@@ -1,12 +1,18 @@
 // We don't directly run agent harnesses on WASM, so this code is unused.
 #![cfg_attr(target_family = "wasm", expect(dead_code))]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use http::header::{CONTENT_TYPE, RETRY_AFTER};
+use http_client::StatusCode;
 #[cfg(test)]
 use mockall::automock;
+use serde::{Deserialize, Deserializer};
+use serde_json::{Map, Value};
 
 use super::ServerApi;
 #[cfg(feature = "local_fs")]
@@ -31,6 +37,251 @@ pub struct UploadTarget {
     #[serde(default)]
     #[serde_as(deserialize_as = "serde_with::DefaultOnNull")]
     pub fields: Vec<UploadField>,
+}
+
+/// Execution ownership supplied only by authenticated, reporting-enabled startup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct HarnessUsageContext {
+    pub schema_version: u32,
+    pub execution_id: i64,
+}
+
+fn deserialize_harness_usage_context<'de, D>(
+    deserializer: D,
+) -> Result<Option<HarnessUsageContext>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    // Capability disagreement must not break raw transcript persistence or resume.
+    Ok(serde_json::from_value::<HarnessUsageContext>(value)
+        .ok()
+        .filter(|context| context.schema_version == 1 && context.execution_id > 0))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum UsageHarness {
+    ClaudeCode,
+    Codex,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HarnessUsageCoverageStatus {
+    Known,
+    Partial,
+    Unavailable,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct HarnessUsageCoverage {
+    pub token_status: HarnessUsageCoverageStatus,
+    pub tool_status: HarnessUsageCoverageStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub captured_scope: Option<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub reason_codes: BTreeMap<String, i64>,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct HarnessUsageSnapshot {
+    pub coverage: HarnessUsageCoverage,
+    pub payload: Map<String, Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub session_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_scope: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub subagent_scope: Vec<String>,
+}
+
+/// One cumulative capture, retained unchanged across publication retries.
+#[derive(Clone, serde::Serialize)]
+pub struct HarnessUsageReport {
+    pub schema_version: u32,
+    pub parser_version: u32,
+    pub harness: UsageHarness,
+    pub execution_id: i64,
+    pub capture_sequence: i64,
+    pub last_updated: DateTime<Utc>,
+    pub snapshot: HarnessUsageSnapshot,
+}
+
+const HARNESS_USAGE_MAX_BODY_BYTES: usize = 1024 * 1024;
+const HARNESS_USAGE_MAX_SCOPE_BYTES: usize = 256;
+const HARNESS_USAGE_MAX_ENTRIES: usize = 64;
+const HARNESS_USAGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+impl HarnessUsageReport {
+    fn encode(&self) -> Result<Vec<u8>, HarnessUsageError> {
+        let snapshot = &self.snapshot;
+        let coverage = &snapshot.coverage;
+        if self.schema_version != 1
+            || self.parser_version != 1
+            || self.execution_id <= 0
+            || self.capture_sequence <= 0
+            || (coverage.token_status == HarnessUsageCoverageStatus::Unavailable
+                && coverage.tool_status == HarnessUsageCoverageStatus::Unavailable)
+            || snapshot.session_ids.len() > HARNESS_USAGE_MAX_ENTRIES
+            || snapshot.subagent_scope.len() > HARNESS_USAGE_MAX_ENTRIES
+            || coverage.reason_codes.len() > HARNESS_USAGE_MAX_ENTRIES
+            || snapshot
+                .session_ids
+                .iter()
+                .chain(&snapshot.subagent_scope)
+                .chain(snapshot.root_scope.iter())
+                .chain(coverage.captured_scope.iter())
+                .chain(coverage.reason_codes.keys())
+                .any(|scope| scope.len() > HARNESS_USAGE_MAX_SCOPE_BYTES)
+            || coverage.reason_codes.values().any(|count| *count < 0)
+        {
+            return Err(HarnessUsageError::new(HarnessUsageErrorKind::InvalidReport));
+        }
+        let body = serde_json::to_vec(self)
+            .map_err(|_| HarnessUsageError::new(HarnessUsageErrorKind::InvalidReport))?;
+        if body.len() > HARNESS_USAGE_MAX_BODY_BYTES {
+            return Err(HarnessUsageError::new(HarnessUsageErrorKind::InvalidReport));
+        }
+        Ok(body)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HarnessUsagePublicationStatus {
+    Accepted,
+    Stale,
+    Idempotent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct HarnessUsagePublication {
+    pub status: HarnessUsagePublicationStatus,
+    pub execution_id: i64,
+    pub capture_sequence: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HarnessUsageErrorKind {
+    Retryable,
+    Disabled,
+    Unauthorized,
+    Conflict,
+    InvalidReport,
+    InvalidResponse,
+}
+
+/// Safe diagnostics only: never retain server bodies or authentication error text.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("Harness usage publication failed: {kind:?} (HTTP {status:?})")]
+pub struct HarnessUsageError {
+    pub kind: HarnessUsageErrorKind,
+    pub status: Option<StatusCode>,
+    pub retry_after: Option<Duration>,
+}
+
+impl HarnessUsageError {
+    pub fn new(kind: HarnessUsageErrorKind) -> Self {
+        Self {
+            kind,
+            status: None,
+            retry_after: None,
+        }
+    }
+
+    fn from_auth_error(error: anyhow::Error) -> Self {
+        let retryable = error.chain().any(|cause| {
+            cause.downcast_ref::<reqwest::Error>().is_some_and(|error| {
+                error.status().is_none_or(|status| {
+                    status.is_server_error()
+                        || matches!(
+                            status,
+                            StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_MANY_REQUESTS
+                        )
+                })
+            })
+        });
+        Self::new(if retryable {
+            HarnessUsageErrorKind::Retryable
+        } else {
+            HarnessUsageErrorKind::Unauthorized
+        })
+    }
+
+    async fn from_response(response: http_client::Response) -> Self {
+        let status = response.status();
+        let retry_after = response
+            .headers()
+            .get(RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| parse_harness_usage_retry_after(value, Utc::now()));
+        let problem = response.json::<HarnessUsageProblem>().await.ok();
+        let problem_type = problem.as_ref().map(|problem| problem.problem_type);
+        let kind = if matches!(
+            problem_type,
+            Some(HarnessUsageProblemType::Disabled | HarnessUsageProblemType::Unsupported)
+        ) || matches!(
+            status,
+            StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED | StatusCode::NOT_IMPLEMENTED
+        ) {
+            HarnessUsageErrorKind::Disabled
+        } else if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
+            HarnessUsageErrorKind::Unauthorized
+        } else if matches!(
+            status,
+            StatusCode::CONFLICT | StatusCode::PRECONDITION_FAILED
+        ) {
+            HarnessUsageErrorKind::Conflict
+        } else if matches!(
+            status,
+            StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_MANY_REQUESTS
+        ) || (status.is_server_error()
+            && problem.and_then(|problem| problem.retryable) != Some(false))
+        {
+            HarnessUsageErrorKind::Retryable
+        } else {
+            HarnessUsageErrorKind::InvalidReport
+        };
+        Self {
+            kind,
+            status: Some(status),
+            retry_after,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct HarnessUsageProblem {
+    #[serde(rename = "type", default)]
+    problem_type: HarnessUsageProblemType,
+    retryable: Option<bool>,
+}
+
+#[derive(Clone, Copy, Default, Deserialize)]
+enum HarnessUsageProblemType {
+    #[serde(rename = "https://docs.warp.dev/errors/feature_not_available")]
+    Disabled,
+    #[serde(rename = "https://docs.warp.dev/errors/operation_not_supported")]
+    Unsupported,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+fn parse_harness_usage_retry_after(value: &str, now: DateTime<Utc>) -> Option<Duration> {
+    value
+        .trim()
+        .parse::<u64>()
+        .map(Duration::from_secs)
+        .ok()
+        .or_else(|| {
+            DateTime::parse_from_rfc2822(value).ok().map(|date| {
+                (date.with_timezone(&Utc) - now)
+                    .to_std()
+                    .unwrap_or_default()
+            })
+        })
 }
 
 /// A single multipart form field on a POST upload target.
@@ -248,6 +499,8 @@ pub struct ResolvedHarnessPrompt {
     /// after any resumption preamble.
     #[serde(default)]
     pub context: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_harness_usage_context")]
+    pub harness_usage: Option<HarnessUsageContext>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -373,6 +626,68 @@ pub trait HarnessSupportClient: 'static + Send + Sync {
 }
 
 impl ServerApi {
+    /// Publish without retries; the ordered save owns retry identity and its deadline.
+    pub async fn report_harness_usage(
+        &self,
+        report: &HarnessUsageReport,
+    ) -> Result<HarnessUsagePublication, HarnessUsageError> {
+        let body = report.encode()?;
+        let auth_token = self
+            .get_or_refresh_access_token()
+            .await
+            .map_err(HarnessUsageError::from_auth_error)?;
+        let url = format!(
+            "{}/api/v1/harness-support/harness-usage",
+            crate::ChannelState::server_root_url()
+        );
+        let mut request = self
+            .base_client
+            .http_client()
+            .post(&url)
+            .header(CONTENT_TYPE, "application/json")
+            .body(body)
+            .timeout(HARNESS_USAGE_REQUEST_TIMEOUT);
+        if let Some(token) = auth_token.as_bearer_token() {
+            request = request.bearer_auth(token);
+        }
+        for (name, value) in self
+            .ambient_agent_headers()
+            .await
+            .map_err(HarnessUsageError::from_auth_error)?
+        {
+            request = request.header(name, value);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|_| HarnessUsageError::new(HarnessUsageErrorKind::Retryable))?;
+        if !response.status().is_success() {
+            self.observe_iap_challenge(&response);
+            return Err(HarnessUsageError::from_response(response).await);
+        }
+        let publication = response
+            .json::<HarnessUsagePublication>()
+            .await
+            .map_err(|error| {
+                HarnessUsageError::new(if error.is_decode() {
+                    HarnessUsageErrorKind::InvalidResponse
+                } else {
+                    HarnessUsageErrorKind::Retryable
+                })
+            })?;
+        if publication.execution_id <= 0
+            || publication.capture_sequence <= 0
+            || (publication.status != HarnessUsagePublicationStatus::Stale
+                && (publication.execution_id != report.execution_id
+                    || publication.capture_sequence != report.capture_sequence))
+        {
+            return Err(HarnessUsageError::new(
+                HarnessUsageErrorKind::InvalidResponse,
+            ));
+        }
+        Ok(publication)
+    }
+
     pub(crate) async fn get_public_api_response_for_task(
         &self,
         task_id: &AmbientAgentTaskId,
@@ -635,3 +950,7 @@ pub async fn upload_to_target(
 #[cfg(test)]
 #[path = "harness_support_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "harness_usage_tests.rs"]
+mod harness_usage_tests;
