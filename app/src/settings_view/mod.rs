@@ -1237,7 +1237,7 @@ impl SettingsView {
         });
 
         // About page
-        let about_page_handle = ctx.add_view(AboutPageView::new);
+        let about_page_handle = ctx.add_typed_action_view(AboutPageView::new);
 
         // Warp Agent page
         let warp_agent_page_handle = ctx.add_typed_action_view(WarpAgentPageView::new);
