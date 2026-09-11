@@ -57,6 +57,7 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::comment::ReviewComment;
 use crate::ai::agent::conversation::{RecordingSpanInfo, RecordingSpanStatus};
 use crate::ai::agent::icons::{self, gray_stop_icon, yellow_stop_icon};
+use crate::ai::agent::request_metadata::RequestMetadataRecord;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
@@ -102,6 +103,7 @@ use crate::ai::blocklist::inline_action::web_fetch::WebFetchView;
 use crate::ai::blocklist::inline_action::web_search::WebSearchView;
 use crate::ai::blocklist::keyboard_navigable_buttons::KeyboardNavigableButtons;
 use crate::ai::blocklist::secret_redaction::SecretRedactionState;
+use crate::ai::blocklist::usage::request_metadata_turn_view::turn_panel_tooltip_text;
 use crate::ai::blocklist::usage::rollup::compute_orchestration_rollup;
 use crate::ai::blocklist::view_util::{
     FAILED_OUTPUT_USAGE_NOTICE_TEXT, format_usage, should_show_failed_output_usage_notice,
@@ -184,6 +186,7 @@ pub(crate) struct Props<'a> {
     pub(super) has_accepted_edits: bool,
     pub(super) finish_reason: Option<&'a FinishReason>,
     pub(super) is_usage_footer_expanded: bool,
+    pub(super) is_turn_panel_expanded: bool,
     pub(super) shared_session_status: &'a SharedSessionStatus,
     pub(super) terminal_view_id: EntityId,
     pub(super) is_conversation_transcript_viewer: bool,
@@ -1168,6 +1171,8 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                     .then(|| render_response_footer(props, app))
                     .flatten()
                 {
+                    output_items.add_child(footer);
+                } else if let Some(footer) = render_turn_panel_only_footer(props, app) {
                     output_items.add_child(footer);
                 }
 
@@ -3455,16 +3460,9 @@ fn render_suggested_rules_and_prompts_footer(
     )
 }
 
-fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Element>> {
-    if props.model.status(app).is_streaming() {
-        return None;
-    }
-
+/// The shared (idle, hovered/active) styles for the icon buttons in a block's response footer.
+fn footer_icon_button_styles(app: &AppContext) -> (UiComponentStyles, UiComponentStyles) {
     let appearance = Appearance::as_ref(app);
-    let mut flex = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-    let is_passive_code_diff = props.model.request_type(app).is_passive_code_diff();
-
-    // Show footer for any terminal state (complete, cancelled, or failed)
     let style_override = UiComponentStyles {
         font_color: Some(
             appearance
@@ -3480,6 +3478,91 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         background: Some(blended_colors::neutral_4(appearance.theme()).into()),
         ..style_override
     };
+    (style_override, style_override_with_background)
+}
+
+/// The server-authored per-request records for the user-visible turn this block closes
+/// (APP-5720): every record across the turn's exchanges, from the user's query through the last
+/// tool-result round trip. Empty unless this block is the turn's last exchange (a mid-turn
+/// tool-call block renders no trigger; the turn's total lands on its final block), for a turn the
+/// client cancelled or disconnected from, for a conversation predating the record, or when
+/// pricing transparency is off.
+fn request_metadata_for_block(props: Props, app: &AppContext) -> Vec<RequestMetadataRecord> {
+    if !FeatureFlag::PricingTransparency.is_enabled() {
+        return Vec::new();
+    }
+    let Some(exchange_id) = props.model.exchange_id(app) else {
+        return Vec::new();
+    };
+    let Some(conversation) = props.model.conversation(app) else {
+        return Vec::new();
+    };
+    if !conversation.is_last_exchange_in_turn(exchange_id) {
+        return Vec::new();
+    }
+    conversation.request_metadata_records_for_turn(exchange_id)
+}
+
+/// Whether any tool call in this block's output has not finished yet. A finished block that ends
+/// in an unanswered tool call is the tail of an in-progress turn: its follow-up request has not
+/// started, so the turn's controls should not appear on it yet.
+fn has_pending_output_action(props: Props, app: &AppContext) -> bool {
+    let Some(output) = props.model.status(app).output_to_render() else {
+        return false;
+    };
+    let action_model = props.action_model.as_ref(app);
+    output.get().actions().any(|action| {
+        action_model
+            .get_action_status(&action.id)
+            .is_none_or(|status| !status.is_done())
+    })
+}
+
+/// The turn-panel trigger on its own, for blocks whose full response footer is not rendered.
+///
+/// The full footer (ratings, fork, usage) is deliberately shown only on the conversation's
+/// latest visible exchange, but every earlier turn's total must stay reachable on the block
+/// that closes that turn, including after close/reopen. A still-streaming block has no record
+/// yet and renders nothing here.
+fn render_turn_panel_only_footer(props: Props, app: &AppContext) -> Option<Box<dyn Element>> {
+    if props.model.status(app).is_streaming()
+        || !props.model.request_type(app).is_active()
+        || has_pending_output_action(props, app)
+    {
+        return None;
+    }
+    let records = request_metadata_for_block(props, app);
+    if records.is_empty() {
+        return None;
+    }
+    let (style_override, style_override_with_background) = footer_icon_button_styles(app);
+    Some(
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(render_turn_panel_button(
+                props,
+                &records,
+                style_override,
+                style_override_with_background,
+                app,
+            ))
+            .finish()
+            .with_content_item_spacing()
+            .finish(),
+    )
+}
+
+fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Element>> {
+    if props.model.status(app).is_streaming() {
+        return None;
+    }
+
+    let appearance = Appearance::as_ref(app);
+    let mut flex = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+    let is_passive_code_diff = props.model.request_type(app).is_passive_code_diff();
+
+    // Show footer for any terminal state (complete, cancelled, or failed)
+    let (style_override, style_override_with_background) = footer_icon_button_styles(app);
 
     let ui_builder = appearance.ui_builder().clone();
 
@@ -3638,7 +3721,21 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         flex.add_child(fork_button);
     }
 
-    flex.add_child(render_usage_button(props, app));
+    // When this block closes a turn with server-authored per-request records (APP-5720), the
+    // turn's trigger icon replaces the conversation-level credit-count button; blocks without
+    // one keep it.
+    let records = request_metadata_for_block(props, app);
+    if records.is_empty() {
+        flex.add_child(render_usage_button(props, app));
+    } else {
+        flex.add_child(render_turn_panel_button(
+            props,
+            &records,
+            style_override,
+            style_override_with_background,
+            app,
+        ));
+    }
 
     // Review changes button.
     if props.has_accepted_edits && !props.shared_session_status.is_viewer() {
@@ -3668,6 +3765,39 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
     }
 
     Some(flex.finish().with_content_item_spacing().finish())
+}
+
+/// Renders the per-turn icon that, on click, opens/closes the docked "Turn" panel backed by the
+/// turn's persisted request-metadata record. Same hover-tooltip/click-to-open pattern as the
+/// usage button, but an independent trigger with no cross-navigation to the usage footer.
+fn render_turn_panel_button(
+    props: Props,
+    records: &[RequestMetadataRecord],
+    style_override: UiComponentStyles,
+    style_override_with_background: UiComponentStyles,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let ui_builder = appearance.ui_builder().clone();
+    let tooltip_text = turn_panel_tooltip_text(records);
+
+    icon_button(
+        appearance,
+        Icon::TurnUsagePie,
+        // Keep the trigger visibly "active" while the panel is open, not just while
+        // hovered/clicked, so the icon reads as the panel's open/closed toggle.
+        props.is_turn_panel_expanded,
+        props.state_handles.turn_panel_button_handle.clone(),
+    )
+    .with_tooltip(move || ui_builder.tool_tip(tooltip_text.clone()).build().finish())
+    .with_style(style_override)
+    .with_hovered_styles(style_override_with_background)
+    .with_active_styles(style_override_with_background)
+    .build()
+    .on_click(|ctx, _, _| {
+        ctx.dispatch_typed_action(AIBlockAction::ToggleIsTurnPanelExpanded);
+    })
+    .finish()
 }
 
 /// Renders the usage button that, on click, will expand & collapse the usage summary footer.
