@@ -90,11 +90,16 @@ pub fn icon_from_file_path(path: &str, appearance: &Appearance) -> Option<Box<dy
 }
 
 /// Returns a special icon for the given folder path, if any.
-pub fn icon_from_folder_path(path: &str) -> Option<Box<dyn Element>> {
-    let folder_name = Path::new(path).file_name().and_then(|s| s.to_str())?;
-    let asset = FOLDER_NAME_ICONS.get(folder_name.to_lowercase().as_str())?;
-    Some(bundled_image(asset))
+pub fn icon_from_folder_path(path: &str) -> Box<dyn Element> {
+    let asset = Path::new(path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .and_then(|folder_name| FOLDER_NAME_ICONS.get(folder_name.to_lowercase().as_str()))
+        .copied()
+        .unwrap_or("bundled/svg/folder_type/folder-default.svg");
+    bundled_image(asset)
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -140,17 +145,19 @@ mod tests {
 
     #[test]
     fn folder_name_match() {
-        assert!(icon_from_folder_path("/repo/src").is_some());
-        assert!(icon_from_folder_path("/repo/node_modules").is_some());
+        assert!(FOLDER_NAME_ICONS.contains_key("src"));
+        assert!(FOLDER_NAME_ICONS.contains_key("node_modules"));
     }
 
     #[test]
     fn dotfile_folder_name_match() {
-        assert!(icon_from_folder_path("/repo/.git").is_some());
+        assert!(FOLDER_NAME_ICONS.contains_key(".git"));
     }
 
     #[test]
-    fn unmatched_folder_returns_none() {
-        assert!(icon_from_folder_path("/repo/my_random_folder_name").is_none());
+    fn unmatched_folder_falls_back_to_default_icon() {
+        assert!(!FOLDER_NAME_ICONS.contains_key("my_random_folder_name"));
+        // Should not panic even though there's no specific match.
+        let _ = icon_from_folder_path("/repo/my_random_folder_name");
     }
 }

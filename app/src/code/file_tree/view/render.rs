@@ -50,12 +50,9 @@ impl FileTreeItem {
                     .map(ToOwned::to_owned)
                     .unwrap_or_else(|| String::from("Folder"));
 
-                let icon_from_folder_path =
-                    icon_from_folder_path(directory.path.as_str()).map(ImageOrIcon::Image);
-
                 RenderState {
                     display_name,
-                    icon: icon_from_folder_path.unwrap_or(ImageOrIcon::Icon(Icon::Folder)),
+                    icon: ImageOrIcon::Image(icon_from_folder_path(directory.path.as_str())),
                     is_expanded,
                     depth: *depth,
                     mouse_state: mouse_state_handle.clone(),
