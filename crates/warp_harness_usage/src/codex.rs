@@ -77,7 +77,6 @@ pub fn extract_codex(
 ) -> ExtractionOutcome {
     let mut findings = Findings::default();
     findings.capture(diagnostics);
-    findings.reason(ReasonCode::RootOnly);
     if !identifier(session_id, &mut findings) {
         return ExtractionOutcome::Unavailable(findings.reasons);
     }
@@ -93,7 +92,7 @@ pub fn extract_codex(
         match entry.get("type").and_then(Value::as_str) {
             Some("session_meta") => {
                 let Some(id) = payload.get("id").and_then(Value::as_str) else {
-                    findings.token(ReasonCode::MissingIdentity);
+                    findings.token(ReasonCode::InvalidData);
                     findings.tools_partial = true;
                     continue;
                 };
@@ -102,13 +101,13 @@ pub fn extract_codex(
                 }
                 if id != session {
                     if !seen_metadata || sessions.contains(id) {
-                        findings.token(ReasonCode::AmbiguousCounterDecrease);
+                        findings.token(ReasonCode::AmbiguousAccounting);
                         findings.tools_partial = true;
                         segment.ambiguous = true;
                         continue;
                     }
                     if sessions.len() >= MAX_SCOPE_ENTRIES {
-                        findings.limit(ReasonCode::CollectionLimit);
+                        findings.limit(ReasonCode::ResourceLimit);
                         break;
                     }
                     mem::take(&mut segment).finish(&mut accounting, &mut findings);
@@ -133,11 +132,11 @@ pub fn extract_codex(
                     &mut findings,
                 ),
                 None => {
-                    findings.token(ReasonCode::UnsupportedRecord);
+                    findings.token(ReasonCode::InvalidData);
                     findings.tools_partial = true;
                 }
                 Some(name) if name.contains("token") || name.contains("usage") => {
-                    findings.token(ReasonCode::UnsupportedRecord);
+                    findings.token(ReasonCode::InvalidData);
                 }
                 Some(_) => {}
             },
@@ -151,11 +150,11 @@ pub fn extract_codex(
                 Some(
                     "message" | "reasoning" | "function_call_output" | "custom_tool_call_output",
                 ) => {}
-                _ => findings.tool(ReasonCode::UnsupportedRecord),
+                _ => findings.tool(ReasonCode::InvalidData),
             },
             Some("compacted") => {}
             _ => {
-                findings.token(ReasonCode::UnsupportedRecord);
+                findings.token(ReasonCode::InvalidData);
                 findings.tools_partial = true;
             }
         }
@@ -169,10 +168,6 @@ pub fn extract_codex(
         .total
         .any()
         .then(|| accounting.total.clone().into());
-    let unattributed = accounting
-        .unattributed
-        .any()
-        .then(|| accounting.unattributed.clone().into());
     let attribution = accounting.groups();
     if findings.limit_exceeded || (usage.is_none() && tool_calls.is_none()) {
         return ExtractionOutcome::Unavailable(findings.reasons);
@@ -187,7 +182,6 @@ pub fn extract_codex(
         payload: NativePayload::Codex(UsagePayload {
             usage,
             attribution,
-            unattributed,
             tool_calls,
         }),
         session_ids: sessions.into_iter().collect(),
@@ -205,8 +199,11 @@ fn observe_checkpoint(
     if segment.ambiguous {
         return;
     }
+    if info.is_null() {
+        return;
+    }
     let Some(total) = info.get("total_token_usage") else {
-        findings.token(ReasonCode::MissingUsage);
+        findings.token(ReasonCode::IncompleteInput);
         return;
     };
     let Some(total) = parse_usage(total, findings) else {
@@ -223,7 +220,7 @@ fn observe_checkpoint(
         if total.decreased(previous) {
             // A decrease is not proof of a new lifetime; retain only the unambiguous prefix.
             segment.ambiguous = true;
-            findings.token(ReasonCode::AmbiguousCounterDecrease);
+            findings.token(ReasonCode::AmbiguousAccounting);
             return;
         }
         if !total.same_fields(previous) {
@@ -234,7 +231,7 @@ fn observe_checkpoint(
                     .accounting
                     .attribute(&baseline, &Attribution::default(), findings);
             }
-            findings.token(ReasonCode::UnreconciledDelta);
+            findings.token(ReasonCode::AmbiguousAccounting);
         }
         let delta = total.delta(previous);
         if delta.any() {
@@ -244,7 +241,7 @@ fn observe_checkpoint(
                 segment
                     .accounting
                     .attribute(&delta, &Attribution::default(), findings);
-                findings.token(ReasonCode::UnreconciledDelta);
+                findings.token(ReasonCode::AmbiguousAccounting);
             }
         }
     } else if last.as_ref() == Some(&total) {
@@ -265,7 +262,7 @@ fn parse_usage(value: &Value, findings: &mut Findings) -> Option<Counters<5>> {
         || matches!((output, reasoning), (Some(output), Some(reasoning)) if reasoning > output)
         || matches!((input, output, total), (Some(input), Some(output), Some(total)) if input.checked_add(output) != Some(total));
     if invalid {
-        findings.token(ReasonCode::InvalidCounter);
+        findings.token(ReasonCode::InvalidData);
         return None;
     }
     Some(usage)

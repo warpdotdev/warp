@@ -22,7 +22,7 @@ impl<const N: usize> Default for Counters<N> {
 impl<const N: usize> Counters<N> {
     pub(crate) fn parse(value: &Value, paths: [&str; N], findings: &mut Findings) -> Option<Self> {
         if !value.is_object() {
-            findings.token(ReasonCode::InvalidCounter);
+            findings.token(ReasonCode::InvalidData);
             return None;
         }
         let mut result = Self::default();
@@ -31,14 +31,14 @@ impl<const N: usize> Counters<N> {
                 match value.as_i64().filter(|count| *count >= 0) {
                     Some(count) => result.values[index] = Some(count),
                     None => {
-                        findings.token(ReasonCode::InvalidCounter);
+                        findings.token(ReasonCode::InvalidData);
                         return None;
                     }
                 }
             }
         }
         if !result.any() {
-            findings.token(ReasonCode::MissingUsage);
+            findings.token(ReasonCode::IncompleteInput);
             return None;
         }
         Some(result)
@@ -62,7 +62,7 @@ impl<const N: usize> Counters<N> {
                 self.values[index] = sum;
                 if sum.is_none() {
                     self.overflowed[index] = true;
-                    findings.token(ReasonCode::CounterOverflow);
+                    findings.token(ReasonCode::ResourceLimit);
                 }
             }
         }
@@ -131,7 +131,6 @@ impl<const N: usize> Counters<N> {
 
 pub(crate) struct Accounting<const N: usize> {
     pub(crate) total: Counters<N>,
-    pub(crate) unattributed: Counters<N>,
     groups: BTreeMap<Attribution, Counters<N>>,
 }
 
@@ -139,7 +138,6 @@ impl<const N: usize> Default for Accounting<N> {
     fn default() -> Self {
         Self {
             total: Counters::default(),
-            unattributed: Counters::default(),
             groups: BTreeMap::new(),
         }
     }
@@ -147,7 +145,6 @@ impl<const N: usize> Default for Accounting<N> {
 
 impl<const N: usize> Accounting<N> {
     pub(crate) fn omit_missing_fields(&mut self, latest: &Counters<N>) {
-        self.unattributed.omit_missing_fields(latest);
         self.groups.retain(|_, usage| {
             usage.omit_missing_fields(latest);
             usage.any()
@@ -156,10 +153,9 @@ impl<const N: usize> Accounting<N> {
 
     pub(crate) fn merge(&mut self, other: Self, findings: &mut Findings) {
         if self.total.any() && other.total.any() && !self.total.same_fields(&other.total) {
-            findings.token(ReasonCode::MissingUsage);
+            findings.token(ReasonCode::IncompleteInput);
         }
         self.total.add(&other.total, findings);
-        self.unattributed.add(&other.unattributed, findings);
         for (attribution, usage) in other.groups {
             self.attribute(&usage, &attribution, findings);
         }
@@ -170,13 +166,8 @@ impl<const N: usize> Accounting<N> {
         attribution: &Attribution,
         findings: &mut Findings,
     ) {
-        if *attribution == Attribution::default() {
-            self.unattributed.add(usage, findings);
-            findings.reason(ReasonCode::UnattributedUsage);
-            return;
-        }
         if !self.groups.contains_key(attribution) && self.groups.len() >= MAX_ATTRIBUTIONS {
-            findings.limit(ReasonCode::CollectionLimit);
+            findings.limit(ReasonCode::ResourceLimit);
             return;
         }
         self.groups

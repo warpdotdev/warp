@@ -82,9 +82,8 @@ pub fn extract_claude<'a>(
 ) -> ExtractionOutcome {
     let mut findings = Findings::default();
     findings.capture(diagnostics);
-    findings.reason(ReasonCode::UncapturedDescendants);
     if diagnostics.subagents.len() > MAX_SCOPE_ENTRIES {
-        findings.limit(ReasonCode::CollectionLimit);
+        findings.limit(ReasonCode::ResourceLimit);
     }
     if !identifier(session_id, &mut findings) {
         return ExtractionOutcome::Unavailable(findings.reasons);
@@ -92,16 +91,16 @@ pub fn extract_claude<'a>(
     let mut sources = BTreeMap::new();
     for (scope, entries) in subagents {
         if !identifier(scope, &mut findings) || sources.len() >= MAX_SCOPE_ENTRIES {
-            findings.limit(ReasonCode::CollectionLimit);
+            findings.limit(ReasonCode::ResourceLimit);
             return ExtractionOutcome::Unavailable(findings.reasons);
         }
         if sources.insert(scope, entries).is_some() {
-            findings.limit(ReasonCode::InvalidIdentifier);
+            findings.limit(ReasonCode::InvalidData);
         }
         if !diagnostics.subagents.contains_key(scope) {
             findings.tokens_partial = true;
             findings.tools_partial = true;
-            findings.reason(ReasonCode::UnreadableFile);
+            findings.reason(ReasonCode::IncompleteInput);
         }
     }
     let subagent_scope = sources.keys().map(|scope| (*scope).to_owned()).collect();
@@ -111,7 +110,7 @@ pub fn extract_claude<'a>(
     for entries in std::iter::once(root).chain(sources.into_values()) {
         for entry in entries {
             if !entry.is_object() {
-                findings.token(ReasonCode::UnsupportedRecord);
+                findings.token(ReasonCode::InvalidData);
                 findings.tools_partial = true;
                 continue;
             }
@@ -127,15 +126,21 @@ pub fn extract_claude<'a>(
                             | "file-history-snapshot"
                             | "queue-operation"
                             | "last-prompt"
+                            | "mode"
+                            | "permission-mode"
+                            | "atis-latch"
+                            | "attachment"
+                            | "ai-title"
+                            | "cost-state"
                     )
                 ) {
-                    findings.token(ReasonCode::UnsupportedRecord);
+                    findings.token(ReasonCode::InvalidData);
                     findings.tools_partial = true;
                 }
                 continue;
             }
             let Some(message) = entry.get("message").filter(|message| message.is_object()) else {
-                findings.token(ReasonCode::UnsupportedRecord);
+                findings.token(ReasonCode::InvalidData);
                 findings.tools_partial = true;
                 continue;
             };
@@ -154,7 +159,7 @@ pub fn extract_claude<'a>(
             }
             sessions.insert(session.to_owned());
             if sessions.len() > MAX_SCOPE_ENTRIES {
-                findings.limit(ReasonCode::CollectionLimit);
+                findings.limit(ReasonCode::ResourceLimit);
                 break;
             }
             observe_tools(message, session, &mut tools, &mut findings);
@@ -163,7 +168,7 @@ pub fn extract_claude<'a>(
                 .and_then(Value::as_str)
                 .filter(|id| !id.is_empty())
             else {
-                findings.token(ReasonCode::MissingIdentity);
+                findings.token(ReasonCode::InvalidData);
                 continue;
             };
             if !identifier(id, &mut findings) {
@@ -171,7 +176,7 @@ pub fn extract_claude<'a>(
             }
             let key = (session.to_owned(), id.to_owned());
             if !responses.contains_key(&key) && responses.len() >= MAX_IDENTITIES {
-                findings.limit(ReasonCode::CollectionLimit);
+                findings.limit(ReasonCode::ResourceLimit);
                 break;
             }
             let attribution = read_attribution(message, &mut findings);
@@ -188,7 +193,7 @@ pub fn extract_claude<'a>(
                     if !compatible_attribution(&response.attribution, &attribution) {
                         response.conflicted = true;
                         response.usage = None;
-                        findings.token(ReasonCode::ConflictingResponse);
+                        findings.token(ReasonCode::AmbiguousAccounting);
                         continue;
                     }
                     if !usage.covers(previous) {
@@ -205,7 +210,7 @@ pub fn extract_claude<'a>(
                         }
                         response.conflicted = true;
                         response.usage = None;
-                        findings.token(ReasonCode::ConflictingResponse);
+                        findings.token(ReasonCode::AmbiguousAccounting);
                         continue;
                     }
                 }
@@ -237,11 +242,11 @@ pub fn extract_claude<'a>(
             accounting.total.add(&usage, &mut findings);
             accounting.attribute(&usage, &response.attribution, &mut findings);
         } else if !response.conflicted {
-            findings.token(ReasonCode::MissingUsage);
+            findings.token(ReasonCode::IncompleteInput);
         }
     }
     if missing_category {
-        findings.token(ReasonCode::MissingUsage);
+        findings.token(ReasonCode::IncompleteInput);
     }
     let readable = diagnostics.root.is_complete()
         || diagnostics
@@ -253,10 +258,6 @@ pub fn extract_claude<'a>(
         .total
         .any()
         .then(|| accounting.total.clone().into());
-    let unattributed = accounting
-        .unattributed
-        .any()
-        .then(|| accounting.unattributed.clone().into());
     let attribution = accounting.groups();
     if findings.limit_exceeded || (usage.is_none() && tool_calls.is_none()) {
         return ExtractionOutcome::Unavailable(findings.reasons);
@@ -271,7 +272,6 @@ pub fn extract_claude<'a>(
         payload: NativePayload::Claude(UsagePayload {
             usage,
             attribution,
-            unattributed,
             tool_calls,
         }),
         session_ids: sessions.into_iter().collect(),
@@ -285,7 +285,7 @@ fn parse_usage(value: &Value, findings: &mut Findings) -> Option<Counters<6>> {
         .get("cache_creation")
         .is_some_and(|partitions| !partitions.is_object())
     {
-        findings.token(ReasonCode::InvalidCounter);
+        findings.token(ReasonCode::InvalidData);
         return None;
     }
     let usage = Counters::parse(value, PATHS, findings)?;
@@ -293,7 +293,7 @@ fn parse_usage(value: &Value, findings: &mut Findings) -> Option<Counters<6>> {
     if let (Some(aggregate), Some(short), Some(long)) = (aggregate, short, long)
         && short.checked_add(long) != Some(aggregate)
     {
-        findings.token(ReasonCode::InvalidCounter);
+        findings.token(ReasonCode::InvalidData);
         return None;
     }
     Some(usage)
@@ -301,7 +301,7 @@ fn parse_usage(value: &Value, findings: &mut Findings) -> Option<Counters<6>> {
 
 fn observe_tools(message: &Value, session: &str, tools: &mut Tools, findings: &mut Findings) {
     let Some(content) = message.get("content").and_then(Value::as_array) else {
-        findings.tool(ReasonCode::UnsupportedRecord);
+        findings.tool(ReasonCode::InvalidData);
         return;
     };
     for block in content {
@@ -313,7 +313,7 @@ fn observe_tools(message: &Value, session: &str, tools: &mut Tools, findings: &m
                 findings,
             ),
             Some("text" | "thinking" | "redacted_thinking" | "tool_result") => {}
-            _ => findings.tool(ReasonCode::UnsupportedRecord),
+            _ => findings.tool(ReasonCode::InvalidData),
         }
     }
 }
@@ -331,9 +331,12 @@ fn read_attribution(message: &Value, findings: &mut Findings) -> Attribution {
 pub(crate) fn classification(value: Option<&Value>, findings: &mut Findings) -> Option<String> {
     let value = value.filter(|value| !value.is_null())?;
     let Some(value) = value.as_str() else {
-        findings.token(ReasonCode::UnsupportedRecord);
+        findings.token(ReasonCode::InvalidData);
         return None;
     };
+    if value.is_empty() {
+        return None;
+    }
     identifier(value, findings).then(|| value.to_owned())
 }
 
