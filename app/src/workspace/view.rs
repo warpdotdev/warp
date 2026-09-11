@@ -914,6 +914,17 @@ struct FileUploadSessions {
     local_to_upload_id_map: HashMap<TerminalPaneId, RemoteUploadId>,
     upload_id_to_local_map: HashMap<RemoteUploadId, TerminalPaneId>,
 }
+#[cfg(any(target_family = "wasm", test))]
+fn take_matching_viewer_entry(
+    pending_view_id: &mut Option<EntityId>,
+    joined_view_id: EntityId,
+) -> bool {
+    if *pending_view_id != Some(joined_view_id) {
+        return false;
+    }
+    pending_view_id.take();
+    true
+}
 
 /// Controls the color palette used for a workspace banner.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -1051,6 +1062,7 @@ pub struct Workspace {
     window_id: WindowId,
     pub(crate) tabs: Vec<TabData>,
     active_tab_index: usize,
+    pending_viewer_entry_view_id: Option<EntityId>,
     /// Tracks tab activation order (most-recently-used first).
     /// Each entry is the `pane_group.id()` of the corresponding tab.
     tab_mru_order: Vec<EntityId>,
@@ -3495,6 +3507,7 @@ impl Workspace {
         let mut ws = Self {
             tabs: Vec::new(),
             active_tab_index: 0,
+            pending_viewer_entry_view_id: None,
             tab_mru_order: Vec::new(),
             hovered_tab_index: None,
             tab_bar_hover_state: Default::default(),
@@ -4137,7 +4150,7 @@ impl Workspace {
             }
             NewWorkspaceSource::SharedSessionAsViewer { session_id } => {
                 // Generic session link: ambient-ness (if any) is discovered at SessionJoined.
-                self.add_tab_for_joining_shared_session(session_id, false, ctx);
+                self.add_entry_tab_for_joining_shared_session(session_id, ctx);
             }
             NewWorkspaceSource::FromCloudConversationId { conversation_id } => {
                 self.open_cloud_conversation_from_server_token(conversation_id, ctx);
@@ -4478,6 +4491,18 @@ impl Workspace {
         self.tabs.push(TabData::new(new_pane_group));
         self.activate_tab_internal(self.tab_count() - 1, ctx);
     }
+    pub fn add_entry_tab_for_joining_shared_session(
+        &mut self,
+        session_id: SharedSessionId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.add_tab_for_joining_shared_session(session_id, false, ctx);
+        self.pending_viewer_entry_view_id = self
+            .active_tab_pane_group()
+            .as_ref(ctx)
+            .active_session_view(ctx)
+            .map(|view| view.id());
+    }
 
     /// Opens a cloud conversation by server token.
     /// If the current user owns or created it, navigate to its open pane or restore it
@@ -4713,6 +4738,8 @@ impl Workspace {
                 }
                 #[cfg(target_family = "wasm")]
                 ManagerEvent::JoinedSession { view_id, .. } => {
+                    let is_viewer_entry =
+                        take_matching_viewer_entry(&mut me.pending_viewer_entry_view_id, *view_id);
                     // Check if this session is in the current window and has an ambient agent task
                     let manager = Manager::as_ref(ctx);
                     if let Some(terminal_view) = manager.joined_view_by_id(view_id, ctx) {
@@ -4731,7 +4758,7 @@ impl Workspace {
                             }
                             me.update_transcript_details_panel_data(ctx);
                         }
-                        if let Some(task_id) = task_id {
+                        if is_viewer_entry && let Some(task_id) = task_id {
                             me.maybe_canonicalize_direct_child(task_id, ctx);
                         }
                     }

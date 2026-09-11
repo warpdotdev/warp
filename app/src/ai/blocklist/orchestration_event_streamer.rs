@@ -1237,6 +1237,7 @@ impl OrchestrationEventStreamer {
         ctx: &mut ModelContext<Self>,
     ) {
         let needs_seed;
+        let seeded;
         {
             let entry = self
                 .viewer_mode_orchestrators
@@ -1250,6 +1251,7 @@ impl OrchestrationEventStreamer {
             if needs_seed {
                 entry.seed_fetch_in_flight = true;
             }
+            seeded = entry.seeded;
         }
         // Hydrate the orchestrator placeholder's persisted cursor into the
         // per-orchestrator entry so a restart-from-disk picks up where the
@@ -1263,7 +1265,7 @@ impl OrchestrationEventStreamer {
         }
         if needs_seed {
             self.spawn_ancestor_seed_fetch(parent_task_id, ctx);
-        } else {
+        } else if seeded {
             // Already seeded: open the SSE immediately if it's not running
             // (e.g. after a transient teardown).
             self.start_ancestor_sse_if_seeded(parent_task_id, ctx);

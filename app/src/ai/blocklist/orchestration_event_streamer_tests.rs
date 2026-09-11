@@ -1770,6 +1770,67 @@ fn repeated_viewer_registration_starts_one_ancestor_seed_fetch() {
 }
 
 #[test]
+fn viewer_reregistration_during_seed_does_not_emit_seeded() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+        let parent_task_id = make_parent_task_id_for_test(0xa6);
+        let first_consumer_id = warpui::EntityId::new();
+        let second_consumer_id = warpui::EntityId::new();
+        let first_placeholder_id = AIConversation::new(true, false).id();
+        let second_placeholder_id = AIConversation::new(true, false).id();
+        streamer.update(&mut app, |streamer, _| {
+            let entry = streamer
+                .viewer_mode_orchestrators
+                .entry(parent_task_id)
+                .or_default();
+            entry
+                .consumers
+                .insert(first_consumer_id, first_placeholder_id);
+            entry.seed_fetch_in_flight = true;
+        });
+
+        let seeded_events = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let seeded_events_for_subscription = seeded_events.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&streamer, move |_, event, _| {
+                if let OrchestrationEventStreamerEvent::ViewerModeSeeded {
+                    parent_task_id, ..
+                } = event
+                {
+                    seeded_events_for_subscription.lock().push(*parent_task_id);
+                }
+            })
+        });
+
+        streamer.update(&mut app, |streamer, ctx| {
+            streamer.register_viewer_mode_consumer(
+                parent_task_id,
+                second_placeholder_id,
+                second_consumer_id,
+                ctx,
+            );
+        });
+
+        assert!(seeded_events.lock().is_empty());
+        streamer.read(&app, |streamer, _| {
+            let entry = streamer
+                .viewer_mode_orchestrators
+                .get(&parent_task_id)
+                .expect("viewer-mode entry");
+            assert!(!entry.seeded);
+            assert!(entry.seed_fetch_in_flight);
+            assert_eq!(entry.consumers.len(), 2);
+        });
+    });
+}
+
+#[test]
 fn is_known_child_dedupes_per_parent_after_first_observation() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
