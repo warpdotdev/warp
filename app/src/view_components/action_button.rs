@@ -443,6 +443,11 @@ impl ActionButton {
         ctx.notify();
     }
 
+    #[cfg(test)]
+    pub fn tooltip_for_test(&self) -> Option<&str> {
+        self.tooltip.as_deref()
+    }
+
     pub fn clear_tooltip(&mut self, ctx: &mut ViewContext<Self>) {
         self.tooltip = None;
         ctx.notify();

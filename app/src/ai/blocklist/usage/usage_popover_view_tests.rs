@@ -1,10 +1,21 @@
 use std::collections::HashMap;
 
+use chrono::Utc;
+use warpui::{App, SingletonEntity};
+
 use super::*;
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::conversation::{AIAgentHarness, ServerAIConversationMetadata};
+use crate::auth::user::TEST_USER_UID;
+use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerObjectGuest, ServerPermissions};
 use crate::persistence::model::{
     AgentConversationData, ChargedUsageTotals, ConversationUsageMetadata,
 };
+use crate::server::ids::ServerId;
 use crate::settings::UsageDisplayUnit;
+use crate::test_util::terminal::{
+    add_window_with_id_and_terminal, initialize_app_for_terminal_view,
+};
 
 fn identity_labels(config_key: &str) -> String {
     config_key.to_string()
@@ -30,7 +41,7 @@ fn model_usage_rows_drops_zero_token_models() {
     ];
     let rows = model_usage_rows(&models, &HashMap::new(), identity_labels);
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].model_id, "gpt-5.5");
+    assert_eq!(rows[0].label, "gpt-5.5");
 }
 
 #[test]
@@ -41,7 +52,7 @@ fn model_usage_rows_sorts_primary_agent_first() {
         model("auto-model", 10, "other_category"),
     ];
     let rows = model_usage_rows(&models, &HashMap::new(), identity_labels);
-    assert_eq!(rows[0].model_id, "primary-model");
+    assert_eq!(rows[0].label, "primary-model");
     assert_eq!(rows[0].role, Some(ModelRole::PrimaryAgent));
 }
 
@@ -88,8 +99,8 @@ fn model_usage_rows_joins_charged_usage_by_model_id() {
         charged_usage_with_input_cost(36.0),
     )]);
     let rows = model_usage_rows(&models, &charged_usage_by_key, identity_labels);
-    let gpt_row = rows.iter().find(|r| r.model_id == "gpt-5.5").unwrap();
-    let codex_row = rows.iter().find(|r| r.model_id == "codex-model").unwrap();
+    let gpt_row = rows.iter().find(|r| r.label == "gpt-5.5").unwrap();
+    let codex_row = rows.iter().find(|r| r.label == "codex-model").unwrap();
     assert_eq!(gpt_row.cost, Some(CostValue::new(0.0, 36.0)));
     assert!(gpt_row.charged_usage.is_some());
     assert_eq!(codex_row.cost, None);
@@ -115,7 +126,7 @@ fn model_usage_rows_adds_charged_models_missing_from_token_usage() {
     });
 
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].model_id, "labeled-config-key");
+    assert_eq!(rows[0].label, "labeled-config-key");
     assert_eq!(rows[0].tokens, 700);
     assert_eq!(rows[0].role, None);
 }
@@ -136,15 +147,15 @@ fn model_usage_rows_retains_charged_models_with_only_web_search_activity() {
     let rows = model_usage_rows(&[], &charged_usage_by_key, identity_labels);
 
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].model_id, "gpt-5.5");
+    assert_eq!(rows[0].label, "gpt-5.5");
     assert_eq!(rows[0].tokens, 0);
     assert_eq!(rows[0].charged_usage.unwrap().web_search_count, 3);
 }
 
 /// A custom endpoint whose display label collides with a standard model's id
-/// must not merge its charges into the standard model's row: each charge
-/// contributes to exactly one row, so the totals are the sum of the distinct
-/// rows.
+/// must not merge its charges into the standard model's row: the two rows
+/// share a label but carry distinct identities, each keeping its own charge,
+/// so the totals are the sum of the distinct rows.
 #[test]
 fn model_usage_rows_does_not_merge_label_colliding_custom_endpoint_charges() {
     let messages = [request_metadata_message(api::RequestCharges {
@@ -153,7 +164,7 @@ fn model_usage_rows_does_not_merge_label_colliding_custom_endpoint_charges() {
             charged_usage(
                 single_model_usage("gpt-5.5", 100, 100.0),
                 HashMap::new(),
-                single_model_usage("config-key", 200, 200.0),
+                single_model_usage("gpt-5.5", 200, 200.0),
             ),
         )]),
     })];
@@ -161,7 +172,7 @@ fn model_usage_rows_does_not_merge_label_colliding_custom_endpoint_charges() {
     let models = vec![
         model("gpt-5.5", 100, PRIMARY_AGENT_CATEGORY),
         ModelTokenUsage {
-            model_id: "labeled-config-key".to_string(),
+            model_id: "gpt-5.5".to_string(),
             custom_endpoint_tokens: 200,
             custom_endpoint_token_usage_by_category: HashMap::from([(
                 PRIMARY_AGENT_CATEGORY.to_string(),
@@ -171,15 +182,17 @@ fn model_usage_rows_does_not_merge_label_colliding_custom_endpoint_charges() {
         },
     ];
 
-    let rows = model_usage_rows(&models, &charged_usage_by_key, |config_key| {
-        format!("labeled-{config_key}")
-    });
+    let rows = model_usage_rows(&models, &charged_usage_by_key, identity_labels);
     let totals = RowTotals::of_model_rows(&rows);
 
-    let standard_row = rows.iter().find(|r| r.model_id == "gpt-5.5").unwrap();
+    assert_eq!(rows.len(), 2);
+    let standard_row = rows
+        .iter()
+        .find(|r| r.key == ModelRowKey::Standard("gpt-5.5".into()))
+        .unwrap();
     let custom_row = rows
         .iter()
-        .find(|r| r.model_id == "labeled-config-key")
+        .find(|r| r.key == ModelRowKey::CustomEndpoint("gpt-5.5".into()))
         .unwrap();
     assert_eq!(standard_row.tokens, 100);
     assert_eq!(standard_row.cost, Some(CostValue::new(0.0, 100.0)));
@@ -189,7 +202,58 @@ fn model_usage_rows_does_not_merge_label_colliding_custom_endpoint_charges() {
     assert_eq!(totals.cost, Some(CostValue::new(0.0, 300.0)));
 }
 
-/// The row total must equal the sum of the breakdown rows shown beneath it,
+/// Ambiguous legacy labels — two custom endpoints configured with the same
+/// display alias, only one of which has attributed charges — have an explicit,
+/// order-independent rule: same-label token rows merge into one row (summed
+/// buckets) and all same-label charges sum onto it, so the displayed row is
+/// identical regardless of which token row comes first.
+#[test]
+fn model_usage_rows_merges_same_label_custom_rows_and_charges_in_any_order() {
+    let messages = [request_metadata_message(api::RequestCharges {
+        usage_by_category: HashMap::from([(
+            PRIMARY_AGENT_CATEGORY.to_string(),
+            charged_usage(
+                HashMap::new(),
+                HashMap::new(),
+                single_model_usage("k1", 100, 10.0),
+            ),
+        )]),
+    })];
+    let charged_usage_by_key = sum_charged_usage_by_key(messages.iter());
+    let custom_row = |tokens: u32| ModelTokenUsage {
+        model_id: "shared-alias".to_string(),
+        custom_endpoint_tokens: tokens,
+        ..Default::default()
+    };
+    // Both endpoints resolve to the same display alias, so their charge keys
+    // only separate by config_key.
+    let shared_alias = |_config_key: &str| "shared-alias".to_string();
+
+    let charged_first = model_usage_rows(
+        &[custom_row(100), custom_row(200)],
+        &charged_usage_by_key,
+        shared_alias,
+    );
+    let uncharged_first = model_usage_rows(
+        &[custom_row(200), custom_row(100)],
+        &charged_usage_by_key,
+        shared_alias,
+    );
+
+    for rows in [&charged_first, &uncharged_first] {
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].key,
+            ModelRowKey::CustomEndpoint("shared-alias".into())
+        );
+        assert_eq!(rows[0].label, "shared-alias");
+        // The merged row displays its charged usage when it has one, so the
+        // row total matches the breakdown shown when it's expanded.
+        assert_eq!(rows[0].tokens, 100);
+        assert_eq!(rows[0].cost, Some(CostValue::new(0.0, 10.0)));
+    }
+    assert_eq!(charged_first, uncharged_first);
+}
 /// including cache buckets and web search.
 #[test]
 fn model_usage_row_totals_match_the_charged_usage_breakdown_rows() {
@@ -654,4 +718,95 @@ fn conversation_total_text_uses_the_charged_usage_totals() {
         conversation_total_text(&conversation, UsageDisplayUnit::Dollars),
         "$1.00"
     );
+}
+
+fn server_conversation_metadata() -> ServerAIConversationMetadata {
+    ServerAIConversationMetadata {
+        title: "Conversation".to_string(),
+        working_directory: None,
+        harness: AIAgentHarness::ClaudeCode,
+        usage: ConversationUsageMetadata::default(),
+        metadata: ServerMetadata {
+            uid: ServerId::default(),
+            revision: Revision::now(),
+            metadata_last_updated_ts: Utc::now().into(),
+            trashed_ts: None,
+            folder_id: None,
+            is_welcome_object: false,
+            creator_uid: Some(TEST_USER_UID.to_string()),
+            last_editor_uid: None,
+            current_editor_uid: None,
+        },
+        creator: None,
+        permissions: ServerPermissions {
+            space: Owner::mock_current_user(),
+            guests: Vec::<ServerObjectGuest>::new(),
+            anyone_link_sharing: None,
+            permissions_last_updated_ts: Utc::now().into(),
+        },
+        ambient_agent_task_id: None,
+        server_conversation_token: ServerConversationToken::new(
+            "server-conversation-token".to_string(),
+        ),
+        artifacts: vec![],
+    }
+}
+
+/// The popover must react to usage events for its own conversation (the
+/// footer's re-renders don't reach it as a child view) and ignore events for
+/// other conversations.
+#[test]
+fn usage_popover_reacts_to_its_conversations_usage_events() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+
+        let (conversation_id, other_conversation_id) = app.update(|ctx| {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
+                let conversation_id =
+                    model.start_new_conversation(terminal.id(), false, false, false, ctx);
+                let other_conversation_id =
+                    model.start_new_conversation(terminal.id(), false, false, false, ctx);
+                (conversation_id, other_conversation_id)
+            })
+        });
+
+        let popover = app.add_typed_action_view(window_id, |ctx| {
+            UsagePopoverView::new(Some(conversation_id), ctx)
+        });
+
+        let count = popover.update(&mut app, |popover, _| popover.usage_event_count_for_test());
+        assert_eq!(count, 0);
+
+        // Events flush when the outermost update finishes, so event dispatch
+        // and the assertion are kept in separate app-level updates.
+        app.update(|ctx| {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
+                let mut metadata = server_conversation_metadata();
+                metadata.usage.total_provider_cost_in_cents = Some(250.0);
+                model.set_server_metadata_for_conversation(conversation_id, metadata, ctx);
+            });
+        });
+        let count = popover.update(&mut app, |popover, _| popover.usage_event_count_for_test());
+        assert_eq!(count, 1);
+
+        // Another conversation's usage events don't reach this popover.
+        app.update(|ctx| {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
+                let mut metadata = server_conversation_metadata();
+                metadata.usage.total_provider_cost_in_cents = Some(999.0);
+                model.set_server_metadata_for_conversation(other_conversation_id, metadata, ctx);
+            });
+        });
+        let count = popover.update(&mut app, |popover, _| popover.usage_event_count_for_test());
+        assert_eq!(count, 1);
+
+        // The event changed the headline's data source, not just a flag.
+        let headline = app.read(|ctx| {
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            let conversation = history.conversation(&conversation_id).unwrap();
+            conversation_total_text(conversation, UsageDisplayUnit::Dollars)
+        });
+        assert_eq!(headline, "$2.50");
+    });
 }

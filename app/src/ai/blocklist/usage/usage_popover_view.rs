@@ -1,5 +1,7 @@
 //! The "Conversation" usage popover, anchored to the footer's usage icon.
 
+#[cfg(test)]
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -54,8 +56,8 @@ pub enum UsagePopoverAction {
     /// the popover.
     RequestClose,
     /// Toggles the per-model token/cost breakdown subsection for the given
-    /// model id.
-    ToggleModelExpanded(String),
+    /// row.
+    ToggleModelExpanded(ModelRowKey),
 }
 
 /// Emitted when the popover should be closed, so the footer (which owns
@@ -103,9 +105,7 @@ fn space_between_row() -> Flex {
         .with_main_axis_size(MainAxisSize::Max)
 }
 
-/// Floating "Conversation" usage popover. The footer owns a single
-/// long-lived instance and calls [`Self::reset_for_conversation`] each time
-/// the popover opens.
+/// Floating "Conversation" usage popover.
 pub struct UsagePopoverView {
     /// `None` until the footer first opens the popover and points it at the
     /// active conversation.
@@ -113,10 +113,10 @@ pub struct UsagePopoverView {
     model_usage_section_expanded: bool,
     tool_call_summary_section_expanded: bool,
     response_time_section_expanded: bool,
-    /// Model ids whose per-model breakdown subsection is currently expanded.
-    /// Keyed by model id rather than a fixed set of fields since the list of
-    /// models is dynamic per-conversation.
-    expanded_model_ids: HashSet<String>,
+    /// Rows whose per-model breakdown subsection is currently expanded.
+    /// Keyed by row identity rather than a fixed set of fields since the list
+    /// of models is dynamic per-conversation.
+    expanded_model_ids: HashSet<ModelRowKey>,
     /// Hover state per tooltip, keyed by a string unique to each hoverable
     /// instance. The handles must persist across renders: the hover-in delay
     /// never fires on a handle rebuilt every frame.
@@ -125,6 +125,10 @@ pub struct UsagePopoverView {
     tool_call_summary_toggle_mouse_state: MouseStateHandle,
     response_time_toggle_mouse_state: MouseStateHandle,
     view_account_usage_mouse_state: MouseStateHandle,
+    /// Count of usage-relevant history events that reached this popover.
+    /// Notification itself has no observable state, so tests count it.
+    #[cfg(test)]
+    usage_event_count_for_test: Cell<usize>,
 }
 
 impl UsagePopoverView {
@@ -136,15 +140,17 @@ impl UsagePopoverView {
                 ctx.notify();
             }
         });
-        // Usage updates notify the history model's subscribers; the footer
-        // re-renders itself but not this child view, so the open popover must
-        // listen for its own conversation's usage changes.
+        // The footer's re-renders don't reach this child view.
         ctx.subscribe_to_model(
             &BlocklistAIHistoryModel::handle(ctx),
             |me, _, event, ctx| {
                 let touched_conversation_id = match event {
                     BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated {
                         conversation_id,
+                    }
+                    | BlocklistAIHistoryEvent::UpdatedConversationMetadata {
+                        conversation_id,
+                        ..
                     }
                     | BlocklistAIHistoryEvent::RemoveConversation {
                         conversation_id, ..
@@ -155,6 +161,9 @@ impl UsagePopoverView {
                     _ => None,
                 };
                 if touched_conversation_id.is_some_and(|id| Some(id) == me.conversation_id) {
+                    #[cfg(test)]
+                    me.usage_event_count_for_test
+                        .set(me.usage_event_count_for_test.get() + 1);
                     ctx.notify();
                 }
             },
@@ -170,6 +179,8 @@ impl UsagePopoverView {
             tool_call_summary_toggle_mouse_state: MouseStateHandle::default(),
             response_time_toggle_mouse_state: MouseStateHandle::default(),
             view_account_usage_mouse_state: MouseStateHandle::default(),
+            #[cfg(test)]
+            usage_event_count_for_test: Cell::new(0),
         }
     }
 
@@ -178,10 +189,14 @@ impl UsagePopoverView {
         self.conversation_id
     }
 
+    #[cfg(test)]
+    pub fn usage_event_count_for_test(&self) -> usize {
+        self.usage_event_count_for_test.get()
+    }
+
     /// Points this (reused) popover at `conversation_id` and resets all
     /// section-collapse state back to [`Self::new`]'s defaults. Subscriptions
-    /// are deliberately not re-registered: they are bound to the view's
-    /// identity, which outlives any single conversation.
+    /// live on the view and must not be re-registered here.
     pub fn reset_for_conversation(
         &mut self,
         conversation_id: AIConversationId,
@@ -532,12 +547,12 @@ impl UsagePopoverView {
         let background = theme.surface_2();
         let font_size = appearance.ui_font_size();
         let color = chart_color(index);
-        let expanded = self.expanded_model_ids.contains(&row.model_id);
+        let expanded = self.expanded_model_ids.contains(&row.key);
 
         let badge = row.role.and_then(ModelRole::badge_label);
         let full_label = match badge {
-            Some(badge) => format!("{} ({badge})", row.model_id),
-            None => row.model_id.clone(),
+            Some(badge) => format!("{} ({badge})", row.label),
+            None => row.label.clone(),
         };
         let chevron_color = blended_colors::text_disabled(theme, background);
         let chevron_icon = if expanded {
@@ -554,7 +569,7 @@ impl UsagePopoverView {
         label_row.add_child(
             Shrinkable::new(
                 1.,
-                Text::new(row.model_id.clone(), appearance.ui_font_family(), font_size)
+                Text::new(row.label.clone(), appearance.ui_font_family(), font_size)
                     .with_color(blended_colors::text_main(theme, background))
                     .soft_wrap(false)
                     .with_clip(ClipConfig::ellipsis())
@@ -575,7 +590,7 @@ impl UsagePopoverView {
         }
 
         let label_with_tooltip = with_tooltip(
-            self.hover_state_for(format!("label:model:{}", row.model_id)),
+            self.hover_state_for(format!("label:model:{}", row.key.hover_key())),
             label_row.finish(),
             full_label,
             appearance,
@@ -598,7 +613,7 @@ impl UsagePopoverView {
         .with_color(blended_colors::text_main(theme, background))
         .finish();
         let value = self.maybe_with_tooltip(
-            format!("value:model:{}", row.model_id),
+            format!("value:model:{}", row.key.hover_key()),
             value,
             exact_token_count_tooltip(row.tokens),
             appearance,
@@ -621,12 +636,10 @@ impl UsagePopoverView {
 
         // Only the summary row toggles; wrapping the whole column would make
         // any click inside the expanded breakdown collapse it again.
-        let model_id = row.model_id.clone();
+        let row_key = row.key.clone();
         let summary_row = EventHandler::new(summary_row)
             .on_left_mouse_down(move |ctx, _, _| {
-                ctx.dispatch_typed_action(UsagePopoverAction::ToggleModelExpanded(
-                    model_id.clone(),
-                ));
+                ctx.dispatch_typed_action(UsagePopoverAction::ToggleModelExpanded(row_key.clone()));
                 DispatchEventResult::StopPropagation
             })
             .finish();
@@ -635,7 +648,7 @@ impl UsagePopoverView {
         if expanded {
             let breakdown = match row.charged_usage {
                 Some(charged_usage) => self.render_charged_usage_breakdown(
-                    &row.model_id,
+                    &row.key,
                     &charged_usage,
                     usage_display_unit,
                     appearance,
@@ -667,19 +680,21 @@ impl UsagePopoverView {
     /// omitted for categories the model didn't incur (e.g. cache tokens
     /// only apply to Anthropic models, and web searches are relatively
     /// rare). Each token-count row gets an "exact amount" tooltip when its
-    /// value is large enough to be abbreviated, keyed by `model_id` plus a
-    /// per-category suffix so each row has its own persistent hover state.
+    /// value is large enough to be abbreviated, keyed by the row's hover key
+    /// plus a per-category suffix so each row has its own persistent hover
+    /// state.
     fn render_charged_usage_breakdown(
         &self,
-        model_id: &str,
+        row_key: &ModelRowKey,
         charged_usage: &ModelChargedUsage,
         usage_display_unit: UsageDisplayUnit,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
+        let hover_key = row_key.hover_key();
         let mut column = Flex::column().with_spacing(4.);
         if charged_usage.input_tokens > 0 {
             column.add_child(self.render_label_value_row_with_tooltip(
-                format!("value:model:{model_id}:input"),
+                format!("value:model:{hover_key}:input"),
                 "Input tokens",
                 format_tokens_and_cost(
                     Some(u64::from(charged_usage.input_tokens)),
@@ -692,7 +707,7 @@ impl UsagePopoverView {
         }
         if charged_usage.output_tokens > 0 {
             column.add_child(self.render_label_value_row_with_tooltip(
-                format!("value:model:{model_id}:output"),
+                format!("value:model:{hover_key}:output"),
                 "Output tokens",
                 format_tokens_and_cost(
                     Some(u64::from(charged_usage.output_tokens)),
@@ -705,7 +720,7 @@ impl UsagePopoverView {
         }
         if charged_usage.input_cache_read_tokens > 0 {
             column.add_child(self.render_label_value_row_with_tooltip(
-                format!("value:model:{model_id}:cache_read"),
+                format!("value:model:{hover_key}:cache_read"),
                 "Cache read tokens",
                 format_tokens_and_cost(
                     Some(u64::from(charged_usage.input_cache_read_tokens)),
@@ -718,7 +733,7 @@ impl UsagePopoverView {
         }
         if charged_usage.input_cache_write_tokens > 0 {
             column.add_child(self.render_label_value_row_with_tooltip(
-                format!("value:model:{model_id}:cache_write"),
+                format!("value:model:{hover_key}:cache_write"),
                 "Cache write tokens",
                 format_tokens_and_cost(
                     Some(u64::from(charged_usage.input_cache_write_tokens)),
@@ -1009,9 +1024,9 @@ impl TypedActionView for UsagePopoverView {
             UsagePopoverAction::RequestClose => {
                 ctx.emit(UsagePopoverEvent::Close);
             }
-            UsagePopoverAction::ToggleModelExpanded(model_id) => {
-                if !self.expanded_model_ids.remove(model_id) {
-                    self.expanded_model_ids.insert(model_id.clone());
+            UsagePopoverAction::ToggleModelExpanded(row_key) => {
+                if !self.expanded_model_ids.remove(row_key) {
+                    self.expanded_model_ids.insert(row_key.clone());
                 }
                 ctx.notify();
             }
@@ -1037,9 +1052,32 @@ impl ModelRole {
     }
 }
 
+/// Stable identity of a per-model row, kept distinct from the display label:
+/// a standard model and a custom endpoint (or two custom endpoints sharing an
+/// alias) can display the same label but must not share expansion state or
+/// tooltip hover state.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ModelRowKey {
+    Standard(String),
+    /// Keyed by the display label of the merged custom-endpoint row.
+    CustomEndpoint(String),
+}
+
+impl ModelRowKey {
+    /// Stable string key backing this row's tooltip hover state.
+    fn hover_key(&self) -> String {
+        match self {
+            Self::Standard(model_id) => format!("standard:{model_id}"),
+            Self::CustomEndpoint(label) => format!("custom:{label}"),
+        }
+    }
+}
+
 /// One row of the per-model usage breakdown.
+#[derive(Debug, PartialEq)]
 struct ModelUsageRow {
-    model_id: String,
+    key: ModelRowKey,
+    label: String,
     role: Option<ModelRole>,
     tokens: u64,
     cost: Option<CostValue>,
@@ -1143,6 +1181,28 @@ impl ModelChargedUsage {
     /// zero-cost row.
     fn has_activity(&self) -> bool {
         self.tokens() > 0 || self.web_search_count > 0 || self.cost() != CostValue::new(0., 0.)
+    }
+
+    fn merge_from(&mut self, other: &Self) {
+        self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
+        self.input_cache_read_tokens = self
+            .input_cache_read_tokens
+            .saturating_add(other.input_cache_read_tokens);
+        self.input_cache_write_tokens = self
+            .input_cache_write_tokens
+            .saturating_add(other.input_cache_write_tokens);
+        self.input_cost_in_cents += other.input_cost_in_cents;
+        self.output_cost_in_cents += other.output_cost_in_cents;
+        self.input_cache_read_cost_in_cents += other.input_cache_read_cost_in_cents;
+        self.input_cache_write_cost_in_cents += other.input_cache_write_cost_in_cents;
+        self.input_cost_in_credits += other.input_cost_in_credits;
+        self.output_cost_in_credits += other.output_cost_in_credits;
+        self.input_cache_read_cost_in_credits += other.input_cache_read_cost_in_credits;
+        self.input_cache_write_cost_in_credits += other.input_cache_write_cost_in_credits;
+        self.web_search_count = self.web_search_count.saturating_add(other.web_search_count);
+        self.web_search_cost_in_cents += other.web_search_cost_in_cents;
+        self.web_search_cost_in_credits += other.web_search_cost_in_credits;
     }
 
     fn add(&mut self, usage: &api::InferenceUsage) {
@@ -1259,87 +1319,147 @@ impl RowTotals {
 }
 
 /// Joins a standard token row with its charged usage, keyed by the server
-/// model id, marking the charge consumed so it can never attach to a second
-/// row.
+/// model id. The charge attaches to at most one row: an already-consumed key
+/// is skipped, so a duplicate row falls back to its reported tokens.
 fn charged_usage_for_standard_row(
     model_id: &str,
     charged_usage_by_key: &HashMap<ModelChargeKey, ModelChargedUsage>,
     consumed_keys: &mut HashSet<ModelChargeKey>,
 ) -> Option<ModelChargedUsage> {
     let key = ModelChargeKey::Standard(model_id.to_string());
+    if consumed_keys.contains(&key) {
+        return None;
+    }
     charged_usage_by_key.get(&key).map(|charged_usage| {
         consumed_keys.insert(key);
         *charged_usage
     })
 }
 
-/// Joins a custom-endpoint token row with its charged usage. Both are labeled
-/// through the same display-label lookup, so the join is by label; the first
-/// unconsumed matching charge wins, so each charge attaches to at most one
-/// row even when labels collide.
-fn charged_usage_for_custom_row(
+/// Sums every custom-endpoint charge whose display label matches the given
+/// (merged) custom row's label. Row order therefore cannot change attribution:
+/// same-label rows were already merged, and same-label charges all sum onto
+/// that one row.
+fn charged_usage_for_custom_label(
     label: &str,
     charged_usage_by_key: &HashMap<ModelChargeKey, ModelChargedUsage>,
     custom_endpoint_label: impl Fn(&str) -> String,
     consumed_keys: &mut HashSet<ModelChargeKey>,
 ) -> Option<ModelChargedUsage> {
-    charged_usage_by_key
-        .iter()
-        .find(|(key, _)| match key {
-            ModelChargeKey::CustomEndpoint(config_key) => {
-                !consumed_keys.contains(key) && custom_endpoint_label(config_key) == label
-            }
-            ModelChargeKey::Standard(_) => false,
-        })
-        .map(|(key, charged_usage)| {
+    let mut joined: Option<ModelChargedUsage> = None;
+    for (key, charged_usage) in charged_usage_by_key {
+        if let ModelChargeKey::CustomEndpoint(config_key) = key
+            && custom_endpoint_label(config_key) == label
+        {
             consumed_keys.insert(key.clone());
-            *charged_usage
-        })
+            joined
+                .get_or_insert_with(Default::default)
+                .merge_from(charged_usage);
+        }
+    }
+    joined
+}
+
+/// Merges the three token buckets and their per-category breakdowns.
+fn merge_model_token_usage(target: &mut ModelTokenUsage, source: &ModelTokenUsage) {
+    target.warp_tokens = target.warp_tokens.saturating_add(source.warp_tokens);
+    target.byok_tokens = target.byok_tokens.saturating_add(source.byok_tokens);
+    target.custom_endpoint_tokens = target
+        .custom_endpoint_tokens
+        .saturating_add(source.custom_endpoint_tokens);
+    let category_maps = [
+        (
+            &mut target.warp_token_usage_by_category,
+            &source.warp_token_usage_by_category,
+        ),
+        (
+            &mut target.byok_token_usage_by_category,
+            &source.byok_token_usage_by_category,
+        ),
+        (
+            &mut target.custom_endpoint_token_usage_by_category,
+            &source.custom_endpoint_token_usage_by_category,
+        ),
+    ];
+    for (target_map, source_map) in category_maps {
+        for (category, tokens) in source_map {
+            let entry = target_map.entry(category.clone()).or_default();
+            *entry = entry.saturating_add(*tokens);
+        }
+    }
 }
 
 /// Builds the sorted per-model row list. Rows are ordered primary-agent-first,
 /// then alphabetically by model id.
+///
+/// Custom-endpoint token rows are indistinguishable in the UI beyond their
+/// display label, so rows sharing a label merge into one row (summed
+/// buckets), and all same-label custom charges sum onto that merged row. The
+/// result is independent of the token rows' order.
 fn model_usage_rows(
     models: &[ModelTokenUsage],
     charged_usage_by_key: &HashMap<ModelChargeKey, ModelChargedUsage>,
     custom_endpoint_label: impl Fn(&str) -> String,
 ) -> Vec<ModelUsageRow> {
     let mut consumed_keys: HashSet<ModelChargeKey> = HashSet::new();
-    let mut rows: Vec<ModelUsageRow> = models
-        .iter()
-        .filter_map(|model| {
-            let reported_tokens = model.warp_tokens as u64
-                + model.byok_tokens as u64
-                + model.custom_endpoint_tokens as u64;
-            let charged_usage = if model.custom_endpoint_tokens > 0 {
-                charged_usage_for_custom_row(
-                    &model.model_id,
-                    charged_usage_by_key,
-                    &custom_endpoint_label,
-                    &mut consumed_keys,
-                )
-            } else {
-                charged_usage_for_standard_row(
-                    &model.model_id,
-                    charged_usage_by_key,
-                    &mut consumed_keys,
-                )
-            };
-            if reported_tokens == 0 && charged_usage.is_none() {
-                return None;
-            }
-            Some(ModelUsageRow {
-                model_id: model.model_id.clone(),
-                role: role_for_model(model),
-                tokens: charged_usage
-                    .as_ref()
-                    .map(ModelChargedUsage::tokens)
-                    .unwrap_or(reported_tokens),
-                cost: charged_usage.as_ref().map(ModelChargedUsage::cost),
-                charged_usage,
-            })
-        })
-        .collect();
+    let mut rows: Vec<ModelUsageRow> = Vec::new();
+    let mut custom_rows_by_label: HashMap<String, ModelTokenUsage> = HashMap::new();
+    for model in models {
+        if model.custom_endpoint_tokens > 0 {
+            let merged = custom_rows_by_label
+                .entry(model.model_id.clone())
+                .or_insert_with(|| ModelTokenUsage {
+                    model_id: model.model_id.clone(),
+                    ..Default::default()
+                });
+            merge_model_token_usage(merged, model);
+            continue;
+        }
+
+        let reported_tokens = model.warp_tokens as u64 + model.byok_tokens as u64;
+        let charged_usage = charged_usage_for_standard_row(
+            &model.model_id,
+            charged_usage_by_key,
+            &mut consumed_keys,
+        );
+        if reported_tokens == 0 && charged_usage.is_none() {
+            continue;
+        }
+        rows.push(ModelUsageRow {
+            key: ModelRowKey::Standard(model.model_id.clone()),
+            label: model.model_id.clone(),
+            role: role_for_model(model),
+            tokens: charged_usage
+                .as_ref()
+                .map(ModelChargedUsage::tokens)
+                .unwrap_or(reported_tokens),
+            cost: charged_usage.as_ref().map(ModelChargedUsage::cost),
+            charged_usage,
+        });
+    }
+    for (label, merged) in custom_rows_by_label {
+        let reported_tokens = u64::from(merged.custom_endpoint_tokens);
+        let charged_usage = charged_usage_for_custom_label(
+            &label,
+            charged_usage_by_key,
+            &custom_endpoint_label,
+            &mut consumed_keys,
+        );
+        if reported_tokens == 0 && charged_usage.is_none() {
+            continue;
+        }
+        rows.push(ModelUsageRow {
+            key: ModelRowKey::CustomEndpoint(label.clone()),
+            label,
+            role: role_for_model(&merged),
+            tokens: charged_usage
+                .as_ref()
+                .map(ModelChargedUsage::tokens)
+                .unwrap_or(reported_tokens),
+            cost: charged_usage.as_ref().map(ModelChargedUsage::cost),
+            charged_usage,
+        });
+    }
     // Charges without a token row to join (e.g. a restore that dropped token
     // metadata) still rendered, as long as they would not be invisible zeros.
     for (key, charged_usage) in charged_usage_by_key {
@@ -1347,7 +1467,13 @@ fn model_usage_rows(
             continue;
         }
         rows.push(ModelUsageRow {
-            model_id: key.display_label(&custom_endpoint_label),
+            key: match key {
+                ModelChargeKey::Standard(model_id) => ModelRowKey::Standard(model_id.clone()),
+                ModelChargeKey::CustomEndpoint(config_key) => {
+                    ModelRowKey::CustomEndpoint(custom_endpoint_label(config_key))
+                }
+            },
+            label: key.display_label(&custom_endpoint_label),
             role: None,
             tokens: charged_usage.tokens(),
             cost: Some(charged_usage.cost()),
@@ -1359,7 +1485,7 @@ fn model_usage_rows(
         match (primary(a.role), primary(b.role)) {
             (true, false) => Ordering::Less,
             (false, true) => Ordering::Greater,
-            _ => a.model_id.cmp(&b.model_id),
+            _ => a.label.cmp(&b.label),
         }
     });
     rows
@@ -1472,10 +1598,9 @@ fn render_tooltip_box(text: String, appearance: &Appearance) -> Box<dyn Element>
     .finish()
 }
 
-/// The conversation-level total from the usage metadata: cumulative charged
-/// usage in credits mode, the server-seeded provider cost in dollars mode.
-/// A conversation with no cost data renders an em dash rather than a fake
-/// zero.
+/// The conversation-level total from the usage metadata: the cumulative
+/// charged usage when known, falling back to the server-seeded provider cost.
+/// A conversation with neither renders an em dash rather than a fake zero.
 pub(crate) fn conversation_total_text(
     conversation: &AIConversation,
     usage_display_unit: UsageDisplayUnit,
