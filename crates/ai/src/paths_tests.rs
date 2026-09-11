@@ -1,10 +1,56 @@
-#[cfg(windows)]
 use std::path::PathBuf;
 
 #[cfg(windows)]
 use warp_terminal::shell::{ShellLaunchData, ShellType};
 
 use super::*;
+#[test]
+fn shell_native_absolute_path_preserves_windows_path_for_windows_cwd() {
+    let cwd = Some(r"C:\workspace\project".to_string());
+
+    assert_eq!(
+        shell_native_absolute_path_for_display(
+            r"C:\workspace\project\src\main.rs",
+            None,
+            cwd.as_ref()
+        ),
+        r"C:\workspace\project\src\main.rs"
+    );
+}
+
+#[test]
+fn shell_native_absolute_path_resolves_relative_path_for_windows_cwd() {
+    let cwd = Some(r"C:\workspace\project".to_string());
+
+    assert_eq!(
+        shell_native_absolute_path_for_display(r"src\main.rs", None, cwd.as_ref()),
+        r"C:\workspace\project\src\main.rs"
+    );
+}
+
+#[test]
+fn shell_native_absolute_path_for_display_uses_unix_paths_for_docker_sandbox() {
+    let shell = ShellLaunchData::DockerSandbox {
+        sbx_path: PathBuf::from("/usr/bin/sbx"),
+        base_image: None,
+    };
+    let cwd = Some("/workspace".to_string());
+
+    assert_eq!(
+        shell_native_absolute_path_for_display("src/main.rs", Some(&shell), cwd.as_ref()),
+        "/workspace/src/main.rs"
+    );
+}
+
+#[test]
+fn shell_native_absolute_path_for_display_preserves_unix_path_for_unix_cwd() {
+    let cwd = Some("/workspace/project".to_string());
+
+    assert_eq!(
+        shell_native_absolute_path_for_display("/workspace/src/main.rs", None, cwd.as_ref()),
+        "/workspace/src/main.rs"
+    );
+}
 
 #[cfg(unix)]
 #[test]

@@ -17,6 +17,31 @@ fn use_unix_paths(shell: Option<&ShellLaunchData>) -> bool {
         })
 }
 
+fn target_uses_unix_paths(
+    shell: Option<&ShellLaunchData>,
+    current_working_directory: &str,
+) -> bool {
+    if shell.is_some_and(|shell| {
+        matches!(
+            shell,
+            ShellLaunchData::WSL { .. }
+                | ShellLaunchData::MSYS2 { .. }
+                | ShellLaunchData::DockerSandbox { .. }
+        )
+    }) {
+        return true;
+    }
+
+    let current_working_directory = TypedPath::derive(current_working_directory);
+    if current_working_directory.is_windows() {
+        false
+    } else if current_working_directory.is_absolute() {
+        true
+    } else {
+        use_unix_paths(shell)
+    }
+}
+
 pub fn join_paths(paths: &[&str], shell: Option<&ShellLaunchData>) -> String {
     let use_unix_paths = use_unix_paths(shell);
 
@@ -34,12 +59,11 @@ pub fn join_paths(paths: &[&str], shell: Option<&ShellLaunchData>) -> String {
 
 fn shell_native_absolute_path_internal(
     file_path: &str,
-    shell: Option<&ShellLaunchData>,
     current_working_directory: &str,
+    use_unix_paths: bool,
 ) -> TypedPathBuf {
     let expanded_path = shellexpand::tilde(file_path).into_owned();
 
-    let use_unix_paths = use_unix_paths(shell);
     let (cwd, file_path) = if use_unix_paths {
         (
             TypedPathBuf::from_unix(current_working_directory),
@@ -67,7 +91,21 @@ pub fn shell_native_absolute_path(
     let Some(cwd) = current_working_directory else {
         return shellexpand::tilde(file_path).into_owned();
     };
-    shell_native_absolute_path_internal(file_path, shell, cwd)
+    shell_native_absolute_path_internal(file_path, cwd, use_unix_paths(shell))
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Returns an absolute path encoded for the target session for display.
+pub fn shell_native_absolute_path_for_display(
+    file_path: &str,
+    shell: Option<&ShellLaunchData>,
+    current_working_directory: Option<&String>,
+) -> String {
+    let Some(cwd) = current_working_directory else {
+        return shellexpand::tilde(file_path).into_owned();
+    };
+    shell_native_absolute_path_internal(file_path, cwd, target_uses_unix_paths(shell, cwd))
         .to_string_lossy()
         .into_owned()
 }
@@ -85,7 +123,8 @@ pub fn host_native_absolute_path(
     let Some(cwd) = current_working_directory.as_ref() else {
         return shellexpand::tilde(file_path).into_owned();
     };
-    let normalized_path = shell_native_absolute_path_internal(file_path, shell.as_ref(), cwd);
+    let normalized_path =
+        shell_native_absolute_path_internal(file_path, cwd, use_unix_paths(shell.as_ref()));
 
     match shell {
         Some(ShellLaunchData::WSL { distro }) => {
