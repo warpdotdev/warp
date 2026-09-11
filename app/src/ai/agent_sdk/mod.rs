@@ -70,8 +70,11 @@ use crate::cloud_object::CloudObjectLookup as _;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::send_telemetry_sync_from_app_ctx;
 use crate::server::ids::{ServerId, SyncId};
+use crate::server::retry_strategies::with_retry;
 use crate::server::server_api::ServerApiProvider;
-use crate::server::server_api::ai::{AIClient, AgentConfigSnapshot, GitCredential};
+use crate::server::server_api::ai::{
+    AIClient, AgentConfigSnapshot, GitCredential, TaskGitCredentialsError,
+};
 use crate::server::server_api::managed_secrets::AppManagedSecretManager as ManagedSecretManager;
 use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
@@ -906,19 +909,39 @@ impl AgentDriverRunner {
     async fn fetch_task_git_credentials(
         task_id_str: String,
         ai_client: Arc<dyn AIClient>,
-    ) -> anyhow::Result<Vec<GitCredential>> {
-        let workload_token = warp_isolation_platform::issue_workload_token(Some(
-            std::time::Duration::from_secs(5 * 60),
-        ))
-        .await?
-        .token;
-        // Bootstrap has no prior credential store, so a one-host success would
-        // leave the other host unauthenticated for the first clone. Partial
-        // refresh is reserved for later cycles after stores exist.
-        let response = ai_client
-            .get_task_git_credentials(task_id_str, workload_token, false)
-            .await?;
-        driver::git_credentials::credentials_for_bootstrap(response)
+    ) -> Result<Vec<GitCredential>, TaskGitCredentialsError> {
+        with_retry(
+            "Git credentials bootstrap",
+            || {
+                let task_id_str = task_id_str.clone();
+                let ai_client = Arc::clone(&ai_client);
+                async move {
+                    driver::git_credentials::ensure_workload_token_available()?;
+
+                    let workload_token = warp_isolation_platform::issue_workload_token(Some(
+                        std::time::Duration::from_secs(5 * 60),
+                    ))
+                    .await
+                    .map_err(|error| TaskGitCredentialsError::Request(error.into()))?
+                    .token;
+                    let response = ai_client
+                        .get_task_git_credentials(task_id_str, workload_token, false)
+                        .await?;
+                    driver::git_credentials::credentials_for_bootstrap(response)
+                        .map_err(TaskGitCredentialsError::Request)
+                }
+            },
+            driver::git_credentials::is_retryable,
+            |delay| async move {
+                warpui::r#async::Timer::after(delay).await;
+            },
+            |attempts_made| {
+                driver::git_credentials::GIT_CREDENTIALS_BOOTSTRAP_BACKOFF
+                    .get(attempts_made)
+                    .copied()
+            },
+        )
+        .await
     }
 
     async fn bootstrap_git_credentials_for_task(
@@ -971,9 +994,14 @@ impl AgentDriverRunner {
             })
             .await?;
 
-        let credentials = match Self::fetch_task_git_credentials(task_id_str, ai_client).await {
+        let credentials = match Self::fetch_task_git_credentials(
+            task_id_str.clone(),
+            Arc::clone(&ai_client),
+        )
+        .await
+        {
             Ok(credentials) => credentials,
-            Err(err)
+            Err(TaskGitCredentialsError::Request(err))
                 if err
                     .downcast_ref::<IsolationPlatformError>()
                     .is_some_and(|err| {
@@ -984,9 +1012,9 @@ impl AgentDriverRunner {
                 return Ok(());
             }
             Err(err) if git_credentials_configured_with_gh => {
-                // gh already configured github.com above, so a failed server
-                // fetch degrades to GitHub-only credentials instead of
-                // failing a run that previously worked without the fetch.
+                // gh already configured github.com above, so a failed server fetch degrades to
+                // GitHub-only credentials instead of failing a run that previously worked without
+                // the fetch.
                 log::warn!(
                     "Failed to fetch git credentials; continuing with gh-configured GitHub credentials only: {err:#}"
                 );
@@ -998,9 +1026,7 @@ impl AgentDriverRunner {
                     error = ?err,
                     "Failed to fetch git credentials before skill resolution"
                 );
-                return Err(AgentDriverError::SkillResolutionFailed(format!(
-                    "Failed to fetch git credentials before skill resolution: {err:#}"
-                )));
+                return Err(AgentDriverError::GitCredentialsFetchFailed(err));
             }
         };
         if credentials.is_empty() {
@@ -1533,8 +1559,7 @@ impl AgentDriverRunner {
                 let harness_support_client = foreground
                     .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_harness_support_client())
                     .await?;
-                let resume_conversation_id = AIConversationId::try_from(conversation_id.clone())
-                    .map_err(|err| AgentDriverError::ConversationLoadFailed(format!("{err:#}")))?;
+                let resume_conversation_id = ServerConversationToken::new(conversation_id.clone());
                 Ok(
                     h.fetch_resume_payload(&resume_conversation_id, harness_support_client)
                         .await?

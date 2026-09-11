@@ -81,7 +81,10 @@ pub trait ManagedSecretsClient: 'static + Send + Sync {
         description: Option<String>,
     ) -> Result<ManagedSecret>;
 
-    async fn list_secrets(&self, request_scope: &Self::RequestScope) -> Result<Vec<ManagedSecret>>;
+    async fn list_secrets(
+        &self,
+        request_scope: Option<&Self::RequestScope>,
+    ) -> Result<Vec<ManagedSecret>>;
 
     /// List managed secrets that authenticate the given harness.
     /// Returns an empty list for harnesses that do not use auth secrets (e.g. Oz).

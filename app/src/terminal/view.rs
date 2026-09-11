@@ -546,6 +546,7 @@ use crate::workspace::view::cloud_agent_capacity_modal::CloudAgentCapacityModalV
 use crate::workspace::{
     CommandSearchOptions, ForkAIConversationParams, ForkFromExchange,
     ForkedConversationDestination, OneTimeModalModel, ToastStack, WorkspaceAction,
+    WorkspaceRegistry,
 };
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::CustomerType;
@@ -8896,6 +8897,24 @@ impl TerminalView {
         }
     }
 
+    /// Handles a shared-session cancel control action (a viewer's stop or a server-side steering
+    /// interrupt) for the live conversation bound to `server_conversation_token`. The conversation
+    /// is stopped the same way a local stop is, so an in-flight agent command is interrupted along
+    /// with the turn rather than left running to completion.
+    #[cfg(feature = "local_tty")]
+    pub(crate) fn handle_shared_session_cancel_action(
+        &mut self,
+        server_conversation_token: SessionSharingServerConversationToken,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let conversation_id = self.ai_controller.update(ctx, |controller, ctx| {
+            controller.conversation_for_shared_session_cancel_action(server_conversation_token, ctx)
+        });
+        if let Some(conversation_id) = conversation_id {
+            self.stop_local_agent_conversation(conversation_id, ctx);
+        }
+    }
+
     fn user_write_ctrl_c_to_pty(&mut self, ctx: &mut ViewContext<Self>) {
         self.write_user_bytes_to_pty(vec![escape_sequences::C0::ETX], ctx);
     }
@@ -12165,7 +12184,17 @@ impl TerminalView {
                 // case, we want the block to be focused because otherwise,
                 // users get stuck as they'd otherwise need to click into the
                 // box to respond to whether or not they want to update oh my zsh.
-                self.focus_terminal(ctx);
+                //
+                // Skipped while a tab or tab-group rename editor is focused. Taking focus
+                // would end the rename and lose user inputs (#14241).
+                let inline_rename_editor_is_focused = WorkspaceRegistry::as_ref(ctx)
+                    .get(self.window_id, ctx)
+                    .is_some_and(|workspace| {
+                        workspace.as_ref(ctx).is_inline_rename_editor_focused(ctx)
+                    });
+                if !inline_rename_editor_is_focused {
+                    self.focus_terminal(ctx);
+                }
             }
             ModelEvent::AfterBlockStarted {
                 command,
@@ -13613,8 +13642,8 @@ impl TerminalView {
         &self,
         ctx: &AppContext,
     ) -> Option<AIConversationId> {
-        let task_id =
-            LocalAgentTaskSyncModel::as_ref(ctx).task_id_for_terminal_view(self.view_id)?;
+        let task_id = LocalAgentTaskSyncModel::as_ref(ctx)
+            .cli_harness_task_id_for_terminal_view(self.view_id)?;
         let matches_task = |conversation: &&AIConversation| conversation.task_id() == Some(task_id);
 
         let history_model = BlocklistAIHistoryModel::as_ref(ctx);

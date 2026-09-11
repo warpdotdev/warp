@@ -127,11 +127,6 @@ impl WindowManager {
             .set_all_windows_background_blur_radius(blur_radius_pixels)
     }
 
-    pub fn set_all_windows_background_blur_texture(&self, use_blur_texture: bool) {
-        self.platform
-            .set_all_windows_background_blur_texture(use_blur_texture)
-    }
-
     pub fn set_window_title(&self, window_id: WindowId, title: &str) {
         self.platform.set_window_title(window_id, title)
     }

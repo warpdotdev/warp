@@ -50,6 +50,12 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
             visibility
             featureModelChoice { ... }
           }
+          openTeams {
+            teamUid
+            numMembers
+            name
+            teamAcceptingInvites
+          }
           billingMetadata {
             customerType
             delinquencyStatus

@@ -88,11 +88,21 @@ fn scoped_managed_secret_requests_send_selected_team_header() {
     );
     assert_request_sent(
         mock_graphql_request("ListManagedSecrets", Some(&team_uid_header)),
-        server_api.list_secrets(&request_scope),
+        server_api.list_secrets(Some(&request_scope)),
     );
     assert_request_sent(
         mock_graphql_request("ListHarnessAuthSecrets", Some(&team_uid_header)),
         server_api.list_harness_auth_secrets(&request_scope, AgentHarness::ClaudeCode),
+    );
+}
+
+#[test]
+fn unscoped_managed_secret_list_omits_team_header() {
+    let server_api = server_api();
+
+    assert_request_sent(
+        mock_graphql_request("ListManagedSecrets", None),
+        server_api.list_secrets(None),
     );
 }
 

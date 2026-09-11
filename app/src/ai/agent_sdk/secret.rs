@@ -116,6 +116,13 @@ enum SecretInput {
         value_args: ValueArgs,
         base_url: Option<String>,
     },
+    /// Multi-field container registry credential with dedicated CLI flags.
+    DockerRegistry {
+        host: Option<String>,
+        username: Option<String>,
+        password: Option<String>,
+        password_file: Option<std::path::PathBuf>,
+    },
 }
 
 impl SecretInput {
@@ -152,6 +159,12 @@ impl SecretInput {
                 value_args,
                 base_url,
             } => read_openai_api_key_secret_value(&value_args, base_url),
+            SecretInput::DockerRegistry {
+                host,
+                username,
+                password,
+                password_file,
+            } => read_docker_registry_secret_value(host, username, password, password_file),
         }
     }
 }
@@ -202,6 +215,17 @@ fn create_secret(ctx: &mut AppContext, args: CreateSecretArgs) -> Result<()> {
                 a.common.scope,
             ),
         },
+        Some(CreateProvider::DockerRegistry(a)) => (
+            a.common.name,
+            SecretInput::DockerRegistry {
+                host: a.host,
+                username: a.username,
+                password: a.password,
+                password_file: a.password_file,
+            },
+            a.common.description,
+            a.common.scope,
+        ),
         None => {
             let name = args.name.ok_or_else(|| {
                 anyhow::anyhow!("Secret name is required. Usage: oz secret create <NAME>")
@@ -429,7 +453,7 @@ fn update_secret(ctx: &mut AppContext, args: UpdateSecretArgs) -> Result<()> {
 
             if let Some(secret_value) = secret_value {
                 // Look up the existing secret's type so we use the correct ManagedSecretValue variant.
-                let list_future = manager.list_secrets(request_scope);
+                let list_future = manager.list_secrets(Some(request_scope));
                 ctx.spawn(list_future, move |manager, list_result, ctx| {
                     let secrets = match list_result {
                         Ok(secrets) => secrets,
@@ -504,42 +528,69 @@ fn update_secret(ctx: &mut AppContext, args: UpdateSecretArgs) -> Result<()> {
 fn list_secrets(
     ctx: &mut AppContext,
     output_format: OutputFormat,
-    _args: ListSecretsArgs,
+    args: ListSecretsArgs,
 ) -> Result<()> {
-    ManagedSecretManager::handle(ctx).update(ctx, |manager, ctx| {
-        let request_scope = RequestTeamScope::temporary_managed_secrets_server_fallback();
-        ctx.spawn(
-            manager.list_secrets(request_scope),
-            move |_, result, ctx| match result {
-                Ok(secrets) => {
-                    let secret_infos = secrets.into_iter().map(|secret| {
-                        let owner = match secret.owner.type_ {
-                            SpaceType::User => Owner::User {
-                                user_uid: UserUid::new(secret.owner.uid.inner()),
-                            },
-                            SpaceType::Team => Owner::Team {
-                                team_uid: ServerId::from_string_lossy(secret.owner.uid.inner()),
-                            },
-                        };
-
-                        SecretInfo {
-                            name: secret.name,
-                            scope: super::common::format_owner(&owner).to_string(),
-                            secret_type: secret.type_,
-                            created_at: secret.created_at.utc(),
-                            updated_at: secret.updated_at.utc(),
-                        }
-                    });
-
-                    output::print_list(secret_infos, output_format);
-
-                    ctx.terminate_app(TerminationMode::ForceTerminate, None);
+    ManagedSecretManager::handle(ctx).update(ctx, move |_manager, ctx| {
+        let refresh_future = super::common::refresh_workspace_metadata(ctx);
+        ctx.spawn(refresh_future, move |manager, refresh_result, ctx| {
+            if let Err(err) = refresh_result {
+                super::report_fatal_error(err, ctx);
+                return;
+            }
+            let include_user_secrets = !args.scope.is_team();
+            let include_team_secrets = !args.scope.personal;
+            let request_scope = if args.scope.is_team() {
+                match super::common::request_team_scope_for_cli(&args.scope.team_selection, ctx) {
+                    Ok(request_scope) => Some(request_scope),
+                    Err(err) => {
+                        super::report_fatal_error(err, ctx);
+                        return;
+                    }
                 }
-                Err(err) => {
-                    super::report_fatal_error(err, ctx);
-                }
-            },
-        );
+            } else {
+                None
+            };
+            ctx.spawn(
+                manager.list_secrets(request_scope),
+                move |_, result, ctx| match result {
+                    Ok(secrets) => {
+                        let secret_infos = secrets
+                            .into_iter()
+                            .filter(|secret| match secret.owner.type_ {
+                                SpaceType::User => include_user_secrets,
+                                SpaceType::Team => include_team_secrets,
+                            })
+                            .map(|secret| {
+                                let owner = match secret.owner.type_ {
+                                    SpaceType::User => Owner::User {
+                                        user_uid: UserUid::new(secret.owner.uid.inner()),
+                                    },
+                                    SpaceType::Team => Owner::Team {
+                                        team_uid: ServerId::from_string_lossy(
+                                            secret.owner.uid.inner(),
+                                        ),
+                                    },
+                                };
+
+                                SecretInfo {
+                                    name: secret.name,
+                                    scope: super::common::format_owner(&owner).to_string(),
+                                    secret_type: secret.type_,
+                                    created_at: secret.created_at.utc(),
+                                    updated_at: secret.updated_at.utc(),
+                                }
+                            });
+
+                        output::print_list(secret_infos, output_format);
+
+                        ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                    }
+                    Err(err) => {
+                        super::report_fatal_error(err, ctx);
+                    }
+                },
+            );
+        });
     });
     Ok(())
 }
@@ -850,6 +901,101 @@ fn read_bedrock_access_key_secret_value(
     )))
 }
 
+/// Mirrors the server's registry-host format check (a bare host, no scheme or path), matching
+/// the same rule the web UI enforces client-side.
+fn validate_registry_host(host: &str) -> Result<()> {
+    if host.contains("://") || host.contains('/') {
+        anyhow::bail!("Registry host must not include a scheme or path.");
+    }
+    Ok(())
+}
+
+/// Read a container registry credential secret from dedicated CLI flags or interactive prompts.
+fn read_docker_registry_secret_value(
+    host: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
+    password_file: Option<std::path::PathBuf>,
+) -> Result<Option<ManagedSecretValue>> {
+    const NON_INTERACTIVE_REQUIRED_MSG: &str = "Container registry credentials require --host, --username, and one of --password or --password-file in non-interactive mode";
+
+    // Check once and reuse: querying terminal status is a syscall.
+    let is_terminal = io::stdin().is_terminal();
+
+    let host = match host {
+        Some(v) if !v.is_empty() => v,
+        _ => {
+            if !is_terminal {
+                return Err(anyhow::anyhow!(NON_INTERACTIVE_REQUIRED_MSG));
+            }
+            match inquire::Text::new("Registry host (e.g. ghcr.io):").prompt() {
+                Ok(value) if !value.is_empty() => value,
+                Ok(_) => return Ok(None),
+                Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => {
+                    return Ok(None);
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+    };
+    validate_registry_host(&host)?;
+
+    let username = match username {
+        Some(v) if !v.is_empty() => v,
+        _ => {
+            if !is_terminal {
+                return Err(anyhow::anyhow!(NON_INTERACTIVE_REQUIRED_MSG));
+            }
+            match inquire::Text::new("Registry username:").prompt() {
+                Ok(value) if !value.is_empty() => value,
+                Ok(_) => return Ok(None),
+                Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => {
+                    return Ok(None);
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+    };
+
+    let password = match password {
+        Some(v) if !v.is_empty() => v,
+        _ => {
+            if let Some(password_file) = password_file {
+                let value = fs::read_to_string(&password_file).with_context(|| {
+                    format!(
+                        "Failed to read registry password from: {}",
+                        password_file.display()
+                    )
+                })?;
+                let value = value.trim_end_matches(['\n', '\r']);
+                if value.is_empty() {
+                    return Ok(None);
+                }
+                value.to_owned()
+            } else if !is_terminal {
+                return Err(anyhow::anyhow!(NON_INTERACTIVE_REQUIRED_MSG));
+            } else {
+                match Password::new("Registry password or access token:")
+                    .with_display_toggle_enabled()
+                    .without_confirmation()
+                    .prompt()
+                {
+                    Ok(value) if !value.is_empty() => value,
+                    Ok(_) => return Ok(None),
+                    Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => {
+                        return Ok(None);
+                    }
+                    Err(err) => return Err(err.into()),
+                }
+            }
+        }
+    };
+
+    Ok(Some(ManagedSecretValue::docker_registry(
+        host, username, password,
+    )))
+}
+
 /// Finds the type of an existing secret by name and owner scope.
 fn find_secret_type(
     secrets: &[ManagedSecret],
@@ -881,3 +1027,7 @@ fn format_secret_type(type_: &ManagedSecretType) -> String {
         ManagedSecretType::DockerRegistry => "Container Registry Credential".to_string(),
     }
 }
+
+#[cfg(test)]
+#[path = "secret_tests.rs"]
+mod tests;

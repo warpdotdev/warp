@@ -14,7 +14,7 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use super::*;
-use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::test_support::build_test_http_client;
 use crate::ai::artifacts::Artifact;
 use crate::server::server_api::harness_support::{
@@ -91,18 +91,18 @@ impl FailingUploadTargetsClient {
 
 #[async_trait]
 impl HarnessSupportClient for FailingUploadTargetsClient {
-    async fn create_external_conversation(&self, _format: &str) -> Result<AIConversationId> {
+    async fn create_external_conversation(&self, _format: &str) -> Result<ServerConversationToken> {
         unimplemented!("not used by the coordinator")
     }
     async fn get_transcript_upload_target(
         &self,
-        _conversation_id: &AIConversationId,
+        _conversation_id: &ServerConversationToken,
     ) -> Result<UploadTarget> {
         unimplemented!("not used by the coordinator")
     }
     async fn get_block_snapshot_upload_target(
         &self,
-        _conversation_id: &AIConversationId,
+        _conversation_id: &ServerConversationToken,
     ) -> Result<UploadTarget> {
         unimplemented!("not used by the coordinator")
     }
@@ -191,18 +191,18 @@ impl RecordingClient {
 
 #[async_trait]
 impl HarnessSupportClient for RecordingClient {
-    async fn create_external_conversation(&self, _format: &str) -> Result<AIConversationId> {
+    async fn create_external_conversation(&self, _format: &str) -> Result<ServerConversationToken> {
         unimplemented!("not used by the coordinator")
     }
     async fn get_transcript_upload_target(
         &self,
-        _conversation_id: &AIConversationId,
+        _conversation_id: &ServerConversationToken,
     ) -> Result<UploadTarget> {
         unimplemented!("not used by the coordinator")
     }
     async fn get_block_snapshot_upload_target(
         &self,
-        _conversation_id: &AIConversationId,
+        _conversation_id: &ServerConversationToken,
     ) -> Result<UploadTarget> {
         unimplemented!("not used by the coordinator")
     }

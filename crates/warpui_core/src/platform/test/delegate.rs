@@ -138,10 +138,6 @@ impl platform::WindowManager for WindowManager {
         // no-op for tests
     }
 
-    fn set_all_windows_background_blur_texture(&self, _use_blur_texture: bool) {
-        // no-op for tests
-    }
-
     fn set_window_title(&self, _window_id: WindowId, _title: &str) {
         // no-op for tests
     }

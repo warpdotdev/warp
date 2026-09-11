@@ -58,6 +58,7 @@ use crate::server::server_api::ai::SpawnAgentRequest;
 use crate::server::team_scope::RequestTeamScope;
 use crate::settings::import::model::ImportedConfigModel;
 use crate::settings::{AISettings, AppEditorSettings, RightClickBehavior, WarpPromptSeparator};
+use crate::tab::NewSessionMenuItem;
 use crate::terminal::alt_screen::should_intercept_mouse;
 use crate::terminal::block_list_element::{SnackbarPoint, SnackbarTranslationMode};
 use crate::terminal::block_list_viewport::{ClampingMode, ScrollLines};
@@ -93,7 +94,8 @@ use crate::test_util::terminal::{
 };
 use crate::test_util::{add_window_with_terminal, assert_eventually};
 use crate::view_components::find::FindWithinBlockState;
-use crate::workspace::ToastStack;
+use crate::workspace::view::tests::{initialize_app as initialize_workspace_app, mock_workspace};
+use crate::workspace::{ToastStack, WorkspaceAction};
 use crate::workspaces::user_workspaces::TeamlessScopeForTest;
 
 fn add_window_with_cloud_mode_terminal(app: &mut App) -> ViewHandle<TerminalView> {
@@ -7170,6 +7172,185 @@ fn ctrl_c_after_transfer_takeover_does_not_cancel_conversation() {
     })
 }
 
+/// Subscribes to the terminal view's PTY writes so tests can assert on the bytes forwarded to the
+/// shell.
+fn capture_pty_writes(
+    app: &mut App,
+    terminal: &ViewHandle<TerminalView>,
+) -> Rc<RefCell<Vec<Vec<u8>>>> {
+    let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+    let writes = pty_writes.clone();
+    app.update(|ctx| {
+        ctx.subscribe_to_view(terminal, move |_, event, _| {
+            if let Event::WriteBytesToPty { bytes } = event {
+                writes.borrow_mut().push(bytes.to_vec());
+            }
+        });
+    });
+    pty_writes
+}
+
+/// Starts an in-progress conversation bound to a server token whose agent-requested command is
+/// still running in the active block.
+fn start_conversation_with_running_agent_command(
+    view: &mut TerminalView,
+    server_conversation_token: &SessionSharingServerConversationToken,
+    ctx: &mut ViewContext<TerminalView>,
+) -> AIConversationId {
+    let conversation_id = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+        let conversation_id =
+            history.start_new_conversation(view.view_id, false, false, false, ctx);
+        history.set_server_conversation_token_for_conversation(
+            conversation_id,
+            server_conversation_token.to_string(),
+        );
+        conversation_id
+    });
+
+    let mut model = view.model.lock();
+    model.simulate_long_running_block("echo step-one; sleep 12; echo done-one", "step-one");
+    model
+        .block_list_mut()
+        .active_block_mut()
+        .set_agent_interaction_mode_for_requested_command(
+            AIAgentActionId::from("requested-command".to_owned()),
+            None,
+            conversation_id,
+        );
+    conversation_id
+}
+
+#[test]
+fn shared_session_cancel_action_interrupts_running_agent_command() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        FeatureFlag::AgentView.set_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let pty_writes = capture_pty_writes(&mut app, &terminal);
+        let server_conversation_token = SessionSharingServerConversationToken::new();
+
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            start_conversation_with_running_agent_command(view, &server_conversation_token, ctx)
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_shared_session_cancel_action(server_conversation_token, ctx);
+        });
+
+        assert_eq!(*pty_writes.borrow(), vec![vec![C0::ETX]]);
+        terminal.read(&app, |_, ctx| {
+            let conversation = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .expect("conversation should exist");
+            assert_eq!(conversation.status(), &ConversationStatus::Cancelled);
+        });
+    })
+}
+
+#[test]
+fn shared_session_cancel_action_releases_agent_controlled_command_before_interrupting() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        FeatureFlag::AgentView.set_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let pty_writes = capture_pty_writes(&mut app, &terminal);
+        let server_conversation_token = SessionSharingServerConversationToken::new();
+
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            let conversation_id = start_conversation_with_running_agent_command(
+                view,
+                &server_conversation_token,
+                ctx,
+            );
+            let task_id = TaskId::new("test-cli-subagent".to_owned());
+            view.model
+                .lock()
+                .block_list_mut()
+                .active_block_mut()
+                .set_agent_interaction_mode_for_agent_monitored_command(&task_id, conversation_id)
+                .expect("command should become agent monitored");
+            assert!(
+                view.model
+                    .lock()
+                    .block_list()
+                    .active_block()
+                    .is_agent_in_control()
+            );
+            conversation_id
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_shared_session_cancel_action(server_conversation_token, ctx);
+        });
+
+        // The agent-controlled block would otherwise swallow the Ctrl-C (see
+        // `write_user_bytes_to_pty`), so control must be handed to the user for teardown first.
+        assert_eq!(*pty_writes.borrow(), vec![vec![C0::ETX]]);
+        terminal.read(&app, |view, ctx| {
+            let model = view.model.lock();
+            let active_block = model.block_list().active_block();
+            assert!(!active_block.is_agent_in_control());
+            assert!(
+                !active_block
+                    .long_running_control_state()
+                    .is_some_and(|state| state.should_auto_resume())
+            );
+            let conversation = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .expect("conversation should exist");
+            assert_eq!(conversation.status(), &ConversationStatus::Cancelled);
+        });
+    })
+}
+
+#[test]
+fn shared_session_cancel_action_ignores_unknown_and_finished_conversations() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        FeatureFlag::AgentView.set_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let pty_writes = capture_pty_writes(&mut app, &terminal);
+        let server_conversation_token = SessionSharingServerConversationToken::new();
+
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            start_conversation_with_running_agent_command(view, &server_conversation_token, ctx)
+        });
+
+        // A token that isn't bound to any conversation on this surface is a no-op.
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_shared_session_cancel_action(
+                SessionSharingServerConversationToken::new(),
+                ctx,
+            );
+        });
+        assert!(pty_writes.borrow().is_empty());
+
+        // A cancel that arrives after the conversation already finished must neither interrupt
+        // the command nor overwrite the terminal status.
+        terminal.update(&mut app, |view, ctx| {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.update_conversation_status(
+                    view.view_id,
+                    conversation_id,
+                    ConversationStatus::Success,
+                    ctx,
+                );
+            });
+            view.handle_shared_session_cancel_action(server_conversation_token, ctx);
+        });
+        assert!(pty_writes.borrow().is_empty());
+        terminal.read(&app, |_, ctx| {
+            let conversation = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .expect("conversation should exist");
+            assert_eq!(conversation.status(), &ConversationStatus::Success);
+        });
+    })
+}
+
 #[test]
 fn completed_user_controlled_lrc_resumes_when_not_suppressed() {
     App::test((), |mut app| async move {
@@ -10218,5 +10399,75 @@ fn back_button_label_resolves_token_only_parent_linkage() {
                 "for Orchestrator",
             );
         });
+    });
+}
+
+#[test]
+fn visible_bootstrap_block_leaves_focus_on_tab_rename_editor() {
+    App::test((), |mut app| async move {
+        initialize_workspace_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let (window, terminal) = workspace.update(&mut app, |workspace, ctx| {
+            workspace.rename_tab(0, ctx);
+            let terminal = workspace
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .active_session_view(ctx)
+                .expect("tab should contain a terminal");
+            (ctx.window_id(), terminal)
+        });
+        assert!(workspace.read(&app, |workspace, ctx| {
+            workspace.is_inline_rename_editor_focused(ctx)
+        }));
+        let focused_before = app.focused_view_id(window);
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_terminal_event(&ModelEvent::VisibleBootstrapBlock, ctx);
+        });
+
+        assert_eq!(app.focused_view_id(window), focused_before);
+        assert!(workspace.read(&app, |workspace, ctx| {
+            workspace.is_inline_rename_editor_focused(ctx)
+        }));
+    });
+}
+
+#[test]
+fn visible_bootstrap_block_leaves_focus_on_tab_group_rename_editor() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_workspace_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let (window, terminal, group_id) = workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(
+                &WorkspaceAction::SelectNewSessionMenuItem(NewSessionMenuItem::CreateNewTabGroup),
+                ctx,
+            );
+            let group_id = workspace.tabs[0]
+                .group_id
+                .expect("active tab should be assigned to the new group");
+            let terminal = workspace
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .active_session_view(ctx)
+                .expect("new tab group should contain a terminal");
+            (ctx.window_id(), terminal, group_id)
+        });
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.rename_tab_group(group_id, ctx);
+        });
+        assert!(workspace.read(&app, |workspace, ctx| {
+            workspace.is_inline_rename_editor_focused(ctx)
+        }));
+        let focused_before = app.focused_view_id(window);
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_terminal_event(&ModelEvent::VisibleBootstrapBlock, ctx);
+        });
+
+        assert_eq!(app.focused_view_id(window), focused_before);
+        assert!(workspace.read(&app, |workspace, ctx| {
+            workspace.is_inline_rename_editor_focused(ctx)
+        }));
     });
 }

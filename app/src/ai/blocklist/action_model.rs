@@ -32,7 +32,7 @@ pub use execute::{
     RequestFileEditsTelemetryEvent, RunAgentsExecutor, RunAgentsExecutorEvent,
     RunAgentsSpawningSnapshot, ShellCommandExecutor, ShellCommandExecutorEvent, StartAgentExecutor,
     StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest, StartAgentRequestId,
-    read_local_file_context,
+    TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR, read_local_file_context,
 };
 pub(crate) use execute::{
     FileReadResult, MalformedFinalLineProxyEvent, apply_edits, coerce_integer_args,

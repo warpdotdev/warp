@@ -448,6 +448,26 @@ fn status_change_does_not_refetch_metadata_after_materialization() {
         });
     });
 }
+#[test]
+fn repeated_child_discovery_starts_one_legacy_metadata_fetch() {
+    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(false);
+    App::test((), |mut app| async move {
+        let fixture = setup(&mut app);
+
+        fixture.model.update(&mut app, |model, ctx| {
+            model.handle_child_spawned(CHILD_A_TASK_ID.to_string(), ctx);
+            model.handle_child_spawned(CHILD_A_TASK_ID.to_string(), ctx);
+        });
+
+        fixture.model.read(&app, |model, _| {
+            assert_eq!(model.metadata_fetch_dispatch_count, 1);
+            assert_eq!(
+                model.metadata_fetches,
+                HashSet::from([task_id(CHILD_A_TASK_ID)])
+            );
+        });
+    });
+}
 
 // ---- Pending-metadata poll --------------------------------------------------
 
