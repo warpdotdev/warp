@@ -945,22 +945,6 @@ impl OrchestrationEventStreamer {
         }
     }
 
-    fn drain_owner_events(
-        &mut self,
-        conversation_id: AIConversationId,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        self.drain_owner_family_events(conversation_id, ctx);
-    }
-
-    fn drain_viewer_events(
-        &mut self,
-        parent_task_id: AmbientAgentTaskId,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        self.drain_viewer_family_events(parent_task_id, ctx);
-    }
-
     #[cfg(not(target_family = "wasm"))]
     pub(crate) fn persist_dormant_claude_wake_cursor(
         &mut self,
@@ -1481,7 +1465,7 @@ impl OrchestrationEventStreamer {
                 if !is_current {
                     return;
                 }
-                me.drain_viewer_events(parent_task_id, ctx);
+                me.drain_viewer_family_events(parent_task_id, ctx);
                 if let Err(err) = result {
                     log::warn!(
                         "Ancestor SSE driver exited for parent_task_id={parent_task_id} \
@@ -1525,7 +1509,7 @@ impl OrchestrationEventStreamer {
                 if !is_current {
                     return;
                 }
-                me.drain_viewer_events(parent_task_id, ctx);
+                me.drain_viewer_family_events(parent_task_id, ctx);
                 me.start_ancestor_sse_drain_timer(parent_task_id, generation, ctx);
             },
         );
@@ -1539,7 +1523,7 @@ impl OrchestrationEventStreamer {
         parent_task_id: AmbientAgentTaskId,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.drain_viewer_events(parent_task_id, ctx);
+        self.drain_viewer_family_events(parent_task_id, ctx);
         let cursor;
         {
             let Some(entry) = self.viewer_mode_orchestrators.get_mut(&parent_task_id) else {
@@ -2417,7 +2401,7 @@ impl OrchestrationEventStreamer {
                     return;
                 }
 
-                me.drain_owner_events(conversation_id, ctx);
+                me.drain_owner_family_events(conversation_id, ctx);
 
                 if let Err(err) = result {
                     log::warn!(
@@ -2486,7 +2470,7 @@ impl OrchestrationEventStreamer {
                 if !is_current {
                     return;
                 }
-                me.drain_owner_events(conversation_id, ctx);
+                me.drain_owner_family_events(conversation_id, ctx);
                 me.start_sse_drain_timer(conversation_id, generation, ctx);
             },
         );
@@ -2619,7 +2603,7 @@ impl OrchestrationEventStreamer {
     fn reconnect_sse(&mut self, conversation_id: AIConversationId, ctx: &mut ModelContext<Self>) {
         // Drain buffered events before dropping the channel so we don't
         // discard already-fetched message bodies.
-        self.drain_owner_events(conversation_id, ctx);
+        self.drain_owner_family_events(conversation_id, ctx);
         if let Some(stream) = self.streams.get_mut(&conversation_id)
             && let Some(connection) = stream.sse_connection.take()
         {
@@ -2636,7 +2620,7 @@ impl OrchestrationEventStreamer {
     /// external state and are pruned through their own paths.
     fn teardown_sse(&mut self, conversation_id: AIConversationId, ctx: &mut ModelContext<Self>) {
         // Drain anything buffered so we don't lose hydrated messages.
-        self.drain_owner_events(conversation_id, ctx);
+        self.drain_owner_family_events(conversation_id, ctx);
         if let Some(stream) = self.streams.get_mut(&conversation_id)
             && let Some(connection) = stream.sse_connection.take()
         {
