@@ -435,7 +435,7 @@ async fn staged_rename_and_modify_produces_non_empty_diff() {
 }
 
 #[tokio::test]
-async fn head_diff_marks_files_after_aggregate_byte_budget_unrenderable() {
+async fn head_diff_respects_aggregate_retained_allocation_budget_boundary() {
     let repo_dir = tempfile::tempdir().expect("create temp repo dir");
     let repo_path = repo_dir.path();
 
@@ -471,7 +471,7 @@ async fn head_diff_marks_files_after_aggregate_byte_budget_unrenderable() {
     let first_content =
         LocalDiffStateModel::get_file_content_at_head(repo_path, "a.txt", &GitFileStatus::Modified)
             .await;
-    let first_file_bytes = approx_file_diff_bytes(&first_diff.hunks, first_content.as_deref());
+    let first_file_bytes = approx_file_diff_bytes(&first_diff.hunks, first_content.as_ref());
     assert!(first_file_bytes < MAX_DIFF_SIZE);
 
     let diffs = LocalDiffStateModel::diff_state_against_head_with_limits(
@@ -492,6 +492,21 @@ async fn head_diff_marks_files_after_aggregate_byte_budget_unrenderable() {
         diffs.files[1].file_diff.size,
         DiffSize::Unrenderable(UnrenderableReason::FileTooLarge)
     );
+
+    let below_boundary = LocalDiffStateModel::diff_state_against_head_with_limits(
+        repo_path,
+        first_file_bytes - 1,
+        usize::MAX,
+    )
+    .await
+    .expect("load aggregate diff below boundary");
+
+    assert_eq!(
+        below_boundary.files[0].file_diff.size,
+        DiffSize::Unrenderable(UnrenderableReason::FileTooLarge)
+    );
+    assert!(below_boundary.files[0].file_diff.hunks.is_empty());
+    assert_eq!(below_boundary.files[0].content_at_head, None);
 }
 
 #[test]

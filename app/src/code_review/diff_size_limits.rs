@@ -1,8 +1,10 @@
 use std::fmt;
+use std::mem::size_of;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use super::diff_state::{DiffHunk, DiffLineType};
+use super::diff_state::{DiffHunk, DiffLine, DiffLineType};
 
 /**
  * Maximum diff size that we will attempt to render. Diffs larger than this
@@ -76,14 +78,27 @@ impl fmt::Display for UnrenderableReason {
     }
 }
 
-/// Estimates the variable-size text retained for a parsed file diff and its base content.
-pub fn approx_file_diff_bytes(hunks: &[DiffHunk], content_at_head: Option<&str>) -> usize {
-    let hunk_bytes = hunks
+/// Estimates the allocations retained for a parsed file diff and its base content.
+pub fn approx_file_diff_bytes(
+    hunks: &Arc<Vec<DiffHunk>>,
+    content_at_head: Option<&String>,
+) -> usize {
+    let hunk_bytes = hunks.capacity().saturating_mul(size_of::<DiffHunk>());
+    let line_bytes = hunks
         .iter()
-        .flat_map(|hunk| &hunk.lines)
-        .map(|line| line.text.len())
+        .map(|hunk| {
+            let line_storage = hunk.lines.capacity().saturating_mul(size_of::<DiffLine>());
+            let text_storage = hunk
+                .lines
+                .iter()
+                .map(|line| line.text.capacity())
+                .fold(0usize, usize::saturating_add);
+            line_storage.saturating_add(text_storage)
+        })
         .fold(0usize, usize::saturating_add);
-    hunk_bytes.saturating_add(content_at_head.map_or(0, str::len))
+    hunk_bytes
+        .saturating_add(line_bytes)
+        .saturating_add(content_at_head.map_or(0, String::capacity))
 }
 
 /// Determines if a diff size exceeds the maximum renderable limit

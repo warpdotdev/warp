@@ -1,12 +1,15 @@
+use std::mem::size_of;
+use std::sync::Arc;
+
 use super::*;
 use crate::code_review::diff_state::{DiffHunk, DiffLine, DiffLineType};
 
-fn line(text: &str, line_type: DiffLineType) -> DiffLine {
+fn line(text: String, line_type: DiffLineType) -> DiffLine {
     DiffLine {
         line_type,
         old_line_number: None,
         new_line_number: None,
-        text: text.to_string(),
+        text,
         no_trailing_newline: false,
     }
 }
@@ -25,28 +28,46 @@ fn hunk(lines: Vec<DiffLine>) -> DiffHunk {
 
 #[test]
 fn approx_bytes_empty_diff_no_content_is_zero() {
-    assert_eq!(approx_file_diff_bytes(&[], None), 0);
+    assert_eq!(approx_file_diff_bytes(&Arc::new(Vec::new()), None), 0);
 }
 
 #[test]
-fn approx_bytes_counts_only_content_when_no_hunks() {
-    assert_eq!(approx_file_diff_bytes(&[], Some("hello")), 5);
-}
+fn approx_bytes_counts_content_capacity_when_no_hunks() {
+    let mut content = String::with_capacity(32);
+    content.push_str("hello");
 
-#[test]
-fn approx_bytes_sums_hunk_line_text_and_content() {
-    let hunks = vec![
-        hunk(vec![
-            line("added line", DiffLineType::Add), // 10
-            line("ctx", DiffLineType::Context),    // 3
-        ]),
-        hunk(vec![
-            line("gone", DiffLineType::Delete), // 4
-        ]),
-    ];
-    // 10 + 3 + 4 hunk bytes, plus 6 bytes of base content.
     assert_eq!(
-        approx_file_diff_bytes(&hunks, Some("base!!")),
-        10 + 3 + 4 + 6
+        approx_file_diff_bytes(&Arc::new(Vec::new()), Some(&content)),
+        content.capacity()
     );
+}
+
+#[test]
+fn approx_bytes_counts_retained_structure_and_string_capacities() {
+    let mut text = String::with_capacity(32);
+    text.push('a');
+    let text_capacity = text.capacity();
+
+    let mut lines = Vec::with_capacity(4);
+    lines.push(line(text, DiffLineType::Add));
+
+    let mut hunks = Vec::with_capacity(3);
+    hunks.push(hunk(lines));
+    let hunks = Arc::new(hunks);
+
+    let mut content = String::with_capacity(64);
+    content.push_str("base");
+
+    let expected = hunks
+        .capacity()
+        .saturating_mul(size_of::<DiffHunk>())
+        .saturating_add(
+            hunks[0]
+                .lines
+                .capacity()
+                .saturating_mul(size_of::<DiffLine>()),
+        )
+        .saturating_add(text_capacity)
+        .saturating_add(content.capacity());
+    assert_eq!(approx_file_diff_bytes(&hunks, Some(&content)), expected);
 }
