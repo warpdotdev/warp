@@ -313,6 +313,13 @@ impl UserWorkspaces {
     ) -> TeamContextForOperationResolver {
         Rc::new(move |_| TeamContextForOperation { team_uid })
     }
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn teamless_context_resolvers_for_test() -> TeamContextResolvers {
+        TeamContextResolvers {
+            team_context: Self::teamless_context_resolver_for_test(),
+            team_context_for_operation: Self::team_context_for_operation_resolver_for_test(None),
+        }
+    }
 
     fn team_context_for_window_id(&self, window_id: WindowId) -> TeamContext<'_> {
         TeamContext {
