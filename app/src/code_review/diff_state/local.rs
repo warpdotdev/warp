@@ -118,6 +118,72 @@ impl DiffMaterializationBudget {
     }
 }
 
+#[cfg(feature = "local_fs")]
+#[derive(Default)]
+struct HeadMaterializationBudget {
+    bytes_by_path: HashMap<String, usize>,
+    total_bytes: usize,
+}
+#[cfg(feature = "local_fs")]
+enum HeadMaterializationUpdate {
+    Removed,
+    Unmaterialized,
+    Materialized(usize),
+}
+
+#[cfg(feature = "local_fs")]
+impl HeadMaterializationBudget {
+    fn clear(&mut self) {
+        self.bytes_by_path.clear();
+        self.total_bytes = 0;
+    }
+
+    fn try_apply_update(
+        &mut self,
+        path: &str,
+        update: HeadMaterializationUpdate,
+        max_bytes: usize,
+        max_files: usize,
+    ) -> bool {
+        let candidate_bytes = match update {
+            HeadMaterializationUpdate::Materialized(bytes) => Some(bytes),
+            HeadMaterializationUpdate::Unmaterialized => None,
+            HeadMaterializationUpdate::Removed => {
+                if let Some(previous_bytes) = self.bytes_by_path.remove(path) {
+                    self.total_bytes = self.total_bytes.saturating_sub(previous_bytes);
+                }
+                return true;
+            }
+        };
+        let previous_bytes = self.bytes_by_path.get(path).copied();
+        // An unsaved editor can retain the previous materialization after an invalidation, so
+        // replacements cannot release its reservation until a full reload or removal.
+        let retained_bytes = previous_bytes
+            .unwrap_or(0)
+            .max(candidate_bytes.unwrap_or(0));
+        let retains_materialization = previous_bytes.is_some() || candidate_bytes.is_some();
+        let total_without_previous = self.total_bytes.saturating_sub(previous_bytes.unwrap_or(0));
+        let next_total = total_without_previous.saturating_add(retained_bytes);
+        let files_without_previous = self
+            .bytes_by_path
+            .len()
+            .saturating_sub(usize::from(previous_bytes.is_some()));
+        let next_files =
+            files_without_previous.saturating_add(usize::from(retains_materialization));
+
+        if next_total > max_bytes || next_files > max_files {
+            return false;
+        }
+
+        self.total_bytes = next_total;
+        if retains_materialization {
+            self.bytes_by_path.insert(path.to_string(), retained_bytes);
+        } else {
+            self.bytes_by_path.remove(path);
+        }
+        true
+    }
+}
 /// Internal representation of the diffs we've loaded against all bases.
 /// This could include changes against both the latest commit/HEAD
 /// and changes against the main branch.
@@ -177,6 +243,7 @@ struct FileInvalidationState {
     merge_base_handle: Option<SpawnedFutureHandle>,
     /// Queue for per-file invalidation tasks
     queue: SyncQueue<FileInvalidationTask>,
+    head_materialization_budget: HeadMaterializationBudget,
 }
 
 #[cfg(feature = "local_fs")]
@@ -187,6 +254,7 @@ impl FileInvalidationState {
             merge_base: None,
             merge_base_handle: None,
             queue,
+            head_materialization_budget: HeadMaterializationBudget::default(),
         }
     }
 
@@ -287,6 +355,7 @@ impl LocalDiffStateModel {
                                     (path.clone(), diff.clone())
                                 }
                             };
+                        let diff = me.apply_head_invalidation_budget(&path, diff);
                         ctx.emit(DiffStateModelEvent::SingleFileUpdated { path, diff });
                     }
                     Err(err) => {
@@ -1738,6 +1807,7 @@ impl LocalDiffStateModel {
             }
         };
 
+        self.reset_head_materialization_budget(&diffs);
         self.state = InternalDiffState::Loaded((&diffs).into());
         // Compute merge base and flush deferred invalidations before emitting.
         self.recompute_merge_base_and_flush(ctx);
@@ -1745,6 +1815,64 @@ impl LocalDiffStateModel {
             diffs: diffs.changes.ok().map(Arc::new),
             load_duration,
         });
+    }
+
+    fn materialized_file_bytes(file: &FileDiffAndContent) -> Option<usize> {
+        (!file.file_diff.is_binary && !matches!(file.file_diff.size, DiffSize::Unrenderable(_)))
+            .then(|| approx_file_diff_bytes(&file.file_diff.hunks, file.content_at_head.as_ref()))
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn reset_head_materialization_budget(&mut self, diffs: &DiffsWithBaseContent) {
+        self.file_invalidation.head_materialization_budget.clear();
+        if !matches!(self.mode, DiffMode::Head) {
+            return;
+        }
+        let Ok(diffs) = &diffs.changes else {
+            return;
+        };
+        for file in &diffs.files {
+            let Some(bytes) = Self::materialized_file_bytes(file) else {
+                continue;
+            };
+            let accepted = self
+                .file_invalidation
+                .head_materialization_budget
+                .try_apply_update(
+                    &file.file_diff.file_path,
+                    HeadMaterializationUpdate::Materialized(bytes),
+                    MAX_TOTAL_DIFF_BYTES,
+                    MAX_TOTAL_DIFF_FILES,
+                );
+            debug_assert!(accepted);
+        }
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn apply_head_invalidation_budget(
+        &mut self,
+        path: &str,
+        diff: Option<Arc<FileDiffAndContent>>,
+    ) -> Option<Arc<FileDiffAndContent>> {
+        if !matches!(self.mode, DiffMode::Head) {
+            return diff;
+        }
+
+        let update = match diff.as_deref() {
+            Some(file) => Self::materialized_file_bytes(file)
+                .map(HeadMaterializationUpdate::Materialized)
+                .unwrap_or(HeadMaterializationUpdate::Unmaterialized),
+            None => HeadMaterializationUpdate::Removed,
+        };
+        if self
+            .file_invalidation
+            .head_materialization_budget
+            .try_apply_update(path, update, MAX_TOTAL_DIFF_BYTES, MAX_TOTAL_DIFF_FILES)
+        {
+            return diff;
+        }
+
+        diff.map(|diff| Arc::new(Self::mark_file_diff_over_budget(diff.file_diff.clone())))
     }
 
     /// Returns the number of lines in a given file. Returns `None` if the file is a binary file
@@ -1884,8 +2012,24 @@ impl LocalDiffStateModel {
                 continue;
             }
 
-            let content_at_head =
-                Self::get_file_content_at_head(repo_path, &file_path, &status).await;
+            let content_at_head_size =
+                Self::get_file_content_size_at_head(repo_path, &file_path, &status).await;
+            let retained_bytes_with_content =
+                diff_bytes.saturating_add(content_at_head_size.unwrap_or(0));
+            if !budget.can_reserve(retained_bytes_with_content) {
+                log::warn!(
+                    "LocalDiffStateModel: reached the aggregate diff materialization budget"
+                );
+                budget_exhausted = true;
+                files.push(Self::mark_file_diff_over_budget(file_diff));
+                continue;
+            }
+
+            let content_at_head = if content_at_head_size.is_some() {
+                Self::get_file_content_at_head(repo_path, &file_path, &status).await
+            } else {
+                None
+            };
 
             file_diff.is_autogenerated =
                 is_file_autogenerated(&file_path, content_at_head.as_deref());
@@ -2471,6 +2615,22 @@ impl LocalDiffStateModel {
         Self::get_binary_files_vs_commit(repo_path, "HEAD").await
     }
 
+    async fn get_file_content_size_at_head(
+        repo_path: &Path,
+        file_path: &str,
+        status: &GitFileStatus,
+    ) -> Option<usize> {
+        match status {
+            GitFileStatus::Untracked | GitFileStatus::New => {
+                repo_path.join(file_path).is_file().then_some(0)
+            }
+            GitFileStatus::Renamed { old_path } => {
+                Self::get_file_content_size_at_commit(repo_path, old_path, "HEAD").await
+            }
+            _ => Self::get_file_content_size_at_commit(repo_path, file_path, "HEAD").await,
+        }
+    }
+
     /// Gets the file content at HEAD commit for diff comparison
     async fn get_file_content_at_head(
         repo_path: &Path,
@@ -2986,6 +3146,25 @@ impl LocalDiffStateModel {
         run_git_command(repo_path, &["show", &format!("{commit}:{file_path}")])
             .await
             .ok()
+    }
+
+    async fn get_file_content_size_at_commit(
+        repo_path: &Path,
+        file_path: &str,
+        commit: &str,
+    ) -> Option<usize> {
+        log::debug!(
+            "[GIT OPERATION] local.rs get_file_content_size_at_commit git cat-file -s {commit}:{file_path}"
+        );
+        run_git_command(
+            repo_path,
+            &["cat-file", "-s", &format!("{commit}:{file_path}")],
+        )
+        .await
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
     }
 
     /// Maps git status codes to GitFileStatus
