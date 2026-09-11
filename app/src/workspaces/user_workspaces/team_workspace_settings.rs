@@ -270,7 +270,6 @@ impl UserWorkspaces {
         Rc::new(move |app| Self::as_ref(app).team_context(&view, app))
     }
     /// Captures the raw team assignment for `view` when an operation starts.
-
     pub fn team_context_for_operation_resolver<T: Entity>(
         view: WeakViewHandle<T>,
     ) -> TeamContextForOperationResolver {
