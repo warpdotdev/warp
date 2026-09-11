@@ -29,6 +29,13 @@ cargo clippy --workspace --exclude warp_completer --all-targets --tests -- -D wa
 # Workspace feature unification enables `warp/tui` through the `warp_tui` package.
 # Also lint the default GUI configuration used by `cargo run` and `./script/run`.
 cargo clippy -p warp --all-targets --tests -- -D warnings
+# The workspace clippy run above only exercises warp_tui's default (empty) feature set, so its
+# opt-in features (voice_input, release_bundle, standalone, crash_reporting) go uncompiled. Lint
+# the lib alone, with the same feature set the TUI release build actually ships
+# (script/macos/bundle's WARP_TUI_FEATURES), to catch call sites gated behind them. `--all-features`
+# is avoided here because it also pulls in `test-util`, which requires dev-dependencies and
+# currently fails to compile on non-macOS platforms for reasons unrelated to this crate.
+cargo clippy -p warp_tui --lib --features voice_input,release_bundle,standalone,crash_reporting -- -D warnings
 # Run clippy on warp_completer with default, rather than all features enabled, because there is
 # feature-gated logic for the WIP completions-on-js implementation.
 cargo clippy -p warp_completer --all-targets --tests -- -D warnings
