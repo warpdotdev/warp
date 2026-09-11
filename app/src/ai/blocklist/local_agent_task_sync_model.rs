@@ -544,6 +544,12 @@ fn map_conversation_status(
     }
 }
 
+#[cfg(test)]
+pub(crate) fn map_conversation_status_for_test(
+    conversation: &AIConversation,
+) -> (AgentTaskState, Option<TaskStatusUpdate>) {
+    map_conversation_status(conversation)
+}
 /// Maps a conversation-level error to a terminal task update. In-flight recoveries
 /// surface as `TransientError`, so an `Error` status is always terminal here — the
 /// `will_attempt_resume` rendering hint is deliberately ignored.

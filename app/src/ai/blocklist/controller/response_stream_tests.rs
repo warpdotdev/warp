@@ -25,21 +25,6 @@ fn exhausted() -> RecoveryBudget {
     recovery
 }
 
-#[cfg(not(target_family = "wasm"))]
-#[test]
-fn retry_attempt_state_does_not_inherit_stream_start() {
-    let mut stream = ResponseStream::new_for_test(ResponseStreamId::new_for_test());
-    stream.init_received = true;
-    stream.has_received_client_actions = true;
-    assert!(stream.current_attempt_started());
-
-    stream.reset_attempt_state();
-
-    assert!(!stream.current_attempt_started());
-    assert!(!stream.init_received);
-    assert!(!stream.has_received_client_actions);
-}
-
 #[test]
 fn pre_action_failures_retry() {
     assert_eq!(

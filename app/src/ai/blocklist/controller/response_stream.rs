@@ -302,19 +302,41 @@ pub struct ResponseStream {
 
     /// Captured once at construction, so retries keep the team the request started on.
     team_scope: RequestTeamScope,
+
+    #[cfg(test)]
+    suppress_request_spawn: bool,
 }
 
 impl ResponseStream {
-    /// Emits a synthetic successful response event through the normal controller subscription.
     #[cfg(test)]
     pub fn emit_response_event_for_test(
         &mut self,
         event: warp_multi_agent_api::ResponseEvent,
         ctx: &mut ModelContext<Self>,
     ) {
-        ctx.emit(ResponseStreamEvent::ReceivedEvent(Consumable::new(Ok(
-            event,
-        ))));
+        let request_id = self
+            .current_request_id
+            .expect("test response stream must have a current request");
+        self.handle_response_stream_event(request_id, Ok(event), ctx);
+    }
+
+    #[cfg(test)]
+    pub fn emit_error_event_for_test(
+        &mut self,
+        error: Arc<AIApiError>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let request_id = self
+            .current_request_id
+            .expect("test response stream must have a current request");
+        self.handle_response_stream_event(request_id, Err(error), ctx);
+    }
+
+    #[cfg(test)]
+    pub fn exhaust_recovery_budget_for_test(&mut self, ctx: &mut ModelContext<Self>) {
+        while self.recovery.has_remaining() {
+            self.retry(ctx);
+        }
     }
 
     /// Emits the natural-completion `AfterStreamFinished` event (no cancellation) through
@@ -347,6 +369,7 @@ impl ResponseStream {
             deferred_retry_pending: false,
             current_request_id: Some(Uuid::new_v4()),
             team_scope: RequestTeamScope::from_scope(&TeamlessScopeForTest),
+            suppress_request_spawn: true,
         }
     }
 
@@ -380,6 +403,8 @@ impl ResponseStream {
             deferred_retry_pending: false,
             current_request_id: Some(request_id),
             team_scope,
+            #[cfg(test)]
+            suppress_request_spawn: false,
         }
     }
 
@@ -445,6 +470,10 @@ impl ResponseStream {
 
         let request_id = Uuid::new_v4();
         self.current_request_id = Some(request_id);
+        #[cfg(test)]
+        if self.suppress_request_spawn {
+            return;
+        }
         Self::spawn_request(
             request_id,
             self.params.clone(),
