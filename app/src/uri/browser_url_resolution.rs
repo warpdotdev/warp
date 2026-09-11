@@ -1,7 +1,8 @@
 #[cfg(any(target_family = "wasm", test))]
-use super::web_intent_parser::WebIntent;
-#[cfg(any(target_family = "wasm", test))]
 use url::Url;
+
+#[cfg(any(target_family = "wasm", test))]
+use super::web_intent_parser::WebIntent;
 
 #[cfg(any(target_family = "wasm", test))]
 const BASE_APP_PATH: &str = "/app";
