@@ -367,7 +367,7 @@ impl PaneGroup {
         let Some(location) = parse_current_url().as_ref().and_then(ViewerLocation::parse) else {
             return;
         };
-        let seeded_child_ids = children
+        let seeded_child_ids: HashSet<AmbientAgentTaskId> = children
             .iter()
             .filter(|task| task.task_id != parent_task_id)
             .map(|task| task.task_id)
