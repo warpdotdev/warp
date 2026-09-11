@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use mockall::predicate::eq;
-use warp_core::features::FeatureFlag;
 use warpui::App;
 
 use super::*;
@@ -1613,7 +1612,7 @@ fn on_conversation_removed_prunes_killed_child_run_id_from_parent_but_keeps_tomb
 // viewer-mode ancestor SSE path: `conversation_status_from_lifecycle_event_type`,
 // `is_known_child`, the `register_viewer_mode_consumer` /
 // `unregister_viewer_mode_consumer` refcount, and the
-// `is_remote_run_view` flag-gated relaxation. These tests drive the
+// `is_remote_run_view` eligibility rule. These tests drive the
 // bookkeeping directly via pure-function calls or short App fixtures.
 
 #[test]
@@ -2919,37 +2918,6 @@ fn wait_registration_fetch_error_does_not_register() {
     });
 }
 
-#[test]
-fn register_parent_on_wait_flag_off_is_noop() {
-    // With the gating flag off, `register_parent_on_wait` does not fetch.
-    App::test((), |mut app| async move {
-        let history_model =
-            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
-        let own_run_id = "550e8400-e29b-41d4-a716-446655440523";
-        let mut conversation = AIConversation::new(false, false);
-        conversation.set_run_id(own_run_id.to_string());
-        let conversation_id = conversation.id();
-        let terminal_view_id = warpui::EntityId::new();
-        history_model.update(&mut app, |model, ctx| {
-            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
-            model.update_conversation_status(
-                terminal_view_id,
-                conversation_id,
-                ConversationStatus::InProgress,
-                ctx,
-            );
-        });
-
-        let poller = streamer_with_no_fetch_expected(&mut app);
-        poller.update(&mut app, |me, ctx| {
-            me.register_parent_on_wait(conversation_id, ctx);
-        });
-        poller.read(&app, |me, _| {
-            assert!(connected_filter(me, conversation_id).is_none());
-        });
-    });
-}
-
 // ---- classify_family_event ----------------------------------------------
 
 #[test]
@@ -3207,8 +3175,6 @@ fn wait_registration_eligibility_child_conversation_is_eligible() {
     // A child conversation must be eligible: with multi-level orchestration
     // a mid-tree node can have children of its own to discover.
     App::test((), |mut app| async move {
-        let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
-
         let history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let mut conversation = AIConversation::new(false, false);
@@ -3228,46 +3194,19 @@ fn wait_registration_eligibility_child_conversation_is_eligible() {
 }
 
 #[test]
-fn wait_registration_eligibility_requires_the_flag() {
-    App::test((), |mut app| async move {
-        let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(false);
-
-        let history_model =
-            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
-        let mut conversation = AIConversation::new(false, false);
-        conversation.set_run_id("550e8400-e29b-41d4-a716-446655440527".to_string());
-        let conversation_id = conversation.id();
-        let terminal_view_id = warpui::EntityId::new();
-        history_model.update(&mut app, |model, ctx| {
-            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
-        });
-
-        let poller = streamer_with_no_fetch_expected(&mut app);
-        poller.read(&app, |me, ctx| {
-            assert!(!me.should_register_parent_on_wait(conversation_id, ctx));
-        });
-    });
-}
-
-#[test]
 fn wait_registration_eligibility_excludes_remote_run_views() {
     // A remote-child placeholder is a passive view of a run executing in
     // another process; that process owns the inbox and the registration.
     App::test((), |mut app| async move {
-        let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
-
-        // `mark_conversation_as_remote_child` persists the conversation,
-        // which needs the settings + persistence singletons wired up.
-        crate::test_util::settings::initialize_history_persistence_for_tests(&mut app);
         let history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let mut conversation = AIConversation::new(false, false);
         conversation.set_run_id("550e8400-e29b-41d4-a716-446655440528".to_string());
+        conversation.mark_as_remote_child();
         let conversation_id = conversation.id();
         let terminal_view_id = warpui::EntityId::new();
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
-            model.mark_conversation_as_remote_child(conversation_id, ctx);
         });
 
         let poller = streamer_with_no_fetch_expected(&mut app);
@@ -3282,8 +3221,6 @@ fn wait_registration_eligibility_excludes_established_parents() {
     // Once the parent role exists (a watched child run_id), the live
     // ancestor stream discovers new children; no wait-time re-fetch.
     App::test((), |mut app| async move {
-        let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
-
         let history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let own_run_id = "550e8400-e29b-41d4-a716-446655440529";
@@ -3379,8 +3316,6 @@ fn register_parent_on_wait_already_parent_is_idempotent() {
     // A second call when the conversation is already a known parent must not
     // re-fetch or churn the open ancestor stream.
     App::test((), |mut app| async move {
-        let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
-
         let history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let own_run_id = "550e8400-e29b-41d4-a716-446655440525";
@@ -3429,8 +3364,6 @@ fn register_parent_on_wait_without_self_run_id_is_noop() {
     // No run_id yet means there is nothing to query the server with; the call
     // is a no-op and the next wait re-checks.
     App::test((), |mut app| async move {
-        let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
-
         let history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         // Intentionally leave run_id unset.

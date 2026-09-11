@@ -431,10 +431,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ConversationsAsContext,
         #[cfg(feature = "incremental_auto_reload")]
         FeatureFlag::IncrementalAutoReload,
-        #[cfg(feature = "wait_for_events_parent_registration")]
-        FeatureFlag::WaitForEventsParentRegistration,
-        #[cfg(feature = "orchestration_unified_stack")]
-        FeatureFlag::OrchestrationUnifiedStack,
         #[cfg(feature = "pending_user_query_indicator")]
         FeatureFlag::PendingUserQueryIndicator,
         #[cfg(feature = "queue_slash_command")]
