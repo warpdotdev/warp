@@ -495,11 +495,16 @@ impl AgentDriver {
                     spec_token,
                     &templatable_mcp_server.name,
                 );
+                // The spec token is the managed uid or well-known id the config
+                // was resolved from, i.e. the run config's `warp_id`; keep it so
+                // the request's MCPContext can carry it alongside the opaque
+                // installation id.
                 Ok(TemplatableMCPServerInstallation::new(
                     installation_id,
                     templatable_mcp_server,
                     variable_values,
-                ))
+                )
+                .with_warp_id(Some(spec_token.to_string())))
             })
             .collect()
     }

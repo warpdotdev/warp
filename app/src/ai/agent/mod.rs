@@ -2187,6 +2187,9 @@ pub struct MCPServer {
     pub id: String,
     pub name: String,
     pub description: String,
+    /// Managed MCP server uid or well-known integration id the server was
+    /// resolved from; empty for local servers. Mirrors `MCPServerConfig.warp_id`.
+    pub warp_id: String,
     pub resources: Vec<rmcp::model::Resource>,
     pub tools: Vec<rmcp::model::Tool>,
 }
