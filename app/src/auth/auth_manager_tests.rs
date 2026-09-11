@@ -5,7 +5,9 @@ use std::time::Duration;
 use anyhow::anyhow;
 use warpui::{App, SingletonEntity};
 
-use super::{AuthManager, AuthManagerEvent, request_device_code_with_timeout};
+use super::{
+    AuthManager, AuthManagerEvent, login_url_with_return_location, request_device_code_with_timeout,
+};
 use crate::ServerApiProvider;
 use crate::auth::auth_view_modal::AuthRedirectPayload;
 use crate::auth::credentials::{Credentials, LoginToken, RefreshToken};
@@ -17,6 +19,28 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_ctx| ServerApiProvider::new_for_test());
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(AuthManager::new_for_test);
+}
+
+#[test]
+fn web_login_return_location_preserves_query_and_child_fragment() {
+    let login_url = login_url_with_return_location(
+        "https://app.warp.dev/login?custom_token=secret",
+        &url::Url::parse(
+            "https://app.warp.dev/conversation/root?view=standalone#child=22222222-2222-2222-2222-222222222222",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        login_url
+            .query_pairs()
+            .find_map(|(key, value)| (key == "redirect_to").then(|| value.into_owned())),
+        Some(
+            "/conversation/root?view=standalone#child=22222222-2222-2222-2222-222222222222"
+                .to_string()
+        )
+    );
 }
 
 /// Subscribes to `AuthManager` events and returns a flag that becomes `true`

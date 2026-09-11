@@ -318,6 +318,11 @@ pub enum OrchestrationEventStreamerEvent {
         run_id: String,
         status: ConversationStatus,
     },
+    #[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
+    ViewerModeSeeded {
+        parent_task_id: AmbientAgentTaskId,
+        child_run_ids: Vec<String>,
+    },
     /// Lifecycle transition observed on an owner-side stream for a watched run.
     #[cfg_attr(not(feature = "tui"), allow(dead_code))]
     WatchedRunStatusChanged {
@@ -1263,6 +1268,15 @@ impl OrchestrationEventStreamer {
             // (e.g. after a transient teardown).
             self.start_ancestor_sse_if_seeded(parent_task_id, ctx);
             self.emit_known_viewer_mode_children(parent_task_id, ctx);
+            let child_run_ids = self
+                .viewer_mode_orchestrators
+                .get(&parent_task_id)
+                .map(|entry| entry.known_children.iter().cloned().collect())
+                .unwrap_or_default();
+            ctx.emit(OrchestrationEventStreamerEvent::ViewerModeSeeded {
+                parent_task_id,
+                child_run_ids,
+            });
         }
     }
 
@@ -1429,7 +1443,11 @@ impl OrchestrationEventStreamer {
                         entry.known_children.len(),
                     );
                 }
-                self.emit_viewer_mode_child_spawns(parent_task_id, seeded_run_ids, ctx);
+                self.emit_viewer_mode_child_spawns(parent_task_id, seeded_run_ids.clone(), ctx);
+                ctx.emit(OrchestrationEventStreamerEvent::ViewerModeSeeded {
+                    parent_task_id,
+                    child_run_ids: seeded_run_ids,
+                });
                 self.start_ancestor_sse_if_seeded(parent_task_id, ctx);
             }
             Err(err) => {
@@ -1437,6 +1455,12 @@ impl OrchestrationEventStreamer {
                     "[orch-viewer-streamer] ancestor seed fetch failed for \
                      parent_task_id={parent_task_id}: {err:#}"
                 );
+                if !is_transient_http_error(&err) {
+                    ctx.emit(OrchestrationEventStreamerEvent::ViewerModeSeeded {
+                        parent_task_id,
+                        child_run_ids: Vec::new(),
+                    });
+                }
                 // No retry timer here: the next viewer-mode registration
                 // (or an explicit reconnect) re-issues the fetch. Closed
                 // orchestrators with no consumers wouldn't benefit from

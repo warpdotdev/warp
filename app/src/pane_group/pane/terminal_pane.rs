@@ -1361,6 +1361,37 @@ fn handle_terminal_view_event(
                     );
                 }
             }
+            Event::RestoreInitialChildAnchor { conversation_id } => {
+                #[cfg(not(target_family = "wasm"))]
+                let _ = conversation_id;
+                #[cfg(target_family = "wasm")]
+                match conversation_id {
+                    Some(conversation_id)
+                        if group.ensure_hidden_child_agent_pane_for_conversation(
+                            *conversation_id,
+                            ctx,
+                        ) =>
+                    {
+                        group.swap_active_pane_to_conversation_with_origin(
+                            pane_id,
+                            *conversation_id,
+                            crate::uri::browser_url_resolution::BrowserNavigationOrigin::InitialAnchorRestoration,
+                            ctx,
+                        );
+                    }
+                    Some(conversation_id) => {
+                        log::warn!(
+                            "RestoreInitialChildAnchor: failed to materialize conversation {conversation_id:?}"
+                        );
+                    }
+                    None => {
+                        crate::uri::browser_url_handler::update_viewer_selection(
+                            None,
+                            crate::uri::browser_url_resolution::BrowserNavigationOrigin::InvalidAnchorCleanup,
+                        );
+                    }
+                }
+            }
             Event::OrchestrationChildSharedSessionJoinFailed {
                 conversation_id,
                 session_id,

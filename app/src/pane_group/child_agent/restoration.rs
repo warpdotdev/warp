@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+#[cfg(target_family = "wasm")]
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -30,6 +32,12 @@ use crate::terminal::shared_session::IsSharedSessionCreator;
 use crate::terminal::view::load_ai_conversation::{
     RestoreConversationEntryBehavior, RestoredAIConversation,
 };
+#[cfg(target_family = "wasm")]
+use crate::uri::browser_url_handler::{parse_current_url, update_viewer_selection};
+#[cfg(target_family = "wasm")]
+use crate::uri::browser_url_resolution::BrowserNavigationOrigin;
+#[cfg(target_family = "wasm")]
+use crate::uri::viewer_location::{HydratedAnchorAction, ViewerLocation, hydrated_anchor_action};
 
 /// Max direct children fetched per ancestor-list restore seed. The server
 /// caps at 100 regardless, matching the Observer-side ancestor seed fetch.
@@ -255,6 +263,13 @@ impl PaneGroup {
                     // Permanent failure (401/403/404/...): retrying blindly
                     // can't succeed until something external changes, so
                     // give up instead of leaving this pending forever.
+                    #[cfg(target_family = "wasm")]
+                    self.restore_initial_child_anchor_after_seed(
+                        parent_conversation_id,
+                        parent_task_id,
+                        &[],
+                        ctx,
+                    );
                     self.remove_pending_parent_child_seed(parent_task_id);
                 }
                 return;
@@ -308,6 +323,13 @@ impl PaneGroup {
         }
 
         if all_children_resolved {
+            #[cfg(target_family = "wasm")]
+            self.restore_initial_child_anchor_after_seed(
+                parent_conversation_id,
+                parent_task_id,
+                &children,
+                ctx,
+            );
             self.remove_pending_parent_child_seed(parent_task_id);
         }
         // Otherwise the parent stays pending so a later re-list can retry.
@@ -329,6 +351,68 @@ impl PaneGroup {
             );
         }
         ctx.notify();
+    }
+
+    #[cfg(target_family = "wasm")]
+    fn restore_initial_child_anchor_after_seed(
+        &mut self,
+        parent_conversation_id: AIConversationId,
+        parent_task_id: AmbientAgentTaskId,
+        children: &[AmbientAgentTask],
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.settled_initial_child_anchors.insert(parent_task_id) {
+            return;
+        }
+        let Some(location) = parse_current_url().as_ref().and_then(ViewerLocation::parse) else {
+            return;
+        };
+        let seeded_child_ids = children
+            .iter()
+            .filter(|task| task.task_id != parent_task_id)
+            .map(|task| task.task_id)
+            .collect();
+        let registered_child_ids = seeded_child_ids
+            .iter()
+            .copied()
+            .filter(|task_id| {
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation_id_for_agent_id(&task_id.to_string())
+                    .is_some()
+            })
+            .collect::<HashSet<_>>();
+        let conversation_id = match hydrated_anchor_action(
+            location.child_anchor,
+            &seeded_child_ids,
+            &registered_child_ids,
+        ) {
+            HydratedAnchorAction::None => return,
+            HydratedAnchorAction::Clear | HydratedAnchorAction::Wait => {
+                update_viewer_selection(None, BrowserNavigationOrigin::InvalidAnchorCleanup);
+                return;
+            }
+            HydratedAnchorAction::Select(task_id) => {
+                let Some(conversation_id) = BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation_id_for_agent_id(&task_id.to_string())
+                else {
+                    update_viewer_selection(None, BrowserNavigationOrigin::InvalidAnchorCleanup);
+                    return;
+                };
+                conversation_id
+            }
+        };
+        let Some(parent_pane_id) = self.pane_id_for_owned_conversation(parent_conversation_id, ctx)
+        else {
+            return;
+        };
+        if self.ensure_hidden_child_agent_pane_for_conversation(conversation_id, ctx) {
+            self.swap_active_pane_to_conversation_with_origin(
+                parent_pane_id,
+                conversation_id,
+                BrowserNavigationOrigin::InitialAnchorRestoration,
+                ctx,
+            );
+        }
     }
 
     /// Re-drives every pending parent seed using the shared `TasksUpdated`
