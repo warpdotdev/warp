@@ -17,6 +17,7 @@ pub fn os_display(os: RunnerOs) -> &'static str {
     match os {
         RunnerOs::Linux => "Linux",
         RunnerOs::Macos => "macOS",
+        RunnerOs::Windows => "Windows",
     }
 }
 
@@ -43,6 +44,7 @@ pub fn icon_for(os: RunnerOs) -> Icon {
     match os {
         RunnerOs::Linux => Icon::Linux,
         RunnerOs::Macos => Icon::Apple,
+        RunnerOs::Windows => Icon::Powershell,
     }
 }
 

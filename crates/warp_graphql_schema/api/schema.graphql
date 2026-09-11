@@ -3035,6 +3035,7 @@ type RunnerInstanceShape {
 enum RunnerOS {
   LINUX
   MACOS
+  WINDOWS
 }
 
 """Target CPU architecture for a runner sandbox."""
