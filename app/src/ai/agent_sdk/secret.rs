@@ -13,15 +13,6 @@ use warp_cli::secret::{
     AnthropicMethod, CodexMethod, CreateProvider, CreateSecretArgs, DeleteSecretArgs,
     ListSecretsArgs, SecretCommand, SecretType, UpdateSecretArgs, ValueArgs,
 };
-
-/// Mirrors the server's registry-host format check (a bare host, no scheme or path), matching
-/// the same rule the web UI enforces client-side.
-fn validate_registry_host(host: &str) -> Result<()> {
-    if host.contains("://") || host.contains('/') {
-        anyhow::bail!("Registry host must not include a scheme or path.");
-    }
-    Ok(())
-}
 use warp_core::features::FeatureFlag;
 use warp_graphql::managed_secrets::{ManagedSecret, ManagedSecretType};
 use warp_graphql::object::SpaceType;
@@ -910,6 +901,15 @@ fn read_bedrock_access_key_secret_value(
     )))
 }
 
+/// Mirrors the server's registry-host format check (a bare host, no scheme or path), matching
+/// the same rule the web UI enforces client-side.
+fn validate_registry_host(host: &str) -> Result<()> {
+    if host.contains("://") || host.contains('/') {
+        anyhow::bail!("Registry host must not include a scheme or path.");
+    }
+    Ok(())
+}
+
 /// Read a container registry credential secret from dedicated CLI flags or interactive prompts.
 fn read_docker_registry_secret_value(
     host: Option<String>,
@@ -919,10 +919,13 @@ fn read_docker_registry_secret_value(
 ) -> Result<Option<ManagedSecretValue>> {
     const NON_INTERACTIVE_REQUIRED_MSG: &str = "Container registry credentials require --host, --username, and one of --password or --password-file in non-interactive mode";
 
+    // Check once and reuse: querying terminal status is a syscall.
+    let is_terminal = io::stdin().is_terminal();
+
     let host = match host {
         Some(v) if !v.is_empty() => v,
         _ => {
-            if !io::stdin().is_terminal() {
+            if !is_terminal {
                 return Err(anyhow::anyhow!(NON_INTERACTIVE_REQUIRED_MSG));
             }
             match inquire::Text::new("Registry host (e.g. ghcr.io):").prompt() {
@@ -940,7 +943,7 @@ fn read_docker_registry_secret_value(
     let username = match username {
         Some(v) if !v.is_empty() => v,
         _ => {
-            if !io::stdin().is_terminal() {
+            if !is_terminal {
                 return Err(anyhow::anyhow!(NON_INTERACTIVE_REQUIRED_MSG));
             }
             match inquire::Text::new("Registry username:").prompt() {
@@ -969,7 +972,7 @@ fn read_docker_registry_secret_value(
                     return Ok(None);
                 }
                 value.to_owned()
-            } else if !io::stdin().is_terminal() {
+            } else if !is_terminal {
                 return Err(anyhow::anyhow!(NON_INTERACTIVE_REQUIRED_MSG));
             } else {
                 match Password::new("Registry password or access token:")
