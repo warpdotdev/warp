@@ -60,6 +60,38 @@ struct PendingDiffParse {
 /// `BufferEdit` to the remote server. Long enough to coalesce rapid
 /// keystrokes, short enough for the remote view to feel responsive.
 const REMOTE_EDIT_DEBOUNCE: Duration = Duration::from_millis(200);
+const MAX_EDITOR_BUFFER_CONTENT_BYTES: usize = 100 * 1024 * 1024;
+// Byte length alone does not bound `BufferText` storage because every newline occupies a fixed-size
+// fragment even when the line itself is empty.
+const MAX_EDITOR_BUFFER_NEWLINE_COUNT: usize = 1_000_000;
+
+fn editor_buffer_load_error(content: &str) -> Option<FileLoadError> {
+    if let Some(error) = editor_buffer_load_error_for_metrics(content.len(), 0) {
+        return Some(error);
+    }
+
+    let newline_count = content
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .take(MAX_EDITOR_BUFFER_NEWLINE_COUNT + 1)
+        .count();
+    editor_buffer_load_error_for_metrics(content.len(), newline_count)
+}
+
+fn editor_buffer_load_error_for_metrics(
+    content_bytes: usize,
+    newline_count: usize,
+) -> Option<FileLoadError> {
+    if content_bytes > MAX_EDITOR_BUFFER_CONTENT_BYTES {
+        return Some(FileLoadError::TooLarge {
+            size_estimate: Some(content_bytes as u64),
+            limit_bytes: MAX_EDITOR_BUFFER_CONTENT_BYTES as u64,
+        });
+    }
+    (newline_count > MAX_EDITOR_BUFFER_NEWLINE_COUNT).then_some(FileLoadError::TooManyLineBreaks {
+        limit: MAX_EDITOR_BUFFER_NEWLINE_COUNT as u64,
+    })
+}
 
 /// Accumulates incremental edits for a single remote buffer during a
 /// debounce window before sending them as a single `BufferEdit` message.
@@ -493,6 +525,13 @@ impl GlobalBufferModel {
         let Some(state) = self.buffers.get_mut(&file_id) else {
             return;
         };
+        if let Some(error) = editor_buffer_load_error(content) {
+            ctx.emit(GlobalBufferModelEvent::FailedToLoad {
+                file_id,
+                error: Rc::new(error),
+            });
+            return;
+        }
 
         let Some(buffer) = state.buffer.upgrade(ctx) else {
             self.cleanup_file_id(file_id, ctx);
@@ -501,6 +540,7 @@ impl GlobalBufferModel {
         };
 
         if is_initial_load {
+            state.set_initial_content_version(new_version);
             // Initial load: use synchronous replace_all since there's nothing to preserve
             buffer.update(ctx, |buffer, ctx| {
                 buffer.replace_all(content, ctx);
@@ -689,11 +729,6 @@ impl GlobalBufferModel {
                 id,
                 version,
             } => {
-                // Only set the initial_content_version on first file load.
-                if let Some(state) = self.buffers.get_mut(id) {
-                    state.set_initial_content_version(*version);
-                }
-
                 // For initial load, base_version and new_version are the same
                 self.populate_buffer_with_read_content(*id, content, *version, *version, true, ctx);
             }
@@ -709,6 +744,17 @@ impl GlobalBufferModel {
                 base_version,
                 new_version,
             } => {
+                if self.buffers.get(id).is_some_and(|state| !state.is_loaded()) {
+                    self.populate_buffer_with_read_content(
+                        *id,
+                        content,
+                        *base_version,
+                        *new_version,
+                        true,
+                        ctx,
+                    );
+                    return;
+                }
                 if let Some(buffer) = self.buffer_handle_for_id(*id, ctx) {
                     if buffer.as_ref(ctx).version_match(base_version) {
                         self.populate_buffer_with_read_content(
@@ -1831,6 +1877,13 @@ impl GlobalBufferModel {
                     content.len(),
                     server_version,
                 );
+                if let Some(error) = editor_buffer_load_error(&content) {
+                    ctx.emit(GlobalBufferModelEvent::FailedToLoad {
+                        file_id,
+                        error: Rc::new(error),
+                    });
+                    return;
+                }
                 let Some(state) = self.buffers.get_mut(&file_id) else {
                     safe_error!(
                         safe: ("[remote-buffer] Buffer state missing after OpenBuffer response"),
@@ -2106,6 +2159,13 @@ impl GlobalBufferModel {
             async move { FileModel::read_content_for_file(&file_path).await },
             move |me, content, ctx| match content {
                 Ok(content) => {
+                    if let Some(error) = editor_buffer_load_error(&content) {
+                        ctx.emit(GlobalBufferModelEvent::FailedToLoad {
+                            file_id,
+                            error: Rc::new(error),
+                        });
+                        return;
+                    }
                     let Some(state) = me.buffers.get_mut(&file_id) else {
                         ctx.emit(GlobalBufferModelEvent::FailedToLoad {
                             file_id,
