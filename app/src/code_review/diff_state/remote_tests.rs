@@ -7,9 +7,9 @@ use super::InternalRemoteDiffState;
 use crate::auth::AuthStateProvider;
 use crate::code_review::diff_size_limits::DiffSize;
 use crate::code_review::diff_state::{
-    DiffHunk, DiffLine, DiffLineType, DiffMetadata, DiffMetadataAgainstBase, DiffMode, DiffState,
-    DiffStateModelEvent, DiffStats, FileDiff, FileDiffAndContent, GitDiffData,
-    GitDiffWithBaseContent, GitFileStatus, RemoteDiffStateModel,
+    DiffHunk, DiffLine, DiffLineType, DiffMetadata, DiffMetadataAgainstBase, DiffMode,
+    DiffSnapshot, DiffState, DiffStateModelEvent, DiffStats, FileDiff, FileDiffAndContent,
+    GitDiffData, GitDiffWithBaseContent, GitFileStatus, RemoteDiffStateModel,
 };
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::util::git::Commit;
@@ -229,7 +229,8 @@ fn apply_snapshot_loaded_preserves_content_at_base_in_event() {
             app.update(|ctx| {
                 ctx.subscribe_to_model(&handle, move |_, event, _| {
                     if let DiffStateModelEvent::NewDiffsComputed {
-                        diffs: Some(diffs), ..
+                        snapshot: DiffSnapshot::Loaded(diffs),
+                        ..
                     } = event
                     {
                         emitted_content
@@ -513,7 +514,8 @@ fn apply_snapshot_emits_event_with_repo_relative_paths() {
             app.update(|ctx| {
                 ctx.subscribe_to_model(&handle, move |_, event, _| {
                     if let DiffStateModelEvent::NewDiffsComputed {
-                        diffs: Some(diffs), ..
+                        snapshot: DiffSnapshot::Loaded(diffs),
+                        ..
                     } = event
                     {
                         emitted_paths
