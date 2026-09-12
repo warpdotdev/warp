@@ -9,7 +9,8 @@ use ai::api_keys::{
 use chrono::Local;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
-use warp_multi_agent_api::response_event;
+use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
+use warp_multi_agent_api::{LlmProvider, response_event};
 use warpui::{App, SingletonEntity, ViewHandle};
 
 use super::response_stream::{PendingResume, RecoveryBudget};
@@ -17,12 +18,14 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentAttachment, AIAgentContext, AIAgentInput, CancellationReason, ImageContext,
-    PassiveSuggestionTrigger, UserQueryMode,
+    PassiveSuggestionTrigger, RenderableAIError, UserQueryMode,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::local_agent_task_sync_model::classify_renderable_error;
 use crate::ai::blocklist::orchestration_events::{
     OrchestrationEventService, PendingEvent, PendingEventDetail,
 };
+use crate::ai::blocklist::view_util::{FailedOutputPresentation, failed_output_presentation};
 use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PendingAttachment, PendingFile, RequestInput,
     ResponseStream, ResponseStreamId,
@@ -361,6 +364,99 @@ fn mock_response_stream_updates_history_through_controller() {
             } if *id == conversation_id
         )));
     });
+}
+
+#[test]
+fn quota_limit_payloads_preserve_copy_and_task_classification() {
+    struct TestCase {
+        name: &'static str,
+        provider: i32,
+        expected_provider: Option<&'static str>,
+        expected_code: PlatformErrorCode,
+        expected_copy: &'static str,
+    }
+
+    let tests = [
+        TestCase {
+            name: "OpenAI provider quota",
+            provider: LlmProvider::Openai as i32,
+            expected_provider: Some("OpenAI"),
+            expected_code: PlatformErrorCode::ProviderQuotaExceeded,
+            expected_copy: "Check your OpenAI billing and API key settings",
+        },
+        TestCase {
+            name: "AWS Bedrock provider quota",
+            provider: LlmProvider::AwsBedrock as i32,
+            expected_provider: Some("AWS Bedrock"),
+            expected_code: PlatformErrorCode::ProviderQuotaExceeded,
+            expected_copy: "Check your AWS service quotas and model access",
+        },
+        TestCase {
+            name: "Gemini Enterprise provider quota",
+            provider: LlmProvider::GeminiEnterprise as i32,
+            expected_provider: Some("Gemini Enterprise"),
+            expected_code: PlatformErrorCode::ProviderQuotaExceeded,
+            expected_copy: "Check your Google Cloud project quota and Gemini Enterprise configuration",
+        },
+        TestCase {
+            name: "absent provider",
+            provider: LlmProvider::Unknown as i32,
+            expected_provider: None,
+            expected_code: PlatformErrorCode::InsufficientCredits,
+            expected_copy: "credit limit",
+        },
+        TestCase {
+            name: "unrecognized provider",
+            provider: i32::MAX,
+            expected_provider: None,
+            expected_code: PlatformErrorCode::InsufficientCredits,
+            expected_copy: "credit limit",
+        },
+    ];
+
+    for test in tests {
+        App::test((), |mut app| async move {
+            initialize_app_for_terminal_view(&mut app);
+            let error = super::renderable_error_for_quota_limit(
+                response_event::stream_finished::QuotaLimit {
+                    provider: test.provider,
+                },
+            );
+
+            match (&error, test.expected_provider) {
+                (RenderableAIError::ProviderQuotaLimit { provider }, Some(expected_provider)) => {
+                    assert_eq!(provider, expected_provider, "{}", test.name)
+                }
+                (RenderableAIError::QuotaLimit { .. }, None) => {}
+                _ => panic!("{} produced an unexpected renderable error", test.name),
+            }
+
+            let presentation = app
+                .update(|ctx| failed_output_presentation(&error, ctx))
+                .expect("quota errors are terminal");
+            let FailedOutputPresentation::Message(presentation) = presentation else {
+                panic!("{} produced an unexpected presentation", test.name);
+            };
+            assert!(
+                presentation.contains(test.expected_copy),
+                "{} presentation {presentation:?} did not contain {:?}",
+                test.name,
+                test.expected_copy
+            );
+
+            let (state, status) = classify_renderable_error(&error);
+            assert_eq!(state, AgentTaskState::Failed, "{}", test.name);
+            let status = status.expect("quota failures include a status update");
+            assert_eq!(status.error_code, Some(test.expected_code), "{}", test.name);
+            assert!(
+                status.message.contains(test.expected_copy)
+                    || test.expected_provider.is_none() && status.message.contains("credits"),
+                "{} task status {:?} did not contain expected quota guidance",
+                test.name,
+                status.message
+            );
+        });
+    }
 }
 
 /// When an agent command exits the shell, the conversation must be finalized as

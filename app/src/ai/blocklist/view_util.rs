@@ -121,6 +121,12 @@ pub fn failed_output_presentation(
                 ))
             }
         }
+        RenderableAIError::ProviderQuotaLimit { provider } => {
+            FailedOutputPresentation::Message(format!(
+                "{ERROR_APOLOGY_TEXT}\n\n{}",
+                RenderableAIError::provider_quota_message(provider)
+            ))
+        }
         RenderableAIError::ServerOverloaded => FailedOutputPresentation::Message(
             "Warp is currently overloaded. Please try again later.".to_string(),
         ),

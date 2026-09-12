@@ -95,6 +95,8 @@ pub enum PlatformErrorCode {
     FeatureNotAvailable,
     #[cynic(rename = "INSUFFICIENT_CREDITS")]
     InsufficientCredits,
+    #[cynic(rename = "PROVIDER_QUOTA_EXCEEDED")]
+    ProviderQuotaExceeded,
     #[cynic(rename = "INTEGRATION_DISABLED")]
     IntegrationDisabled,
     #[cynic(rename = "INTEGRATION_NOT_CONFIGURED")]
