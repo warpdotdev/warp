@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -27,6 +28,7 @@ use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_editor::render::model::AutoScrollMode;
 use warp_editor::render::model::LineCount;
 use warp_util::content_version::ContentVersion;
+use warp_util::file::FileLoadError;
 use warp_util::path::LineAndColumnArg;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::clipboard::ClipboardContent;
@@ -67,7 +69,6 @@ use crate::ai::agent::{
 };
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::appearance::Appearance;
-use crate::code::ShowCommentEditorProvider;
 #[cfg(not(target_family = "wasm"))]
 use crate::code::ShowFindReferencesCard;
 use crate::code::buffer_location::LocalOrRemotePath;
@@ -85,6 +86,7 @@ use crate::code::local_code_editor::{
     LocalCodeEditorEvent, LocalCodeEditorView, render_unsaved_circle_with_tooltip,
 };
 use crate::code::view::PendingSaveIntent;
+use crate::code::{ShowCommentEditorProvider, file_load_error_message};
 use crate::code_review::DiffSetScope;
 use crate::code_review::comments::{
     AttachedReviewCommentTarget, CommentId, ReviewCommentBatch, ReviewCommentBatchEvent,
@@ -3206,11 +3208,12 @@ impl CodeReviewView {
                 ctx.notify();
             }
             LocalCodeEditorEvent::FailedToSave { .. } => {}
-            LocalCodeEditorEvent::DelayedRenderingFlushed
-            | LocalCodeEditorEvent::FailedToLoad { .. } => {
-                // Mark the editor as loaded so we can render it.
-                // This is only relevant for global buffer mode.
-                self.mark_editor_loaded_for_file(file_location, ctx);
+            LocalCodeEditorEvent::DelayedRenderingFlushed => {
+                self.mark_editor_loaded_for_file(file_location, None, ctx);
+                ctx.notify();
+            }
+            LocalCodeEditorEvent::FailedToLoad { error } => {
+                self.mark_editor_loaded_for_file(file_location, Some(error.clone()), ctx);
                 ctx.notify();
             }
             LocalCodeEditorEvent::SelectionAddedAsContext {
@@ -3362,11 +3365,10 @@ impl CodeReviewView {
         })
     }
 
-    /// Marks the editor for the given file location as loaded.
-    /// This is called when LocalCodeEditorEvent::DelayedRenderingFlushed or FailedToLoad fires.
     fn mark_editor_loaded_for_file(
         &mut self,
         file_location: &LocalOrRemotePath,
+        error: Option<Rc<FileLoadError>>,
         ctx: &mut ViewContext<Self>,
     ) {
         let Some(file_index) = self.file_state_index_for_location(file_location) else {
@@ -3383,7 +3385,7 @@ impl CodeReviewView {
         if let Some((_, file_state)) = loaded_state.file_states.get_index_mut(file_index)
             && let Some(editor_state) = &mut file_state.editor_state
         {
-            editor_state.set_loaded();
+            editor_state.set_load_result(error);
         }
 
         if self.all_editors_loaded() {
@@ -3409,7 +3411,7 @@ impl CodeReviewView {
             .file_states
             .values()
             .filter_map(|file_state| file_state.editor_state.as_ref())
-            .all(|editor_state| editor_state.is_loaded())
+            .all(|editor_state| editor_state.load_finished())
     }
 
     fn apply_diff_to_code_editor(
@@ -5221,6 +5223,22 @@ impl CodeReviewView {
             return Self::styled_file_content_container(
                 Text::new(
                     reason.to_string(),
+                    appearance.monospace_font_family(),
+                    appearance.monospace_font_size(),
+                )
+                .with_color(remove_color(appearance))
+                .finish(),
+                theme,
+            );
+        }
+        if let Some(error) = file
+            .editor_state
+            .as_ref()
+            .and_then(CodeReviewEditorState::load_error)
+        {
+            return Self::styled_file_content_container(
+                Text::new(
+                    file_load_error_message(error),
                     appearance.monospace_font_family(),
                     appearance.monospace_font_size(),
                 )

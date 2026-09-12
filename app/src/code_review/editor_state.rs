@@ -1,3 +1,6 @@
+use std::rc::Rc;
+
+use warp_util::file::FileLoadError;
 use warpui::elements::MouseStateHandle;
 use warpui::{AppContext, ViewHandle};
 
@@ -7,9 +10,8 @@ pub struct CodeReviewEditorState {
     pub editor: ViewHandle<LocalCodeEditorView>,
     unsaved_changes_mouse_state: MouseStateHandle,
     pub(super) editor_mouse_state: MouseStateHandle,
-    /// Whether the buffer content has been loaded from disk (for global buffer mode).
-    /// This is set to true when LocalCodeEditorEvent::DelayedRenderingFlushed or FailedToLoad fires.
-    is_loaded: bool,
+    load_finished: bool,
+    load_error: Option<Rc<FileLoadError>>,
 }
 
 impl CodeReviewEditorState {
@@ -19,7 +21,8 @@ impl CodeReviewEditorState {
             editor,
             unsaved_changes_mouse_state: MouseStateHandle::default(),
             editor_mouse_state: MouseStateHandle::default(),
-            is_loaded: false,
+            load_finished: false,
+            load_error: None,
         }
     }
 
@@ -30,18 +33,22 @@ impl CodeReviewEditorState {
             editor,
             unsaved_changes_mouse_state: MouseStateHandle::default(),
             editor_mouse_state: MouseStateHandle::default(),
-            is_loaded: true,
+            load_finished: true,
+            load_error: None,
         }
     }
 
-    /// Returns whether the buffer content has been loaded.
-    pub fn is_loaded(&self) -> bool {
-        self.is_loaded
+    pub fn load_finished(&self) -> bool {
+        self.load_finished
     }
 
-    /// Marks the editor as loaded.
-    pub fn set_loaded(&mut self) {
-        self.is_loaded = true;
+    pub fn set_load_result(&mut self, error: Option<Rc<FileLoadError>>) {
+        self.load_finished = true;
+        self.load_error = error;
+    }
+
+    pub fn load_error(&self) -> Option<&FileLoadError> {
+        self.load_error.as_deref()
     }
 
     pub fn editor(&self) -> &ViewHandle<LocalCodeEditorView> {
