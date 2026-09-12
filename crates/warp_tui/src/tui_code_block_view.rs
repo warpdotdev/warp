@@ -108,8 +108,39 @@ impl TuiCodeBlockView {
         }
 
         let language_changed = self.payload.language != payload.language;
+        // Capture the previous code before the payload is replaced so we can
+        // decide whether the retained overrides are still valid.
+        let prev_code = self.payload.code.clone();
         self.payload = payload;
-        self.text_overrides.clear();
+        // A language change completely invalidates the prior highlights (the
+        // token kinds no longer match), so clear them immediately.  For a
+        // code-only streaming update that is a strict *append* (the new code
+        // starts with the entire previous code), we keep overrides for
+        // complete tokens in the interior so those tokens remain highlighted
+        // while the new parse is in flight — avoiding a visible flash of
+        // fully-unstyled text.  We drop overrides that end at or beyond the
+        // previous code boundary because that token may still be growing:
+        // e.g. `for` (override [0,3)) could be extending to `format`, and
+        // retaining the override would color only the stale `for` prefix of
+        // the now-longer identifier — precisely the intra-token miscoloring
+        // this fix addresses.  If the code is *rewritten or shrunk* we clear
+        // all overrides.  `refresh_highlights` replaces them once the fresh
+        // parse for `expected_syntax_version` completes.
+        if language_changed || !self.payload.code.starts_with(prev_code.as_str()) {
+            self.text_overrides.clear();
+        } else {
+            // Even when the new code is a strict append of `prev_code`, the
+            // *last token* of `prev_code` may still be mid-stream: a token
+            // that started as `for` could be growing into `format`, and the
+            // retained override `[0, 3)` would then color only the old `for`
+            // prefix of the now-longer identifier — exactly the intra-token
+            // miscoloring this fix is about.  Drop any override that ends at
+            // or beyond the previous code boundary; the fresh parse will
+            // restyle that token once it completes.
+            let prev_end = CharOffset::from(prev_code.chars().count());
+            self.text_overrides
+                .retain(|(range, _)| range.end < prev_end);
+        }
         self.expected_syntax_version = None;
         self.fallback_text = bounded_fallback_text(&self.payload.code);
 
