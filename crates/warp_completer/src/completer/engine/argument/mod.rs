@@ -1,12 +1,5 @@
-cfg_if::cfg_if! {
-    if #[cfg(feature = "v2")] {
-        mod v2;
-        pub use v2::*;
-    } else {
-        mod legacy;
-        pub use legacy::*;
-    }
-}
+mod legacy;
+pub use legacy::*;
 
 use crate::meta::{Span, SpannedItem};
 use crate::parsers::hir::{Expression, ShellCommand};

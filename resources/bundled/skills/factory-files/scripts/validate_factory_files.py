@@ -131,6 +131,18 @@ def classify(relative: str) -> tuple[str, str]:
         return ("scorer", segments[1]) if _valid_name(segments[1]) else ("invalid", "")
     if len(segments) == 2 and segments[0] == "scorers" and segments[1].endswith(".md"):
         return "invalid", ""
+    if len(segments) == 3 and segments[0] == "benchmarks" and segments[2] == "suite.yaml":
+        return ("benchmark_suite", segments[1]) if _valid_name(segments[1]) else ("invalid", "")
+    if (
+        len(segments) == 4
+        and segments[0] == "benchmarks"
+        and segments[2] == "tasks"
+        and segments[3].endswith(".yaml")
+    ):
+        task_slug = segments[3][: -len(".yaml")]
+        if _valid_name(segments[1]) and _valid_benchmark_task_slug(task_slug):
+            return "benchmark_task", f"{segments[1]}/{task_slug}"
+        return "invalid", ""
     if len(segments) == 2 and segments[0] == "webhooks" and segments[1].endswith(".yaml"):
         name = segments[1][: -len(".yaml")]
         return ("webhook", name) if _valid_name(name) else ("invalid", "")
@@ -143,6 +155,8 @@ def classify(relative: str) -> tuple[str, str]:
         return "invalid", ""
     if segments[0] == "scorers" and base == "scorer.md":
         return "invalid", ""
+    if segments[0] == "benchmarks" and base.endswith((".yaml", ".yml")):
+        return "invalid", ""
     if segments[0] == "webhooks" and base.endswith(".yaml"):
         return "invalid", ""
     return "unrelated", ""
@@ -152,9 +166,32 @@ def _valid_name(name: str) -> bool:
     return name not in ("", ".", "..") and "/" not in name
 
 
+def _valid_benchmark_task_slug(slug: str) -> bool:
+    if not slug or slug in (".", "..") or slug[0].isspace() or slug[-1].isspace():
+        return False
+    if any(
+        character in '/\\<>:"|?*' or ord(character) < 0x20 or ord(character) == 0x7F
+        for character in slug
+    ):
+        return False
+    leading_segment = slug.split(".", 1)[0].upper()
+    return leading_segment not in {"CON", "PRN", "AUX", "NUL"} and not (
+        len(leading_segment) == 4
+        and leading_segment[:3] in {"COM", "LPT"}
+        and leading_segment[3] in "123456789"
+    )
+
+
 def _resource_files(root: Path) -> list[Path]:
     files = [root / "factory.yaml"]
-    for directory_name in ("agents", "automations", "runners", "scorers", "webhooks"):
+    for directory_name in (
+        "agents",
+        "automations",
+        "runners",
+        "scorers",
+        "benchmarks",
+        "webhooks",
+    ):
         resource_root = root / directory_name
         if not resource_root.is_dir():
             continue
@@ -195,7 +232,9 @@ def collect_tree(root: Path) -> tuple[list[dict[str, str]], list[Problem]]:
     for absolute in _resource_files(root):
         relative = absolute.relative_to(root).as_posix()
         kind, _ = classify(relative)
-        if kind in ("unrelated", "skill", "invalid"):
+        if kind in ("unrelated", "skill") or (
+            kind == "invalid" and not relative.startswith("benchmarks/")
+        ):
             continue
         if _leaves_factory_root(absolute, root):
             problems.append(Problem(relative, SYMLINK_REFUSED))

@@ -427,6 +427,134 @@ fn repository_identity_falls_back_to_the_primary_forge() {
     assert!(select_host_identity(&[], "github.com").is_none());
 }
 
+fn init_repo(dir: &std::path::Path) {
+    BlockingCommand::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(dir)
+        .output()
+        .expect("git init should succeed");
+}
+
+#[test]
+#[serial_test::serial]
+fn global_git_identity_reads_the_actual_global_config() -> Result<()> {
+    // #[serial] because this exercises the real `git config --global`
+    // invocation, which reads/writes process-wide state (the `--global`
+    // config file resolved from HOME) rather than a repo-local temp dir.
+    let temp_home = tempfile::tempdir()?;
+    let prev_home = std::env::var_os("HOME");
+    let prev_git_config_global = std::env::var_os("GIT_CONFIG_GLOBAL");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HOME", temp_home.path()) };
+    // A `GIT_CONFIG_GLOBAL` override in the ambient environment would take
+    // priority over HOME and defeat this test's isolation.
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("GIT_CONFIG_GLOBAL") };
+
+    let attempt = || -> Result<()> {
+        assert_eq!(
+            global_git_identity(),
+            None,
+            "no global identity should be configured in the fresh temp HOME yet"
+        );
+
+        run_git_config("user.name", "Warp");
+        run_git_config("user.email", "agent@warp.dev");
+
+        // This is the regression this test guards: `global_git_identity()` must
+        // issue `git config --global --get <key>` (an option to the `config`
+        // subcommand). Building it as `git --global config --get <key>` instead
+        // (`--global` as a top-level git option, which git rejects) would make
+        // this call fail silently and always return `None`, permanently
+        // defeating the `configure_repository_git_identity_if_unset` fallback
+        // logic that depends on a real baseline.
+        assert_eq!(
+            global_git_identity(),
+            Some(("Warp".to_string(), "agent@warp.dev".to_string()))
+        );
+        Ok(())
+    };
+    let result = attempt();
+
+    match prev_home {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(home) => unsafe { std::env::set_var("HOME", home) },
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        None => unsafe { std::env::remove_var("HOME") },
+    }
+    if let Some(value) = prev_git_config_global {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", value) }
+    }
+    result
+}
+
+#[test]
+fn repository_identity_is_unchanged_when_it_matches_the_baseline() -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    init_repo(temp_dir.path());
+    run_repository_git_config(temp_dir.path(), "user.name", "Warp");
+    run_repository_git_config(temp_dir.path(), "user.email", "agent@warp.dev");
+
+    let baseline = Some(("Warp".to_string(), "agent@warp.dev".to_string()));
+    assert!(!repository_identity_changed_since(
+        temp_dir.path(),
+        baseline
+    ));
+    Ok(())
+}
+
+#[test]
+fn repository_identity_is_changed_when_a_setup_command_overrides_it() -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    init_repo(temp_dir.path());
+    run_repository_git_config(temp_dir.path(), "user.name", "Vercel Bot");
+    run_repository_git_config(temp_dir.path(), "user.email", "vercel-bot@example.com");
+
+    let baseline = Some(("Warp".to_string(), "agent@warp.dev".to_string()));
+    assert!(repository_identity_changed_since(temp_dir.path(), baseline));
+    Ok(())
+}
+
+#[test]
+fn repository_identity_is_changed_when_baseline_is_none_but_the_repo_has_one() -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    init_repo(temp_dir.path());
+    run_repository_git_config(temp_dir.path(), "user.name", "Vercel Bot");
+    run_repository_git_config(temp_dir.path(), "user.email", "vercel-bot@example.com");
+
+    assert!(repository_identity_changed_since(temp_dir.path(), None));
+    Ok(())
+}
+
+#[test]
+fn configure_repository_git_identity_if_unset_skips_a_repo_the_customer_already_configured()
+-> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    init_repo(temp_dir.path());
+    run_repository_git_config(temp_dir.path(), "user.name", "Vercel Bot");
+    run_repository_git_config(temp_dir.path(), "user.email", "vercel-bot@example.com");
+
+    // The repo's identity already differs from `baseline`, so this must return
+    // before ever consulting HOST_IDENTITIES (via recorded_identity_for_host) —
+    // exercised here with a host that has no recorded identity, to make sure a
+    // changed repo is left alone rather than falling through to some default.
+    configure_repository_git_identity_if_unset(
+        temp_dir.path(),
+        "github.com",
+        Some(("Warp".to_string(), "agent@warp.dev".to_string())),
+    );
+
+    assert_eq!(
+        repository_git_identity(temp_dir.path()),
+        Some((
+            "Vercel Bot".to_string(),
+            "vercel-bot@example.com".to_string()
+        ))
+    );
+    Ok(())
+}
+
 #[test]
 fn unique_credentials_drop_identical_duplicate_hosts() {
     let unique = unique_credentials_by_host(&[github_credential(), github_credential()]).unwrap();

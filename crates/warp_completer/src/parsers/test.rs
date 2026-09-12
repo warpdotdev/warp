@@ -2,9 +2,7 @@ use itertools::Itertools;
 use warp_util::path::EscapeChar;
 
 use super::*;
-use crate::parsers::hir::{CommandCallInfo, Flags, ShellCommand};
-#[cfg(not(feature = "v2"))]
-use crate::parsers::hir::{Flag, FlagType};
+use crate::parsers::hir::{CommandCallInfo, Flag, FlagType, Flags, ShellCommand};
 use crate::parsers::simple::parse_for_completions;
 use crate::parsers::{ClassifiedCommand, classify_command};
 use crate::signatures::testing::{create_test_command_registry, test_signature};
@@ -50,7 +48,6 @@ pub fn test_classify_command_classifies_known_command() {
 }
 
 /// TODO(CORE-2797)
-#[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_classify_command_classifies_known_command_with_flags() {
     let registry = create_test_command_registry([test_signature()]);
@@ -117,7 +114,6 @@ pub fn test_classify_command_classifies_known_command_with_flags() {
 /// With exact option matching, `-r` correctly matches the `-r` switch (no arguments),
 /// so the parser advances past it and discovers the `one` subcommand. The command path
 /// becomes `"test -r one"` (the legacy parser's convention for subcommand paths).
-#[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_classify_command_classifies_known_command_with_subcommand() {
     let registry = create_test_command_registry([test_signature()]);
@@ -386,7 +382,6 @@ fn test_classify_command_case_sensitive() {
 }
 
 /// TODO(CORE-2810)
-#[cfg(not(feature = "v2"))]
 #[test]
 fn test_classify_command_case_insensitive() {
     let registry = create_test_command_registry([test_signature()]);

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
 
 use typed_path::TypedPathBuf;
@@ -15,16 +15,10 @@ use crate::completer::testing::{
 use crate::meta::Span;
 use crate::signatures::CommandRegistry;
 use crate::signatures::testing::{
-    cd_signature, create_test_command_registry, fuzzy_signature, git_signature, java_signature,
-    ls_signature, npm_signature, signature_with_empty_positional, test_signature,
+    add_content_signature, cd_signature, create_test_command_registry,
+    enum_then_path_option_signature, fuzzy_signature, git_signature, java_signature, ls_signature,
+    npm_signature, signature_with_empty_positional, test_signature,
 };
-
-cfg_if::cfg_if! {
-    if #[cfg(not(feature = "v2"))] {
-        use std::collections::HashSet;
-        use crate::signatures::testing::{add_content_signature, enum_then_path_option_signature};
-    }
-}
 
 #[cfg(windows)]
 mod windows_constants {
@@ -445,14 +439,8 @@ pub fn test_cd_from_home_dir() {
 pub fn test_completions_ordering_within_group() {
     let mut ctx = FakeCompletionContext::new(CommandRegistry::default());
 
-    // TODO(completions-v2): Re-enable when embedded signatures are implemented. In the long-term we
-    // should create a test signature for `chmod` instead of using real command signatures.
-    cfg_if::cfg_if! {
-        if #[cfg(not(feature = "v2"))] {
-            let chmod_res = complete_at_end_of_line("chmod ", &ctx);
-            assert_eq!(chmod_res, vec!["664", "744", "777", "a+rx", "u+x"],);
-        }
-    }
+    let chmod_res = complete_at_end_of_line("chmod ", &ctx);
+    assert_eq!(chmod_res, vec!["664", "744", "777", "a+rx", "u+x"],);
 
     let path_ctx = MockPathCompletionContext::new(TypedPathBuf::from(TEST_WORK_DIR))
         .with_entries_in_pwd([
@@ -656,7 +644,6 @@ pub fn test_positional_args() {
     );
 }
 
-#[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_command_alias() {
     let registry = create_test_command_registry([test_signature()]);
@@ -748,7 +735,6 @@ fn test_replacement_span() {
 
 /// Verifies that we show completions for top level commands if we are completing on a command that
 /// has an argument where `is_command` is true.
-#[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_completion_results_shows_top_level_commands_for_is_command_argument() {
     let registry = CommandRegistry::default();
@@ -775,7 +761,6 @@ pub fn test_completion_results_shows_top_level_commands_for_is_command_argument(
 
 /// Verifies that we only surface a commands's static list of arguments (instead of all top level commands)
 /// if a command's argument is marked as `is_command: true` but also has a list of static `ArgumentTypes`.
-#[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_completion_results_shows_arguments_for_is_command_argument() {
     let registry = CommandRegistry::default();
@@ -801,7 +786,6 @@ pub fn test_completion_results_shows_arguments_for_is_command_argument() {
 /// Verifies that we show subcommand / argument completions for an argument that is actually a top
 /// level command.
 /// e.g. `sudo git ` should surface completions for _git_.
-#[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_completion_results_for_is_command_argument() {
     // Create the normal command registry with our custom `git` signature.
@@ -888,7 +872,6 @@ pub fn test_variadic_args_for_option() {
     );
 }
 
-#[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_equal_sign_flag_does_not_bleed_variadic_suggestions() {
     let registry = create_test_command_registry([test_signature()]);
@@ -913,7 +896,6 @@ pub fn test_equal_sign_flag_does_not_bleed_variadic_suggestions() {
     );
 }
 
-#[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_equal_sign_flag_completions() {
     let registry = create_test_command_registry([test_signature()]);
@@ -940,7 +922,6 @@ pub fn test_equal_sign_flag_completions() {
     );
 }
 
-#[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_equal_sign_flag_mixed_with_other_styles() {
     let registry = create_test_command_registry([test_signature()]);
@@ -993,7 +974,6 @@ pub fn test_multiple_required_args_for_option() {
     );
 }
 
-#[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_option_first_arg_resolves_by_position() {
     let registry = create_test_command_registry([test_signature()]);
@@ -1005,7 +985,6 @@ pub fn test_option_first_arg_resolves_by_position() {
     );
 }
 
-#[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_option_equals_form_resolves_first_arg() {
     let registry = create_test_command_registry([test_signature()]);
@@ -1017,7 +996,6 @@ pub fn test_option_equals_form_resolves_first_arg() {
     );
 }
 
-#[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_repeated_option_resolves_args_per_instance() {
     let registry = create_test_command_registry([test_signature()]);
@@ -1039,7 +1017,6 @@ pub fn test_repeated_option_resolves_args_per_instance() {
     );
 }
 
-#[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_option_first_value_offers_enum_not_path() {
     let pwd = TypedPathBuf::from(TEST_WORK_DIR);
@@ -1295,7 +1272,6 @@ pub fn test_ls() {
     );
 }
 
-#[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_mv() {
     let pwd = TypedPathBuf::from(TEST_WORK_DIR);
@@ -1344,7 +1320,6 @@ pub fn test_mv() {
     );
 }
 
-#[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_env_var_completion() {
     let pwd = TypedPathBuf::from(TEST_WORK_DIR);
@@ -1420,7 +1395,6 @@ pub fn test_env_var_completion() {
     );
 }
 
-#[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_alias_completion() {
     let registry = CommandRegistry::default();
@@ -1617,7 +1591,6 @@ pub fn test_autocd() {
     assert!(complete_at_end_of_line("ce", &ctx).is_empty());
 }
 
-#[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_completions() {
     let pwd = TypedPathBuf::from(TEST_WORK_DIR);
@@ -1767,7 +1740,6 @@ fn completes_many_args_under_option() {
     );
 }
 
-#[cfg(not(feature = "v2"))]
 #[test]
 fn test_hidden_suggestion_only_appears_on_exact_match() {
     let registry = create_test_command_registry([cd_signature()]);
@@ -2281,7 +2253,6 @@ pub fn test_autocd_completions_with_tilde() {
     assert_eq!(complete_at_end_of_line("~/src/", &ctx), vec!["app/"]);
 }
 
-#[cfg(not(feature = "v2"))]
 #[test]
 fn test_option_name_with_missing_required_value() {
     let registry = create_test_command_registry([git_signature()]);
@@ -2300,7 +2271,6 @@ fn test_option_name_with_missing_required_value() {
 }
 
 /// TODO(CORE-2795)
-#[cfg(not(feature = "v2"))]
 #[test]
 fn test_powershell_parser_directives_for_flags() {
     let registry = create_test_command_registry([add_content_signature()]);
@@ -2370,7 +2340,6 @@ fn test_powershell_parser_directives_for_flags() {
 }
 
 /// TODO(CORE-2795)
-#[cfg(not(feature = "v2"))]
 #[test]
 fn test_powershell_parser_directives_for_case_insensitivity() {
     let registry = create_test_command_registry([add_content_signature()]);

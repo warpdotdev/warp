@@ -397,6 +397,13 @@ async fn prepare_environment_impl(
     }
     let mut codebase_context_receivers = Vec::new();
 
+    // Snapshot the process-wide identity bootstrap set, before anything below
+    // (cloning, setup commands) has a chance to change it for a given repo.
+    // The post-setup-commands fallback below compares each repo's effective
+    // identity against this baseline to tell whether the customer already
+    // claimed that repo's identity, rather than assuming so from forge count.
+    let git_identity_baseline = git_credentials::global_git_identity();
+
     let environment_snapshot = if source_repos.is_empty() {
         EnvironmentSnapshot::empty()
     } else {
@@ -415,10 +422,6 @@ async fn prepare_environment_impl(
 
     if !source_repos.is_empty() {
         for repo in source_repos {
-            git_credentials::configure_repository_git_identity(
-                &working_dir.join(&repo.repo),
-                repo.code_forge.map(CodeForge::host).unwrap_or(""),
-            );
             register_cloned_repo(repo, working_dir, is_sandbox, spawner).await?;
             if !is_sandbox && should_index_codebase {
                 let receiver = index_repo_codebase(
@@ -511,6 +514,23 @@ async fn prepare_environment_impl(
     } else {
         Ok(())
     };
+
+    // Fill in a forge-appropriate identity for any repo whose effective
+    // identity is still exactly what bootstrap set — i.e. nothing (a setup
+    // command, or anything else run above) has claimed it yet. This runs
+    // after setup commands specifically so a customer's own git identity
+    // config always wins: repo-local config always beats `--global` config
+    // regardless of write order, so applying Warp's own fallback any earlier
+    // would permanently shadow a later customer override. Runs even if a
+    // setup command failed, so whatever happens next (e.g. a failure-linger
+    // session) still has a usable identity for every repo.
+    for repo in source_repos {
+        git_credentials::configure_repository_git_identity_if_unset(
+            &working_dir.join(&repo.repo),
+            repo.code_forge.map(CodeForge::host).unwrap_or(""),
+            git_identity_baseline.clone(),
+        );
+    }
 
     let remove_origins_result = if remove_repository_origins {
         remove_repository_origins_from_repos(source_repos, working_dir, spawner).await
