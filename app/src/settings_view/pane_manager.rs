@@ -5,15 +5,13 @@ use warpui::{Entity, EntityId, ModelContext, SingletonEntity, ViewHandle, Window
 use super::SettingsView;
 use crate::PaneViewLocator;
 use crate::pane_group::{PaneContent, PaneId, SettingsPane};
+
 struct SettingsPaneData {
     locator: Option<PaneViewLocator>,
     settings_view: ViewHandle<SettingsView>,
 }
 
-/// Singleton model to manage state of settings panes across multiple windows
-/// (where only one settings pane can exist per window). Specifically:
-/// - Maintains settings view handles to preserve state when panes are hidden
-/// - Tracks currently open settings panes and their location
+/// Tracks each window's Settings view and live pane.
 #[derive(Default)]
 pub struct SettingsPaneManager {
     panes: HashMap<WindowId, SettingsPaneData>,
@@ -64,6 +62,35 @@ impl SettingsPaneManager {
             });
         } else {
             log::warn!("Settings view should already exist for settings pane");
+        }
+    }
+
+    /// Registers a transferred pane unless another pane is already registered.
+    pub fn register_transferred_pane(
+        &mut self,
+        pane: &SettingsPane,
+        pane_group_id: EntityId,
+        window_id: WindowId,
+        _ctx: &mut ModelContext<Self>,
+    ) -> Option<PaneViewLocator> {
+        let incoming = PaneViewLocator {
+            pane_group_id,
+            pane_id: pane.id(),
+        };
+        let Some(data) = self.panes.get_mut(&window_id) else {
+            debug_assert!(
+                false,
+                "SettingsPaneManager::register_transferred_pane: destination window {window_id:?} has no tracked SettingsPaneData; every window is expected to call `register_view` before any pane can transfer into it. Silently dropping this pane's registration would corrupt the one-pane-per-window invariant."
+            );
+            log::warn!("Settings view should already exist for settings pane");
+            return None;
+        };
+        match data.locator {
+            Some(existing) if existing != incoming => Some(existing),
+            _ => {
+                data.locator = Some(incoming);
+                None
+            }
         }
     }
 

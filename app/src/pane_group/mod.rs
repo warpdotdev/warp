@@ -65,6 +65,7 @@ use crate::ai::blocklist::{BlocklistAIHistoryModel, InputConfig, SerializedBlock
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentVersion};
 use crate::ai::execution_profiles::ExecutionProfileId;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::facts::{AIFactManager, AIFactView};
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai_assistant::AskAIType;
@@ -117,8 +118,9 @@ use crate::server::telemetry::{
 };
 use crate::session_management::SessionNavigationData;
 use crate::settings::{AISettings, DefaultSessionMode, PaneSettings};
-use crate::settings_view::SettingsSection;
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
+use crate::settings_view::pane_manager::SettingsPaneManager;
+use crate::settings_view::{SettingsSection, SettingsView};
 use crate::shell_indicator::ShellIndicatorType;
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
 #[cfg(not(target_family = "wasm"))]
@@ -324,7 +326,34 @@ pub enum PaneGroupAction {
     ToggleMaximizePane,
     HandleFocusChange,
     FocusTerminalView(EntityId),
+    /// Re-homes a transferred singleton pane's workspace event subscription.
+    RehomePaneEventSubscription(PaneEventSubscriptionRehome),
 }
+
+/// Data needed to re-home a transferred singleton pane.
+#[derive(Debug, Clone)]
+pub enum PaneEventSubscriptionRehome {
+    Settings {
+        old_window_id: WindowId,
+        new_window_id: WindowId,
+        settings_view: ViewHandle<SettingsView>,
+        collision: Option<PaneCollisionReconciliation>,
+    },
+    AIFact {
+        old_window_id: WindowId,
+        new_window_id: WindowId,
+        ai_fact_view: ViewHandle<AIFactView>,
+        collision: Option<PaneCollisionReconciliation>,
+    },
+}
+
+/// Identifies the winner and loser of a singleton-pane transfer collision.
+#[derive(Debug, Clone, Copy)]
+pub struct PaneCollisionReconciliation {
+    pub keep: PaneViewLocator,
+    pub discard: PaneViewLocator,
+}
+
 #[derive(PartialEq)]
 enum PaneRemovalReason {
     // This pane is being removed from the pane group because it is being moved to another tab or becoming a tab of its own
@@ -4286,6 +4315,18 @@ impl PaneGroup {
         self.pane_contents.contains_key(&pane_id)
     }
 
+    /// Gets the Settings view within the visible pane at `pane_index`.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn settings_view_at_pane_index(
+        &self,
+        pane_index: usize,
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<crate::settings_view::SettingsView>> {
+        self.content_by_pane_index(pane_index)
+            .and_then(|pane| pane.as_any().downcast_ref::<SettingsPane>())
+            .map(|pane| pane.settings_view(ctx))
+    }
+
     /// Get the notebook view within the pane at `pane_index`.
     #[cfg(any(test, feature = "integration_tests"))]
     pub fn notebook_view_at_pane_index(
@@ -4555,8 +4596,7 @@ impl PaneGroup {
         self.close_pane(pane_id, ctx);
     }
 
-    /// Definitively close the pane. This does not go through the undo close check where we might hide the pane instead of
-    /// discarding it.
+    /// Permanently closes a pane without making it available to undo.
     fn discard_pane(&mut self, pane_id: PaneId, ctx: &mut ViewContext<Self>) {
         // Skip ownership transfer for child agent panes (their view
         // canonically owns the conversation).
@@ -4577,6 +4617,21 @@ impl PaneGroup {
         }
 
         self.cleanup_closed_pane(pane_id, ctx);
+    }
+
+    /// Permanently discards a transferred pane without adding it to undo-close history.
+    pub(crate) fn discard_transferred_pane(
+        &mut self,
+        pane_id: PaneId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.pane_contents.contains_key(&pane_id) {
+            return;
+        }
+
+        self.focus_next_terminal_pane_and_activate_session(pane_id, PaneRemovalReason::Close, ctx);
+        self.discard_pane(pane_id, ctx);
+        self.handle_pane_count_change(ctx);
     }
 
     /// Best-effort: re-bind each live child agent conversation on the
@@ -8259,6 +8314,9 @@ impl TypedActionView for PaneGroup {
             } => self.move_pane(*id, *target_pane_id, *direction, ctx),
             HandleFocusChange => self.handle_focus_change(ctx),
             FocusTerminalView(terminal_view_id) => self.focus_terminal_view(*terminal_view_id, ctx),
+            RehomePaneEventSubscription(rehome) => {
+                Self::rehome_pane_event_subscription(rehome, ctx)
+            }
         }
     }
 }
@@ -8424,9 +8482,156 @@ impl View for PaneGroup {
 
     fn on_window_transferred(
         &mut self,
-        _old_window_id: WindowId,
-        _new_window_id: WindowId,
-        _ctx: &mut ViewContext<Self>,
+        old_window_id: WindowId,
+        new_window_id: WindowId,
+        ctx: &mut ViewContext<Self>,
     ) {
+        let pane_group_id = ctx.view_id();
+
+        let settings_pane_ids: Vec<PaneId> = self
+            .panes_of::<SettingsPane>()
+            .filter(|pane| !self.is_pane_hidden_for_close(pane.id()))
+            .map(|pane| pane.id())
+            .collect();
+        for pane_id in settings_pane_ids {
+            if let Some(pane) = self.downcast_pane_by_id::<SettingsPane>(pane_id) {
+                let settings_view = pane.settings_view(ctx);
+                let collision = SettingsPaneManager::handle(ctx).update(ctx, |manager, ctx| {
+                    manager.deregister_pane(&old_window_id, pane_group_id, pane_id, ctx);
+                    manager
+                        .register_transferred_pane(pane, pane_group_id, new_window_id, ctx)
+                        .map(|keep| PaneCollisionReconciliation {
+                            keep,
+                            discard: PaneViewLocator {
+                                pane_group_id,
+                                pane_id,
+                            },
+                        })
+                });
+
+                // Re-homing must wait until the view-tree transfer finishes to avoid a circular
+                // workspace update.
+                ctx.dispatch_typed_action_deferred(PaneGroupAction::RehomePaneEventSubscription(
+                    PaneEventSubscriptionRehome::Settings {
+                        old_window_id,
+                        new_window_id,
+                        settings_view,
+                        collision,
+                    },
+                ));
+            }
+        }
+
+        let ai_fact_pane_ids: Vec<PaneId> = self
+            .panes_of::<AIFactPane>()
+            .filter(|pane| !self.is_pane_hidden_for_close(pane.id()))
+            .map(|pane| pane.id())
+            .collect();
+        for pane_id in ai_fact_pane_ids {
+            if let Some(pane) = self.downcast_pane_by_id::<AIFactPane>(pane_id) {
+                let ai_fact_view = pane.ai_fact_view(ctx);
+                let collision = AIFactManager::handle(ctx).update(ctx, |manager, ctx| {
+                    manager.deregister_pane(&old_window_id, pane_group_id, pane_id, ctx);
+                    manager
+                        .register_transferred_pane(pane, pane_group_id, new_window_id, ctx)
+                        .map(|keep| PaneCollisionReconciliation {
+                            keep,
+                            discard: PaneViewLocator {
+                                pane_group_id,
+                                pane_id,
+                            },
+                        })
+                });
+
+                ctx.dispatch_typed_action_deferred(PaneGroupAction::RehomePaneEventSubscription(
+                    PaneEventSubscriptionRehome::AIFact {
+                        old_window_id,
+                        new_window_id,
+                        ai_fact_view,
+                        collision,
+                    },
+                ));
+            }
+        }
+    }
+}
+
+impl PaneGroup {
+    fn rehome_pane_event_subscription(
+        rehome: &PaneEventSubscriptionRehome,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match rehome {
+            PaneEventSubscriptionRehome::Settings {
+                old_window_id,
+                new_window_id,
+                settings_view,
+                collision,
+            } => {
+                if let Some(old_workspace) =
+                    workspace::WorkspaceRegistry::as_ref(ctx).get(*old_window_id, ctx)
+                {
+                    old_workspace.update(ctx, |old_workspace, ctx| {
+                        ctx.unsubscribe_to_view(settings_view);
+                        old_workspace.replace_native_settings_view(ctx);
+                    });
+                }
+                if let Some(new_workspace) =
+                    workspace::WorkspaceRegistry::as_ref(ctx).get(*new_window_id, ctx)
+                {
+                    if let Some(collision) = collision {
+                        let keep = collision.keep;
+                        let discard = collision.discard;
+                        new_workspace.update(ctx, |_, ctx| {
+                            ctx.dispatch_typed_action_deferred(
+                                WorkspaceAction::DiscardDuplicateTransferredPane { keep, discard },
+                            );
+                        });
+                    } else {
+                        let settings_view = settings_view.clone();
+                        new_workspace.update(ctx, |_, ctx| {
+                            ctx.subscribe_to_view(&settings_view, move |me, _, event, ctx| {
+                                me.handle_settings_pane_event(event, ctx);
+                            });
+                        });
+                    }
+                }
+            }
+            PaneEventSubscriptionRehome::AIFact {
+                old_window_id,
+                new_window_id,
+                ai_fact_view,
+                collision,
+            } => {
+                if let Some(old_workspace) =
+                    workspace::WorkspaceRegistry::as_ref(ctx).get(*old_window_id, ctx)
+                {
+                    old_workspace.update(ctx, |old_workspace, ctx| {
+                        ctx.unsubscribe_to_view(ai_fact_view);
+                        old_workspace.replace_native_ai_fact_view(ctx);
+                    });
+                }
+                if let Some(new_workspace) =
+                    workspace::WorkspaceRegistry::as_ref(ctx).get(*new_window_id, ctx)
+                {
+                    if let Some(collision) = collision {
+                        let keep = collision.keep;
+                        let discard = collision.discard;
+                        new_workspace.update(ctx, |_, ctx| {
+                            ctx.dispatch_typed_action_deferred(
+                                WorkspaceAction::DiscardDuplicateTransferredPane { keep, discard },
+                            );
+                        });
+                    } else {
+                        let ai_fact_view = ai_fact_view.clone();
+                        new_workspace.update(ctx, |_, ctx| {
+                            ctx.subscribe_to_view(&ai_fact_view, move |me, _, event, ctx| {
+                                me.handle_ai_fact_view_event(event, ctx);
+                            });
+                        });
+                    }
+                }
+            }
+        }
     }
 }
