@@ -506,6 +506,30 @@ impl FileNotebookView {
                             // Trigger to save the open file path for session restoration.
                             ctx.emit(FileNotebookEvent::FileLoaded);
                         }
+                        // A path with nothing at it is not a failure: show it as the empty file
+                        // the user is about to create rather than an error treatment. A path that
+                        // exists but cannot be read is still an error.
+                        FileModelEvent::FailedToLoad {
+                            error: load_error, ..
+                        } if matches!(
+                            **load_error,
+                            warp_util::file::FileLoadError::DoesNotExist
+                        ) =>
+                        {
+                            me.set_content("", ctx);
+                            me.file_state =
+                                match mem::replace(&mut me.file_state, FileState::NoFile) {
+                                    FileState::NoFile => FileState::NoFile,
+                                    FileState::Loading(source)
+                                    | FileState::Loaded(source)
+                                    | FileState::Error(source) => FileState::Loaded(source),
+                                };
+                            me.pane_configuration.update(ctx, |pane_config, ctx| {
+                                pane_config.refresh_pane_header_overflow_menu_items(ctx);
+                            });
+                            ctx.notify();
+                            ctx.emit(FileNotebookEvent::FileLoaded);
+                        }
                         FileModelEvent::FailedToLoad { error, .. } => {
                             safe_warn!(
                                 safe: ("Unable to read local notebook file"),
