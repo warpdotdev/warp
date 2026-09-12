@@ -143,35 +143,50 @@ impl RichTextEditorView {
         source: BlockInsertionSource,
         ctx: &mut ViewContext<Self>,
     ) {
+        // Unreachable when the menu is disabled by configuration, since `insertion_menu_state`
+        // is only constructed when it isn't (see `RichTextEditorView::new`).
+        let Some(insertion_menu_state) = &mut self.insertion_menu_state else {
+            return;
+        };
         // Reset selection if we are opening a new block insertion menu or opening
         // the menu from a different source.
-        if self.insertion_menu_state.open_at_source != Some(source) {
-            self.insertion_menu_state.reset_selection(ctx);
+        if insertion_menu_state.open_at_source != Some(source) {
+            insertion_menu_state.reset_selection(ctx);
             ctx.notify();
         }
-        self.insertion_menu_state.open_at_source = Some(source);
+        insertion_menu_state.open_at_source = Some(source);
         // By default we should show the block insertion menu.
-        self.insertion_menu_state.embedded_object_search_open = false;
-        ctx.focus(&self.insertion_menu_state.menu);
+        insertion_menu_state.embedded_object_search_open = false;
+        ctx.focus(&insertion_menu_state.menu);
         ctx.emit(EditorViewEvent::OpenedBlockInsertionMenu(source));
     }
 
     pub(super) fn open_embedded_object_search(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some(embedded_object_search) = &self.insertion_menu_state.embedded_object_search else {
+        let Some(embedded_object_search) = self
+            .insertion_menu_state
+            .as_ref()
+            .and_then(|state| state.embedded_object_search.clone())
+        else {
             return;
         };
-        self.insertion_menu_state.embedded_object_search_open = true;
+        if let Some(insertion_menu_state) = &mut self.insertion_menu_state {
+            insertion_menu_state.embedded_object_search_open = true;
+        }
         // Reset the filter state.
         embedded_object_search.update(ctx, |menu, ctx| {
             menu.reset_state(ctx);
         });
-        ctx.focus(embedded_object_search);
+        ctx.focus(&embedded_object_search);
         ctx.emit(EditorViewEvent::OpenedEmbeddedObjectSearch);
     }
 
     /// Set the space containing this notebook.
     pub fn set_space(&mut self, space: Space, ctx: &mut ViewContext<Self>) {
-        if let Some(embedded_object_search) = &self.insertion_menu_state.embedded_object_search {
+        if let Some(embedded_object_search) = self
+            .insertion_menu_state
+            .as_ref()
+            .and_then(|state| state.embedded_object_search.clone())
+        {
             embedded_object_search.update(ctx, |menu, ctx| menu.set_embedding_space(space, ctx));
         }
     }
@@ -181,14 +196,18 @@ impl RichTextEditorView {
         if self.is_block_insertion_menu_open() {
             ctx.notify();
         }
-        self.insertion_menu_state.open_at_source = None;
-        self.insertion_menu_state.embedded_object_search_open = false;
+        if let Some(insertion_menu_state) = &mut self.insertion_menu_state {
+            insertion_menu_state.open_at_source = None;
+            insertion_menu_state.embedded_object_search_open = false;
+        }
         ctx.focus_self();
     }
 
     /// Whether the block insertion menu is open.
     pub(super) fn is_block_insertion_menu_open(&self) -> bool {
-        self.insertion_menu_state.open_at_source.is_some()
+        self.insertion_menu_state
+            .as_ref()
+            .is_some_and(|state| state.open_at_source.is_some())
     }
 
     fn handle_embedded_object_search_menu_event(
@@ -262,7 +281,11 @@ impl RichTextEditorView {
                 // Don't close the block insertion menu if the embedded object
                 // search menu is open. Handle the close event emitted from
                 // embedded object search menu instead.
-                if self.insertion_menu_state.embedded_object_search_open {
+                if self
+                    .insertion_menu_state
+                    .as_ref()
+                    .is_some_and(|state| state.embedded_object_search_open)
+                {
                     return;
                 }
                 self.close_block_insertion_menu(ctx);
@@ -275,29 +298,34 @@ impl RichTextEditorView {
 
     /// Renders controls for the block insertion menu.
     pub(super) fn render_block_insertion_menu(&self, stack: &mut Stack, app: &AppContext) {
-        if self.disable_block_insertion_menu() {
+        let Some(insertion_menu_state) = &self.insertion_menu_state else {
             return;
-        }
+        };
 
         if self.can_edit_app(app) {
             self.render_button(stack, app);
         }
 
-        if let Some(source) = self.insertion_menu_state.open_at_source {
+        if let Some(source) = insertion_menu_state.open_at_source {
             self.render_menu(source, stack, app);
         }
     }
 
     /// Renders a button that opens the block insertion menu when clicked.
     fn render_button(&self, stack: &mut Stack, app: &AppContext) {
+        // `render_block_insertion_menu` only calls this once `insertion_menu_state` is known
+        // to exist.
+        let Some(insertion_menu_state) = &self.insertion_menu_state else {
+            return;
+        };
+
         let appearance = Appearance::as_ref(app);
         let ui_builder = appearance.ui_builder().clone();
         let button = icon_button(
             appearance,
             Icon::Plus,
-            self.insertion_menu_state.open_at_source
-                == Some(BlockInsertionSource::BlockInsertionButton),
-            self.insertion_menu_state.button_state.clone(),
+            insertion_menu_state.open_at_source == Some(BlockInsertionSource::BlockInsertionButton),
+            insertion_menu_state.button_state.clone(),
         )
         .with_active_styles(UiComponentStyles {
             background: Some(appearance.theme().surface_2().into()),
@@ -349,8 +377,14 @@ impl RichTextEditorView {
         let appearance = Appearance::as_ref(app);
         let render_state = self.model.as_ref(app).render_state.as_ref(app);
 
-        let (container, bounds) = if !self.insertion_menu_state.embedded_object_search_open {
-            let menu = ChildView::new(&self.insertion_menu_state.menu).finish();
+        // `render_block_insertion_menu` only calls this once `insertion_menu_state` is known
+        // to exist.
+        let Some(insertion_menu_state) = &self.insertion_menu_state else {
+            return;
+        };
+
+        let (container, bounds) = if !insertion_menu_state.embedded_object_search_open {
+            let menu = ChildView::new(&insertion_menu_state.menu).finish();
             (
                 Container::new(menu)
                     .with_border(Border::all(1.).with_border_fill(appearance.theme().outline()))
@@ -358,9 +392,7 @@ impl RichTextEditorView {
                     .finish(),
                 PositionedElementOffsetBounds::ParentByPosition,
             )
-        } else if let Some(embedded_object_search) =
-            &self.insertion_menu_state.embedded_object_search
-        {
+        } else if let Some(embedded_object_search) = &insertion_menu_state.embedded_object_search {
             (
                 ChildView::new(embedded_object_search).finish(),
                 // Embedded object search menu is not bounded by the editor.
