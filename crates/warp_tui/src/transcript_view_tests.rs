@@ -514,6 +514,7 @@ fn todo_and_conversation_status_events_refresh_affected_agent_blocks() {
             view.handle_history_event(
                 &BlocklistAIHistoryEvent::UpdatedTodoList {
                     terminal_surface_id,
+                    conversation_id: first_conversation_id,
                 },
                 ctx,
             );

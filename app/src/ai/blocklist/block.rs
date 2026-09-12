@@ -86,8 +86,8 @@ use super::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use super::suggested_rule_modal::SuggestedRuleAndId;
 use super::telemetry_banner::should_collect_ai_ugc_telemetry;
 use super::{
-    BlocklistAIActionModel, BlocklistAIController, BlocklistAIHistoryEvent,
-    BlocklistAIHistoryModel, BlocklistAIPermissions, ResponseStreamId,
+    BlocklistAIActionModel, BlocklistAIController, BlocklistAIHistoryModel, BlocklistAIPermissions,
+    ResponseStreamId,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::redaction::redact_secrets;
@@ -988,6 +988,7 @@ pub struct AIBlock {
 
     time_to_first_token: OnceCell<Duration>,
     time_to_last_token: Option<Duration>,
+    receives_live_output_updates: bool,
 
     /// The number of blocks that were attached as context to this AI block's query.
     num_attached_context_blocks: usize,
@@ -1323,29 +1324,6 @@ impl AIBlock {
             }
         });
 
-        // Note: UpdatedStreamingExchange is handled by the dedicated on_updated_output()
-        // callback in model_impl.rs, so we don't need to respond to it here.
-        ctx.subscribe_to_model(
-            &BlocklistAIHistoryModel::handle(ctx),
-            |me, _, event, ctx| {
-                if event
-                    .terminal_surface_id()
-                    .is_none_or(|id| id == me.terminal_view_id)
-                {
-                    match event {
-                        BlocklistAIHistoryEvent::AppendedExchange { .. }
-                        | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
-                        | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
-                        | BlocklistAIHistoryEvent::StartedNewConversation { .. }
-                        | BlocklistAIHistoryEvent::SetActiveConversation { .. } => {
-                            ctx.notify();
-                        }
-                        _ => {}
-                    }
-                }
-            },
-        );
-
         ctx.subscribe_to_model(
             cli_subagent_controller,
             move |me, _, event, ctx| match event {
@@ -1502,6 +1480,7 @@ impl AIBlock {
         }
 
         let is_passive = model.request_type(ctx).is_passive();
+        let receives_live_output_updates = model.status(ctx).is_streaming();
 
         let mut me = Self {
             model,
@@ -1522,6 +1501,7 @@ impl AIBlock {
             state_handles: Default::default(),
             time_to_first_token: OnceCell::new(),
             time_to_last_token: None,
+            receives_live_output_updates,
             num_attached_context_blocks,
             has_attached_context_selected_text,
             finish_reason: None,
@@ -1583,9 +1563,8 @@ impl AIBlock {
         me.run_secret_redaction_on_user_query(me.client_ids.conversation_id, ctx);
         me.spawn_link_detection(ctx);
 
-        if me.model.status(ctx).is_streaming() {
-            me.model
-                .on_updated_output(Box::new(Self::on_output_status_update), ctx);
+        if let AIBlockOutputStatus::PartiallyReceived { output } = me.model.status(ctx) {
+            me.handle_updated_output(&output.get(), ctx);
         } else if let Some(output) = me.model.status(ctx).output_to_render() {
             // "Simulate" receiving this output if output is already complete.
             let output = output.get();
@@ -1624,6 +1603,14 @@ impl AIBlock {
         self.directory_context.pwd = pwd;
         self.directory_context.home_dir = home_dir;
         ctx.notify();
+    }
+
+    pub(crate) fn contains_todo_list(&self) -> bool {
+        !self.todo_list_states.is_empty()
+    }
+
+    pub(crate) fn receives_live_output_updates(&self) -> bool {
+        self.receives_live_output_updates
     }
 
     /// Set the shell launch data for this block, re-running link detection on the
@@ -1886,7 +1873,7 @@ impl AIBlock {
         })
     }
 
-    fn on_output_status_update(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(crate) fn handle_history_output_update(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(latency) = self.model.time_since_request_start(ctx) {
             // Since this is a OnceCell, we'll only set time_to_first_token to the
             // latency of the first output received.
