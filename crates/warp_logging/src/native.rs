@@ -3,8 +3,9 @@ use std::fs::{self, File};
 use std::io::{IsTerminal, Write, copy};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::Local;
 use log::LevelFilter;
 use warp_core::channel::ChannelState;
@@ -468,13 +469,48 @@ fn collect_log_paths_in(log_directory: &Path, logfile_name: &str) -> Result<Vec<
     Ok(files)
 }
 
+/// Tracks whether a log bundle export is currently running in this process, so a repeated
+/// invocation (e.g. clicking "View Warp logs" or running `/view-logs` again before the first
+/// export finishes) fails fast instead of racing a second archive build over the same files.
+/// `LOG_STATE` is fixed to one process and one `LogFrontend`, so this can't coordinate across
+/// the GUI and the Warp Agent CLI, which run as separate processes over separate directories.
+static LOG_BUNDLE_EXPORT_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+/// Clears [`LOG_BUNDLE_EXPORT_IN_PROGRESS`] on drop, including on early return or panic, so a
+/// failed export can't permanently block all future ones.
+struct LogBundleExportGuard;
+
+impl Drop for LogBundleExportGuard {
+    fn drop(&mut self) {
+        LOG_BUNDLE_EXPORT_IN_PROGRESS.store(false, Ordering::Release);
+    }
+}
+
 /// Creates a timestamped zip archive containing the current log file
 /// and any older logs for the active instance.
 pub fn create_log_bundle_zip() -> Result<PathBuf> {
+    if LOG_BUNDLE_EXPORT_IN_PROGRESS.swap(true, Ordering::AcqRel) {
+        return Err(anyhow::anyhow!(
+            "A log bundle export is already in progress"
+        ));
+    }
+    let _guard = LogBundleExportGuard;
+
     let state = LOG_STATE
         .get()
         .ok_or_else(|| anyhow::anyhow!("Logging not initialized"))?;
     state.create_log_bundle_zip()
+}
+
+/// Margin subtracted from `ZIP64_BYTES_THR` before comparing a source file's length: the
+/// active `warp.log` can grow while it's being copied, and zip separately enforces the same
+/// threshold against the *compressed* size (which a source-length check can't see), so this
+/// leaves room for both without changing behavior for any file anyone would notice.
+const ZIP64_THRESHOLD_MARGIN_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Whether a log entry of `source_len` bytes should be written with `large_file(true)`.
+fn needs_zip64(source_len: u64) -> bool {
+    source_len >= zip::ZIP64_BYTES_THR.saturating_sub(ZIP64_THRESHOLD_MARGIN_BYTES)
 }
 
 impl LogState {
@@ -497,25 +533,42 @@ impl LogState {
             return Err(anyhow::anyhow!("{error_message}"));
         }
 
-        let zip_file = File::create(&zip_path)?;
-        let mut zip_writer = ZipWriter::new(zip_file);
-        let zip_options =
-            SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-
-        for log_file in log_files {
-            let entry_name = log_file
-                .file_name()
-                .and_then(|file_name| file_name.to_str())
-                .ok_or_else(|| anyhow::anyhow!("Invalid log file name: {}", log_file.display()))?;
-            zip_writer.start_file(entry_name, zip_options)?;
-
-            let mut source = File::open(&log_file)?;
-            copy(&mut source, &mut zip_writer)?;
+        if let Err(err) = write_log_bundle_zip(&zip_path, &log_files) {
+            // Don't leave a partial archive behind for a failed export.
+            let _ = fs::remove_file(&zip_path);
+            return Err(err);
         }
-
-        zip_writer.finish()?;
         Ok(zip_path)
     }
+}
+
+fn write_log_bundle_zip(zip_path: &Path, log_files: &[PathBuf]) -> Result<()> {
+    let zip_file = File::create(zip_path)
+        .with_context(|| format!("Failed to create log bundle zip at {}", zip_path.display()))?;
+    let mut zip_writer = ZipWriter::new(zip_file);
+    let zip_options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+    for log_file in log_files {
+        let entry_name = log_file
+            .file_name()
+            .and_then(|file_name| file_name.to_str())
+            .ok_or_else(|| anyhow::anyhow!("Invalid log file name: {}", log_file.display()))?;
+        let source_len = log_file
+            .metadata()
+            .with_context(|| format!("Failed to read metadata for {}", log_file.display()))?
+            .len();
+        zip_writer.start_file(entry_name, zip_options.large_file(needs_zip64(source_len)))?;
+
+        let mut source = File::open(log_file)
+            .with_context(|| format!("Failed to open {}", log_file.display()))?;
+        // Keep this streaming — do not read the file into memory.
+        copy(&mut source, &mut zip_writer).with_context(|| {
+            format!("Failed to write {} into the log bundle", log_file.display())
+        })?;
+    }
+
+    zip_writer.finish()?;
+    Ok(())
 }
 
 fn temp_log_file_path(log_directory: impl AsRef<Path>, channel_logfile_name: &str) -> PathBuf {
