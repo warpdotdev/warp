@@ -23,6 +23,7 @@ fn text_context(path: &LocalOrRemotePath, content: &str) -> FileContextProto {
         line_range_end: None,
         last_modified_epoch_millis: None,
         line_count: content.lines().count() as u32,
+        content_sha256: Vec::new(),
     }
 }
 
@@ -97,6 +98,7 @@ fn remote_text_file_contents_omit_non_text_responses() {
         line_range_end: None,
         last_modified_epoch_millis: None,
         line_count: 0,
+        content_sha256: Vec::new(),
     };
 
     assert!(pair_remote_text_file_contents(vec![path], vec![context]).is_empty());

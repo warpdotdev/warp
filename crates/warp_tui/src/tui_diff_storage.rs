@@ -6,18 +6,18 @@
 //! buffers, so final content is derived by applying each diff's deltas to its
 //! base. The file-edits view registers one per action with the shared executor
 //! and renders a compact summary over it.
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ai::agent::action_result::RequestFileEditsResult;
 use ai::diff_validation::{DiffDelta, DiffType};
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use warp::tui_export::{
-    DiffSessionType, DiffStorage, DiffStorageHelper, FileDiff, FileSnapshot, RegisteredDiffStorage,
-    SaveFuture, UpdatedFileState, changed_lines_from_op,
+    DiffSessionType, DiffStorage, DiffStorageHelper, FileDiff, FileSnapshot, PersistedFileEdits,
+    RegisteredDiffStorage, SaveFuture, UpdatedFileState, changed_lines_from_op,
 };
-use warp_files::FileModel;
+use warp_files::{ExpectedFileRevision, FileModel, RenameExpectedRevisions};
 use warp_util::content_version::ContentVersion;
 use warp_util::file::{FileId, FileSaveError};
 use warp_util::standardized_path::StandardizedPath;
@@ -127,16 +127,47 @@ fn dispatch_write(
     action: &PersistAction,
     path: &str,
     final_content: String,
+    expected_revisions: &HashMap<String, ExpectedFileRevision>,
     ctx: &mut ModelContext<FileModel>,
 ) -> Result<SaveFuture, FileSaveError> {
     let file_id = register_file(file_model, session_type, path, ctx)?;
     let version = ContentVersion::new();
+    let expected_revision = expected_revisions.get(path).copied().ok_or_else(|| {
+        FileSaveError::Other(format!(
+            "{path} has not been read. Call read_files on {path} before retrying the edit."
+        ))
+    })?;
     let dispatch = match action {
-        PersistAction::Delete => file_model.delete(file_id, version, ctx),
-        PersistAction::Rename(to) => {
-            file_model.rename_and_save(file_id, to.clone(), final_content, version, ctx)
+        PersistAction::Delete => {
+            file_model.delete_with_expected_revision(file_id, version, expected_revision, ctx)
         }
-        PersistAction::Write => file_model.save(file_id, final_content, version, ctx),
+        PersistAction::Rename(to) => {
+            let target = to.to_string_lossy();
+            let target: &str = target.as_ref();
+            let target_revision = expected_revisions.get(target).copied().ok_or_else(|| {
+                FileSaveError::Other(format!(
+                    "{target} has not been read. Call read_files on {target} before retrying the edit."
+                ))
+            })?;
+            file_model.rename_and_save_with_expected_revisions(
+                file_id,
+                to.clone(),
+                final_content,
+                version,
+                RenameExpectedRevisions {
+                    source: expected_revision,
+                    target: target_revision,
+                },
+                ctx,
+            )
+        }
+        PersistAction::Write => file_model.save_with_expected_revision(
+            file_id,
+            final_content,
+            version,
+            expected_revision,
+            ctx,
+        ),
     };
     // The write future captures its target path up front; release the temporary
     // registration either way so FileModel state doesn't grow unboundedly.
@@ -247,7 +278,11 @@ impl DiffStorage for TuiDiffStorage {
             .collect()
     }
 
-    fn start_saving(&mut self, app: &mut AppContext) -> Vec<SaveFuture> {
+    fn start_saving(
+        &mut self,
+        expected_revisions: &HashMap<String, ExpectedFileRevision>,
+        app: &mut AppContext,
+    ) -> Vec<SaveFuture> {
         let file_model = FileModel::handle(app);
         let session_type = self.session_type.clone();
         self.diffs
@@ -268,6 +303,7 @@ impl DiffStorage for TuiDiffStorage {
                             &action,
                             &path,
                             final_content,
+                            expected_revisions,
                             ctx,
                         )
                     })
@@ -310,9 +346,13 @@ impl RegisteredDiffStorage for TuiDiffStorageHandle {
         });
     }
 
-    fn accept_and_save(&self, app: &mut AppContext) -> BoxFuture<'static, RequestFileEditsResult> {
+    fn accept_and_save(
+        &self,
+        expected_revisions: HashMap<String, ExpectedFileRevision>,
+        app: &mut AppContext,
+    ) -> BoxFuture<'static, PersistedFileEdits> {
         self.storage.update(app, |model, ctx| {
-            DiffStorageHelper::accept_and_save(model, ctx)
+            DiffStorageHelper::accept_and_save(model, expected_revisions, ctx)
         })
     }
 }

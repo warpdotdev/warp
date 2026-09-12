@@ -2,11 +2,37 @@
 
 use std::io::Write as _;
 
+use sha2::{Digest, Sha256};
+
 use super::*;
 use crate::FileModel;
 
 fn make_accumulator(ranges: &[std::ops::Range<usize>], max_bytes: usize) -> TextFileAccumulator {
     TextFileAccumulator::new("test.txt".to_string(), None, ranges, max_bytes)
+}
+
+#[test]
+fn read_text_file_omits_revision_digest_above_guard_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("oversized.txt");
+    std::fs::write(
+        &path,
+        vec![b'a'; crate::MAX_GUARDED_REVISION_BYTES as usize + 1],
+    )
+    .unwrap();
+
+    let result = futures::executor::block_on(FileModel::read_text_file(
+        &path,
+        crate::MAX_GUARDED_REVISION_BYTES as usize,
+        &[],
+        None,
+    ))
+    .unwrap();
+    let TextFileReadResult::Segments { content_digest, .. } = result else {
+        panic!("expected Segments");
+    };
+
+    assert_eq!(content_digest, None);
 }
 
 /// Helper: push a line that was terminated by a newline in the original file
@@ -370,11 +396,20 @@ fn read_text_file_crlf_normalized_to_lf() {
 
     let result =
         futures::executor::block_on(FileModel::read_text_file(&path, 10_000, &[], None)).unwrap();
-    let TextFileReadResult::Segments { segments, .. } = result else {
+    let TextFileReadResult::Segments {
+        segments,
+        content_digest,
+        ..
+    } = result
+    else {
         panic!("expected Segments");
     };
     // CRLF is normalized to LF; trailing newline preserved.
     assert_eq!(segments[0].content, "hello\nworld\n");
+    assert_eq!(
+        content_digest,
+        Some(Sha256::digest("hello\r\nworld\r\n").into())
+    );
 }
 
 #[test]
