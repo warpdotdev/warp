@@ -12,7 +12,7 @@ use crate::search::async_snapshot_data_source::AsyncSnapshotDataSource;
 use crate::search::command_search::searcher::CommandSearchItemAction;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::{BoxFuture, DataSourceRunErrorWrapper};
-use crate::settings::AISettings;
+use crate::settings::{AISettings, InputSettings};
 use crate::terminal;
 use crate::terminal::HistoryEntry;
 use crate::terminal::model::session::SessionId;
@@ -23,6 +23,7 @@ pub(crate) struct HistorySnapshot {
     commands: Arc<[Arc<HistoryEntry>]>,
     query_text: String,
     current_session_id: SessionId,
+    fuzzy_matching_enabled: bool,
 }
 
 /// Creates an async data source for shell history commands.
@@ -30,12 +31,23 @@ pub(crate) struct HistorySnapshot {
 pub fn history_data_source(
     commands: Vec<HistoryEntry>,
 ) -> AsyncSnapshotDataSource<HistorySnapshot, CommandSearchItemAction> {
+    history_data_source_with_fuzzy_matching(commands, true)
+}
+
+/// Test-only variant of [`history_data_source`] with an explicit fuzzy-matching setting, for
+/// exercising the literal-substring path in [`fuzzy_match_history_literal`].
+#[cfg(test)]
+pub fn history_data_source_with_fuzzy_matching(
+    commands: Vec<HistoryEntry>,
+    fuzzy_matching_enabled: bool,
+) -> AsyncSnapshotDataSource<HistorySnapshot, CommandSearchItemAction> {
     let commands: Arc<[Arc<HistoryEntry>]> = commands.into_iter().map(Arc::new).collect();
     AsyncSnapshotDataSource::new(
         move |query: &Query, _app: &AppContext| HistorySnapshot {
             commands: commands.clone(),
             query_text: query.text.clone(),
             current_session_id: SessionId::from(0),
+            fuzzy_matching_enabled,
         },
         fuzzy_match_history,
     )
@@ -57,6 +69,8 @@ pub(crate) fn history_data_source_for_session(
                 commands,
                 query_text: query.text.clone(),
                 current_session_id: session_id,
+                fuzzy_matching_enabled: *InputSettings::as_ref(app)
+                    .command_search_fuzzy_matching_enabled,
             }
         },
         fuzzy_match_history,
@@ -67,6 +81,10 @@ pub(crate) fn fuzzy_match_history(
     snapshot: HistorySnapshot,
 ) -> BoxFuture<'static, Result<Vec<QueryResult<CommandSearchItemAction>>, DataSourceRunErrorWrapper>>
 {
+    if !snapshot.fuzzy_matching_enabled {
+        return fuzzy_match_history_literal(snapshot);
+    }
+
     if !FeatureFlag::HistorySearchRankingV2.is_enabled() {
         return fuzzy_match_history_legacy(snapshot);
     }
@@ -127,6 +145,38 @@ fn fuzzy_match_history_legacy(
                     continue;
                 };
                 let score = OrderedFloat(match_result.score as f64);
+
+                results.push(
+                    HistorySearchItem {
+                        entry: entry.clone(),
+                        match_result,
+                        score,
+                    }
+                    .into(),
+                );
+            }
+            yield_now().await;
+        }
+
+        Ok(results)
+    })
+}
+
+fn fuzzy_match_history_literal(
+    snapshot: HistorySnapshot,
+) -> BoxFuture<'static, Result<Vec<QueryResult<CommandSearchItemAction>>, DataSourceRunErrorWrapper>>
+{
+    Box::pin(async move {
+        let mut results = Vec::new();
+        let query = snapshot.query_text.trim();
+        let score = rank::literal_match_score(query);
+
+        for chunk in snapshot.commands.chunks(CHUNK_SIZE) {
+            for entry in chunk {
+                let Some(match_result) = rank::match_literal_substring(&entry.command, query)
+                else {
+                    continue;
+                };
 
                 results.push(
                     HistorySearchItem {

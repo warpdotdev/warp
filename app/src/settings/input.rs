@@ -229,6 +229,16 @@ define_settings_group!(InputSettings,
             surface: settings::SettingSurfaces::GUI,
             private: true,
         },
+        command_search_fuzzy_matching_enabled: CommandSearchFuzzyMatchingEnabled {
+            type: bool,
+            default: true,
+            supported_platforms: SupportedPlatforms::ALL,
+            sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+            surface: settings::SettingSurfaces::GUI,
+            private: false,
+            toml_path: "terminal.input.command_search_fuzzy_matching_enabled",
+            description: "Whether command history results in Command Search (Ctrl+R) use fuzzy matching, or fall back to a literal, case-insensitive substring search like bash/zsh's reverse history search. Other Command Search results are unaffected.",
+        },
     ]
 );
 
