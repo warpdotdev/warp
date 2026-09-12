@@ -161,6 +161,8 @@ struct GlobalShortcut {
 pub struct AddWindowOptions {
     pub background_blur_radius_pixels: Option<u8>,
     pub background_backdrop: platform::WindowBackdrop,
+    pub background_backdrop_tint_color: platform::AcrylicTintColor,
+    pub background_backdrop_tint_opacity: u8,
     pub window_style: WindowStyle,
     pub window_bounds: WindowBounds,
     pub title: Option<String>,
