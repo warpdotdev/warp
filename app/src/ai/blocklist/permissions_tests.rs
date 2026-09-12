@@ -496,6 +496,8 @@ fn test_can_write_files_mcp_config_always_denied() {
             PathBuf::from("/project/.mcp.json"),
             PathBuf::from("/project/.warp/.mcp.json"),
             PathBuf::from("/project/.codex/config.toml"),
+            PathBuf::from("/project/.warp/hooks.json"),
+            PathBuf::from("/home/user/.warp/oz-hook-trust.json"),
         ];
 
         for path in mcp_config_paths {

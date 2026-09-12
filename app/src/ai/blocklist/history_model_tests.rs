@@ -3097,6 +3097,7 @@ fn test_initialize_output_for_response_stream_persists_updated_conversation_stat
                     request_id: "request-1".to_string(),
                     conversation_id: server_token.clone(),
                     run_id: run_id.clone(),
+                    supported_oz_hook_payload_schema_versions: vec![],
                 },
                 ctx,
             );
@@ -3363,6 +3364,7 @@ fn test_find_by_token_after_initialize_output_for_response_stream() {
                     request_id: String::new(),
                     conversation_id: server_token_str.clone(),
                     run_id: String::new(),
+                    supported_oz_hook_payload_schema_versions: vec![],
                 },
                 ctx,
             );

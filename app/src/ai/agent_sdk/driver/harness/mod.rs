@@ -235,6 +235,12 @@ pub(crate) enum HarnessKind {
 }
 
 impl HarnessKind {
+    pub(crate) const fn uses_oz_lifecycle_hooks(&self) -> bool {
+        match self {
+            Self::Oz => true,
+            Self::ThirdParty(_) | Self::Unsupported(_) => false,
+        }
+    }
     /// Corresponding [`Harness`] enum value.
     pub(crate) fn harness(&self) -> Harness {
         match self {
