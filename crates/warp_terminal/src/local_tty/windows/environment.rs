@@ -21,6 +21,7 @@ use crate::local_tty::shell::{ShellStarter, extra_path_entries, ssh_socket_dir};
 
 const HONOR_PS1_NAME: &str = "WARP_HONOR_PS1";
 const PROMPT_NODE_VERSION_ENABLED_NAME: &str = "WARP_PROMPT_NODE_VERSION_ENABLED";
+const POWERSHELL_RICH_TABLES_NAME: &str = "WARP_POWERSHELL_RICH_TABLES";
 const INITIAL_WORKING_DIR_NAME: &str = "WARP_INITIAL_WORKING_DIR";
 const USE_SSH_WRAPPER_NAME: &str = "WARP_USE_SSH_WRAPPER";
 const SSH_REUSE_CONTROL_MASTER_NAME: &str = "WARP_SSH_REUSE_CONTROL_MASTER";
@@ -72,6 +73,15 @@ pub(super) fn get_shell_environment_variables(options: &PtyOptions) -> Vec<u16> 
         EnvEntry {
             preferred_key: PROMPT_NODE_VERSION_ENABLED_NAME.into(),
             value: (options.node_version_chip_enabled as usize)
+                .to_string()
+                .into(),
+        },
+    );
+    env.insert(
+        map_key(POWERSHELL_RICH_TABLES_NAME.into()),
+        EnvEntry {
+            preferred_key: POWERSHELL_RICH_TABLES_NAME.into(),
+            value: (FeatureFlag::PowerShellRichTables.is_enabled() as usize)
                 .to_string()
                 .into(),
         },

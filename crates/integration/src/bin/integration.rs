@@ -364,6 +364,9 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_osc8_file_scheme_opens_url);
     register_test!(test_osc8_no_regression_on_url_autodetect);
 
+    register_test!(test_powershell_rich_tables_implicit_format_and_order);
+    register_test!(test_powershell_rich_tables_skips_custom_out_default);
+
     register_test!(test_context_chips_prompt_at_bootstrap);
 
     register_test!(test_cycle_active_tab_color_with_keybinding);

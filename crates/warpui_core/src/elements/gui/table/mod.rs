@@ -15,7 +15,7 @@ use super::{
     SmartSelectFn,
 };
 use crate::event::DispatchedEvent;
-use crate::scene::ClipBounds;
+use crate::scene::{Border, ClipBounds, CornerRadius};
 use crate::text::word_boundaries::WordBoundariesPolicy;
 use crate::text::{IsRect, SelectionDirection, SelectionType};
 use crate::units::{IntoPixels, Pixels};
@@ -543,6 +543,7 @@ pub struct Table {
     state: TableStateHandle,
     headers: Vec<TableHeader>,
     config: TableConfig,
+    corner_radius: CornerRadius,
     /// Width to use when the table has unconstrained width and no intrinsic content to measure.
     unconstrained_width: f32,
     /// Viewport height to use when height constraint is not finite.
@@ -570,6 +571,7 @@ impl Table {
             state,
             headers: Vec::new(),
             config: TableConfig::default(),
+            corner_radius: CornerRadius::default(),
             unconstrained_width,
             unconstrained_height,
             size: None,
@@ -603,6 +605,12 @@ impl Table {
 
     pub fn with_config(mut self, config: TableConfig) -> Self {
         self.config = config;
+        self
+    }
+
+    /// Sets the radius applied to table backgrounds and the outer border.
+    pub fn with_corner_radius(mut self, corner_radius: CornerRadius) -> Self {
+        self.corner_radius = corner_radius;
         self
     }
 
@@ -1217,9 +1225,15 @@ impl Element for Table {
         // In scrolling mode, paint header INSIDE the clip so it gets clipped at table bounds
         if !uses_fixed_header && header_visible {
             let header_rect = RectF::new(header_origin, vec2f(total_width, header_height.as_f32()));
+            let header_corner_radius = if total_row_count == 0 {
+                self.corner_radius
+            } else {
+                self.corner_radius.top()
+            };
             ctx.scene
                 .draw_rect_with_hit_recording(header_rect)
-                .with_background(self.config.header_background);
+                .with_background(self.config.header_background)
+                .with_corner_radius(header_corner_radius);
 
             for (col_idx, header) in self.headers.iter_mut().enumerate() {
                 let col_left = column_lefts.get(col_idx).copied().unwrap_or(0.0);
@@ -1264,7 +1278,12 @@ impl Element for Table {
             );
             ctx.scene
                 .draw_rect_with_hit_recording(row_rect)
-                .with_background(bg_color);
+                .with_background(bg_color)
+                .with_corner_radius(if absolute_row_idx + 1 == total_row_count {
+                    self.corner_radius.bottom()
+                } else {
+                    CornerRadius::default()
+                });
 
             for (col_idx, cell) in row_elements.iter_mut().enumerate() {
                 let col_left = column_lefts.get(col_idx).copied().unwrap_or(0.0);
@@ -1296,9 +1315,15 @@ impl Element for Table {
         // In fixed mode, paint header OUTSIDE the clip so it stays on top while body scrolls
         if uses_fixed_header && header_visible {
             let header_rect = RectF::new(header_origin, vec2f(total_width, header_height.as_f32()));
+            let header_corner_radius = if total_row_count == 0 {
+                self.corner_radius
+            } else {
+                self.corner_radius.top()
+            };
             ctx.scene
                 .draw_rect_with_hit_recording(header_rect)
-                .with_background(self.config.header_background);
+                .with_background(self.config.header_background)
+                .with_corner_radius(header_corner_radius);
 
             for (col_idx, header) in self.headers.iter_mut().enumerate() {
                 let col_left = column_lefts.get(col_idx).copied().unwrap_or(0.0);
@@ -1348,30 +1373,40 @@ impl Element for Table {
             }
 
             if self.config.outer_border {
-                ctx.scene
-                    .draw_rect_with_hit_recording(RectF::new(
-                        vec2f(left_x, top_y),
-                        vec2f(total_width, bw),
-                    ))
-                    .with_background(border_color);
-                ctx.scene
-                    .draw_rect_with_hit_recording(RectF::new(
-                        vec2f(left_x, bottom_y),
-                        vec2f(total_width, bw),
-                    ))
-                    .with_background(border_color);
-                ctx.scene
-                    .draw_rect_with_hit_recording(RectF::new(
-                        vec2f(left_x, top_y),
-                        vec2f(bw, border_height),
-                    ))
-                    .with_background(border_color);
-                ctx.scene
-                    .draw_rect_with_hit_recording(RectF::new(
-                        vec2f(right_x, top_y),
-                        vec2f(bw, border_height),
-                    ))
-                    .with_background(border_color);
+                if self.corner_radius == CornerRadius::default() {
+                    ctx.scene
+                        .draw_rect_with_hit_recording(RectF::new(
+                            vec2f(left_x, top_y),
+                            vec2f(total_width, bw),
+                        ))
+                        .with_background(border_color);
+                    ctx.scene
+                        .draw_rect_with_hit_recording(RectF::new(
+                            vec2f(left_x, bottom_y),
+                            vec2f(total_width, bw),
+                        ))
+                        .with_background(border_color);
+                    ctx.scene
+                        .draw_rect_with_hit_recording(RectF::new(
+                            vec2f(left_x, top_y),
+                            vec2f(bw, border_height),
+                        ))
+                        .with_background(border_color);
+                    ctx.scene
+                        .draw_rect_with_hit_recording(RectF::new(
+                            vec2f(right_x, top_y),
+                            vec2f(bw, border_height),
+                        ))
+                        .with_background(border_color);
+                } else {
+                    ctx.scene
+                        .draw_rect_with_hit_recording(RectF::new(
+                            vec2f(left_x, top_y),
+                            vec2f(total_width, border_height),
+                        ))
+                        .with_border(Border::all(bw).with_border_color(border_color))
+                        .with_corner_radius(self.corner_radius);
+                }
             }
         }
     }
