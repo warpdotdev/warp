@@ -304,3 +304,7 @@ pub trait RemoteTransport: Send + Sync + std::fmt::Debug {
     /// the reconnect loop entirely.
     fn is_reconnectable(&self, exit_status: Option<&RemoteServerExitStatus>) -> bool;
 }
+
+#[cfg(test)]
+#[path = "transport_tests.rs"]
+mod tests;
