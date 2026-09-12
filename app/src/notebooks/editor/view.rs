@@ -2753,6 +2753,12 @@ impl View for RichTextEditorView {
     }
 
     fn active_cursor_position(&self, ctx: &ViewContext<Self>) -> Option<warpui::CursorInfo> {
+        // The caret is hidden (and so unavailable to text-input services) while a command
+        // selection or the link editor owns the surface; the focused nested link editor reports
+        // its own caret instead. See the matching `display_options.editable` computation above.
+        if !self.is_editable(ctx) || self.has_command_selection(ctx) || self.link_editor_open {
+            return None;
+        }
         let model = self.model.as_ref(ctx);
         let render_state = model.render_state().as_ref(ctx);
         let font_size = model.cursor_font_size(ctx);
@@ -2760,6 +2766,7 @@ impl View for RichTextEditorView {
             .map(|position| CursorInfo {
                 position,
                 font_size,
+                view_id: ctx.view_id(),
             })
     }
 

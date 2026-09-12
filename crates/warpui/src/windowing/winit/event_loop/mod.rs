@@ -2,6 +2,8 @@ mod key_events;
 
 #[cfg(test)]
 mod drag_drop_tests;
+#[cfg(test)]
+mod focus_handoff_tests;
 
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
@@ -75,6 +77,27 @@ const MOMENTUM_THRESHOLD: f32 = 50.0; // Min-velocity to start momentum scroll, 
 const MOMENTUM_MIN_VELOCITY: f32 = 1.0; // When velocity falls below this, scrolling stops. 1.0 is subpixel
 const MOMENTUM_MAX_VELOCITY: f32 = 2000.0; // Hard cap on momentum initial velocity (px/s)
 const MIN_VELOCITY_TIME_DELTA: f32 = 0.004; // Floor for time deltas to prevent spikes from batched events
+
+/// Determines whether a canvas [`WindowEvent::Focused`] transition is an artifact of DOM focus
+/// moving to the desktop text-input bridge's `<textarea>` (see
+/// `platform::wasm::desktop_text_input`) rather than a genuine change in which browser tab/window
+/// holds focus.
+///
+/// `document_has_focus` should reflect `document.hasFocus()` at the moment the canvas focus
+/// event fired: it stays `true` throughout an in-page focus handoff (the browsing context itself
+/// never lost top-level focus), and only goes `false` on a real external blur (tab switch,
+/// alt-tab, etc). Only a canvas blur (`is_focused == false`) can ever be a false signal this way;
+/// the canvas regaining focus is always a genuine, idempotent-at-worst `Focused(true)`. Requiring
+/// `bridge_has_focus` keeps unrelated DOM focus targets from being mistaken for this internal
+/// handoff.
+#[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
+fn is_internal_focus_handoff(
+    is_focused: bool,
+    document_has_focus: bool,
+    bridge_has_focus: bool,
+) -> bool {
+    !is_focused && document_has_focus && bridge_has_focus
+}
 
 /// TryFrom implementation for converting winit's `KeyCode` to
 /// `crate::platform::keyboard::KeyCode`.
@@ -511,6 +534,10 @@ pub(super) struct EventLoop {
     /// Soft keyboard manager for mobile WASM.
     #[cfg(target_family = "wasm")]
     soft_keyboard_manager: Option<std::rc::Rc<crate::platform::wasm::SoftKeyboardManager>>,
+    /// Desktop text-input bridge manager for desktop WASM. See
+    /// `platform::wasm::desktop_text_input` for why this exists.
+    #[cfg(target_family = "wasm")]
+    desktop_text_input_manager: Option<std::rc::Rc<crate::platform::wasm::DesktopTextInputManager>>,
 }
 
 impl EventLoop {
@@ -533,6 +560,8 @@ impl EventLoop {
             downrank_non_nvidia_vulkan_adapters: false,
             #[cfg(target_family = "wasm")]
             soft_keyboard_manager: None,
+            #[cfg(target_family = "wasm")]
+            desktop_text_input_manager: None,
         }
     }
 
@@ -593,6 +622,7 @@ impl EventLoop {
                 #[cfg(target_family = "wasm")]
                 {
                     self.initialize_soft_keyboard();
+                    self.initialize_desktop_text_input();
                 }
             }
             Event::UserEvent(CustomEvent::OpenWindow {
@@ -751,6 +781,8 @@ impl EventLoop {
                 if self.ime_enabled {
                     self.update_ime_position();
                 }
+                #[cfg(target_family = "wasm")]
+                self.sync_desktop_text_input();
             }
             Event::UserEvent(CustomEvent::AboutToSleep) => {
                 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -802,6 +834,10 @@ impl EventLoop {
             #[cfg(target_family = "wasm")]
             Event::UserEvent(CustomEvent::VisualViewportResized { width, height }) => {
                 self.handle_visual_viewport_resize(width, height);
+            }
+            #[cfg(target_family = "wasm")]
+            Event::UserEvent(CustomEvent::DesktopTextInput(input)) => {
+                self.handle_desktop_text_input(input);
             }
             Event::UserEvent(CustomEvent::MomentumScroll { window_id }) => {
                 let Some(window_state) = self.state.windows.get_mut(&window_id) else {
@@ -1327,6 +1363,22 @@ impl EventLoop {
                 // "unfocused windows" anyway - you're either in the app or switched away entirely.
                 #[cfg(target_family = "wasm")]
                 if !is_focused && crate::platform::wasm::is_mobile_device() {
+                    return None;
+                }
+
+                // On desktop WASM, focusing the desktop text-input bridge's `<textarea>` blurs
+                // the canvas (and vice versa when the canvas reclaims it), which this pinned
+                // winit web backend reports as this same `WindowEvent::Focused`. See
+                // `is_internal_focus_handoff` for why that must not be treated as the app
+                // becoming active/inactive.
+                #[cfg(target_family = "wasm")]
+                if is_internal_focus_handoff(
+                    is_focused,
+                    gloo::utils::document().has_focus().unwrap_or(false),
+                    self.desktop_text_input_manager
+                        .as_ref()
+                        .is_some_and(|manager| manager.has_focus()),
+                ) {
                     return None;
                 }
 
@@ -2095,6 +2147,134 @@ impl EventLoop {
             let _ = html_element
                 .style()
                 .set_property("height", &format!("{}px", height));
+        }
+    }
+
+    /// Initializes the desktop text-input bridge on non-mobile WASM devices.
+    ///
+    /// This creates the `<textarea>` that OS-level dictation and text-input services attach to.
+    /// The manager is only created on desktop devices; mobile keeps using the soft keyboard's
+    /// hidden input instead (see `platform::wasm::desktop_text_input` for why the two paths are
+    /// kept separate).
+    #[cfg(target_family = "wasm")]
+    fn initialize_desktop_text_input(&mut self) {
+        use crate::platform::wasm::{DesktopTextInputManager, is_mobile_device};
+
+        if is_mobile_device() {
+            log::info!("Mobile device detected, skipping desktop text-input bridge initialization");
+            return;
+        }
+
+        match DesktopTextInputManager::new(self.proxy.clone()) {
+            Ok(manager) => {
+                log::info!("Desktop text-input bridge initialized successfully");
+                self.desktop_text_input_manager = Some(manager);
+            }
+            Err(err) => {
+                report_error!(
+                    anyhow::anyhow!("{err:?}")
+                        .context("Failed to initialize desktop text-input bridge")
+                );
+            }
+        }
+    }
+
+    /// Re-evaluates whether the desktop text-input bridge should be focused, based on the focused
+    /// Warp view's active cursor (or lack thereof). A missing manager (mobile, or bridge creation
+    /// failed) is a no-op: the existing canvas keyboard path is unaffected either way.
+    #[cfg(target_family = "wasm")]
+    fn sync_desktop_text_input(&mut self) {
+        let Some(manager) = self.desktop_text_input_manager.clone() else {
+            return;
+        };
+
+        let Some(active_window_id) = self.ui_app.read(|ctx| ctx.windows().active_window()) else {
+            manager.sync(None);
+            return;
+        };
+        let Some(window) = self
+            .ui_app
+            .read(|ctx| ctx.windows().platform_window(active_window_id))
+        else {
+            return;
+        };
+
+        let mut window_callbacks = self.callbacks.for_window(window.as_ref());
+        let cursor = window_callbacks.get_active_cursor_position();
+        manager.sync(cursor.as_ref());
+    }
+
+    /// Handles input events from the desktop text-input bridge on desktop WASM.
+    ///
+    /// Converts `DesktopTextInputEvent`s into warpui `Event`s and dispatches them to the active
+    /// window, mirroring how the canvas keyboard path and `handle_ime_event` dispatch their
+    /// events.
+    #[cfg(target_family = "wasm")]
+    fn handle_desktop_text_input(&mut self, input: crate::platform::wasm::DesktopTextInputEvent) {
+        use crate::platform::desktop_text_input_reducer::{self, KeyConversion};
+        use crate::platform::wasm::DesktopTextInputEvent;
+
+        let window_id = self.ui_app.read(|ctx| {
+            ctx.windows()
+                .active_window()
+                .or_else(|| ctx.window_ids().next())
+        });
+        let Some(window_id) = window_id else {
+            log::debug!("No window for desktop text-input bridge input");
+            return;
+        };
+        let Some(window) = self
+            .ui_app
+            .read(|ctx| ctx.windows().platform_window(window_id))
+        else {
+            log::debug!("Could not get platform window for desktop text-input bridge input");
+            return;
+        };
+
+        let mut window_callbacks = self.callbacks.for_window(window.as_ref());
+
+        match input {
+            DesktopTextInputEvent::Key(KeyConversion::Down { event, chars }) => {
+                // Match the canvas keyboard path: dispatch the keydown first, and only fall back
+                // to TypedCharacters if it went unhandled and wasn't a Cmd-chorded shortcut.
+                let cmd_pressed = matches!(
+                    &event,
+                    crate::event::Event::KeyDown { keystroke, .. } if keystroke.cmd
+                );
+                let result = window_callbacks.dispatch_event(event);
+                if !result.handled
+                    && !cmd_pressed
+                    && let Some(chars) = chars
+                {
+                    window_callbacks.dispatch_event(TypedCharacters { chars });
+                }
+            }
+            DesktopTextInputEvent::Key(KeyConversion::ModifierChanged { key_code, state }) => {
+                window_callbacks
+                    .dispatch_event(crate::event::Event::ModifierKeyChanged { key_code, state });
+            }
+            DesktopTextInputEvent::Insert(text) => {
+                window_callbacks.dispatch_event(TypedCharacters { chars: text });
+            }
+            DesktopTextInputEvent::Delete(direction) => {
+                window_callbacks
+                    .dispatch_event(desktop_text_input_reducer::key_event_for_delete(direction));
+            }
+            DesktopTextInputEvent::CompositionUpdate { text, selection } => {
+                window_callbacks.dispatch_event(SetMarkedText {
+                    marked_text: text,
+                    selected_range: selection,
+                });
+            }
+            DesktopTextInputEvent::CompositionCommit(text) => {
+                // Clear marked text before inserting, so the Vim FSA knows it can interpret the
+                // committed text as a user insertion (matches `handle_ime_event`'s IME commit).
+                window_callbacks.dispatch_event(ClearMarkedText);
+                window_callbacks.dispatch_event(TypedCharacters { chars: text });
+            }
+            DesktopTextInputEvent::CompositionCancelled => {
+                window_callbacks.dispatch_event(ClearMarkedText);
+            }
         }
     }
 }

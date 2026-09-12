@@ -4159,6 +4159,32 @@ fn test_interaction_state() {
 }
 
 #[test]
+fn test_active_cursor_position_requires_can_edit() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut editor =
+                EditorView::new_with_base_text("some test sentence", Default::default(), ctx);
+
+            editor.set_interaction_state(InteractionState::Selectable, ctx);
+            assert!(
+                editor.active_cursor_position(ctx).is_none(),
+                "a selectable-only editor must not report an active text caret"
+            );
+
+            editor.set_interaction_state(InteractionState::Disabled, ctx);
+            assert!(
+                editor.active_cursor_position(ctx).is_none(),
+                "a disabled editor must not report an active text caret"
+            );
+
+            editor
+        });
+    });
+}
+
+#[test]
 fn test_select_next_occurrence() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
