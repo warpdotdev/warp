@@ -6132,6 +6132,8 @@ impl TerminalView {
             BlocklistAIHistoryEvent::AppendedExchange {
                 conversation_id, ..
             } => {
+                // The pane's latest block and the conversation's latest block may each lose
+                // latest-only controls when a new exchange starts.
                 let mut targets = Vec::with_capacity(2);
                 if let Some(handle) =
                     self.rich_content_views
@@ -6160,25 +6162,33 @@ impl TerminalView {
                 }
                 targets
             }
-            BlocklistAIHistoryEvent::UpdatedStreamingExchange { exchange_id, .. } => self
-                .ai_block_for_exchange(exchange_id)
-                .filter(|handle| handle.as_ref(ctx).receives_live_output_updates())
-                .cloned()
-                .into_iter()
-                .collect(),
+            BlocklistAIHistoryEvent::UpdatedStreamingExchange { exchange_id, .. } => {
+                // Only the matching block that began live can consume output updates; completed
+                // restored blocks receive replay-only events.
+                self.ai_block_for_exchange(exchange_id)
+                    .filter(|handle| handle.as_ref(ctx).receives_live_output_updates())
+                    .cloned()
+                    .into_iter()
+                    .collect()
+            }
             BlocklistAIHistoryEvent::UpdatedTodoList {
                 conversation_id, ..
-            } => self
-                .rich_content_views
-                .iter()
-                .filter_map(|rich_content| {
-                    let metadata = rich_content.ai_block_metadata()?;
-                    (metadata.conversation_id == *conversation_id
-                        && metadata.ai_block_handle.as_ref(ctx).contains_todo_list())
-                    .then(|| metadata.ai_block_handle.clone())
-                })
-                .collect(),
+            } => {
+                // Todo state can appear in earlier exchanges, so every todo-bearing block in the
+                // conversation must refresh.
+                self.rich_content_views
+                    .iter()
+                    .filter_map(|rich_content| {
+                        let metadata = rich_content.ai_block_metadata()?;
+                        (metadata.conversation_id == *conversation_id
+                            && metadata.ai_block_handle.as_ref(ctx).contains_todo_list())
+                        .then(|| metadata.ai_block_handle.clone())
+                    })
+                    .collect()
+            }
             BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { conversation_id } => {
+                // The conversation's latest usage pill and each ancestor's latest rollup depend on
+                // this metadata.
                 let history = BlocklistAIHistoryModel::as_ref(ctx);
                 let mut affected_conversation_ids = HashSet::from([*conversation_id]);
                 let mut current_conversation_id = *conversation_id;
