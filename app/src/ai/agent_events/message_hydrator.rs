@@ -14,7 +14,9 @@ use warpui::r#async::Timer;
 use crate::ai::agent::ReceivedMessageInput;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ServerApi;
-use crate::server::server_api::ai::{AIClient, AgentRunEvent, ReadAgentMessageResponse};
+use crate::server::server_api::ai::{
+    AGENT_RUN_EVENT_TYPE_NEW_MESSAGE, AIClient, AgentRunEvent, ReadAgentMessageResponse,
+};
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::presigned_upload::HttpStatusError;
 
@@ -95,7 +97,8 @@ impl MessageHydrator {
         event: &AgentRunEvent,
         recipient_run_id: &str,
     ) -> Option<ReceivedMessageInput> {
-        if event.event_type != "new_message" || event.run_id != recipient_run_id {
+        if event.event_type != AGENT_RUN_EVENT_TYPE_NEW_MESSAGE || event.run_id != recipient_run_id
+        {
             return None;
         }
 

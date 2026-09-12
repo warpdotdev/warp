@@ -11,7 +11,7 @@ use warpui::r#async::Timer;
 
 use crate::server::retry_strategies::{is_auth_error, is_transient_http_error};
 use crate::server::server_api::ServerApi;
-use crate::server::server_api::ai::AgentRunEvent;
+use crate::server::server_api::ai::{AGENT_RUN_EVENT_TYPE_NEW_MESSAGE, AgentRunEvent};
 use crate::server::server_api::presigned_upload::HttpStatusError;
 
 pub(crate) const DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS: &[u64] = &[1, 2, 5, 10];
@@ -184,7 +184,7 @@ pub(crate) struct AgentMessageEventMetadata {
 
 impl AgentMessageEventMetadata {
     pub(crate) fn from_event(event: &AgentRunEvent) -> Option<Self> {
-        if event.event_type != "new_message" {
+        if event.event_type != AGENT_RUN_EVENT_TYPE_NEW_MESSAGE {
             return None;
         }
 
