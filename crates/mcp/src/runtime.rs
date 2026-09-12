@@ -77,6 +77,78 @@ fn build_header_map(headers: &HashMap<String, String>) -> reqwest::header::Heade
     headers.try_into().unwrap_or_default()
 }
 
+/// Maximum bytes buffered for a single stderr line before it's flushed to the
+/// logger even without a trailing newline, bounding memory if a child writes
+/// an extremely long or endless line.
+const MAX_STDERR_LINE_BYTES: usize = 64 * 1024;
+
+/// Forwards a CLI-based MCP server's stderr to `log`, one line at a time.
+///
+/// Runs until EOF or a read error. The accumulation buffer is cleared after
+/// every flush so `log` only ever sees one line's content (APP-5349), and a
+/// line exceeding `MAX_STDERR_LINE_BYTES` without a newline is flushed and
+/// reset anyway.
+async fn forward_stderr_to_logger<R>(mut reader: R, pid: &str, log: impl Fn(String))
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        let available = match reader.fill_buf().await {
+            Ok(available) => available,
+            Err(e) => {
+                report_error!(anyhow::Error::new(e).context("Failed to read stderr"));
+                return;
+            }
+        };
+
+        if available.is_empty() {
+            // EOF: still flush a trailing, non-newline-terminated chunk.
+            if !buf.is_empty() {
+                log(format_stderr_chunk(pid, &buf));
+            }
+            return;
+        }
+
+        let newline_pos = available.iter().position(|&b| b == b'\n');
+        let consumed = newline_pos.map_or(available.len(), |pos| pos + 1);
+        buf.extend_from_slice(&available[..consumed]);
+        reader.consume(consumed);
+
+        if newline_pos.is_some() {
+            log(format_stderr_chunk(pid, &buf));
+            buf.clear();
+        } else if buf.len() >= MAX_STDERR_LINE_BYTES {
+            // Flush only the longest valid UTF-8 prefix; an incomplete trailing
+            // sequence is carried into the next chunk instead of being decoded
+            // as replacement characters.
+            let boundary = utf8_valid_boundary(&buf);
+            log(format_stderr_chunk(pid, &buf[..boundary]));
+            buf.drain(..boundary);
+        }
+    }
+}
+
+/// Length of the longest prefix of `bytes` that is valid, complete UTF-8.
+/// Genuinely invalid bytes (as opposed to a truncated trailing sequence)
+/// aren't held back, so they still surface via lossy decoding.
+fn utf8_valid_boundary(bytes: &[u8]) -> usize {
+    match std::str::from_utf8(bytes) {
+        Ok(_) => bytes.len(),
+        Err(e) => match e.error_len() {
+            None => e.valid_up_to(),
+            Some(_) => bytes.len(),
+        },
+    }
+}
+
+/// Formats one forwarded stderr chunk, stripping a trailing newline/`\r`.
+fn format_stderr_chunk(pid: &str, chunk: &[u8]) -> String {
+    let text = String::from_utf8_lossy(chunk);
+    let text = text.trim_end_matches(['\n', '\r']);
+    format!("[info] MCP [pid: {pid}] stderr: {text}")
+}
+
 /// Header names whose value Warp treats as a caller-supplied credential when
 /// deciding whether a `401` means "authenticate me" or "your token was
 /// rejected".
@@ -269,25 +341,11 @@ pub async fn spawn_server(
             // We always expect to have an stderr, but this is marginally safer than unwrapping.
             if let Some(stderr) = stderr {
                 let logger = logger.clone();
+                let pid = pid.clone();
                 // Spawn a background task to forward from the child process's stderr to our logger.
                 tokio::spawn(async move {
-                    let mut buf = String::new();
-                    let mut reader = tokio::io::BufReader::new(stderr);
-                    loop {
-                        match reader.read_line(&mut buf).await {
-                            // EOF.
-                            Ok(0) => return,
-                            // Read some data.
-                            Ok(_) => logger.log(format!("[info] MCP [pid: {pid}] stderr: {buf}")),
-                            // Failed to read from the child process's stderr.
-                            Err(e) => {
-                                report_error!(
-                                    anyhow::Error::new(e).context("Failed to read stderr")
-                                );
-                                return;
-                            }
-                        }
-                    }
+                    let reader = tokio::io::BufReader::new(stderr);
+                    forward_stderr_to_logger(reader, &pid, |msg| logger.log(msg)).await;
                 });
             }
 
