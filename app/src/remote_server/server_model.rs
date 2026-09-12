@@ -717,10 +717,7 @@ impl ServerModel {
         // Parse the bundled skill catalog from the global install location.
         // Parsing never blocks the initialize handshake: connections that
         // initialize before parsing completes receive the catalog via the
-        // completion broadcast instead. Deliberately not feature-flag gated:
-        // the flag controls exposure on the client (catalog storage and
-        // skill selection), where the connecting user's flag state actually
-        // lives — a headless daemon only sees its own channel defaults.
+        // completion broadcast instead.
         if let Some(resources_dir) = daemon_bundled_resources_dir() {
             ctx.spawn(
                 BundledSkill::detect_in_resources_dir(resources_dir),
