@@ -248,12 +248,6 @@ impl TemplatableMCPServerManager {
             .flat_map(|server| server.resources().iter())
     }
 
-    pub fn tools(&self) -> impl Iterator<Item = &rmcp::model::Tool> {
-        self.active_servers
-            .values()
-            .flat_map(|server| server.tools().iter())
-    }
-
     /// Returns a reconnecting peer for a server that has the given resource.
     ///
     /// The returned peer will automatically reconnect if the underlying transport is closed.
