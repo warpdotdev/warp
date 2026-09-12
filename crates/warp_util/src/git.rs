@@ -3,10 +3,12 @@ use std::path::Path;
 use anyhow::{Result, anyhow};
 
 /// Runs a git command and returns the output as a string.
-/// Thin wrapper over [`run_git_command_with_env`] with no `PATH` override.
+/// Uses the system command search PATH (see [`crate::command_search_path`])
+/// so that user-installed binaries like `git-lfs` are always reachable,
+/// even when Warp is launched from the Dock with a minimal launchd PATH.
 #[cfg(not(target_family = "wasm"))]
 pub async fn run_git_command(repo_path: &Path, args: &[&str]) -> Result<String> {
-    run_git_command_with_env(repo_path, args, None).await
+    run_git_command_with_env(repo_path, args, crate::command_search_path::path()).await
 }
 
 /// Like [`run_git_command`] but sets `PATH` on the child when `path_env` is
