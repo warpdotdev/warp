@@ -1,6 +1,6 @@
 ---
 name: create-skill
-description: Create new skills, modify and improve existing skills, and measure skill performance. Use when users want to create a skill from scratch, edit, or optimize an existing skill, run evals to test a skill, benchmark skill performance with variance analysis, or optimize a skill's description for better triggering accuracy.
+description: Create new skills, modify and improve existing skills, and measure skill performance. Use when users want to create a skill from scratch, edit, or optimize an existing skill, run evals to test a skill, benchmark skill performance with variance analysis, or optimize a skill's description for better triggering accuracy. For new skill requests, start with a guided ask_user_question flow to capture the user's goal.
 license: Complete terms in LICENSE.txt
 ---
 
@@ -44,6 +44,26 @@ It's OK to briefly explain terms if you're in doubt, and feel free to clarify te
 ---
 
 ## Creating a skill
+
+### Guided creation entrypoint
+
+When the user invokes this skill to create a new skill and has not already provided enough detail to write it, your first visible action should be the `ask_user_question` tool. Use it to turn an open-ended "create a skill" request into a guided setup flow instead of presenting the user with a wall of instructions.
+
+Start with a compact batch of 2-3 questions that captures the biggest decisions:
+
+1. What should this skill help the agent do?
+2. When should the skill trigger?
+3. What kind of output should the skill produce?
+
+Prefer multiple-choice options with an "Other" path for custom details. Good options should be concrete and easy to pick, for example:
+
+- Skill purpose: "Automate a repeatable workflow", "Guide a writing or review style", "Use a specific tool/API"
+- Trigger context: "When I explicitly ask for it", "When a file/type appears", "When a workflow pattern appears"
+- Output style: "Make code or files", "Return a structured report", "Walk me through steps"
+
+After the user answers, summarize what you learned in plain language and ask at most one follow-up `ask_user_question` batch for important missing details, edge cases, examples, or whether to set up test cases. Once the shape is clear, proceed to write the skill.
+
+If the current conversation already contains the needed answers, do not ask duplicate questions. Summarize the inferred intent, ask for confirmation only if a wrong assumption would materially change the skill, then continue.
 
 ### Capture Intent
 
