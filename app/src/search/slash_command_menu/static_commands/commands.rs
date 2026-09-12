@@ -1037,9 +1037,7 @@ fn all_commands_for_all_surfaces() -> Vec<StaticCommand> {
         commands.push(CREATE_ENVIRONMENT.clone());
     }
 
-    if FeatureFlag::CreateProjectFlow.is_enabled() {
-        commands.push(CREATE_NEW_PROJECT.clone());
-    }
+    commands.push(CREATE_NEW_PROJECT.clone());
 
     if FeatureFlag::SummarizationConversationCommand.is_enabled() {
         commands.push(COMPACT.clone());
