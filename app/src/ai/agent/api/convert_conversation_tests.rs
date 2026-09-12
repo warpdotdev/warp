@@ -418,6 +418,9 @@ fn test_into_exchanges_basic() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                origin: None,
+                author: None,
+                source_message: None,
             })),
             request_id: "req1".to_string(),
             timestamp: None,
@@ -448,6 +451,9 @@ fn test_into_exchanges_basic() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                origin: None,
+                author: None,
+                source_message: None,
             })),
             request_id: "req2".to_string(),
             timestamp: None,
@@ -478,6 +484,9 @@ fn test_into_exchanges_basic() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                origin: None,
+                author: None,
+                source_message: None,
             })),
             request_id: "req3".to_string(),
             timestamp: None,
@@ -542,6 +551,9 @@ fn test_invoke_skill_arguments_round_trip() {
                         referenced_attachments: HashMap::new(),
                         mode: None,
                         intended_agent: Default::default(),
+                        origin: None,
+                        author: None,
+                        source_message: None,
                     }),
                 },
             )),
@@ -655,6 +667,9 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                origin: None,
+                author: None,
+                source_message: None,
             })),
             request_id: "req1".to_string(),
             timestamp: None,
@@ -857,6 +872,9 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                origin: None,
+                author: None,
+                source_message: None,
             })),
             request_id: "req3".to_string(),
             timestamp: None,
@@ -975,6 +993,9 @@ fn test_into_exchanges_with_code_diffs() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                origin: None,
+                author: None,
+                source_message: None,
             })),
             request_id: "req1".to_string(),
             timestamp: None,
@@ -1046,6 +1067,9 @@ fn test_into_exchanges_with_code_diffs() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                origin: None,
+                author: None,
+                source_message: None,
             })),
             request_id: "req2".to_string(),
             timestamp: None,
@@ -1143,6 +1167,9 @@ fn test_into_exchanges_with_code_diffs() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                origin: None,
+                author: None,
+                source_message: None,
             })),
             request_id: "req4".to_string(),
             timestamp: None,
@@ -1260,6 +1287,9 @@ fn test_user_query_mode_conversion() {
                 r#type: Some(api::user_query_mode::Type::Plan(())),
             }),
             intended_agent: Default::default(),
+            origin: None,
+            author: None,
+            source_message: None,
         })),
         request_id: String::new(),
         timestamp: None,
@@ -1305,6 +1335,9 @@ fn test_user_query_mode_conversion() {
             referenced_attachments: HashMap::new(),
             mode: Some(api::UserQueryMode { r#type: None }),
             intended_agent: Default::default(),
+            origin: None,
+            author: None,
+            source_message: None,
         })),
         request_id: String::new(),
         timestamp: None,
@@ -1350,6 +1383,9 @@ fn test_user_query_mode_conversion() {
             referenced_attachments: HashMap::new(),
             mode: None,
             intended_agent: Default::default(),
+            origin: None,
+            author: None,
+            source_message: None,
         })),
         request_id: String::new(),
         timestamp: None,
@@ -1424,6 +1460,9 @@ fn test_exchanges_grouped_by_request_id() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                origin: None,
+                author: None,
+                source_message: None,
             })),
         },
         // Message 2: Agent output with same request_id
@@ -1683,6 +1722,9 @@ fn test_multiple_create_documents_get_default_version() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                origin: None,
+                author: None,
+                source_message: None,
             })),
             request_id: "req1".to_string(),
             timestamp: None,
@@ -1900,6 +1942,9 @@ fn test_create_then_edit_then_create_version_tracking() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                origin: None,
+                author: None,
+                source_message: None,
             })),
             request_id: "req1".to_string(),
             timestamp: None,
@@ -2246,4 +2291,44 @@ fn test_handoff_rehydration_system_query_is_hidden() {
         !output.get().messages.is_empty(),
         "Agent output should still be rendered"
     );
+}
+
+#[test]
+fn request_metadata_does_not_create_an_exchange_or_count_as_first_output() {
+    let metadata = api::Message {
+        id: "metadata".to_string(),
+        request_id: "request".to_string(),
+        message: Some(api::message::Message::RequestMetadata(Default::default())),
+        timestamp: Some(prost_types::Timestamp {
+            seconds: 11,
+            nanos: 0,
+        }),
+        ..Default::default()
+    };
+    let output = api::Message {
+        message: Some(api::message::Message::AgentOutput(
+            api::message::AgentOutput {
+                text: "response".to_string(),
+            },
+        )),
+        timestamp: Some(prost_types::Timestamp {
+            seconds: 12,
+            nanos: 0,
+        }),
+        ..Default::default()
+    };
+    let start = proto_timestamp_to_local_datetime(10, 0);
+    assert_eq!(
+        compute_time_to_first_token_ms_from_messages(start, [&metadata, &output].into_iter()),
+        Some(2000)
+    );
+    assert_eq!(
+        compute_time_to_first_token_ms_from_messages(start, [&metadata].into_iter()),
+        None
+    );
+    let task = api::Task {
+        messages: vec![metadata],
+        ..Default::default()
+    };
+    assert!(task.into_exchanges().is_empty());
 }

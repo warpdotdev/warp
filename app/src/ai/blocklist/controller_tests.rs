@@ -7,6 +7,7 @@ use ai::api_keys::{
     GeapCredentialsState,
 };
 use chrono::Local;
+use session_sharing_protocol::common::ProfileData;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api::response_event;
@@ -17,7 +18,7 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentAttachment, AIAgentContext, AIAgentInput, CancellationReason, ImageContext,
-    PassiveSuggestionTrigger, UserQueryMode,
+    PassiveSuggestionTrigger, UserQueryAttribution, UserQueryMode,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::orchestration_events::{
@@ -151,6 +152,13 @@ fn input_for_query_converts_prompt_attachments_and_ignores_live_staging() {
                 file_attachment("notes.txt"),
             ];
 
+            let attribution = Some(UserQueryAttribution::from_shared_session(
+                None,
+                Some(&ProfileData {
+                    firebase_uid: "viewer".into(),
+                    ..Default::default()
+                }),
+            ));
             let input = super::input_for_query(
                 "build a query".to_owned(),
                 &task_id,
@@ -158,6 +166,7 @@ fn input_for_query_converts_prompt_attachments_and_ignores_live_staging() {
                 None,
                 UserQueryMode::Normal,
                 None,
+                attribution.clone(),
                 HashMap::new(),
                 prompt_attachments,
                 context_model.as_ref(ctx),
@@ -168,11 +177,34 @@ fn input_for_query_converts_prompt_attachments_and_ignores_live_staging() {
             let AIAgentInput::UserQuery {
                 context,
                 referenced_attachments,
+                attribution: captured_attribution,
                 ..
             } = input
             else {
                 panic!("expected UserQuery");
             };
+
+            assert_eq!(captured_attribution, attribution);
+
+            // A newly typed or recalled query has no source metadata; mark only its local origin.
+            let fresh_input = super::input_for_query(
+                "fresh or recalled text".to_owned(),
+                &task_id,
+                conversation_id,
+                None,
+                UserQueryMode::Normal,
+                None,
+                None,
+                HashMap::new(),
+                vec![],
+                context_model.as_ref(ctx),
+                active_session.as_ref(ctx),
+                ctx,
+            );
+            let AIAgentInput::UserQuery { attribution, .. } = fresh_input else {
+                panic!("expected UserQuery");
+            };
+            assert_eq!(attribution, Some(UserQueryAttribution::fresh_local()));
 
             // The provided image is attached as image context; the live-staged image is not.
             let image_names: Vec<&str> = context

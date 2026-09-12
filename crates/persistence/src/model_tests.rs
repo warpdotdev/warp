@@ -136,28 +136,30 @@ fn conversation_usage_metadata_preserves_known_zero_provider_cost() {
 }
 
 fn inference_usage_with_web_search(
-    input: u32,
-    output: u32,
+    input: u64,
+    output: u64,
     input_cost_in_cents: f32,
     output_cost_in_cents: f32,
     web_search_count: u32,
     web_search_cost_in_cents: f32,
-) -> api::response_event::stream_finished::InferenceUsage {
-    api::response_event::stream_finished::InferenceUsage {
-        token_count: Some(api::response_event::stream_finished::TokenCount {
+) -> api::InferenceUsage {
+    api::InferenceUsage {
+        token_count: Some(api::TokenCount {
             input,
             output,
             input_cache_read: 0,
             input_cache_write: 0,
         }),
-        token_cost: Some(api::response_event::stream_finished::TokenCost {
+        token_cost: Some(api::TokenCost {
             input_cost_in_cents,
             output_cost_in_cents,
             input_cache_read_cost_in_cents: 0.0,
             input_cache_write_cost_in_cents: 0.0,
+            ..Default::default()
         }),
         web_search_count,
         web_search_cost_in_cents,
+        ..Default::default()
     }
 }
 
@@ -166,7 +168,7 @@ fn charged_usage_totals_sums_web_search_fields_across_categories_and_models() {
     let mut usage_by_category = HashMap::new();
     usage_by_category.insert(
         "primary_agent".to_string(),
-        api::response_event::stream_finished::ChargedUsage {
+        api::ChargedUsage {
             direct_api_inference_usage: HashMap::from([(
                 "claude-4.5".to_string(),
                 inference_usage_with_web_search(1000, 200, 3.0, 6.0, 2, 5.0),
@@ -174,11 +176,12 @@ fn charged_usage_totals_sums_web_search_fields_across_categories_and_models() {
             byok_inference_usage: HashMap::new(),
             custom_endpoint_inference_usage: HashMap::new(),
             platform_usage_in_cents: 1.0,
+            ..Default::default()
         },
     );
     usage_by_category.insert(
         "compaction".to_string(),
-        api::response_event::stream_finished::ChargedUsage {
+        api::ChargedUsage {
             direct_api_inference_usage: HashMap::from([(
                 "claude-4.5".to_string(),
                 inference_usage_with_web_search(500, 100, 1.5, 3.0, 1, 2.5),
@@ -186,9 +189,10 @@ fn charged_usage_totals_sums_web_search_fields_across_categories_and_models() {
             byok_inference_usage: HashMap::new(),
             custom_endpoint_inference_usage: HashMap::new(),
             platform_usage_in_cents: 0.0,
+            ..Default::default()
         },
     );
-    let charges = api::response_event::stream_finished::RequestCharges { usage_by_category };
+    let charges = api::RequestCharges { usage_by_category };
 
     let totals = ChargedUsageTotals::from(&charges);
 
@@ -559,4 +563,42 @@ fn model_token_usage_replay_skips_non_custom_endpoint_entries() {
         ..Default::default()
     };
     assert!(warp_only.to_proto_custom_endpoint_usage().is_none());
+}
+
+#[test]
+fn charged_usage_totals_saturates_wide_wire_counts_and_cumulative_totals() {
+    let charges = api::RequestCharges {
+        usage_by_category: HashMap::from([(
+            "primary_agent".to_string(),
+            api::ChargedUsage {
+                direct_api_inference_usage: HashMap::from([(
+                    "model".to_string(),
+                    api::InferenceUsage {
+                        token_count: Some(api::TokenCount {
+                            input: u64::MAX,
+                            output: u64::from(u32::MAX) + 1,
+                            input_cache_read: u64::from(u32::MAX),
+                            input_cache_write: 1,
+                        }),
+                        ..Default::default()
+                    },
+                )]),
+                ..Default::default()
+            },
+        )]),
+    };
+
+    let mut totals = ChargedUsageTotals::from(&charges);
+    assert_eq!(totals.input_tokens, u32::MAX);
+    assert_eq!(totals.output_tokens, u32::MAX);
+    assert_eq!(totals.input_cache_read_tokens, u32::MAX);
+    assert_eq!(totals.input_cache_write_tokens, 1);
+    assert_eq!(totals.total_tokens(), u32::MAX);
+
+    totals += totals;
+    assert_eq!(totals.input_tokens, u32::MAX);
+    assert_eq!(totals.output_tokens, u32::MAX);
+    assert_eq!(totals.input_cache_read_tokens, u32::MAX);
+    assert_eq!(totals.input_cache_write_tokens, 2);
+    assert_eq!(totals.total_tokens(), u32::MAX);
 }

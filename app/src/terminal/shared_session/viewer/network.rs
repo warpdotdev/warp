@@ -953,6 +953,7 @@ impl Network {
             server_conversation_token,
             prompt,
             attachments,
+            ..Default::default()
         };
         self.send_message_to_server(UpstreamMessage::SendAgentPrompt(request));
     }

@@ -247,3 +247,25 @@ fn transfer_control_tool_call_converts_to_action_message() {
         }
     }
 }
+
+#[test]
+fn request_metadata_has_no_client_output() {
+    let message = api::Message {
+        message: Some(api::message::Message::RequestMetadata(Default::default())),
+        ..Default::default()
+    };
+    let task_id = TaskId::new("task".to_string());
+    let converted = message
+        .to_client_output_message(ConversionParams {
+            task_id: &task_id,
+            current_todo_list: None,
+            active_code_review: None,
+            skill_path_origin: &SkillPathOrigin::Local,
+        })
+        .unwrap();
+
+    assert!(matches!(
+        converted,
+        MaybeAIAgentOutputMessage::NoClientRepresentation
+    ));
+}

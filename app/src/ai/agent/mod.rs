@@ -6,6 +6,7 @@ pub(crate) mod api;
 pub(crate) mod comment;
 pub(crate) mod icons;
 pub(crate) mod linearization;
+pub(crate) mod query_attribution;
 pub(crate) mod redaction;
 pub(crate) mod task;
 mod task_store;
@@ -41,6 +42,7 @@ use warp_editor::render::model::LineCount;
 use warp_multi_agent_api::{AgentEvent, AgentType, diff_hunk as diff_hunk_api};
 
 pub use self::api::{MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError};
+pub use self::query_attribution::UserQueryAttribution;
 use super::llms::LLMId;
 use crate::TelemetryEvent;
 use crate::ai::block_context::BlockContext;
@@ -70,6 +72,7 @@ impl std::fmt::Display for ServerOutputId {
 #[derive(Clone, Debug, PartialEq)]
 pub struct InvokeSkillUserQuery {
     pub query: String,
+    pub attribution: Option<UserQueryAttribution>,
     pub referenced_attachments: HashMap<String, AIAgentAttachment>,
 }
 
@@ -2887,6 +2890,7 @@ pub enum AIAgentInput {
         user_query_mode: UserQueryMode,
         running_command: Option<RunningCommand>,
         intended_agent: Option<AgentType>,
+        attribution: Option<UserQueryAttribution>,
     },
 
     AutoCodeDiffQuery {
