@@ -48,7 +48,11 @@ impl AgentInputFooter {
                     ctx,
                 );
                 chip.maybe_set_git_line_changes_info(git_line_changes_info.clone());
-                chip.update_session_context(self.display_chip_config.session_context.clone(), ctx);
+                // Note: session_context is already passed via `config` above, so calling
+                // `update_session_context` here would be redundant and harmful: it clones
+                // the SessionContext unnecessarily and, for WorkingDirectory chips, cancels
+                // and restarts the DirectoryFetcher fetch that was just initiated in
+                // `DisplayChip::new_for_agent_view`.
                 chip
             });
 
