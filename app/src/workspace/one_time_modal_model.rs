@@ -8,7 +8,9 @@ use warp_util::sync::Condition;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};
 
 use super::hoa_onboarding;
-use super::view::feature_intro_modal::{FEATURE_INTROS, FeatureIntroId};
+use super::view::feature_intro_modal::{
+    FEATURE_INTROS, FactoriesLaunchModalTelemetryEvent, FeatureIntroId,
+};
 use super::view::free_ai_removal_modal::{
     FreeAiRemovalModalTelemetryEvent, FreeAiRemovalModalVariant,
 };
@@ -86,6 +88,7 @@ impl OneTimeModalModel {
                     UserWorkspacesEvent::TeamsChanged => {
                         me.has_fetched_workspaces = true;
                         me.maybe_recheck_free_ai_removal_modal(ctx);
+                        me.maybe_recheck_feature_intro_modal(ctx);
                     }
                     _ => {}
                 }
@@ -547,6 +550,16 @@ impl OneTimeModalModel {
         self.check_and_trigger_free_ai_removal_modal(ctx);
     }
 
+    fn maybe_recheck_feature_intro_modal(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.has_completed_initial_modal_checks
+            || self.is_any_modal_open()
+            || self.active_feature_intro.is_some()
+        {
+            return;
+        }
+        self.check_and_trigger_feature_intro_modal(ctx);
+    }
+
     fn check_and_trigger_free_ai_removal_modal(&mut self, ctx: &mut ModelContext<Self>) -> bool {
         // Never show one-time modals on WASM. `check_and_trigger_all_modals` already
         // guards its own call, but `maybe_recheck_free_ai_removal_modal` and
@@ -753,14 +766,12 @@ impl OneTimeModalModel {
     }
 
     fn check_and_trigger_feature_intro_modal(&mut self, ctx: &mut ModelContext<Self>) -> bool {
-        if !AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
-            return false;
-        }
-        // Show the first registered feature intro that the user hasn't seen yet
-        // (see `FEATURE_INTROS`).
         let next_id = FEATURE_INTROS
             .iter()
-            .find(|intro| !AISettings::as_ref(ctx).is_feature_intro_seen(intro.id.as_key()))
+            .find(|intro| {
+                !AISettings::as_ref(ctx).is_feature_intro_seen(intro.id.as_key())
+                    && intro.id.is_eligible(ctx)
+            })
             .map(|intro| intro.id);
         let Some(id) = next_id else {
             return false;
@@ -774,6 +785,9 @@ impl OneTimeModalModel {
         let should_show = !matches!(ChannelState::channel(), Channel::Integration);
         if should_show {
             self.set_active_feature_intro(Some(id), ctx);
+            if id == FeatureIntroId::FactoriesLaunch {
+                send_telemetry_from_ctx!(FactoriesLaunchModalTelemetryEvent::Shown, ctx);
+            }
         }
         should_show
     }

@@ -1517,6 +1517,7 @@ pub fn workspaces_metadata_response_from_gql(
         workspaces,
         joinable_teams,
         experiments,
+        factories_launch_modal_cta_url: gql_user.factories_launch_modal_cta_url,
         ai_credit_availability: Some(gql_user.ai_credit_availability.into()),
         user_purchase_policy,
     }

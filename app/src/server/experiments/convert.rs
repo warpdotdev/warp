@@ -34,6 +34,8 @@ impl Display for ServerExperiment {
             Self::OzMultiHarnessExperiment => "OZ_MULTI_HARNESS_EXPERIMENT",
             Self::MacosRunnersControl => "MACOS_RUNNERS_CONTROL",
             Self::MacosRunnersExperiment => "MACOS_RUNNERS_EXPERIMENT",
+            Self::FactoriesLaunchModalControl => "FACTORIES_LAUNCH_MODAL_CONTROL",
+            Self::FactoriesLaunchModalExperiment => "FACTORIES_LAUNCH_MODAL_EXPERIMENT",
             #[cfg(test)]
             Self::TestExperiment => "TEST_EXPERIMENT",
         };
@@ -65,6 +67,8 @@ impl ServerExperiment {
             "OZ_MULTI_HARNESS_EXPERIMENT" => Ok(Self::OzMultiHarnessExperiment),
             "MACOS_RUNNERS_CONTROL" => Ok(Self::MacosRunnersControl),
             "MACOS_RUNNERS_EXPERIMENT" => Ok(Self::MacosRunnersExperiment),
+            "FACTORIES_LAUNCH_MODAL_CONTROL" => Ok(Self::FactoriesLaunchModalControl),
+            "FACTORIES_LAUNCH_MODAL_EXPERIMENT" => Ok(Self::FactoriesLaunchModalExperiment),
             s => Err(anyhow::anyhow!(
                 "String doesn't match any server experiment variant {s}"
             )),
@@ -102,6 +106,8 @@ impl TryFrom<Experiment> for ServerExperiment {
             Experiment::OzMultiHarnessExperiment => Ok(Self::OzMultiHarnessExperiment),
             Experiment::MacosRunnersControl => Ok(Self::MacosRunnersControl),
             Experiment::MacosRunnersExperiment => Ok(Self::MacosRunnersExperiment),
+            Experiment::FactoriesLaunchModalControl => Ok(Self::FactoriesLaunchModalControl),
+            Experiment::FactoriesLaunchModalExperiment => Ok(Self::FactoriesLaunchModalExperiment),
             // Experiments that we no longer support on the client.
             e => Err(anyhow::anyhow!(
                 "Server-side enabled experiment '{e:?}' is no longer supported by the client."

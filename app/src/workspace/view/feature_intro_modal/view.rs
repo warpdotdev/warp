@@ -1,5 +1,6 @@
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
+use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
 use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
@@ -13,11 +14,13 @@ use warpui::{
 };
 
 use crate::appearance::Appearance;
+use crate::settings::AISettings;
 use crate::settings_view::{SettingsSection, custom_model_routers_widget_id};
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, NakedTheme, PrimaryTheme,
 };
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const MODAL_WIDTH: f32 = 340.;
 const HERO_HEIGHT: f32 = 110.;
@@ -28,6 +31,7 @@ const HERO_HEIGHT: f32 = 110.;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FeatureIntroId {
     CustomModelRouter,
+    FactoriesLaunch,
 }
 
 impl FeatureIntroId {
@@ -35,6 +39,19 @@ impl FeatureIntroId {
     pub fn as_key(self) -> &'static str {
         match self {
             FeatureIntroId::CustomModelRouter => "custom_model_router",
+            FeatureIntroId::FactoriesLaunch => "factories_launch",
+        }
+    }
+
+    pub fn is_eligible(self, app: &AppContext) -> bool {
+        match self {
+            FeatureIntroId::CustomModelRouter => AISettings::as_ref(app).is_any_ai_enabled(app),
+            FeatureIntroId::FactoriesLaunch => {
+                FeatureFlag::FactoriesLaunchModal.is_enabled()
+                    && UserWorkspaces::as_ref(app)
+                        .factories_launch_modal_cta_url()
+                        .is_some()
+            }
         }
     }
 }
@@ -45,6 +62,7 @@ pub enum FeatureIntroCtaTarget {
         page: SettingsSection,
         widget_id: fn() -> &'static str,
     },
+    FactoriesLaunchModalBooking,
 }
 /// A data-driven description of a single feature-intro popover. New feature
 /// announcements are added by appending an entry to [`FEATURE_INTROS`]; no new
@@ -67,21 +85,31 @@ pub struct FeatureIntro {
     pub cta_target: Option<FeatureIntroCtaTarget>,
 }
 
-/// The registry of feature-intro popovers, in priority order. On startup the
-/// first entry whose id has not yet been seen is shown.
-pub const FEATURE_INTROS: &[FeatureIntro] = &[FeatureIntro {
-    id: FeatureIntroId::CustomModelRouter,
-    hero_image_path: "async/png/onboarding/custom_model_router_intro_banner.png",
-    badge: Some("NEW"),
-    title: "Build a custom model router for the Warp Agent.",
-    description: "Custom routers can be complexity-based, where tasks are routed based on how difficult they are, or rule-based, where they are routed based on a set of natural language prompts.",
-    description_icon: Some(Icon::Compass),
-    cta_label: "Get started",
-    cta_target: Some(FeatureIntroCtaTarget::SettingsWidget {
-        page: SettingsSection::WarpAgent,
-        widget_id: custom_model_routers_widget_id,
-    }),
-}];
+pub const FEATURE_INTROS: &[FeatureIntro] = &[
+    FeatureIntro {
+        id: FeatureIntroId::CustomModelRouter,
+        hero_image_path: "async/png/onboarding/custom_model_router_intro_banner.png",
+        badge: Some("NEW"),
+        title: "Build a custom model router for the Warp Agent.",
+        description: "Custom routers can be complexity-based, where tasks are routed based on how difficult they are, or rule-based, where they are routed based on a set of natural language prompts.",
+        description_icon: Some(Icon::Compass),
+        cta_label: "Get started",
+        cta_target: Some(FeatureIntroCtaTarget::SettingsWidget {
+            page: SettingsSection::WarpAgent,
+            widget_id: custom_model_routers_widget_id,
+        }),
+    },
+    FeatureIntro {
+        id: FeatureIntroId::FactoriesLaunch,
+        hero_image_path: "async/png/onboarding/factories_launch_banner.png",
+        badge: Some("NEW"),
+        title: "Build your software factory on Warp",
+        description: "Open, flexible infrastructure for building cloud software factories around the way your team already works. Factories-as-code, any model or harness, with evals, benchmarks, and self-improvement built in. Select teams also get hands-on implementation support and up to $10K in Factory usage during Early Access.",
+        description_icon: None,
+        cta_label: "Get Early Access",
+        cta_target: Some(FeatureIntroCtaTarget::FactoriesLaunchModalBooking),
+    },
+];
 
 /// Looks up a feature-intro descriptor by its id.
 pub fn feature_intro_by_id(id: FeatureIntroId) -> Option<&'static FeatureIntro> {

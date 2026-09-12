@@ -191,6 +191,7 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
           isEligibleForDiscovery
         }
         experiments
+        factoriesLaunchModalCtaUrl
         discoverableTeams {
           teamUid
           numMembers
@@ -258,6 +259,7 @@ pub struct User {
     pub billing_metadata: Option<UserPurchasePolicyBillingMetadata>,
     pub workspaces: Vec<Workspace>,
     pub experiments: Option<Vec<Experiment>>,
+    pub factories_launch_modal_cta_url: Option<String>,
     pub discoverable_teams: Vec<DiscoverableTeamData>,
 }
 

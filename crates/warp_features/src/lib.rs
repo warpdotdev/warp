@@ -680,6 +680,8 @@ pub enum FeatureFlag {
     /// Enables the launch modal announcing the Warp Agent CLI.
     AgentCliLaunchModal,
 
+    FactoriesLaunchModal,
+
     /// Updated tab styling (background colors, border, close button positioning, margins).
     NewTabStyling,
 

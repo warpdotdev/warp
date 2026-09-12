@@ -338,6 +338,7 @@ fn run_list_scope_uses_team_loaded_by_workspace_refresh() {
                         workspaces: vec![workspace],
                         joinable_teams: vec![],
                         experiments: None,
+                        factories_launch_modal_cta_url: None,
                         ai_credit_availability: None,
                         user_purchase_policy: None,
                     },

@@ -238,6 +238,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
                         workspaces: vec![],
                         joinable_teams: vec![],
                         experiments: None,
+                        factories_launch_modal_cta_url: None,
                         ai_credit_availability: None,
                         user_purchase_policy: None,
                     },
@@ -256,6 +257,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
                         workspaces: vec![workspace.clone()],
                         joinable_teams: vec![],
                         experiments: None,
+                        factories_launch_modal_cta_url: None,
                         ai_credit_availability: None,
                         user_purchase_policy: None,
                     },
@@ -416,6 +418,7 @@ fn test_aws_bedrock_credentials_respect_user_setting() {
                 workspaces: vec![workspace_for_poll.clone()],
                 joinable_teams: vec![],
                 experiments: None,
+                factories_launch_modal_cta_url: None,
                 ai_credit_availability: None,
                 user_purchase_policy: None,
             },
@@ -467,6 +470,7 @@ fn test_aws_bedrock_credentials_enforced_by_admin() {
                 workspaces: vec![workspace_for_poll.clone()],
                 joinable_teams: vec![],
                 experiments: None,
+                factories_launch_modal_cta_url: None,
                 ai_credit_availability: None,
                 user_purchase_policy: None,
             },
@@ -4064,6 +4068,7 @@ fn test_remove_user_from_team_success_emits_success_event_and_refreshes_members(
                         workspaces: vec![updated_workspace.clone()],
                         joinable_teams: vec![],
                         experiments: None,
+                        factories_launch_modal_cta_url: None,
                         ai_credit_availability: None,
                         user_purchase_policy: None,
                     },
@@ -4555,6 +4560,9 @@ fn gql_user(
         }),
         workspaces,
         experiments: None,
+        factories_launch_modal_cta_url: Some(
+            "https://warp-dev.chilipiper.com/round-robin/factories-warp-intro".to_string(),
+        ),
         discoverable_teams: vec![],
     }
 }
@@ -4604,6 +4612,10 @@ fn test_user_level_policy_survives_placeholder_filtering_for_teamless_users() {
                 price_premium_bps: 1000,
             })
         );
+        assert_eq!(
+            response.factories_launch_modal_cta_url.as_deref(),
+            Some("https://warp-dev.chilipiper.com/round-robin/factories-warp-intro")
+        );
 
         UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
             user_workspaces.on_workspaces_updated(
@@ -4617,6 +4629,10 @@ fn test_user_level_policy_survives_placeholder_filtering_for_teamless_users() {
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(
+                user_workspaces.factories_launch_modal_cta_url(),
+                Some("https://warp-dev.chilipiper.com/round-robin/factories-warp-intro")
+            );
             assert!(
                 user_workspaces.current_workspace().is_none(),
                 "teamless users keep having no workspace"

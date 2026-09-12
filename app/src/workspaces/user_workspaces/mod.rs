@@ -134,6 +134,7 @@ pub struct UserWorkspaces {
     /// filtered out of `workspaces` — this is the only place their purchase
     /// policy survives.
     user_purchase_policy: Option<PurchaseAddOnCreditsPolicy>,
+    factories_launch_modal_cta_url: Option<String>,
     /// The model catalog to fall back to when no current workspace exists: before login, or
     /// for a logged-in user whose only workspace is the server's placeholder, which is
     /// filtered out of `workspaces`.
@@ -151,6 +152,7 @@ pub struct WorkspacesMetadataResponse {
     pub joinable_teams: Vec<DiscoverableTeam>,
     /// The list of experiments applicable to the user.
     pub experiments: Option<Vec<ServerExperiment>>,
+    pub factories_launch_modal_cta_url: Option<String>,
     /// The server-authoritative AI credit availability decision, piggybacked
     /// on the metadata query so every refresh keeps the shared state fresh.
     pub ai_credit_availability: Option<AICreditAvailability>,
@@ -197,6 +199,7 @@ impl UserWorkspaces {
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
             user_purchase_policy: None,
+            factories_launch_modal_cta_url: None,
             workspaceless_models_by_feature: None,
             team_client,
             workspace_client,
@@ -248,6 +251,7 @@ impl UserWorkspaces {
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
             user_purchase_policy: None,
+            factories_launch_modal_cta_url: None,
             workspaceless_models_by_feature: None,
             team_client,
             workspace_client,
@@ -630,6 +634,13 @@ impl UserWorkspaces {
     pub fn set_user_purchase_policy(&mut self, policy: Option<PurchaseAddOnCreditsPolicy>) {
         self.user_purchase_policy = policy;
     }
+    pub fn set_factories_launch_modal_cta_url(&mut self, url: Option<String>) {
+        self.factories_launch_modal_cta_url = url;
+    }
+
+    pub fn factories_launch_modal_cta_url(&self) -> Option<&str> {
+        self.factories_launch_modal_cta_url.as_deref()
+    }
 
     pub fn current_workspace_mut(&mut self) -> Option<&mut Workspace> {
         self.current_workspace_uid
@@ -880,6 +891,9 @@ impl UserWorkspaces {
                 let joinable_teams = response.metadata.joinable_teams;
 
                 self.set_user_purchase_policy(response.metadata.user_purchase_policy);
+                self.set_factories_launch_modal_cta_url(
+                    response.metadata.factories_launch_modal_cta_url,
+                );
                 self.update_workspaces(workspaces.clone(), ctx);
                 self.update_joinable_teams(joinable_teams, ctx);
 
