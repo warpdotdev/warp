@@ -1071,7 +1071,7 @@ fn all_commands_for_all_surfaces() -> Vec<StaticCommand> {
         commands.push(INVOKE_SKILL.clone());
     }
 
-    if FeatureFlag::CloudMode.is_enabled() && FeatureFlag::CloudModeFromLocalSession.is_enabled() {
+    if FeatureFlag::CloudModeFromLocalSession.is_enabled() {
         commands.push(CLOUD_AGENT.clone());
     }
 

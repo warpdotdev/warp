@@ -1101,7 +1101,6 @@ pub fn init(app: &mut AppContext) {
         )
         .with_enabled(|| {
             FeatureFlag::AgentView.is_enabled()
-                && FeatureFlag::CloudMode.is_enabled()
                 && FeatureFlag::CloudModeFromLocalSession.is_enabled()
         })
         .with_group(bindings::BindingGroup::WarpAi.as_str())]);

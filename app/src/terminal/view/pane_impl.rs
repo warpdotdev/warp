@@ -404,11 +404,10 @@ impl TerminalView {
 
         // Cloud-mode-only ambient agent cancel button is shown while we're waiting
         // for the session to be ready.
-        let is_waiting_for_session = FeatureFlag::CloudMode.is_enabled()
-            && self
-                .ambient_agent_view_model
-                .as_ref()
-                .is_some_and(|model| model.as_ref(app).is_waiting_for_session());
+        let is_waiting_for_session = self
+            .ambient_agent_view_model
+            .as_ref()
+            .is_some_and(|model| model.as_ref(app).is_waiting_for_session());
         // The gate and the render path are split by target: on desktop the panel is pane-level
         // and `can_show_conversation_details_ui` is correct. On WASM the panel is
         // workspace-level; the pane-header button is shown only for surfaces that lack a tab-bar
@@ -978,11 +977,9 @@ impl TerminalView {
     }
 
     pub fn is_ambient_agent_session(&self, ctx: &AppContext) -> bool {
-        FeatureFlag::CloudMode.is_enabled()
-            && self
-                .ambient_agent_view_model
-                .as_ref()
-                .is_some_and(|model| model.as_ref(ctx).is_ambient_agent())
+        self.ambient_agent_view_model
+            .as_ref()
+            .is_some_and(|model| model.as_ref(ctx).is_ambient_agent())
     }
 
     /// Whether this pane should be treated as an ambient agent conversation for display
