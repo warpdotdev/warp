@@ -730,7 +730,9 @@ impl Response {
         match self.0.error_for_status_ref() {
             Ok(_) => Ok(self),
             Err(source) => {
-                let body = self.text().await.ok();
+                // Cap the body read to 64 KiB — error bodies are only used for diagnostics
+                // and we must not buffer unbounded CDN error pages into memory.
+                let body = self.text_capped(64 * 1024).await.ok();
                 Err(ResponseError {
                     source,
                     headers: Box::new(headers),
@@ -738,6 +740,27 @@ impl Response {
                 })
             }
         }
+    }
+
+    /// Reads up to `max_bytes` of the response body as a `String`.
+    ///
+    /// Unlike [`text`], this never allocates more than `max_bytes` for the body,
+    /// which prevents unbounded memory growth when error responses contain large
+    /// or adversarial payloads (e.g. HTML error pages from CDNs or proxies).
+    /// Any bytes beyond `max_bytes` are silently discarded. Replacement characters
+    /// are inserted for any non-UTF-8 sequences, matching `String::from_utf8_lossy`.
+    pub async fn text_capped(self, max_bytes: usize) -> reqwest::Result<String> {
+        let mut stream = self.0.bytes_stream();
+        let mut buf: Vec<u8> = Vec::with_capacity(max_bytes.min(8 * 1024));
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            let space = max_bytes.saturating_sub(buf.len());
+            if space == 0 {
+                break;
+            }
+            buf.extend_from_slice(&chunk[..chunk.len().min(space)]);
+        }
+        Ok(String::from_utf8_lossy(&buf).into_owned())
     }
 
     /// Returns a reference to the underlying response if the status is successful,
