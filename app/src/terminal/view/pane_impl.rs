@@ -158,11 +158,6 @@ impl TerminalView {
 
     /// Returns the shareable object for the active agent view conversation, if any.
     fn agent_view_shareable_object(&self, ctx: &ViewContext<Self>) -> Option<ShareableObject> {
-        // Only set shareable object if CloudConversations feature is enabled
-        if !FeatureFlag::CloudConversations.is_enabled() {
-            return None;
-        }
-
         // If we're in a shared session, prioritize this to share.
         if let Some(shared_session) = &self.shared_session {
             return Some(ShareableObject::Session {

@@ -8,7 +8,6 @@ use pathfinder_geometry::vector::vec2f;
 use regex::Regex;
 use settings::Setting as _;
 use warp_core::context_flag::ContextFlag;
-use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::WarpTheme;
 use warp_core::ui::theme::color::internal_colors;
 use warp_errors::{report_error, report_if_error};
@@ -1653,10 +1652,6 @@ impl SettingsWidget for CloudConversationStorageWidget {
     }
 
     fn should_render(&self, app: &AppContext) -> bool {
-        if !FeatureFlag::CloudConversations.is_enabled() {
-            return false;
-        }
-
         // Hide the toggle entirely when AI is disabled: the setting has no
         // effect without AI (no agent conversations are produced), so showing
         // it is confusing.
@@ -1992,19 +1987,16 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         flags::SAFE_MODE_FLAG,
     ));
 
-    toggle_binding_pairs.push(
-        ToggleSettingActionPair::new(
-            "cloud AI conversation storage",
-            builder(SettingsAction::PrivacyPageToggle(
-                PrivacyPageAction::ToggleCloudConversationStorage,
-            )),
-            &(context.clone()
-                & id!(flags::IS_ANY_AI_ENABLED)
-                & id!(flags::CLOUD_CONVERSATION_STORAGE_EDITABLE_FLAG)),
-            flags::CLOUD_CONVERSATION_STORAGE_FLAG,
-        )
-        .with_enabled(|| FeatureFlag::CloudConversations.is_enabled()),
-    );
+    toggle_binding_pairs.push(ToggleSettingActionPair::new(
+        "cloud AI conversation storage",
+        builder(SettingsAction::PrivacyPageToggle(
+            PrivacyPageAction::ToggleCloudConversationStorage,
+        )),
+        &(context.clone()
+            & id!(flags::IS_ANY_AI_ENABLED)
+            & id!(flags::CLOUD_CONVERSATION_STORAGE_EDITABLE_FLAG)),
+        flags::CLOUD_CONVERSATION_STORAGE_FLAG,
+    ));
 
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(toggle_binding_pairs, app);
 }

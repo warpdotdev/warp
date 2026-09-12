@@ -149,28 +149,26 @@ impl TerminalView {
         );
         items.push(MenuItem::Separator);
 
-        if FeatureFlag::CloudConversations.is_enabled() {
-            let history_model = BlocklistAIHistoryModel::as_ref(ctx);
-            if history_model.can_conversation_be_shared(&ai_conversation_id) {
-                items.push(
-                    MenuItemFields::new("Copy share link")
-                        .with_on_select_action(TerminalAction::ContextMenu(
-                            ContextMenuAction::CopyConversationShareLink {
-                                conversation_id: ai_conversation_id,
-                            },
-                        ))
-                        .into_item(),
-                );
-                items.push(
-                    MenuItemFields::new("Share conversation")
-                        .with_on_select_action(TerminalAction::ContextMenu(
-                            ContextMenuAction::OpenConversationShareDialog {
-                                conversation_id: ai_conversation_id,
-                            },
-                        ))
-                        .into_item(),
-                );
-            }
+        let history_model = BlocklistAIHistoryModel::as_ref(ctx);
+        if history_model.can_conversation_be_shared(&ai_conversation_id) {
+            items.push(
+                MenuItemFields::new("Copy share link")
+                    .with_on_select_action(TerminalAction::ContextMenu(
+                        ContextMenuAction::CopyConversationShareLink {
+                            conversation_id: ai_conversation_id,
+                        },
+                    ))
+                    .into_item(),
+            );
+            items.push(
+                MenuItemFields::new("Share conversation")
+                    .with_on_select_action(TerminalAction::ContextMenu(
+                        ContextMenuAction::OpenConversationShareDialog {
+                            conversation_id: ai_conversation_id,
+                        },
+                    ))
+                    .into_item(),
+            );
         }
 
         items.push(
@@ -331,10 +329,9 @@ impl TerminalView {
     ) -> Vec<MenuItem<TerminalAction>> {
         let mut items = Vec::new();
 
-        if FeatureFlag::CloudConversations.is_enabled()
-            && ShareableObject::AIConversation(conversation_id)
-                .link(ctx)
-                .is_some()
+        if ShareableObject::AIConversation(conversation_id)
+            .link(ctx)
+            .is_some()
         {
             items.push(
                 MenuItemFields::new("Copy share link")
