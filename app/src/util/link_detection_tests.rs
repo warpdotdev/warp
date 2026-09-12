@@ -1,6 +1,11 @@
 use itertools::Itertools;
+use warp_core::features::FeatureFlag;
 
 use super::*;
+
+fn native_path(path: &str) -> String {
+    path.replace('/', std::path::MAIN_SEPARATOR_STR)
+}
 
 #[test]
 fn test_possible_file_paths_in_word() {
@@ -241,4 +246,65 @@ fn link_tooltip_anchor_ids_are_unique_per_block() {
         unset.resolved_tooltip_position_id(),
         RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID
     );
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn relative_display_paths_detect_the_original_absolute_file_and_line() {
+    use crate::ai::agent::FileLocations;
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
+
+    let root = tempfile::tempdir().unwrap();
+    let cwd = root.path().join("repo").join("worktree").join("deep");
+    let relative_file = cwd.join("src").join("lib.rs");
+    let absolute_fallback = root.path().join("fallback.rs");
+    std::fs::create_dir_all(relative_file.parent().unwrap()).unwrap();
+    std::fs::write(&relative_file, "fn main() {}\n").unwrap();
+    std::fs::write(&absolute_fallback, "fn fallback() {}\n").unwrap();
+
+    let cwd = cwd.to_string_lossy().to_string();
+    let relative_display = FileLocations {
+        name: relative_file.to_string_lossy().to_string(),
+        lines: std::iter::once(10..20).collect(),
+    }
+    .to_user_message(None, Some(&cwd), None);
+    assert_eq!(
+        relative_display,
+        format!("{} (10-20)", native_path("src/lib.rs"))
+    );
+
+    let relative_links = detect_file_paths(&cwd, &relative_display, None);
+    let DetectedLinkType::FilePath {
+        absolute_path,
+        line_and_column_num,
+    } = relative_links.get(&(0..10)).unwrap()
+    else {
+        panic!("expected a file path link");
+    };
+    assert_eq!(absolute_path, &relative_file);
+    assert_eq!(line_and_column_num, &None);
+    assert!(relative_links.values().any(|link| {
+        matches!(
+            link,
+            DetectedLinkType::FilePath {
+                absolute_path,
+                line_and_column_num: Some(line_and_column_num),
+            } if absolute_path == &relative_file && line_and_column_num.line_num == 10
+        )
+    }));
+
+    let fallback_display = FileLocations {
+        name: absolute_fallback.to_string_lossy().to_string(),
+        lines: vec![],
+    }
+    .to_user_message(None, Some(&cwd), None);
+    assert_eq!(fallback_display, absolute_fallback.to_string_lossy());
+    let fallback_links = detect_file_paths(&cwd, &fallback_display, None);
+    assert!(fallback_links.values().any(|link| {
+        matches!(
+            link,
+            DetectedLinkType::FilePath { absolute_path, .. }
+                if absolute_path == &absolute_fallback
+        )
+    }));
 }
