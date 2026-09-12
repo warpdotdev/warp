@@ -31,12 +31,16 @@ const DARK_MODE_BRIGHT_COLORS: AnsiColors = AnsiColors::new(
 
 const LIGHT_MODE_NORMAL_COLORS: AnsiColors = AnsiColors::new(
     AnsiColor::from_u32(0x212121FF),
-    AnsiColor::from_u32(0xC30771FF),
-    AnsiColor::from_u32(0x10A778FF),
+    // Sampled from Erica Luzzi's Figma light-mode design spec (Slack thread:
+    // https://warpdev.slack.com/archives/C0BA99TSDB2/p1785174407785429).
+    // Values are PNG pixel samples; a Figma color-profile shift is possible.
+    // Design sign-off recommended before stable release.
+    AnsiColor::from_u32(0xB3276FFF), // red   (was 0xC30771)
+    AnsiColor::from_u32(0x4CA47BFF), // green (was 0x10A778)
     AnsiColor::from_u32(0xA89C14FF),
     AnsiColor::from_u32(0x008EC4FF),
     AnsiColor::from_u32(0x523C79FF),
-    AnsiColor::from_u32(0x20A5BAFF),
+    AnsiColor::from_u32(0x4FA3B7FF), // cyan  (was 0x20A5BA)
     AnsiColor::from_u32(0xE0E0E0FF),
 );
 const LIGHT_MODE_BRIGHT_COLORS: AnsiColors = AnsiColors::new(
@@ -629,3 +633,7 @@ pub(super) fn received_referral_reward() -> WarpTheme {
         Some("Received Referral Reward".to_string()),
     )
 }
+
+#[cfg(test)]
+#[path = "default_themes_tests.rs"]
+mod tests;
