@@ -601,7 +601,6 @@ default = [
     "team_api_keys",
     "named_agents",
     "agent_tips",
-    "pluggable_notifications",
     "agent_onboarding",
     "account_first_onboarding",
     "global_search",
@@ -810,7 +809,6 @@ oz_changelog_updates = []
 remote_tty = ["warp_terminal/remote_tty"]
 # Fix for cursor reflow bug during window resize, from Alacritty resizing logic.
 resize_fix = []
-pluggable_notifications = []
 # This enables `read_files` to support images.
 read_image_files = []
 # Enable this feature to automatically perform CPU profiling via pprof.  The
