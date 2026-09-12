@@ -8,6 +8,7 @@ use instant::Duration;
 use oauth2::TokenResponse as _;
 use url::Url;
 use warp_core::channel::ChannelState;
+use warp_core::execution_mode::current_client_id;
 use warp_server_auth::auth_state::AuthState;
 use warp_server_auth::credentials::{
     AuthToken, Credentials, FirebaseToken, LoginToken, RefreshToken,
@@ -18,6 +19,9 @@ use warpui_core::r#async::{BoxFuture, Timer};
 use super::UserAuthenticationError;
 
 const FETCH_ACCESS_TOKEN_TIMEOUT: Duration = Duration::from_secs(5);
+const WARP_AGENT_CLI_CLIENT_ID: &str = "warp-agent-cli";
+const WARP_CLI_CLIENT_ID: &str = "warp-cli";
+const WARP_TUI_CLIENT_ID: &str = "warp-tui";
 
 /// Authentication and authenticated-transport conditions observed by shared client code.
 #[derive(Clone)]
@@ -84,7 +88,7 @@ impl AuthSession {
             client,
             auth_state,
             event_sender,
-            oauth_client: Self::create_oauth_client(),
+            oauth_client: Self::create_oauth_client(current_client_id()),
         }
     }
 
@@ -195,7 +199,7 @@ impl AuthSession {
         ))
     }
 
-    fn create_oauth_client() -> OAuth2Client {
+    fn create_oauth_client(reported_client_id: Option<&str>) -> OAuth2Client {
         let server_root =
             Url::parse(&ChannelState::server_root_url()).expect("Server root URL must be valid");
         let token_url = server_root
@@ -205,7 +209,12 @@ impl AuthSession {
             .join("/api/v1/oauth/device/auth")
             .expect("Invalid device URL");
 
-        oauth2::basic::BasicClient::new(oauth2::ClientId::new("warp-agent-cli".to_string()))
+        let client_id = if reported_client_id == Some(WARP_TUI_CLIENT_ID) {
+            WARP_AGENT_CLI_CLIENT_ID
+        } else {
+            WARP_CLI_CLIENT_ID
+        };
+        oauth2::basic::BasicClient::new(oauth2::ClientId::new(client_id.to_string()))
             .set_token_uri(oauth2::TokenUrl::from_url(token_url))
             .set_device_authorization_url(oauth2::DeviceAuthorizationUrl::from_url(device_url))
     }
