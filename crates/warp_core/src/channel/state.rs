@@ -123,6 +123,12 @@ impl ChannelState {
         url.host_str() == Some("staging.warp.dev")
     }
 
+    /// Whether the resolved server root URL points at a local host, in which case
+    /// IAP is skipped (see [`host_is_local`]).
+    pub fn server_root_url_is_local() -> bool {
+        host_is_local(&Self::server_root_url())
+    }
+
     /// Returns the canonical identifier for the application.
     ///
     /// This should not be used for namespacing persisted data - such use cases
@@ -419,6 +425,19 @@ fn derive_http_origin_from_ws_url(ws_url: &str) -> Option<String> {
         origin.push_str(&format!(":{port}"));
     }
     Some(origin)
+}
+
+/// Hosts treated as local (non-IAP) servers. `Url::host_str` yields IPv6
+/// loopback as `[::1]` (pinned by a test in `state_tests.rs`).
+const LOCAL_HOSTS: &[&str] = &["localhost", "127.0.0.1", "[::1]", "host.docker.internal"];
+
+/// Whether `server_root_url`'s host is in [`LOCAL_HOSTS`]. Matching is exact, and
+/// an unparseable URL is non-local, so the IAP decision fails safe toward enabled.
+fn host_is_local(server_root_url: &str) -> bool {
+    Url::parse(server_root_url)
+        .ok()
+        .and_then(|url| url.host_str().map(|host| LOCAL_HOSTS.contains(&host)))
+        .unwrap_or(false)
 }
 
 #[cfg(all(test, not(feature = "test-util")))]
