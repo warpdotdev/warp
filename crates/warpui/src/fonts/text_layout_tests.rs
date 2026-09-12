@@ -1,15 +1,18 @@
 //! Platform-independent text layout tests.
+use std::sync::Arc;
+
 use anyhow::Result;
 use itertools::Itertools;
 use pathfinder_color::ColorU;
 
 use crate::elements::DEFAULT_UI_LINE_HEIGHT_RATIO;
-use crate::fonts::{FamilyId, Properties, Style, Weight};
+use crate::fonts::{Cache as FontCache, FamilyId, Properties, Style, Weight};
 #[cfg(target_os = "macos")]
 use crate::platform::mac::fonts::FontDB;
 use crate::platform::{FontDB as _, LineStyle};
 use crate::text_layout::{
-    ClipConfig, DEFAULT_TOP_BOTTOM_RATIO, Line, StyleAndFont, TextAlignment, TextFrame, TextStyle,
+    ClipConfig, DEFAULT_TOP_BOTTOM_RATIO, LayoutCache, Line, MAX_LAYOUT_CHARS, StyleAndFont,
+    TextAlignment, TextFrame, TextStyle,
 };
 #[cfg(not(target_os = "macos"))]
 use crate::windowing::winit::fonts::FontDB;
@@ -64,6 +67,171 @@ fn test_fixed_width_tab_size_matches_spaces_width() -> Result<()> {
     );
 
     Ok(())
+}
+
+/// Wide enough that a long line is never wrapped, which keeps it in a single run of glyphs - the
+/// shape whose per-character allocations grew without bound in APP-5360.
+const UNWRAPPED_WIDTH: f32 = 10_000_000.;
+
+/// A character count comfortably under [`MAX_LAYOUT_CHARS`]. It also leaves plenty of room under
+/// the 16,384 characters at which the winit backend's shaper starts returning no glyphs at all for
+/// an unbroken run, so this is a size both backends really lay out.
+///
+/// That leaves 16,384..[`MAX_LAYOUT_CHARS`] uncovered here: in that band an unbroken line is
+/// already blank on winit, so only Core Text can say anything about it, and a lone macOS-only
+/// assertion in this platform-independent module would buy little over the tests that do run
+/// everywhere.
+const UNCAPPED_CHAR_COUNT: usize = 8_000;
+
+fn layout_test_line_style() -> LineStyle {
+    LineStyle {
+        font_size: FONT_SIZE,
+        line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
+        baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+        fixed_width_tab_size: None,
+    }
+}
+
+fn glyph_count(line: &Line) -> usize {
+    line.runs.iter().map(|run| run.glyphs.len()).sum()
+}
+
+/// A line long enough to be worth guarding but under the cap must be laid out in full. This is the
+/// guard against the cap silently eating merely-large lines. See APP-5360.
+#[test]
+fn test_line_under_cap_is_laid_out_in_full() -> Result<()> {
+    let (font_db, font_family) = init_fonts();
+    let font_cache = FontCache::new(Box::new(font_db));
+    let text_layout_system = font_cache.text_layout_system();
+    let layout_cache = LayoutCache::new();
+
+    let text = "a".repeat(UNCAPPED_CHAR_COUNT);
+    let line = layout_cache.layout_line(
+        &text,
+        layout_test_line_style(),
+        &[(
+            0..UNCAPPED_CHAR_COUNT,
+            StyleAndFont::new(font_family, Properties::default(), TextStyle::new()),
+        )],
+        UNWRAPPED_WIDTH,
+        ClipConfig::default(),
+        &text_layout_system,
+    );
+
+    assert_eq!(line.caret_positions.len(), UNCAPPED_CHAR_COUNT);
+    assert_eq!(glyph_count(&line), UNCAPPED_CHAR_COUNT);
+    Ok(())
+}
+
+/// Laying out a line allocates per-character state (caret positions, glyphs) that nothing else
+/// bounds, so a single degenerate line - a minified bundle, a base64 blob - used to allocate
+/// without limit. See APP-5360.
+///
+/// Note that this only really bites on Core Text. The winit backend's shaper independently returns
+/// no glyphs at all for an unbroken run longer than 16,384 characters, so on that platform these
+/// assertions hold whether or not the cap is applied; `test_line_under_cap_is_laid_out_in_full`
+/// and the `truncate_text_for_layout` unit tests carry the cross-platform weight.
+#[test]
+fn test_degenerate_line_layout_is_capped() -> Result<()> {
+    let (font_db, font_family) = init_fonts();
+    let font_cache = FontCache::new(Box::new(font_db));
+    let text_layout_system = font_cache.text_layout_system();
+    let layout_cache = LayoutCache::new();
+
+    let char_count = MAX_LAYOUT_CHARS + 1_000;
+    let text = "a".repeat(char_count);
+    let line_style = layout_test_line_style();
+    let style_runs = [(
+        0..char_count,
+        StyleAndFont::new(font_family, Properties::default(), TextStyle::new()),
+    )];
+
+    let line = layout_cache.layout_line(
+        &text,
+        line_style,
+        &style_runs,
+        UNWRAPPED_WIDTH,
+        ClipConfig::default(),
+        &text_layout_system,
+    );
+    assert_line_within_cap(&line);
+
+    let frame = layout_cache.layout_text(
+        &text,
+        line_style,
+        &style_runs,
+        UNWRAPPED_WIDTH,
+        FRAME_HEIGHT,
+        TextAlignment::Left,
+        None,
+        &text_layout_system,
+    );
+    for line in frame.lines() {
+        assert_line_within_cap(line);
+    }
+    let frame_caret_count: usize = frame
+        .lines()
+        .iter()
+        .map(|line| line.caret_positions.len())
+        .sum();
+    assert!(frame_caret_count <= MAX_LAYOUT_CHARS);
+    assert!(frame.lines().iter().map(glyph_count).sum::<usize>() <= MAX_LAYOUT_CHARS);
+
+    Ok(())
+}
+
+/// Two over-cap lines that share the capped prefix must resolve to the same cached layout, which
+/// only holds if the input really reached the backend truncated. Unlike the glyph-count
+/// assertions this says nothing about what the backend produced, so it is the one check of the
+/// wiring that fails on every platform if the cap stops being applied. See APP-5360.
+#[test]
+fn test_over_cap_lines_sharing_a_prefix_share_a_layout() -> Result<()> {
+    let (font_db, font_family) = init_fonts();
+    let font_cache = FontCache::new(Box::new(font_db));
+    let text_layout_system = font_cache.text_layout_system();
+    let layout_cache = LayoutCache::new();
+
+    let layout = |char_count: usize| {
+        let text = "a".repeat(char_count);
+        layout_cache.layout_line(
+            &text,
+            layout_test_line_style(),
+            &[(
+                0..char_count,
+                StyleAndFont::new(font_family, Properties::default(), TextStyle::new()),
+            )],
+            UNWRAPPED_WIDTH,
+            ClipConfig::default(),
+            &text_layout_system,
+        )
+    };
+
+    let shorter = layout(MAX_LAYOUT_CHARS + 1);
+    let longer = layout(MAX_LAYOUT_CHARS + 1_000);
+
+    assert!(Arc::ptr_eq(&shorter, &longer));
+    Ok(())
+}
+
+/// Asserts that nothing the backend produced for `line` refers to a character at or past the cap,
+/// which is the property truncating the input buys us.
+fn assert_line_within_cap(line: &Line) {
+    assert!(line.caret_positions.len() <= MAX_LAYOUT_CHARS);
+    assert!(glyph_count(line) <= MAX_LAYOUT_CHARS);
+    for caret in &line.caret_positions {
+        assert!(
+            caret.last_offset < MAX_LAYOUT_CHARS,
+            "caret refers to character {} past the cap",
+            caret.last_offset
+        );
+    }
+    for glyph in line.runs.iter().flat_map(|run| run.glyphs.iter()) {
+        assert!(
+            glyph.index < MAX_LAYOUT_CHARS,
+            "glyph refers to character {} past the cap",
+            glyph.index
+        );
+    }
 }
 
 /// Read the bundled Roboto font's bytes from the filesystem.
