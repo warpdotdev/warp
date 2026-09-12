@@ -281,8 +281,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::AmbientAgentsImageUpload,
         #[cfg(feature = "scheduled_ambient_agents")]
         FeatureFlag::ScheduledAmbientAgents,
-        #[cfg(feature = "conversation_api")]
-        FeatureFlag::ConversationApi,
         #[cfg(feature = "code_launch_modal")]
         FeatureFlag::CodeLaunchModal,
         #[cfg(feature = "api_key_management")]
