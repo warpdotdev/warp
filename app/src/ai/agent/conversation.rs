@@ -3789,6 +3789,49 @@ impl AIConversation {
         );
     }
 
+    pub(crate) fn write_updated_event_sequence(
+        &self,
+        ctx: &mut ModelContext<BlocklistAIHistoryModel>,
+    ) {
+        if self.is_viewing_shared_session
+            || (self.is_remote_child
+                && crate::features::FeatureFlag::OrchestrationUnifiedStack.is_enabled())
+        {
+            return;
+        }
+
+        if !*GeneralSettings::as_ref(ctx).restore_session
+            || !AppExecutionMode::as_ref(ctx).can_save_session()
+        {
+            return;
+        }
+
+        let Some(sqlite_sender) = GlobalResourceHandlesProvider::as_ref(ctx)
+            .get()
+            .model_event_sender
+            .clone()
+        else {
+            return;
+        };
+        let Some(sequence) = self.last_event_sequence else {
+            return;
+        };
+        let event = ModelEvent::UpdateMultiAgentConversationEventSequence {
+            conversation_id: self.id.to_string(),
+            sequence,
+        };
+        ctx.spawn(
+            async move {
+                if let Err(e) = sqlite_sender.send(event) {
+                    log::warn!(
+                        "Failed to send updated AI conversation event sequence to sqlite writer thread: {e:?}"
+                    );
+                }
+            },
+            |_, _, _| {},
+        );
+    }
+
     pub fn rollback_transaction(&mut self, response_stream_id: &ResponseStreamId) {
         let Some(transaction) = self.transaction.take() else {
             report_error!("No transaction in progress.");
