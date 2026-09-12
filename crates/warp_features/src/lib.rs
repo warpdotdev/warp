@@ -307,9 +307,6 @@ pub enum FeatureFlag {
     /// Enables the resume button for cancelled AI conversations.
     AIResumeButton,
 
-    /// Enables the agent to decide whether to execute a command.
-    AgentDecidesCommandExecution,
-
     /// Show speed bump when enabling codebase indexing.
     CodebaseIndexSpeedbump,
 
