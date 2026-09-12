@@ -87,3 +87,16 @@ fn excludes_ambient_expired_and_depleted_grants() {
 
     assert!(!classified.has_any());
 }
+
+#[test]
+fn excludes_grant_of_unknown_type_from_balance_cards() {
+    // A grant type this client doesn't recognize (a fallback `Other` from a
+    // newer server) must not be shown as spendable balance, since this
+    // client cannot reason about how it may be spent.
+    let current = workspace_uid(1);
+    let grants = vec![grant(BonusGrantScope::User, BonusGrantType::Other, 10)];
+
+    let classified = ClassifiedGrants::new(&grants, Some(current));
+
+    assert!(!classified.has_any());
+}
