@@ -33,6 +33,13 @@ fn mouse_moved_event(position: Vector2F) -> Event {
     }
 }
 
+fn left_mouse_dragged_event(position: Vector2F) -> Event {
+    Event::LeftMouseDragged {
+        position,
+        modifiers: Default::default(),
+    }
+}
+
 #[derive(Default)]
 struct View {
     // Maps identifier to number of mouse down events
@@ -50,6 +57,9 @@ struct View {
     /// If [`Some`], the top-right hoverable will
     /// have a hover-out delay with this duration.
     hover_out_delay: Option<Duration>,
+
+    /// If true, both hoverables track hover during a left-mouse drag.
+    hover_during_drag: bool,
 }
 
 pub fn init(app: &mut AppContext) {
@@ -67,6 +77,11 @@ impl View {
 
     fn with_hover_out_delay(mut self, delay: Duration) -> Self {
         self.hover_out_delay = Some(delay);
+        self
+    }
+
+    fn with_hover_during_drag(mut self) -> Self {
+        self.hover_during_drag = true;
         self
     }
 
@@ -125,29 +140,34 @@ impl crate::core::View for View {
                 .with_width(100.)
                 .finish(),
         );
+        let mut bottom_left_hoverable = Hoverable::new(self.bottom_mouse_state.clone(), |_| {
+            ConstrainedBox::new(Rect::new().finish())
+                .with_height(25.)
+                .with_width(25.)
+                .finish()
+        })
+        .on_click(|evt, _, _| {
+            evt.dispatch_action(
+                "hoverable_test:mouse_down",
+                ElementIdentifier::HoverableElementBottomLeft,
+            );
+        })
+        .on_hover(|hovered, evt, _, _| {
+            let action_name = if hovered {
+                "hoverable_test:hover_in"
+            } else {
+                "hoverable_test:hover_out"
+            };
+            evt.dispatch_action(action_name, ElementIdentifier::HoverableElementBottomLeft);
+        })
+        .with_cursor(Cursor::Crosshair);
+
+        if self.hover_during_drag {
+            bottom_left_hoverable = bottom_left_hoverable.with_hover_during_drag();
+        }
+
         stack.add_positioned_child(
-            Hoverable::new(self.bottom_mouse_state.clone(), |_| {
-                ConstrainedBox::new(Rect::new().finish())
-                    .with_height(25.)
-                    .with_width(25.)
-                    .finish()
-            })
-            .on_click(|evt, _, _| {
-                evt.dispatch_action(
-                    "hoverable_test:mouse_down",
-                    ElementIdentifier::HoverableElementBottomLeft,
-                );
-            })
-            .on_hover(|hovered, evt, _, _| {
-                let action_name = if hovered {
-                    "hoverable_test:hover_in"
-                } else {
-                    "hoverable_test:hover_out"
-                };
-                evt.dispatch_action(action_name, ElementIdentifier::HoverableElementBottomLeft);
-            })
-            .with_cursor(Cursor::Crosshair)
-            .finish(),
+            bottom_left_hoverable.finish(),
             OffsetPositioning::offset_from_parent(
                 vec2f(0., 75.),
                 ParentOffsetBounds::ParentByPosition,
@@ -178,6 +198,10 @@ impl crate::core::View for View {
 
         if let Some(delay) = self.hover_out_delay {
             hoverable = hoverable.with_hover_out_delay(delay);
+        }
+
+        if self.hover_during_drag {
+            hoverable = hoverable.with_hover_during_drag();
         }
 
         stack.add_positioned_child(
@@ -404,6 +428,207 @@ fn test_hoverable_element_hover_handling_no_delay() {
             assert_eq!(
                 1,
                 view.num_hover_out_events(&ElementIdentifier::HoverableElementBottomLeft)
+            );
+        });
+    });
+}
+
+#[test]
+fn test_hoverable_element_hover_freezes_during_left_mouse_drag_by_default() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        app.update(init);
+        let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |_| View::default());
+
+        let mut presenter = Presenter::new(window_id);
+
+        let mut updated = EntityIdSet::default();
+        updated.insert(app.root_view_id(window_id).unwrap());
+        let invalidation = WindowInvalidation {
+            updated,
+            ..Default::default()
+        };
+
+        app.update(move |ctx| {
+            presenter.invalidate(invalidation, ctx);
+            presenter.build_scene(vec2f(100., 100.), 1., None, ctx);
+            let presenter = Rc::new(RefCell::new(presenter));
+
+            // Hover onto, then press down on, the bottom-left hoverable.
+            let event = mouse_moved_event(vec2f(10., 90.));
+            ctx.simulate_window_event(event.clone(), window_id, presenter.clone());
+            ctx.set_last_mouse_move_event(window_id, event);
+
+            ctx.simulate_window_event(
+                Event::LeftMouseDown {
+                    position: vec2f(10., 90.),
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                },
+                window_id,
+                presenter.clone(),
+            );
+
+            // Drag off of the hoverable while the button is held. Without the
+            // opt-in, hover state should stay frozen at whatever it was when
+            // the drag began, so no hover-out should fire yet.
+            ctx.simulate_window_event(
+                left_mouse_dragged_event(vec2f(50., 50.)),
+                window_id,
+                presenter,
+            );
+        });
+
+        view.read(app, |view, _| {
+            assert_eq!(
+                1,
+                view.num_hover_in_events(&ElementIdentifier::HoverableElementBottomLeft)
+            );
+            assert_eq!(
+                0,
+                view.num_hover_out_events(&ElementIdentifier::HoverableElementBottomLeft)
+            );
+        });
+    });
+}
+
+#[test]
+fn test_hoverable_element_with_hover_during_drag_tracks_pointer_during_left_mouse_drag() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        app.update(init);
+        let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |_| {
+            View::default().with_hover_during_drag()
+        });
+
+        let mut presenter = Presenter::new(window_id);
+
+        let mut updated = EntityIdSet::default();
+        updated.insert(app.root_view_id(window_id).unwrap());
+        let invalidation = WindowInvalidation {
+            updated,
+            ..Default::default()
+        };
+
+        app.update(move |ctx| {
+            presenter.invalidate(invalidation, ctx);
+            presenter.build_scene(vec2f(100., 100.), 1., None, ctx);
+            let presenter = Rc::new(RefCell::new(presenter));
+
+            // Hover onto, then press down on, the bottom-left hoverable.
+            let event = mouse_moved_event(vec2f(10., 90.));
+            ctx.simulate_window_event(event.clone(), window_id, presenter.clone());
+            ctx.set_last_mouse_move_event(window_id, event);
+
+            ctx.simulate_window_event(
+                Event::LeftMouseDown {
+                    position: vec2f(10., 90.),
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                },
+                window_id,
+                presenter.clone(),
+            );
+
+            // Drag off of the hoverable while the button is held. With the
+            // opt-in enabled, hover should immediately follow the pointer,
+            // firing a hover-out.
+            ctx.simulate_window_event(
+                left_mouse_dragged_event(vec2f(50., 50.)),
+                window_id,
+                presenter,
+            );
+        });
+
+        view.read(app, |view, _| {
+            assert_eq!(
+                1,
+                view.num_hover_in_events(&ElementIdentifier::HoverableElementBottomLeft)
+            );
+            assert_eq!(
+                1,
+                view.num_hover_out_events(&ElementIdentifier::HoverableElementBottomLeft)
+            );
+        });
+    });
+}
+
+#[test]
+fn test_hoverable_element_with_hover_during_drag_settles_after_multiple_moves() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        app.update(init);
+        let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |_| {
+            View::default().with_hover_during_drag()
+        });
+
+        let mut presenter = Presenter::new(window_id);
+
+        let mut updated = EntityIdSet::default();
+        updated.insert(app.root_view_id(window_id).unwrap());
+        let invalidation = WindowInvalidation {
+            updated,
+            ..Default::default()
+        };
+
+        app.update(move |ctx| {
+            presenter.invalidate(invalidation, ctx);
+            presenter.build_scene(vec2f(100., 100.), 1., None, ctx);
+            let presenter = Rc::new(RefCell::new(presenter));
+
+            // Hover onto, then press down on, the bottom-left hoverable.
+            let event = mouse_moved_event(vec2f(10., 90.));
+            ctx.simulate_window_event(event.clone(), window_id, presenter.clone());
+            ctx.set_last_mouse_move_event(window_id, event);
+
+            ctx.simulate_window_event(
+                Event::LeftMouseDown {
+                    position: vec2f(10., 90.),
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                },
+                window_id,
+                presenter.clone(),
+            );
+
+            // Drag, while still holding, straight into the top-right hoverable, then
+            // off of it again. Each step gives the window's compensating synthetic
+            // MouseMoved replay (which always uses the stale pre-drag position) a
+            // chance to run and, if not correctly ignored, silently re-mark a
+            // previous row as hovered without a matching hover-out.
+            ctx.simulate_window_event(
+                left_mouse_dragged_event(vec2f(90., 10.)),
+                window_id,
+                presenter.clone(),
+            );
+            ctx.simulate_window_event(
+                left_mouse_dragged_event(vec2f(50., 50.)),
+                window_id,
+                presenter,
+            );
+        });
+
+        // Both hoverables should have cleanly settled on "unhovered": one hover-in
+        // and one matching hover-out each, with nothing left stuck highlighted.
+        view.read(app, |view, _| {
+            assert_eq!(
+                1,
+                view.num_hover_in_events(&ElementIdentifier::HoverableElementBottomLeft)
+            );
+            assert_eq!(
+                1,
+                view.num_hover_out_events(&ElementIdentifier::HoverableElementBottomLeft)
+            );
+            assert_eq!(
+                1,
+                view.num_hover_in_events(&ElementIdentifier::HoverableElementTopRight)
+            );
+            assert_eq!(
+                1,
+                view.num_hover_out_events(&ElementIdentifier::HoverableElementTopRight)
             );
         });
     });
