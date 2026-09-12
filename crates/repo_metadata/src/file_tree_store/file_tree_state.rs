@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::iter;
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ignore::gitignore::Gitignore;
 use warp_util::standardized_path::StandardizedPath;
@@ -8,10 +10,47 @@ use warp_util::standardized_path::StandardizedPath;
 use crate::file_tree_store::{FileTreeDirectoryEntryState, FileTreeEntry, FileTreeEntryState};
 use crate::{BuildTreeError, DirectoryEntry, Entry};
 
-#[derive(Debug, Clone)]
+// Counts full-map deep clones triggered by `Arc::make_mut` so tests can assert that a batch
+// of mutations against a tree shared with another `Arc` holder (e.g. a UI view snapshot)
+// clones at most once per batch, not once per mutation.
+#[cfg(test)]
+static DEEP_CLONE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(crate) fn reset_deep_clone_count() {
+    DEEP_CLONE_COUNT.store(0, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub(crate) fn deep_clone_count() -> usize {
+    DEEP_CLONE_COUNT.load(Ordering::SeqCst)
+}
+
+// `DEEP_CLONE_COUNT` is process-global, so tests that read it must not run
+// concurrently with each other (the default test runner executes tests on
+// separate threads within the same process). Acquire this lock for the
+// duration of any test that resets or asserts on the clone count.
+#[cfg(test)]
+pub(crate) fn deep_clone_count_test_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
+#[derive(Debug)]
 pub(super) struct FileTreeMapStore {
     state_map: HashMap<Arc<StandardizedPath>, FileTreeEntryState>,
     parent_to_child_map: HashMap<Arc<StandardizedPath>, HashSet<Arc<StandardizedPath>>>,
+}
+
+impl Clone for FileTreeMapStore {
+    fn clone(&self) -> Self {
+        #[cfg(test)]
+        DEEP_CLONE_COUNT.fetch_add(1, Ordering::SeqCst);
+        Self {
+            state_map: self.state_map.clone(),
+            parent_to_child_map: self.parent_to_child_map.clone(),
+        }
+    }
 }
 
 impl From<Entry> for FileTreeMapStore {
