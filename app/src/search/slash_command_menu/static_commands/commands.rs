@@ -228,6 +228,24 @@ pub const CREATE_DOCKER_SANDBOX: StaticCommand = StaticCommand {
     argument: None,
 };
 
+/// Prototype: brings up the `.devcontainer/devcontainer.json` config for the
+/// current session's directory (via `@devcontainers/cli`) and opens a
+/// session inside the resulting container.
+///
+/// Reuses the Docker icon; a dedicated Dev Containers icon is a cut corner
+/// for this prototype.
+pub const CREATE_DEV_CONTAINER: StaticCommand = StaticCommand {
+    name: "/devcontainer",
+    description: "Open a session inside this project's Dev Container",
+    kind: SlashCommandKind::CreateDevContainer,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/docker.svg",
+    },
+    availability: Availability::LOCAL.union(Availability::AI_ENABLED),
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
 pub static CREATE_NEW_PROJECT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/create-new-project",
     description: "Have Oz walk you through creating a new coding project",
@@ -1015,6 +1033,10 @@ fn all_commands_for_all_surfaces() -> Vec<StaticCommand> {
 
     if FeatureFlag::LocalDockerSandbox.is_enabled() {
         commands.push(CREATE_DOCKER_SANDBOX);
+    }
+
+    if FeatureFlag::LocalDevContainer.is_enabled() {
+        commands.push(CREATE_DEV_CONTAINER);
     }
 
     if FeatureFlag::CreatingSharedSessions.is_enabled()

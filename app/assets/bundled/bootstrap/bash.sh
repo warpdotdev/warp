@@ -67,7 +67,7 @@
      #if [[ -n "${bash_preexec_imported:-}" ]]; then
      #    return 0
      #fi
- #### End of difference 1/4 between Warp and bash-preexec's original source.
+ #### End of difference 1/5 between Warp and bash-preexec's original source.
      bash_preexec_imported="defined"
 
      # WARNING: This variable is no longer used and should not be relied upon.
@@ -253,7 +253,7 @@
              # command running.
              return
          fi
- #### End of difference 2/4 between Warp and bash-preexec's original source.
+ #### End of difference 2/5 between Warp and bash-preexec's original source.
 
          if [[ -z "${__bp_preexec_interactive_mode:-}" ]]; then
              # We're doing something related to displaying the prompt.  Let the
@@ -281,9 +281,21 @@
          this_command=$(
              export LC_ALL=C
              HISTTIMEFORMAT='' builtin history 1 | sed '1 s/^ *[0-9][0-9]*[* ] //'
-         )
+        )
 
-         # Sanity check to make sure we have something to invoke our function with.
+ #### For Warp, if HISTCONTROL/HISTIGNORE kept the command about to run out of
+ #### history (e.g. Warp's own in-band generator commands, which are
+ #### deliberately HISTIGNORE'd below), `history 1` reflects whatever ran last
+ #### that WAS recorded -- or nothing, if every command so far has been
+ #### excluded. Fall back to $BASH_COMMAND, the command the trap actually
+ #### fired for, rather than skipping preexec_functions entirely: every guard
+ #### above already confirms this is a real interactively-submitted command.
+        if [[ -z "$this_command" ]]; then
+            this_command="${BASH_COMMAND:-}"
+        fi
+ #### End of difference 5/5 between Warp and bash-preexec's original source.
+
+        # Sanity check to make sure we have something to invoke our function with.
          if [[ -z "$this_command" ]]; then
              return
          fi
@@ -340,7 +352,7 @@
  # Note: this method diverges from the bash_preexec script in that
  # we don't call __bp_adjust_histcontrol because of
  # https://linear.app/warpdotdev/issue/WAR-2592.
- # End of difference 3/4 between Warp and bash-preexec's original source.
+# End of difference 3/5 between Warp and bash-preexec's original source.
 
          # Issue #25. Setting debug trap for subshells causes sessions to exit for
          # backgrounded subshell commands (e.g. (pwd)& ). Believe this is a bug in Bash.
@@ -409,7 +421,7 @@
      #if [[ -z "${__bp_delay_install:-}" ]]; then
      #    __bp_install_after_session_init
      #fi;
- ### End of difference 4/4 between Warp and bash-preexec's original source.
+ ### End of difference 4/5 between Warp and bash-preexec's original source.
  }
 
  function install_bashpreexec() {

@@ -47,7 +47,9 @@ impl TerminalServerClient {
 
         protocol::send_message(
             fd.as_fd(),
-            api::Message::SpawnShellRequest { options },
+            api::Message::SpawnShellRequest {
+                options: Box::new(options),
+            },
             Option::<RawFd>::None,
         )?;
 
