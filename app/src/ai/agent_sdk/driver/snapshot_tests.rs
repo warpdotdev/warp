@@ -629,6 +629,38 @@ fn build_repo_patch_preserves_non_utf8_untracked_paths() {
         "patch should include non-UTF-8 untracked file contents: {patch}"
     );
 }
+#[test]
+fn build_repo_patch_stops_tracked_diff_at_limit() {
+    let tempdir = snaptest_tempdir();
+    init_git_repo(tempdir.path(), false);
+    fs::write(tempdir.path().join("README.md"), vec![b'x'; 4 * 1024]).unwrap();
+
+    let patch = Runtime::new()
+        .unwrap()
+        .block_on(build_repo_patch_with_limit(tempdir.path(), 512))
+        .unwrap();
+
+    assert_eq!(patch.len(), 513);
+}
+
+#[test]
+fn build_repo_patch_stops_after_untracked_diffs_exceed_cumulative_limit() {
+    let tempdir = snaptest_tempdir();
+    init_git_repo(tempdir.path(), false);
+    fs::write(tempdir.path().join("first.txt"), vec![b'a'; 200]).unwrap();
+    let runtime = Runtime::new().unwrap();
+    let first_patch = runtime
+        .block_on(build_repo_patch_with_limit(tempdir.path(), 512))
+        .unwrap();
+    assert!(first_patch.len() <= 512);
+
+    fs::write(tempdir.path().join("second.txt"), vec![b'b'; 200]).unwrap();
+    let patch = runtime
+        .block_on(build_repo_patch_with_limit(tempdir.path(), 512))
+        .unwrap();
+
+    assert_eq!(patch.len(), 513);
+}
 
 #[test]
 fn e2e_clean_repo_uploads_only_manifest() {
