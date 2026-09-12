@@ -49,6 +49,20 @@ impl ReadSkillExecutor {
             ctx,
         ) {
             Ok(skill) => {
+                let mut skill = skill.clone();
+                if let Err(error) = skill.refresh_local_file_for_invocation() {
+                    send_telemetry_from_ctx!(
+                        SkillTelemetryEvent::Read {
+                            reference: skill_ref.clone(),
+                            name: Some(skill.name.clone()),
+                            scope: Some(skill.scope),
+                            provider: Some(skill.provider),
+                            error: true,
+                        },
+                        ctx
+                    );
+                    return ActionExecution::Sync(ReadSkillResult::Error(error.to_string()).into());
+                }
                 send_telemetry_from_ctx!(
                     SkillTelemetryEvent::Read {
                         reference: skill_ref.clone(),
@@ -61,7 +75,7 @@ impl ReadSkillExecutor {
                 );
                 let content = FileContext::new(
                     skill.path.display_path(),
-                    AnyFileContent::StringContent(skill.content.clone()),
+                    AnyFileContent::StringContent(skill.content),
                     skill.line_range.clone(),
                     None,
                 );

@@ -1,5 +1,6 @@
 use std::fmt::Display;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::path::Path;
 
@@ -48,16 +49,15 @@ pub fn parse_skill_content_at_location(
         .filter(|value| !value.is_empty())
     {
         Some(description) => description.to_string(),
-        None => truncate_skill_description(
-            &derive_description_from_content(&parsed.content, parsed.line_range.as_ref())
-                .unwrap_or_default(),
-        ),
+        None => derive_description_from_content(&parsed.content, parsed.line_range.as_ref())
+            .unwrap_or_default(),
     };
 
     Ok(ParsedSkill {
         path,
         name,
-        description,
+        description: truncate_skill_description(&description),
+        content_hash: Some(hash_skill_content(&parsed.content)),
         content: parsed.content,
         line_range: parsed.line_range,
         provider,
@@ -79,6 +79,8 @@ pub struct ParsedSkill {
     pub path: LocalOrRemotePath,
     pub name: String,
     pub description: String,
+    /// Hash of the original file body, retained after [`Self::drop_listing_body`].
+    pub content_hash: Option<u64>,
     /// The entire content of the file (including front matter)
     pub content: String,
     /// The line range where the markdown content (without front matter) is located (1-indexed)
@@ -94,6 +96,32 @@ impl ParsedSkill {
     /// Returns true if this skill is bundled with Warp (not a user-editable file).
     pub fn is_bundled(&self) -> bool {
         self.scope == SkillScope::Bundled
+    }
+
+    /// Drops the in-memory markdown body after listing. The file stays on disk for invocation.
+    pub fn drop_listing_body(&mut self) {
+        if self.content_hash.is_none() {
+            self.content_hash = Some(hash_skill_content(&self.content));
+        }
+        self.content.clear();
+        self.content.shrink_to_fit();
+    }
+
+    pub fn listing_content_hash(&self) -> u64 {
+        self.content_hash
+            .unwrap_or_else(|| hash_skill_content(&self.content))
+    }
+
+    /// Reloads a local file-backed skill from disk so invocation uses current content and line range.
+    pub fn refresh_local_file_for_invocation(&mut self) -> Result<()> {
+        if self.scope == SkillScope::Bundled {
+            return Ok(());
+        }
+        let Some(path) = self.path.to_local_path() else {
+            return Ok(());
+        };
+        *self = parse_skill(path)?;
+        Ok(())
     }
 }
 
@@ -189,6 +217,12 @@ fn first_paragraph_from_markdown(markdown: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn hash_skill_content(content: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    content.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn truncate_skill_description(description: &str) -> String {

@@ -87,11 +87,8 @@ pub fn resolve_orchestration_participant(
     let Some(conversation_id) = conversation_id else {
         return ResolvedOrchestrationParticipant::unknown();
     };
-    let Some(conversation) = history.conversation(&conversation_id) else {
-        return ResolvedOrchestrationParticipant::unknown();
-    };
-    let name = conversation
-        .agent_name()
+    let name = history
+        .agent_name_for_conversation(&conversation_id)
         .filter(|name| !name.is_empty())
         .unwrap_or("Agent")
         .to_string();
@@ -251,23 +248,24 @@ fn conversations_in_pill_order(
     let mut descendants = conversation_ids
         .into_iter()
         .enumerate()
-        .filter_map(|(spawn_index, conversation_id)| {
-            history.conversation(&conversation_id).map(|conversation| {
-                let status_key = pill_status_sort_key(Some(conversation.status()));
-                let secondary_key = pill_secondary_sort_key(
-                    status_key,
+        .map(|(spawn_index, conversation_id)| {
+            let conversation = history.conversation(&conversation_id);
+            let status_key = pill_status_sort_key(conversation.map(AIConversation::status));
+            let secondary_key = pill_secondary_sort_key(
+                status_key,
+                conversation.and_then(|conversation| {
                     conversation
                         .last_modified_at()
-                        .map(|time| time.timestamp_millis()),
-                );
-                (
-                    !conversation.is_pinned(),
-                    status_key,
-                    secondary_key,
-                    spawn_index,
-                    conversation_id,
-                )
-            })
+                        .map(|time| time.timestamp_millis())
+                }),
+            );
+            (
+                !history.is_pinned_conversation(&conversation_id),
+                status_key,
+                secondary_key,
+                spawn_index,
+                conversation_id,
+            )
         })
         .collect::<Vec<_>>();
 

@@ -82,6 +82,7 @@ fn parsed_skill_api_conversion_emits_plain_path_reference() {
         path: skill_path.clone(),
         name: "deploy".to_string(),
         description: "Deploy the service".to_string(),
+        content_hash: None,
         content: "# Deploy".to_string(),
         line_range: None,
         scope: SkillScope::Project,

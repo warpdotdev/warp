@@ -9,6 +9,7 @@ fn daemon_skill(id: &str, content: &str) -> ParsedSkill {
         name: id.to_string(),
         description: format!("{id} description"),
         path: LocalOrRemotePath::Local(format!("/daemon/bundled/skills/{id}/SKILL.md").into()),
+        content_hash: None,
         content: content.to_string(),
         line_range: None,
         provider: SkillProvider::Warp,

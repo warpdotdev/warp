@@ -45,6 +45,7 @@ fn test_unique_skills_dedupes_identical_skills_same_dir() {
         path: LocalOrRemotePath::Local(skill_path1.clone()),
         name: "test-skill".to_string(),
         description: "A test skill".to_string(),
+        content_hash: None,
         content: content.to_string(),
         line_range: Some(8..18),
         provider: SkillProvider::Agents,
@@ -55,6 +56,7 @@ fn test_unique_skills_dedupes_identical_skills_same_dir() {
         path: LocalOrRemotePath::Local(skill_path2.clone()),
         name: "test-skill".to_string(),
         description: "A test skill".to_string(),
+        content_hash: None,
         content: content.to_string(),
         line_range: Some(8..18),
         provider: SkillProvider::Claude,
@@ -94,6 +96,7 @@ fn test_unique_skills_does_not_dedupe_different_dirs() {
         path: LocalOrRemotePath::Local(home_path.clone()),
         name: "test-skill".to_string(),
         description: "A test skill".to_string(),
+        content_hash: None,
         content: content.to_string(),
         line_range: Some(8..18),
         provider: SkillProvider::Agents,
@@ -104,6 +107,7 @@ fn test_unique_skills_does_not_dedupe_different_dirs() {
         path: LocalOrRemotePath::Local(project_path.clone()),
         name: "test-skill".to_string(),
         description: "A test skill".to_string(),
+        content_hash: None,
         content: content.to_string(),
         line_range: Some(8..18),
         provider: SkillProvider::Agents,
@@ -149,6 +153,7 @@ fn test_unique_skills_does_not_dedupe_different_content() {
         path: LocalOrRemotePath::Local(skill_path1.clone()),
         name: "test-skill".to_string(),
         description: "A test skill".to_string(),
+        content_hash: None,
         content: content1.to_string(),
         line_range: Some(8..18),
         provider: SkillProvider::Agents,
@@ -159,6 +164,7 @@ fn test_unique_skills_does_not_dedupe_different_content() {
         path: LocalOrRemotePath::Local(skill_path2.clone()),
         name: "test-skill".to_string(),
         description: "A test skill".to_string(),
+        content_hash: None,
         content: content2.to_string(),
         line_range: Some(8..18),
         provider: SkillProvider::Claude,
@@ -186,4 +192,54 @@ fn test_unique_skills_does_not_dedupe_different_content() {
         2,
         "Skills with different content should not be deduped even if same directory and name"
     );
+}
+
+#[test]
+fn test_unique_skills_dedupes_after_listing_body_is_dropped() {
+    let shared_skill_dir = PathBuf::from("/home/user");
+    let skill_path1 = shared_skill_dir.join(".agents/skills/my-skill/SKILL.md");
+    let skill_path2 = shared_skill_dir.join(".claude/skills/my-skill/SKILL.md");
+
+    let content = "---\nname: test-skill\ndescription: A test skill\n---\nContent here";
+    let mut skill = ParsedSkill {
+        path: LocalOrRemotePath::Local(skill_path1.clone()),
+        name: "test-skill".to_string(),
+        description: "A test skill".to_string(),
+        content_hash: None,
+        content: content.to_string(),
+        line_range: Some(8..18),
+        provider: SkillProvider::Agents,
+        scope: SkillScope::Home,
+    };
+    let mut skill2 = ParsedSkill {
+        path: LocalOrRemotePath::Local(skill_path2.clone()),
+        name: "test-skill".to_string(),
+        description: "A test skill".to_string(),
+        content_hash: None,
+        content: content.to_string(),
+        line_range: Some(8..18),
+        provider: SkillProvider::Claude,
+        scope: SkillScope::Home,
+    };
+    skill.drop_listing_body();
+    skill2.drop_listing_body();
+
+    let mut skills_by_path = HashMap::new();
+    skills_by_path.insert(LocalOrRemotePath::Local(skill_path1.clone()), skill);
+    skills_by_path.insert(LocalOrRemotePath::Local(skill_path2.clone()), skill2);
+
+    let skill_paths = vec![
+        (
+            LocalOrRemotePath::Local(shared_skill_dir.clone()),
+            LocalOrRemotePath::Local(skill_path1),
+        ),
+        (
+            LocalOrRemotePath::Local(shared_skill_dir),
+            LocalOrRemotePath::Local(skill_path2),
+        ),
+    ];
+
+    let result = unique_skills(&skill_paths, &skills_by_path);
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].provider, SkillProvider::Agents);
 }

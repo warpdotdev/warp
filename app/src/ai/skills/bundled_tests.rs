@@ -12,6 +12,7 @@ fn bundled_skill(content: &str) -> BundledSkill {
             name: "test-skill".to_string(),
             description: "Test skill".to_string(),
             path: LocalOrRemotePath::Local("/bundled/skills/test-skill/SKILL.md".into()),
+            content_hash: None,
             content: content.to_string(),
             line_range: None,
             provider: SkillProvider::Warp,

@@ -572,9 +572,8 @@ impl OrchestrationPillBar {
         conversation_id: AIConversationId,
         app: &AppContext,
     ) -> Option<String> {
-        let run_id = BlocklistAIHistoryModel::as_ref(app)
-            .conversation(&conversation_id)?
-            .run_id()?;
+        let run_id =
+            BlocklistAIHistoryModel::as_ref(app).run_id_for_conversation(&conversation_id)?;
         let oz_root_url = ChannelState::oz_root_url();
         Some(format!("{oz_root_url}/runs/{run_id}"))
     }
@@ -651,10 +650,7 @@ impl OrchestrationPillBar {
         // renders only the anchor's DIRECT children — deeper levels are
         // reached by drilling into a group pill, and the bar follows the
         // keyboard selection by re-anchoring (`drill_down_anchor_id`).
-        let children: Vec<_> = child_conversations_in_pill_order(history, anchor_id)
-            .into_iter()
-            .filter_map(|descendant| history.conversation(&descendant.conversation_id))
-            .collect();
+        let children = child_conversations_in_pill_order(history, anchor_id);
 
         // Nothing to show if the anchor has no children yet.
         if children.is_empty() {
@@ -683,29 +679,31 @@ impl OrchestrationPillBar {
 
         // Stamp each child's current pin state; partitioning happens at render.
         let pill_bar_model = OrchestrationPillBarModel::as_ref(app);
-        for child in children {
-            let name = child
-                .agent_name()
+        for descendant in children {
+            let child_id = descendant.conversation_id;
+            let name = history
+                .agent_name_for_conversation(&child_id)
                 .filter(|n| !n.is_empty())
                 .unwrap_or("Agent");
-            let pin_state = if pill_bar_model.is_pinned(&child.id()) {
+            let pin_state = if pill_bar_model.is_pinned(&child_id) {
                 PillPinState::Pinned
             } else {
                 PillPinState::Unpinned
             };
             // A child with children of its own renders as a "group" pill:
             // its own status on the avatar plus a rolled-up subtree badge.
-            let subtree_rollup = loaded_subtree_rollup(history, child.id());
+            let subtree_rollup = loaded_subtree_rollup(history, child_id);
+            let conversation = history.conversation(&child_id);
             specs.push(PillSpec {
-                conversation_id: child.id(),
+                conversation_id: child_id,
                 label: name.to_string(),
                 avatar_color: pill_avatar_color(name, theme),
                 avatar_glyph: AvatarGlyph::Letter(pill_initial(name)),
-                status: Some(child.status().clone()),
-                is_selected: child.id() == active_id,
+                status: conversation.map(|child| child.status().clone()),
+                is_selected: child_id == active_id,
                 kind: PillKind::Child,
                 pin_state,
-                is_remote_child: child.is_remote_child(),
+                is_remote_child: history.is_remote_child_conversation(&child_id),
                 subtree_rollup,
             });
         }

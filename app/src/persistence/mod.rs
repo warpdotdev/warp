@@ -431,6 +431,11 @@ pub enum ModelEvent {
         updated_tasks: Vec<api::Task>,
         conversation_data: AgentConversationData,
     },
+    /// Updates `agent_conversations.conversation_data` without rewriting `agent_tasks`.
+    UpdateAgentConversationData {
+        conversation_id: String,
+        conversation_data: AgentConversationData,
+    },
     /// Persists read-time-derived conversation summaries for rows written
     /// before the `summary` column existed.
     BackfillConversationSummaries {

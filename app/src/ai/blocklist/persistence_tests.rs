@@ -1,10 +1,14 @@
 use std::collections::HashMap;
 
+use ai::skills::{SkillProvider, SkillReference, SkillScope};
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{App, EntityId};
 
 use super::{PersistedAIInputType, maybe_build_ai_query_upsert_event};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+use crate::ai::agent::{AIAgentContext, AIAgentInput, UserQueryMode};
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::ai::skills::SkillDescriptor;
 use crate::persistence::ModelEvent;
 
 fn user_query_message(task_id: &str, query: &str) -> warp_multi_agent_api::Message {
@@ -84,4 +88,41 @@ fn query_exchange_event_builds_persistence_upsert() {
             }]
         );
     });
+}
+
+#[test]
+fn persisted_query_drops_skill_snapshots() {
+    let input = AIAgentInput::UserQuery {
+        query: "hello".to_owned(),
+        context: vec![
+            AIAgentContext::SelectedText("keep me".to_owned()),
+            AIAgentContext::Skills {
+                skills: vec![SkillDescriptor {
+                    reference: SkillReference::Path(LocalOrRemotePath::Local(
+                        "/tmp/.agents/skills/x/SKILL.md".into(),
+                    )),
+                    name: "x".to_owned(),
+                    description: "a".repeat(400),
+                    scope: SkillScope::Home,
+                    provider: SkillProvider::Agents,
+                    icon_override: None,
+                }],
+            },
+        ]
+        .into(),
+        static_query_type: None,
+        referenced_attachments: Default::default(),
+        user_query_mode: UserQueryMode::default(),
+        running_command: None,
+        intended_agent: None,
+    };
+
+    let PersistedAIInputType::Query { context, text, .. } =
+        PersistedAIInputType::try_from(&input).unwrap();
+    assert_eq!(text, "hello");
+    assert_eq!(context.len(), 1);
+    assert_eq!(
+        context[0],
+        AIAgentContext::SelectedText("keep me".to_owned())
+    );
 }
