@@ -867,6 +867,7 @@ pub fn user_inputs_from_messages(messages: &[api::Message]) -> Vec<AIAgentInput>
                     user_query_mode: convert_user_query_mode(uq.mode.as_ref()),
                     running_command: None,
                     intended_agent: Some(uq.intended_agent()),
+                    attribution_token: None,
                 });
             }
             api::message::Message::SystemQuery(sq) => {

@@ -160,6 +160,7 @@ fn input_for_query_converts_prompt_attachments_and_ignores_live_staging() {
                 None,
                 HashMap::new(),
                 prompt_attachments,
+                /*attribution_token*/ None,
                 context_model.as_ref(ctx),
                 active_session.as_ref(ctx),
                 ctx,
@@ -203,6 +204,57 @@ fn input_for_query_converts_prompt_attachments_and_ignores_live_staging() {
             assert!(referenced_attachments.contains_key("notes.txt"));
             assert!(referenced_attachments.contains_key("notes.txt (1)"));
             assert!(!referenced_attachments.contains_key("live.txt"));
+        });
+    });
+}
+
+/// The attribution token is opaque to the client: `input_for_query` must place it on the
+/// `UserQuery` untouched so it can be echoed to the server.
+#[test]
+fn input_for_query_carries_attribution_token() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |terminal, ctx| {
+            let conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                    history_model.start_new_conversation(terminal.id(), false, false, false, ctx)
+                });
+
+            let controller = terminal.ai_controller();
+            let context_model = controller.as_ref(ctx).context_model.clone();
+            let active_session = controller.as_ref(ctx).active_session.clone();
+            let task_id = TaskId::new("test-task".to_owned());
+
+            let input = super::input_for_query(
+                "injected follow-up".to_owned(),
+                &task_id,
+                conversation_id,
+                None,
+                UserQueryMode::Normal,
+                None,
+                HashMap::new(),
+                vec![],
+                Some("opaque-attribution-token".to_owned()),
+                context_model.as_ref(ctx),
+                active_session.as_ref(ctx),
+                ctx,
+            );
+
+            let AIAgentInput::UserQuery {
+                query,
+                attribution_token,
+                ..
+            } = input
+            else {
+                panic!("expected UserQuery");
+            };
+            assert_eq!(query, "injected follow-up");
+            assert_eq!(
+                attribution_token.as_deref(),
+                Some("opaque-attribution-token")
+            );
         });
     });
 }

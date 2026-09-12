@@ -224,6 +224,7 @@ pub(super) fn convert_input(
                                         .collect(),
                                     mode: None,
                                     intended_agent: Default::default(),
+                                    attribution_token: String::new(),
                                 }
                             }),
                         },
@@ -290,6 +291,7 @@ fn convert_input_to_user_input(
             user_query_mode,
             running_command: None,
             intended_agent,
+            attribution_token,
             ..
         } => Ok(
             api::request::input::user_inputs::user_input::Input::UserQuery(
@@ -298,6 +300,8 @@ fn convert_input_to_user_input(
                     referenced_attachments: referenced_attachments.into_iter().map(|(k, attachment)| (k, attachment.into())).collect(),
                     mode: Some(user_query_mode.into()),
                     intended_agent: intended_agent.map(|agent| agent.into()).unwrap_or_default(),
+                    // Opaque and server-issued; echoed verbatim, never parsed.
+                    attribution_token: attribution_token.unwrap_or_default(),
                 },
             ),
         ),
@@ -314,6 +318,7 @@ fn convert_input_to_user_input(
                 requested_command_id,
                 is_alt_screen_active,
             }),
+            attribution_token,
             ..
         } => {
             Ok(api::request::input::user_inputs::user_input::Input::CliAgentUserQuery(
@@ -323,6 +328,7 @@ fn convert_input_to_user_input(
                             referenced_attachments: referenced_attachments.into_iter().map(|(k, attachment)| (k, attachment.into())).collect(),
                             mode: Some(user_query_mode.into()),
                             intended_agent: api::AgentType::Cli.into(),
+                            attribution_token: attribution_token.unwrap_or_default(),
                         }),
                     running_command: Some(api::RunningShellCommand{
                         command,

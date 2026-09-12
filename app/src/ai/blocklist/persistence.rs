@@ -126,6 +126,7 @@ impl TryFrom<PersistedAIInputType> for AIAgentInput {
                 user_query_mode: UserQueryMode::default(),
                 running_command: None,
                 intended_agent: None,
+                attribution_token: None,
             }),
         }
     }

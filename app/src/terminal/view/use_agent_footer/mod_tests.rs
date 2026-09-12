@@ -146,6 +146,7 @@ fn insert_pending_ai_block(
             user_query_mode: UserQueryMode::default(),
             running_command: None,
             intended_agent: None,
+            attribution_token: None,
         }],
     ));
     let ai_block = ctx.add_typed_action_view(|ctx| {

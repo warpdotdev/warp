@@ -4,10 +4,49 @@ use warp_multi_agent_api as api;
 
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentActionResult, AIAgentActionResultType, AIAgentContext,
-    TransferShellCommandControlToUserResult,
+    AIAgentActionResult, AIAgentActionResultType, AIAgentContext, AIAgentInput,
+    TransferShellCommandControlToUserResult, UserQueryMode,
 };
 use crate::terminal::model::block::BlockId;
+
+fn user_query_input(attribution_token: Option<String>) -> AIAgentInput {
+    AIAgentInput::UserQuery {
+        query: "follow up".to_string(),
+        context: std::sync::Arc::new([]),
+        static_query_type: None,
+        referenced_attachments: std::collections::HashMap::new(),
+        user_query_mode: UserQueryMode::Normal,
+        running_command: None,
+        intended_agent: None,
+        attribution_token,
+    }
+}
+
+fn convert_to_api_user_query(input: AIAgentInput) -> api::request::input::UserQuery {
+    match super::convert_input_to_user_input(input).unwrap() {
+        api::request::input::user_inputs::user_input::Input::UserQuery(user_query) => user_query,
+        other => panic!("Expected user-query input, got {other:?}"),
+    }
+}
+
+/// The token is opaque and server-issued; the client echoes it verbatim on the proto `UserQuery`.
+#[test]
+fn user_query_converts_attribution_token() {
+    let user_query = convert_to_api_user_query(user_query_input(Some(
+        "opaque-attribution-token".to_string(),
+    )));
+
+    assert_eq!(user_query.query, "follow up");
+    assert_eq!(user_query.attribution_token, "opaque-attribution-token");
+}
+
+/// Locally typed queries have no token; the proto field is left at its empty default.
+#[test]
+fn user_query_without_attribution_token_serializes_empty() {
+    let user_query = convert_to_api_user_query(user_query_input(None));
+
+    assert_eq!(user_query.attribution_token, "");
+}
 
 #[test]
 fn git_context_converts_repository_and_pull_request_metadata() {
