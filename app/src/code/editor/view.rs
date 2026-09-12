@@ -271,7 +271,11 @@ pub struct CodeEditorView {
     vim_model: ModelHandle<VimModel>,
     // Track the most recent Vim search direction to determine how to cycle (n/N) thereafter.
     last_search_direction: Direction,
-    active_comment_editor: ViewHandle<CommentEditor>,
+    /// The comment composer for this file, built lazily the first time a comment is opened.
+    /// `CodeReviewView` creates one `CodeEditorView` per changed file, so building this
+    /// unconditionally (each pulling in a `NotebooksEditorModel`, `NotebookLinks` and a full
+    /// `RichTextEditorView`) scaled memory with file count regardless of comment count (APP-5356).
+    active_comment_editor: Option<ViewHandle<CommentEditor>>,
     /// TODO: maybe turn into a map for fast UUID or range lookup
     comment_locations: Vec<SavedComment>,
     /// Save position of the comment button rendered within this code editor view.
@@ -372,13 +376,6 @@ impl CodeEditorView {
             ctx.notify();
         });
 
-        let comment_model = model.as_ref(ctx).comments().clone();
-        let comment_editor =
-            ctx.add_typed_action_view(|ctx| CommentEditor::new(ctx, comment_model));
-        ctx.subscribe_to_view(&comment_editor, |me, _, event, ctx| {
-            me.handle_comment_editor_event(event, ctx);
-        });
-
         Self {
             searcher,
             find_bar: Some(find_bar),
@@ -420,7 +417,7 @@ impl CodeEditorView {
             supports_vim_mode,
             vim_model,
             last_search_direction: Direction::Forward,
-            active_comment_editor: comment_editor,
+            active_comment_editor: None,
             comment_save_position_id: format!("code_editor_comment_{}", ctx.view_id()),
             show_comment_editor_provider: render_options.show_comment_editor_provider,
             find_references_save_position_id: format!(
@@ -1139,6 +1136,22 @@ impl CodeEditorView {
                 }
             }
         }
+    }
+
+    /// Builds the comment composer the first time it's needed for this file, since most
+    /// `CodeEditorView` instances (one per changed file in a review) never have a comment opened
+    /// on them. See APP-5356.
+    fn ensure_active_comment_editor(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.active_comment_editor.is_some() {
+            return;
+        }
+        let comment_model = self.model.as_ref(ctx).comments().clone();
+        let comment_editor =
+            ctx.add_typed_action_view(|ctx| CommentEditor::new(ctx, comment_model));
+        ctx.subscribe_to_view(&comment_editor, |me, _, event, ctx| {
+            me.handle_comment_editor_event(event, ctx);
+        });
+        self.active_comment_editor = Some(comment_editor);
     }
 
     fn handle_comment_editor_event(
@@ -2171,8 +2184,11 @@ impl CodeEditorView {
             return;
         }
 
-        self.active_comment_editor
-            .update(ctx, |comment_editor, ctx| {
+        // Built on demand: most files in a review never have a comment reopened on them.
+        self.ensure_active_comment_editor(ctx);
+
+        if let Some(active_comment_editor) = &self.active_comment_editor {
+            active_comment_editor.update(ctx, |comment_editor, ctx| {
                 comment_editor.reopen_saved_comment(
                     id,
                     Some(location.clone()),
@@ -2181,6 +2197,7 @@ impl CodeEditorView {
                     ctx,
                 );
             });
+        }
 
         self.model.update(ctx, |editor_model, ctx| {
             editor_model.reopen_comment_line(id, location, comment_text, origin, ctx);
@@ -2394,9 +2411,11 @@ impl View for CodeEditorView {
                     None => true,
                 };
 
-                if should_render_comment_editor {
+                if should_render_comment_editor
+                    && let Some(active_comment_editor) = &self.active_comment_editor
+                {
                     stack.add_positioned_child(
-                        ChildView::new(&self.active_comment_editor).finish(),
+                        ChildView::new(active_comment_editor).finish(),
                         OffsetPositioning::offset_from_parent(
                             vec2f(0., vertical_offset.as_f32()),
                             ParentOffsetBounds::ParentByPosition,
@@ -2485,6 +2504,15 @@ pub fn code_text_styles(
     // URLs are not clickable in code editors, so we should not highlight them.
     styling.highlight_urls = false;
     styling
+}
+
+#[cfg(test)]
+impl CodeEditorView {
+    /// The comment composer for this file, if one has been constructed yet. `None` proves that
+    /// no comment has ever been opened on this editor (see APP-5356).
+    pub(crate) fn active_comment_editor_for_test(&self) -> Option<&ViewHandle<CommentEditor>> {
+        self.active_comment_editor.as_ref()
+    }
 }
 
 #[cfg(feature = "integration_tests")]
