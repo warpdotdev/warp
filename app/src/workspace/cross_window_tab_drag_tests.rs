@@ -7,8 +7,8 @@
 //! is reordering it back in the source window removed the visible drop zone and
 //! made the slot oscillate every frame.
 
-use warpui::WindowId;
 use warpui::geometry::vector::{Vector2F, vec2f};
+use warpui::{EntityId, WindowId};
 
 use super::CrossWindowTabDrag;
 
@@ -22,6 +22,7 @@ fn begin_multi_tab_drag(
     drag.begin_multi_tab_drag(
         source_window_id,
         SOURCE_TAB_INDEX,
+        EntityId::from_usize(42),
         Vector2F::zero(),
         vec2f(800.0, 600.0),
         Vector2F::zero(),
@@ -29,6 +30,45 @@ fn begin_multi_tab_drag(
         false,
         vec2f(120.0, 34.0),
     );
+}
+
+#[test]
+fn drag_captures_the_dragged_pane_group_identity() {
+    // Source cleanup resolves the tab to remove through this id, so the id has
+    // to survive from drag start to drop. The index next to it is deliberately
+    // NOT the thing cleanup keys on: it is frozen here and goes stale if the
+    // source tab list changes while the drag is in flight.
+    let source = WindowId::from_usize(1);
+    let preview = WindowId::from_usize(2);
+    let dragged = EntityId::from_usize(7);
+
+    let mut drag = CrossWindowTabDrag::new();
+    assert_eq!(drag.source_pane_group_id(), None);
+
+    drag.begin_multi_tab_drag(
+        source,
+        SOURCE_TAB_INDEX,
+        dragged,
+        Vector2F::zero(),
+        vec2f(800.0, 600.0),
+        Vector2F::zero(),
+        preview,
+        false,
+        vec2f(120.0, 34.0),
+    );
+    assert_eq!(drag.source_pane_group_id(), Some(dragged));
+
+    let mut drag = CrossWindowTabDrag::new();
+    drag.begin_single_tab_drag(
+        source,
+        dragged,
+        Vector2F::zero(),
+        vec2f(800.0, 600.0),
+        Vector2F::zero(),
+        false,
+        vec2f(120.0, 34.0),
+    );
+    assert_eq!(drag.source_pane_group_id(), Some(dragged));
 }
 
 #[test]
@@ -91,6 +131,7 @@ fn single_tab_drag_never_collapses_a_slot() {
     // placeholder to collapse.
     drag.begin_single_tab_drag(
         source,
+        EntityId::from_usize(42),
         Vector2F::zero(),
         vec2f(800.0, 600.0),
         Vector2F::zero(),
