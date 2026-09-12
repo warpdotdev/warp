@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use warp_core::ui::appearance::Appearance;
+use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_util::user_input::UserInput;
+use warpui::clipboard::ClipboardContent;
 use warpui::elements::ScrollbarWidth;
 use warpui::elements::new_scrollable::ScrollableAppearance;
 use warpui::platform::WindowStyle;
@@ -23,6 +25,47 @@ use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 fn initialize_editor(app: &mut App) -> (WindowId, ViewHandle<CodeEditorView>) {
+    initialize_editor_singletons(app);
+
+    let (window, editor_view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+        CodeEditorView::new(
+            None,
+            None,
+            CodeEditorRenderOptions::new(VerticalExpansionBehavior::GrowToMaxHeight),
+            ctx,
+        )
+        .with_horizontal_scrollbar_appearance(ScrollableAppearance::new(ScrollbarWidth::Auto, true))
+    });
+
+    (window, editor_view)
+}
+
+/// Adds an editor that owns its copy shortcut outright, seeded with `buffer_content`
+/// and the cursor at the start of the buffer.
+fn initialize_editor_copying_the_cursor_line(
+    app: &mut App,
+    buffer_content: &str,
+) -> ViewHandle<CodeEditorView> {
+    initialize_editor_singletons(app);
+
+    let buffer_content = buffer_content.to_string();
+    app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+        let mut editor = CodeEditorView::new(
+            None,
+            None,
+            CodeEditorRenderOptions::new(VerticalExpansionBehavior::GrowToMaxHeight),
+            ctx,
+        )
+        .with_copy_line_when_selection_is_empty();
+        editor.reset(InitialBufferState::plain_text(&buffer_content), ctx);
+        editor.handle_action(&CodeEditorViewAction::CursorAtBufferStart, ctx);
+        editor
+    })
+    .1
+}
+
+/// Registers the singleton models that a [`CodeEditorView`] depends on.
+fn initialize_editor_singletons(app: &mut App) {
     initialize_settings_for_tests(app);
 
     // Add all required singleton models for EditorView dependencies
@@ -48,18 +91,6 @@ fn initialize_editor(app: &mut App) -> (WindowId, ViewHandle<CodeEditorView>) {
             ctx,
         )
     });
-
-    let (window, editor_view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
-        CodeEditorView::new(
-            None,
-            None,
-            CodeEditorRenderOptions::new(VerticalExpansionBehavior::GrowToMaxHeight),
-            ctx,
-        )
-        .with_horizontal_scrollbar_appearance(ScrollableAppearance::new(ScrollbarWidth::Auto, true))
-    });
-
-    (window, editor_view)
 }
 
 #[test]
@@ -85,5 +116,94 @@ fn test_interaction_state_prevents_editing() {
         });
 
         assert_eq!(text.as_str(), "abc");
+    });
+}
+
+#[test]
+fn copies_the_cursor_line_when_the_selection_is_empty() {
+    App::test((), |mut app| async move {
+        let editor_view = initialize_editor_copying_the_cursor_line(&mut app, "alpha\nbeta");
+
+        editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::Copy, ctx);
+        });
+
+        assert_eq!(
+            app.update(|ctx| ctx.clipboard().read().plain_text),
+            "alpha\n",
+            "an empty-selection copy should take the cursor's line and its newline"
+        );
+    });
+}
+
+#[test]
+fn copies_the_last_line_without_a_trailing_newline() {
+    App::test((), |mut app| async move {
+        let editor_view = initialize_editor_copying_the_cursor_line(&mut app, "alpha\nbeta");
+
+        editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::CursorAtBufferEnd, ctx);
+            view.handle_action(&CodeEditorViewAction::Copy, ctx);
+        });
+
+        assert_eq!(app.update(|ctx| ctx.clipboard().read().plain_text), "beta");
+    });
+}
+
+#[test]
+fn copies_only_the_selection_when_one_exists() {
+    App::test((), |mut app| async move {
+        let editor_view = initialize_editor_copying_the_cursor_line(&mut app, "alpha\nbeta");
+
+        editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::CursorAtBufferEnd, ctx);
+            view.handle_action(&CodeEditorViewAction::SelectLeft, ctx);
+            view.handle_action(&CodeEditorViewAction::SelectLeft, ctx);
+            view.handle_action(&CodeEditorViewAction::Copy, ctx);
+        });
+
+        assert_eq!(app.update(|ctx| ctx.clipboard().read().plain_text), "ta");
+    });
+}
+
+#[test]
+fn copying_an_empty_document_leaves_the_clipboard_untouched() {
+    App::test((), |mut app| async move {
+        let editor_view = initialize_editor_copying_the_cursor_line(&mut app, "");
+        app.update(|ctx| {
+            ctx.clipboard()
+                .write(ClipboardContent::plain_text("kept".to_string()))
+        });
+
+        editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::Copy, ctx);
+        });
+
+        assert_eq!(
+            app.update(|ctx| ctx.clipboard().read().plain_text),
+            "kept",
+            "an empty document has no line to copy, so the clipboard must survive"
+        );
+    });
+}
+
+#[test]
+fn an_editor_that_delegates_empty_copies_does_not_take_the_cursor_line() {
+    App::test((), |mut app| async move {
+        let (_window, editor_view) = initialize_editor(&mut app);
+
+        editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &CodeEditorViewAction::UserTyped(UserInput::new("alpha")),
+                ctx,
+            );
+            view.handle_action(&CodeEditorViewAction::Copy, ctx);
+        });
+
+        assert_eq!(
+            app.update(|ctx| ctx.clipboard().read().plain_text),
+            "",
+            "an embedded editor hands an empty-selection copy to its parent view instead"
+        );
     });
 }

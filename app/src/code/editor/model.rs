@@ -1909,6 +1909,30 @@ impl CodeEditorModel {
         ctx.clipboard().write(clipboard);
     }
 
+    /// Copy the line holding the primary cursor, including its trailing newline.
+    ///
+    /// An empty document has no line to copy, and this leaves the clipboard alone
+    /// rather than clearing it.
+    pub fn copy_current_line(&self, ctx: &mut ModelContext<Self>) {
+        let Some(range) = self.current_line_range(ctx) else {
+            return;
+        };
+        let clipboard = self.read_text_as_clipboard_content(range, ctx);
+        ctx.clipboard().write(clipboard);
+    }
+
+    /// The character range of the line holding the primary cursor. The range runs
+    /// to the start of the next line, so it carries the trailing newline whenever
+    /// the line has one, and stops at the end of the buffer on the last line.
+    fn current_line_range(&self, ctx: &AppContext) -> Option<Range<CharOffset>> {
+        let buffer = self.content().as_ref(ctx);
+        let cursor = self.selections(ctx).first().head;
+        let row = cursor.to_buffer_point(buffer).row;
+        let start = Point::new(row, 0).to_buffer_char_offset(buffer);
+        let end = Point::new(row + 1, 0).to_buffer_char_offset(buffer);
+        (start < end).then_some(start..end)
+    }
+
     #[cfg(windows)]
     /// If there is selected text, copy it. Otherwise, emit an event to allow
     /// an ancestor to handle the `WindowsCtrlC` event.

@@ -1001,14 +1001,25 @@ impl TypedActionView for CodeEditorView {
             // The owner of the editor can also perform a copy by accessing the selected text and copying it to the clipboard.
             // This is the case when the code block is owned by an AIBlock and unfocused.
             Copy => {
-                self.model.update(ctx, |model, ctx| {
-                    model.copy(ctx);
-                });
-                // It's possible that the copy action was dispatched to the focused editor even when
-                // the user intended to copy selected text from a parent view (i.e. an `AIBlock`).
-                // The `CopiedEmptyText` event gives the parent view a signal to attempt a copy action.
-                if self.selected_text(ctx).is_none() {
-                    ctx.emit(CodeEditorEvent::CopiedEmptyText);
+                let has_selection = self.selected_text(ctx).is_some();
+                // An editor that owns its copy shortcut outright copies the line holding
+                // the cursor instead of clearing the clipboard. Every other editor keeps
+                // the default, because a parent view may hold the selection the user
+                // meant to copy.
+                if !has_selection && self.copy_line_when_selection_is_empty {
+                    self.model.update(ctx, |model, ctx| {
+                        model.copy_current_line(ctx);
+                    });
+                } else {
+                    self.model.update(ctx, |model, ctx| {
+                        model.copy(ctx);
+                    });
+                    // It's possible that the copy action was dispatched to the focused editor even when
+                    // the user intended to copy selected text from a parent view (i.e. an `AIBlock`).
+                    // The `CopiedEmptyText` event gives the parent view a signal to attempt a copy action.
+                    if !has_selection {
+                        ctx.emit(CodeEditorEvent::CopiedEmptyText);
+                    }
                 }
             }
             #[cfg(windows)]
