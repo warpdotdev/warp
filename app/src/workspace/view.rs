@@ -18295,10 +18295,15 @@ impl Workspace {
             WindowSettingsChangedEvent::BackgroundOpacity { .. } => {
                 ctx.notify();
             }
-            WindowSettingsChangedEvent::BackgroundBackdrop { .. } => {
-                let backdrop = *WindowSettings::as_ref(ctx).background_backdrop;
+            WindowSettingsChangedEvent::BackgroundBackdrop { .. }
+            | WindowSettingsChangedEvent::BackgroundBackdropTintColor { .. }
+            | WindowSettingsChangedEvent::BackgroundBackdropTintOpacity { .. } => {
+                let window_settings = WindowSettings::as_ref(ctx);
+                let backdrop = *window_settings.background_backdrop;
+                let tint_color = *window_settings.background_backdrop_tint_color;
+                let tint_opacity = *window_settings.background_backdrop_tint_opacity;
                 if let Some(window) = ctx.windows().platform_window(ctx.window_id()) {
-                    window.set_background_backdrop(backdrop);
+                    window.set_background_backdrop(backdrop, tint_color, tint_opacity);
                 }
             }
             WindowSettingsChangedEvent::LeftPanelVisibilityAcrossTabs { .. } => {

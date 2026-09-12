@@ -2493,6 +2493,8 @@ impl AppContext {
             fullscreen_state,
             background_blur_radius_pixels,
             background_backdrop,
+            background_backdrop_tint_color,
+            background_backdrop_tint_opacity,
             anchor_new_windows_from_closed_position,
             on_gpu_driver_selected: on_gpu_driver_reported,
             window_instance,
@@ -2521,6 +2523,8 @@ impl AppContext {
             style: window_style,
             background_blur_radius_pixels,
             background_backdrop,
+            background_backdrop_tint_color,
+            background_backdrop_tint_opacity,
             gpu_power_preference: self.rendering_config.gpu_power_preference,
             backend_preference: self.rendering_config.backend_preference,
             on_gpu_device_info_reported: on_gpu_driver_reported.unwrap_or(Box::new(|_| {})),
@@ -2826,6 +2830,8 @@ impl AppContext {
         data: ClosedWindowData,
         background_blur_radius_pixels: Option<u8>,
         background_backdrop: platform::WindowBackdrop,
+        background_backdrop_tint_color: platform::AcrylicTintColor,
+        background_backdrop_tint_opacity: u8,
     ) {
         let ClosedWindowData {
             window_id,
@@ -2855,6 +2861,8 @@ impl AppContext {
         let add_window_options = AddWindowOptions {
             background_blur_radius_pixels,
             background_backdrop,
+            background_backdrop_tint_color,
+            background_backdrop_tint_opacity,
             window_bounds: WindowBounds::ExactPosition(bounds),
             // TODO(alokedesai): Determine if, and how, we want to pass the on_gpu_driver_reported
             // callback from the original window back to this window.

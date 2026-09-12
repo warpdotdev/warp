@@ -262,14 +262,27 @@ impl UndoCloseStack {
                 );
 
                 let window_id = data.window_id;
-                let (background_blur_radius_pixels, background_backdrop) = {
+                let (
+                    background_blur_radius_pixels,
+                    background_backdrop,
+                    background_backdrop_tint_color,
+                    background_backdrop_tint_opacity,
+                ) = {
                     let window_settings = WindowSettings::as_ref(ctx);
                     (
                         Some(*window_settings.background_blur_radius),
                         *window_settings.background_backdrop,
+                        *window_settings.background_backdrop_tint_color,
+                        *window_settings.background_backdrop_tint_opacity,
                     )
                 };
-                ctx.reopen_closed_window(*data, background_blur_radius_pixels, background_backdrop);
+                ctx.reopen_closed_window(
+                    *data,
+                    background_blur_radius_pixels,
+                    background_backdrop,
+                    background_backdrop_tint_color,
+                    background_backdrop_tint_opacity,
+                );
 
                 if let Some(workspace) = window_workspace(window_id, ctx) {
                     workspace.update(ctx, |workspace, ctx| {
