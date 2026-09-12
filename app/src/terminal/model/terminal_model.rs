@@ -52,6 +52,7 @@ use super::secrets::{RespectObfuscatedSecrets, SecretAndHandle};
 use super::selection::ScrollDelta;
 use super::session::{BootstrapSessionType, InBandCommandOutputReceiver, SessionId};
 use super::{Secret, SecretHandle};
+use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::SerializedBlockListItem;
 use crate::terminal::available_shells::AvailableShell;
@@ -96,6 +97,13 @@ const TITLE_STACK_MAX_DEPTH: usize = 4096;
 pub enum ConversationTranscriptViewerStatus {
     /// Loading conversation data from the server.
     Loading,
+    /// The conversation data failed to load. The viewer stays in this permanent state
+    /// rather than falling back to an indefinite loading spinner. Carries what a retry
+    /// needs to load the same conversation again.
+    Failed {
+        server_token: ServerConversationToken,
+        ambient_agent_task_id: Option<AmbientAgentTaskId>,
+    },
     /// Viewing a local conversation (not from ambient agent).
     ViewingLocalConversation,
     /// Viewing an ambient agent conversation with the associated task ID.
@@ -1537,6 +1545,27 @@ impl TerminalModel {
             self.conversation_transcript_viewer_status,
             Some(ConversationTranscriptViewerStatus::Loading)
         )
+    }
+
+    pub fn is_conversation_transcript_load_failed(&self) -> bool {
+        matches!(
+            self.conversation_transcript_viewer_status,
+            Some(ConversationTranscriptViewerStatus::Failed { .. })
+        )
+    }
+
+    /// Returns the retry target for a failed conversation transcript load, if the viewer is
+    /// currently in that state.
+    pub fn conversation_transcript_load_retry_target(
+        &self,
+    ) -> Option<(ServerConversationToken, Option<AmbientAgentTaskId>)> {
+        match &self.conversation_transcript_viewer_status {
+            Some(ConversationTranscriptViewerStatus::Failed {
+                server_token,
+                ambient_agent_task_id,
+            }) => Some((server_token.clone(), *ambient_agent_task_id)),
+            _ => None,
+        }
     }
 
     pub fn conversation_transcript_viewer_status(
