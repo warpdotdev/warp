@@ -31,13 +31,26 @@ fn gate_matrix_requires_namespace_and_nonempty_root() {
 }
 
 #[test]
+fn substituted_remote_uses_target_cache_identity_and_source_checkout() {
+    let remote = SourceRepo::new(
+        CodeForge::GitHub,
+        "warpdotdev".to_owned(),
+        "warp-for-benchmarks".to_owned(),
+    );
+    let mapped = repository_cache_source(&remote, "warp", Path::new("/work"));
+    assert_eq!(mapped.name, "warpdotdev/warp-for-benchmarks");
+    assert_eq!(mapped.identity.repo, "warp-for-benchmarks");
+    assert_eq!(mapped.cwd, Path::new("/work/warp"));
+}
+
+#[test]
 fn source_repo_maps_to_canonical_identity_and_checkout() {
     let repo = SourceRepo::new(
         CodeForge::GitLab,
         "Platform/Backend".to_owned(),
         "API".to_owned(),
     );
-    let mapped = repository_cache_source(&repo, Path::new("/work"));
+    let mapped = repository_cache_source(&repo, "API", Path::new("/work"));
     assert_eq!(mapped.name, "Platform/Backend/API");
     assert_eq!(mapped.identity.forge_host, "gitlab.com");
     assert_eq!(mapped.identity.owner, "platform/backend");

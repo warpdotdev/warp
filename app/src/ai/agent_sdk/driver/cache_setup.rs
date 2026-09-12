@@ -10,6 +10,7 @@ use warp_errors::report_error;
 use warp_isolation_platform::IsolationPlatformType;
 use warpui::ModelSpawner;
 
+use super::environment::RepositoryCloneRequest;
 use super::terminal::TerminalDriver;
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
@@ -44,13 +45,14 @@ pub(crate) fn enabled_cache_root() -> Option<PathBuf> {
 /// [`RepositoryCacheSource`] type.
 pub(crate) fn repository_cache_source(
     repo: &SourceRepo,
+    checkout_name: &str,
     working_dir: &Path,
 ) -> RepositoryCacheSource {
     let forge_host = repo.code_forge.unwrap_or_default().host();
     RepositoryCacheSource {
         name: format!("{}/{}", repo.owner, repo.repo),
         identity: RepoIdentity::new(forge_host, &repo.owner, &repo.repo),
-        cwd: working_dir.join(&repo.repo),
+        cwd: working_dir.join(checkout_name),
     }
 }
 
@@ -58,15 +60,17 @@ pub(crate) fn repository_cache_source(
 /// working directory. This will modify the filesystem, including some locations outside the
 /// cloned repositories. If any caches require environment variables, they are applied to the
 /// given terminal session.
-pub(crate) async fn setup_caches(
+pub(super) async fn setup_caches(
     cache_root: PathBuf,
-    source_repos: &[SourceRepo],
+    source_repos: &[RepositoryCloneRequest],
     working_dir: &Path,
     spawner: &ModelSpawner<TerminalDriver>,
 ) -> Result<(), CacheSetupDegraded> {
     let repositories = source_repos
         .iter()
-        .map(|repo| repository_cache_source(repo, working_dir))
+        .map(|request| {
+            repository_cache_source(&request.remote, &request.checkout_name, working_dir)
+        })
         .collect();
     let report = build_cache::setup_cache(
         cache_root,

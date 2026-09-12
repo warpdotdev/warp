@@ -1,8 +1,12 @@
 use std::sync::Arc;
 
 use clap::Parser;
+use cloud_object_models::CodeForge;
 use serde_json::json;
-use warp_cli::agent::{AgentCommand, Harness, RunAgentArgs};
+use warp_cli::agent::{
+    AgentCommand, Harness, RepositoryForge, RepositoryHeadRef, RepositoryPreparationOverride,
+    RunAgentArgs,
+};
 use warp_cli::artifact::{
     ArtifactCommand, DownloadArtifactArgs, GetArtifactArgs, UploadArtifactArgs,
 };
@@ -14,10 +18,11 @@ use warpui::{App, SingletonEntity, WindowId};
 use super::{
     AgentDriverRunner, CommandAuthentication, command_authentication, command_requires_auth,
     command_to_telemetry_event, reconcile_task_harness, resolve_agent_driver_team_scope,
-    team_scope_for_task_scope,
+    team_scope_for_task_scope, validated_driver_repositories_for_preparation,
 };
 use crate::ai::agent_sdk::driver::AgentDriverOptions;
 use crate::ai::ambient_agents::task::TaskScope;
+use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::auth::AuthStateProvider;
 use crate::auth::user::{PrincipalType, User};
 use crate::root_view::NewWorkspaceSource;
@@ -42,6 +47,54 @@ fn parse_run_agent_args(args: &[&str]) -> RunAgentArgs {
         panic!("expected `agent run`");
     };
     args.clone()
+}
+
+#[test]
+fn driver_validation_uses_live_repository_membership() {
+    let mut options = agent_driver_options();
+    let mut environment =
+        AmbientAgentEnvironment::new(String::new(), None, vec![], String::new(), vec![]);
+    environment.source_repos = Some(vec![SourceRepo::new(
+        CodeForge::GitHub,
+        "warpdotdev".to_string(),
+        "warp".to_string(),
+    )]);
+    options.additional_source_repos = vec![SourceRepo::new(
+        CodeForge::GitHub,
+        "warpdotdev".to_string(),
+        "added-after-dispatch".to_string(),
+    )];
+    options.environment = Some(environment);
+    options.repository_preparation_overrides = vec![RepositoryPreparationOverride {
+        code_forge: RepositoryForge::GitHub,
+        repo_owner: "WarpDotDev".to_string(),
+        repo_name: "Warp".to_string(),
+        head: RepositoryHeadRef::CommitSha("0123456789abcdef0123456789abcdef01234567".to_string()),
+        clone_from: Some(warp_cli::agent::RepositoryIdentity {
+            code_forge: RepositoryForge::GitHub,
+            repo_owner: "warpdotdev".to_string(),
+            repo_name: "warp-for-benchmarks".to_string(),
+        }),
+        preserve_origin: true,
+    }];
+
+    let repositories = validated_driver_repositories_for_preparation(&options).unwrap();
+
+    assert_eq!(
+        repositories,
+        vec![
+            SourceRepo::new(
+                CodeForge::GitHub,
+                "warpdotdev".to_string(),
+                "warp".to_string(),
+            ),
+            SourceRepo::new(
+                CodeForge::GitHub,
+                "warpdotdev".to_string(),
+                "added-after-dispatch".to_string(),
+            ),
+        ]
+    );
 }
 
 fn team(uid: i64, name: &str) -> Team {
@@ -94,7 +147,7 @@ fn agent_driver_options() -> AgentDriverOptions {
         cloud_providers: vec![],
         environment: None,
         additional_source_repos: vec![],
-        repository_head_overrides: vec![],
+        repository_preparation_overrides: vec![],
         remove_repository_origins: false,
         selected_harness: Harness::Oz,
         third_party_harness_model_config: None,

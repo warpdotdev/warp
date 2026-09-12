@@ -39,6 +39,62 @@ fn runner_list_accepts_team_uid() {
         Some("team_uid00000000000123")
     );
 }
+#[test]
+fn agent_run_parses_sparse_repository_substitution() {
+    let args = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "550e8400-e29b-41d4-a716-446655440000",
+        "--repository-head-override-json",
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"COMMIT_SHA","value":"0123456789abcdef0123456789abcdef01234567"},"clone_from":{"code_forge":"GITHUB","owner":"warpdotdev","repo":"warp-for-benchmarks"},"preserve_origin":true}"#,
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp agent run` command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(run_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp agent run` command");
+    };
+
+    let mapped = &run_args.repository_preparation_overrides[0];
+    assert_eq!(
+        mapped
+            .clone_from
+            .as_ref()
+            .map(|identity| identity.repo_name.as_str()),
+        Some("warp-for-benchmarks")
+    );
+    assert!(mapped.preserve_origin);
+    assert_eq!(
+        mapped.head,
+        RepositoryHeadRef::CommitSha("0123456789abcdef0123456789abcdef01234567".to_string())
+    );
+}
+
+#[test]
+fn agent_run_rejects_malformed_sparse_repository_substitution_payloads() {
+    for invalid_override in [
+        r#"{"code_forge":"GITHUB","repo_owner":"","repo_name":"warp","head":{"type":"BRANCH","value":"main"}}"#,
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"COMMIT_SHA","value":"0123456789abcdef0123456789abcdef01234567"},"clone_from":{"code_forge":"GITHUB","owner":"","repo":"target"},"preserve_origin":true}"#,
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"COMMIT_SHA","value":"0123456789abcdef0123456789abcdef01234567"},"clone_from":{"code_forge":"GITHUB","owner":"warpdotdev","repo":"target"}}"#,
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"COMMIT_SHA","value":"0123456789abcdef0123456789abcdef01234567"},"preserve_origin":true}"#,
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"BRANCH","value":"main"},"clone_from":{"code_forge":"GITHUB","owner":"warpdotdev","repo":"target"},"preserve_origin":true}"#,
+    ] {
+        Args::try_parse_from([
+            "warp",
+            "agent",
+            "run",
+            "--task-id",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "--repository-head-override-json",
+            invalid_override,
+        ])
+        .expect_err("invalid repository preparation payload must fail parsing");
+    }
+}
 
 #[test]
 fn runner_name_update_accepts_bare_team_selection() {
@@ -423,25 +479,25 @@ fn agent_run_parses_repeated_repository_head_override_json() {
         panic!("Expected `warp agent run` command");
     };
 
-    assert_eq!(run_args.repository_head_overrides.len(), 2);
+    assert_eq!(run_args.repository_preparation_overrides.len(), 2);
     assert_eq!(
-        run_args.repository_head_overrides[0].code_forge,
+        run_args.repository_preparation_overrides[0].code_forge,
         RepositoryForge::GitHub
     );
     assert_eq!(
-        run_args.repository_head_overrides[0].head,
+        run_args.repository_preparation_overrides[0].head,
         RepositoryHeadRef::CommitSha("0123456789abcdef0123456789abcdef01234567".to_string())
     );
     assert_eq!(
-        run_args.repository_head_overrides[1].code_forge,
+        run_args.repository_preparation_overrides[1].code_forge,
         RepositoryForge::GitLab
     );
     assert_eq!(
-        run_args.repository_head_overrides[1].repo_owner,
+        run_args.repository_preparation_overrides[1].repo_owner,
         "platform/backend"
     );
     assert_eq!(
-        run_args.repository_head_overrides[1].head,
+        run_args.repository_preparation_overrides[1].head,
         RepositoryHeadRef::Branch("develop".to_string())
     );
 }
