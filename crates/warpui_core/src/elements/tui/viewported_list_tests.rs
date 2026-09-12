@@ -281,7 +281,7 @@ fn mouse(app: &App, element: &mut impl TuiElement, size: TuiSize, event: TuiEven
             let mut surface = TuiPaintSurface::new(&mut buffer);
             element.render(TuiScreenPosition::new(0, 0), &mut surface, &mut paint_ctx);
         }
-        let (scene, _, _) = paint_ctx.finish();
+        let (scene, _, _, _) = paint_ctx.finish();
         let mut event_ctx = TuiEventContext::new(Rc::new(scene), &mut rendered_views);
         event_ctx.set_origin_view(Some(EntityId::new()));
         element.dispatch_event(&event, &mut event_ctx, app_ctx)
@@ -313,7 +313,7 @@ fn mouse_in_area(
                 &mut paint_ctx,
             );
         }
-        let (scene, _, _) = paint_ctx.finish();
+        let (scene, _, _, _) = paint_ctx.finish();
         let mut event_ctx = TuiEventContext::new(Rc::new(scene), &mut rendered_views);
         event_ctx.set_origin_view(Some(EntityId::new()));
         element.dispatch_event(&event, &mut event_ctx, app_ctx)
@@ -429,7 +429,7 @@ fn wheel_with_notify_count(
             let mut surface = TuiPaintSurface::new(&mut buffer);
             viewport.render(TuiScreenPosition::new(0, 0), &mut surface, &mut paint_ctx);
         }
-        let (scene, _, _) = paint_ctx.finish();
+        let (scene, _, _, _) = paint_ctx.finish();
         let mut event_ctx = TuiEventContext::new(Rc::new(scene), &mut rendered_views);
         event_ctx.set_origin_view(Some(EntityId::new()));
         let event = TuiEvent::ScrollWheel {

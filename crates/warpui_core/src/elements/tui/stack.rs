@@ -18,6 +18,9 @@
 //! All children share the caller's paint context, so animation repaint requests
 //! propagate normally and coalesce at the earliest deadline.
 
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use ratatui::buffer::CellWidth;
 
 use super::{
@@ -115,21 +118,41 @@ impl TuiElement for TuiStack {
             let child_area = TuiRect::new(0, 0, child_size.width, child_size.height);
             let mut layer = TuiBuffer::empty(child_area);
             let child_bounds = TuiScreenRect::new(screen_origin, child_size);
-            let mut opaque_regions = ctx.with_scene_layer(
+            // The child paints into `layer`, a scratch buffer local to this
+            // layer's own (0,0) origin, not the final frame buffer. Any
+            // hyperlink it records is therefore captured separately (keyed by
+            // that local `layer` coordinate) rather than written straight into
+            // `ctx`'s frame-wide table, and translated to final buffer
+            // coordinates below as `composite_buffer` copies each surviving
+            // cell — exactly mirroring how `capture_opaque_regions` defers
+            // opaque-region bookkeeping until compositing decides visibility.
+            let (mut opaque_regions, hyperlinks) = ctx.with_scene_layer(
                 TuiClipBounds::BoundedByActiveLayerAnd(child_bounds),
                 |ctx| {
-                    let (_, opaque_regions) = ctx.capture_opaque_regions(|ctx| {
-                        let mut child_surface = TuiPaintSurface::mapped(&mut layer, origin);
-                        child.render(origin, &mut child_surface, ctx);
+                    let (opaque_regions, hyperlinks) = ctx.capture_hyperlinks(|ctx| {
+                        let (_, opaque_regions) = ctx.capture_opaque_regions(|ctx| {
+                            let mut child_surface = TuiPaintSurface::mapped(&mut layer, origin);
+                            child.render(origin, &mut child_surface, ctx);
+                        });
+                        opaque_regions
                     });
-                    opaque_regions
+                    (opaque_regions, hyperlinks)
                 },
             );
             opaque_regions = opaque_regions
                 .into_iter()
                 .filter_map(|region| region.intersection(child_bounds))
                 .collect();
-            composite_buffer(&layer, &opaque_regions, origin, child_size, size, surface);
+            composite_buffer(
+                &layer,
+                &hyperlinks,
+                &opaque_regions,
+                origin,
+                child_size,
+                size,
+                surface,
+                ctx,
+            );
             for region in opaque_regions {
                 ctx.record_opaque_region(region);
             }
@@ -165,14 +188,25 @@ impl TuiElement for TuiStack {
     }
 }
 
-/// Paints the opaque cells in `source` onto `destination`.
+/// Paints the opaque cells in `source` onto `destination`, translating any
+/// hyperlink the child recorded in its scratch-buffer-local coordinates
+/// (`source_hyperlinks`, keyed the same way as `source` itself) into
+/// `destination`'s own buffer coordinates. A hyperlink only survives onto a
+/// cell this layer actually painted over: an untouched destination cell
+/// (transparent, not explicitly opaque) keeps whatever a lower, already-
+/// composited layer left there, and an opaquely overwritten cell with no
+/// hyperlink of its own clears one, so an occluded link can never remain
+/// clickable underneath unrelated foreground content.
+#[allow(clippy::too_many_arguments)]
 fn composite_buffer(
     source: &TuiBuffer,
+    source_hyperlinks: &HashMap<(u16, u16), Rc<str>>,
     opaque_regions: &[TuiScreenRect],
     origin: TuiScreenPosition,
     source_size: TuiSize,
     destination_size: TuiSize,
     destination: &mut TuiPaintSurface<'_>,
+    ctx: &mut TuiPaintContext,
 ) {
     for y in 0..source_size.height {
         let mut x = 0;
@@ -192,16 +226,38 @@ fn composite_buffer(
                 .cell_width()
                 .max(1)
                 .min(source_size.width.saturating_sub(x));
-            clear_intersecting_graphemes(destination, origin, destination_size, x, y, width);
-            destination.set_cell(origin.offset(i32::from(x), i32::from(y)), cell.clone());
+            clear_intersecting_graphemes(destination, ctx, origin, destination_size, x, y, width);
+            let lead_position = origin.offset(i32::from(x), i32::from(y));
+            destination.set_cell(lead_position, cell.clone());
+            composite_hyperlink(
+                destination,
+                ctx,
+                lead_position,
+                source_hyperlinks.get(&(x, y)).cloned(),
+            );
             for continuation in 1..width {
-                destination.set_cell(
-                    origin.offset(i32::from(x.saturating_add(continuation)), i32::from(y)),
-                    Cell::default(),
-                );
+                let continuation_position =
+                    origin.offset(i32::from(x.saturating_add(continuation)), i32::from(y));
+                destination.set_cell(continuation_position, Cell::default());
+                composite_hyperlink(destination, ctx, continuation_position, None);
             }
             x = x.saturating_add(width);
         }
+    }
+}
+
+/// Translates an absolute screen position into `destination`'s own buffer
+/// coordinates and sets or clears its hyperlink there. A position outside
+/// `destination`'s active clip has nothing to translate to and is ignored,
+/// matching how out-of-clip cell writes are silently dropped elsewhere.
+fn composite_hyperlink(
+    destination: &TuiPaintSurface<'_>,
+    ctx: &mut TuiPaintContext,
+    position: TuiScreenPosition,
+    url: Option<Rc<str>>,
+) {
+    if let Some(buffer_point) = destination.buffer_point(position) {
+        ctx.set_hyperlink(buffer_point, url);
     }
 }
 
@@ -217,6 +273,7 @@ fn is_transparent(cell: &Cell) -> bool {
 /// Clears every destination grapheme touched by the incoming cell span.
 fn clear_intersecting_graphemes(
     destination: &mut TuiPaintSurface<'_>,
+    ctx: &mut TuiPaintContext,
     origin: TuiScreenPosition,
     size: TuiSize,
     start_x: u16,
@@ -234,7 +291,9 @@ fn clear_intersecting_graphemes(
     for (span_start, span_width) in spans {
         let span_end = span_start.saturating_add(span_width).min(size.width);
         for x in span_start..span_end {
-            destination.set_cell(origin.offset(i32::from(x), i32::from(y)), Cell::default());
+            let position = origin.offset(i32::from(x), i32::from(y));
+            destination.set_cell(position, Cell::default());
+            composite_hyperlink(destination, ctx, position, None);
         }
     }
 }

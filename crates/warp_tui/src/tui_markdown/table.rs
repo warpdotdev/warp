@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use markdown_parser::{FormattedTable, FormattedTextInline, Hyperlink, TableAlignment};
 use unicode_width::UnicodeWidthStr;
 use warpui_core::AppContext;
@@ -102,10 +104,25 @@ impl TuiMarkdownTable {
         }
         for (row_index, row) in rows.iter().enumerate() {
             for (header, value) in headers.iter().zip(row) {
-                let mut spans = inline_spans(header, self.palette.table_header, self.palette);
+                let mut hyperlinks = Vec::new();
+                let mut spans = inline_spans(
+                    header,
+                    self.palette.table_header,
+                    self.palette,
+                    &mut hyperlinks,
+                );
                 push_span(&mut spans, ": ".to_owned(), self.palette.muted);
-                spans.extend(inline_spans(value, self.palette.body, self.palette));
-                table.add_child(TuiText::from_spans(spans).finish());
+                spans.extend(inline_spans(
+                    value,
+                    self.palette.body,
+                    self.palette,
+                    &mut hyperlinks,
+                ));
+                table.add_child(
+                    TuiText::from_spans(spans)
+                        .with_hyperlinks(hyperlinks)
+                        .finish(),
+                );
             }
             if row_index + 1 < rows.len() {
                 table.add_child(blank_row());
@@ -251,8 +268,12 @@ fn table_row(
                 .finish(),
             );
         }
-        let spans = aligned_cell_spans(cell, *alignment, *width, base, palette);
-        row.add_child(TuiFixedWidth::new(*width, TuiText::from_spans(spans).finish()).finish());
+        let mut hyperlinks = Vec::new();
+        let spans = aligned_cell_spans(cell, *alignment, *width, base, palette, &mut hyperlinks);
+        let text = TuiText::from_spans(spans)
+            .with_hyperlinks(hyperlinks)
+            .finish();
+        row.add_child(TuiFixedWidth::new(*width, text).finish());
     }
     row.finish()
 }
@@ -263,6 +284,7 @@ fn aligned_cell_spans(
     width: u16,
     base: TuiStyle,
     palette: TuiMarkdownPalette,
+    hyperlinks: &mut Vec<Rc<str>>,
 ) -> Vec<(String, TuiStyle)> {
     let content_width = inline_visible_width(cell);
     let available_padding = usize::from(width).saturating_sub(content_width);
@@ -275,7 +297,7 @@ fn aligned_cell_spans(
     if leading_padding > 0 {
         spans.push((" ".repeat(leading_padding), base));
     }
-    spans.extend(inline_spans(cell, base, palette));
+    spans.extend(inline_spans(cell, base, palette, hyperlinks));
     spans
 }
 
