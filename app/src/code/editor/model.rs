@@ -1,12 +1,12 @@
 #![cfg_attr(target_family = "wasm", allow(dead_code, unused_imports))]
 // Adding this file level gate as some of the code around editability is not used in WASM yet.
 
+use std::cmp;
 use std::future::Future;
 use std::ops::Range;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::{cmp, mem};
 
 use ai::diff_validation::DiffDelta;
 use itertools::Itertools;
@@ -17,16 +17,8 @@ use rangemap::{RangeMap, RangeSet};
 use string_offset::CharOffset;
 use syntax_tree::{ColorMap, DecorationStateEvent, SyntaxTreeState};
 use vec1::{Vec1, vec1};
-use vim::vim::{
-    BracketChar, CharacterMotion, Direction, FindCharMotion, FirstNonWhitespaceMotion,
-    InsertPosition, LineMotion, MotionType, TextObjectInclusion, TextObjectType, VimOperator,
-    VimTextObject, WordBound, WordMotion, WordType,
-};
-use vim::{
-    find_next_paragraph_end, find_previous_paragraph_start, vim_a_block, vim_a_paragraph,
-    vim_a_quote, vim_a_word, vim_find_char_on_line, vim_find_matching_bracket, vim_inner_block,
-    vim_inner_paragraph, vim_inner_quote, vim_inner_word, vim_word_iterator_from_offset,
-};
+use vim::handler::VimBufferOps;
+use vim::vim::{Direction, InsertPosition, VimOperand, VimOperator};
 use warp_core::platform::SessionPlatform;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_core::ui::theme::Fill;
@@ -47,9 +39,9 @@ use warp_editor::editor::TextDecoration;
 use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
 use warp_editor::multiline::{AnyMultilineString, LF, MultilineString};
 use warp_editor::render::model::{
-    AutoScrollMode, BlockItem, BlockSpacings, BrokenLinkStyle, CheckBoxStyle, ColumnUnit,
-    Decoration, HorizontalRuleStyle, InlineCodeStyle, LineCount, LineDecoration, ParagraphStyles,
-    RenderEvent, RenderLineLocation, RenderState, RichTextStyles, StyleUpdateAction, TableStyle,
+    AutoScrollMode, BlockItem, BlockSpacings, BrokenLinkStyle, CheckBoxStyle, Decoration,
+    HorizontalRuleStyle, InlineCodeStyle, LineCount, LineDecoration, ParagraphStyles, RenderEvent,
+    RenderLineLocation, RenderState, RichTextStyles, StyleUpdateAction, TableStyle,
     UpdateDecorationAfterLayout, WidthSetting,
 };
 use warp_editor::selection::{SelectionMode, SelectionModel, TextDirection, TextUnit};
@@ -58,9 +50,8 @@ use warpui::elements::{
     AnchorPair, OffsetPositioning, OffsetType, PositionedElementOffsetBounds, PositioningAxis,
     XAxisAnchor, YAxisAnchor,
 };
-use warpui::text::TextBuffer;
 use warpui::text::point::Point;
-use warpui::units::{IntoPixels, Pixels};
+use warpui::units::Pixels;
 use warpui::{AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity};
 
 use super::super::DiffResult;
@@ -299,9 +290,11 @@ pub struct CodeEditorModel {
     show_current_line_highlights: bool,
     /// Delay rendering of content updates until a certain trigger.
     delay_rendering: Option<DelayRendering>,
-    /// Stores the selection "tails" when entering Vim visual mode so we can derive
-    /// visual selections that may differ from the cursor positions.
-    vim_visual_tails: Vec<CharOffset>,
+    vim_goal_columns: Option<Vec<u32>>,
+    /// Heads last written by Vim. A later SelectionChanged with the same heads is
+    /// Vim's own echo, not an independent mutation.
+    vim_applied_heads: Option<Vec<CharOffset>>,
+    applying_vim_selections: bool,
     hovered_symbol_range: Option<HoverableLink>,
     /// Automatically hide lines outside of the active diff with X context lines.
     hide_lines_outside_of_active_diff: Option<usize>,
@@ -463,7 +456,9 @@ impl CodeEditorModel {
             interaction_state: InteractionState::Editable,
             show_current_line_highlights,
             delay_rendering: None,
-            vim_visual_tails: vec![],
+            vim_goal_columns: None,
+            vim_applied_heads: None,
+            applying_vim_selections: false,
             hovered_symbol_range: None,
             hide_lines_outside_of_active_diff: None,
             recalculate_hidden_lines_after_diff: None,
@@ -760,25 +755,6 @@ impl CodeEditorModel {
                 autoscroll,
                 ctx,
             );
-        });
-    }
-
-    /// Set selections but save goal columns.
-    /// update_selection typically overwrites goal columns; this fn will save and restore them.
-    pub fn vim_set_selections_preserving_goal_xs(
-        &mut self,
-        selections: Vec1<SelectionOffsets>,
-        autoscroll: AutoScrollBehavior,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        self.selection.update(ctx, |selection, ctx| {
-            let saved_goal_xs = selection.goal_xs.clone();
-            selection.update_selection(
-                BufferSelectAction::SetSelectionOffsets { selections },
-                autoscroll,
-                ctx,
-            );
-            selection.goal_xs = saved_goal_xs;
         });
     }
 
@@ -1585,6 +1561,10 @@ impl CodeEditorModel {
                 buffer_version,
                 selection_model_id,
             } => {
+                if !self.applying_vim_selections {
+                    self.vim_goal_columns = None;
+                    self.vim_applied_heads = None;
+                }
                 let buffer = self.content().as_ref(ctx);
                 let content = buffer.text();
                 if self.should_defer_syntax_tree_parsing() {
@@ -1692,6 +1672,19 @@ impl CodeEditorModel {
                 buffer_version,
                 ..
             } => {
+                if !self.applying_vim_selections {
+                    let heads: Vec<CharOffset> = self
+                        .selection_model
+                        .as_ref(ctx)
+                        .selection_offsets()
+                        .iter()
+                        .map(|selection| selection.head)
+                        .collect();
+                    if self.vim_applied_heads.as_ref() != Some(&heads) {
+                        self.vim_goal_columns = None;
+                        self.vim_applied_heads = None;
+                    }
+                }
                 let content = self.content.as_ref(ctx);
                 let mut selections =
                     content.to_rendered_selection_set(self.selection_model.clone(), ctx);
@@ -2134,145 +2127,6 @@ impl CodeEditorModel {
         self.validate(ctx);
     }
 
-    /// Set Vim visual tails to the current selection heads (cursor positions).
-    pub fn vim_set_visual_tail_to_selection_heads(&mut self, ctx: &mut ModelContext<Self>) {
-        let selection_model = self.selection_model.as_ref(ctx);
-        let selections = selection_model.selection_offsets();
-        self.vim_visual_tails = selections.iter().map(|s| s.head).collect();
-    }
-
-    pub fn vim_visual_tails(&self) -> &Vec<CharOffset> {
-        &self.vim_visual_tails
-    }
-
-    /// Return the ranges represented by the current Vim visual tails and
-    /// selection heads without consuming the tails.
-    pub fn vim_visual_selection_ranges(
-        &self,
-        motion_type: MotionType,
-        ctx: &AppContext,
-    ) -> Vec<Range<CharOffset>> {
-        let selection_model = self.selection_model.as_ref(ctx);
-        let buffer = self.content().as_ref(ctx);
-
-        selection_model
-            .selection_offsets()
-            .iter()
-            .zip(self.vim_visual_tails.iter())
-            .map(|(selection, visual_tail)| {
-                let mut start = *visual_tail;
-                let mut end = selection.head;
-                if start > end {
-                    mem::swap(&mut start, &mut end);
-                }
-
-                let max_offset = buffer.max_charoffset();
-                if end < max_offset
-                    && (motion_type != MotionType::Linewise
-                        || buffer.char_at(end).is_some_and(|c| c != '\n'))
-                {
-                    end += 1;
-                }
-
-                if motion_type == MotionType::Linewise {
-                    let start_point = start.to_buffer_point(buffer);
-                    start = Point::new(start_point.row, 0).to_buffer_char_offset(buffer);
-
-                    let end_point = end.to_buffer_point(buffer);
-                    if end_point.column != 0 {
-                        end = Point::new(end_point.row, buffer.line_len(end_point.row))
-                            .to_buffer_char_offset(buffer);
-                    }
-                }
-
-                start..end
-            })
-            .collect()
-    }
-
-    /// Expand the current selection(s) for a visual-mode operation using stored visual tails.
-    /// Charwise visual mode includes the character under the block cursor; linewise visual mode
-    /// expands to the full line bounds.
-    ///
-    /// This is used by operators to get the actual selection range for visual operations.
-    pub fn vim_visual_selection_range(
-        &mut self,
-        motion_type: MotionType,
-        include_newline: bool,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let selection_model = self.selection_model.as_ref(ctx);
-        let buffer = self.content().as_ref(ctx);
-        let vim_visual_tails = mem::take(&mut self.vim_visual_tails);
-
-        let new_selections = selection_model
-            .selection_offsets()
-            .iter()
-            .zip(vim_visual_tails.iter())
-            .map(|(selection, visual_tail)| {
-                let mut start = *visual_tail;
-                let mut end = selection.head;
-                if start > end {
-                    mem::swap(&mut start, &mut end);
-                }
-
-                let max_offset = buffer.max_charoffset();
-                // Include the char under the block cursor for charwise/visual.
-                // For linewise, only include +1 if it won't move onto the next line (i.e., the
-                // current char at `end` is not a newline).
-                if end < max_offset
-                    && (motion_type != MotionType::Linewise
-                        || buffer.char_at(end).map(|c| c != '\n').unwrap_or(false))
-                {
-                    end += 1;
-                }
-
-                if motion_type == MotionType::Linewise {
-                    let point = start.to_buffer_point(buffer);
-
-                    let start_point = Point::new(point.row, 0);
-                    let end_point = end.to_buffer_point(buffer);
-                    let new_end = if end_point.column == 0 {
-                        end_point
-                    } else {
-                        Point::new(end_point.row, buffer.line_len(end_point.row))
-                    };
-
-                    start = start_point.to_buffer_char_offset(buffer);
-                    end = new_end.to_buffer_char_offset(buffer);
-
-                    if include_newline {
-                        let start_newline = start.as_usize() > 0
-                            && buffer
-                                .char_at(start.saturating_sub(&1.into()))
-                                .map(|c| c == '\n')
-                                .unwrap_or(false);
-                        let end_newline = buffer.char_at(end).map(|c| c == '\n').unwrap_or(false);
-
-                        if end_newline && end < max_offset {
-                            end += 1;
-                        } else if start_newline {
-                            start = start.saturating_sub(&1.into());
-                        }
-                    }
-                }
-
-                SelectionOffsets {
-                    head: start,
-                    tail: end,
-                }
-            })
-            .collect_vec();
-
-        if let Ok(new_selections) = Vec1::try_from_vec(new_selections) {
-            self.vim_set_selections_preserving_goal_xs(
-                new_selections,
-                AutoScrollBehavior::Selection,
-                ctx,
-            );
-        }
-    }
-
     pub fn toggle_comments(&mut self, ctx: &mut ModelContext<Self>) {
         let Some(prefix) = self.syntax_tree.as_ref(ctx).comment_prefix() else {
             return;
@@ -2640,7 +2494,17 @@ impl CodeEditorModel {
             }
         });
 
-        self.vim_set_selections_preserving_goal_xs(new_selections, AutoScrollBehavior::None, ctx);
+        self.applying_vim_selections = true;
+        self.vim_set_selections(new_selections, AutoScrollBehavior::None, ctx);
+        self.vim_applied_heads = Some(
+            self.buffer_selection_model()
+                .as_ref(ctx)
+                .selection_offsets()
+                .iter()
+                .map(|selection| selection.head)
+                .collect(),
+        );
+        self.applying_vim_selections = false;
     }
 
     /// Horizontal cursor movement for vim in the code editor.
@@ -2763,20 +2627,17 @@ impl CodeEditorModel {
         let selection_model = self.selection_model.as_ref(ctx);
         let current_selections = selection_model.selection_offsets();
 
-        // Determine desired column for each selection. If goal_xs exist, interpret them as columns;
-        // otherwise initialize from current buffer columns.
-        let goal_cols: Vec<u32> =
-            if let Some(existing) = self.selection().as_ref(ctx).goal_xs.as_ref() {
-                existing
-                    .iter()
-                    .map(|col| col.as_pixels().as_f32().round() as u32)
-                    .collect()
-            } else {
-                current_selections
-                    .iter()
-                    .map(|sel| sel.head.to_buffer_point(buffer).column)
-                    .collect()
-            };
+        let goal_cols: Vec<u32> = current_selections
+            .iter()
+            .enumerate()
+            .map(|(index, sel)| {
+                self.vim_goal_columns
+                    .as_ref()
+                    .and_then(|goals| goals.get(index).copied())
+                    .unwrap_or_else(|| sel.head.to_buffer_point(buffer).column)
+                    .max(sel.head.to_buffer_point(buffer).column)
+            })
+            .collect();
 
         let max_row = buffer.max_point().row;
 
@@ -2808,17 +2669,18 @@ impl CodeEditorModel {
             .collect();
 
         if let Ok(new_selections) = Vec1::try_from_vec(new_selections_vec) {
+            self.applying_vim_selections = true;
             self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
-
-            // Update goal_xs to the desired columns (stored as ColumnUnit::Pixels for
-            // consistency with the GUI SelectionModel pixel path)
-            let goal_pixels: Vec<_> = goal_cols
-                .into_iter()
-                .map(|c| ColumnUnit::Pixels((c as usize).into_pixels()))
-                .collect();
-            self.selection().update(ctx, |selection, _| {
-                selection.goal_xs = Vec1::try_from_vec(goal_pixels).ok();
-            });
+            self.vim_goal_columns = Some(goal_cols);
+            self.vim_applied_heads = Some(
+                self.buffer_selection_model()
+                    .as_ref(ctx)
+                    .selection_offsets()
+                    .iter()
+                    .map(|selection| selection.head)
+                    .collect(),
+            );
+            self.applying_vim_selections = false;
         }
     }
 
@@ -2851,761 +2713,6 @@ impl CodeEditorModel {
                 } else {
                     new_offset
                 },
-            }
-        });
-
-        self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
-    }
-
-    /// Move by paragraph boundaries for vim motions.
-    pub fn vim_move_by_paragraph(
-        &mut self,
-        count: u32,
-        direction: &Direction,
-        keep_selection: bool,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let buffer = self.content().as_ref(ctx);
-        let selection_model = self.selection_model.as_ref(ctx);
-        let current_selections = selection_model.selection_offsets();
-        let max = buffer.max_charoffset();
-        let new_selections = current_selections.mapped(|selection| {
-            let mut offset = selection.head;
-            match direction {
-                Direction::Forward => {
-                    for _ in 0..count {
-                        offset = find_next_paragraph_end(buffer, offset).unwrap_or(max);
-                    }
-                }
-                Direction::Backward => {
-                    for _ in 0..count {
-                        offset = find_previous_paragraph_start(buffer, offset)
-                            .unwrap_or(CharOffset::from(1));
-                    }
-                }
-            }
-            SelectionOffsets {
-                head: offset,
-                tail: if keep_selection {
-                    selection.tail
-                } else {
-                    offset
-                },
-            }
-        });
-
-        self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
-    }
-
-    /// Navigate by words using vim-specific word boundaries.
-    pub fn vim_navigate_word(
-        &mut self,
-        direction: Direction,
-        bound: WordBound,
-        word_type: WordType,
-        word_count: u32,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let buffer = self.content().as_ref(ctx);
-        let selection_model = self.selection_model.as_ref(ctx);
-        let current_selections = selection_model.selection_offsets();
-
-        let new_selections = current_selections.mapped(|selection| {
-            let start_offset = selection.head;
-
-            let end_offset = match vim_word_iterator_from_offset(
-                start_offset,
-                buffer,
-                direction,
-                bound,
-                word_type,
-            ) {
-                Ok(boundaries) => boundaries
-                    .take(word_count as usize)
-                    .last()
-                    .unwrap_or(start_offset),
-                _ => start_offset,
-            };
-
-            SelectionOffsets {
-                head: end_offset,
-                tail: end_offset,
-            }
-        });
-
-        self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
-    }
-
-    pub fn vim_select_for_char_motion(
-        &mut self,
-        char_motion: &CharacterMotion,
-        motion_type: &MotionType,
-        operator: &VimOperator,
-        operand_count: u32,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        match char_motion {
-            CharacterMotion::Right => {
-                self.vim_move_horizontal_by_offset(
-                    operand_count,
-                    &Direction::Forward,
-                    true, // keep_selection
-                    true, // stop_at_line_boundary
-                    ctx,
-                );
-            }
-            CharacterMotion::Left => {
-                self.vim_move_horizontal_by_offset(
-                    operand_count,
-                    &Direction::Backward,
-                    true, // keep_selection
-                    true, // stop_at_line_boundary
-                    ctx,
-                );
-            }
-            CharacterMotion::Down => {
-                self.vim_move_vertical_by_offset(operand_count, TextDirection::Forwards, true, ctx);
-            }
-            CharacterMotion::Up => {
-                self.vim_move_vertical_by_offset(
-                    operand_count,
-                    TextDirection::Backwards,
-                    true,
-                    ctx,
-                );
-            }
-            CharacterMotion::WrappingLeft => {
-                self.vim_move_horizontal_by_offset(
-                    operand_count,
-                    &Direction::Backward,
-                    true,  // keep_selection
-                    false, // don't stop_at_line_boundary (allows wrapping)
-                    ctx,
-                );
-            }
-            CharacterMotion::WrappingRight => {
-                self.vim_move_horizontal_by_offset(
-                    operand_count,
-                    &Direction::Forward,
-                    true,  // keep_selection
-                    false, // don't stop_at_line_boundary (allows wrapping)
-                    ctx,
-                );
-            }
-        }
-
-        let include_newline = operator.includes_trailing_newline();
-        if *motion_type == MotionType::Linewise {
-            self.vim_extend_selection_linewise(
-                include_newline,
-                *operator == VimOperator::Delete,
-                ctx,
-            );
-        }
-    }
-
-    pub fn vim_select_to_line(
-        &mut self,
-        line_number: u32,
-        motion_type: &MotionType,
-        operator: &VimOperator,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let buffer = self.content().as_ref(ctx);
-        let current_selections = self.selection_model.as_ref(ctx).selection_offsets();
-        let target_row = line_number.max(1).min(buffer.max_point().row);
-        let new_selections = current_selections.mapped(|selection| SelectionOffsets {
-            head: Point::new(target_row, 0).to_buffer_char_offset(buffer),
-            tail: selection.head,
-        });
-        self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
-
-        if *motion_type == MotionType::Linewise {
-            self.vim_extend_selection_linewise(
-                operator.includes_trailing_newline(),
-                *operator == VimOperator::Delete,
-                ctx,
-            );
-        }
-    }
-
-    pub fn vim_select_for_word_motion(
-        &mut self,
-        word_motion: &WordMotion,
-        word_count: u32,
-        motion_type: &MotionType,
-        operator: &VimOperator,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let WordMotion {
-            direction,
-            bound,
-            word_type,
-        } = word_motion;
-
-        let buffer = self.content().as_ref(ctx);
-        let selection_model = self.selection_model.as_ref(ctx);
-        let current_selections = selection_model.selection_offsets();
-        let new_selections = current_selections.mapped(|selection| {
-            let start_offset = selection.head;
-            let (cursor_position, selection_start) = match vim_word_iterator_from_offset(
-                start_offset,
-                buffer,
-                *direction,
-                *bound,
-                *word_type,
-            ) {
-                Ok(boundaries) => {
-                    let mut target_pos = boundaries
-                        .take(word_count as usize)
-                        .last()
-                        .unwrap_or(start_offset);
-
-                    // Apply vim word boundary quirks and calculate selection boundaries
-                    match direction {
-                        Direction::Forward => {
-                            // `de`, unlike other word motions, will include character it lands on
-                            // in the operation.
-                            if *bound == WordBound::End {
-                                target_pos += 1;
-                            } else if *bound == WordBound::Start && word_count == 1 {
-                                // `dw`, cannot traverse a newline unless the count > 1. We have
-                                // to check this range for newlines and cut the range short in that
-                                // case.
-                                let text = buffer.text_in_range(start_offset..target_pos);
-                                if let Some(newline_pos) = text.as_str().find('\n') {
-                                    target_pos = start_offset + newline_pos;
-                                }
-                            }
-                            (target_pos, start_offset)
-                        }
-                        Direction::Backward => {
-                            // `db` will traverse *but not delete* a newline if the count is 1 and
-                            // the cursor starts on column zero and the line above is not empty.
-                            let mut actual_start = start_offset;
-                            if *bound == WordBound::Start
-                                && word_count == 1
-                                && let Ok(mut char_iter) = buffer.chars_rev_at(start_offset)
-                                && char_iter.next().is_some_and(|c| c == '\n')
-                                && char_iter.next().is_some_and(|c| c != '\n')
-                            {
-                                actual_start -= 1;
-                            }
-                            (target_pos, actual_start)
-                        }
-                    }
-                }
-                _ => (start_offset, start_offset),
-            };
-
-            SelectionOffsets {
-                head: cursor_position,
-                tail: selection_start,
-            }
-        });
-
-        self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
-
-        let include_newline = operator.includes_trailing_newline();
-        if *motion_type == MotionType::Linewise {
-            self.vim_extend_selection_linewise(
-                include_newline,
-                *operator == VimOperator::Delete,
-                ctx,
-            );
-        }
-    }
-
-    pub fn vim_select_for_line_motion(
-        &mut self,
-        line_motion: &LineMotion,
-        operand_count: u32,
-        motion_type: &MotionType,
-        operator: &VimOperator,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        match line_motion {
-            LineMotion::Start => {
-                self.vim_move_to_line_bound(LineBound::Start, true, ctx);
-            }
-            LineMotion::End => {
-                // For $ with count, move down lines first
-                if operand_count > 1 {
-                    self.vim_move_vertical_by_offset(
-                        operand_count - 1,
-                        TextDirection::Forwards,
-                        true,
-                        ctx,
-                    );
-                }
-                self.vim_move_to_line_bound(LineBound::End, true, ctx);
-            }
-            LineMotion::FirstNonWhitespace => {
-                self.vim_move_to_first_nonwhitespace(true, ctx);
-            }
-        }
-
-        let include_newline = operator.includes_trailing_newline();
-        if *motion_type == MotionType::Linewise {
-            self.vim_extend_selection_linewise(
-                include_newline,
-                *operator == VimOperator::Delete,
-                ctx,
-            );
-        }
-    }
-
-    pub fn vim_select_for_first_nonwhitespace_motion(
-        &mut self,
-        nonws_motion: &FirstNonWhitespaceMotion,
-        motion_type: &MotionType,
-        operator: &VimOperator,
-        operand_count: u32,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        match nonws_motion {
-            FirstNonWhitespaceMotion::Up => {
-                self.vim_move_vertical_by_offset(
-                    operand_count,
-                    TextDirection::Backwards,
-                    true,
-                    ctx,
-                );
-            }
-            FirstNonWhitespaceMotion::Down => {
-                self.vim_move_vertical_by_offset(operand_count, TextDirection::Forwards, true, ctx);
-            }
-            FirstNonWhitespaceMotion::DownMinusOne => {
-                if operand_count > 0 {
-                    self.vim_move_vertical_by_offset(
-                        operand_count - 1,
-                        TextDirection::Forwards,
-                        true,
-                        ctx,
-                    );
-                }
-            }
-        };
-
-        self.vim_move_to_first_nonwhitespace(true, ctx);
-
-        let include_newline = operator.includes_trailing_newline();
-        if *motion_type == MotionType::Linewise {
-            self.vim_extend_selection_linewise(
-                include_newline,
-                *operator == VimOperator::Delete,
-                ctx,
-            );
-        }
-    }
-
-    pub fn vim_select_to_buffer_bound(
-        &mut self,
-        direction: TextDirection,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let buffer = self.content().as_ref(ctx);
-        let selection_model = self.selection_model.as_ref(ctx);
-        let current_selections = selection_model.selection_offsets();
-
-        let new_selections = current_selections.mapped(|selection| {
-            let cursor_pos = selection.head;
-
-            let target_pos = match direction {
-                TextDirection::Backwards => Point::new(0, 0).to_buffer_char_offset(buffer),
-                TextDirection::Forwards => buffer.max_charoffset(),
-            };
-
-            SelectionOffsets {
-                head: target_pos,
-                tail: cursor_pos,
-            }
-        });
-
-        self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
-    }
-
-    /// Select from cursor to buffer start (for dgg command).
-    pub fn vim_select_to_buffer_start(&mut self, ctx: &mut ModelContext<Self>) {
-        self.vim_select_to_buffer_bound(TextDirection::Backwards, ctx);
-    }
-
-    /// Select from cursor to buffer end (for dG command).
-    pub fn vim_select_to_buffer_end(&mut self, ctx: &mut ModelContext<Self>) {
-        self.vim_select_to_buffer_bound(TextDirection::Forwards, ctx);
-    }
-
-    pub fn vim_move_to_last_line(&mut self, ctx: &mut ModelContext<Self>) {
-        let has_trailing_empty_line = self.content_string(ctx).into_string().ends_with('\n');
-        let (max_offset, max_row) = {
-            let buffer = self.content().as_ref(ctx);
-            (buffer.max_charoffset(), buffer.max_point().row)
-        };
-        if has_trailing_empty_line {
-            self.vim_set_selections(
-                vec1![SelectionOffsets {
-                    head: max_offset,
-                    tail: max_offset,
-                }],
-                AutoScrollBehavior::Selection,
-                ctx,
-            );
-        } else {
-            self.jump_to_line_column(max_row as usize, None, ctx);
-        }
-    }
-
-    pub fn vim_extend_selection_linewise(
-        &mut self,
-        include_newline: bool,
-        consume_preceding_newline_at_eof: bool,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let buffer = self.content().as_ref(ctx);
-        let selection_model = self.selection_model.as_ref(ctx);
-        let current_selections = selection_model.selection_offsets();
-        let max_offset = buffer.max_charoffset();
-        let has_trailing_empty_line = self.content_string(ctx).into_string().ends_with('\n');
-
-        let new_selections = current_selections.mapped(|selection| {
-            let start_pos = selection.tail.min(selection.head);
-            let end_pos = selection.tail.max(selection.head);
-            if include_newline
-                && has_trailing_empty_line
-                && start_pos == max_offset
-                && end_pos == max_offset
-            {
-                return SelectionOffsets {
-                    head: max_offset,
-                    tail: max_offset.saturating_sub(&CharOffset::from(1)),
-                };
-            }
-
-            let start_point = start_pos.to_buffer_point(buffer);
-            let end_point = end_pos.to_buffer_point(buffer);
-
-            let line_start = Point::new(start_point.row, 0).to_buffer_char_offset(buffer);
-            let start_of_end_line = Point::new(end_point.row, 0).to_buffer_char_offset(buffer);
-            let line_end = if include_newline {
-                buffer
-                    .containing_line_end(start_of_end_line)
-                    .min(buffer.max_charoffset())
-            } else {
-                // Don't include newline (for change operations)
-                buffer.containing_line_end(start_of_end_line) - 1
-            };
-            let should_consume_preceding_newline = line_end == buffer.max_charoffset()
-                && start_point.row > 1
-                && consume_preceding_newline_at_eof;
-            let line_start = if should_consume_preceding_newline {
-                line_start.saturating_sub(&CharOffset::from(1))
-            } else {
-                line_start
-            };
-
-            SelectionOffsets {
-                head: line_end,
-                tail: line_start,
-            }
-        });
-
-        self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
-    }
-
-    fn calculate_text_object_range(
-        &self,
-        text_object: &VimTextObject,
-        cursor_pos: CharOffset,
-        operator: Option<&VimOperator>,
-        ctx: &ModelContext<Self>,
-    ) -> Option<Range<CharOffset>> {
-        let buffer = self.content().as_ref(ctx);
-
-        match text_object.object_type {
-            TextObjectType::Word(word_type) => match text_object.inclusion {
-                TextObjectInclusion::Inner => vim_inner_word(buffer, cursor_pos, word_type),
-                TextObjectInclusion::Around => vim_a_word(buffer, cursor_pos, word_type),
-            },
-            TextObjectType::Paragraph => {
-                let paragraph_range = match text_object.inclusion {
-                    TextObjectInclusion::Inner => vim_inner_paragraph(buffer, cursor_pos),
-                    TextObjectInclusion::Around => vim_a_paragraph(buffer, cursor_pos),
-                };
-                if operator.is_none() {
-                    // `vim_a_paragraph` and `vim_inner_paragraph` do _not_ include the trailing
-                    // newline. For other operators, we rely on [`Self::vim_extend_selection_linewise`]
-                    // to grow the range to include the newline, but we don't call that for visual
-                    // mode expansion of text objects.
-                    paragraph_range.map(|range| range.start..range.end + 1)
-                } else {
-                    paragraph_range
-                }
-            }
-            TextObjectType::Quote(quote_type) => match text_object.inclusion {
-                TextObjectInclusion::Inner => vim_inner_quote(buffer, cursor_pos, quote_type),
-                TextObjectInclusion::Around => vim_a_quote(buffer, cursor_pos, quote_type),
-            },
-            TextObjectType::Block(bracket_type) => match text_object.inclusion {
-                TextObjectInclusion::Inner => {
-                    // For inner blocks, preserve leading padding for change operations
-                    // Change operations (c) preserve leading padding, delete operations (d) don't
-                    // Visual mode (operator is None) doesn't preserve padding
-                    let preserve_leading_padding = operator
-                        .map(|op| *op == VimOperator::Change)
-                        .unwrap_or(false);
-                    vim_inner_block(buffer, cursor_pos, bracket_type, preserve_leading_padding)
-                }
-                TextObjectInclusion::Around => vim_a_block(buffer, cursor_pos, bracket_type),
-            },
-        }
-    }
-
-    /// Select a vim text object, preserving leading padding for change ops.
-    /// If operator is None, does selection for visual mode.
-    pub fn vim_select_text_object(
-        &mut self,
-        text_object: &VimTextObject,
-        operator: Option<&VimOperator>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let selection_model = self.selection_model.as_ref(ctx);
-        let current_selections = selection_model.selection_offsets();
-
-        // Visual mode (operator is None): compute and store visual tails
-        match operator {
-            None => {
-                let mut visual_tails: Vec<CharOffset> = Vec::new();
-
-                let new_selections = current_selections.mapped(|selection| {
-                    let cursor_pos = selection.head;
-
-                    if let Some(mut range) =
-                        self.calculate_text_object_range(text_object, cursor_pos, operator, ctx)
-                    {
-                        visual_tails.push(range.start);
-                        if range.end > range.start {
-                            range.end -= 1;
-                        }
-
-                        let buffer = self.content().as_ref(ctx);
-                        // For visual text objects, start the selection at the beginning of the line
-                        // (column = 0) of the computed range end.
-                        let end_point = range.end.to_buffer_point(buffer);
-                        let new_head = Point::new(end_point.row, 0).to_buffer_char_offset(buffer);
-                        SelectionOffsets {
-                            head: new_head,
-                            tail: new_head,
-                        }
-                    } else {
-                        visual_tails.push(cursor_pos);
-                        SelectionOffsets {
-                            head: cursor_pos,
-                            tail: cursor_pos,
-                        }
-                    }
-                });
-
-                self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
-                self.vim_visual_tails = visual_tails;
-            }
-            Some(op) => {
-                let new_selections = current_selections.mapped(|selection| {
-                    let cursor_pos = selection.head;
-
-                    if let Some(range) =
-                        self.calculate_text_object_range(text_object, cursor_pos, operator, ctx)
-                    {
-                        SelectionOffsets {
-                            head: range.end,
-                            tail: range.start,
-                        }
-                    } else {
-                        SelectionOffsets {
-                            head: cursor_pos,
-                            tail: cursor_pos,
-                        }
-                    }
-                });
-
-                self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
-                if let TextObjectType::Paragraph = text_object.object_type {
-                    let include_newline = op.includes_trailing_newline();
-                    self.vim_extend_selection_linewise(
-                        include_newline,
-                        *op == VimOperator::Delete,
-                        ctx,
-                    );
-                }
-            }
-        }
-    }
-
-    /// This method does Vim's "%" command. This command checks if there is a bracket under the
-    /// cursor, or to the right of the cursor on the same line. If so, jump to the bracket that
-    /// matches it.
-    pub fn vim_jump_to_matching_bracket(
-        &mut self,
-        keep_selection: bool,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let buffer = self.content().as_ref(ctx);
-        let selection_model = self.selection_model.as_ref(ctx);
-        let current_selections = selection_model.selection_offsets();
-
-        let new_selections = current_selections.mapped(|selection| {
-            let cursor = selection.head;
-
-            // Create char iterator from current position to the end of the line
-            let line_end = buffer.containing_line_end(selection.head);
-            let line_text = buffer.text_in_range(cursor..line_end).into_string();
-            let mut iter = line_text.chars();
-
-            let Some(c) = iter.next() else {
-                return selection;
-            };
-
-            let (bracket, start_offset) = match BracketChar::try_from(c) {
-                Ok(bracket) => (bracket, cursor),
-
-                Err(_) => match iter
-                    .enumerate()
-                    .find_map(|(i, c)| Some((i, BracketChar::try_from(c).ok()?)))
-                {
-                    None => return selection,
-                    Some((i, bracket)) => (bracket, cursor + i + 1),
-                },
-            };
-
-            if let Some(bracket_position) =
-                vim_find_matching_bracket(buffer, &bracket, start_offset)
-            {
-                SelectionOffsets {
-                    head: bracket_position,
-                    tail: if keep_selection {
-                        cursor
-                    } else {
-                        bracket_position
-                    },
-                }
-            } else {
-                selection
-            }
-        });
-
-        self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
-    }
-
-    /// Builds the selection used by operator+`%` motions (`d%`, `c%`, `y%`).
-    ///
-    /// `vim_jump_to_matching_bracket(true, ctx)` creates a half-open selection from the cursor to
-    /// the matching bracket offset. Because operator ranges are half-open, that would leave the
-    /// matching bracket char itself outside the deleted/changed/yanked range. Operator motions on
-    /// `%` must include that final char (mirroring Vim), so this extends the selection end by one
-    /// after the jump — the same adjustment the block editor makes in its
-    /// `vim_select_for_matching_bracket`.
-    pub fn vim_select_for_matching_bracket(&mut self, ctx: &mut ModelContext<Self>) {
-        self.vim_jump_to_matching_bracket(true, ctx);
-
-        let max_offset = self.content().as_ref(ctx).max_charoffset();
-        let current_selections = self.selection_model.as_ref(ctx).selection_offsets();
-
-        let new_selections = current_selections.mapped(|selection| {
-            // A cursor-only selection means no matching bracket was found; leave it untouched.
-            if selection.head == selection.tail {
-                return selection;
-            }
-            // The selection end is the larger of head/tail. Extend it by one so the matching
-            // bracket char is included in the operator's (half-open) range.
-            if selection.head > selection.tail {
-                SelectionOffsets {
-                    head: cmp::min(selection.head + 1, max_offset),
-                    tail: selection.tail,
-                }
-            } else {
-                SelectionOffsets {
-                    head: selection.head,
-                    tail: cmp::min(selection.tail + 1, max_offset),
-                }
-            }
-        });
-
-        self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
-    }
-
-    /// This method does Vim's `[` command. It moves to the enclosing bracket around the cursor. It
-    /// is similar to the `%` command, but it does not require the cursor to start on a bracket.
-    pub fn vim_jump_to_unmatched_bracket(
-        &mut self,
-        bracket: &BracketChar,
-        keep_selection: bool,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let buffer = self.content().as_ref(ctx);
-        let selection_model = self.selection_model.as_ref(ctx);
-        let current_selections = selection_model.selection_offsets();
-
-        let new_selections = current_selections.mapped(|selection| {
-            let cursor = selection.head;
-
-            if let Some(bracket_position) = vim_find_matching_bracket(buffer, bracket, cursor) {
-                SelectionOffsets {
-                    head: bracket_position,
-                    tail: if keep_selection {
-                        cursor
-                    } else {
-                        bracket_position
-                    },
-                }
-            } else {
-                selection
-            }
-        });
-
-        self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
-    }
-
-    /// Vim find character functionality (f, F, t, T commands)
-    /// Searches for a character on the current line and moves the cursor to it or before it
-    pub fn vim_find_char(
-        &mut self,
-        keep_selection: bool,
-        occurrence_count: u32,
-        motion: &FindCharMotion,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let buffer = self.content().as_ref(ctx);
-        let selection_model = self.selection_model.as_ref(ctx);
-        let current_selections = selection_model.selection_offsets();
-
-        let new_selections = current_selections.mapped(|selection| {
-            let head_point = selection.head.to_buffer_point(buffer);
-            let current_column = head_point.column as usize;
-
-            let line_start = buffer.containing_line_start(selection.head);
-            let line_end = buffer.containing_line_end(selection.head);
-            let line_text = buffer.text_in_range(line_start..line_end).into_string();
-
-            if let Some(new_column) = vim_find_char_on_line(
-                &line_text,
-                current_column,
-                motion,
-                occurrence_count,
-                keep_selection,
-            ) {
-                let target_point = Point::new(head_point.row, new_column as u32);
-                let new_head = target_point.to_buffer_char_offset(buffer);
-
-                SelectionOffsets {
-                    head: new_head,
-                    tail: if keep_selection {
-                        selection.tail
-                    } else {
-                        new_head
-                    },
-                }
-            } else {
-                // Character not found
-                selection
             }
         });
 
@@ -4105,6 +3212,132 @@ impl CodeEditorModel {
             self.get_diff_content_for_line(&updated_loc, ctx)
         };
         (updated_loc, content, used_fallback)
+    }
+}
+
+fn vim_goal_columns_from_carets(carets: &[vim::handler::VimCaret]) -> Option<Vec<u32>> {
+    if carets.iter().any(|caret| caret.goal_column.is_some()) {
+        Some(
+            carets
+                .iter()
+                .map(|caret| caret.goal_column.unwrap_or(0))
+                .collect(),
+        )
+    } else {
+        None
+    }
+}
+
+impl VimBufferOps for CodeEditorModel {
+    type Ctx<'a> = ModelContext<'a, Self>;
+
+    fn snapshot(&self, ctx: &Self::Ctx<'_>) -> vim::handler::VimSnapshot {
+        let text = self.content().as_ref(ctx).text().into_string();
+        let carets = self
+            .buffer_selection_model()
+            .as_ref(ctx)
+            .selection_offsets()
+            .iter()
+            .enumerate()
+            .map(|(index, selection)| vim::handler::VimCaret {
+                head: selection.head,
+                tail: selection.tail,
+                goal_column: self
+                    .vim_goal_columns
+                    .as_ref()
+                    .and_then(|goals| goals.get(index).copied()),
+            })
+            .collect();
+        vim::handler::VimSnapshot::from_plain_text(&text, carets)
+    }
+
+    fn set_selections(&mut self, carets: &[vim::handler::VimCaret], ctx: &mut Self::Ctx<'_>) {
+        let Ok(selections) = Vec1::try_from_vec(
+            carets
+                .iter()
+                .map(|caret| SelectionOffsets {
+                    head: caret.head,
+                    tail: caret.tail,
+                })
+                .collect(),
+        ) else {
+            return;
+        };
+        self.applying_vim_selections = true;
+        self.vim_set_selections(selections, AutoScrollBehavior::Selection, ctx);
+        self.vim_goal_columns = vim_goal_columns_from_carets(carets);
+        self.vim_applied_heads = Some(carets.iter().map(|caret| caret.head).collect());
+        self.applying_vim_selections = false;
+    }
+
+    fn replace_ranges(
+        &mut self,
+        edits: &[(CharOffset, CharOffset, String)],
+        ctx: &mut Self::Ctx<'_>,
+    ) {
+        let Ok(edits) = Vec1::try_from_vec(
+            edits
+                .iter()
+                .map(|(start, end, text)| (text.clone(), *start..*end))
+                .collect(),
+        ) else {
+            return;
+        };
+        let selection_model = self.buffer_selection_model().clone();
+        self.update_content(
+            |mut content, ctx| {
+                content.apply_edit(
+                    BufferEditAction::InsertAtCharOffsetRanges { edits: &edits },
+                    EditOrigin::UserInitiated,
+                    selection_model,
+                    ctx,
+                );
+            },
+            ctx,
+        );
+    }
+
+    fn selected_text(&mut self, ctx: &mut Self::Ctx<'_>) -> String {
+        self.content()
+            .as_ref(ctx)
+            .selected_text_as_plain_text(self.buffer_selection_model().clone(), ctx)
+            .into_string()
+    }
+
+    fn delete_selection(&mut self, ctx: &mut Self::Ctx<'_>) {
+        self.delete(TextDirection::Forwards, TextUnit::Character, false, ctx);
+    }
+
+    fn insert_text(&mut self, text: &str, ctx: &mut Self::Ctx<'_>) {
+        self.insert(text, EditOrigin::UserInitiated, ctx);
+    }
+
+    fn toggle_comments(&mut self, ctx: &mut Self::Ctx<'_>) {
+        self.toggle_comments(ctx);
+    }
+
+    fn indent(&mut self, dedent: bool, ctx: &mut Self::Ctx<'_>) {
+        CoreEditorModel::indent(self, dedent, ctx);
+    }
+
+    fn open_line(&mut self, above: bool, ctx: &mut Self::Ctx<'_>) {
+        self.vim_newline(above, ctx);
+    }
+
+    fn change_line_smart_indent(&mut self, ctx: &mut Self::Ctx<'_>) {
+        self.vim_change_line_with_smart_indent(ctx);
+    }
+
+    fn supports_operator(&self, _operator: &VimOperator) -> bool {
+        true
+    }
+
+    fn supports_text_objects(&self) -> bool {
+        true
+    }
+
+    fn smart_indent_on_linewise_change(&self, _operand: &VimOperand) -> bool {
+        true
     }
 }
 
