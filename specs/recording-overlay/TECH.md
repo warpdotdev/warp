@@ -36,15 +36,15 @@ entry and clamps it at the next group's start.
 - Drain the entries alongside the handle at finalize: extend the finalization claim introduced by #2 (`begin_finalize`/`take_handle_or_err`) to return `(RecordingHandle, Vec<ActionLogEntry>)`.
 
 #### Action-label mapping
-Derive overlay eligibility, ordering, and redaction from the structured actions (authoritative and redaction-safe). Use the call-level summary only for the semantic text of a lone renderable key group, where it preserves the provider's key naming. A single summary cannot describe every pill in a multi-action call, so reconstruct those key labels from the structured keycodes. Never render the typed payload. The zero-duration wait placeholder remains the shared no-op distinction used by recording decoration, while overlay eligibility is a separate mapping.
+Derive overlay eligibility, ordering, and the visible-vs-non-visible key boundary from the structured actions (authoritative and redaction-safe). Use the call-level summary only for the semantic text of a lone non-printing key group, where it preserves the provider's key naming. A single summary cannot describe every pill in a multi-action call, so reconstruct those key labels from the structured keycodes. Never render the typed payload, a printable-only key group, or a scroll action. The zero-duration wait placeholder remains the shared no-op distinction used by recording decoration, while overlay eligibility is a separate mapping.
 
 | Server `action_summary` (`anthropic_computer_use.go`) | Structured `computer_use::Action` | Label | Render |
 | --- | --- | --- | --- |
-| `Key "<combo>"` | `KeyDown`/`KeyUp` | `<combo>` for modifier/non-printing keys; `typing…` for an unmodified printable key | yes |
-| `Type "<text>"` | `TypeText` | `typing…` (payload dropped) | yes |
+| `Key \"<combo>\"` | `KeyDown`/`KeyUp` | `<combo>` for modifier/non-printing keys; no label for a printable-only key group | yes for non-visible keys; no for printable-only keys |
+| `Type \"<text>\"` | `TypeText` | — (payload dropped) | no (typing is visible) |
 | `… click at …`, `Left mouse down/up …` | `MouseDown`/`MouseUp` | — | no (cursor visible) |
 | `Mouse moved to …` | `MouseMove` | — | no (cursor visible) |
-| `Scroll <dir> …` | `MouseWheel` | `scroll ↑/↓/←/→` | yes |
+| `Scroll <dir> …` | `MouseWheel` | — | no (scrolling is visible) |
 | `Left click drag from … to …` | `MouseDown`+`MouseMove`+`MouseUp` | — | no (cursor visible) |
 | `Wait …`, `Screenshot`, `Cursor position`, `Zoom …` | `Wait(0)` | — | no (no-op/meta) |
 
@@ -54,7 +54,7 @@ Add `computer_use::burn_in_action_log(input: &Path, entries: &[ActionLogEntry], 
 2. Runs `ffmpeg -y -i <input.mp4> -vf "subtitles=<overlay.ass>" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -movflags +faststart <input.overlay.mp4>`. This **demuxes the on-disk mp4 frame-by-frame and never buffers the whole recording in memory** (matches the finalization design's no-buffering rule). libass is present in stock apt ffmpeg — no `libzmq` / custom build needed.
 3. Returns the overlay path on success; on any error, returns `Err` and the caller falls back to the original (PRODUCT invariant 12).
 
-Bottom-center pill style — concrete example (`ctrl+a`, `typing…`, and `Return` in one group at 3.0–4.5s):
+Bottom-center pill style — concrete example (`ctrl+a` and `Return` in one group at 3.0–4.5s):
 ```
 [Script Info]
 ScriptType: v4.00+
@@ -69,8 +69,7 @@ Style: Pill,DejaVu Sans Mono,48,&H00FFFFFF,&H000000FF,&H00000000,&HB0000000,-1,0
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 Dialogue: 0,0:00:03.00,0:00:04.50,Pill,,0,0,0,,{\an2\pos(760,990)}ctrl+a
-Dialogue: 0,0:00:03.00,0:00:04.50,Pill,,0,0,0,,{\an2\pos(960,990)}typing…
-Dialogue: 0,0:00:03.00,0:00:04.50,Pill,,0,0,0,,{\an2\pos(1160,990)}Return
+Dialogue: 0,0:00:03.00,0:00:04.50,Pill,,0,0,0,,{\an2\pos(1060,990)}Return
 ```
 `Alignment=2` anchors each positioned label from its bottom center; the `\pos` y-coordinate lifts the row off the edge. `BorderStyle=3` + `BackColour=&HB0000000` = semi-transparent dark pill (ASS alpha inverted: `00`=opaque, `FF`=clear); `Outline=16` sets box padding.
 
@@ -86,11 +85,11 @@ Because burn-in sits inside the single finalize path, it covers every terminal c
 libass renders **no text** from `xfonts-base` (bitmap) alone. The Xvfb sidecar installs `fonts-dejavu-core` and `fontconfig` alongside ffmpeg. Its existing ffmpeg wrapper generates a fontconfig file that points at the mounted sidecar fonts, so the client can invoke the normal `subtitles=<file>` filter without knowing the sidecar layout. This is a **hard dependency**: without it burn-in produces empty pills (and per invariant 12 still publishes the original video, so the failure mode is "no labels," not "no video").
 
 ### 6. Redaction
-`action_summary` and `TypeText.text` are `(sensitive)=true`. The `Type` case drops the payload and renders `typing…`; unmodified printable keypresses are redacted the same way. Modifier combinations, non-printing keys, direction-only scroll labels, and the generic `typing…` indicator may render. Burned-in text is user-visible in the artifact by design, but `ActionLogEntry` values must never be written to non-artifact logs (no `log::*` of labels/summaries).
+`action_summary` and `TypeText.text` are `(sensitive)=true`. The `Type` case drops the payload and emits no label; unmodified printable keypresses likewise emit no label because their visible effect is already in the recording. Modifier combinations and named non-printing keys may render. Scroll actions are omitted. Burned-in text is user-visible in the artifact by design, but `ActionLogEntry` values must never be written to non-artifact logs (no `log::*` of labels/summaries).
 
 ## Testing and validation
 ### Pure unit tests (no recorder, no ffmpeg)
-- Label mapping (PRODUCT 5–9): table-driven over representative `UseComputer` requests (structured actions + summary) asserting ordered labels or omission; explicitly assert `TypeText` and unmodified printable keys → `typing…` and never the payload, scroll directions map to direction-only labels, and clicks, mouse-moves, drag, and waits produce no group.
+- Label mapping (PRODUCT 5–11): table-driven over representative `UseComputer` requests (structured actions + summary) asserting ordered labels or omission; explicitly assert `TypeText`, scroll actions, and unmodified printable keys produce no labels and never expose the payload, while modifier/non-printing key presses retain labels and clicks, mouse-moves, drag, and waits produce no group.
 - Group/clamp logic (invariant 4): multiple renderable actions in one call share the recording-wide time window and render as separate horizontal pills; closer entries end the earlier group at the next group's start.
 - `.ass` generation: `Dialogue` timecode formatting (`H:MM:SS.cs`), ASS escaping of labels, style/`PlayRes` from capture dims, empty-entry list ⇒ no burn-in (invariant 8).
 

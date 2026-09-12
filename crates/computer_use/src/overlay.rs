@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use crate::{Action, Key, MouseButton, ScrollDirection, TargetedAction, Vector2I};
+use crate::{Action, Key, MouseButton, TargetedAction, Vector2I};
 
 /// A group of semantic actions dispatched in one `UseComputer` call.
 ///
@@ -69,26 +69,31 @@ pub fn is_meaningful_action_group(actions: &[TargetedAction]) -> bool {
 
 enum LabelCandidate {
     Key(Vec<Key>),
-    Label(String),
 }
 /// Converts one `UseComputer` call into ordered, redaction-safe overlay labels.
 ///
-/// Key down/up primitives are grouped until all pressed keys are released. Text
-/// and scroll actions become semantic labels; pointer and meta actions are
-/// omitted. The call-level summary preserves provider naming for a lone key
+/// Key down/up primitives are grouped until all pressed keys are released.
+/// Printable text, scroll, pointer, and meta actions are omitted because their
+/// effects are visible in the recording or do not add useful context. The
+/// call-level summary preserves provider naming for a lone non-printing key
 /// group, but structured actions reconstruct multi-action calls and always
-/// determine printable-key redaction.
+/// determine the printable-vs-non-printing boundary.
 pub fn overlay_labels_for(actions: &[TargetedAction], action_summary: &str) -> Vec<String> {
     let candidates = collect_label_candidates(actions);
-    let use_action_summary = matches!(candidates.as_slice(), [LabelCandidate::Key(_)]);
+    let use_action_summary = matches!(candidates.as_slice(), [LabelCandidate::Key(_)])
+        && actions.iter().all(|targeted| {
+            matches!(
+                targeted.action,
+                Action::KeyDown { .. } | Action::KeyUp { .. }
+            )
+        });
 
     candidates
         .into_iter()
-        .map(|candidate| match candidate {
+        .filter_map(|candidate| match candidate {
             LabelCandidate::Key(keys) => {
                 key_label(&keys, use_action_summary.then_some(action_summary))
             }
-            LabelCandidate::Label(label) => label,
         })
         .collect()
 }
@@ -113,15 +118,9 @@ fn collect_label_candidates(actions: &[TargetedAction]) -> Vec<LabelCandidate> {
                     pressed_keys.remove(index);
                 }
             }
-            Action::TypeText { .. } => {
-                flush_keys(&mut candidates, &mut current_keys, &mut pressed_keys);
-                candidates.push(LabelCandidate::Label("typing\u{2026}".to_string()));
-            }
-            Action::MouseWheel { direction, .. } => {
-                flush_keys(&mut candidates, &mut current_keys, &mut pressed_keys);
-                candidates.push(LabelCandidate::Label(scroll_label(*direction).to_string()));
-            }
-            Action::Wait(_)
+            Action::TypeText { .. }
+            | Action::MouseWheel { .. }
+            | Action::Wait(_)
             | Action::MouseDown { .. }
             | Action::MouseUp { .. }
             | Action::MouseMove { .. } => {
@@ -133,9 +132,15 @@ fn collect_label_candidates(actions: &[TargetedAction]) -> Vec<LabelCandidate> {
     candidates
 }
 
-fn key_label(keys: &[Key], action_summary: Option<&str>) -> String {
-    if matches!(keys, [Key::Char(ch)] if !ch.is_control()) {
-        return "typing\u{2026}".to_string();
+fn key_label(keys: &[Key], action_summary: Option<&str>) -> Option<String> {
+    // Printable-only key groups are already visible in the captured UI and
+    // therefore do not need a burned-in label. A key group containing a
+    // modifier, control, or named non-printing key remains useful context.
+    if keys
+        .iter()
+        .all(|key| matches!(key, Key::Char(ch) if !ch.is_control()))
+    {
+        return None;
     }
 
     let label = action_summary
@@ -155,15 +160,11 @@ fn flush_keys(
     pressed_keys.clear();
 }
 
-fn redact_printable_key(label: String) -> String {
+fn redact_printable_key(label: String) -> Option<String> {
     let mut chars = label.chars();
-    if chars.next().is_some_and(|ch| !ch.is_control()) && chars.next().is_none()
-        || label.eq_ignore_ascii_case("space")
-    {
-        "typing\u{2026}".to_string()
-    } else {
-        label
-    }
+    let is_single_printable =
+        chars.next().is_some_and(|ch| !ch.is_control()) && chars.next().is_none();
+    (!is_single_printable && !label.eq_ignore_ascii_case("space")).then_some(label)
 }
 
 fn key_label_from_summary(summary: &str) -> String {
@@ -204,15 +205,6 @@ fn key_label_from_keys(keys: &[Key]) -> String {
         })
         .collect::<Vec<_>>()
         .join("+")
-}
-
-fn scroll_label(direction: ScrollDirection) -> &'static str {
-    match direction {
-        ScrollDirection::Up => "scroll \u{2191}",
-        ScrollDirection::Down => "scroll \u{2193}",
-        ScrollDirection::Left => "scroll \u{2190}",
-        ScrollDirection::Right => "scroll \u{2192}",
-    }
 }
 
 #[cfg(any(linux, test))]
