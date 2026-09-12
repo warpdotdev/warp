@@ -211,16 +211,8 @@ pub(crate) fn validate_repository_preparation_overrides(
     }
 
     let mut source_identities = HashSet::new();
-    let mut checkout_names = HashSet::new();
     for repo in source_repos {
         source_identities.insert(source_repo_identity(repo)?);
-        if !checkout_names.insert(repo.repo.to_lowercase()) {
-            return Err(
-                PrepareEnvironmentError::InvalidRepositoryPreparationOverrides {
-                    reason: format!("duplicate checkout name {}", repo.repo),
-                },
-            );
-        }
     }
 
     let mut override_identities = HashSet::new();
