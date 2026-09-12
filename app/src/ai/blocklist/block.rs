@@ -2023,10 +2023,8 @@ impl AIBlock {
         }
         self.has_recording_related_actions = has_recording_related_actions;
 
-        if FeatureFlag::WebSearchUI.is_enabled() {
-            // Handle WebSearch messages
-            self.handle_web_search_messages(&output.messages, ctx);
-        }
+        // Handle WebSearch messages
+        self.handle_web_search_messages(&output.messages, ctx);
 
         if FeatureFlag::WebFetchUI.is_enabled() {
             // Handle WebFetch messages
