@@ -37,13 +37,24 @@ Worth noting: `permission_replied` is parsed and handled by the client but **no 
 
 So the answer to the question this spec exists to settle is **no**: Codex offers no event that separates "a reviewer is deciding" from "a human is being asked". The work this issue needs starts with a contract change, not with a plugin edit.
 
-One point remains observational rather than measured. That the `PermissionRequest` hook fires *before* the reviewer answers is reported by the issue author against 0.153.4 and accepted in triage (`repro:high`), and it is consistent with a hook that returns a decision into the chain — but it was not reproduced under instrumentation for this spec. It does not change the conclusion: whichever order the two run in, the payload in (2) carries nothing that distinguishes the outcome, and (1) means nothing fires afterward to correct it.
+One point remains observational rather than measured. That the `PermissionRequest` hook fires *before* the reviewer answers is reported by the issue author against 0.153.4 and accepted in triage (`repro:high`), and it is consistent with a hook that returns a decision into the chain — but it was not reproduced under instrumentation for this spec. It does not change the conclusion: whichever order the two run in, the payload described above carries nothing that distinguishes the outcome, and the catalogue means nothing fires afterward to correct it.
 
 ## Proposed changes
 
-### 1. Propose a resolution-time hook event upstream — `openai/codex`
+### 1. Propose a resolution-time hook event, and a way to detect it, upstream — `openai/codex`
 
-Add a hook event that fires at the moment Codex determines a permission request requires a human decision, carrying at least the `session_id`, `turn_id`, and `tool_name` of the request it refers to, so a consumer can correlate it with the `PermissionRequest` that opened it.
+Two things are needed, and asking for only the first leaves the plugin unable to use it safely.
+
+**The event.** A hook event that fires at the moment Codex determines a permission request requires a human decision, carrying at least the `session_id`, `turn_id`, and `tool_name` of the request it refers to, so a consumer can correlate it with the `PermissionRequest` that opened it.
+
+**A capability signal the hook process can read.** Without one, a plugin cannot tell "this Codex will fire the escalation event, so stay quiet at request time" from "this Codex never will, so notify now" — and guessing wrong in the quiet direction is the silent miss invariant 12 forbids. The absence of an event is not observable at the moment the decision has to be made.
+
+The shape has a precedent in this same integration, running the other way. `plugins/warp/scripts/should-use-structured.sh` gates every structured emission on `WARP_CLI_AGENT_PROTOCOL_VERSION` and `WARP_CLIENT_VERSION`, environment variables Warp exports into the Codex process, and `build-payload.sh` negotiates `min(plugin_current, warp_declared)` from them. What is missing is the symmetric direction: Codex advertising its own hook capability to the hook process it spawns.
+
+Either form works, in this order of preference:
+
+1. A capability or hook-protocol version in the hook environment or payload, which lets a plugin ask "does this build fire the escalation event" rather than inferring it from a release number.
+2. Codex's own version, which reduces the gate to a version comparison. `CODEX_VERSION` appears in the binary in the same symbol run as `CODEX_PLUGIN_METRICS_OUTPUT` and `CODEX_PERMISSION_PROFILE`, which suggests the plugin subprocess environment — but it was **not confirmed to reach a hook process**, because hooks do not fire in an unauthenticated `codex exec` (see Risks). If it already does reach hooks, this half of the request costs upstream nothing and only the event remains.
 
 This is the only proposal here that satisfies the product spec, and the reason is worth stating because the cheaper alternative looks adequate until invariant 12 is applied to it:
 
@@ -55,17 +66,20 @@ The event's name and exact payload are upstream's to choose. What this spec asks
 
 ### 2. Emit on the new event instead — `warpdotdev/codex-warp`
 
-Once the event exists, `hooks.json` registers it and a new script emits the `permission_request` OSC 777 event that `on-permission-request.sh` emits today. `on-permission-request.sh` stops emitting `permission_request`.
+Once (1) exists, `hooks.json` registers the escalation event **in addition to** `PermissionRequest`, never in place of it, and a new `on-permission-escalated.sh` emits the `permission_request` OSC 777 event that `on-permission-request.sh` emits today.
 
-Register the new event **in addition to** `PermissionRequest`, not in place of it, and gate the emission inside the scripts rather than by which hooks are registered. That keeps invariant 12 satisfiable: a plugin running against a Codex that does not fire the new event keeps notifying from `PermissionRequest`, which is today's behavior, rather than going silent.
+Which of the two scripts actually emits is decided at runtime by the capability signal from (1), not by which hooks are registered:
+
+- **Capability present.** `on-permission-request.sh` emits nothing, and `on-permission-escalated.sh` emits `permission_request`. This is the behavior the issue asks for.
+- **Capability absent.** `on-permission-request.sh` emits `permission_request` exactly as it does today, and `on-permission-escalated.sh` never runs because the event never fires. The user gets today's over-notification rather than silence, satisfying invariant 12.
+
+The gate belongs in `should-use-structured.sh` alongside the checks already there, so both directions of capability negotiation live in one file and a script that forgets to consult it fails toward emitting.
+
+**Without the capability signal from (1), this change cannot be made safely at all.** A plugin that simply moved the emission would go quiet on every Codex build that does not fire the escalation event, which is a worse regression than the bug being fixed. That dependency is the reason (1) asks for two things rather than one.
 
 The existing OSC 777 protocol needs no new event name. `permission_request` already means "blocked on the user" to the client, which is precisely what it would now mean.
 
-### 3. Emit `permission_replied` — `warpdotdev/codex-warp`
-
-Independently of (1), the plugin should emit `permission_replied` when a request is resolved, so the client's blocked status clears on the request's own resolution rather than waiting for the next `tool_complete`. The client already parses and handles it; there is simply no producer. This is a small correctness improvement and does not by itself address the issue.
-
-### 4. Warp client — no protocol change required
+### 3. Warp client — no protocol change required
 
 With (1) and (2) in place, the client needs no change to satisfy invariants 1 through 8, 11, and 13 through 15: `permission_request` continues to mean `Blocked`, the navigated-away gate continues to apply, and the existing clearing paths continue to work.
 
@@ -82,9 +96,13 @@ Product invariants are numbered in [`product.md`](./product.md); each is listed 
 
 **Plugin scripts, `warpdotdev/codex-warp`.** Shell-level tests over the emission decision, driving each script with a recorded hook payload on stdin and asserting the OSC 777 body:
 
-- Invariant 1: the new event absent, `PermissionRequest` alone, emits nothing under (2)'s gating.
-- Invariants 2 and 6: the new event fires, `permission_request` is emitted once with the summary built from `tool_name` and `tool_input`.
-- Invariant 12: a payload from a Codex that does not fire the new event still emits on `PermissionRequest`. This is the case most worth pinning, because its failure mode is silence.
+The capability gate from (2) is what these tests are really pinning, so each case names which side of it it drives.
+
+- Invariant 1: capability present, `PermissionRequest` alone — `on-permission-request.sh` emits nothing.
+- Invariants 2 and 6: capability present, the escalation event fires — `on-permission-escalated.sh` emits `permission_request` once, with the summary built from `tool_name` and `tool_input`.
+- Invariant 12: capability absent, `PermissionRequest` alone — `on-permission-request.sh` still emits `permission_request`. This is the case most worth pinning, because its failure mode is silence rather than a visible error.
+- The gate's own falsifiability: a case that removes the capability signal and asserts the emission comes back. A gate that is never observed failing is not evidence, and this one decides between over-notifying and going quiet.
+- Exactly one emission per request across both scripts, so a build where both paths fire does not double-notify.
 
 **Manual validation.** The distinction under test only exists in a real Codex session, so this cannot be reduced to unit tests. On macOS, with Warp navigated away from the Codex pane:
 
@@ -104,15 +122,15 @@ A screen recording of the second and third cases is the evidence worth attaching
 - The negative control fired, so that silence is meaningful: a `hooks.json` whose `SessionStart` value is a string rather than a sequence produces `warning: failed to parse hooks config <path>: invalid type: string ..., expected a sequence at line 4 column 58`. The file is read, and parse problems do surface.
 - That warning is a warning. Codex continued and printed its session header, so even a `hooks.json` that fails to deserialize does not stop Codex from starting.
 
-Since the unknown-name file deserialized without a warning, the known entries in that same map were retained. Whether the sibling hook then *executes* was not observable here: the positive control did not fire either, because `SessionStart` hooks did not run in an unauthenticated `codex exec`. Confirm that last step in an authenticated session before (2) ships, and repeat the whole probe against the oldest Codex the plugin supports rather than only against 0.154.0.
+Since the unknown-name file deserialized without a warning, the known entries in that same map were retained. Whether the sibling hook then *executes* was not observable here: the positive control did not fire either, with an omitted matcher and again with an explicit `startup|resume|clear` one, because `SessionStart` hooks do not run in an unauthenticated `codex exec` at all. That same limit is why the `CODEX_VERSION` question in (1) is left open rather than answered — a hook that never runs cannot report the environment it was given. Confirm both in an authenticated session before (2) ships, and repeat the whole probe against the oldest Codex the plugin supports rather than only against 0.154.0.
 
 **Silence is worse than noise.** Every proposal here is shaped by invariant 12, and the review of any implementation should check the failure direction first: a change that removes notifications for requests it cannot classify is a regression even if it fixes the reported case.
 
-**This spec depends on an upstream change.** Nothing in (1) is Warp's to land. (3) is independently shippable, and (2) is only shippable once (1) exists. If upstream declines, the issue has no correct fix under the current contract, and the honest outcome is to say so on the issue rather than to ship a heuristic.
+**This spec depends entirely on an upstream change, and nothing here ships without it.** Nothing in (1) is Warp's to land, (2) is unsafe to attempt before (1) exists, and (3) is the observation that the client needs no work rather than work of its own. If upstream declines, the issue has no correct fix under the current contract, and the honest outcome is to say so on the issue rather than to ship a heuristic.
 
 **The contract evidence is read from a binary.** Every claim in Context is from schemas and symbols embedded in Codex 0.154.0, not from published documentation. The shape is unlikely to be wrong, but the wording of an upstream proposal should be checked against Codex's own hook documentation first.
 
 ## Follow-ups
 
 - Whether the other CLI agent plugins that emit `permission_request` have the same gap against their own upstreams, tracked separately per the product spec's open questions.
-- `permission_replied` having no producer in either plugin, which (3) addresses for Codex only.
+- `permission_replied` having no producer in either plugin. An earlier draft of this spec proposed filling that slot as an independently shippable improvement; that was wrong, and it is recorded here rather than dropped because the reasoning generalizes. A producer would need to fire on the approved, denied, abandoned, timed-out, and user-answered paths, and Codex exposes an observable for exactly one of them: the tool running, which `on-post-tool-use.sh` already reports as `tool_complete`, and which the client already uses to clear `Blocked`. So a `permission_replied` producer built on today's contract would be redundant where it worked and silent everywhere else. It becomes worth doing once (1) lands, and not before.
