@@ -1,0 +1,21 @@
+[workspace]
+
+[package]
+name = "model_handle_capture"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Dylint lint: detects ModelHandle/ViewHandle captures in subscribe_to_model/subscribe_to_view closures"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+dylint_linting = "6"
+
+[dev-dependencies]
+dylint_testing = "6"
+
+# Let rust-analyzer know this crate uses rustc internals.
+[package.metadata.rust-analyzer]
+rustc_private = true

@@ -1,0 +1,10 @@
+error: closure captures `ModelHandle<Foo>` — the subscribed entity's handle is already the second callback parameter; use that instead of capturing an owned handle
+  --> $DIR/same_entity_view_ctx.rs:29:18
+   |
+LL |         let _ = &handle_clone; //~ ERROR closure captures
+   |                  ^^^^^^^^^^^^
+   |
+   = note: `#[deny(model_handle_in_subscription)]` on by default
+
+error: aborting due to 1 previous error
+

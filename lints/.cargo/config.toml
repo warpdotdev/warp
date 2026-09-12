@@ -1,0 +1,5 @@
+[build]
+rustflags = ["-C", "prefer-dynamic"]
+
+[target.'cfg(all())']
+linker = "dylint-link"
