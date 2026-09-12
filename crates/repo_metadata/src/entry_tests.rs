@@ -501,14 +501,14 @@ fn standing_queries_report_skills_below_an_ignored_directory() {
         std::fs::write(repo.join(".gitignore"), ".agents/\n").unwrap();
 
         let mut files = Vec::new();
-        let mut gitignores = Vec::new();
+        let mut gitignore_rules = crate::GitignoreRules::default();
         let mut results = StandingQueryResults::default();
         let mut definitions = StandingQueryDefinitions::default();
         definitions.set_project_skill_provider_paths([std::path::PathBuf::from(".agents/skills")]);
         let tree = run(Entry::build_tree_with_standing_queries(
             &repo,
             &mut files,
-            &mut gitignores,
+            &mut gitignore_rules,
             None,
             super::BuildTreeOptions {
                 max_depth: 200,
@@ -557,7 +557,7 @@ fn standing_queries_report_symlinked_skills_without_materializing_symlinked_dire
                 .unwrap();
 
             let mut files = Vec::new();
-            let mut gitignores = Vec::new();
+            let mut gitignore_rules = crate::GitignoreRules::default();
             let mut results = StandingQueryResults::default();
             let mut definitions = StandingQueryDefinitions::default();
             definitions
@@ -565,7 +565,7 @@ fn standing_queries_report_symlinked_skills_without_materializing_symlinked_dire
             let tree = run(Entry::build_tree_with_standing_queries(
                 &repo,
                 &mut files,
-                &mut gitignores,
+                &mut gitignore_rules,
                 None,
                 super::BuildTreeOptions {
                     max_depth: 200,
@@ -604,12 +604,12 @@ fn standing_queries_do_not_report_rules_below_an_unloaded_shallow_directory() {
         let repo = dirs.tests().join("repo");
 
         let mut files = Vec::new();
-        let mut gitignores = Vec::new();
+        let mut gitignore_rules = crate::GitignoreRules::default();
         let mut results = StandingQueryResults::default();
         let tree = run(Entry::build_tree_with_standing_queries(
             &repo,
             &mut files,
-            &mut gitignores,
+            &mut gitignore_rules,
             None,
             super::BuildTreeOptions {
                 max_depth: 1,
@@ -657,14 +657,14 @@ fn shallow_tree_expands_force_included_skill_branch_only() {
         let rule_path = workspace.join("src/deep/WARP.md");
 
         let mut files = Vec::new();
-        let mut gitignores = Vec::new();
+        let mut gitignore_rules = crate::GitignoreRules::default();
         let mut results = StandingQueryResults::default();
         let mut definitions = StandingQueryDefinitions::default();
         definitions.set_project_skill_provider_paths([std::path::PathBuf::from(".agents/skills")]);
         let tree = run(Entry::build_tree_with_standing_queries(
             &workspace,
             &mut files,
-            &mut gitignores,
+            &mut gitignore_rules,
             None,
             super::BuildTreeOptions {
                 max_depth: 1,
