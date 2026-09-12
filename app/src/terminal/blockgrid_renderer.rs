@@ -31,10 +31,10 @@ pub struct GridRenderParams {
     pub size_info: SizeInfo,
     pub cell_size: Vector2F,
     pub use_ligature_rendering: bool,
-    /// When true, suppresses cursor rendering for CLI agents when rich input is open. For agents that draw their own cursor (SHOW_CURSOR off),
-    /// the cursor cell is skipped. For agents that let Warp draw the cursor
-    /// (SHOW_CURSOR on), the `draw_cursor` call and cursor contrast colouring
-    /// are suppressed instead.
+    /// When true, suppresses Warp's own cursor for CLI agents while rich input is open: both the
+    /// `draw_cursor` overlay and the contrast colouring of the cell under the cursor. The cell
+    /// itself is still rendered, so an agent drawing its own cursor (SHOW_CURSOR off) keeps the
+    /// glyph underneath it.
     pub hide_cursor_cell: bool,
 }
 
