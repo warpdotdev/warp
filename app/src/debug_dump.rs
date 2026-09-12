@@ -26,6 +26,8 @@ pub(crate) fn run() -> anyhow::Result<()> {
     #[cfg_attr(windows, expect(unused_mut))]
     #[cfg_attr(any(target_os = "macos", target_family = "wasm"), expect(unused))]
     let mut windowing_system: Option<windowing::System> = None;
+    #[cfg(any(target_os = "linux", target_os = "freebsd", windows))]
+    let mut wgpu_initialized = false;
 
     // On non-macOS platforms, initialize winit and wgpu.
     #[cfg(not(target_os = "macos"))]
@@ -34,6 +36,10 @@ pub(crate) fn run() -> anyhow::Result<()> {
             warpui::rendering::wgpu::init_wgpu_instance(Box::new(
                 event_loop.owned_display_handle(),
             ));
+            #[cfg(any(target_os = "linux", target_os = "freebsd", windows))]
+            {
+                wgpu_initialized = true;
+            }
 
             // Log some additional windowing system information on Linux.
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -84,11 +90,15 @@ pub(crate) fn run() -> anyhow::Result<()> {
         println!("##################################################");
         println!("# wgpu Adapters");
         println!("##################################################");
-        warpui::r#async::block_on(warpui::rendering::wgpu::print_wgpu_adapters(
-            gpu_power_preference,
-            backend_preference,
-            windowing_system,
-        ));
+        if wgpu_initialized {
+            warpui::r#async::block_on(warpui::rendering::wgpu::print_wgpu_adapters(
+                gpu_power_preference,
+                backend_preference,
+                windowing_system,
+            ));
+        } else {
+            println!("Unavailable: no display event loop could be initialized");
+        }
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
