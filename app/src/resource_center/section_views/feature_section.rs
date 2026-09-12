@@ -128,6 +128,7 @@ impl FeatureSectionView {
                     ctx.notify();
                 }
             }
+            KeybindingChangedEvent::BindingsReloaded => {}
         }
     }
 

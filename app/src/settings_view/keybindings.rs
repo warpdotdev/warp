@@ -75,6 +75,9 @@ pub enum KeybindingChangedEvent {
         binding_name: String,
         new_trigger: Option<Keystroke>,
     },
+    /// The set of registered editable bindings changed — e.g. bindings derived from launch
+    /// configurations or tab configs were re-registered after a reload from disk.
+    BindingsReloaded,
 }
 
 impl Entity for KeybindingChangedNotifier {
@@ -511,6 +514,15 @@ impl KeybindingsView {
 
         let search_bar = ctx.add_typed_action_view(|_| SearchBar::new(search_editor.clone()));
 
+        let bindings_notifier = KeybindingChangedNotifier::handle(ctx);
+        ctx.subscribe_to_model(&bindings_notifier, |me, _, event, ctx| {
+            // Only refresh once the page has been shown; `on_page_selected` builds the initial
+            // list.
+            if matches!(event, KeybindingChangedEvent::BindingsReloaded) && me.bindings.is_some() {
+                me.rebuild_binding_list(ctx);
+            }
+        });
+
         let page = PageType::new_monolith(KeybindingsWidget::default(), None, false);
         Self {
             page,
@@ -522,6 +534,62 @@ impl KeybindingsView {
             search_editor,
             conflict_map: Default::default(),
         }
+    }
+
+    /// Rebuilds the cached binding list, rows, and conflict map from the keymap's currently
+    /// registered editable bindings.
+    fn rebuild_binding_list(&mut self, ctx: &mut ViewContext<Self>) {
+        // `from_editable_lens` materializes any dynamic description resolver
+        // before caching, so the dedup below (which compares descriptions)
+        // sees concrete strings.
+        let lenses: Vec<_> = ctx.editable_bindings().collect();
+        self.bindings = Some(
+            lenses
+                .into_iter()
+                .map(|lens| CommandBinding::from_editable_lens(lens, ctx))
+                .sorted_by(|a, b| {
+                    // Sort by description then name so that we can deduplicate bindings by name.
+                    a.description
+                        .in_context(DescriptionContext::Default)
+                        .cmp(b.description.in_context(DescriptionContext::Default))
+                        .then(a.name.cmp(&b.name))
+                })
+                // Effectively, editable bindings can only be used by one view, because the
+                // corresponding context predicate and typed action are view-specific.
+                //
+                // If multiple views need equivalent bindings, we handle this by declaring
+                // duplicates with the same name and description, but different actions and
+                // predicates. Because bindings are saved/loaded by name, changes to one binding
+                // will affect the others. To reduce clutter, only show one binding for a given name
+                // and description.
+                //
+                // There are some bindings with the same name, but different descriptions. Because
+                // we sort by description first, those bindings won't be deduplicated. This is
+                // alright for now, since those bindings have slightly different semantics despite
+                // being linked (e.g. find in block vs. find in terminal).
+                //
+                // TODO: Long-term, we should instead refactor TypedActionView so that common
+                // bindings can be declared once and handled by multiple views.
+                .dedup_by(|a, b| a.name == b.name && a.description == b.description)
+                .collect(),
+        );
+        self.rows = Some(
+            self.bindings
+                .iter()
+                .flatten()
+                .map(|b| (None, b))
+                .map(KeybindingRow::from)
+                .collect(),
+        );
+
+        self.conflict_map = self
+            .bindings
+            .iter()
+            .flatten()
+            .map(|binding| binding.trigger.clone())
+            .collect();
+
+        ctx.notify();
     }
 
     /// Searches for a keybinding as if the user had typed the query into the search
@@ -749,56 +817,7 @@ impl SettingsPageMeta for KeybindingsView {
     fn on_page_selected(&mut self, allow_steal_focus: bool, ctx: &mut ViewContext<Self>) {
         // Reset previous modifying_row state.
         self.modifying_row = None;
-        // `from_editable_lens` materializes any dynamic description resolver
-        // before caching, so the dedup below (which compares descriptions)
-        // sees concrete strings.
-        let lenses: Vec<_> = ctx.editable_bindings().collect();
-        self.bindings = Some(
-            lenses
-                .into_iter()
-                .map(|lens| CommandBinding::from_editable_lens(lens, ctx))
-                .sorted_by(|a, b| {
-                    // Sort by description then name so that we can deduplicate bindings by name.
-                    a.description
-                        .in_context(DescriptionContext::Default)
-                        .cmp(b.description.in_context(DescriptionContext::Default))
-                        .then(a.name.cmp(&b.name))
-                })
-                // Effectively, editable bindings can only be used by one view, because the
-                // corresponding context predicate and typed action are view-specific.
-                //
-                // If multiple views need equivalent bindings, we handle this by declaring
-                // duplicates with the same name and description, but different actions and
-                // predicates. Because bindings are saved/loaded by name, changes to one binding
-                // will affect the others. To reduce clutter, only show one binding for a given name
-                // and description.
-                //
-                // There are some bindings with the same name, but different descriptions. Because
-                // we sort by description first, those bindings won't be deduplicated. This is
-                // alright for now, since those bindings have slightly different semantics despite
-                // being linked (e.g. find in block vs. find in terminal).
-                //
-                // TODO: Long-term, we should instead refactor TypedActionView so that common
-                // bindings can be declared once and handled by multiple views.
-                .dedup_by(|a, b| a.name == b.name && a.description == b.description)
-                .collect(),
-        );
-        self.rows = Some(
-            self.bindings
-                .iter()
-                .flatten()
-                .map(|b| (None, b))
-                .map(KeybindingRow::from)
-                .collect(),
-        );
-
-        // Populate the conflict map at startup.
-        self.conflict_map = self
-            .bindings
-            .iter()
-            .flatten()
-            .map(|binding| binding.trigger.clone())
-            .collect();
+        self.rebuild_binding_list(ctx);
 
         self.search_editor.update(ctx, |editor, ctx| {
             editor.clear_buffer_and_reset_undo_stack(ctx);

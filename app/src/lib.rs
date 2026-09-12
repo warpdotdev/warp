@@ -20,6 +20,7 @@ mod coding_entrypoints;
 mod coding_panel_enablement_state;
 mod command_palette;
 mod completer;
+mod config_keybindings;
 #[allow(dead_code)]
 mod context_chips;
 #[cfg(enable_crash_recovery)]
@@ -2108,6 +2109,8 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(|_| SystemStats::new());
     workspace::auto_handoff::init(ctx);
     ctx.add_singleton_model(|_| KeybindingChangedNotifier::new());
+    // Requires the WarpConfig singleton and the KeybindingChangedNotifier registered above.
+    config_keybindings::init(ctx);
     ctx.add_singleton_model(|_| TabShortcutModifierState::new());
     ctx.add_singleton_model(|_| search::command_palette::SelectedItems::new());
     ctx.add_singleton_model(search::files::model::FileSearchModel::new);

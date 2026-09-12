@@ -613,7 +613,7 @@ fn open_launch_config(arg: &OpenLaunchConfigArg, ctx: &mut AppContext) {
 
     send_telemetry_from_app_ctx!(
         TelemetryEvent::OpenLaunchConfig {
-            ui_location: crate::server::telemetry::LaunchConfigUiLocation::Uri,
+            ui_location: arg.ui_location,
             open_in_active_window: arg.open_in_active_window,
         },
         ctx

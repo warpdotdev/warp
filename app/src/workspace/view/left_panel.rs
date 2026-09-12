@@ -384,7 +384,8 @@ impl LeftPanelView {
         ctx.subscribe_to_model(
             &KeybindingChangedNotifier::handle(ctx),
             |me, _, event, ctx| match event {
-                KeybindingChangedEvent::BindingChanged { .. } => {
+                KeybindingChangedEvent::BindingChanged { .. }
+                | KeybindingChangedEvent::BindingsReloaded => {
                     for button in &mut me.toolbelt_buttons {
                         button.tooltip_keybinding =
                             toolbelt_tooltip_keybinding(&button.tooltip_keybinding_names, ctx);

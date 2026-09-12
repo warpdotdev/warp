@@ -197,6 +197,9 @@ impl KeybindingsView {
                     ctx.notify();
                 }
             }
+            KeybindingChangedEvent::BindingsReloaded => {
+                self.rebuild_bindings(TabSettings::handle(ctx), ctx);
+            }
         }
     }
 
