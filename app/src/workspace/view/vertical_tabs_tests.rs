@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::iter::once;
 use std::path::PathBuf;
 
@@ -12,16 +13,16 @@ use super::{
     VerticalTabsDetailTargetKind, VerticalTabsSummaryBranchEntry, VerticalTabsSummaryData,
     VerticalTabsSummaryPrimaryLabel, branch_label_display, coalesce_summary_branch_entries,
     code_detail_kind_label, compact_branch_subtitle_display, detail_sidecar_width_and_bounds,
-    detail_target_for_hovered_row, non_terminal_search_text_fragments,
-    pane_ids_for_display_granularity, pane_search_text_fragments, preferred_agent_tab_titles,
-    push_normalized_unique_summary_label, search_fragments_contain_query,
-    select_summary_pane_kind_icons, should_keep_detail_sidecar_visible_for_mouse_position,
-    should_show_tab_group_header, shows_synced_inputs_indicator,
-    sort_summary_primary_labels_status_first, summary_overflow_count,
-    summary_search_text_fragments, terminal_kind_badge_label, terminal_primary_line_data,
-    terminal_pull_request_badge_label, terminal_search_text_fragments,
-    terminal_title_fallback_font, uses_outer_group_container, visible_pane_ids_for_detail_target,
-    vtab_diff_stats_text,
+    detail_target_for_hovered_row, group_display_name, matched_group_ids, merge_group_name_matches,
+    non_terminal_search_text_fragments, pane_ids_for_display_granularity,
+    pane_search_text_fragments, preferred_agent_tab_titles, push_normalized_unique_summary_label,
+    search_fragments_contain_query, select_summary_pane_kind_icons,
+    should_keep_detail_sidecar_visible_for_mouse_position, should_show_tab_group_header,
+    shows_synced_inputs_indicator, sort_summary_primary_labels_status_first,
+    summary_overflow_count, summary_search_text_fragments, tab_admitted_by_group_name,
+    terminal_kind_badge_label, terminal_primary_line_data, terminal_pull_request_badge_label,
+    terminal_search_text_fragments, terminal_title_fallback_font, uses_outer_group_container,
+    visible_pane_ids_for_detail_target, vtab_diff_stats_text,
 };
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::context_chips::display_chip::GitLineChanges;
@@ -30,6 +31,7 @@ use crate::pane_group::{PaneId, TerminalPaneId};
 use crate::safe_triangle::SafeTriangle;
 use crate::tab::{ShortcutModifierKind, reveals_shortcut_hints};
 use crate::terminal::CLIAgent;
+use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::tab_settings::VerticalTabsDisplayGranularity;
 
 fn label(text: &str) -> VerticalTabsSummaryPrimaryLabel {
@@ -1241,4 +1243,170 @@ fn summary_search_fragments_include_hidden_overflow_values() {
     assert!(search_fragments_contain_query(&fragments, "#789"));
     assert!(search_fragments_contain_query(&fragments, "+2"));
     assert!(search_fragments_contain_query(&fragments, "-3"));
+}
+
+fn tab_group(name: Option<&str>) -> TabGroup {
+    TabGroup {
+        name: name.map(str::to_string),
+        ..TabGroup::new()
+    }
+}
+
+#[test]
+fn group_display_name_uses_the_group_name_when_set() {
+    assert_eq!(group_display_name(&tab_group(Some("backend"))), "backend");
+}
+
+#[test]
+fn group_display_name_falls_back_to_the_untitled_header_text() {
+    assert_eq!(group_display_name(&tab_group(None)), "New Group");
+}
+
+#[test]
+fn group_name_match_includes_members_that_did_not_match_on_their_own() {
+    let group = TabGroupId::new();
+    let tab_group_ids = vec![Some(group), Some(group), None];
+
+    let merged = merge_group_name_matches(
+        &tab_group_ids,
+        &HashSet::from([group]),
+        // Only the second tab matched on its own title.
+        vec![(1, None)],
+    );
+
+    assert_eq!(merged, vec![(0, None), (1, None)]);
+}
+
+#[test]
+fn group_name_match_keeps_results_ordered_by_tab_index() {
+    let group = TabGroupId::new();
+    // Ungrouped tabs on either side of the group.
+    let tab_group_ids = vec![None, Some(group), Some(group), None];
+
+    let merged = merge_group_name_matches(
+        &tab_group_ids,
+        &HashSet::from([group]),
+        vec![(0, None), (3, None)],
+    );
+
+    assert_eq!(
+        merged,
+        vec![(0, None), (1, None), (2, None), (3, None)],
+        "group members must be interleaved in tab order, not appended"
+    );
+}
+
+#[test]
+fn group_name_match_upgrades_a_pane_filtered_member_to_all_panes() {
+    let group = TabGroupId::new();
+    let tab_group_ids = vec![Some(group)];
+
+    let merged = merge_group_name_matches(
+        &tab_group_ids,
+        &HashSet::from([group]),
+        // The tab matched on one pane row only.
+        vec![(0, Some(vec![pane_id()]))],
+    );
+
+    assert_eq!(
+        merged,
+        vec![(0, None)],
+        "a group-name match shows the whole tab, not a pane-filtered slice"
+    );
+}
+
+#[test]
+fn group_name_match_for_a_group_with_no_members_changes_nothing() {
+    let empty_group = TabGroupId::new();
+    let tab_group_ids = vec![None, None];
+
+    let merged = merge_group_name_matches(
+        &tab_group_ids,
+        &HashSet::from([empty_group]),
+        vec![(1, None)],
+    );
+
+    assert_eq!(merged, vec![(1, None)]);
+}
+
+#[test]
+fn group_name_match_leaves_tabs_outside_the_group_filtered() {
+    let matched = TabGroupId::new();
+    let other = TabGroupId::new();
+    let tab_group_ids = vec![Some(matched), Some(other), None];
+
+    let merged = merge_group_name_matches(&tab_group_ids, &HashSet::from([matched]), vec![]);
+
+    assert_eq!(
+        merged,
+        vec![(0, None)],
+        "only members of the name-matched group are force-included"
+    );
+}
+
+#[test]
+fn no_group_name_match_leaves_the_filtered_tabs_untouched() {
+    let group = TabGroupId::new();
+    let tab_group_ids = vec![Some(group), None];
+    let own_matches = vec![(1, Some(vec![pane_id()]))];
+
+    let merged = merge_group_name_matches(&tab_group_ids, &HashSet::new(), own_matches.clone());
+
+    assert_eq!(merged, own_matches);
+}
+
+fn tab_groups_map(groups: Vec<TabGroup>) -> HashMap<TabGroupId, TabGroup> {
+    groups.into_iter().map(|group| (group.id, group)).collect()
+}
+
+#[test]
+fn matched_group_ids_selects_groups_whose_displayed_name_contains_the_query() {
+    let backend = tab_group(Some("backend"));
+    let frontend = tab_group(Some("frontend"));
+    let backend_id = backend.id;
+    let groups = tab_groups_map(vec![backend, frontend]);
+
+    assert_eq!(
+        matched_group_ids(&groups, "backend"),
+        HashSet::from([backend_id])
+    );
+}
+
+#[test]
+fn matched_group_ids_is_case_insensitive() {
+    let group = tab_group(Some("Backend Services"));
+    let id = group.id;
+    let groups = tab_groups_map(vec![group]);
+
+    assert_eq!(matched_group_ids(&groups, "backend"), HashSet::from([id]));
+}
+
+#[test]
+fn matched_group_ids_matches_the_untitled_group_placeholder() {
+    let group = tab_group(None);
+    let id = group.id;
+    let groups = tab_groups_map(vec![group]);
+
+    assert_eq!(matched_group_ids(&groups, "new group"), HashSet::from([id]));
+}
+
+#[test]
+fn matched_group_ids_is_empty_when_nothing_matches() {
+    let groups = tab_groups_map(vec![tab_group(Some("backend"))]);
+
+    assert!(matched_group_ids(&groups, "nomatch").is_empty());
+}
+
+#[test]
+fn tab_is_admitted_by_group_name_only_when_its_group_matched() {
+    let matched = TabGroupId::new();
+    let other = TabGroupId::new();
+    let matched_groups = HashSet::from([matched]);
+
+    assert!(tab_admitted_by_group_name(Some(matched), &matched_groups));
+    assert!(!tab_admitted_by_group_name(Some(other), &matched_groups));
+    assert!(
+        !tab_admitted_by_group_name(None, &matched_groups),
+        "an ungrouped tab is never admitted by a group-name match"
+    );
 }
