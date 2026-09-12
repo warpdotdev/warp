@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::{ContentHash, Fragment, FragmentLocation, FragmentMetadata};
 use crate::index::locations::{CodeContextLocation, FileFragmentLocation};
@@ -21,7 +22,7 @@ pub fn build_fragments_from_file_contents(
     let mut fail_to_read_path = Vec::new();
 
     // Group fragments by file path.
-    let mut fragments_by_path: HashMap<_, Vec<_>> = HashMap::new();
+    let mut fragments_by_path: HashMap<Arc<Path>, Vec<_>> = HashMap::new();
     for (content_hash, metadata) in metadatas {
         fragments_by_path
             .entry(metadata.absolute_path)
@@ -32,7 +33,7 @@ pub fn build_fragments_from_file_contents(
     // Process each file and its fragments.
     for (file_path, file_fragments) in fragments_by_path {
         let mut has_failed_to_read_fragments = false;
-        if let Some(file_content) = file_contents.get(&file_path) {
+        if let Some(file_content) = file_contents.get(file_path.as_ref()) {
             // Process all fragments for this file.
             for (content_hash, fragment_ranges) in file_fragments {
                 let start_idx = fragment_ranges.start.as_usize();
@@ -65,7 +66,7 @@ pub fn build_fragments_from_file_contents(
                             content,
                             content_hash,
                             location: FragmentLocation {
-                                absolute_path: file_path.clone(),
+                                absolute_path: file_path.to_path_buf(),
                                 byte_range: fragment_ranges,
                             },
                         });
@@ -87,7 +88,7 @@ pub fn build_fragments_from_file_contents(
         }
 
         if has_failed_to_read_fragments {
-            fail_to_read_path.push(file_path);
+            fail_to_read_path.push(file_path.to_path_buf());
         }
     }
 
@@ -113,7 +114,7 @@ pub fn fragments_to_context_locations<'a>(
     for fragment in &fragments {
         if let Some(metadata) = metadata_for_hash(&fragment.content_hash).and_then(|metadatas| {
             metadatas.iter().find(|m| {
-                m.absolute_path == fragment.location.absolute_path
+                m.absolute_path.as_ref() == fragment.location.absolute_path
                     && m.location.byte_range == fragment.location.byte_range
             })
         }) {
