@@ -304,6 +304,15 @@ impl Draggable {
         self
     }
 
+    /// Constrains the drag to `axis`, or leaves it unconstrained when `None`.
+    ///
+    /// Lets a caller decide at runtime whether to lock the axis without having
+    /// to break its builder chain in two.
+    pub fn with_optional_drag_axis(mut self, axis: Option<DragAxis>) -> Self {
+        self.drag_axis = axis;
+        self
+    }
+
     /// Sets an alternate element to be rendered while the drag is active
     pub fn with_alternate_drag_element(mut self, element: Box<dyn Element>) -> Self {
         self.alternate_drag_element = Some(element);
