@@ -649,14 +649,15 @@ fn complete_policy_origin_removal_excludes_preserved_target() {
         ),
     ];
     let requests = repository_clone_requests(&repos, &overrides, false).unwrap();
-    let command = build_remove_repository_origins_command(
-        &requests,
-        Path::new("/workspace"),
-        ShellType::Bash,
-    );
-
-    assert!(!command.contains("/workspace/warp'"));
-    assert!(command.contains("/workspace/common-skills"));
+    let workspace = Path::new("/workspace");
+    let command = build_remove_repository_origins_command(&requests, workspace, ShellType::Bash);
+    let preserved_target = workspace.join("warp").to_string_lossy().into_owned();
+    let removed_source = workspace
+        .join("common-skills")
+        .to_string_lossy()
+        .into_owned();
+    assert!(!command.contains(&preserved_target));
+    assert!(command.contains(&removed_source));
 }
 
 #[test]
