@@ -30,3 +30,6 @@ getrandom = { version = "0.2", features = ["js"] }
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
