@@ -375,8 +375,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::AmbientAgentsRTC,
         #[cfg(feature = "classic_completions")]
         FeatureFlag::ClassicCompletions,
-        #[cfg(feature = "force_classic_completions")]
-        FeatureFlag::ForceClassicCompletions,
         #[cfg(feature = "native_shell_completions")]
         FeatureFlag::NativeShellCompletions,
         #[cfg(feature = "agent_view_conversation_list_view")]

@@ -1196,8 +1196,6 @@ pub enum InputAction {
     /// this action resets the command to its original workflow state.
     ResetWorkflowState,
 
-    ToggleClassicCompletionsMode,
-
     /// Toggles the inline conversation menu for selecting AI conversations.
     ToggleConversationsMenu,
 
@@ -2194,17 +2192,6 @@ pub fn init(app: &mut AppContext) {
             & !id!(flags::ACTIVE_AGENT_VIEW)
             & !id!(flags::ACTIVE_INLINE_AGENT_VIEW),
     )]);
-
-    if FeatureFlag::ClassicCompletions.is_enabled()
-        && !FeatureFlag::ForceClassicCompletions.is_enabled()
-    {
-        app.register_editable_bindings([EditableBinding::new(
-            "input:toggle_classic_completions_mode",
-            "(Experimental) Toggle classic completions mode",
-            InputAction::ToggleClassicCompletionsMode,
-        )
-        .with_context_predicate(id!("Input"))]);
-    }
 
     // Register editable bindings relating to Command Search.
     app.register_editable_bindings([
@@ -9098,20 +9085,17 @@ impl Input {
                         replacement_start, ..
                     } => {
                         let replacement_start = *replacement_start;
-                        if self.is_classic_completions_enabled(ctx) {
-                            self.editor.update(ctx, |editor, ctx| {
-                                let cursor_end_offset =
-                                    editor.end_byte_index_of_last_selection(ctx);
-                                editor.select_and_replace(
-                                    selected_item.text(),
-                                    [ByteOffset::from(replacement_start)..cursor_end_offset],
-                                    PlainTextEditorViewAction::CycleCompletionSuggestion,
-                                    ctx,
-                                );
-                                ctx.notify();
-                            });
+                        self.editor.update(ctx, |editor, ctx| {
+                            let cursor_end_offset = editor.end_byte_index_of_last_selection(ctx);
+                            editor.select_and_replace(
+                                selected_item.text(),
+                                [ByteOffset::from(replacement_start)..cursor_end_offset],
+                                PlainTextEditorViewAction::CycleCompletionSuggestion,
+                                ctx,
+                            );
                             ctx.notify();
-                        }
+                        });
+                        ctx.notify();
                     }
                     InputSuggestionsMode::StaticWorkflowEnumSuggestions { .. }
                     | InputSuggestionsMode::DynamicWorkflowEnumSuggestions { .. } => {
@@ -11083,9 +11067,7 @@ impl Input {
                         // current word span.
                         let old_buffer_text_original = buffer_text_original.clone();
                         if *trigger == CompletionsTrigger::AsYouType
-                            && (!self.is_classic_completions_enabled(ctx)
-                                || (self.is_classic_completions_enabled(ctx)
-                                    && selected_item_differs_from_current_word))
+                            && selected_item_differs_from_current_word
                         {
                             // For as-you-type completions, we recalculate suggestions rather than
                             // filtering, since typing could involve moving to a new parameter
@@ -12243,9 +12225,7 @@ impl Input {
         // query must still invalidate the result set. Otherwise a Tab followed by
         // Backspace past the replacement boundary would leave stale suggestions on
         // screen (and an empty prefix would re-show the entire original result set).
-        if !text_up_to_cursor.starts_with(buffer_text_original)
-            && (!self.is_classic_completions_enabled(ctx) || is_user_edit)
-        {
+        if !text_up_to_cursor.starts_with(buffer_text_original) && is_user_edit {
             // Close the input suggestions since the buffer was edited to no longer
             // contain the text that triggered tab completion.
             true
@@ -12254,16 +12234,12 @@ impl Input {
             // cursor
             let current_word = &editor_text[replacement_start..cursor_position.as_usize()];
 
-            if self.is_classic_completions_enabled(ctx) {
-                let current_selected_item =
-                    self.input_suggestions.as_ref(ctx).get_selected_item_text();
-                if current_selected_item.is_some_and(|selected| selected == current_word) {
-                    // If we're in classic completion mode and the selected item is equal
-                    // to the current word, then we should keep the menu open; the user is cycling.
-                    // We early-return because we don't want to filter the menu based on the
-                    // selected item.
-                    return false;
-                }
+            let current_selected_item = self.input_suggestions.as_ref(ctx).get_selected_item_text();
+            if current_selected_item.is_some_and(|selected| selected == current_word) {
+                // If the selected item is equal to the current word, then we should keep
+                // the menu open; the user is cycling. We early-return because we don't want
+                // to filter the menu based on the selected item.
+                return false;
             }
 
             // If the user continues to type with the tab suggestions open, we perform a
@@ -12576,12 +12552,6 @@ impl Input {
             );
 
         !looks_like_package_install
-    }
-
-    fn is_classic_completions_enabled(&self, ctx: &AppContext) -> bool {
-        (FeatureFlag::ClassicCompletions.is_enabled()
-            && *InputSettings::as_ref(ctx).classic_completions_mode)
-            || FeatureFlag::ForceClassicCompletions.is_enabled()
     }
 
     fn should_expand_aliases(&self, ctx: &mut ViewContext<Self>) -> bool {
@@ -12992,11 +12962,9 @@ impl Input {
     /// Returns the buffer point that the tab completion menu should be positioned relative to.
     /// If None, the menu should be positioned relative to the cursor.
     ///
-    /// In regular completions mode, we want to dock the completions menu at the cursor.
-    ///
-    /// In classic completions mode, we want to dock the completions menu at the start of
-    /// the replacement span*. This ensures that the menu doesn't jump around as the cursor
-    /// moves when the user cycles through items in the menu.
+    /// We dock the completions menu at the start of the replacement span*. This ensures that the
+    /// menu doesn't jump around as the cursor moves when the user cycles through items in the
+    /// menu.
     /// * The one edge case is when we're completing a file path. In this case, the menu
     ///   should be docked at the end of the last directory in the replacement span.
     ///   This is because the replacement span will include the entire file path.
@@ -13009,11 +12977,6 @@ impl Input {
         buffer_text_original: &str,
         ctx: &AppContext,
     ) -> Option<BufferPoint> {
-        // In regular mode, the menu should be positioned at the cursor.
-        if !self.is_classic_completions_enabled(ctx) {
-            return None;
-        }
-
         // Note: the replacement span is in terms of byte offsets.
         // But these byte offsets should correspond to valid char offsets.
         let start = results.replacement_span.start();
@@ -13177,11 +13140,7 @@ impl Input {
                     );
                 });
 
-                let preselect_option = if self.is_classic_completions_enabled(ctx) {
-                    TabCompletionsPreselectOption::Unselected
-                } else {
-                    TabCompletionsPreselectOption::First
-                };
+                let preselect_option = TabCompletionsPreselectOption::Unselected;
 
                 self.input_suggestions
                     .update(ctx, |input_suggestions, ctx| {
@@ -13225,7 +13184,6 @@ impl Input {
         ctx: &mut ViewContext<Input>,
     ) {
         let completion_result = strip_control_characters(completion_result);
-        let is_completions_as_you_type_enabled = self.is_completions_while_typing_turned_on(ctx);
         self.editor.update(ctx, |input, ctx| {
             let cursor_end_offset = input.end_byte_index_of_last_selection(ctx);
 
@@ -13233,12 +13191,8 @@ impl Input {
             // buffer and the completion result doesn't end with a slash or an equals sign. A
             // trailing slash means more of a path follows; a trailing `=` (e.g. `--color=`) means a
             // value follows directly, as shells' own `-S '='` completions do.
-            // If completions as you type is turned on and classic completions is off, then
-            // _don't_ add a space.
-            let is_classic_completions_enabled = self.is_classic_completions_enabled(ctx);
-            let replacement: Cow<str> = if (!is_completions_as_you_type_enabled
-                || is_classic_completions_enabled)
-                && cursor_end_offset.as_usize() == input.buffer_text(ctx).len()
+            let replacement: Cow<str> = if cursor_end_offset.as_usize()
+                == input.buffer_text(ctx).len()
                 && !completion_result.ends_with(self.path_separators(ctx).main)
                 && !completion_result.ends_with('=')
                 && executing == Executing::No
@@ -13671,47 +13625,18 @@ impl Input {
     }
 
     fn should_enter_accept_completion_suggestion(&self, app: &AppContext) -> bool {
-        let InputSuggestionsMode::CompletionSuggestions {
-            replacement_start, ..
-        } = self.suggestions_mode_model.as_ref(app).mode()
-        else {
+        if !matches!(
+            self.suggestions_mode_model.as_ref(app).mode(),
+            InputSuggestionsMode::CompletionSuggestions { .. }
+        ) {
             return false;
-        };
-        let completions_while_typing = self.is_completions_while_typing_turned_on(app);
-        let selected_item = self.input_suggestions.as_ref(app).get_selected_item_text();
-
-        // If classic completions is enabled, accept the suggestion if an item is selected.
-        if self.is_classic_completions_enabled(app) {
-            return self
-                .input_suggestions
-                .as_ref(app)
-                .get_selected_item()
-                .is_some();
-        }
-        // If completions as you type is disabled, accept the suggestion if an item is selected.
-        if !completions_while_typing {
-            return selected_item.is_some();
         }
 
-        let path_separators = self.path_separators(app).all;
-
-        // At this point, we know completions as you type is enabled and classic completions
-        // is disabled. Accept the completion unless the buffer already matches the selected item
-        // (in which case, just execute the command).
-        let current_buffer_text = self.editor.as_ref(app).buffer_text(app);
-        selected_item.is_none_or(|selected_item| {
-            let Some(replacement) = &current_buffer_text.get(*replacement_start..) else {
-                report_error!("Failed to get replacement range in current buffer text");
-                return true;
-            };
-            if replacement == &selected_item {
-                return false;
-            }
-            let Some(no_slash) = selected_item.strip_suffix(path_separators) else {
-                return true;
-            };
-            replacement != &no_slash
-        })
+        // Classic completions are enabled, so accept the suggestion if an item is selected.
+        self.input_suggestions
+            .as_ref(app)
+            .get_selected_item()
+            .is_some()
     }
 
     /// Determines whether to insert a newline in the buffer instead of executing a command
@@ -16625,15 +16550,6 @@ impl TypedActionView for Input {
             }
             InputAction::HideWorkflowInfoCard => self.hide_workflows_info_box(ctx),
             InputAction::ResetWorkflowState => self.reset_workflow_state(None, ctx),
-            InputAction::ToggleClassicCompletionsMode => {
-                InputSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    if let Err(e) = settings.classic_completions_mode.toggle_and_save_value(ctx) {
-                        log::warn!(
-                            "Failed to toggle and save classic completions mode setting: {e}."
-                        )
-                    }
-                });
-            }
             InputAction::ToggleConversationsMenu => {
                 if self
                     .suggestions_mode_model
