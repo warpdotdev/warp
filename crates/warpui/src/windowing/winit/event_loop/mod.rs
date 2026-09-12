@@ -3,6 +3,10 @@ mod key_events;
 #[cfg(test)]
 mod drag_drop_tests;
 
+#[cfg(test)]
+#[path = "titlebar_tests.rs"]
+mod titlebar_tests;
+
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 
@@ -222,6 +226,12 @@ impl WindowState {
         self.last_mouse_button_pressed = Some(new_state);
         click_count
     }
+
+    /// Native window operations can suppress the matching mouse-release event. The last press is
+    /// retained separately so multi-click detection continues to work.
+    fn native_window_operation_completed(&mut self) {
+        self.current_mouse_button_pressed = None;
+    }
 }
 
 /// An extension trait to add helpful methods to [`winit::dpi::LogicalPosition`].
@@ -268,6 +278,26 @@ fn from_winit_modifiers_state(state: keyboard::ModifiersState) -> ModifiersState
         // TODO(advait): Implement the function key for winit.
         // Note there is no function_key() function to use here.
         func: false,
+    }
+}
+
+fn convert_cursor_moved(
+    position: PhysicalPosition<f64>,
+    window_state: &mut WindowState,
+    scale_factor: f32,
+) -> ConvertedEvent {
+    window_state.last_cursor_position = position.to_logical(scale_factor as f64);
+    match window_state.current_mouse_button_pressed {
+        Some(MouseButton::Left) => ConvertedEvent::Event(crate::event::Event::LeftMouseDragged {
+            position: window_state.last_cursor_position.to_vec2f(),
+            modifiers: from_winit_modifiers_state(window_state.modifiers),
+        }),
+        _ => ConvertedEvent::Event(crate::event::Event::MouseMoved {
+            position: window_state.last_cursor_position.to_vec2f(),
+            cmd: window_state.modifiers.super_key(),
+            shift: window_state.modifiers.shift_key(),
+            is_synthetic: false,
+        }),
     }
 }
 
@@ -1165,21 +1195,7 @@ impl EventLoop {
                 ))
             }
             WindowEvent::CursorMoved { position, .. } => {
-                window_state.last_cursor_position = position.to_logical(scale_factor as f64);
-                match window_state.current_mouse_button_pressed {
-                    Some(MouseButton::Left) => Some(ConvertedEvent::Event(
-                        crate::event::Event::LeftMouseDragged {
-                            position: window_state.last_cursor_position.to_vec2f(),
-                            modifiers: from_winit_modifiers_state(window_state.modifiers),
-                        },
-                    )),
-                    _ => Some(ConvertedEvent::Event(crate::event::Event::MouseMoved {
-                        position: window_state.last_cursor_position.to_vec2f(),
-                        cmd: window_state.modifiers.super_key(),
-                        shift: window_state.modifiers.shift_key(),
-                        is_synthetic: false,
-                    })),
-                }
+                Some(convert_cursor_moved(position, window_state, scale_factor))
             }
             WindowEvent::MouseInput { state, button, .. } => match state {
                 ElementState::Pressed => {
@@ -1627,11 +1643,7 @@ impl EventLoop {
             && winit_window.try_drag_resize()
             && window_state.last_touch_purpose.is_none()
         {
-            // If we initiated a drag via the method
-            // [`winit::window::Window::drag_resize_window`], we will not
-            // receive a MouseInput event when the button is release, so we
-            // pre-emptively set this back to None.
-            window_state.current_mouse_button_pressed = None;
+            window_state.native_window_operation_completed();
             return;
         }
         let dispatch_result = self
@@ -1654,12 +1666,13 @@ impl EventLoop {
                 // Double-clicking the titlebar does maximize/restore.
                 if click_count >= 2 {
                     window.toggle_maximized();
+                    window_state.native_window_operation_completed();
                 } else if window_state.last_touch_purpose.is_none() {
                     // Single-click drag moves the window. Skip for touch events as
                     // drag_window doesn't work properly with touch input on Windows.
                     // We won't receive MouseInput::Released after drag_window.
                     match winit_window.drag_window() {
-                        Ok(_) => window_state.current_mouse_button_pressed = None,
+                        Ok(()) => window_state.native_window_operation_completed(),
                         Err(err) => {
                             report_error!(anyhow::Error::new(err).context("error dragging window"))
                         }
