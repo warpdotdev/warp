@@ -201,6 +201,58 @@ fn persisted_index_restore_starts_on_startup_by_default() {
 
 #[test]
 #[cfg(feature = "local_fs")]
+fn persisted_index_restore_caps_indices_queued_on_startup() {
+    App::test((), |app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+
+        let snapshot_dir = tempfile::tempdir().unwrap();
+        let storage = SnapshotStorage::from_dir(snapshot_dir.path().join("daemon")).unwrap();
+
+        // Create more persisted, valid snapshots than the auto-restore cap allows, to make
+        // sure the manager doesn't eagerly queue all of them on startup (which would keep
+        // every one of them resident in memory for the app's lifetime), even when the
+        // account's plan-level max_indices allowance is unlimited (`None`).
+        let repo_dirs: Vec<_> = (0..(super::MAX_PERSISTED_INDICES_TO_AUTO_RESTORE + 5))
+            .map(|_| tempfile::tempdir().unwrap())
+            .collect();
+        let metadata: Vec<_> = repo_dirs
+            .iter()
+            .enumerate()
+            .map(|(idx, dir)| {
+                std::fs::write(storage.snapshot_path(dir.path()), b"snapshot").unwrap();
+                let mut metadata = workspace_metadata(dir.path());
+                metadata.modified_ts = Some(Utc::now() - chrono::Duration::seconds(idx as i64));
+                metadata
+            })
+            .collect();
+
+        let manager = app.add_singleton_model(|ctx| {
+            CodebaseIndexManager::new_with_snapshot_storage(
+                CodebaseIndexManagerConfig::new(
+                    metadata,
+                    None,
+                    1000,
+                    32,
+                    Arc::new(MockStoreClient),
+                    true,
+                ),
+                Some(storage),
+                ctx,
+            )
+        });
+
+        manager.read(&app, |manager, _| {
+            // One index starts building immediately, leaving cap - 1 queued.
+            assert_eq!(
+                manager.build_queue.queued_metadata().into_iter().count(),
+                super::MAX_PERSISTED_INDICES_TO_AUTO_RESTORE - 1
+            );
+        });
+    });
+}
+
+#[test]
+#[cfg(feature = "local_fs")]
 fn deferred_persisted_index_restore_starts_once() {
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new);
