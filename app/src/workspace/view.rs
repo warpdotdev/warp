@@ -292,6 +292,8 @@ use crate::menu::{
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::network::{NetworkStatus, NetworkStatusEvent};
 use crate::notebooks::CloudNotebook;
+#[cfg(feature = "local_fs")]
+use crate::notebooks::file::SourceScrollTarget;
 use crate::notebooks::manager::{NotebookManager, NotebookSource};
 use crate::notification::NotificationContext;
 use crate::palette::PaletteMode;
@@ -6539,6 +6541,7 @@ impl Workspace {
                     session,
                     layout,
                     Some(code_source),
+                    source_scroll_target(line_col),
                     ctx,
                 );
             }
@@ -6657,6 +6660,7 @@ impl Workspace {
                                     None,
                                     *layout,
                                     Some(code_source),
+                                    source_scroll_target(*line_col),
                                     ctx,
                                 );
                             } else {
@@ -8772,6 +8776,7 @@ impl Workspace {
         session: Option<Arc<Session>>,
         layout: EditorLayout,
         code_source: Option<CodeSource>,
+        source_target: Option<SourceScrollTarget>,
         ctx: &mut ViewContext<Self>,
     ) {
         let existing_file_pane = {
@@ -8790,6 +8795,18 @@ impl Workspace {
             self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
                 pane_group.focus_pane_by_id(pane_id, ctx);
             });
+            if let Some(target) = source_target {
+                // Resolved after the update: holding a view handle across it deadlocks.
+                let file_view = self
+                    .active_tab_pane_group()
+                    .as_ref(ctx)
+                    .file_notebook_view_from_pane_id(pane_id, ctx);
+                if let Some(file_view) = file_view {
+                    file_view.update(ctx, |view, ctx| {
+                        view.scroll_to_source_target(target, ctx);
+                    });
+                }
+            }
             return;
         }
         // The notebook viewer renders markdown rather than raw lines, but it
@@ -8800,6 +8817,7 @@ impl Workspace {
             session,
             #[cfg(feature = "local_fs")]
             code_source,
+            source_target,
             ctx,
         );
 
@@ -16322,7 +16340,14 @@ impl Workspace {
                 #[cfg(feature = "local_fs")]
                 {
                     let layout = *EditorSettings::as_ref(ctx).open_file_layout.value();
-                    self.open_file_notebook(path.clone(), Some(session.clone()), layout, None, ctx);
+                    self.open_file_notebook(
+                        path.clone(),
+                        Some(session.clone()),
+                        layout,
+                        None,
+                        None,
+                        ctx,
+                    );
                 }
             }
             pane_group::Event::MoveToSpace {
@@ -29595,6 +29620,15 @@ pub(crate) fn tab_bar_rects_for_window(window_id: WindowId, app: &AppContext) ->
     app.element_position_by_id_at_last_frame(window_id, active_tab_bar_position_id(app))
         .into_iter()
         .collect()
+}
+
+/// Builds the Markdown viewer's scroll target, or `None` when there is no line to scroll to.
+#[cfg(feature = "local_fs")]
+fn source_scroll_target(line_col: Option<LineAndColumnArg>) -> Option<SourceScrollTarget> {
+    let line_col = line_col?;
+    Some(SourceScrollTarget {
+        source_line: line_col.line_num,
+    })
 }
 
 // Checks that the tab/group rect is not clipped by overflow area

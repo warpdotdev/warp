@@ -9,7 +9,264 @@ use warpui_core::{App, ReadModel};
 use super::MarkdownStyle;
 use crate::content::buffer::tests::TestEmbeddedItem;
 use crate::content::buffer::{Buffer, BufferEditAction, EditOrigin, StyledBlockBoundaryBehavior};
-use crate::content::text::{IndentBehavior, TABLE_BLOCK_MARKDOWN_LANG};
+use crate::content::text::{
+    BlockType, BufferBlockStyle, IndentBehavior, TABLE_BLOCK_MARKDOWN_LANG,
+};
+
+/// The rendered row a source line resolves to, as text. Asserted on instead of a literal offset so
+/// the tests pin the row a reader lands on rather than the buffer's offset arithmetic.
+fn landed_row(buffer: &Buffer, source_line: usize) -> Option<String> {
+    let offset = buffer.markdown_offset_for_source_line(source_line)?;
+    let end = buffer
+        .containing_line_end(offset)
+        .min(buffer.max_charoffset());
+    let row = buffer.text_in_range(offset..end).into_string();
+    Some(row.trim_end_matches('\n').to_string())
+}
+
+#[test]
+fn markdown_source_lines_map_to_rendered_buffer_offsets() {
+    App::test((), |mut app| async move {
+        let markdown = "Before\n```text\n=>\n---\n```\n<!--\nhidden\n-->\nAfter\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        app.read_model(&buffer, |buffer, _| {
+            // Rendered as: "Before" / "=>" / "---" / "After".
+            assert_eq!(landed_row(buffer, 1).as_deref(), Some("Before"));
+            // Code punctuation and a rule-like code line each keep their own row.
+            assert_eq!(landed_row(buffer, 3).as_deref(), Some("=>"));
+            assert_eq!(landed_row(buffer, 4).as_deref(), Some("---"));
+            assert_eq!(landed_row(buffer, 9).as_deref(), Some("After"));
+            // The hidden comment renders nothing, so it has nowhere to scroll to.
+            assert_eq!(buffer.markdown_offset_for_source_line(6), None);
+            assert_eq!(buffer.markdown_offset_for_source_line(7), None);
+            assert_eq!(buffer.markdown_offset_for_source_line(8), None);
+        });
+    });
+}
+
+#[test]
+fn markdown_table_separator_maps_to_the_table_header() {
+    App::test((), |mut app| async move {
+        let _flag = warp_core::features::FeatureFlag::MarkdownTables.override_enabled(true);
+        let markdown = "| Header |\n| --- |\n| => |\nAfter\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        app.read_model(&buffer, |buffer, _| {
+            let header = buffer.markdown_offset_for_source_line(1);
+            let separator = buffer.markdown_offset_for_source_line(2);
+
+            // The separator row renders nothing of its own, so it shares the header's row.
+            assert_eq!(separator, header);
+            assert_eq!(landed_row(buffer, 1).as_deref(), Some("Header"));
+            assert_eq!(landed_row(buffer, 3).as_deref(), Some("=>"));
+            assert_eq!(landed_row(buffer, 4).as_deref(), Some("After"));
+        });
+    });
+}
+
+#[test]
+fn markdown_source_map_does_not_count_hidden_link_destinations() {
+    App::test((), |mut app| async move {
+        let markdown = "[Warp](https://example.com/needle)\n\nclicked needle\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        app.read_model(&buffer, |buffer, _| {
+            assert_eq!(landed_row(buffer, 1).as_deref(), Some("Warp"));
+            assert_eq!(landed_row(buffer, 3).as_deref(), Some("clicked needle"));
+        });
+    });
+}
+
+/// A thematic break lowers to a block item that absorbs the blank line after it, so the buffer
+/// renders fewer rows than the parsed line count.
+#[test]
+fn markdown_source_map_survives_thematic_breaks() {
+    App::test((), |mut app| async move {
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            "A\n\n---\n\nB\n\nC\n",
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        app.read_model(&buffer, |buffer, _| {
+            assert_eq!(landed_row(buffer, 1).as_deref(), Some("A"));
+            assert_eq!(landed_row(buffer, 5).as_deref(), Some("B"));
+            assert_eq!(landed_row(buffer, 7).as_deref(), Some("C"));
+        });
+    });
+}
+
+/// As above for block-level images, including the last source line.
+#[test]
+fn markdown_source_map_survives_block_images() {
+    App::test((), |mut app| async move {
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            "A\n\n![x](y.png)\n\nB\n\nC\n\nD\n",
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        app.read_model(&buffer, |buffer, _| {
+            assert_eq!(landed_row(buffer, 1).as_deref(), Some("A"));
+            assert_eq!(landed_row(buffer, 5).as_deref(), Some("B"));
+            assert_eq!(landed_row(buffer, 7).as_deref(), Some("C"));
+            assert_eq!(landed_row(buffer, 9).as_deref(), Some("D"));
+        });
+    });
+}
+
+/// An embedded object whose conversion yields nothing renders no row at all.
+#[test]
+fn markdown_source_map_survives_dropped_embedded_objects() {
+    App::test((), |mut app| async move {
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            "A\n\n```warp-embedded-object\nid: abc\n```\n\nB\n\nC\n",
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        app.read_model(&buffer, |buffer, _| {
+            assert_eq!(landed_row(buffer, 1).as_deref(), Some("A"));
+            assert_eq!(landed_row(buffer, 7).as_deref(), Some("B"));
+            assert_eq!(landed_row(buffer, 9).as_deref(), Some("C"));
+        });
+    });
+}
+
+/// Several block-level items in one document, whose row differences would otherwise compound.
+#[test]
+fn markdown_source_map_survives_repeated_block_items() {
+    App::test((), |mut app| async move {
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            "Intro\n\n![i](a.png)\n\n---\n\n![j](b.png)\n\nTail\n",
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        app.read_model(&buffer, |buffer, _| {
+            assert_eq!(landed_row(buffer, 1).as_deref(), Some("Intro"));
+            assert_eq!(landed_row(buffer, 9).as_deref(), Some("Tail"));
+        });
+    });
+}
+
+/// Source lines resolve to the first character of their row, not to the newline that ends the row
+/// above it.
+#[test]
+fn markdown_source_offsets_point_at_the_start_of_their_row() {
+    App::test((), |mut app| async move {
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            "First\n\nSecond\n",
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        app.read_model(&buffer, |buffer, _| {
+            for (source_line, expected) in [(1, "First"), (3, "Second")] {
+                let offset = buffer
+                    .markdown_offset_for_source_line(source_line)
+                    .expect("line should resolve");
+                let end = buffer
+                    .max_charoffset()
+                    .min(offset + expected.chars().count());
+                assert_eq!(buffer.text_in_range(offset..end).into_string(), expected);
+            }
+        });
+    });
+}
+
+#[test]
+fn markdown_source_map_is_invalidated_after_an_edit() {
+    App::test((), |mut app| async move {
+        let (buffer, selection) = Buffer::mock_from_markdown(
+            "First\nSecond\n",
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        app.read_model(&buffer, |buffer, _| {
+            assert!(buffer.markdown_offset_for_source_line(2).is_some());
+        });
+
+        buffer.update(&mut app, |buffer, ctx| {
+            buffer.update_content(
+                BufferEditAction::Insert {
+                    text: "changed",
+                    style: Default::default(),
+                    override_text_style: None,
+                },
+                EditOrigin::UserTyped,
+                selection,
+                ctx,
+            );
+            assert_eq!(buffer.markdown_offset_for_source_line(2), None);
+        });
+    });
+}
+
+/// Syntax highlighting only writes colors, which are never serialized back to Markdown, so it must
+/// not discard the source map. It runs asynchronously after load.
+#[test]
+fn markdown_source_map_survives_code_block_highlighting() {
+    App::test((), |mut app| async move {
+        let (buffer, selection) = Buffer::mock_from_markdown(
+            "Intro\n\n```sh\necho a\n```\n\nTarget line\n",
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let before = app.read_model(&buffer, |buffer, _| {
+            buffer.markdown_offset_for_source_line(7)
+        });
+        assert!(
+            before.is_some(),
+            "target should resolve before highlighting"
+        );
+
+        buffer.update(&mut app, |buffer, ctx| {
+            let code_block_start = buffer
+                .outline_blocks()
+                .into_iter()
+                .find(|block| {
+                    matches!(
+                        &block.block_type,
+                        BlockType::Text(BufferBlockStyle::CodeBlock { .. })
+                    )
+                })
+                .expect("document has a code block")
+                .start;
+            buffer.color_code_block_ranges(code_block_start + 1, &[], selection.clone(), ctx);
+        });
+
+        app.read_model(&buffer, |buffer, _| {
+            assert_eq!(buffer.markdown_offset_for_source_line(7), before);
+            assert_eq!(landed_row(buffer, 7).as_deref(), Some("Target line"));
+        });
+    });
+}
 
 #[test]
 fn test_export_normalizes_code_languages() {

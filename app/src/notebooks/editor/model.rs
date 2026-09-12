@@ -49,7 +49,7 @@ use super::notebook_command::NotebookCommand;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::editor::InteractionState;
 use crate::notebooks::editor::interaction_state_model::InteractionStateModelEvent;
-use crate::notebooks::file::MarkdownDisplayMode;
+use crate::notebooks::file::{MarkdownDisplayMode, SourceScrollTarget};
 use crate::notebooks::telemetry::BlockInfo;
 use crate::terminal::ShellLaunchData;
 
@@ -108,6 +108,21 @@ pub struct NotebooksEditorModel {
     /// Context used to generate clickable file path links for notebooks.
     file_link_resolution_context: Option<FileLinkResolutionContext>,
     default_mermaid_display_mode: MarkdownDisplayMode,
+    /// A scroll target that has not visibly taken effect yet. A freshly opened pane has no
+    /// viewport to resolve against, and Markdown lays out progressively, so an early scroll can
+    /// clamp to the top or land short. Re-asserted on each layout until the target is on screen.
+    pending_scroll: Option<PendingScroll>,
+}
+
+/// Bounds failed viewport confirmations, so content that never settles cannot scroll forever.
+const MAX_PENDING_SCROLL_CONFIRMATIONS: u8 = 8;
+
+/// A scroll request waiting for layout to catch up.
+#[derive(Debug, Clone, Copy)]
+struct PendingScroll {
+    offset: CharOffset,
+    failed_confirmations: u8,
+    request_sent: bool,
 }
 
 #[derive(Clone)]
@@ -239,6 +254,7 @@ impl NotebooksEditorModel {
             resize_tx,
             file_link_resolution_context: None,
             default_mermaid_display_mode: MarkdownDisplayMode::Raw,
+            pending_scroll: None,
         }
     }
 
@@ -380,9 +396,44 @@ impl NotebooksEditorModel {
                 if self.sync_mermaid_render_offsets(ctx) {
                     self.rebuild_layout(ctx);
                 }
+                self.apply_pending_scroll(false, ctx);
+            }
+            RenderEvent::ViewportUpdated(_) => {
+                self.apply_pending_scroll(true, ctx);
             }
             RenderEvent::ViewportUpdated(_) => {}
         }
+    }
+
+    /// Re-asserts a scroll target that has not visibly taken effect yet, until the target is on
+    /// screen or the confirmation budget runs out.
+    fn apply_pending_scroll(&mut self, confirm_visible: bool, ctx: &mut ModelContext<Self>) {
+        let Some(pending) = self.pending_scroll else {
+            return;
+        };
+        if !self.has_sized_viewport(ctx) {
+            return;
+        }
+
+        let mut failed_confirmations = pending.failed_confirmations;
+        if confirm_visible && pending.request_sent {
+            if self.is_offset_visible(pending.offset, ctx) {
+                self.pending_scroll = None;
+                return;
+            }
+            failed_confirmations += 1;
+            if failed_confirmations >= MAX_PENDING_SCROLL_CONFIRMATIONS {
+                self.pending_scroll = None;
+                return;
+            }
+        }
+
+        self.pending_scroll = Some(PendingScroll {
+            failed_confirmations,
+            request_sent: true,
+            ..pending
+        });
+        self.request_scroll_to_offset(pending.offset, ctx);
     }
 
     fn handle_interaction_state_model_event(
@@ -1370,6 +1421,78 @@ impl NotebooksEditorModel {
                 .request_autoscroll_to(AutoScrollMode::PositionOffsetInViewportCenter(range.start));
         });
         true
+    }
+
+    /// Scrolls, best effort, to the rendered position of a location in the raw markdown source
+    /// this document was loaded from. Returns false when the target cannot be located, leaving
+    /// the scroll position unchanged.
+    pub fn scroll_to_source_target(
+        &mut self,
+        target: &SourceScrollTarget,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        self.pending_scroll = None;
+        let Some(offset) = self.source_target_offset(target, ctx) else {
+            return false;
+        };
+
+        self.scroll_to_offset(offset, ctx);
+        true
+    }
+
+    /// Scrolls the given offset into view, deferring until the viewport has a size. An autoscroll
+    /// resolved against a zero-height viewport clamps to the top.
+    fn scroll_to_offset(&mut self, offset: CharOffset, ctx: &mut ModelContext<Self>) {
+        // Held until confirmed on screen: the pane may not be measured yet, and blocks above the
+        // target can still be laying out, either of which lands this request in the wrong place.
+        self.pending_scroll = Some(PendingScroll {
+            offset,
+            failed_confirmations: 0,
+            request_sent: false,
+        });
+
+        if self.has_sized_viewport(ctx) {
+            self.apply_pending_scroll(false, ctx);
+        }
+    }
+
+    /// Test-only: whether a scroll request is still waiting for layout.
+    #[cfg(test)]
+    pub(crate) fn has_pending_scroll_for_test(&self) -> bool {
+        self.pending_scroll.is_some()
+    }
+
+    /// Whether the viewport has been measured. A freshly opened pane reports zero height.
+    fn has_sized_viewport(&self, ctx: &AppContext) -> bool {
+        self.render_state.as_ref(ctx).viewport().height().as_f32() > 0.0
+    }
+
+    fn is_offset_visible(&self, offset: CharOffset, ctx: &AppContext) -> bool {
+        let render_state = self.render_state.as_ref(ctx);
+        let Some((offset_top, offset_bottom)) = render_state.character_vertical_bounds(offset)
+        else {
+            return false;
+        };
+        let viewport_top = render_state.viewport().scroll_top();
+        let viewport_bottom = viewport_top + render_state.viewport().height();
+        offset_top < viewport_bottom && offset_bottom > viewport_top
+    }
+
+    fn request_scroll_to_offset(&self, offset: CharOffset, ctx: &mut ModelContext<Self>) {
+        self.render_state.update(ctx, |render_state, _| {
+            render_state
+                .request_autoscroll_to(AutoScrollMode::PositionOffsetInViewportCenter(offset));
+        });
+    }
+
+    fn source_target_offset(
+        &self,
+        target: &SourceScrollTarget,
+        ctx: &AppContext,
+    ) -> Option<CharOffset> {
+        self.content
+            .as_ref(ctx)
+            .markdown_offset_for_source_line(target.source_line)
     }
 
     fn find_matching_header(&self, fragment: &str, ctx: &AppContext) -> Option<Range<CharOffset>> {

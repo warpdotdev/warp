@@ -25,6 +25,7 @@ pub fn create_home_pane(ctx: &mut ViewContext<Workspace>) -> Box<dyn AnyPaneCont
         None,
         #[cfg(feature = "local_fs")]
         None,
+        None,
         ctx,
     );
     pane.file_view(ctx).update(ctx, |pane, ctx| {
