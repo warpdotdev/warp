@@ -20,6 +20,7 @@ mod coding_entrypoints;
 mod coding_panel_enablement_state;
 mod command_palette;
 mod completer;
+mod config_keybindings;
 #[allow(dead_code)]
 mod context_chips;
 #[cfg(enable_crash_recovery)]
@@ -2066,6 +2067,7 @@ pub(crate) fn initialize_app(
     menu::init(ctx);
     tips::tip_view::init(ctx);
     launch_configs::init(ctx);
+    config_keybindings::init(ctx);
     workflows::init(ctx);
     themes::theme_chooser::init(ctx);
     themes::theme_creator_modal::init(ctx);

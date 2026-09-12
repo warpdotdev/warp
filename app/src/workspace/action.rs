@@ -331,6 +331,16 @@ pub enum WorkspaceAction {
     },
     OpenLaunchConfigSaveModal,
     SelectTabConfig(TabConfig),
+    /// Opens the launch configuration with this name into the active window, resolving it from
+    /// `WarpConfig` at dispatch time so keybindings never act on stale contents.
+    OpenLaunchConfigNamed {
+        name: String,
+    },
+    /// Opens the tab config whose file has this stem in the active window, resolving it from
+    /// `WarpConfig` at dispatch time so keybindings never act on stale contents.
+    OpenTabConfigNamed {
+        file_stem: String,
+    },
     DispatchToSettingsTab(SettingsTabAction),
     ToggleResourceCenter,
     ToggleUserMenu,
@@ -1000,6 +1010,8 @@ impl WorkspaceAction {
             | SummarizeAIConversation { .. }
             | OpenRepository { .. }
             | SelectTabConfig(_)
+            | OpenLaunchConfigNamed { .. }
+            | OpenTabConfigNamed { .. }
             | ToggleVerticalTabsPanel
             | OpenVerticalTabsPanel => true, // actions that actually change a state of the state of user's
             // workspace would most likely require a save, so that if the app gets

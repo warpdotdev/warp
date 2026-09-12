@@ -7232,6 +7232,59 @@ impl Workspace {
 
     /// Opens a tab config, showing the param-fill modal when the config has parameters,
     /// or opening the tab directly when there are no parameters.
+    /// Opens the launch configuration with the given name (case-insensitive) into the active
+    /// window, resolving it from [`WarpConfig`] so keybindings never act on stale contents.
+    fn open_launch_config_by_name(&mut self, name: &str, ctx: &mut ViewContext<Self>) {
+        let launch_config = crate::launch_configs::launch_config::find_by_name(
+            WarpConfig::handle(ctx).as_ref(ctx).launch_configs(),
+            name,
+        )
+        .cloned();
+        match launch_config {
+            Some(launch_config) => ctx.dispatch_global_action(
+                "root_view:open_launch_config",
+                OpenLaunchConfigArg {
+                    launch_config,
+                    ui_location: LaunchConfigUiLocation::Keybinding,
+                    open_in_active_window: true,
+                },
+            ),
+            None => {
+                log::warn!("no launch configuration named '{name}' for keybinding");
+                self.toast_stack.update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(
+                        DismissibleToast::error(format!(
+                            "Launch configuration \"{name}\" not found"
+                        )),
+                        ctx,
+                    );
+                });
+            }
+        }
+    }
+
+    /// Opens the tab config whose file has the given stem (case-insensitive) in this window,
+    /// resolving it from [`WarpConfig`] so keybindings never act on stale contents.
+    fn open_tab_config_by_stem(&mut self, file_stem: &str, ctx: &mut ViewContext<Self>) {
+        let tab_config = crate::tab_configs::tab_config::find_by_file_stem(
+            WarpConfig::handle(ctx).as_ref(ctx).tab_configs(),
+            file_stem,
+        )
+        .cloned();
+        match tab_config {
+            Some(tab_config) => self.open_tab_config(tab_config, ctx),
+            None => {
+                log::warn!("no tab config with file stem '{file_stem}' for keybinding");
+                self.toast_stack.update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(
+                        DismissibleToast::error(format!("Tab config \"{file_stem}\" not found")),
+                        ctx,
+                    );
+                });
+            }
+        }
+    }
+
     pub(crate) fn open_tab_config(
         &mut self,
         tab_config: crate::tab_configs::TabConfig,
@@ -19047,12 +19100,14 @@ impl Workspace {
             KeybindingChangedEvent::BindingChanged {
                 binding_name,
                 new_trigger: new_trigger_option,
-            } => self
-                .cached_keybindings
-                .entry(binding_name.to_owned())
-                .and_modify(|keystroke| {
-                    *keystroke = new_trigger_option.as_ref().map(|key| key.displayed())
-                }),
+            } => {
+                self.cached_keybindings
+                    .entry(binding_name.to_owned())
+                    .and_modify(|keystroke| {
+                        *keystroke = new_trigger_option.as_ref().map(|key| key.displayed())
+                    });
+            }
+            KeybindingChangedEvent::BindingsReloaded => {}
         };
         ctx.notify()
     }
@@ -24203,6 +24258,12 @@ impl TypedActionView for Workspace {
             }
             SelectTabConfig(tab_config) => {
                 self.open_tab_config(tab_config.clone(), ctx);
+            }
+            OpenLaunchConfigNamed { name } => {
+                self.open_launch_config_by_name(name, ctx);
+            }
+            OpenTabConfigNamed { file_stem } => {
+                self.open_tab_config_by_stem(file_stem, ctx);
             }
             OpenNewWorktreeModal => {
                 let cwd = self

@@ -541,3 +541,68 @@ fn test_binding_description_resolve_dynamic_override_falls_back_to_custom_contex
         assert_eq!(resolved, "menu-static");
     });
 }
+
+#[test]
+fn test_custom_trigger_applies_to_binding_registered_later() {
+    #[derive(Debug)]
+    struct TestAction;
+
+    let mut map = Keymap::default();
+    let custom = Keystroke::parse("ctrl-alt-1").unwrap();
+    map.update_custom_trigger(
+        "launch_config:open:backend",
+        Some(Trigger::Keystrokes(vec![custom.clone()])),
+    );
+
+    map.register_editable_bindings([EditableBinding::new(
+        String::from("launch_config:open:backend"),
+        "Open Launch Configuration \"backend\"",
+        TestAction,
+    )]);
+
+    let binding = map
+        .get_binding_by_name("launch_config:open:backend")
+        .unwrap();
+    match binding.trigger {
+        Trigger::Keystrokes(keystrokes) => {
+            assert_eq!(keystrokes, std::slice::from_ref(&custom));
+        }
+        _ => panic!("Expected keystroke trigger"),
+    }
+}
+
+#[test]
+fn test_replace_editable_bindings_with_prefix() {
+    #[derive(Debug)]
+    struct TestAction;
+
+    let mut map = Keymap::default();
+    map.register_editable_bindings([
+        EditableBinding::new("other:action", "Other action", TestAction).with_key_binding("cmd-1"),
+        EditableBinding::new(String::from("cfg:1"), "Config one", TestAction),
+        EditableBinding::new(String::from("cfg:2"), "Config two", TestAction),
+    ]);
+    let custom = Keystroke::parse("ctrl-2").unwrap();
+    map.update_custom_trigger("cfg:2", Some(Trigger::Keystrokes(vec![custom.clone()])));
+
+    map.replace_editable_bindings_with_prefix(
+        "cfg:",
+        [
+            EditableBinding::new(String::from("cfg:2"), "Config two", TestAction),
+            EditableBinding::new(String::from("cfg:3"), "Config three", TestAction),
+        ],
+    );
+
+    assert!(map.get_binding_by_name("other:action").is_some());
+    assert!(map.get_binding_by_name("cfg:1").is_none());
+    assert!(map.get_binding_by_name("cfg:3").is_some());
+
+    // The custom trigger assigned before the replace survives re-registration.
+    let replaced = map.get_binding_by_name("cfg:2").unwrap();
+    match replaced.trigger {
+        Trigger::Keystrokes(keystrokes) => {
+            assert_eq!(keystrokes, std::slice::from_ref(&custom));
+        }
+        _ => panic!("Expected keystroke trigger"),
+    }
+}

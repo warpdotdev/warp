@@ -1142,11 +1142,12 @@ impl DisplayChip {
         ctx.subscribe_to_model(
             &KeybindingChangedNotifier::handle(ctx),
             |me, _, event, ctx| {
-                let KeybindingChangedEvent::BindingChanged {
+                if let KeybindingChangedEvent::BindingChanged {
                     binding_name,
                     new_trigger,
-                } = event;
-                if binding_name == TOGGLE_RIGHT_PANEL_BINDING_NAME {
+                } = event
+                    && binding_name == TOGGLE_RIGHT_PANEL_BINDING_NAME
+                {
                     me.code_review_keybinding = new_trigger.as_ref().map(|k| k.displayed());
                     ctx.notify();
                 }

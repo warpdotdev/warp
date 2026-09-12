@@ -176,6 +176,12 @@ impl TabConfig {
             .collect()
     }
 
+    /// The stem of the file this config was loaded from — the stable identity used by
+    /// `warp://tab_config/<stem>` URIs and `tab_config:open:<stem>` keybindings.
+    pub fn file_stem(&self) -> Option<&str> {
+        self.source_path.as_ref()?.file_stem()?.to_str()
+    }
+
     pub(crate) fn is_worktree(&self) -> bool {
         self.panes.iter().any(|pane| {
             pane.commands.as_ref().is_some_and(|commands| {
@@ -201,6 +207,16 @@ impl TabConfig {
                     })
             })
     }
+}
+
+/// Case-insensitive lookup of a tab config by the stem of the file it was loaded from.
+pub fn find_by_file_stem<'a>(configs: &'a [TabConfig], file_stem: &str) -> Option<&'a TabConfig> {
+    let target = file_stem.to_lowercase();
+    configs.iter().find(|config| {
+        config
+            .file_stem()
+            .is_some_and(|stem| stem.to_lowercase() == target)
+    })
 }
 
 /// Renders a [`TabConfig`] with the given param values into a [`PaneTemplateType`]
