@@ -76,3 +76,29 @@ fn request_carries_trace_link_header_on_warp_header_path() {
     let value = value.expect("trace-link header should be added on the warp-header path");
     assert!(value.starts_with("00-"), "unexpected header value: {value}");
 }
+
+#[test]
+fn fetch_credentials_include_preserves_request_builder_contract() {
+    let client = Client::new();
+    let request = client
+        .get("https://rtc.staging.warp.dev/api/v1/agent/events/stream")
+        .fetch_credentials_include()
+        .build()
+        .expect("request should build");
+
+    assert_eq!(
+        request.wrapped.url().as_str(),
+        "https://rtc.staging.warp.dev/api/v1/agent/events/stream"
+    );
+    assert!(request.wrapped.headers().get(AUTHORIZATION).is_none());
+
+    // Credential mode is deliberately opt-in: unrelated requests do not use this method.
+    let unrelated = client
+        .get("https://staging.warp.dev/graphql")
+        .build()
+        .expect("request should build");
+    assert_eq!(
+        unrelated.wrapped.url().as_str(),
+        "https://staging.warp.dev/graphql"
+    );
+}
