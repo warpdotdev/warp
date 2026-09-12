@@ -18,6 +18,7 @@ use std::path::Path;
 use crate::ai::generate_code_review_content::api::{GenerateCodeReviewContentRequest, OutputType};
 use crate::code_review::diff_state::CommitChainMode;
 use crate::server::server_api::ai::AIClient;
+use crate::server::team_scope::RequestTeamScope;
 use crate::util::git::{self, Commit, PrInfo, get_branch_commit_messages, get_diff_for_pr};
 
 /// Runs the commit chain — always commits, then optionally pushes, then
@@ -27,6 +28,7 @@ use crate::util::git::{self, Commit, PrInfo, get_branch_commit_messages, get_dif
 ///
 /// When the chain creates a PR, `ai_client` (when `Some`) generates the
 /// title/body with a `--fill` fallback; pass `None` to skip AI entirely.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_commit_chain(
     repo_path: &Path,
     mode: CommitChainMode,
@@ -34,6 +36,7 @@ pub async fn run_commit_chain(
     include_unstaged: bool,
     branch: &str,
     ai_client: Option<&dyn AIClient>,
+    team_scope: RequestTeamScope,
     path_env: Option<&str>,
 ) -> anyhow::Result<(Vec<Commit>, Option<String>, Option<PrInfo>)> {
     git::run_commit(repo_path, message, include_unstaged, path_env).await?;
@@ -45,7 +48,7 @@ pub async fn run_commit_chain(
         }
         CommitChainMode::CommitAndCreatePr => {
             git::run_push(repo_path, branch, path_env).await?;
-            Some(create_pr(repo_path, branch, ai_client, path_env).await?)
+            Some(create_pr(repo_path, branch, ai_client, team_scope, path_env).await?)
         }
     };
     let (commits, upstream_ref) = git::compute_unpushed_state(repo_path).await;
@@ -70,10 +73,11 @@ pub async fn create_pr(
     repo_path: &Path,
     branch: &str,
     ai_client: Option<&dyn AIClient>,
+    team_scope: RequestTeamScope,
     path_env: Option<&str>,
 ) -> anyhow::Result<PrInfo> {
     match ai_client {
-        Some(ai) => create_pr_with_ai_content(repo_path, branch, ai, path_env).await,
+        Some(ai) => create_pr_with_ai_content(repo_path, branch, ai, team_scope, path_env).await,
         None => git::create_pr(repo_path, None, None, path_env).await,
     }
 }
@@ -85,6 +89,7 @@ pub async fn generate_commit_message(
     branch_name: &str,
     include_unstaged: bool,
     ai_client: &dyn AIClient,
+    team_scope: RequestTeamScope,
 ) -> anyhow::Result<String> {
     let diff = git::get_diff_for_commit_message(repo_path, include_unstaged).await?;
     // Skip the AI round trip when there's nothing to summarize.
@@ -92,12 +97,15 @@ pub async fn generate_commit_message(
         anyhow::bail!("no changes to generate a commit message from");
     }
     let generated = ai_client
-        .generate_code_review_content(GenerateCodeReviewContentRequest {
-            output_type: OutputType::CommitMessage,
-            diff,
-            branch_name: branch_name.to_string(),
-            commit_messages: Vec::new(),
-        })
+        .generate_code_review_content(
+            GenerateCodeReviewContentRequest {
+                output_type: OutputType::CommitMessage,
+                diff,
+                branch_name: branch_name.to_string(),
+                commit_messages: Vec::new(),
+            },
+            team_scope,
+        )
         .await?
         .content;
     let trimmed = generated.trim();
@@ -115,6 +123,7 @@ async fn create_pr_with_ai_content(
     repo_path: &Path,
     branch_name: &str,
     code_review_ai: &dyn AIClient,
+    team_scope: RequestTeamScope,
     path_env: Option<&str>,
 ) -> anyhow::Result<PrInfo> {
     let diff = get_diff_for_pr(repo_path).await?;
@@ -136,8 +145,8 @@ async fn create_pr_with_ai_content(
     };
 
     match futures::try_join!(
-        code_review_ai.generate_code_review_content(title_req),
-        code_review_ai.generate_code_review_content(body_req),
+        code_review_ai.generate_code_review_content(title_req, team_scope),
+        code_review_ai.generate_code_review_content(body_req, team_scope),
     ) {
         Ok((title_resp, body_resp))
             if !title_resp.content.trim().is_empty() && !body_resp.content.trim().is_empty() =>
