@@ -77,6 +77,60 @@ fn refresh_working_directories_collapses_subroots_to_nearest_repo_root() {
 }
 
 #[test]
+fn refresh_working_directories_keeps_linked_worktree_as_display_root() {
+    App::test((), |mut app| async move {
+        let detected_repos_handle = app.add_singleton_model(|_| DetectedRepositories::default());
+
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let repo_root = temp_dir.path().join("repo");
+        let worktree = repo_root.join("linked-worktree");
+        fs::create_dir_all(repo_root.join(".git")).expect("create main .git dir");
+        fs::create_dir_all(&worktree).expect("create worktree");
+        fs::write(
+            worktree.join(".git"),
+            "gitdir: ../.git/worktrees/linked-worktree\n",
+        )
+        .expect("create worktree gitfile");
+
+        let canonical_repo_root = dunce::canonicalize(&repo_root).expect("canonical repo root");
+        let canonical_worktree = dunce::canonicalize(&worktree).expect("canonical worktree");
+
+        detected_repos_handle.update(&mut app, |repos, _ctx| {
+            let canonical =
+                warp_util::standardized_path::StandardizedPath::from_local_canonicalized(
+                    canonical_repo_root.as_path(),
+                )
+                .expect("canonicalized path");
+            repos.insert_test_repo_root(canonical);
+        });
+
+        let pane_group_id = EntityId::new();
+        let terminal_id = EntityId::new();
+
+        let working_directories_handle = app.add_model(|_| WorkingDirectoriesModel::new());
+        let roots: Vec<LocalOrRemotePath> =
+            working_directories_handle.update(&mut app, |model, ctx| {
+                model.refresh_working_directories_for_pane_group(
+                    pane_group_id,
+                    vec![(terminal_id, LocalOrRemotePath::Local(worktree.clone()))],
+                    vec![],
+                    Some(terminal_id),
+                    ctx,
+                );
+
+                model
+                    .most_recent_directories_for_pane_group(pane_group_id)
+                    .expect("pane group exists")
+                    .map(|dir| dir.path)
+                    .collect()
+            });
+
+        assert_eq!(roots, vec![local(&canonical_worktree)]);
+        assert_ne!(roots[0], local(&canonical_repo_root));
+    });
+}
+
+#[test]
 fn refresh_working_directories_preserves_non_repo_paths_and_dedupes() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| DetectedRepositories::default());
