@@ -66,5 +66,6 @@ websocket.workspace = true
 [dev-dependencies]
 mockall.workspace = true
 mockito.workspace = true
+serial_test = "0.8.0"
 warp_core = { workspace = true, features = ["test-util"] }
 warp_server_auth = { workspace = true, features = ["test-util"] }
