@@ -622,7 +622,14 @@ impl ShellType {
                 // well for remote sessions. Additionally, we invoke `type` once, passing it the full
                 // list of commands, to avoid a lot of overhead invoking it thousands of times for
                 // systems with a lot of installed commands.
-                r#"COMMANDS=($(compgen -c)); TYPES=($(type -t ${COMMANDS[@]})); for i in "${!COMMANDS[@]}"; do if [[ ${TYPES[$i]} == "file" ]]; then echo ${COMMANDS[$i]}; fi; done"#
+                //
+                // The two arrays are paired by index, so they have to stay the same length. Split
+                // `compgen` output on newlines only (`IFS`) and disable globbing (`set -f`) while
+                // building them: a command name containing a space would otherwise become several
+                // array entries, and `type -t` prints nothing for the resulting non-existent names,
+                // leaving `TYPES` shorter than `COMMANDS`. Every later index then reads the wrong
+                // type and valid executables drop out of the cache (#13475).
+                r#"__warp_oifs=$IFS; set -f; IFS=$'\n'; COMMANDS=($(compgen -c)); TYPES=($(type -t "${COMMANDS[@]}")); IFS=$__warp_oifs; set +f; unset __warp_oifs; for i in "${!COMMANDS[@]}"; do if [[ ${TYPES[$i]} == "file" ]]; then printf '%s\n' "${COMMANDS[$i]}"; fi; done"#
             }
             ShellType::Fish => {
                 // Although `complete -C` returns more than just executables, we don't check the type here
