@@ -55,6 +55,6 @@ pub(super) async fn forward_uri_to_sole_running_instance(
     )
     .await?;
     let uri_service_caller = ipc::service_caller::<UriService>(Arc::new(client));
-    let _ = uri_service_caller.call(urls).await?;
+    uri_service_caller.call(urls).await?;
     Ok(())
 }
