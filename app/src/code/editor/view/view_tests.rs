@@ -188,6 +188,67 @@ fn copying_an_empty_document_leaves_the_clipboard_untouched() {
 }
 
 #[test]
+fn pastes_a_copied_line_above_the_cursor_line() {
+    App::test((), |mut app| async move {
+        let editor_view = initialize_editor_copying_the_cursor_line(&mut app, "alpha\nbeta");
+
+        let text = editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::Copy, ctx);
+            view.handle_action(&CodeEditorViewAction::CursorAtBufferEnd, ctx);
+            view.handle_action(&CodeEditorViewAction::Paste, ctx);
+            view.text(ctx)
+        });
+
+        assert_eq!(text.as_str(), "alpha\nalpha\nbeta");
+    });
+}
+
+#[test]
+fn pastes_a_copied_line_whole_when_the_cursor_sits_mid_line() {
+    App::test((), |mut app| async move {
+        let editor_view =
+            initialize_editor_copying_the_cursor_line(&mut app, "    alpha\nbeta\ngamma");
+
+        let text = editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::Copy, ctx);
+            view.handle_action(&CodeEditorViewAction::MoveToLineEnd, ctx);
+            view.handle_action(&CodeEditorViewAction::Paste, ctx);
+            view.text(ctx)
+        });
+
+        assert_eq!(
+            text.as_str(),
+            "    alpha\n    alpha\nbeta\ngamma",
+            "a line-wise paste must not split the line the caret happens to sit in"
+        );
+    });
+}
+
+#[test]
+fn an_editor_that_delegates_empty_copies_pastes_at_the_caret() {
+    App::test((), |mut app| async move {
+        let (_window, editor_view) = initialize_editor(&mut app);
+        app.update(|ctx| {
+            ctx.clipboard()
+                .write(ClipboardContent::plain_text("X".to_string()))
+        });
+
+        let text = editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::UserTyped(UserInput::new("ab")), ctx);
+            view.handle_action(&CodeEditorViewAction::MoveLeft, ctx);
+            view.handle_action(&CodeEditorViewAction::Paste, ctx);
+            view.text(ctx)
+        });
+
+        assert_eq!(
+            text.as_str(),
+            "aXb",
+            "an editor that has not opted in keeps the char-wise paste at the caret"
+        );
+    });
+}
+
+#[test]
 fn an_editor_that_delegates_empty_copies_does_not_take_the_cursor_line() {
     App::test((), |mut app| async move {
         let (_window, editor_view) = initialize_editor(&mut app);
