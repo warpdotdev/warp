@@ -2204,6 +2204,10 @@ fn render_stopped_output(props: Props, app: &AppContext) -> Box<dyn Element> {
         .model
         .is_latest_exchange_in_terminal_pane(props.terminal_view_id, app)
         && FeatureFlag::AIResumeButton.is_enabled()
+        && props
+            .model
+            .conversation(app)
+            .is_some_and(|conversation| conversation.status().is_manually_resumable())
     {
         let ui_builder = appearance.ui_builder().clone();
 

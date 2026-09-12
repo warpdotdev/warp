@@ -2052,7 +2052,11 @@ impl BlocklistAIController {
             );
             return;
         };
-        let task_id = {
+        let status = conversation.status().clone();
+        let has_active_stream = self
+            .in_flight_response_streams
+            .has_active_stream_for_conversation(conversation_id, ctx);
+        let (task_id, task_source) = {
             let terminal_model = self.terminal_model.lock();
             let active_block = terminal_model.block_list().active_block();
             if let Some(agent_interaction_metadata) = active_block
@@ -2061,14 +2065,19 @@ impl BlocklistAIController {
                     metadata.conversation_id() == &conversation_id && metadata.is_agent_in_control()
                 })
             {
-                agent_interaction_metadata
-                    .subagent_task_id()
-                    .cloned()
-                    .unwrap_or_else(|| conversation.get_root_task_id().clone())
+                if let Some(task_id) = agent_interaction_metadata.subagent_task_id() {
+                    (task_id.clone(), "active_command_subtask")
+                } else {
+                    (conversation.get_root_task_id().clone(), "root_task")
+                }
             } else {
-                conversation.get_root_task_id().clone()
+                (conversation.get_root_task_id().clone(), "root_task")
             }
         };
+        log::info!(
+            "[conversation-resume] Preparing request: conversation_id={conversation_id:?} task_id={task_id:?} task_source={task_source} status={status:?} has_active_stream={has_active_stream} is_auto_resume_after_error={is_auto_resume_after_error} recovery_attempts={}",
+            recovery.attempts_used()
+        );
 
         let context = input_context_for_request(
             false,
@@ -2090,10 +2099,10 @@ impl BlocklistAIController {
             None
         };
         let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
-        let _ = self.send_request_input(
+        let result = self.send_request_input(
             RequestInput::for_task(
                 inputs,
-                task_id,
+                task_id.clone(),
                 &self.active_session,
                 self.get_current_response_initiator(),
                 conversation_id,
@@ -2106,6 +2115,18 @@ impl BlocklistAIController {
             /*is_queued_prompt*/ false,
             ctx,
         );
+        match result {
+            Ok((sent_conversation_id, response_stream_id)) => {
+                log::info!(
+                    "[conversation-resume] Request sent: conversation_id={sent_conversation_id:?} task_id={task_id:?} response_stream_id={response_stream_id:?} is_auto_resume_after_error={is_auto_resume_after_error}"
+                );
+            }
+            Err(error) => {
+                log::warn!(
+                    "[conversation-resume] Request failed before stream registration: conversation_id={conversation_id:?} task_id={task_id:?} is_auto_resume_after_error={is_auto_resume_after_error} error={error:#}"
+                );
+            }
+        }
     }
 
     /// Schedules an auto-resume-after-error for the conversation, once the recovery backoff
