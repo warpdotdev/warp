@@ -9,7 +9,9 @@ use anyhow::{Result, anyhow};
 use image::codecs::gif::GifDecoder;
 use image::codecs::webp::WebPDecoder;
 use image::imageops::FilterType;
-use image::{AnimationDecoder, DynamicImage, Frame, ImageBuffer, ImageFormat};
+use image::{
+    AnimationDecoder, DynamicImage, Frame, Frames, ImageBuffer, ImageDecoder, ImageFormat, Limits,
+};
 use itertools::Itertools;
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use pathfinder_geometry::vector::Vector2I;
@@ -22,6 +24,69 @@ use crate::util::parse_u32;
 use crate::{Entity, SingletonEntity};
 
 const MIN_REFRESH_DELAY_MS: u32 = 50;
+
+/// Hard ceiling on how many decoded frames of an animated GIF/WebP we will retain in memory,
+/// regardless of the decoded-byte budget below. A cheap secondary guard against pathologically
+/// long animations made up of many small frames.
+const MAX_ANIMATED_IMAGE_FRAME_COUNT: usize = 512;
+
+/// Hard ceiling on the total decoded RGBA bytes retained for a single animated image, summed
+/// across all of its frames. `Frames::next()` decodes one full RGBA bitmap per frame, so without
+/// a cap a single large/long animated GIF or WebP can balloon memory by gigabytes. 256 MiB
+/// comfortably covers ordinary GIFs/WebPs pasted into chat, markdown, or notebooks (typically
+/// well under a few MB of decoded frames in total) while still bounding worst-case memory for
+/// pathological inputs. This bounds the *retained* set across all frames; an individual frame's
+/// own decode allocation is instead bounded by `MAX_IMAGE_DECODE_ALLOC_BYTES` below.
+const MAX_ANIMATED_IMAGE_DECODED_BYTES: usize = 256 * 1024 * 1024;
+
+/// Maximum width/height, in pixels, any decoder will allow for a single image or animation
+/// frame. Rejects a header-declared decompression bomb (e.g. an image claiming a 50000x50000
+/// canvas) before any pixel buffer for it is allocated. 8192 is far above real content (a full
+/// "8K" UHD frame is 7680x4320) while staying at or below the maximum texture size most GPUs
+/// support.
+const MAX_IMAGE_DECODE_DIMENSION: u32 = 8192;
+
+/// Maximum bytes a decoder may allocate for a single image or animation frame while decoding
+/// (checked against `image::Limits::max_alloc`). This is independent of
+/// `MAX_ANIMATED_IMAGE_DECODED_BYTES` above, which bounds the *retained* set of already-decoded
+/// animated frames; this instead bounds each individual decode allocation, before it happens. A
+/// full "8K" UHD RGBA frame (7680x4320) is ~132 MB, so 200 MiB comfortably covers real content
+/// while sitting far below the gigabyte-scale allocations a decompression bomb would otherwise
+/// trigger.
+const MAX_IMAGE_DECODE_ALLOC_BYTES: u64 = 200 * 1024 * 1024;
+
+/// The decode-time resource limits applied to every image/animation decoder before it decodes
+/// any pixel data, so an oversized or bomb-like input is rejected instead of allocated for.
+fn image_decode_limits() -> Limits {
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_DECODE_DIMENSION);
+    limits.max_image_height = Some(MAX_IMAGE_DECODE_DIMENSION);
+    limits.max_alloc = Some(MAX_IMAGE_DECODE_ALLOC_BYTES);
+    limits
+}
+
+/// `image`'s `WebPDecoder` inherits the default `ImageDecoder::set_limits`, which only checks
+/// `max_image_width`/`max_image_height` and never enforces `max_alloc` (the underlying
+/// `image_webp` decoder does not accept a byte budget at all). The dimension check alone is not
+/// enough: an image within `MAX_IMAGE_DECODE_DIMENSION` on both axes can still exceed
+/// `MAX_IMAGE_DECODE_ALLOC_BYTES` (e.g. 8192x8192 RGBA is 256 MiB). This preflights the RGBA byte
+/// count ourselves, using checked `u64` arithmetic since `width`/`height` come directly from an
+/// untrusted image header and a `usize`/`u32` overflow here would silently defeat the check.
+fn check_webp_decode_alloc_budget(width: u32, height: u32) -> Result<()> {
+    let byte_count = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixel_count| pixel_count.checked_mul(4));
+
+    match byte_count {
+        Some(byte_count) if byte_count <= MAX_IMAGE_DECODE_ALLOC_BYTES => Ok(()),
+        _ => Err(
+            image::ImageError::Limits(image::error::LimitError::from_kind(
+                image::error::LimitErrorKind::InsufficientMemory,
+            ))
+            .into(),
+        ),
+    }
+}
 
 static SVG_FONT_DB: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
     let mut fontdb = usvg::fontdb::Database::new();
@@ -270,6 +335,70 @@ impl CustomImageHeader {
     }
 }
 
+/// Decodes frames of an animated image one at a time, stopping once the retained set would
+/// exceed `MAX_ANIMATED_IMAGE_DECODED_BYTES` decoded bytes or `MAX_ANIMATED_IMAGE_FRAME_COUNT`
+/// frames, so the full animation is never retained at once.
+fn collect_bounded_animated_frames(frames: Frames<'_>) -> Result<Vec<Frame>> {
+    collect_bounded_animated_frames_with_limits(
+        frames,
+        MAX_ANIMATED_IMAGE_FRAME_COUNT,
+        MAX_ANIMATED_IMAGE_DECODED_BYTES,
+    )
+}
+
+/// Implements [`collect_bounded_animated_frames`] with the limits as parameters.
+///
+/// When a limit is hit, the frames decoded so far are kept as a (shorter) looping animation
+/// rather than failing the whole image. Among frames that successfully decode, the first is
+/// always retained regardless of size, so the image still has something to render; a frame that
+/// fails to decode (e.g. because it exceeds the decoder's own resource limits) still propagates
+/// as an error, since there is nothing to retain in that case.
+fn collect_bounded_animated_frames_with_limits(
+    mut frames: Frames<'_>,
+    max_frame_count: usize,
+    max_decoded_bytes: usize,
+) -> Result<Vec<Frame>> {
+    let mut collected: Vec<Frame> = Vec::new();
+    let mut total_bytes: usize = 0;
+    let mut truncation_reason: Option<&'static str> = None;
+
+    loop {
+        if collected.len() >= max_frame_count {
+            // Report that the cap was reached, not that a frame was dropped: whether another
+            // frame actually follows is unknown without pulling it, which would defeat the
+            // point of the cap and could mask a decode error as a successful truncation.
+            truncation_reason = Some("reached the frame-count cap");
+            break;
+        }
+
+        let Some(frame) = frames.next() else {
+            break;
+        };
+        let frame = frame?;
+        let frame_bytes = frame.buffer().as_raw().len();
+
+        // Always keep the first frame, even if it alone exceeds the budget, so the image
+        // still has something to render.
+        if !collected.is_empty() && total_bytes.saturating_add(frame_bytes) > max_decoded_bytes {
+            truncation_reason = Some("exceeded the decoded-byte budget");
+            break;
+        }
+
+        total_bytes += frame_bytes;
+        collected.push(frame);
+    }
+
+    if let Some(reason) = truncation_reason {
+        log::warn!(
+            "Truncated animated image decoding after {} frame(s) / {} decoded byte(s): {reason}",
+            collected.len(),
+            total_bytes
+        );
+    }
+
+    Ok(collected)
+}
+
 impl Asset for ImageType {
     fn try_from_bytes(data: &[u8]) -> anyhow::Result<ImageType> {
         // SVGs are not handled by the guess_format helper function, so we have to manually check
@@ -321,31 +450,34 @@ impl Asset for ImageType {
 
         match image::guess_format(data) {
             Ok(ImageFormat::Jpeg) => {
-                let img = image::ImageReader::with_format(
+                let mut reader = image::ImageReader::with_format(
                     std::io::Cursor::new(data),
                     image::ImageFormat::Jpeg,
-                )
-                .decode()?
-                .into_rgba8();
+                );
+                reader.limits(image_decode_limits());
+                let img = reader.decode()?.into_rgba8();
                 Ok(ImageType::StaticBitmap {
                     image: Arc::new(StaticImage { img }),
                 })
             }
             Ok(ImageFormat::Png) => {
-                let img = image::ImageReader::with_format(
+                let mut reader = image::ImageReader::with_format(
                     std::io::Cursor::new(data),
                     image::ImageFormat::Png,
-                )
-                .decode()?
-                .into_rgba8();
+                );
+                reader.limits(image_decode_limits());
+                let img = reader.decode()?.into_rgba8();
                 Ok(ImageType::StaticBitmap {
                     image: Arc::new(StaticImage { img }),
                 })
             }
             Ok(ImageFormat::WebP) => {
-                let decoder = WebPDecoder::new(std::io::Cursor::new(data))?;
+                let mut decoder = WebPDecoder::new(std::io::Cursor::new(data))?;
+                decoder.set_limits(image_decode_limits())?;
+                let (width, height) = decoder.dimensions();
+                check_webp_decode_alloc_budget(width, height)?;
                 if decoder.has_animation() {
-                    let frames = decoder.into_frames().collect_frames()?;
+                    let frames = collect_bounded_animated_frames(decoder.into_frames())?;
                     Ok(ImageType::AnimatedBitmap {
                         image: Arc::new(AnimatedImage::from(frames)),
                     })
@@ -357,8 +489,9 @@ impl Asset for ImageType {
                 }
             }
             Ok(ImageFormat::Gif) => {
-                let decoder = GifDecoder::new(std::io::Cursor::new(data))?;
-                let frames = decoder.into_frames().collect_frames()?;
+                let mut decoder = GifDecoder::new(std::io::Cursor::new(data))?;
+                decoder.set_limits(image_decode_limits())?;
+                let frames = collect_bounded_animated_frames(decoder.into_frames())?;
                 Ok(ImageType::AnimatedBitmap {
                     image: Arc::new(AnimatedImage::from(frames)),
                 })

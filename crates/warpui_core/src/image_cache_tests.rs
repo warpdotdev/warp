@@ -32,6 +32,26 @@ impl AssetProvider for Assets {
     }
 }
 
+/// Builds raw GIF bytes for a synthetic animation with `frame_count` solid-color frames of the
+/// given dimensions and per-frame delay.
+fn make_animated_gif_bytes(frame_count: usize, width: u32, height: u32, delay_ms: u32) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = image::codecs::gif::GifEncoder::new(&mut bytes);
+        for i in 0..frame_count {
+            let mut buffer = image::RgbaImage::new(width, height);
+            let color = image::Rgba([(i % 256) as u8, 0, 0, 255]);
+            for pixel in buffer.pixels_mut() {
+                *pixel = color;
+            }
+            let delay = image::Delay::from_numer_denom_ms(delay_ms, 1);
+            let frame = Frame::from_parts(buffer, 0, 0, delay);
+            encoder.encode_frame(frame).expect("encode synthetic frame");
+        }
+    }
+    bytes
+}
+
 fn new_asset_cache() -> AssetCache {
     AssetCache::new(
         Box::new(Assets),
@@ -284,6 +304,284 @@ fn test_respects_max_dimensions_for_cacheoption_original() {
     };
     // Assert that, when we specify a max dimension of 512, the image is resized accordingly.
     assert_eq!(image.img.dimensions(), (512, 512));
+}
+
+#[test]
+fn test_animated_gif_within_budget_keeps_all_frames_and_duration() {
+    let gif_bytes = make_animated_gif_bytes(3, 4, 4, 100);
+
+    let image_type = ImageType::try_from_bytes(&gif_bytes).expect("synthetic gif should decode");
+    let ImageType::AnimatedBitmap { image } = image_type else {
+        panic!("Expected an animated bitmap");
+    };
+
+    assert_eq!(image.frames.len(), 3);
+    // MIN_REFRESH_DELAY_MS (50) is below our 100ms per-frame delay, so it doesn't kick in.
+    assert_eq!(image.duration, 300);
+}
+
+#[test]
+fn test_collect_bounded_animated_frames_truncates_on_byte_budget() {
+    // Each 4x4 RGBA frame decodes to 4 * 4 * 4 = 64 bytes.
+    let gif_bytes = make_animated_gif_bytes(10, 4, 4, 100);
+    let decoder = GifDecoder::new(std::io::Cursor::new(gif_bytes.as_slice()))
+        .expect("synthetic gif should decode");
+
+    // A budget of 200 bytes fits 3 frames (192 bytes) but not a 4th (256 bytes), so decoding
+    // should stop well short of materializing all 10 frames.
+    let frames = collect_bounded_animated_frames_with_limits(decoder.into_frames(), 1000, 200)
+        .expect("truncation should not surface as an error");
+    assert_eq!(frames.len(), 3);
+
+    let animated = AnimatedImage::from(frames);
+    assert_eq!(
+        animated.duration, 300,
+        "retained duration should reflect only the retained frames, not the original 10"
+    );
+}
+
+#[test]
+fn test_collect_bounded_animated_frames_always_keeps_first_frame_over_budget() {
+    let gif_bytes = make_animated_gif_bytes(5, 4, 4, 100);
+    let decoder = GifDecoder::new(std::io::Cursor::new(gif_bytes.as_slice()))
+        .expect("synthetic gif should decode");
+
+    // A budget smaller than a single frame (64 bytes) must still retain that first frame so
+    // the image has something to render.
+    let frames = collect_bounded_animated_frames_with_limits(decoder.into_frames(), 1000, 10)
+        .expect("an over-budget first frame should still be kept, not error");
+
+    assert_eq!(frames.len(), 1);
+}
+
+#[test]
+fn test_collect_bounded_animated_frames_truncates_on_frame_count() {
+    let gif_bytes = make_animated_gif_bytes(5, 4, 4, 100);
+    let decoder = GifDecoder::new(std::io::Cursor::new(gif_bytes.as_slice()))
+        .expect("synthetic gif should decode");
+
+    let frames = collect_bounded_animated_frames_with_limits(decoder.into_frames(), 2, usize::MAX)
+        .expect("frame count cap should truncate rather than error");
+
+    assert_eq!(frames.len(), 2);
+}
+
+#[test]
+fn test_collect_bounded_animated_frames_stops_pulling_once_byte_budget_rejects_a_frame() {
+    // Frame 1 (64 bytes) is always kept. Frame 2 (64 bytes) pushes the running total to 128,
+    // over the 100-byte budget, so it is decoded but rejected. If the implementation kept
+    // pulling after that rejection, it would call `next()` a third time and hit the panic
+    // below, so reaching `Ok` here proves the iterator is not drained past that point.
+    let make_frame = |value: u8| {
+        Frame::new(image::RgbaImage::from_pixel(
+            4,
+            4,
+            image::Rgba([value, 0, 0, 255]),
+        ))
+    };
+    let mut scripted_frames = vec![make_frame(1), make_frame(2)].into_iter();
+    let frames = Frames::new(Box::new(std::iter::from_fn(
+        move || match scripted_frames.next() {
+            Some(frame) => Some(Ok(frame)),
+            None => panic!(
+                "frame iterator was pulled past the point the byte budget should have stopped it"
+            ),
+        },
+    )));
+
+    let collected = collect_bounded_animated_frames_with_limits(frames, usize::MAX, 100)
+        .expect("byte-budget truncation should not surface as an error");
+
+    assert_eq!(collected.len(), 1);
+}
+
+#[test]
+fn test_collect_bounded_animated_frames_propagates_decode_error_before_budget() {
+    let good_frame = Frame::new(image::RgbaImage::from_pixel(
+        4,
+        4,
+        image::Rgba([1, 0, 0, 255]),
+    ));
+    let mut yielded_first = false;
+    let frames = Frames::new(Box::new(std::iter::from_fn(move || {
+        if !yielded_first {
+            yielded_first = true;
+            Some(Ok(good_frame.clone()))
+        } else {
+            Some(Err(image::ImageError::Parameter(
+                image::error::ParameterError::from_kind(
+                    image::error::ParameterErrorKind::NoMoreData,
+                ),
+            )))
+        }
+    })));
+
+    let result = collect_bounded_animated_frames_with_limits(frames, usize::MAX, usize::MAX);
+
+    assert!(
+        result.is_err(),
+        "a decode error encountered before any budget is hit should propagate"
+    );
+}
+
+#[test]
+fn test_image_decode_limits_match_configured_constants() {
+    let limits = image_decode_limits();
+    assert_eq!(limits.max_image_width, Some(MAX_IMAGE_DECODE_DIMENSION));
+    assert_eq!(limits.max_image_height, Some(MAX_IMAGE_DECODE_DIMENSION));
+    assert_eq!(limits.max_alloc, Some(MAX_IMAGE_DECODE_ALLOC_BYTES));
+}
+
+#[test]
+fn test_image_decode_limits_reject_oversized_dimensions() {
+    let limits = image_decode_limits();
+    assert!(
+        limits
+            .check_dimensions(MAX_IMAGE_DECODE_DIMENSION + 1, 10)
+            .is_err()
+    );
+    assert!(
+        limits
+            .check_dimensions(10, MAX_IMAGE_DECODE_DIMENSION + 1)
+            .is_err()
+    );
+    assert!(
+        limits
+            .check_dimensions(MAX_IMAGE_DECODE_DIMENSION, MAX_IMAGE_DECODE_DIMENSION)
+            .is_ok()
+    );
+}
+
+#[test]
+fn test_image_decode_limits_reject_oversized_allocation() {
+    let mut over_budget = image_decode_limits();
+    assert!(
+        over_budget
+            .reserve(MAX_IMAGE_DECODE_ALLOC_BYTES + 1)
+            .is_err()
+    );
+
+    let mut at_budget = image_decode_limits();
+    assert!(at_budget.reserve(MAX_IMAGE_DECODE_ALLOC_BYTES).is_ok());
+}
+
+/// Builds a minimal, valid GIF (header + logical screen descriptor + trailer, no color table or
+/// frames) declaring the given logical screen dimensions. Since GIF dimension limits are checked
+/// against the header alone, this exercises decode-time rejection without needing to encode any
+/// actual pixel data. Trailing padding bytes are required: the `gif` crate's streaming parser
+/// peeks one byte ahead of the trailer marker before recognizing end-of-stream, so a stream
+/// ending exactly at the trailer byte reads as a truncated file rather than a complete one.
+fn make_gif_header_only_bytes(width: u16, height: u16) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"GIF89a");
+    bytes.extend_from_slice(&width.to_le_bytes());
+    bytes.extend_from_slice(&height.to_le_bytes());
+    bytes.push(0x00); // packed fields: no global color table
+    bytes.push(0x00); // background color index
+    bytes.push(0x00); // pixel aspect ratio
+    bytes.push(0x3B); // trailer, no image blocks
+    bytes.extend_from_slice(&[0x00; 4]); // trailing padding; see doc comment above
+    bytes
+}
+
+#[test]
+fn test_oversized_gif_dimensions_are_rejected_before_decoding() {
+    let oversized = make_gif_header_only_bytes((MAX_IMAGE_DECODE_DIMENSION + 1) as u16, 100);
+
+    let result = ImageType::try_from_bytes(&oversized);
+
+    assert!(
+        result.is_err(),
+        "a GIF declaring dimensions beyond the decode limit should be rejected, not allocated for"
+    );
+}
+
+#[test]
+fn test_within_limit_gif_dimensions_still_decode() {
+    let within_limit = make_gif_header_only_bytes(100, 100);
+
+    let result = ImageType::try_from_bytes(&within_limit);
+
+    assert!(
+        result.is_ok(),
+        "a GIF within the decode limit should still decode successfully"
+    );
+}
+
+#[test]
+fn test_within_limit_jpeg_still_decodes() {
+    let img = image::RgbaImage::from_pixel(16, 16, image::Rgba([10, 20, 30, 255]));
+    let mut bytes = Vec::new();
+    image::DynamicImage::ImageRgba8(img)
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Jpeg,
+        )
+        .expect("encode synthetic jpeg");
+
+    let image_type = ImageType::try_from_bytes(&bytes).expect("within-limit jpeg should decode");
+    let ImageType::StaticBitmap { image } = image_type else {
+        panic!("Expected a static bitmap");
+    };
+    assert_eq!(image.size(), Vector2I::new(16, 16));
+}
+
+#[test]
+fn test_within_limit_static_webp_still_decodes() {
+    let img = image::RgbaImage::from_pixel(16, 16, image::Rgba([10, 20, 30, 255]));
+    let mut bytes = Vec::new();
+    image::codecs::webp::WebPEncoder::new_lossless(&mut bytes)
+        .encode(img.as_raw(), 16, 16, image::ExtendedColorType::Rgba8)
+        .expect("encode synthetic webp");
+
+    let image_type = ImageType::try_from_bytes(&bytes).expect("within-limit webp should decode");
+    let ImageType::StaticBitmap { image } = image_type else {
+        panic!("Expected a static bitmap");
+    };
+    assert_eq!(image.size(), Vector2I::new(16, 16));
+}
+
+#[test]
+fn test_check_webp_decode_alloc_budget_rejects_within_dimension_but_over_alloc_budget() {
+    // 8000x8000 stays within MAX_IMAGE_DECODE_DIMENSION on both axes (so the dimension check
+    // alone would not catch it), but its RGBA byte count (256,000,000) exceeds
+    // MAX_IMAGE_DECODE_ALLOC_BYTES (200 MiB).
+    assert!(check_webp_decode_alloc_budget(8000, 8000).is_err());
+}
+
+#[test]
+fn test_check_webp_decode_alloc_budget_accepts_within_budget() {
+    assert!(check_webp_decode_alloc_budget(16, 16).is_ok());
+}
+
+#[test]
+fn test_check_webp_decode_alloc_budget_handles_overflow_safely() {
+    // width * height * 4 overflows u64 for dimensions this large; the checked arithmetic must
+    // still reject it rather than panicking or wrapping around to a small, accepted value.
+    assert!(check_webp_decode_alloc_budget(u32::MAX, u32::MAX).is_err());
+}
+
+#[test]
+fn test_oversized_webp_allocation_is_rejected_before_decoding() {
+    // 8192x6500 is within MAX_IMAGE_DECODE_DIMENSION on both axes, so the dimension check alone
+    // does not catch it, but its RGBA byte count (~203 MiB) exceeds MAX_IMAGE_DECODE_ALLOC_BYTES
+    // (200 MiB). WebPDecoder never enforces max_alloc itself, so this exercises our own
+    // preflight end to end.
+    let width = MAX_IMAGE_DECODE_DIMENSION;
+    let height = 6500;
+    let img = image::RgbaImage::from_pixel(width, height, image::Rgba([7, 8, 9, 255]));
+    let mut bytes = Vec::new();
+    image::codecs::webp::WebPEncoder::new_lossless(&mut bytes)
+        .encode(img.as_raw(), width, height, image::ExtendedColorType::Rgba8)
+        .expect("encode synthetic oversized webp");
+    drop(img);
+
+    let result = ImageType::try_from_bytes(&bytes);
+
+    assert!(
+        result.is_err(),
+        "a WebP within dimension limits but over the allocation budget should be rejected, not allocated for"
+    );
 }
 
 #[test]
