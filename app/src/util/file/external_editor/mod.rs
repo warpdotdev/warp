@@ -6,10 +6,12 @@ pub mod settings;
 #[cfg(target_os = "windows")]
 mod windows;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use settings::EditorChoice;
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
+use warp_core::AppId;
 use warp_util::path::LineAndColumnArg;
 use warpui::{AppContext, SingletonEntity};
 
@@ -317,6 +319,37 @@ pub fn open_file_path_with_editor(
             windows::open_file_path_with_line_and_col(line_column_number, editor, &full_path, ctx);
         } else {
             ctx.open_file_path(&full_path);
+        }
+    }
+}
+
+/// Whether `app_id` identifies a Warp application, on any channel (Stable,
+/// Preview, Dev, ...). The identifier is the macOS bundle identifier or the
+/// Linux `.desktop` entry name without its extension.
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
+pub(crate) fn is_warp_app_id(app_id: &str) -> bool {
+    AppId::parse(app_id)
+        .map(|id| id.qualifier() == "dev" && id.organization() == "warp")
+        .unwrap_or(false)
+}
+
+/// Whether the OS's registered default handler for `path` is Warp itself.
+///
+/// Handing such a file to the OS bounces it straight back into Warp through the
+/// `file://` URL entry point, which carries no line number. Callers use this to
+/// open the file in-process instead, so a requested line survives.
+///
+/// Asked of the OS every time rather than remembered: a user can re-associate a
+/// file type while Warp is running, and the next click should respect that.
+pub fn system_default_handler_is_warp(path: &Path) -> bool {
+    cfg_if::cfg_if! {
+        if #[cfg(target_os = "macos")] {
+            mac::system_default_handler_is_warp(path)
+        } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
+            linux::system_default_handler_is_warp(path)
+        } else {
+            let _ = path;
+            false
         }
     }
 }
