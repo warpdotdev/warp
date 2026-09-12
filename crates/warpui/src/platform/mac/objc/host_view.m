@@ -8,6 +8,7 @@ void warp_update_layer(WarpHostView *);
 BOOL warp_handle_view_event(WarpHostView *, NSEvent *, BOOL);
 BOOL warp_handle_first_mouse_event(WarpHostView *, NSEvent *);
 void warp_handle_insert_text(WarpHostView *, id);
+void warp_handle_replace_preceding_text(WarpHostView *, id);
 void warp_update_ime_state(WarpHostView *, BOOL);
 void warp_handle_drag_and_drop(WarpHostView *, NSArray *, NSPoint);
 void warp_handle_file_drag(WarpHostView *, NSPoint);
@@ -55,6 +56,12 @@ void warp_marked_text_cleared(WarpHostView *);
 
     // Whether we're in the middle of a call to interpretKeyEvents.
     BOOL interpretingKeyEvents;
+
+    // Whether the press-and-hold accent popup is currently choosing a replacement for
+    // a character we have already committed. AppKit opens that popup by calling
+    // setMarkedText: with a real replacementRange, which is the one shape ordinary
+    // dead-key composition never takes — see insertText:replacementRange:.
+    BOOL accentPopupReplacingCommittedText;
 
     // Whether the IME modified marked text (via setMarkedText: or unmarkText)
     // during the current interpretKeyEvents: pass. Used to avoid wiping a
@@ -456,7 +463,34 @@ void warp_marked_text_cleared(WarpHostView *);
         // call to `insertText` is not in a call stack underneath `keyDown`
         // (e.g.: when inserting an emoji from the emoji composer), just insert
         // the text directly.
-        if (interpretingKeyEvents) {
+        // The press-and-hold accent popup replaces a character we have already
+        // committed: holding `o` commits a literal `o`, then picking `ò` is meant to
+        // take its place. Appending leaves both, which is issue #13631.
+        //
+        // Two shapes reach us, depending on how the entry is chosen:
+        //   - picking by number  -> insertText with a real replacementRange location
+        //   - arrow keys + Return -> insertText with NSNotFound, but the popup opened
+        //     earlier via setMarkedText: carrying a real replacementRange
+        //
+        // Both run *inside* interpretKeyEvents:, so the batching branch below would
+        // otherwise swallow them. Ordinary dead-key composition (Option-E then `g`)
+        // also runs there with marked text, but its setMarkedText: always carries
+        // NSNotFound, so it never sets the flag and keeps appending as before.
+        //
+        // The flag is only trusted while the popup's marked text is still standing.
+        // Dismissing the popup clears that marked text, so a flag that outlived its
+        // popup cannot make the next ordinary keystroke eat the character before it.
+        BOOL replacesCommittedText =
+            (accentPopupReplacingCommittedText && [self hasMarkedText]) ||
+            replacementRange.location != NSNotFound;
+
+        if (replacesCommittedText) {
+            accentPopupReplacingCommittedText = NO;
+            // Drop the popup's in-progress marked text first. Otherwise the editor
+            // would delete that ephemeral text instead of the committed character.
+            [self unmarkText];
+            warp_handle_replace_preceding_text(self, (NSString *)characters);
+        } else if (interpretingKeyEvents) {
             [textToInsert appendString:characters];
         } else {
             warp_handle_insert_text(self, (NSString *)characters);
@@ -489,6 +523,13 @@ void warp_marked_text_cleared(WarpHostView *);
         imeTouchedMarkedTextDuringInterpret = YES;
     }
 
+    // A real replacementRange here means AppKit is offering alternatives for text it
+    // has already handed us — the press-and-hold accent popup. Dead-key composition
+    // always passes NSNotFound, so this cannot be confused with it.
+    if (replacementRange.location != NSNotFound) {
+        accentPopupReplacingCommittedText = YES;
+    }
+
     [markedText release];
     if ([string isKindOfClass:[NSAttributedString class]])
         markedText = [[NSMutableAttributedString alloc] initWithAttributedString:string];
@@ -509,6 +550,9 @@ void warp_marked_text_cleared(WarpHostView *);
     if (interpretingKeyEvents) {
         imeTouchedMarkedTextDuringInterpret = YES;
     }
+    // The accent popup is gone, whether it committed or was cancelled. Either way it
+    // is no longer offering to replace anything.
+    accentPopupReplacingCommittedText = NO;
     [[markedText mutableString] setString:@""];
     if (self.readyForWarp) {
         warp_update_ime_state(self, NO);
