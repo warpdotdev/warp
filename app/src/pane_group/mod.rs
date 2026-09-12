@@ -803,6 +803,7 @@ pub struct DraggedBorder {
     border_id: EntityId,
     direction: SplitDirection,
     previous_mouse_location: Vector2F,
+    cached_total_pixel_size: Option<f32>,
 }
 
 /// Options that can be set when adding a new local terminal pane.
@@ -5998,7 +5999,12 @@ impl PaneGroup {
                 SplitDirection::Vertical => position.y() - border.previous_mouse_location.y(),
             };
 
-            self.panes.adjust_pane_size(border.border_id, delta, ctx);
+            self.panes.adjust_pane_size(
+                border.border_id,
+                delta,
+                &mut border.cached_total_pixel_size,
+                ctx,
+            );
 
             border.previous_mouse_location = position;
             ctx.notify();

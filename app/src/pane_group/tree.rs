@@ -524,9 +524,11 @@ impl PaneData {
         &mut self,
         border_id: EntityId,
         delta: f32,
+        cached_total_pixel_size: &mut Option<f32>,
         ctx: &mut ViewContext<PaneGroup>,
     ) {
-        self.root.adjust_pane_size(border_id, delta, ctx);
+        self.root
+            .adjust_pane_size(border_id, delta, cached_total_pixel_size, ctx);
     }
 
     pub fn reset_pane_sizes(&mut self, border_id: EntityId) -> bool {
@@ -753,11 +755,14 @@ impl PaneNode {
         &mut self,
         border_id: EntityId,
         delta: f32,
+        cached_total_pixel_size: &mut Option<f32>,
         ctx: &mut ViewContext<PaneGroup>,
     ) -> bool {
         match self {
             PaneNode::Leaf(_) => false,
-            PaneNode::Branch(branch) => branch.adjust_pane_size(border_id, delta, ctx),
+            PaneNode::Branch(branch) => {
+                branch.adjust_pane_size(border_id, delta, cached_total_pixel_size, ctx)
+            }
         }
     }
 
@@ -896,6 +901,45 @@ impl FindPaneByDirection for PaneNode {
             PaneNode::Branch(branch) => branch.panes_by_direction(pane_id, direction),
         }
     }
+}
+
+fn compute_new_flex(
+    flex_1: f32,
+    flex_2: f32,
+    delta: f32,
+    measured_sizes: (f32, f32),
+    cached_total_pixel_size: &mut Option<f32>,
+    ctx: &AppContext,
+) -> Option<f32> {
+    let measured_total_pixel_size = measured_sizes.0 + measured_sizes.1;
+    let total_pixel_size = match *cached_total_pixel_size {
+        Some(total_pixel_size) => total_pixel_size,
+        None if measured_total_pixel_size.is_finite()
+            && measured_total_pixel_size > f32::EPSILON =>
+        {
+            *cached_total_pixel_size = Some(measured_total_pixel_size);
+            measured_total_pixel_size
+        }
+        None => return None,
+    };
+
+    let total_flex = flex_1 + flex_2;
+    if !total_flex.is_finite()
+        || total_flex <= f32::EPSILON
+        || !delta.is_finite()
+        || delta.abs() < f32::EPSILON
+    {
+        return None;
+    }
+
+    let size_1 = flex_1 / total_flex * total_pixel_size;
+    let size_2 = flex_2 / total_flex * total_pixel_size;
+    let minimum_pane_size = get_minimum_pane_size(ctx);
+    if size_1 + delta < minimum_pane_size || size_2 - delta < minimum_pane_size {
+        return None;
+    }
+
+    Some(((size_1 + delta) / total_pixel_size * total_flex).clamp(0., total_flex))
 }
 
 impl PaneBranch {
@@ -1139,6 +1183,7 @@ impl PaneBranch {
         &mut self,
         border_id: EntityId,
         delta: f32,
+        cached_total_pixel_size: &mut Option<f32>,
         ctx: &mut ViewContext<PaneGroup>,
     ) -> bool {
         if let Some(idx) = self
@@ -1159,28 +1204,23 @@ impl PaneBranch {
                 SplitDirection::Vertical => (pane_size_1.y(), pane_size_2.y()),
             };
 
-            // Omit noise in dragging.
-            let minimum_pane_size = get_minimum_pane_size(ctx);
-            if size_1 + delta < minimum_pane_size
-                || size_2 - delta < minimum_pane_size
-                || delta.abs() < f32::EPSILON
-            {
-                return true;
+            if let Some(new_flex) = compute_new_flex(
+                flex_1,
+                flex_2,
+                delta,
+                (size_1, size_2),
+                cached_total_pixel_size,
+                ctx,
+            ) {
+                self.nodes[idx].0 = PaneFlex(new_flex);
+                self.nodes[idx + 1].0 = PaneFlex(total_flex - new_flex);
             }
-
-            // Re-distribute the flex factors.
-            let new_flex = ((size_1 + delta) / (size_1 + size_2) * total_flex)
-                .max(0.)
-                .min(total_flex);
-
-            self.nodes[idx].0 = PaneFlex(new_flex);
-            self.nodes[idx + 1].0 = PaneFlex(total_flex - new_flex);
 
             return true;
         }
 
         for (_, node) in &mut self.nodes {
-            if node.adjust_pane_size(border_id, delta, ctx) {
+            if node.adjust_pane_size(border_id, delta, cached_total_pixel_size, ctx) {
                 return true;
             }
         }
@@ -1239,7 +1279,8 @@ impl PaneBranch {
                 }
 
                 let divider_id = self.dividers[idx.min(self.dividers.len() - 1)].id;
-                self.adjust_pane_size(divider_id, delta, ctx);
+                let mut cached_total_pixel_size = None;
+                self.adjust_pane_size(divider_id, delta, &mut cached_total_pixel_size, ctx);
                 break;
             }
         }
@@ -1414,6 +1455,7 @@ fn divider_mouse_down_action(
             border_id,
             direction,
             previous_mouse_location: position,
+            cached_total_pixel_size: None,
         })
     }
 }
