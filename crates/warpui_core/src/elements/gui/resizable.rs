@@ -107,7 +107,7 @@ impl ResizableState {
     ) -> Option<Vector2F> {
         let mut resized = false;
 
-        if let Some(origin) = origin {
+        if origin.is_some() {
             let delta = match dragbar_side {
                 DragBarSide::Right => new_position.x() - old_position.x(),
                 DragBarSide::Left => old_position.x() - new_position.x(),
@@ -123,22 +123,6 @@ impl ResizableState {
             }
             let size = self.size;
 
-            // The last position should reflect the latest position of the dragbar.
-            let last_position = match dragbar_side {
-                // With a right-side dragbar, the latest position of the dragbar will
-                // be the old origin of the element plus the new width/height.
-                DragBarSide::Right => origin + vec2f(size, 0.),
-                // With a left-side dragbar, the latest position of the dragbar will
-                // be the old origin of the element minus the bounded delta of the drag.
-                DragBarSide::Left => origin - vec2f(size - old_size, 0.),
-                // With a bottom-side dragbar, the latest position of the dragbar will
-                // be the old origin of the element plus the new height.
-                DragBarSide::Bottom => origin + vec2f(0., size),
-                // With a top-side dragbar, the latest position of the dragbar will
-                // be the old origin of the element minus the bounded delta of the drag.
-                DragBarSide::Top => origin - vec2f(0., size - old_size),
-            };
-
             let origin_delta = match dragbar_side {
                 DragBarSide::Right => Vector2F::zero(),
                 DragBarSide::Left => vec2f(old_size - size, 0.),
@@ -146,7 +130,9 @@ impl ResizableState {
                 DragBarSide::Top => vec2f(0., old_size - size),
             };
 
-            self.mode = ResizableMode::Dragging { last_position };
+            self.mode = ResizableMode::Dragging {
+                last_position: new_position,
+            };
 
             if resized { Some(origin_delta) } else { None }
         } else {
@@ -500,3 +486,7 @@ fn dispatch_callback(callback: Option<&mut Handler>, ctx: &mut EventContext, app
         callback(ctx, app);
     }
 }
+
+#[cfg(test)]
+#[path = "resizable_tests.rs"]
+mod tests;
