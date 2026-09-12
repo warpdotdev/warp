@@ -219,9 +219,6 @@ pub enum FeatureFlag {
     /// Enables Kitty image rendering
     KittyImages,
 
-    /// Enables support for Warp Packs.
-    WarpPacks,
-
     /// Enables the revised AI analytics policy banner.
     ///
     /// This does not gate actual collection of data under the new policy.
