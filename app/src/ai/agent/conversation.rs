@@ -46,6 +46,7 @@ use crate::ai::agent::icons::{
     failed_icon, gray_stop_icon, in_progress_icon, succeeded_icon, yellow_stop_icon,
 };
 use crate::ai::agent::linearization::compute_task_depths;
+use crate::ai::agent::request_metadata::RequestMetadataRecord;
 use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
     AIAgentOutputMessage, AIAgentOutputMessageType, AIIdentifiers, CancellationOutcome,
@@ -3512,6 +3513,125 @@ impl AIConversation {
 
     pub fn get_task(&self, task_id: &TaskId) -> Option<&Task> {
         self.task_store.get(task_id)
+    }
+
+    /// The request ids of the messages added to `exchange_id`, resolved across the whole task
+    /// store: summarization (`Action::MoveMessagesToNewTask`) moves an exchange's messages into
+    /// a subtask without touching the exchange's `added_message_ids`, so message membership
+    /// cannot be read off the single task the exchange happens to live in.
+    fn exchange_request_ids(&self, exchange_id: AIAgentExchangeId) -> HashSet<String> {
+        let Some(exchange) = self.all_tasks().find_map(|task| task.exchange(exchange_id)) else {
+            return HashSet::new();
+        };
+        self.all_tasks()
+            .flat_map(|task| task.messages())
+            .filter(|message| {
+                exchange
+                    .added_message_ids
+                    .contains(&MessageId::new(message.id.clone()))
+            })
+            .map(|message| message.request_id.clone())
+            .filter(|request_id| !request_id.is_empty())
+            .collect()
+    }
+
+    /// Every per-request record for the requests that produced `exchange_id`, in task order.
+    /// An exchange can hold several records — one per underlying API request (retries, resumes,
+    /// multi-request turns) — so the Turn panel groups these rather than showing one per request.
+    pub fn request_metadata_records_for_exchange(
+        &self,
+        exchange_id: AIAgentExchangeId,
+    ) -> Vec<RequestMetadataRecord> {
+        let request_ids = self.exchange_request_ids(exchange_id);
+        if request_ids.is_empty() {
+            return Vec::new();
+        }
+        let mut seen_message_ids = HashSet::new();
+        self.all_tasks()
+            .flat_map(|task| task.messages())
+            .filter(|message| request_ids.contains(message.request_id.as_str()))
+            .filter_map(RequestMetadataRecord::from_message)
+            .filter(|record| seen_message_ids.insert(record.message_id.clone()))
+            .collect()
+    }
+
+    /// The root-task exchanges that make up the user-visible turn containing `exchange_id`:
+    /// from the exchange carrying the user's query through every follow-up exchange (tool-result
+    /// round trips are separate requests, and so separate exchanges) up to, but not including,
+    /// the next exchange that carries a user query. An exchange outside the root task is its own
+    /// turn.
+    pub fn turn_exchange_ids(&self, exchange_id: AIAgentExchangeId) -> Vec<AIAgentExchangeId> {
+        let root_exchanges: Vec<&AIAgentExchange> = self.root_task_exchanges().collect();
+        let Some(index) = root_exchanges
+            .iter()
+            .position(|exchange| exchange.id == exchange_id)
+        else {
+            return vec![exchange_id];
+        };
+        let start = (0..=index)
+            .rev()
+            .find(|&i| root_exchanges[i].has_user_query())
+            .unwrap_or(0);
+        let end = ((index + 1)..root_exchanges.len())
+            .find(|&i| root_exchanges[i].has_user_query())
+            .unwrap_or(root_exchanges.len());
+        root_exchanges[start..end]
+            .iter()
+            .map(|exchange| exchange.id)
+            .collect()
+    }
+
+    /// Whether `exchange_id` is the last exchange of its turn (see [`Self::turn_exchange_ids`]),
+    /// i.e. the block where turn-level controls belong.
+    pub fn is_last_exchange_in_turn(&self, exchange_id: AIAgentExchangeId) -> bool {
+        self.turn_exchange_ids(exchange_id).last() == Some(&exchange_id)
+    }
+
+    /// Every per-request record for the turn containing `exchange_id`, in task order: the union
+    /// of [`Self::request_metadata_records_for_exchange`] over [`Self::turn_exchange_ids`].
+    pub fn request_metadata_records_for_turn(
+        &self,
+        exchange_id: AIAgentExchangeId,
+    ) -> Vec<RequestMetadataRecord> {
+        let mut seen_message_ids = HashSet::new();
+        self.turn_exchange_ids(exchange_id)
+            .into_iter()
+            .flat_map(|id| self.request_metadata_records_for_exchange(id))
+            .filter(|record| seen_message_ids.insert(record.message_id.clone()))
+            .collect()
+    }
+
+    /// The single eligibility check for the Turn panel, shared by the response footer and the
+    /// panel opener: the turn's per-request records when the turn closes at `exchange_id` (see
+    /// [`Self::is_last_exchange_in_turn`]) and its metadata is complete — every exchange in the
+    /// turn has request ids, and all of them have delivered their `Message.RequestMetadata`
+    /// record to this client.
+    ///
+    /// Request membership is resolved from the exchanges' messages, not from the records, and
+    /// every exchange must contribute some: a request cancelled or failed before the server's
+    /// input echo lands (or disconnected mid-stream) leaves its exchange without messages or
+    /// record, and the non-empty record set of its earlier requests must not be presented as
+    /// the turn's total.
+    pub fn turn_panel_records(
+        &self,
+        exchange_id: AIAgentExchangeId,
+    ) -> Option<Vec<RequestMetadataRecord>> {
+        if !self.is_last_exchange_in_turn(exchange_id) {
+            return None;
+        }
+        let records = self.request_metadata_records_for_turn(exchange_id);
+        let covered_request_ids: HashSet<String> = records
+            .iter()
+            .map(|record| record.request_id.clone())
+            .collect();
+        let complete = self.turn_exchange_ids(exchange_id).into_iter().all(|id| {
+            let request_ids = self.exchange_request_ids(id);
+            !request_ids.is_empty()
+                && request_ids
+                    .iter()
+                    .all(|request_id| covered_request_ids.contains(request_id))
+        });
+        complete.then_some(records)
     }
 
     /// Optimistically creates a subtask for the CLISubagent task when a user query is sent while
