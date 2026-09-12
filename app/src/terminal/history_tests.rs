@@ -63,20 +63,10 @@ impl History {
 
 impl HistoryEntry {
     fn with_session_id<S: Into<String>>(session_id: SessionId, command: S) -> Self {
-        Self {
-            session_id: Some(session_id),
-            exit_code: Some(ExitCode::from(0)),
-            command: command.into(),
-            workflow_id: None,
-            workflow_command: None,
-            pwd: None,
-            start_ts: None,
-            completed_ts: None,
-            git_head: None,
-            shell_host: None,
-            is_agent_executed: false,
-            is_for_restored_block: false,
-        }
+        let mut entry = Self::command_only(command);
+        entry.session_id = Some(session_id);
+        entry.exit_code = Some(ExitCode::from(0));
+        entry
     }
 
     pub fn with_pwd_and_exit_code<S: Into<String>>(
@@ -84,20 +74,10 @@ impl HistoryEntry {
         pwd: S,
         exit_code: impl Into<ExitCode>,
     ) -> Self {
-        Self {
-            session_id: None,
-            exit_code: Some(exit_code.into()),
-            command: command.into(),
-            workflow_id: None,
-            workflow_command: None,
-            pwd: Some(pwd.into()),
-            start_ts: None,
-            completed_ts: None,
-            git_head: None,
-            shell_host: None,
-            is_agent_executed: false,
-            is_for_restored_block: false,
-        }
+        let mut entry = Self::command_only(command);
+        entry.exit_code = Some(exit_code.into());
+        entry.pwd = Some(pwd.into());
+        entry
     }
 }
 
@@ -807,40 +787,31 @@ fn append_command_with_rich_history_data() {
         )
         .await;
 
+        let touch_entry = {
+            let mut entry = HistoryEntry::with_pwd_and_exit_code("touch foobar", "/Users/andy/", 0);
+            entry.session_id = Some(session.id());
+            entry.start_ts = Some(start_ts_3);
+            entry.completed_ts = Some(end_ts_3);
+            entry
+        };
+        let ls_entry = {
+            let mut entry = HistoryEntry::with_pwd_and_exit_code("ls", "/Users/andy/", 0);
+            entry.session_id = Some(session.id());
+            entry.start_ts = Some(start_ts_4);
+            entry.completed_ts = Some(end_ts_4);
+            entry
+        };
+        let date_entry = {
+            let mut entry = HistoryEntry::with_pwd_and_exit_code("date", "/usr/bin", 0);
+            entry.start_ts = Some(start_ts_2);
+            entry.completed_ts = Some(end_ts_2);
+            entry.git_head = Some(String::from("foobar"));
+            entry.shell_host = Some(shell_host.clone());
+            entry
+        };
+
         history_handle.update(&mut app, |history, _ctx| {
-            history.append_commands(
-                session.id(),
-                vec![
-                    HistoryEntry {
-                        session_id: Some(session.id()),
-                        command: String::from("touch foobar"),
-                        pwd: Some(String::from("/Users/andy/")),
-                        start_ts: Some(start_ts_3),
-                        completed_ts: Some(end_ts_3),
-                        workflow_id: None,
-                        workflow_command: None,
-                        exit_code: Some(ExitCode::from(0)),
-                        git_head: None,
-                        shell_host: None,
-                        is_agent_executed: false,
-                        is_for_restored_block: false,
-                    },
-                    HistoryEntry {
-                        session_id: Some(session.id()),
-                        command: String::from("ls"),
-                        pwd: Some(String::from("/Users/andy/")),
-                        start_ts: Some(start_ts_4),
-                        completed_ts: Some(end_ts_4),
-                        workflow_id: None,
-                        workflow_command: None,
-                        exit_code: Some(ExitCode::from(0)),
-                        git_head: None,
-                        shell_host: None,
-                        is_agent_executed: false,
-                        is_for_restored_block: false,
-                    },
-                ],
-            );
+            history.append_commands(session.id(), vec![touch_entry.clone(), ls_entry.clone()]);
         });
 
         history_handle.read(&app, |history, _ctx| {
@@ -848,48 +819,9 @@ fn append_command_with_rich_history_data() {
                 history.commands(session.id()).unwrap_or_default(),
                 vec![
                     &HistoryEntry::command_only("cd ~/Desktop"),
-                    &HistoryEntry {
-                        session_id: None,
-                        command: String::from("date"),
-                        pwd: Some(String::from("/usr/bin")),
-                        start_ts: Some(start_ts_2),
-                        completed_ts: Some(end_ts_2),
-                        workflow_id: None,
-                        workflow_command: None,
-                        exit_code: Some(ExitCode::from(0)),
-                        git_head: Some(String::from("foobar")),
-                        shell_host: Some(shell_host.clone()),
-                        is_agent_executed: false,
-                        is_for_restored_block: false,
-                    },
-                    &HistoryEntry {
-                        session_id: Some(session.id()),
-                        command: String::from("touch foobar"),
-                        pwd: Some(String::from("/Users/andy/")),
-                        start_ts: Some(start_ts_3),
-                        completed_ts: Some(end_ts_3),
-                        workflow_id: None,
-                        workflow_command: None,
-                        exit_code: Some(ExitCode::from(0)),
-                        git_head: None,
-                        shell_host: None,
-                        is_agent_executed: false,
-                        is_for_restored_block: false,
-                    },
-                    &HistoryEntry {
-                        session_id: Some(session.id()),
-                        command: String::from("ls"),
-                        pwd: Some(String::from("/Users/andy/")),
-                        start_ts: Some(start_ts_4),
-                        completed_ts: Some(end_ts_4),
-                        workflow_id: None,
-                        workflow_command: None,
-                        exit_code: Some(ExitCode::from(0)),
-                        git_head: None,
-                        shell_host: None,
-                        is_agent_executed: false,
-                        is_for_restored_block: false,
-                    },
+                    &date_entry,
+                    &touch_entry,
+                    &ls_entry,
                 ]
             );
         });
@@ -935,46 +867,23 @@ fn append_restored_command_doesnt_overwrite_rich_history() {
         )
         .await;
 
+        let restored_entry = {
+            let mut entry = HistoryEntry::with_pwd_and_exit_code("ls", "/tmp", 0);
+            entry.session_id = Some(session.id());
+            entry.start_ts = Some(start_ts);
+            entry.completed_ts = Some(end_ts);
+            entry.is_for_restored_block = true;
+            entry
+        };
+
         history_handle.update(&mut app, |history, _ctx| {
-            history.append_restored_commands(
-                session.id(),
-                vec![HistoryEntry {
-                    session_id: Some(session.id()),
-                    command: "ls".to_string(),
-                    pwd: Some("/tmp".to_string()),
-                    start_ts: Some(start_ts),
-                    completed_ts: Some(end_ts),
-                    workflow_id: None,
-                    workflow_command: None,
-                    exit_code: Some(ExitCode::from(0)),
-                    git_head: None,
-                    shell_host: None,
-                    is_agent_executed: false,
-                    is_for_restored_block: true,
-                }],
-            );
+            history.append_restored_commands(session.id(), vec![restored_entry.clone()]);
         });
 
         history_handle.read(&app, |history, _ctx| {
             assert_eq!(
                 history.commands(session.id()).unwrap_or_default(),
-                vec![
-                    &HistoryEntry::command_only("cd ~/Desktop"),
-                    &HistoryEntry {
-                        session_id: Some(session.id()),
-                        command: String::from("ls"),
-                        pwd: Some(String::from("/tmp")),
-                        start_ts: Some(start_ts),
-                        completed_ts: Some(end_ts),
-                        workflow_id: None,
-                        workflow_command: None,
-                        exit_code: Some(ExitCode::from(0)),
-                        git_head: None,
-                        shell_host: None,
-                        is_agent_executed: false,
-                        is_for_restored_block: true,
-                    },
-                ]
+                vec![&HistoryEntry::command_only("cd ~/Desktop"), &restored_entry]
             )
         });
     });

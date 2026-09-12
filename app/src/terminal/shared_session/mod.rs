@@ -6,9 +6,9 @@ use session_sharing_protocol::sharer::SessionSourceType;
 use warpui::keymap::ContextPredicate;
 use warpui::{AppContext, WindowId, id};
 
+use super::TerminalModel;
 use super::model::block::SerializedBlock;
 use super::model::terminal_model::BlockIndex;
-use super::{GridType, TerminalModel};
 use crate::channel::{Channel, ChannelState};
 use crate::editor::{InteractionState, ReplicaId};
 use crate::features::FeatureFlag;
@@ -393,30 +393,6 @@ impl EventNumber {
 impl From<EventNumber> for usize {
     fn from(value: EventNumber) -> Self {
         value.0
-    }
-}
-
-impl From<GridType> for session_sharing_protocol::common::GridType {
-    fn from(val: GridType) -> Self {
-        match val {
-            GridType::Prompt => session_sharing_protocol::common::GridType::Prompt,
-            GridType::Rprompt => session_sharing_protocol::common::GridType::Rprompt,
-            GridType::Output => session_sharing_protocol::common::GridType::Output,
-            GridType::PromptAndCommand => {
-                session_sharing_protocol::common::GridType::PromptAndCommand
-            }
-        }
-    }
-}
-
-impl From<session_sharing_protocol::common::GridType> for GridType {
-    fn from(value: session_sharing_protocol::common::GridType) -> Self {
-        match value {
-            session_sharing_protocol::common::GridType::Prompt => Self::Prompt,
-            session_sharing_protocol::common::GridType::Rprompt => Self::Rprompt,
-            session_sharing_protocol::common::GridType::Output => Self::Output,
-            session_sharing_protocol::common::GridType::PromptAndCommand => Self::PromptAndCommand,
-        }
     }
 }
 

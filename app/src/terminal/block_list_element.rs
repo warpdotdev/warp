@@ -6,7 +6,6 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use enum_iterator::Sequence;
 use itertools::Itertools;
 use parking_lot::FairMutex;
 use pathfinder_color::ColorU;
@@ -15,6 +14,7 @@ use vec1::Vec1;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_core::ui::builder::UiBuilder;
 use warp_core::ui::theme::AnsiColorIdentifier;
+pub use warp_terminal::model::GridType;
 use warp_util::user_input::UserInput;
 use warpui::elements::new_scrollable::{NewScrollableElement, ScrollableAxis};
 use warpui::elements::{
@@ -213,14 +213,6 @@ pub type FilterBuilderFn = dyn Fn(
     &HashMap<BlockIndex, MouseStateHandle>,
     &AppContext,
 ) -> Vec<Option<Box<dyn Element>>>;
-
-#[derive(Debug, PartialEq, Copy, Clone, Eq, PartialOrd, Sequence, Hash)]
-pub enum GridType {
-    Prompt,
-    Rprompt,          // Right side prompt
-    PromptAndCommand, // Combined prompt/command grid.
-    Output,
-}
 
 #[derive(Debug, Default, Clone)]
 pub struct SnackbarHeaderState {
