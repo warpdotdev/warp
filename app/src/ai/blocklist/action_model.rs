@@ -234,6 +234,8 @@ pub struct BlocklistAIActionModel {
 
     /// Map from conversation ID to actions received in the most recent AI output that are finished.
     finished_action_results: HashMap<AIConversationId, Vec<Arc<AIAgentActionResult>>>,
+    server_owned_action_results:
+        HashMap<AIConversationId, HashMap<AIAgentActionId, Arc<AIAgentActionResult>>>,
 
     /// Original order for the current batch of actions.
     ///
@@ -242,7 +244,8 @@ pub struct BlocklistAIActionModel {
     action_order: HashMap<AIConversationId, HashMap<AIAgentActionId, usize>>,
 
     /// Past actions and their corresponding statuses from previous AI exchanges.
-    past_action_results: HashMap<AIAgentActionId, Arc<AIAgentActionResult>>,
+    past_action_results:
+        HashMap<AIConversationId, HashMap<AIAgentActionId, Arc<AIAgentActionResult>>>,
     recording_spans_by_conversation:
         RefCell<HashMap<AIConversationId, Arc<HashMap<AIAgentActionId, RecordingSpanInfo>>>>,
 
@@ -313,6 +316,7 @@ impl BlocklistAIActionModel {
         Self {
             pending_actions: Default::default(),
             finished_action_results: Default::default(),
+            server_owned_action_results: Default::default(),
             executor,
             past_action_results: HashMap::new(),
             recording_spans_by_conversation: Default::default(),
@@ -663,7 +667,142 @@ impl BlocklistAIActionModel {
             .values()
             .flat_map(|results| results.iter())
             .find(|result| &result.id == id)
-            .or_else(|| self.past_action_results.get(id))
+            .or_else(|| {
+                self.past_action_results
+                    .values()
+                    .find_map(|results| results.get(id))
+            })
+    }
+    pub fn get_action_result_for_conversation(
+        &self,
+        conversation_id: AIConversationId,
+        id: &AIAgentActionId,
+    ) -> Option<&Arc<AIAgentActionResult>> {
+        self.finished_action_results
+            .get(&conversation_id)
+            .and_then(|results| results.iter().find(|result| &result.id == id))
+            .or_else(|| {
+                self.server_owned_action_results
+                    .get(&conversation_id)
+                    .and_then(|results| results.get(id))
+            })
+            .or_else(|| {
+                self.past_action_results
+                    .get(&conversation_id)
+                    .and_then(|results| results.get(id))
+            })
+    }
+
+    pub fn get_action_status_for_conversation(
+        &self,
+        conversation_id: AIConversationId,
+        id: &AIAgentActionId,
+    ) -> Option<AIActionStatus> {
+        if let Some((index, _)) = self
+            .pending_actions
+            .get(&conversation_id)
+            .and_then(|actions| {
+                actions
+                    .iter()
+                    .enumerate()
+                    .find(|(_, action)| &action.id == id)
+            })
+        {
+            if index == 0
+                && !self.is_view_only
+                && !self.running_actions.contains_key(&conversation_id)
+            {
+                return Some(AIActionStatus::Blocked);
+            }
+            return Some(AIActionStatus::Queued);
+        }
+
+        self.running_actions
+            .get(&conversation_id)
+            .filter(|running| running.contains(id))
+            .map(|_| AIActionStatus::RunningAsync)
+            .or_else(|| {
+                self.get_action_result_for_conversation(conversation_id, id)
+                    .map(|result| AIActionStatus::Finished(result.clone()))
+            })
+            .or_else(|| {
+                self.pending_preprocessed_actions
+                    .get(&conversation_id)
+                    .is_some_and(|preprocessing| preprocessing.contains(id))
+                    .then_some(AIActionStatus::Preprocessing)
+            })
+    }
+
+    fn has_server_owned_action_result(
+        &self,
+        conversation_id: AIConversationId,
+        action_id: &AIAgentActionId,
+    ) -> bool {
+        self.server_owned_action_results
+            .get(&conversation_id)
+            .is_some_and(|results| results.contains_key(action_id))
+    }
+
+    pub fn apply_server_owned_run_agents_failure(
+        &mut self,
+        conversation_id: AIConversationId,
+        action_result: AIAgentActionResult,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !matches!(
+            action_result.result,
+            AIAgentActionResultType::RunAgents(
+                ai::agent::action_result::RunAgentsResult::Failure { .. }
+            )
+        ) {
+            return;
+        }
+
+        let action_id = action_result.id.clone();
+        if self.has_server_owned_action_result(conversation_id, &action_id)
+            || self
+                .finished_action_results
+                .get(&conversation_id)
+                .is_some_and(|results| results.iter().any(|result| result.id == action_id))
+        {
+            return;
+        }
+
+        if let Some(queue) = self.pending_actions.get_mut(&conversation_id) {
+            queue.retain(|action| action.id != action_id);
+        }
+
+        let should_remove_running_entry = self
+            .running_actions
+            .get_mut(&conversation_id)
+            .is_some_and(|running| {
+                running.remove_action(&action_id);
+                running.is_empty()
+            });
+        if should_remove_running_entry {
+            self.running_actions.remove(&conversation_id);
+        }
+
+        self.executor.update(ctx, |executor, ctx| {
+            executor.suppress_running_async_action(&action_id, conversation_id, ctx);
+        });
+        self.server_owned_action_results
+            .entry(conversation_id)
+            .or_default()
+            .insert(action_id.clone(), Arc::new(action_result));
+        self.recording_spans_by_conversation
+            .get_mut()
+            .remove(&conversation_id);
+
+        ctx.emit(BlocklistAIActionEvent::FinishedAction {
+            action_id,
+            conversation_id,
+            cancellation_reason: None,
+        });
+
+        if !self.running_actions.contains_key(&conversation_id) {
+            self.try_to_execute_available_actions(conversation_id, ctx);
+        }
     }
 
     pub fn recording_spans_for_conversation(
@@ -694,7 +833,11 @@ impl BlocklistAIActionModel {
     }
 
     /// Bulk restore action results from a list of exchanges (used when loading conversations from tasks)
-    pub fn restore_action_results_from_exchanges(&mut self, exchanges: Vec<&AIAgentExchange>) {
+    pub fn restore_action_results_from_exchanges(
+        &mut self,
+        conversation_id: AIConversationId,
+        exchanges: Vec<&AIAgentExchange>,
+    ) {
         self.recording_spans_by_conversation.get_mut().clear();
         for exchange in exchanges.iter() {
             for input in &exchange.input {
@@ -712,6 +855,8 @@ impl BlocklistAIActionModel {
                         );
                     }
                     self.past_action_results
+                        .entry(conversation_id)
+                        .or_default()
                         .insert(result_id, Arc::new(result_to_insert));
                 }
             }
@@ -970,6 +1115,13 @@ impl BlocklistAIActionModel {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
+        let actions = actions
+            .into_iter()
+            .filter(|action| !self.has_server_owned_action_result(conversation_id, &action.id))
+            .collect::<Vec<_>>();
+        if actions.is_empty() {
+            return;
+        }
         self.action_order.insert(
             conversation_id,
             actions
@@ -1041,6 +1193,7 @@ impl BlocklistAIActionModel {
                 .finished_action_results
                 .get(&conversation_id)
                 .is_some_and(|results| results.iter().any(|r| r.id == action_id))
+                || self.has_server_owned_action_result(conversation_id, &action_id)
             {
                 continue;
             }
@@ -1288,6 +1441,8 @@ impl BlocklistAIActionModel {
 
         for result in finished_action_results.iter() {
             self.past_action_results
+                .entry(conversation_id)
+                .or_default()
                 .insert(result.id.clone(), result.clone());
         }
         finished_action_results

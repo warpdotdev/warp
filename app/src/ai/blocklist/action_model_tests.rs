@@ -1,9 +1,20 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
+
+use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest};
+use ai::agent::action_result::RunAgentsResult;
+use chrono::Local;
+use warpui::r#async::Timer;
+use warpui::{App, SingletonEntity};
 
 use super::*;
-use crate::ai::agent::AIAgentActionResultType;
 use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{
+    AIAgentActionResultType, AIAgentExchangeId, AIAgentOutputStatus, FinishedAIAgentOutput, Shared,
+};
+use crate::ai::llms::LLMId;
+use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
 fn make_action_result(id: &str) -> Arc<AIAgentActionResult> {
     Arc::new(AIAgentActionResult {
@@ -11,6 +22,66 @@ fn make_action_result(id: &str) -> Arc<AIAgentActionResult> {
         task_id: TaskId::new("task".to_owned()),
         result: AIAgentActionResultType::InitProject,
     })
+}
+
+fn run_agents_action(id: &str) -> AIAgentAction {
+    AIAgentAction {
+        id: AIAgentActionId::from(id.to_owned()),
+        task_id: TaskId::new("task".to_owned()),
+        action: AIAgentActionType::RunAgents(RunAgentsRequest {
+            summary: "Run child".to_owned(),
+            base_prompt: "Investigate".to_owned(),
+            skills: vec![],
+            model_id: String::new(),
+            harness_type: String::new(),
+            execution_mode: RunAgentsExecutionMode::Local,
+            agent_run_configs: vec![RunAgentsAgentRunConfig {
+                name: "child".to_owned(),
+                prompt: String::new(),
+                title: String::new(),
+                agent_identity_uid: String::new(),
+                model_id: String::new(),
+            }],
+            plan_id: String::new(),
+            harness_auth_secret_name: None,
+        }),
+        requires_result: true,
+    }
+}
+fn exchange_with_action_result(result: AIAgentActionResult) -> AIAgentExchange {
+    AIAgentExchange {
+        id: AIAgentExchangeId::new(),
+        input: vec![AIAgentInput::ActionResult {
+            result,
+            context: Default::default(),
+        }],
+        output_status: AIAgentOutputStatus::Finished {
+            finished_output: FinishedAIAgentOutput::Success {
+                output: Shared::new(Default::default()),
+            },
+        },
+        added_message_ids: HashSet::new(),
+        start_time: Local::now(),
+        finish_time: None,
+        time_to_first_token_ms: None,
+        working_directory: None,
+        model_id: LLMId::from("test-model"),
+        request_cost: None,
+        coding_model_id: LLMId::from("test-coding-model"),
+        cli_agent_model_id: LLMId::from("test-cli-model"),
+        computer_use_model_id: LLMId::from("test-computer-use-model"),
+        response_initiator: None,
+    }
+}
+
+fn server_owned_failure(id: &str) -> AIAgentActionResult {
+    AIAgentActionResult {
+        id: AIAgentActionId::from(id.to_owned()),
+        task_id: TaskId::new("task".to_owned()),
+        result: AIAgentActionResultType::RunAgents(RunAgentsResult::Failure {
+            error: "server rejected request".to_owned(),
+        }),
+    }
 }
 
 fn count_startable_actions_for_pass(phases: &[(RunningActionPhase, bool)]) -> usize {
@@ -99,4 +170,174 @@ fn finished_results_stay_in_original_action_order() {
         finished_results[2].id,
         AIAgentActionId::from("third".to_owned())
     );
+}
+
+#[test]
+fn server_owned_run_agents_failure_suppresses_preprocessed_action_and_outbound_result() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let (conversation_id, action_model) = terminal.update(&mut app, |terminal, ctx| {
+            let conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.start_new_conversation(terminal.id(), false, false, false, ctx)
+                });
+            (conversation_id, terminal.ai_action_model().clone())
+        });
+        let action_id = AIAgentActionId::from("server-resolved".to_owned());
+
+        action_model.update(&mut app, |model, ctx| {
+            model.queue_actions(
+                vec![run_agents_action("server-resolved")],
+                conversation_id,
+                ctx,
+            );
+            model.apply_server_owned_run_agents_failure(
+                conversation_id,
+                server_owned_failure("server-resolved"),
+                ctx,
+            );
+            model.apply_server_owned_run_agents_failure(
+                conversation_id,
+                server_owned_failure("server-resolved"),
+                ctx,
+            );
+        });
+        Timer::after(Duration::from_millis(1)).await;
+
+        action_model.read(&app, |model, _| {
+            let Some(AIActionStatus::Finished(result)) =
+                model.get_action_status_for_conversation(conversation_id, &action_id)
+            else {
+                panic!("expected terminal action status");
+            };
+            assert!(matches!(
+                result.result,
+                AIAgentActionResultType::RunAgents(RunAgentsResult::Failure { .. })
+            ));
+            assert!(
+                model
+                    .get_pending_actions_for_conversation(&conversation_id)
+                    .next()
+                    .is_none()
+            );
+            assert!(model.get_finished_action_results(conversation_id).is_none());
+            assert!(!model.has_unfinished_actions_for_conversation(conversation_id));
+        });
+    });
+}
+
+#[test]
+fn restored_result_does_not_suppress_shared_session_result_with_same_id() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let (first_conversation_id, second_conversation_id, action_model) =
+            terminal.update(&mut app, |terminal, ctx| {
+                let (first, second) =
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                        (
+                            history.start_new_conversation(terminal.id(), false, true, false, ctx),
+                            history.start_new_conversation(terminal.id(), false, true, false, ctx),
+                        )
+                    });
+                let action_model = terminal.ai_action_model().clone();
+                action_model.update(ctx, |model, _| model.set_view_only(true));
+                (first, second, action_model)
+            });
+        let action_id = AIAgentActionId::from("shared-conversation-local".to_owned());
+        let restored_exchange =
+            exchange_with_action_result(server_owned_failure("shared-conversation-local"));
+
+        action_model.update(&mut app, |model, ctx| {
+            model.restore_action_results_from_exchanges(
+                first_conversation_id,
+                vec![&restored_exchange],
+            );
+            assert!(
+                model
+                    .get_action_result_for_conversation(second_conversation_id, &action_id)
+                    .is_none()
+            );
+            if model
+                .get_action_result_for_conversation(second_conversation_id, &action_id)
+                .is_none()
+            {
+                model.apply_finished_action_result(
+                    second_conversation_id,
+                    AIAgentActionResult {
+                        id: action_id.clone(),
+                        task_id: TaskId::new("second-task".to_owned()),
+                        result: AIAgentActionResultType::InitProject,
+                    },
+                    ctx,
+                );
+            }
+        });
+
+        action_model.read(&app, |model, _| {
+            assert!(matches!(
+                model
+                    .get_action_result_for_conversation(first_conversation_id, &action_id)
+                    .map(|result| &result.result),
+                Some(AIAgentActionResultType::RunAgents(
+                    RunAgentsResult::Failure { .. }
+                ))
+            ));
+            assert!(matches!(
+                model
+                    .get_action_result_for_conversation(second_conversation_id, &action_id)
+                    .map(|result| &result.result),
+                Some(AIAgentActionResultType::InitProject)
+            ));
+        });
+    });
+}
+
+#[test]
+fn server_owned_run_agents_failure_is_scoped_to_conversation() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let (first_conversation_id, second_conversation_id, action_model) =
+            terminal.update(&mut app, |terminal, ctx| {
+                let (first, second) =
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                        (
+                            history.start_new_conversation(terminal.id(), false, false, false, ctx),
+                            history.start_new_conversation(terminal.id(), false, false, false, ctx),
+                        )
+                    });
+                (first, second, terminal.ai_action_model().clone())
+            });
+        let action_id = AIAgentActionId::from("conversation-local".to_owned());
+
+        action_model.update(&mut app, |model, ctx| {
+            model.apply_server_owned_run_agents_failure(
+                first_conversation_id,
+                server_owned_failure("conversation-local"),
+                ctx,
+            );
+            model.queue_actions(
+                vec![run_agents_action("conversation-local")],
+                second_conversation_id,
+                ctx,
+            );
+        });
+        Timer::after(Duration::from_millis(1)).await;
+
+        action_model.read(&app, |model, _| {
+            assert!(
+                model
+                    .get_pending_actions_for_conversation(&second_conversation_id)
+                    .any(|action| action.id == action_id)
+            );
+            assert!(model.has_unfinished_actions_for_conversation(second_conversation_id));
+            assert!(
+                model
+                    .get_finished_action_results(second_conversation_id)
+                    .is_none()
+            );
+        });
+    });
 }

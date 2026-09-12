@@ -1934,8 +1934,8 @@ impl AIConversation {
         // Transcript-held action results, collected once up front. These are
         // conversation-scoped, covering restored/cloud transcripts. The action
         // model is only a fallback for live results not yet drained into a
-        // follow-up request's inputs: its maps are keyed globally by action ID
-        // across conversations, so it must not take precedence.
+        // follow-up request's inputs: its unscoped lookup searches across
+        // conversations, so it must not take precedence.
         let mut results_by_action_id: HashMap<&AIAgentActionId, &AIAgentActionResultType> =
             HashMap::new();
         for exchange in self.all_exchanges() {

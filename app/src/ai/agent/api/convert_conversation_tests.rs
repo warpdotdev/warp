@@ -54,6 +54,44 @@ fn test_server_metadata(
     }
 }
 
+#[test]
+fn test_convert_tool_call_result_to_input_run_agents_failure() {
+    let task_id = crate::ai::agent::task::TaskId::new("task".to_string());
+    let mut document_versions = HashMap::new();
+    let tool_call_result = api::message::ToolCallResult {
+        tool_call_id: "run-agents".to_string(),
+        context: None,
+        result: Some(api::message::tool_call_result::Result::RunAgentsResult(
+            api::RunAgentsResult {
+                outcome: Some(api::run_agents_result::Outcome::Failure(
+                    api::run_agents_result::Failure {
+                        error: "server rejected request".to_string(),
+                    },
+                )),
+            },
+        )),
+    };
+
+    let input = convert_tool_call_result_to_input(
+        &task_id,
+        &tool_call_result,
+        &HashMap::new(),
+        &mut document_versions,
+    )
+    .unwrap();
+
+    let AIAgentInput::ActionResult { result, .. } = input else {
+        panic!("expected action-result input");
+    };
+    assert_eq!(result.id, "run-agents".to_string().into());
+    assert!(matches!(
+        result.result,
+        crate::ai::agent::AIAgentActionResultType::RunAgents(
+            ai::agent::action_result::RunAgentsResult::Failure { ref error }
+        ) if error == "server rejected request"
+    ));
+}
+
 fn test_skill() -> api::Skill {
     api::Skill {
         descriptor: Some(api::SkillDescriptor {

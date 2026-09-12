@@ -2447,7 +2447,10 @@ impl TuiTerminalSessionView {
         };
 
         self.ai_action_model.update(ctx, |actions, _| {
-            actions.restore_action_results_from_exchanges(restoration_plan.exchanges().collect());
+            actions.restore_action_results_from_exchanges(
+                conversation_id,
+                restoration_plan.exchanges().collect(),
+            );
         });
 
         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
@@ -3172,7 +3175,10 @@ impl TuiTerminalSessionView {
         };
 
         self.ai_action_model.update(ctx, |actions, _| {
-            actions.restore_action_results_from_exchanges(restoration_plan.exchanges().collect());
+            actions.restore_action_results_from_exchanges(
+                conversation_id,
+                restoration_plan.exchanges().collect(),
+            );
         });
 
         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {

@@ -1116,6 +1116,16 @@ impl BlocklistAIHistoryModel {
             .copied()
     }
 
+    pub(crate) fn conversation_id_for_task(&self, task_id: &TaskId) -> Option<AIConversationId> {
+        self.conversations_by_id
+            .iter()
+            .find_map(|(conversation_id, conversation)| {
+                conversation
+                    .get_task(task_id)
+                    .is_some()
+                    .then_some(*conversation_id)
+            })
+    }
     pub fn existing_suggestions_for_conversation(
         &self,
         conversation_id: AIConversationId,

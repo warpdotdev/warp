@@ -386,7 +386,12 @@ impl TerminalView {
                             }) => {
                                 if let Some(result) =
                                     self.ai_action_model.read(ctx, |action_model, _| {
-                                        action_model.get_action_result(&action.id).cloned()
+                                        action_model
+                                            .get_action_result_for_conversation(
+                                                conversation_id,
+                                                &action.id,
+                                            )
+                                            .cloned()
                                     })
                                     && let AIAgentActionResultType::CreateDocuments(
                                         CreateDocumentsResult::Success { created_documents },
@@ -420,7 +425,12 @@ impl TerminalView {
                             AIAgentActionType::EditDocuments { .. } => {
                                 if let Some(result) =
                                     self.ai_action_model.read(ctx, |action_model, _| {
-                                        action_model.get_action_result(&action.id).cloned()
+                                        action_model
+                                            .get_action_result_for_conversation(
+                                                conversation_id,
+                                                &action.id,
+                                            )
+                                            .cloned()
                                     })
                                     && let AIAgentActionResultType::EditDocuments(
                                         EditDocumentsResult::Success { updated_documents },
@@ -464,9 +474,12 @@ impl TerminalView {
             .collect();
 
         for conversation in &conversations {
+            let conversation_id = conversation.id();
             self.ai_action_model.update(ctx, |action_model, _ctx| {
-                action_model
-                    .restore_action_results_from_exchanges(exchanges_for_blocklist(conversation));
+                action_model.restore_action_results_from_exchanges(
+                    conversation_id,
+                    exchanges_for_blocklist(conversation),
+                );
             });
         }
 
@@ -1177,3 +1190,7 @@ impl TerminalView {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "load_ai_conversation_tests.rs"]
+mod tests;

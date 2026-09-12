@@ -364,7 +364,7 @@ impl BlocklistAIController {
             if self
                 .action_model
                 .as_ref(ctx)
-                .get_action_result(&result.id)
+                .get_action_result_for_conversation(conversation_id, &result.id)
                 .is_none()
             {
                 self.action_model.update(ctx, |action_model, ctx| {
