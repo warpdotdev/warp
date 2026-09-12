@@ -229,3 +229,121 @@ fn write_filter_output_respects_scalar_unwrapping_for_direct_vals() {
     write_filter_output(&Val::Bool(false), &mut buf).unwrap();
     assert_eq!(String::from_utf8(buf).unwrap(), "null\ntrue\nfalse\n");
 }
+
+/// Regression tests for APP-5099: CLI table output was truncated mid-print when
+/// stdout is a non-blocking PTY. `print_list` now writes through
+/// `StdoutBlockingGuard`, which clears `O_NONBLOCK` (via `clear_nonblocking`)
+/// for the duration of the write so a large table blocks instead of failing
+/// with `EAGAIN` after a partial write.
+#[cfg(unix)]
+mod nonblocking_stdout {
+    use std::fs::File;
+    use std::io::{Read as _, Write as _};
+    use std::os::unix::io::FromRawFd as _;
+
+    use super::super::clear_nonblocking;
+
+    /// Create a unix pipe, returning `(read_fd, write_fd)`.
+    fn make_pipe() -> (libc::c_int, libc::c_int) {
+        let mut fds = [0 as libc::c_int; 2];
+        // SAFETY: `pipe` writes exactly two valid fds into the provided array.
+        let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
+        assert_eq!(rc, 0, "pipe() failed: {}", std::io::Error::last_os_error());
+        (fds[0], fds[1])
+    }
+
+    /// Mark `fd` as `O_NONBLOCK`, matching how stdout can be configured when it
+    /// is a PTY.
+    fn set_nonblocking(fd: libc::c_int) {
+        // SAFETY: `fcntl` F_GETFL/F_SETFL only read/write the fd status flags.
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFL, 0);
+            assert!(
+                flags >= 0,
+                "F_GETFL failed: {}",
+                std::io::Error::last_os_error()
+            );
+            let rc = libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+            assert_eq!(rc, 0, "F_SETFL failed: {}", std::io::Error::last_os_error());
+        }
+    }
+
+    /// A payload larger than any pipe buffer, so the writer cannot dump it all
+    /// at once and must contend with backpressure.
+    fn large_payload() -> Vec<u8> {
+        vec![b'x'; 4 * 1024 * 1024]
+    }
+
+    /// Reproduces the defect: writing a large payload to a **non-blocking** fd
+    /// whose reader is not draining fails with `WouldBlock` after a partial
+    /// write. This is what truncates a CLI table mid-print on a non-blocking
+    /// PTY, and what the fix prevents.
+    #[test]
+    fn nonblocking_write_truncates_without_the_fix() {
+        let (r, w) = make_pipe();
+        set_nonblocking(w);
+
+        // No reader drains `r`, so the pipe buffer fills; a blocking write would
+        // wait, but this fd is non-blocking, so it errors instead.
+        // SAFETY: `w` is a valid fd we own; `File` takes ownership and closes it.
+        let mut writer = unsafe { File::from_raw_fd(w) };
+        let payload = large_payload();
+        let err = writer
+            .write_all(&payload)
+            .expect_err("a non-blocking write of a large payload with no reader must fail");
+        assert_eq!(err.kind(), std::io::ErrorKind::WouldBlock);
+
+        // SAFETY: `r` is a valid fd we own and have not closed yet.
+        unsafe { libc::close(r) };
+    }
+
+    /// Verifies the fix: after `clear_nonblocking` (what `StdoutBlockingGuard`
+    /// applies to stdout), the same large write completes in full and the
+    /// reader receives every byte — no truncation.
+    #[test]
+    fn clearing_nonblocking_lets_the_full_payload_through() {
+        let (r, w) = make_pipe();
+        set_nonblocking(w);
+
+        // Apply the production fix to the write end.
+        let restored = clear_nonblocking(w);
+        assert!(
+            restored.is_some(),
+            "expected to clear O_NONBLOCK on the write fd"
+        );
+
+        let payload = large_payload();
+        let expected_len = payload.len();
+
+        // Drain the read end on another thread so the now-blocking writer can
+        // make progress instead of deadlocking.
+        let reader = std::thread::spawn(move || {
+            // SAFETY: `r` is a valid fd we own; `File` takes ownership.
+            let mut reader = unsafe { File::from_raw_fd(r) };
+            let mut buf = Vec::new();
+            reader.read_to_end(&mut buf).expect("read the full payload");
+            buf
+        });
+
+        {
+            // SAFETY: `w` is a valid fd we own; `File` takes ownership and closes
+            // it at the end of this scope, giving the reader EOF.
+            let mut writer = unsafe { File::from_raw_fd(w) };
+            writer
+                .write_all(&payload)
+                .expect("blocking write completes in full");
+            writer.flush().expect("flush succeeds");
+        }
+
+        let received = reader.join().expect("reader thread panicked");
+        assert_eq!(
+            received.len(),
+            expected_len,
+            "the reader must receive every byte of the payload"
+        );
+        assert!(
+            received.iter().all(|&b| b == b'x'),
+            "payload content must be preserved"
+        );
+    }
+}
