@@ -394,6 +394,7 @@ impl CodeView {
                                 true,
                             ),
                         )
+                        .with_copy_line_when_selection_is_empty()
                     })
                 },
                 false,
@@ -438,6 +439,7 @@ impl CodeView {
                     true,
                 ),
             )
+            .with_copy_line_when_selection_is_empty()
         });
 
         ctx.add_typed_action_view(|ctx| {
