@@ -13,6 +13,7 @@ use super::{ModeProvider, TermMode};
 pub(super) fn maybe_convert_keystroke_to_csi_u(
     keystroke: &Keystroke,
     key_without_modifiers: Option<&str>,
+    base_layout_key: Option<char>,
     chars: Option<&str>,
     mode_provider: &dyn ModeProvider,
 ) -> Option<Vec<u8>> {
@@ -64,12 +65,18 @@ pub(super) fn maybe_convert_keystroke_to_csi_u(
         return None;
     }
 
-    keystroke_to_csi_u(keystroke, key_without_modifiers, chars, mode_provider)
+    keystroke_to_csi_u(
+        keystroke,
+        key_without_modifiers,
+        base_layout_key,
+        chars,
+        mode_provider,
+    )
 }
 
 /// Encodes a keystroke to a CSI u escape sequence for the Kitty keyboard protocol.
 ///
-/// Full format: CSI unicode-key-code[:shifted-key] ; modifiers[:event_type] ; text-as-codepoints u
+/// Full format: CSI unicode-key-code[:[shifted-key][:base-layout-key]] ; modifiers[:event_type] ; text-as-codepoints u
 /// where modifiers is: 1 + (shift ? 1 : 0) + (alt ? 2 : 0) + (ctrl ? 4 : 0) + (super ? 8 : 0)
 ///
 /// Key codes follow the Kitty protocol specification:
@@ -77,6 +84,8 @@ pub(super) fn maybe_convert_keystroke_to_csi_u(
 /// - Function keys F13-F35 use codes 57376-57398
 /// - When REPORT_ALTERNATE_KEYS (flag 4) is active and shift is held, the shifted key
 ///   code is appended after a colon (e.g., `97:65` for shift+a).
+/// - When REPORT_ALTERNATE_KEYS (flag 4) is active, the base layout key follows in the third
+///   sub-field (e.g., `1084::118` for ctrl+v on a Russian layout, where 118 is `v`).
 /// - When REPORT_ASSOCIATED_TEXT (flag 16) is active, the OS-provided text (`chars`)
 ///   is appended as a colon-separated list of Unicode codepoints (e.g., `;65` for "A").
 /// - Event type encoding (press=1, repeat=2, release=3) is omitted for press events
@@ -89,6 +98,7 @@ pub(super) fn maybe_convert_keystroke_to_csi_u(
 fn keystroke_to_csi_u(
     keystroke: &Keystroke,
     key_without_modifiers: Option<&str>,
+    base_layout_key: Option<char>,
     chars: Option<&str>,
     mode_provider: &(impl ModeProvider + ?Sized),
 ) -> Option<Vec<u8>> {
@@ -165,7 +175,7 @@ fn keystroke_to_csi_u(
         _ => return None,
     };
 
-    // Build the key code portion: `key_code[:shifted_key]`
+    // Build the key code portion: `key_code[:[shifted_key][:base_layout_key]]`
     // Per spec: "the shifted key must be present only if shift is also present in the modifiers"
     let alternate_key_code = if report_alternate && keystroke.shift {
         original_char.and_then(|c| {
@@ -181,9 +191,21 @@ fn keystroke_to_csi_u(
         None
     };
 
-    let key_part = match alternate_key_code {
-        Some(alt) => format!("{key_code}:{alt}"),
-        None => key_code.to_string(),
+    // The base layout key is what lets an application match a chord such as ctrl+v while a
+    // layout with no Latin letters is active, where `key_code` is a letter it cannot match on.
+    let base_layout_key_code = if report_alternate {
+        base_layout_key
+            .map(|c| c as u32)
+            .filter(|&base| base != key_code)
+    } else {
+        None
+    };
+
+    let key_part = match (alternate_key_code, base_layout_key_code) {
+        (Some(shifted), Some(base)) => format!("{key_code}:{shifted}:{base}"),
+        (Some(shifted), None) => format!("{key_code}:{shifted}"),
+        (None, Some(base)) => format!("{key_code}::{base}"),
+        (None, None) => key_code.to_string(),
     };
 
     // Calculate modifier value per the Kitty protocol.

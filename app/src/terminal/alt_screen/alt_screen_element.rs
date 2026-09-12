@@ -863,6 +863,7 @@ impl Element for AltScreenElement {
                 if let Some(escape_sequence) = (KeystrokeWithDetails {
                     keystroke,
                     key_without_modifiers: details.key_without_modifiers.as_deref(),
+                    base_layout_key: details.base_layout_key,
                     chars: Some(chars.as_str()),
                 })
                 .to_escape_sequence(self.model.lock().deref())
