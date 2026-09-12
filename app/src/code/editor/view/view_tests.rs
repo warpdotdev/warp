@@ -225,6 +225,27 @@ fn pastes_a_copied_line_whole_when_the_cursor_sits_mid_line() {
 }
 
 #[test]
+fn a_cut_with_no_selection_leaves_no_stale_line_wise_paste() {
+    App::test((), |mut app| async move {
+        let editor_view = initialize_editor_copying_the_cursor_line(&mut app, "alpha\nbeta");
+
+        let text = editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::Copy, ctx);
+            view.handle_action(&CodeEditorViewAction::CursorAtBufferEnd, ctx);
+            view.handle_action(&CodeEditorViewAction::Cut, ctx);
+            view.handle_action(&CodeEditorViewAction::Paste, ctx);
+            view.text(ctx)
+        });
+
+        assert_eq!(
+            text.as_str(),
+            "alpha\nbet",
+            "a cut clears the clipboard, so the paste after it must insert nothing rather than replay the line copied earlier"
+        );
+    });
+}
+
+#[test]
 fn an_editor_that_delegates_empty_copies_pastes_at_the_caret() {
     App::test((), |mut app| async move {
         let (_window, editor_view) = initialize_editor(&mut app);
