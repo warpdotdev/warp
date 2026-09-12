@@ -2067,7 +2067,6 @@ pub(crate) fn initialize_app(
     menu::init(ctx);
     tips::tip_view::init(ctx);
     launch_configs::init(ctx);
-    config_keybindings::init(ctx);
     workflows::init(ctx);
     themes::theme_chooser::init(ctx);
     themes::theme_creator_modal::init(ctx);
@@ -2110,6 +2109,8 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(|_| SystemStats::new());
     workspace::auto_handoff::init(ctx);
     ctx.add_singleton_model(|_| KeybindingChangedNotifier::new());
+    // Requires the WarpConfig singleton and the KeybindingChangedNotifier registered above.
+    config_keybindings::init(ctx);
     ctx.add_singleton_model(|_| TabShortcutModifierState::new());
     ctx.add_singleton_model(|_| search::command_palette::SelectedItems::new());
     ctx.add_singleton_model(search::files::model::FileSearchModel::new);
