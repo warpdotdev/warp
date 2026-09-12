@@ -239,10 +239,10 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
         ),
 
         // --- Setup errors ---
-        AgentDriverError::TeamMetadataRefreshTimeout => (
+        AgentDriverError::TeamMetadataRefreshFailed(err) => (
             AgentTaskState::Error,
             TaskStatusUpdate::with_error_code(
-                "Timed out refreshing team metadata. Please check your network connection and try again.",
+                format!("Failed to refresh team metadata: {err:#}"),
                 PlatformErrorCode::InternalError,
             ),
         ),

@@ -150,17 +150,20 @@ impl TeamUpdateManager {
     }
 
     /// Out-of-band (from the regular poll) refresh of workspace metadata.
-    /// Returns a oneshot Receiver that resolves when the refresh completes (success or final failure).
-    pub fn refresh_workspace_metadata(&mut self, ctx: &mut ModelContext<Self>) -> Receiver<()> {
+    /// Returns a oneshot Receiver that resolves with the final refresh result.
+    pub fn refresh_workspace_metadata(
+        &mut self,
+        ctx: &mut ModelContext<Self>,
+    ) -> Receiver<Result<()>> {
         // Skip the refresh when logged out to avoid noisy auth errors.
         if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
-            let (tx, rx) = oneshot::channel::<()>();
-            let _ = tx.send(());
+            let (tx, rx) = oneshot::channel::<Result<()>>();
+            let _ = tx.send(Ok(()));
             return rx;
         }
 
         let team_client = self.team_client.clone();
-        let (tx, rx) = oneshot::channel::<()>();
+        let (tx, rx) = oneshot::channel::<Result<()>>();
         let mut tx = Some(tx);
         ctx.spawn_with_retry_on_error(
             move || {
@@ -169,11 +172,12 @@ impl TeamUpdateManager {
             },
             OUT_OF_BAND_REQUEST_RETRY_STRATEGY,
             move |update_manager, request_state, ctx| {
-                // Only signal once there are no more retries left.
-                let is_final = !request_state.has_pending_retries();
-                update_manager.handle_workspace_metadata_with_request_state(request_state, ctx);
-                if is_final && let Some(sender) = tx.take() {
-                    let _ = sender.send(());
+                let result =
+                    update_manager.handle_workspace_metadata_with_request_state(request_state, ctx);
+                if let Some(result) = result
+                    && let Some(sender) = tx.take()
+                {
+                    let _ = sender.send(result);
                 }
             },
         );
@@ -230,7 +234,7 @@ impl TeamUpdateManager {
                 // Only poll if `spawn_with_retry_on_error` is not going to retry again so we don't end up with multiple
                 // polls running simultaneously.
                 let should_poll_again = !res.has_pending_retries();
-                update_manager.handle_workspace_metadata_with_request_state(res, ctx);
+                let _ = update_manager.handle_workspace_metadata_with_request_state(res, ctx);
 
                 if should_poll_again {
                     let next_poll_handle = ctx.spawn(
@@ -441,7 +445,7 @@ impl TeamUpdateManager {
         &mut self,
         request_state: RequestState<WorkspacesMetadataWithPricing>,
         ctx: &mut ModelContext<Self>,
-    ) {
+    ) -> Option<Result<()>> {
         match request_state {
             RequestState::RequestSucceeded(response) => {
                 if let Some(pricing_info) = response.pricing_info.clone() {
@@ -453,16 +457,19 @@ impl TeamUpdateManager {
                 // Right now, this function is coupled with how we handle leaving a team.
                 // TODO(zheng) refactor so we can separate these two cases and have clearer logic.
                 self.on_workspaces_updated(Ok(response.metadata), ctx);
+                Some(Ok(()))
             }
             RequestState::RequestFailedRetryPending(err) => {
                 log::info!(
                     "get_workspaces_metadata_for_user: request failed with error {err:#}. Trying again."
                 );
+                None
             }
             RequestState::RequestFailed(err) => {
                 log::info!(
                     "get_workspaces_metadata_for_user: request failed with error {err:#}. Retries exhausted."
                 );
+                Some(Err(err))
             }
         }
     }

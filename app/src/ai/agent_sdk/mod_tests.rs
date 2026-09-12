@@ -16,10 +16,11 @@ use super::{
     command_to_telemetry_event, reconcile_task_harness, resolve_agent_driver_team_scope,
     team_scope_for_task_scope,
 };
-use crate::ai::agent_sdk::driver::AgentDriverOptions;
+use crate::ai::agent_sdk::driver::{AgentDriverError, AgentDriverOptions};
 use crate::ai::ambient_agents::task::TaskScope;
 use crate::auth::AuthStateProvider;
 use crate::auth::user::{PrincipalType, User};
+use crate::network::NetworkStatus;
 use crate::root_view::NewWorkspaceSource;
 use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApiProvider;
@@ -27,6 +28,8 @@ use crate::server::server_api::ai::{AIClient, AgentConfigSnapshot, MockAIClient}
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::workspaces::team::{Team, TeamVisibility};
+use crate::workspaces::team_tester::TeamTesterStatus;
+use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 
@@ -107,6 +110,32 @@ fn agent_driver_options() -> AgentDriverOptions {
         strict_mcp_startup: false,
         mcp_startup_timeout: None,
     }
+}
+
+#[test]
+fn agent_run_setup_propagates_terminal_team_metadata_refresh_failure() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(TeamTesterStatus::new);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+
+        let mut team_client = MockTeamClient::new();
+        team_client
+            .expect_workspaces_metadata()
+            .times(4)
+            .returning(|| Err(anyhow::anyhow!("workspace metadata unavailable")));
+        app.add_singleton_model(|ctx| TeamUpdateManager::new(Arc::new(team_client), None, ctx));
+
+        let runner = app.add_singleton_model(|_| AgentDriverRunner);
+        let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
+        let error = AgentDriverRunner::refresh_team_metadata(&foreground)
+            .await
+            .expect_err("terminal refresh errors should abort agent run setup");
+        let AgentDriverError::TeamMetadataRefreshFailed(source) = error else {
+            panic!("unexpected setup error: {error:#}");
+        };
+        assert_eq!(source.to_string(), "workspace metadata unavailable");
+    });
 }
 
 #[test]
