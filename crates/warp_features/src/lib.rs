@@ -414,9 +414,6 @@ pub enum FeatureFlag {
     /// Enables saving code review pane changes
     CodeReviewSaveChanges,
 
-    /// Enables the file tree (with an entrypoint through code mode).
-    FileTree,
-
     /// Enables ignoring input suggestions.
     AllowIgnoringInputSuggestions,
 
