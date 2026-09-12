@@ -1,10 +1,12 @@
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{Vector2F, vec2f};
+use warpui::SingletonEntity as _;
 use warpui::fonts::Cache as FontCache;
 use warpui::units::{IntoLines, Lines, Pixels};
 
 use super::{CachedBackgroundColor, active_or_next_match};
 use crate::terminal::grid_size_util::calculate_grid_baseline_position;
+use crate::terminal::model::grid::Dimensions as _;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::selection::SelectionPoint;
 use crate::terminal::{SizeInfo, grid_renderer};
@@ -261,4 +263,201 @@ fn test_calculate_selection_bounds() {
     assert_selection_bounds(5.into_lines()); // Without scroll clipping
     assert_selection_bounds(10.into_lines()); // Without scroll clipping (but on the cusp of clipping)
     assert_selection_bounds(80.into_lines()); // With scroll clipping
+}
+
+const HIDDEN_CURSOR_HINT: &str = "Press up to edit queued messages";
+const HIDDEN_CURSOR_CELL_WIDTH: f32 = 8.;
+const HIDDEN_CURSOR_CELL_HEIGHT: f32 = 16.;
+
+struct HiddenCursorCellView {
+    grid: crate::terminal::model::blockgrid::BlockGrid,
+    hide_cursor_cell: bool,
+    use_ligature_rendering: bool,
+}
+
+impl warpui::Entity for HiddenCursorCellView {
+    type Event = ();
+}
+
+impl warpui::TypedActionView for HiddenCursorCellView {
+    type Action = ();
+}
+
+impl warpui::View for HiddenCursorCellView {
+    fn ui_name() -> &'static str {
+        "HiddenCursorCellView"
+    }
+
+    fn render(&self, _app: &warpui::AppContext) -> Box<dyn warpui::Element> {
+        Box::new(HiddenCursorCellElement {
+            grid: self.grid.clone(),
+            hide_cursor_cell: self.hide_cursor_cell,
+            use_ligature_rendering: self.use_ligature_rendering,
+            size: None,
+            origin: None,
+        })
+    }
+}
+
+struct HiddenCursorCellElement {
+    grid: crate::terminal::model::blockgrid::BlockGrid,
+    hide_cursor_cell: bool,
+    use_ligature_rendering: bool,
+    size: Option<Vector2F>,
+    origin: Option<warpui::elements::Point>,
+}
+
+impl warpui::Element for HiddenCursorCellElement {
+    fn layout(
+        &mut self,
+        constraint: warpui::SizeConstraint,
+        _ctx: &mut warpui::LayoutContext,
+        _app: &warpui::AppContext,
+    ) -> Vector2F {
+        let size = vec2f(
+            HIDDEN_CURSOR_CELL_WIDTH * self.grid.grid_handler().columns() as f32,
+            HIDDEN_CURSOR_CELL_HEIGHT,
+        )
+        .min(constraint.max);
+        self.size = Some(size);
+        size
+    }
+
+    fn after_layout(&mut self, _ctx: &mut warpui::AfterLayoutContext, _app: &warpui::AppContext) {}
+
+    fn paint(
+        &mut self,
+        origin: Vector2F,
+        ctx: &mut warpui::PaintContext,
+        app: &warpui::AppContext,
+    ) {
+        self.origin = Some(warpui::elements::Point::from_vec2f(
+            origin,
+            ctx.scene.z_index(),
+        ));
+        let appearance = crate::appearance::Appearance::as_ref(app);
+        let cell_size = vec2f(HIDDEN_CURSOR_CELL_WIDTH, HIDDEN_CURSOR_CELL_HEIGHT);
+        let colors = crate::terminal::color::List::from(&crate::terminal::color::Colors::from(
+            appearance.theme().clone(),
+        ));
+        let mut glyphs = crate::terminal::grid_renderer::CellGlyphCache::default();
+        crate::terminal::grid_renderer::render_grid(
+            self.grid.grid_handler(),
+            0,
+            1,
+            &colors,
+            &crate::terminal::color::OverrideList::empty(),
+            appearance.theme(),
+            warpui::fonts::Properties::default(),
+            appearance.monospace_font_family(),
+            appearance.monospace_font_size(),
+            appearance.ui_builder().line_height_ratio(),
+            cell_size,
+            Pixels::zero(),
+            origin,
+            &mut glyphs,
+            255,
+            None,
+            None,
+            None::<std::iter::Empty<&std::ops::RangeInclusive<crate::terminal::model::index::Point>>>,
+            None,
+            crate::settings::EnforceMinimumContrast::Never,
+            crate::terminal::model::ObfuscateSecrets::No,
+            None,
+            self.use_ligature_rendering,
+            None,
+            crate::terminal::model::grid::RespectDisplayedOutput::Yes,
+            &std::collections::HashMap::new(),
+            None,
+            self.hide_cursor_cell,
+            ctx,
+            app,
+        );
+    }
+
+    fn size(&self) -> Option<Vector2F> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<warpui::elements::Point> {
+        self.origin
+    }
+
+    fn dispatch_event(
+        &mut self,
+        _event: &warpui::event::DispatchedEvent,
+        _ctx: &mut warpui::EventContext,
+        _app: &warpui::AppContext,
+    ) -> bool {
+        false
+    }
+}
+
+fn hint_grid_with_cursor_on_leading_glyph() -> crate::terminal::model::blockgrid::BlockGrid {
+    let mut grid = crate::test_util::mock_blockgrid(HIDDEN_CURSOR_HINT);
+    grid.grid_handler_mut().update_cursor(|cursor| {
+        cursor.point.row = crate::terminal::model::index::VisibleRow(0);
+        cursor.point.col = 0;
+    });
+    grid
+}
+
+fn scene_glyph_count(hide_cursor_cell: bool, use_ligature_rendering: bool) -> usize {
+    warpui::App::test((), |mut app| async move {
+        app.add_singleton_model(|_| crate::appearance::Appearance::mock());
+        let grid = hint_grid_with_cursor_on_leading_glyph();
+        assert_eq!(
+            grid.grid_handler().cursor_render_point(),
+            crate::terminal::model::index::Point::new(0, 0)
+        );
+        assert_eq!(grid.grid_handler().row(0).unwrap()[0].c, 'P');
+
+        let (window_id, _) = app.add_window(warpui::platform::WindowStyle::NotStealFocus, |_| {
+            HiddenCursorCellView {
+                grid,
+                hide_cursor_cell,
+                use_ligature_rendering,
+            }
+        });
+
+        let mut presenter = warpui::Presenter::new(window_id);
+        app.update(move |ctx| {
+            let root = ctx.root_view_id(window_id).expect("root view");
+            presenter.invalidate(
+                warpui::WindowInvalidation {
+                    updated: warpui::EntityIdSet::from_iter([root]),
+                    ..Default::default()
+                },
+                ctx,
+            );
+            presenter
+                .build_scene(vec2f(1024., 768.), 1., None, ctx)
+                .layers()
+                .map(|layer| layer.glyphs.len())
+                .sum()
+        })
+    })
+}
+
+fn assert_hidden_cursor_cell_glyph_is_painted(use_ligature_rendering: bool) {
+    let hidden = scene_glyph_count(true, use_ligature_rendering);
+    let shown = scene_glyph_count(false, use_ligature_rendering);
+    assert_eq!(
+        hidden, shown,
+        "hiding the Warp cursor overlay must still paint the PTY glyph under the cursor"
+    );
+    assert!(
+        hidden > 0,
+        "expected the PTY cursor cell glyph to be painted while hide_cursor_cell is set"
+    );
+}
+
+#[test]
+fn paints_glyph_at_hidden_pty_cursor_cell_without_ligatures() {
+    assert_hidden_cursor_cell_glyph_is_painted(false);
+}
+
+#[test]
+fn paints_glyph_at_hidden_pty_cursor_cell_with_ligatures() {
+    assert_hidden_cursor_cell_glyph_is_painted(true);
 }
