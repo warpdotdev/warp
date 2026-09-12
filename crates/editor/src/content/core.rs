@@ -9,7 +9,7 @@ use warpui_core::elements::ListIndentLevel;
 
 use super::buffer::{Buffer, EditOrigin, EditResult};
 use super::cursor::BufferSumTree;
-use super::edit::EditDelta;
+use super::edit::{EditDelta, RenderDelta};
 use super::text::{
     BlockType, BufferTextStyle, ColorMarker, LinkCount, LinkMarker, MarkerDir, SyntaxColorId,
     TextStyles, TextStylesWithMetadata,
@@ -153,6 +153,21 @@ impl Buffer {
         &mut self,
         actions: impl IntoIterator<Item = CoreEditorAction>,
     ) -> EditResult {
+        self.apply_core_edit_actions_internal(actions, false)
+    }
+
+    pub(super) fn apply_core_edit_actions_with_separate_render_deltas(
+        &mut self,
+        actions: impl IntoIterator<Item = CoreEditorAction>,
+    ) -> EditResult {
+        self.apply_core_edit_actions_internal(actions, true)
+    }
+
+    fn apply_core_edit_actions_internal(
+        &mut self,
+        actions: impl IntoIterator<Item = CoreEditorAction>,
+        separate_render_deltas: bool,
+    ) -> EditResult {
         // If there are no actions, return early.
         let mut actions_iter = actions.into_iter().peekable();
         if actions_iter.peek().is_none() {
@@ -215,6 +230,7 @@ impl Buffer {
         let mut new_range_anchors = Vec::new();
         let mut precise_deltas = Vec::new();
         let mut anchor_updates = Vec::new();
+        let mut old_render_ranges = Vec::new();
         // Anchors tracking each delta's new content range, resolved after all edits
         // to get correct final-buffer coordinates.
         let mut new_content_range_anchors: Vec<RangeAnchors> = Vec::new();
@@ -246,6 +262,14 @@ impl Buffer {
 
             let edit_range = edit_start..edit_end;
             let replaced_points = self.offset_range_to_point_range(edit_range.clone());
+            if separate_render_deltas {
+                old_render_ranges.push(
+                    self.block_or_line_start(edit_range.start)
+                        ..self
+                            .block_or_line_end(edit_range.end)
+                            .min(self.max_charoffset()),
+                );
+            }
 
             // Compute pre-edit byte range from the correct intermediate buffer state.
             let old_byte_start = edit_range.start.to_buffer_byte_offset(self);
@@ -352,7 +376,7 @@ impl Buffer {
         reverse_actions.reverse();
         let replacement_range = ReplacementRange {
             old_range,
-            new_range: self.anchors_to_range(new_range_anchors),
+            new_range: self.anchors_to_range(&new_range_anchors),
         };
         let undo_arg = UndoArg {
             actions: reverse_actions,
@@ -365,17 +389,46 @@ impl Buffer {
         );
         log::debug!("=> Overall new range: {:?}", replacement_range.new_range);
 
-        let new_lines = Arc::new(self.styled_blocks_in_range(
-            replacement_range.new_range,
-            StyledBlockBoundaryBehavior::Exclusive,
-        ));
+        let mut render_deltas = if separate_render_deltas {
+            old_render_ranges
+                .into_iter()
+                .zip(new_range_anchors.iter())
+                .map(|(old_offset, anchors)| {
+                    let start = self
+                        .internal_anchors
+                        .resolve(&anchors.start)
+                        .expect("Render range start should exist");
+                    let end = self
+                        .internal_anchors
+                        .resolve(&anchors.end)
+                        .expect("Render range end should exist");
+                    RenderDelta {
+                        old_offset,
+                        new_lines: Arc::new(self.styled_blocks_in_range(
+                            start..end,
+                            StyledBlockBoundaryBehavior::Exclusive,
+                        )),
+                    }
+                })
+                .collect::<Vec<_>>()
+        } else {
+            vec![RenderDelta {
+                old_offset: replacement_range.old_range.clone(),
+                new_lines: Arc::new(self.styled_blocks_in_range(
+                    replacement_range.new_range,
+                    StyledBlockBoundaryBehavior::Exclusive,
+                )),
+            }]
+        };
+        let render_delta = render_deltas.remove(0);
 
         EditResult {
             undo_item: Some(undo_arg),
             delta: Some(EditDelta {
                 precise_deltas,
-                old_offset: replacement_range.old_range,
-                new_lines,
+                old_offset: render_delta.old_offset,
+                new_lines: render_delta.new_lines,
+                additional_render_deltas: render_deltas,
             }),
             anchor_updates,
         }
@@ -423,7 +476,7 @@ impl Buffer {
 
     // Find the minimal range of character offset that covers the list of range
     // represented by anchors.
-    fn anchors_to_range(&self, anchors: Vec<RangeAnchors>) -> Range<CharOffset> {
+    fn anchors_to_range(&self, anchors: &[RangeAnchors]) -> Range<CharOffset> {
         let range_start = anchors
             .iter()
             .filter_map(|range| self.internal_anchors.resolve(&range.start))

@@ -181,6 +181,11 @@ impl PreciseDelta {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RenderDelta {
+    pub(crate) old_offset: Range<CharOffset>,
+    pub(crate) new_lines: Arc<Vec<StyledBufferBlock>>,
+}
 /// Delta after an edit operation recording the old range of rows that got replaced
 /// and the content of new rows changed after the edit. This is necessary for the rendering
 /// model to know what block objects need a re-layout.
@@ -200,6 +205,29 @@ pub struct EditDelta {
     /// file's worth of styled blocks can add several gigabytes of transient
     /// allocation for large files.
     pub new_lines: Arc<Vec<StyledBufferBlock>>,
+    pub(crate) additional_render_deltas: Vec<RenderDelta>,
+}
+
+impl EditDelta {
+    pub fn render_old_offsets(&self) -> impl Iterator<Item = &Range<CharOffset>> {
+        std::iter::once(&self.old_offset).chain(
+            self.additional_render_deltas
+                .iter()
+                .map(|delta| &delta.old_offset),
+        )
+    }
+
+    pub(crate) fn into_render_deltas(mut self) -> Vec<Self> {
+        let additional_render_deltas = mem::take(&mut self.additional_render_deltas);
+        let mut render_deltas = Vec::with_capacity(additional_render_deltas.len() + 1);
+        render_deltas.push(self);
+        render_deltas.extend(additional_render_deltas.into_iter().map(|delta| Self {
+            old_offset: delta.old_offset,
+            new_lines: delta.new_lines,
+            ..Default::default()
+        }));
+        render_deltas
+    }
 }
 
 /// Render Delta that has its content laid out into TextFrames.
