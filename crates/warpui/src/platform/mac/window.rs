@@ -42,6 +42,43 @@ use super::{RectFExt as _, app};
 unsafe extern "C" {
     fn screenFrame() -> NSRect;
     fn activeScreenId() -> NSUInteger;
+    fn frontmostAppWindowFrame() -> NSRect;
+    fn screenIdAtIndex(index: NSUInteger) -> NSUInteger;
+}
+
+/// Index into `[NSScreen screens]` of the display the frontmost application is working on, or
+/// `None` when that application has no ordinary window on screen.
+///
+/// `[NSScreen mainScreen]` is not usable here: it reports the primary display whenever the
+/// frontmost window sits in a fullscreen Space on a secondary display, which places the hotkey
+/// window on the wrong display.
+fn active_screen_index(mtm: MainThreadMarker) -> Option<usize> {
+    let screens = NSScreen::screens(mtm);
+    let screen_frames: Vec<NSRect> = (0..screens.count())
+        .map(|index| screens.objectAtIndex(index).frame())
+        .collect();
+
+    // SAFETY: `frontmostAppWindowFrame` only reads window server state and must run on the main
+    // thread, which `mtm` witnesses.
+    let window_frame = unsafe { frontmostAppWindowFrame() };
+
+    screen_index_containing_center(&screen_frames, window_frame)
+}
+
+/// Index of the first frame in `screen_frames` containing the center of `window_frame`, or `None`
+/// when `window_frame` is empty or its center lies outside every screen.
+fn screen_index_containing_center(screen_frames: &[NSRect], window_frame: NSRect) -> Option<usize> {
+    if window_frame.size.width <= 0. || window_frame.size.height <= 0. {
+        return None;
+    }
+
+    let center_x = window_frame.origin.x + window_frame.size.width / 2.;
+    let center_y = window_frame.origin.y + window_frame.size.height / 2.;
+
+    screen_frames.iter().position(|frame| {
+        (frame.origin.x..frame.origin.x + frame.size.width).contains(&center_x)
+            && (frame.origin.y..frame.origin.y + frame.size.height).contains(&center_y)
+    })
 }
 
 pub const WINDOW_STATE_IVAR: &str = "windowState";
@@ -163,7 +200,12 @@ impl platform::WindowManager for WindowManager {
     }
 
     fn active_display_bounds(&self) -> RectF {
-        let rect = unsafe { screenFrame() };
+        // SAFETY: `WindowManager` methods run on the main thread.
+        let mtm = unsafe { MainThreadMarker::new_unchecked() };
+        let rect = match active_screen_index(mtm) {
+            Some(index) => NSScreen::screens(mtm).objectAtIndex(index).frame(),
+            None => unsafe { screenFrame() },
+        };
         let point = Vector2F::new(rect.origin.x as f32, rect.origin.y as f32);
         let size = Vector2F::new(rect.size.width as f32, rect.size.height as f32);
         RectF::new(
@@ -173,7 +215,12 @@ impl platform::WindowManager for WindowManager {
     }
 
     fn active_display_id(&self) -> DisplayId {
-        let id = unsafe { activeScreenId() };
+        // SAFETY: `WindowManager` methods run on the main thread.
+        let mtm = unsafe { MainThreadMarker::new_unchecked() };
+        let id = match active_screen_index(mtm) {
+            Some(index) => unsafe { screenIdAtIndex(index) },
+            None => unsafe { activeScreenId() },
+        };
         (id as usize).into()
     }
 
@@ -1769,3 +1816,7 @@ fn as_objc_object(object: &AnyObject) -> &Object {
     // to the same Objective-C instance; only the Rust view of it differs.
     unsafe { &*(object as *const AnyObject).cast::<Object>() }
 }
+
+#[cfg(test)]
+#[path = "window_tests.rs"]
+mod tests;
