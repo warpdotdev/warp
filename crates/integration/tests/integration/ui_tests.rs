@@ -233,6 +233,7 @@ integration_tests! {
     test_attach_tab_to_other_window_and_continue_drag,
     test_single_tab_handoff_continues_drag,
     test_multi_tab_drag_back_to_source_and_out_again,
+    test_undo_close_does_not_resurrect_content_transferred_window,
 
     test_restore_single_closed_pane,
     test_restore_multiple_closed_panes,
