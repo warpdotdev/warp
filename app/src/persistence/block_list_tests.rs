@@ -1,23 +1,31 @@
-//! Unit tests for the `ai_queries` persistence layer in [`super`].
+//! Unit tests for the `ai_queries` and restored-block persistence layer in [`super`].
 //!
-//! Covers the FIFO eviction cap added to [`super::upsert_ai_query`] and the empty-input filter
-//! that drives the persistence skip in `handle_ai_history_event`.
+//! Covers the FIFO eviction cap added to [`super::upsert_ai_query`], the empty-input filter
+//! that drives the persistence skip in `handle_ai_history_event`, and the SQL per-pane cap in
+//! [`super::get_all_restored_blocks`].
 
 use std::sync::Arc;
 
-use chrono::{DateTime, Duration, Local};
+use chrono::{DateTime, Duration, Local, NaiveDateTime};
+use diesel::connection::SimpleConnection;
 use diesel::sqlite::SqliteConnection;
 use diesel::{Connection, ExpressionMethods, QueryDsl, RunQueryDsl};
 use diesel_migrations::MigrationHarness;
 
 use super::{
+    MAX_TERMINAL_BLOCKS_TO_PERSIST_PER_SESSION, get_all_restored_blocks,
     process_ai_queries_for_nld_history_match, process_ai_queries_for_uparrow_prompt,
     read_recent_ai_queries, upsert_ai_query_with_limit,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentExchangeId, AIAgentInput, UserQueryMode};
-use crate::ai::blocklist::{AIQueryHistoryOutputStatus, PersistedAIInput, PersistedAIInputType};
+use crate::ai::blocklist::{
+    AIQueryHistoryOutputStatus, PersistedAIInput, PersistedAIInputType, SerializedBlockListItem,
+};
 use crate::ai::llms::LLMId;
+use crate::app_state::PaneUuid;
+use crate::persistence::model::{NewBlock, NewTerminalPane};
+use crate::persistence::schema;
 
 /// Builds an in-memory SQLite database with all migrations applied.
 fn test_connection() -> SqliteConnection {
@@ -273,4 +281,322 @@ fn empty_input_skip_filters_out_non_query_inputs() {
         .filter_map(|input| PersistedAIInputType::try_from(input).ok())
         .collect();
     assert_eq!(persisted.len(), 1);
+}
+
+const RESTORE_OVER_CAP_COUNT: usize = MAX_TERMINAL_BLOCKS_TO_PERSIST_PER_SESSION as usize + 1;
+
+fn restore_test_connection() -> SqliteConnection {
+    let mut conn = test_connection();
+    conn.batch_execute("PRAGMA foreign_keys = OFF")
+        .expect("foreign keys should disable for restore fixtures");
+    conn
+}
+
+fn insert_pane(conn: &mut SqliteConnection, id: i32, uuid: &[u8]) {
+    diesel::insert_into(schema::terminal_panes::table)
+        .values(NewTerminalPane {
+            id,
+            uuid: uuid.to_vec(),
+            cwd: None,
+            is_active: false,
+            shell_launch_data: None,
+            input_config: None,
+            llm_model_override: None,
+            active_profile_id: None,
+            conversation_ids: None,
+            active_conversation_id: None,
+        })
+        .execute(conn)
+        .expect("insert pane should succeed");
+}
+
+fn insert_block(
+    conn: &mut SqliteConnection,
+    pane_uuid: &[u8],
+    block_id: &str,
+    start_ts: Option<NaiveDateTime>,
+) {
+    let empty = Vec::new();
+    diesel::insert_into(schema::blocks::table)
+        .values(NewBlock {
+            block_id,
+            pane_leaf_uuid: pane_uuid.to_vec(),
+            stylized_command: &empty,
+            stylized_output: &empty,
+            pwd: None,
+            git_branch: None,
+            git_branch_name: None,
+            virtual_env: None,
+            conda_env: None,
+            exit_code: 0,
+            did_execute: true,
+            is_background: false,
+            completed_ts: None,
+            start_ts,
+            ps1: None,
+            rprompt: None,
+            honor_ps1: false,
+            shell: None,
+            user: None,
+            host: None,
+            prompt_snapshot: None,
+            ai_metadata: None,
+            is_local: Some(true),
+            agent_view_visibility: None,
+        })
+        .execute(conn)
+        .expect("insert block should succeed");
+}
+
+fn insert_blocks_oldest_first(
+    conn: &mut SqliteConnection,
+    pane_uuid: &[u8],
+    prefix: &str,
+    count: usize,
+    first_ts: NaiveDateTime,
+) {
+    for i in 0..count {
+        insert_block(
+            conn,
+            pane_uuid,
+            &format!("{prefix}{i:03}"),
+            Some(first_ts + Duration::seconds(i as i64)),
+        );
+    }
+}
+
+fn insert_blocks_newest_first(
+    conn: &mut SqliteConnection,
+    pane_uuid: &[u8],
+    prefix: &str,
+    count: usize,
+    first_ts: NaiveDateTime,
+) {
+    for i in (0..count).rev() {
+        insert_block(
+            conn,
+            pane_uuid,
+            &format!("{prefix}{i:03}"),
+            Some(first_ts + Duration::seconds(i as i64)),
+        );
+    }
+}
+
+fn insert_blocks_same_start_ts(
+    conn: &mut SqliteConnection,
+    pane_uuid: &[u8],
+    prefix: &str,
+    count: usize,
+    start_ts: NaiveDateTime,
+) {
+    for i in 0..count {
+        insert_block(conn, pane_uuid, &format!("{prefix}{i:03}"), Some(start_ts));
+    }
+}
+
+fn insert_unreadable_block(
+    conn: &mut SqliteConnection,
+    pane_uuid: &[u8],
+    block_id: &str,
+    start_ts: NaiveDateTime,
+) {
+    diesel::sql_query(
+        "INSERT INTO blocks (
+            pane_leaf_uuid, stylized_command, stylized_output, exit_code, did_execute,
+            honor_ps1, is_background, block_id, start_ts
+         ) VALUES (?, x'', x'', 'not-an-int', 1, 0, 0, ?, ?)",
+    )
+    .bind::<diesel::sql_types::Binary, _>(pane_uuid)
+    .bind::<diesel::sql_types::Text, _>(block_id)
+    .bind::<diesel::sql_types::Timestamp, _>(start_ts)
+    .execute(conn)
+    .expect("insert unreadable block should succeed");
+}
+
+fn ts(stamp: &str) -> NaiveDateTime {
+    NaiveDateTime::parse_from_str(stamp, "%Y-%m-%d %H:%M:%S").expect("timestamp should parse")
+}
+
+fn command_ids(items: &[SerializedBlockListItem]) -> Vec<&str> {
+    items
+        .iter()
+        .map(|item| match item {
+            SerializedBlockListItem::Command { block } => block.id.as_str(),
+        })
+        .collect()
+}
+
+#[test]
+fn get_all_restored_blocks_caps_each_pane_independently() {
+    let mut conn = restore_test_connection();
+    let pane_a = b"pane-a".as_slice();
+    let pane_b = b"pane-b".as_slice();
+    insert_pane(&mut conn, 1, pane_a);
+    insert_pane(&mut conn, 2, pane_b);
+    let first_ts = ts("2024-01-01 00:00:00");
+    insert_blocks_oldest_first(&mut conn, pane_a, "a", RESTORE_OVER_CAP_COUNT, first_ts);
+    insert_blocks_oldest_first(&mut conn, pane_b, "b", RESTORE_OVER_CAP_COUNT, first_ts);
+
+    let restored = get_all_restored_blocks(&mut conn).expect("restore should succeed");
+    let pane_a_ids = command_ids(&restored[&PaneUuid(pane_a.to_vec())]);
+    let pane_b_ids = command_ids(&restored[&PaneUuid(pane_b.to_vec())]);
+
+    assert_eq!(
+        pane_a_ids.len(),
+        MAX_TERMINAL_BLOCKS_TO_PERSIST_PER_SESSION as usize
+    );
+    assert_eq!(pane_a_ids.first().copied(), Some("a001"));
+    assert_eq!(pane_a_ids.last().copied(), Some("a100"));
+    assert_eq!(
+        pane_b_ids.len(),
+        MAX_TERMINAL_BLOCKS_TO_PERSIST_PER_SESSION as usize
+    );
+    assert_eq!(pane_b_ids.first().copied(), Some("b001"));
+    assert_eq!(pane_b_ids.last().copied(), Some("b100"));
+}
+
+#[test]
+fn get_all_restored_blocks_keeps_newest_by_start_ts_not_insertion_order() {
+    let mut conn = restore_test_connection();
+    let pane = b"pane-a".as_slice();
+    insert_pane(&mut conn, 1, pane);
+    insert_blocks_newest_first(
+        &mut conn,
+        pane,
+        "b",
+        RESTORE_OVER_CAP_COUNT,
+        ts("2024-01-01 00:00:00"),
+    );
+
+    let restored = get_all_restored_blocks(&mut conn).expect("restore should succeed");
+    let ids = command_ids(&restored[&PaneUuid(pane.to_vec())]);
+
+    assert_eq!(
+        ids.len(),
+        MAX_TERMINAL_BLOCKS_TO_PERSIST_PER_SESSION as usize
+    );
+    assert_eq!(ids.first().copied(), Some("b001"));
+    assert_eq!(ids.last().copied(), Some("b100"));
+}
+
+#[test]
+fn get_all_restored_blocks_breaks_equal_start_ts_ties_by_higher_id() {
+    let mut conn = restore_test_connection();
+    let pane = b"pane-a".as_slice();
+    insert_pane(&mut conn, 1, pane);
+    insert_blocks_same_start_ts(
+        &mut conn,
+        pane,
+        "b",
+        RESTORE_OVER_CAP_COUNT,
+        ts("2024-01-01 00:00:01"),
+    );
+
+    let restored = get_all_restored_blocks(&mut conn).expect("restore should succeed");
+    let ids = command_ids(&restored[&PaneUuid(pane.to_vec())]);
+
+    assert_eq!(
+        ids.len(),
+        MAX_TERMINAL_BLOCKS_TO_PERSIST_PER_SESSION as usize
+    );
+    assert_eq!(ids.first().copied(), Some("b001"));
+    assert_eq!(ids.last().copied(), Some("b100"));
+}
+
+#[test]
+fn get_all_restored_blocks_treats_null_start_ts_as_oldest() {
+    let mut conn = restore_test_connection();
+    let pane = b"pane-a".as_slice();
+    insert_pane(&mut conn, 1, pane);
+    insert_block(&mut conn, pane, "null-a", None);
+    insert_block(&mut conn, pane, "null-b", None);
+    insert_blocks_oldest_first(
+        &mut conn,
+        pane,
+        "t",
+        MAX_TERMINAL_BLOCKS_TO_PERSIST_PER_SESSION as usize,
+        ts("2024-01-01 00:00:01"),
+    );
+
+    let restored = get_all_restored_blocks(&mut conn).expect("restore should succeed");
+    let ids = command_ids(&restored[&PaneUuid(pane.to_vec())]);
+
+    assert_eq!(
+        ids.len(),
+        MAX_TERMINAL_BLOCKS_TO_PERSIST_PER_SESSION as usize
+    );
+    assert_eq!(ids.first().copied(), Some("t000"));
+    assert_eq!(ids.last().copied(), Some("t099"));
+}
+
+#[test]
+fn get_all_restored_blocks_skips_unreadable_rows_outside_the_cap() {
+    let mut conn = restore_test_connection();
+    let pane = b"pane-a".as_slice();
+    insert_pane(&mut conn, 1, pane);
+    insert_unreadable_block(&mut conn, pane, "unreadable", ts("2024-01-01 00:00:00"));
+    insert_blocks_oldest_first(
+        &mut conn,
+        pane,
+        "b",
+        MAX_TERMINAL_BLOCKS_TO_PERSIST_PER_SESSION as usize,
+        ts("2024-01-01 00:00:01"),
+    );
+
+    let restored = get_all_restored_blocks(&mut conn).expect("restore should succeed");
+    let ids = command_ids(&restored[&PaneUuid(pane.to_vec())]);
+
+    assert_eq!(
+        ids.len(),
+        MAX_TERMINAL_BLOCKS_TO_PERSIST_PER_SESSION as usize
+    );
+    assert_eq!(ids.first().copied(), Some("b000"));
+    assert_eq!(ids.last().copied(), Some("b099"));
+}
+
+#[test]
+fn get_all_restored_blocks_includes_empty_panes_and_ignores_orphans() {
+    let mut conn = restore_test_connection();
+    let pane_with_blocks = b"pane-a".as_slice();
+    let empty_pane = b"pane-empty".as_slice();
+    let orphan_pane = b"pane-orphan".as_slice();
+    insert_pane(&mut conn, 1, pane_with_blocks);
+    insert_pane(&mut conn, 2, empty_pane);
+    insert_block(
+        &mut conn,
+        pane_with_blocks,
+        "kept",
+        Some(ts("2024-01-01 00:00:01")),
+    );
+    insert_block(
+        &mut conn,
+        orphan_pane,
+        "orphan",
+        Some(ts("2024-01-01 00:00:02")),
+    );
+
+    let restored = get_all_restored_blocks(&mut conn).expect("restore should succeed");
+
+    assert_eq!(
+        command_ids(&restored[&PaneUuid(pane_with_blocks.to_vec())]),
+        vec!["kept"]
+    );
+    assert!(restored[&PaneUuid(empty_pane.to_vec())].is_empty());
+    assert!(!restored.contains_key(&PaneUuid(orphan_pane.to_vec())));
+}
+
+#[test]
+fn get_all_restored_blocks_keeps_all_blocks_when_under_cap() {
+    let mut conn = restore_test_connection();
+    let pane = b"pane-a".as_slice();
+    insert_pane(&mut conn, 1, pane);
+    insert_block(&mut conn, pane, "first", Some(ts("2024-01-01 00:00:01")));
+    insert_block(&mut conn, pane, "second", Some(ts("2024-01-01 00:00:02")));
+
+    let restored = get_all_restored_blocks(&mut conn).expect("restore should succeed");
+
+    assert_eq!(
+        command_ids(&restored[&PaneUuid(pane.to_vec())]),
+        vec!["first", "second"]
+    );
 }
