@@ -6,7 +6,6 @@
 use std::collections::HashMap;
 
 use settings::Setting as _;
-use warp::features::FeatureFlag;
 use warp::integration_testing::input::{
     open_cli_agent_rich_input, rich_input_buffer_contains_newline,
     rich_input_buffer_does_not_contain_newline, rich_input_buffer_text_is_empty,
@@ -27,8 +26,6 @@ use crate::Builder;
 /// toggle: it proves that the setting actually propagates to editor behaviour
 /// (issue #11588).
 pub fn test_rich_input_toggle_on_enter_inserts_newline_and_ctrl_enter_submits() -> Builder {
-    FeatureFlag::CLIAgentRichInput.set_enabled(true);
-
     new_builder()
         .with_user_defaults(HashMap::from([(
             SubmitRichInputOnCtrlEnter::storage_key().to_string(),
@@ -63,8 +60,6 @@ pub fn test_rich_input_toggle_on_enter_inserts_newline_and_ctrl_enter_submits() 
 /// Regression (#11588): with toggle ON, typing `/` opens the slash-commands
 /// menu and pressing Enter must route to menu acceptance, not newline insertion.
 pub fn test_rich_input_enter_accepts_menu_item_when_toggle_is_true() -> Builder {
-    FeatureFlag::CLIAgentRichInput.set_enabled(true);
-
     new_builder()
         .with_user_defaults(HashMap::from([(
             SubmitRichInputOnCtrlEnter::storage_key().to_string(),

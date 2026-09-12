@@ -696,10 +696,6 @@ pub enum FeatureFlag {
     /// Enables attaching conversations as context in Agent Mode via the @ menu.
     ConversationsAsContext,
 
-    /// Enables the rich input editor for CLI agents (e.g., Claude Code).
-    /// Ctrl-G intercepts the keystroke and opens Warp's input editor instead of $EDITOR.
-    CLIAgentRichInput,
-
     /// Enables incremental (diff-based) buffer updates for auto-reload instead of full replace.
     IncrementalAutoReload,
 
