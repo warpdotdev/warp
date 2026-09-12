@@ -225,8 +225,6 @@
 /crates/managed_secrets/ @bnavetta @ianhodge
 /crates/warp_web_event_bus/ @bnavetta @ianhodge
 
-# Command signatures v2
-/command-signatures-v2/ @zachbai
 
 # OS-level bootstrap scripts
 /script/linux/bootstrap @acarl005

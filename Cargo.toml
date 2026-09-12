@@ -37,7 +37,6 @@ asset_macro = { path = "crates/asset_macro" }
 build_cache = { path = "crates/build_cache" }
 channel_versions = { path = "crates/channel_versions", default-features = false }
 command = { path = "crates/command" }
-command-signatures-v2 = { path = "crates/command-signatures-v2" }
 cloud_objects = { path = "crates/cloud_objects" }
 cloud_object_client = { path = "crates/cloud_object_client" }
 cloud_object_persistence = { path = "crates/cloud_object_persistence" }
@@ -92,7 +91,6 @@ warp_files = { path = "crates/warp_files" }
 warp_graphql = { path = "crates/graphql" }
 warp_graphql_schema = { path = "crates/warp_graphql_schema" }
 warp_isolation_platform = { path = "crates/isolation_platform" }
-warp_js = { path = "crates/warp_js" }
 warp_logging = { path = "crates/warp_logging" }
 warp_managed_secrets = { path = "crates/managed_secrets" }
 warp_multi_agent_client = { path = "crates/warp_multi_agent_client" }
@@ -389,7 +387,6 @@ async-recursion = "1.0.0"
 getset = "0.1.1"
 regex = "1.11.1"
 regex-automata = "0.4.6"
-rquickjs = { version = "0.3.1" }
 dirs = "6.0.0"
 rayon = "1.10.0"
 sha2 = "0.10"

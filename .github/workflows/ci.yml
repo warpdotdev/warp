@@ -23,7 +23,7 @@ name: Warp CI
 env:
   CARGO_TERM_COLOR: always
   NEXTEST_PROFILE: ci
-  WORKSPACE_TEST_ARGS: --workspace --locked --exclude command-signatures-v2
+  WORKSPACE_TEST_ARGS: --workspace --locked
   # Include only as much debug info as is necessary to see backtraces
   # in test failures.  This should speed up compilation somewhat and
   # reduces the size of built artifacts (which addresses issues with
@@ -109,7 +109,6 @@ jobs:
             name: "MacOS"
             runner: ${{ fromJSON(needs.params.outputs.macos-runner) }}
             is_self_hosted: ${{ contains(fromJSON(needs.params.outputs.macos-runner), 'self-hosted') }}
-            extra_test_args: ""
 
           - os: "linux"
             name: "Linux"
@@ -118,14 +117,12 @@ jobs:
             runner: ubuntu-latest-large
             # We don't (yet) have any self-hosted Linux runners.
             is_self_hosted: false
-            extra_test_args: ""
 
           - os: "windows"
             name: "Windows"
             runner: windows-latest-large
             # We don't (yet) have any self-hosted Windows runners.
             is_self_hosted: false
-            extra_test_args: "--exclude command-signatures-v2 --exclude warp_js"
     runs-on: ${{ matrix.runner }}
     needs: params
     # Make sure an ID token is created with the necessary permissions to use
@@ -247,7 +244,7 @@ jobs:
           apt: vim
 
       - name: Compile tests
-        run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} ${{ matrix.extra_test_args }} --no-run
+        run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} --no-run
         env:
           # Attach the GitHub auth token so that requests to the GitHub API
           # don't get rate limited during compilation (e.g.: retrieving
@@ -259,7 +256,7 @@ jobs:
         # that we don't bother running these first tests if test compilation
         # fails).
         if: success()
-        run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} ${{ matrix.extra_test_args }} -E "not package(integration)"
+        run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} -E "not package(integration)"
         env:
           # Unit tests may end up spawning a shell, but shouldn't care which
           # shell it is.  We'll use zsh, as it has the shortest bootstrap times
@@ -285,7 +282,7 @@ jobs:
         if: matrix.os != 'windows' && (success() || failure())
         uses: coactions/setup-xvfb@b6b4fcfb9f5a895edadc3bc76318fae0ac17c8b3 # v1
         with:
-          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} ${{ matrix.extra_test_args }} -E "package(integration) and not test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
+          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} -E "package(integration) and not test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
         env:
           # We run shell-agnostic tests against zsh, as it has the shortest
           # bootstrap times and tends to be the most reliable.
@@ -310,7 +307,7 @@ jobs:
         if: matrix.os != 'windows' && (success() || failure())
         uses: coactions/setup-xvfb@b6b4fcfb9f5a895edadc3bc76318fae0ac17c8b3 # v1
         with:
-          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} ${{ matrix.extra_test_args }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
+          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
         env:
           WARP_SHELL_PATH: ${{ steps.echo_shells_unix.outputs.default_bash_path }}
 
@@ -336,7 +333,7 @@ jobs:
         if: (success() || failure()) && runner.os == 'macos'
         uses: coactions/setup-xvfb@b6b4fcfb9f5a895edadc3bc76318fae0ac17c8b3 # v1
         with:
-          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} ${{ matrix.extra_test_args }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
+          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
         env:
           WARP_SHELL_PATH: ${{ steps.echo_shells_unix.outputs.latest_bash_path }}
 
@@ -359,7 +356,7 @@ jobs:
         if: matrix.os != 'windows' && (success() || failure())
         uses: coactions/setup-xvfb@b6b4fcfb9f5a895edadc3bc76318fae0ac17c8b3 # v1
         with:
-          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} ${{ matrix.extra_test_args }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
+          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
         env:
           WARP_SHELL_PATH: ${{ steps.echo_shells_unix.outputs.fish_path }}
 
@@ -382,7 +379,7 @@ jobs:
         if: matrix.os != 'windows' && (success() || failure())
         uses: coactions/setup-xvfb@b6b4fcfb9f5a895edadc3bc76318fae0ac17c8b3 # v1
         with:
-          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} ${{ matrix.extra_test_args }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
+          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
         env:
           WARP_SHELL_PATH: ${{ steps.echo_shells_unix.outputs.zsh_path }}
 
@@ -405,7 +402,7 @@ jobs:
         if: matrix.os != 'windows' && (success() || failure())
         uses: coactions/setup-xvfb@b6b4fcfb9f5a895edadc3bc76318fae0ac17c8b3 # v1
         with:
-          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} ${{ matrix.extra_test_args }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
+          run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} -E "package(integration) and test(shell_integration_tests)${{ env.EXCLUDE_SSH_TESTS_FILTER }}${{ env.EXCLUDE_REMOTE_SERVER_TESTS_FILTER }}"
         env:
           WARP_SHELL_PATH: ${{ steps.echo_shells_unix.outputs.powershell_path }}
 
@@ -428,17 +425,8 @@ jobs:
       - name: Run doc tests
         # Run this step even if a previous test step fails
         if: success() || failure()
-        run: cargo test ${{ env.WORKSPACE_TEST_ARGS }} ${{ matrix.extra_test_args }} --doc
+        run: cargo test ${{ env.WORKSPACE_TEST_ARGS }} --doc
 
-        # Run warp_completer tests with the "v2" (completions-on-js) flag enabled. We do this to
-        # ensure that the v2 completions implementation doesn't regress/rot while it's development
-        # is paused.
-      - name: Run completions-on-js tests
-        # Run this step even if a previous test step fails
-        if: matrix.os != 'windows' && (success() || failure())
-        uses: coactions/setup-xvfb@b6b4fcfb9f5a895edadc3bc76318fae0ac17c8b3 # v1
-        with:
-          run: cargo nextest run --locked -p warp_completer --features v2
 
     # This is longer than we like and temporary until we speed up integration tests
     # The maximum timeout for the entire job is 6 hours:
@@ -571,7 +559,6 @@ jobs:
             runner: ${{ fromJSON(needs.params.outputs.macos-runner) }}
             is_self_hosted: ${{ contains(fromJSON(needs.params.outputs.macos-runner), 'self-hosted') }}
             null_device: "/dev/null"
-            clippy_excludes: "--exclude warp_completer"
 
           - os: "linux"
             name: "Linux"
@@ -581,7 +568,6 @@ jobs:
             # We don't (yet) have any self-hosted Linux runners.
             is_self_hosted: false
             null_device: "/dev/null"
-            clippy_excludes: "--exclude warp_completer"
 
           - os: "windows"
             name: "Windows"
@@ -589,7 +575,6 @@ jobs:
             # We don't (yet) have any self-hosted Windows runners.
             is_self_hosted: false
             null_device: "NUL"
-            clippy_excludes: "--exclude warp_js --exclude command-signatures-v2"
     runs-on: ${{ matrix.runner }}
     needs: params
     #    if: ${{ needs.params.outputs.affects-rust-sources == 'true' }}
@@ -615,13 +600,10 @@ jobs:
           set -e
           # On Windows, omit --all-features because pprof and related profiling features don't compile.
           if [ "${{ matrix.os }}" = "windows" ]; then
-            cargo clippy --locked --workspace ${{ matrix.clippy_excludes }} --all-targets --tests -- -D warnings
+            cargo clippy --locked --workspace --all-targets --tests -- -D warnings
           else
             # TODO(vorporeal): Re-enable the `all-features` flag once we've fixed things.
-            cargo clippy --locked --workspace ${{ matrix.clippy_excludes }} --all-targets --tests -- -D warnings
-            # Run clippy on warp_completer with default, rather than all features enabled, because there is
-            # feature-gated logic for the WIP completions-on-js implementation.
-            cargo clippy --locked -p warp_completer --all-targets --tests -- -D warnings
+            cargo clippy --locked --workspace --all-targets --tests -- -D warnings
           fi
           # Workspace feature unification enables `warp/tui` through the `warp_tui` package.
           # Also lint the default GUI configuration used by `cargo run` and `./script/run`.

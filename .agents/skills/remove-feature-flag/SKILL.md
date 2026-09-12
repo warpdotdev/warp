@@ -120,7 +120,7 @@ After removing the flag:
 cargo clippy --workspace --all-targets --all-features --tests -- -D warnings
 
 # Run tests
-cargo nextest run --no-fail-fast --workspace --exclude command-signatures-v2
+cargo nextest run --no-fail-fast --workspace
 
 # Build the GUI app
 cargo run
