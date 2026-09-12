@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+
+set -e
+
+workspace_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+temp_dir="$(mktemp -d)"
+trap 'rm -rf "$temp_dir"' EXIT
+
+fake_bin="$temp_dir/bin"
+mkdir -p "$fake_bin"
+
+cat > "$fake_bin/cargo" <<'EOF'
+#!/usr/bin/env bash
+
+case "$1" in
+  metadata)
+    printf '{"target_directory":"%s"}\n' "$FAKE_TARGET_DIR"
+    ;;
+  bundle)
+    printf '%s\n' "$@" > "$CARGO_ARGS_FILE"
+    exit 42
+    ;;
+  *)
+    echo "Unexpected cargo command: $1" >&2
+    exit 1
+    ;;
+esac
+EOF
+chmod +x "$fake_bin/cargo"
+
+oss_args="$temp_dir/oss-args"
+oss_expected_args="$temp_dir/oss-expected-args"
+cat > "$oss_expected_args" <<'EOF'
+bundle
+--bin
+warp-oss
+--features
+gui
+--format
+osx
+--release
+EOF
+
+oss_status=0
+PATH="$fake_bin:$PATH" \
+  FAKE_TARGET_DIR="$temp_dir/oss-target" \
+  CARGO_ARGS_FILE="$oss_args" \
+  WARP_BIN_NAME="warp-oss" \
+  WARP_CHANNEL="oss" \
+  FEATURES="gui" \
+  "$workspace_root/script/macos/run" --dont-open --release || oss_status=$?
+
+if [[ "$oss_status" -ne 42 ]]; then
+  echo "Expected the OSS run to stop at cargo bundle with status 42, got $oss_status." >&2
+  exit 1
+fi
+diff -u "$oss_expected_args" "$oss_args"
+
+local_args="$temp_dir/local-args"
+local_expected_args="$temp_dir/local-expected-args"
+cat > "$local_expected_args" <<'EOF'
+bundle
+--bin
+warp
+--features
+gui,local-feature
+--format
+osx
+--profile
+test-profile
+EOF
+
+local_status=0
+PATH="$fake_bin:$PATH" \
+  FAKE_TARGET_DIR="$temp_dir/local-target" \
+  CARGO_ARGS_FILE="$local_args" \
+  WARP_BIN_NAME="warp" \
+  WARP_CHANNEL="local" \
+  FEATURES="gui,local-feature" \
+  "$workspace_root/script/macos/run" --dont-open --profile test-profile || local_status=$?
+
+if [[ "$local_status" -ne 42 ]]; then
+  echo "Expected the local run to stop at cargo bundle with status 42, got $local_status." >&2
+  exit 1
+fi
+diff -u "$local_expected_args" "$local_args"
