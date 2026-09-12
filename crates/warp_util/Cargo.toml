@@ -30,6 +30,7 @@ serde.workspace = true
 serde_json.workspace = true
 pin-project.workspace = true
 futures-util.workspace = true
+futures-lite.workspace = true
 log.workspace = true
 warp_errors.workspace = true
 

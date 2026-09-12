@@ -150,6 +150,11 @@ message DiffMetadataAgainstBase {
   // produces aggregate_stats so the git dialog's Changes box can render
   // without a working-tree read (lets the box populate for remote repos).
   repeated FileChangeEntry files = 2;
+  // True when the underlying git status/numstat read on the daemon was cut
+  // off before finishing (an extreme case, e.g. a huge non-gitignored
+  // directory tree) — aggregate_stats and files are then a lower bound
+  // rather than the true total.
+  bool files_truncated = 3;
 }
 
 // Mirrors Commit in Rust (util/git.rs).
