@@ -2410,7 +2410,7 @@ fn test_agent_block_with_registered_singletons(
             &model_events,
             get_relevant_files,
             EntityId::new(),
-            UserWorkspaces::teamless_context_resolvers_for_test(),
+            UserWorkspaces::teamless_context_resolver_for_test(),
             ctx,
         )
     });

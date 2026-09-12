@@ -56,8 +56,7 @@ pub trait TeamScope: sealed::Sealed {
     fn team_uid(&self) -> Option<ServerId>;
 }
 
-/// The team selected when a view-scoped operation starts, captured directly from its window
-/// assignment without requiring current workspace membership metadata.
+/// The team selected when a view-scoped operation starts.
 pub struct TeamContextForOperation {
     team_uid: Option<ServerId>,
 }
@@ -82,7 +81,6 @@ impl TeamContextForOperation {
 /// The team a view renders as, borrowed for the duration of a single read.
 ///
 /// It is resolved at the point of use so policy reads follow the view between windows.
-/// A selected team absent from current workspace membership metadata resolves as teamless.
 pub struct TeamContext<'a> {
     team_uid: Option<&'a ServerId>,
 }
@@ -156,19 +154,6 @@ impl TeamScope for TeamlessScopeForTest {
 pub type TeamContextResolver = Rc<dyn for<'a> Fn(&'a AppContext) -> TeamContext<'a>>;
 pub(crate) type TeamContextForOperationResolver =
     Rc<dyn Fn(&AppContext) -> TeamContextForOperation>;
-
-/// View-bound team contexts that keep policy reads membership-validated while preserving the
-/// selected window team when an operation begins.
-pub struct TeamContextResolvers {
-    team_context: TeamContextResolver,
-    team_context_for_operation: TeamContextForOperationResolver,
-}
-
-impl TeamContextResolvers {
-    pub(crate) fn into_parts(self) -> (TeamContextResolver, TeamContextForOperationResolver) {
-        (self.team_context, self.team_context_for_operation)
-    }
-}
 
 #[cfg(not(target_family = "wasm"))]
 #[derive(Debug, thiserror::Error)]
@@ -284,18 +269,13 @@ impl UserWorkspaces {
     pub fn team_context_resolver<T: Entity>(view: WeakViewHandle<T>) -> TeamContextResolver {
         Rc::new(move |app| Self::as_ref(app).team_context(&view, app))
     }
-    /// Builds the policy and operation team contexts for `view`.
-    pub fn team_context_resolvers<T: Entity>(view: WeakViewHandle<T>) -> TeamContextResolvers {
-        let team_context = Self::team_context_resolver(view.clone());
-        let team_context_for_operation = Rc::new(move |app: &AppContext| TeamContextForOperation {
-            team_uid: view
-                .window_id(app)
-                .and_then(|window_id| Self::as_ref(app).team_uid_for_window(window_id)),
-        });
-        TeamContextResolvers {
-            team_context,
-            team_context_for_operation,
-        }
+
+    pub(crate) fn team_context_for_operation_resolver(
+        resolver: TeamContextResolver,
+    ) -> TeamContextForOperationResolver {
+        Rc::new(move |app| TeamContextForOperation {
+            team_uid: resolver(app).team_uid(),
+        })
     }
 
     /// A resolver for tests that build a model without a window to resolve against.
@@ -306,19 +286,6 @@ impl UserWorkspaces {
     #[cfg(any(test, feature = "test-util"))]
     pub fn teamless_context_for_operation_for_test() -> TeamContextForOperation {
         TeamContextForOperation { team_uid: None }
-    }
-    #[cfg(any(test, feature = "test-util"))]
-    pub fn team_context_for_operation_resolver_for_test(
-        team_uid: Option<ServerId>,
-    ) -> TeamContextForOperationResolver {
-        Rc::new(move |_| TeamContextForOperation { team_uid })
-    }
-    #[cfg(any(test, feature = "test-util"))]
-    pub fn teamless_context_resolvers_for_test() -> TeamContextResolvers {
-        TeamContextResolvers {
-            team_context: Self::teamless_context_resolver_for_test(),
-            team_context_for_operation: Self::team_context_for_operation_resolver_for_test(None),
-        }
     }
 
     fn team_context_for_window_id(&self, window_id: WindowId) -> TeamContext<'_> {

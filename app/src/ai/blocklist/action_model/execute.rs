@@ -111,7 +111,7 @@ use crate::util::image::{
 };
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::is_binary_file;
-use crate::workspaces::user_workspaces::{TeamContextResolver, TeamContextResolvers};
+use crate::workspaces::user_workspaces::TeamContextResolver;
 
 /// Types of actions that can be executed in parallel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -295,11 +295,9 @@ impl BlocklistAIActionExecutor {
         model_event_dispatcher: &ModelHandle<ModelEventDispatcher>,
         get_relevant_files_controller: ModelHandle<GetRelevantFilesController>,
         terminal_view_id: EntityId,
-        team_context_resolvers: TeamContextResolvers,
+        team_context_resolver: TeamContextResolver,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        let (team_context_resolver, team_context_for_operation_resolver) =
-            team_context_resolvers.into_parts();
         let read_files_executor =
             ctx.add_model(|_| ReadFilesExecutor::new(active_session.clone(), terminal_view_id));
         let upload_artifact_executor = ctx
@@ -347,11 +345,12 @@ impl BlocklistAIActionExecutor {
         let read_skill_executor = ctx.add_model(|_| ReadSkillExecutor::new(active_session.clone()));
         let fetch_conversation_executor = ctx.add_model(|_| FetchConversationExecutor::new());
         let start_agent_executor = ctx.add_model(StartAgentExecutor::new);
+        let team_context_resolver_for_run_agents = team_context_resolver.clone();
         let run_agents_executor = ctx.add_model(|_| {
             RunAgentsExecutor::new(
                 start_agent_executor.clone(),
                 terminal_view_id,
-                team_context_for_operation_resolver,
+                team_context_resolver_for_run_agents,
             )
         });
         let send_message_executor = ctx.add_model(|_| SendMessageToAgentExecutor::new());

@@ -888,7 +888,7 @@ impl AgentDriverRunner {
             )
             .await?
             .await
-            .map_err(|_| AgentDriverError::TeamMetadataRefreshTimeout)
+            .map_err(AgentDriverError::TeamMetadataRefreshFailed)
     }
 
     async fn set_ambient_agent_task_id(

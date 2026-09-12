@@ -42,7 +42,8 @@ use crate::ai::orchestration::{
 use crate::features::FeatureFlag;
 use crate::server::team_scope::RequestTeamScope;
 use crate::workspaces::user_workspaces::{
-    TeamContextForOperation, TeamContextForOperationResolver, TeamScope,
+    TeamContextForOperation, TeamContextForOperationResolver, TeamContextResolver, TeamScope,
+    UserWorkspaces,
 };
 
 /// Per-child spawn timeout. If a child agent doesn't report back within
@@ -74,7 +75,7 @@ pub struct RunAgentsExecutor {
     launched_agents: HashMap<AIConversationId, HashMap<String, ExistingLaunchedAgent>>,
     start_agent_executor: ModelHandle<StartAgentExecutor>,
     terminal_view_id: EntityId,
-    team_context_for_operation_resolver: TeamContextForOperationResolver,
+    team_context_resolver: TeamContextForOperationResolver,
 }
 
 /// Lifecycle events for in-flight dispatches.
@@ -96,19 +97,21 @@ impl RunAgentsExecutor {
     pub fn new(
         start_agent_executor: ModelHandle<StartAgentExecutor>,
         terminal_view_id: EntityId,
-        team_context_for_operation_resolver: TeamContextForOperationResolver,
+        team_context_resolver: TeamContextResolver,
     ) -> Self {
         Self {
             pending: HashMap::new(),
             launched_agents: HashMap::new(),
             start_agent_executor,
             terminal_view_id,
-            team_context_for_operation_resolver,
+            team_context_resolver: UserWorkspaces::team_context_for_operation_resolver(
+                team_context_resolver,
+            ),
         }
     }
 
     fn team_scope(&self, ctx: &ModelContext<Self>) -> TeamContextForOperation {
-        (self.team_context_for_operation_resolver)(ctx)
+        (self.team_context_resolver)(ctx)
     }
 
     pub fn is_pending(&self, action_id: &AIAgentActionId) -> bool {

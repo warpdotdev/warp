@@ -3581,8 +3581,8 @@ impl TerminalView {
         });
 
         let get_relevant_files_controller = ctx.add_model(GetRelevantFilesController::new);
-        let ai_action_team_context_resolvers =
-            UserWorkspaces::team_context_resolvers(terminal_view.clone());
+        let ai_action_team_context_resolver =
+            UserWorkspaces::team_context_resolver(terminal_view.clone());
         let ai_action_model = ctx.add_model(|ctx| {
             BlocklistAIActionModel::new(
                 model.clone(),
@@ -3590,7 +3590,7 @@ impl TerminalView {
                 &model_events_handle,
                 get_relevant_files_controller.clone(),
                 terminal_view_id,
-                ai_action_team_context_resolvers,
+                ai_action_team_context_resolver,
                 ctx,
             )
         });
