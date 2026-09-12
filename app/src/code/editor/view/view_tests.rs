@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use string_offset::CharOffset;
 use warp_core::ui::appearance::Appearance;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_util::user_input::UserInput;
@@ -85,5 +86,90 @@ fn test_interaction_state_prevents_editing() {
         });
 
         assert_eq!(text.as_str(), "abc");
+    });
+}
+
+#[test]
+fn test_select_to_buffer_boundaries() {
+    App::test((), |mut app| async move {
+        let (_window, editor_view) = initialize_editor(&mut app);
+
+        editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &CodeEditorViewAction::UserTyped(UserInput::new("first\nsecond")),
+                ctx,
+            );
+            let max_offset = view.model.as_ref(ctx).max_character_offset(ctx);
+
+            view.handle_action(&CodeEditorViewAction::SelectToBufferStart, ctx);
+            let selection = view
+                .model
+                .as_ref(ctx)
+                .buffer_selection_model()
+                .as_ref(ctx)
+                .selection_offsets()[0];
+            assert_eq!(selection.head, CharOffset::from(1));
+            assert_eq!(selection.tail, max_offset);
+
+            view.handle_action(&CodeEditorViewAction::CursorAtBufferStart, ctx);
+            view.handle_action(&CodeEditorViewAction::SelectToBufferEnd, ctx);
+            let selection = view
+                .model
+                .as_ref(ctx)
+                .buffer_selection_model()
+                .as_ref(ctx)
+                .selection_offsets()[0];
+            assert_eq!(selection.head, max_offset);
+            assert_eq!(selection.tail, CharOffset::from(1));
+        });
+    });
+}
+
+#[test]
+fn test_select_to_buffer_boundary_preserves_reverse_selection_anchor() {
+    App::test((), |mut app| async move {
+        let (_window, editor_view) = initialize_editor(&mut app);
+
+        editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &CodeEditorViewAction::UserTyped(UserInput::new("first\nsecond")),
+                ctx,
+            );
+            let max_offset = view.model.as_ref(ctx).max_character_offset(ctx);
+
+            view.handle_action(&CodeEditorViewAction::SelectToBufferStart, ctx);
+            view.handle_action(&CodeEditorViewAction::SelectRight, ctx);
+            view.handle_action(&CodeEditorViewAction::SelectToBufferStart, ctx);
+
+            let selection = view
+                .model
+                .as_ref(ctx)
+                .buffer_selection_model()
+                .as_ref(ctx)
+                .selection_offsets()[0];
+            assert_eq!(selection.head, CharOffset::from(1));
+            assert_eq!(selection.tail, max_offset);
+        });
+    });
+}
+
+#[test]
+fn test_select_to_buffer_boundaries_in_empty_editor() {
+    App::test((), |mut app| async move {
+        let (_window, editor_view) = initialize_editor(&mut app);
+
+        editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::SelectToBufferStart, ctx);
+            view.handle_action(&CodeEditorViewAction::SelectToBufferEnd, ctx);
+
+            let selection = view
+                .model
+                .as_ref(ctx)
+                .buffer_selection_model()
+                .as_ref(ctx)
+                .selection_offsets()[0];
+            assert_eq!(selection.head, CharOffset::from(1));
+            assert_eq!(selection.tail, CharOffset::from(1));
+        });
     });
 }
