@@ -1,0 +1,18 @@
+[package]
+name = "editor_memory_profile"
+version = "0.1.0"
+edition = "2024"
+description = "Reproduces the APP-4844 retained-bytes measurements for BufferSumTree::append_str."
+publish.workspace = true
+license.workspace = true
+
+# Deliberately depends on `warp_editor` as an ordinary (non-dev) dependency, and does not itself
+# declare a `sum_tree` dev-dependency. See the module doc comment on
+# `warp_editor::content::memory_profile` for why: this keeps the `sum_tree` `test-util` feature
+# (a dev-dependency of `warp_editor`, which shrinks the tree's branching factor for easier test
+# assertions) out of this binary's build, so the numbers it prints reflect the real production
+# configuration.
+[dependencies]
+instant.workspace = true
+sum_tree.workspace = true
+warp_editor.workspace = true
