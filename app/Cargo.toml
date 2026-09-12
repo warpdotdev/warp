@@ -142,6 +142,7 @@ log.workspace = true
 log-panics = { version = "2.1.0", features = ["with-backtrace"] }
 lsp.workspace = true
 warp_logging.workspace = true
+warp_harness_usage.workspace = true
 sentry = { workspace = true, optional = true }
 lz4_flex = "0.11"
 markdown_parser.workspace = true

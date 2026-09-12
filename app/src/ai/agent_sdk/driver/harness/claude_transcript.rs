@@ -17,7 +17,9 @@
 //! envelopes without pulling in the rest of the harness runner.
 use std::collections::HashMap;
 use std::fs::{create_dir_all, write};
-use std::io::{BufRead, BufReader, Read};
+#[cfg(test)]
+use std::io::BufRead;
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -25,6 +27,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 use warp_core::safe_warn;
+use warp_harness_usage::{
+    CaptureDiagnostics, JsonlCapture, JsonlDiagnostics, JsonlReadStatus, parse_jsonl,
+};
 
 use super::json_utils::entries_to_jsonl;
 use crate::ai::agent::api::ServerConversationToken;
@@ -118,44 +123,89 @@ pub(super) fn home_dir_for_claude_config() -> Option<PathBuf> {
 ///
 /// If the main JSONL does not exist, `require_main_transcript` controls whether
 /// this returns an error or an envelope with an empty `entries` list.
+#[cfg(test)]
 pub(crate) fn read_envelope(
     session_uuid: Uuid,
     cwd: &Path,
     config_root: &Path,
     require_main_transcript: bool,
 ) -> Result<ClaudeTranscriptEnvelope> {
+    read_envelope_with_diagnostics(session_uuid, cwd, config_root, require_main_transcript)
+        .map(|(envelope, _)| envelope)
+}
+
+pub(super) fn read_jsonl_capture(path: &Path) -> Result<JsonlCapture> {
+    match std::fs::File::open(path) {
+        Ok(file) => Ok(parse_jsonl(BufReader::new(file))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(JsonlCapture {
+            entries: Vec::new(),
+            diagnostics: JsonlDiagnostics::default(),
+        }),
+        Err(error) => Err(error).context("Failed to open native transcript"),
+    }
+}
+
+pub(super) fn read_envelope_with_diagnostics(
+    session_uuid: Uuid,
+    cwd: &Path,
+    config_root: &Path,
+    require_main_transcript: bool,
+) -> Result<(ClaudeTranscriptEnvelope, CaptureDiagnostics)> {
     let encoded = encode_cwd(cwd);
     let projects_dir = config_root.join("projects").join(&encoded);
 
     // Main session transcript.
     let session_file = projects_dir.join(format!("{session_uuid}.jsonl"));
-    if require_main_transcript && !session_file.exists() {
+    let root = read_jsonl_capture(&session_file)?;
+    if root.diagnostics.status == JsonlReadStatus::Unreadable && root.entries.is_empty() {
+        anyhow::bail!("Native root transcript could not be read");
+    }
+    if require_main_transcript && root.entries.is_empty() && !root.diagnostics.is_complete() {
+        anyhow::bail!("Native root transcript has no complete readable records");
+    }
+    if require_main_transcript && root.diagnostics.status == JsonlReadStatus::Missing {
         anyhow::bail!(
             "Claude Code transcript does not exist after harness termination: {}",
             session_file.display()
         );
     }
-    let entries = read_jsonl(&session_file)?;
+    let entries = root.entries;
+    let mut diagnostics = CaptureDiagnostics {
+        root: root.diagnostics,
+        ..Default::default()
+    };
 
     // Subagents are stored in a directory named after the session UUID.
     let mut subagents: HashMap<String, Vec<Value>> = HashMap::new();
     let subagents_dir = projects_dir
         .join(session_uuid.to_string())
         .join("subagents");
-    if subagents_dir.is_dir() {
-        for entry in std::fs::read_dir(&subagents_dir)
-            .with_context(|| format!("Failed to read subagents dir {}", subagents_dir.display()))?
-        {
-            let entry = entry?;
+    match std::fs::read_dir(&subagents_dir) {
+        Ok(directory) => for entry in directory {
+            let Ok(entry) = entry else {
+                diagnostics.subagent_discovery_incomplete = true;
+                continue;
+            };
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
             }
             let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                diagnostics.subagent_discovery_incomplete = true;
                 continue;
             };
-            subagents.insert(stem.to_owned(), read_jsonl(&path)?);
-        }
+            let capture = read_jsonl_capture(&path).unwrap_or_else(|_| JsonlCapture {
+                diagnostics: JsonlDiagnostics {
+                    status: JsonlReadStatus::Unreadable,
+                    ..Default::default()
+                },
+                entries: Vec::new(),
+            });
+            diagnostics.subagents.insert(stem.to_owned(), capture.diagnostics);
+            subagents.insert(stem.to_owned(), capture.entries);
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => diagnostics.subagent_discovery_incomplete = true,
     }
 
     // Per-agent todo lists.
@@ -189,14 +239,14 @@ pub(crate) fn read_envelope(
         }
     }
 
-    Ok(ClaudeTranscriptEnvelope {
+    Ok((ClaudeTranscriptEnvelope {
         cwd: cwd.to_path_buf(),
         uuid: session_uuid,
         claude_version: None,
         entries,
         subagents,
         todos,
-    })
+    }, diagnostics))
 }
 
 /// Write a [`ClaudeTranscriptEnvelope`] back to disk using the same layout
@@ -436,6 +486,7 @@ pub(crate) fn write_session_index_entry(
 ///
 /// Lines that fail to parse as JSON are skipped with a warning rather than
 /// causing the entire read to fail. A missing file returns an empty [`Vec`].
+#[cfg(test)]
 pub(crate) fn read_jsonl(path: &Path) -> Result<Vec<Value>> {
     let file = match std::fs::File::open(path) {
         Ok(f) => f,

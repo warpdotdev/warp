@@ -7,8 +7,8 @@ including when running against a local server with `oz-local`.
 
 This is the client collection slice of
 [APP-5545](https://linear.app/warpdotdev/issue/APP-5545/support-byollm-and-third-party-metrics).
-The server storage and publication APIs are separate work. This PR proposes behavior; it does not
-implement collection or enable a production rollout.
+The server storage and publication APIs are separate work. Collection does not enable a production
+rollout without authenticated server capability.
 
 ## Behavior
 1. **Supported runs.** Collection applies to Claude Code and Codex running through the managed
@@ -43,18 +43,19 @@ implement collection or enable a production rollout.
    Do not translate native tool names into Warp billing or benchmark categories.
 
 7. **Scope and completeness.** Token and tool coverage are independent: each is known, partial, or
-   unavailable for the stated captured scope. Include captured Claude subagent histories without
-   claiming every possible descendant was discovered. Codex v1 covers its captured root rollout;
-   uncaptured child histories are explicitly outside coverage. Missing files, unknown session IDs,
+   unavailable for the fixed scope defined by harness and metrics version. Include captured Claude
+   subagent histories without claiming every possible descendant was discovered. Codex v1 covers its root rollout;
+   child histories are outside that version's fixed scope. Missing files, unknown session IDs,
    denied reads, malformed records, and ambiguous identities must not silently become complete zero
    totals. A supported, readable history with no tool invocations can establish a zero tool count;
    absent token categories still remain absent.
 
 8. **Partial observations.** A snapshot containing useful observed counts may be published with
-   partial coverage and concise reasons. Unreliable values are omitted rather than fabricated.
+   partial coverage. Concise diagnostic reasons remain producer-local, not in publication payloads.
+   Unreliable values are omitted rather than fabricated.
    If neither token nor tool data is usable, retain the older snapshot. A newer usable partial
-   snapshot may contain lower counts or less scope than an older one; do not merge the two or take
-   per-field maxima to disguise that change.
+   snapshot may contain lower observed counts than an older one without changing its defined scope;
+   do not merge the two or take per-field maxima to disguise that change.
 
 9. **Relationship to transcript saving.** Metrics describe the same captured input used by a
    successfully uploaded raw transcript. Failed extraction does not prevent raw upload. Failed raw

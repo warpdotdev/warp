@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use chrono::Utc;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -13,6 +14,7 @@ use tempfile::NamedTempFile;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::safe_info;
+use warp_harness_usage::extract_claude;
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner};
 
@@ -20,10 +22,13 @@ use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
 use super::claude_transcript::{
     ClaudeResumeInfo, ClaudeTranscriptEnvelope, claude_config_dir, home_dir_for_claude_config,
-    read_envelope, rehydrate_claude_transcript,
+    read_envelope_with_diagnostics, rehydrate_claude_transcript,
 };
 use super::json_utils::{read_json_file_or_default, write_json_file};
 use super::save_coordinator::{SaveCoordinator, save_transcript_and_block};
+use super::usage_reporting::{
+    CapturedTranscript, UsageReporter, capture_with_retry, needs_capture_retry, upload_capture,
+};
 use super::{
     HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint,
     ThirdPartyHarness, cli_agent_session_status, write_temp_file,
@@ -36,7 +41,7 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::mcp::JSONTransportType;
 use crate::server::server_api::ServerApi;
-use crate::server::server_api::harness_support::{HarnessSupportClient, upload_to_target};
+use crate::server::server_api::harness_support::{HarnessSupportClient, UsageHarness};
 use crate::terminal::CLIAgent;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::ExecuteCommandOptions;
@@ -246,6 +251,7 @@ struct ClaudeHarnessRunner {
     terminal_driver: ModelHandle<TerminalDriver>,
     state: Mutex<ClaudeRunnerState>,
     saves: SaveCoordinator,
+    usage: UsageReporter,
     session_id: Uuid,
     harness_working_dir: PathBuf,
     parent_bridge: Option<MessageBridge>,
@@ -330,6 +336,7 @@ impl ClaudeHarnessRunner {
             terminal_driver,
             state: Mutex::new(ClaudeRunnerState::Preexec),
             saves: SaveCoordinator::default(),
+            usage: UsageReporter::default(),
             session_id,
             harness_working_dir: harness_working_dir.to_path_buf(),
             parent_bridge,
@@ -557,6 +564,9 @@ impl HarnessRunner for ClaudeHarnessRunner {
     fn save_coordinator(&self) -> Option<&SaveCoordinator> {
         Some(&self.saves)
     }
+    fn usage_reporter(&self) -> Option<&UsageReporter> {
+        Some(&self.usage)
+    }
 
     async fn save_conversation(
         &self,
@@ -596,6 +606,7 @@ impl HarnessRunner for ClaudeHarnessRunner {
                 harness_working_dir,
                 claude_version,
                 require_main_transcript,
+                &self.usage,
             ),
             super::upload_current_block_snapshot(
                 foreground,
@@ -628,29 +639,46 @@ async fn upload_transcript(
     harness_working_dir: &Path,
     claude_version: Option<String>,
     require_main_transcript: bool,
+    reporter: &UsageReporter,
 ) -> Result<()> {
     log::info!("Uploading Claude Code transcript to conversation {conversation_id}");
 
     let config_dir = claude_config_dir().context("Failed to resolve Claude config dir")?;
     let harness_working_dir = harness_working_dir.to_path_buf();
-    let body = tokio::task::spawn_blocking(move || {
-        let mut envelope = read_envelope(
-            session_id,
-            &harness_working_dir,
-            &config_dir,
-            require_main_transcript,
-        )
-        .with_context(|| format!("Failed to read transcript for session {session_id}"))?;
-        envelope.claude_version = claude_version;
-        serde_json::to_vec(&envelope).context("Failed to serialize transcript envelope")
-    })
-    .await
-    .context("read_envelope task panicked")??;
-    let target = client
-        .get_transcript_upload_target(conversation_id)
-        .await
-        .with_context(|| format!("Failed to get transcript upload target for {conversation_id}"))?;
-    upload_to_target(client.http_client(), &target, body).await
+    let capture = capture_with_retry(reporter.is_enabled(), || {
+        let identity = reporter.begin_capture();
+        let harness_working_dir = harness_working_dir.clone();
+        let config_dir = config_dir.clone();
+        let claude_version = claude_version.clone();
+        async move {
+            tokio::task::spawn_blocking(move || -> Result<CapturedTranscript> {
+                let captured_at = Utc::now();
+                let (mut envelope, diagnostics) = read_envelope_with_diagnostics(
+                    session_id,
+                    &harness_working_dir,
+                    &config_dir,
+                    require_main_transcript || identity.is_some(),
+                )?;
+                envelope.claude_version = claude_version;
+                let body = serde_json::to_vec(&envelope)
+                    .context("Failed to serialize transcript envelope")?;
+                let report = identity.and_then(|identity| identity.report(
+                    UsageHarness::ClaudeCode,
+                    captured_at,
+                    extract_claude(
+                        &session_id.to_string(),
+                        &envelope.entries,
+                        envelope.subagents.iter().map(|(id, entries)| (id.as_str(), entries.as_slice())),
+                        &diagnostics,
+                    ),
+                ));
+                Ok(CapturedTranscript { body, report, needs_retry: needs_capture_retry(&diagnostics) })
+            })
+            .await
+            .context("Native transcript capture task failed")?
+        }
+    }).await?;
+    upload_capture(client, conversation_id, reporter, capture).await
 }
 pub(crate) fn prepare_claude_environment_config(
     workspace_root: &Path,

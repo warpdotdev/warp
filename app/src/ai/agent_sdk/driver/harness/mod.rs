@@ -49,6 +49,8 @@ pub(crate) mod process_control;
 mod save_coordinator;
 mod skill_dirs_publish;
 mod telemetry;
+mod usage_reporting;
+use usage_reporting::UsageReporter;
 pub(crate) use claude_code::ClaudeHarness;
 use claude_transcript::ClaudeResumeInfo;
 use codex::CodexHarness;
@@ -541,6 +543,15 @@ pub(crate) trait HarnessRunner: Send + Sync + 'static {
     fn save_coordinator(&self) -> Option<&SaveCoordinator> {
         None
     }
+    fn usage_reporter(&self) -> Option<&UsageReporter> {
+        None
+    }
+
+    async fn publish_usage(&self) {
+        if let Some(reporter) = self.usage_reporter() {
+            reporter.publish().await;
+        }
+    }
 
     async fn request_save(
         self: Arc<Self>,
@@ -569,7 +580,9 @@ pub(crate) trait HarnessRunner: Send + Sync + 'static {
                     {
                         log::warn!("Harness session update before save failed");
                     }
-                    runner.save_conversation(save_point, &foreground).await
+                    let persistence = runner.save_conversation(save_point, &foreground).await;
+                    runner.publish_usage().await;
+                    persistence
                 })
             }),
             &background,
@@ -589,6 +602,7 @@ pub(crate) trait HarnessRunner: Send + Sync + 'static {
                     }
                     self.save_conversation(SavePoint::Final, foreground).await
                 },
+                self.publish_usage(),
                 final_save_budget(),
             )
             .await
