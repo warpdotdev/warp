@@ -164,6 +164,64 @@ fn test_no_trailing_newline() {
     })
 }
 
+/// Regression test for the memory issue where every content change materialized the full
+/// buffer text and recomputed the diff, even for editors that never need diff tracking.
+///
+/// Uses the `#[cfg(test)]` `DiffModel::diff_computation_was_scheduled` seam rather than the
+/// public `diff_status()`/`modified_lines()` contract: those are only updated once the async
+/// `compute_diff` task completes and emits `DiffUpdated`, and there is no reliable way to
+/// drain-and-assert the *absence* of an event that (with the fix in place) is never emitted.
+#[test]
+fn test_diff_tracking_disabled_skips_diff_computation() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        // Diff tracking must be disabled before the editor is seeded with content, since
+        // resetting content emits a `ContentChanged` event just like a regular edit does.
+        // `reset_content` already sets the diff base to the normalized initial text, so no
+        // separate `diff().set_base(..)` call is needed here.
+        let editor = app.add_model(|ctx| {
+            let styles = code_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx), None);
+            let mut model = CodeEditorModel::new(styles, None, false, None, ctx);
+            model.set_diff_tracking_enabled(false);
+            let state =
+                InitialBufferState::plain_text("AAA\nBBB").with_version(ContentVersion::new());
+            model.reset_content(state, ctx);
+            model
+        });
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.insert("X", EditOrigin::UserTyped, ctx);
+        });
+        editor.read(&app, |editor, ctx| {
+            assert!(
+                !editor.diff().as_ref(ctx).diff_computation_was_scheduled(),
+                "content changes must not schedule diff computation when tracking is disabled"
+            );
+        });
+    })
+}
+
+/// Sanity check for [`test_diff_tracking_disabled_skips_diff_computation`]: with diff tracking
+/// left enabled (the default), the same edit still schedules a diff computation.
+#[test]
+fn test_diff_tracking_enabled_schedules_diff_computation() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let editor = mock_model_with_diff(&mut app, "AAA\nBBB", "AAA\nBBB", ContentVersion::new());
+        editor.update(&mut app, |editor, ctx| {
+            editor.insert("X", EditOrigin::UserTyped, ctx);
+        });
+        editor.read(&app, |editor, ctx| {
+            assert!(
+                editor.diff().as_ref(ctx).diff_computation_was_scheduled(),
+                "content changes should still schedule diff computation when tracking is enabled"
+            );
+        });
+    })
+}
+
 #[test]
 fn test_toggle_comment() {
     App::test((), |mut app| async move {
