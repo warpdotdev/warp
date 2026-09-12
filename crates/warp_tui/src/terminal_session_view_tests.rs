@@ -4149,6 +4149,7 @@ fn zero_state_renders_with_only_zero_height_bootstrap_blocks() {
                 .mut_block_from_id(&bootstrap_block_id)
                 .expect("bootstrap block should remain in the block list");
             bootstrap_block.set_should_hide_command_grid(true);
+            bootstrap_block.set_should_hide_output_grid(true);
             terminal_model.update_blockheight_items(
                 BlockPadding {
                     bottom: 1.0,
