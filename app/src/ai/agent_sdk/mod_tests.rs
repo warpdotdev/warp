@@ -4,8 +4,8 @@ use clap::Parser;
 use cloud_object_models::CodeForge;
 use serde_json::json;
 use warp_cli::agent::{
-    AgentCommand, Harness, RepositoryForge, RepositoryHeadRef, RepositoryOriginPolicy,
-    RepositoryPreparationOverride, RunAgentArgs,
+    AgentCommand, Harness, RepositoryForge, RepositoryHeadRef, RepositoryPreparationOverride,
+    RunAgentArgs,
 };
 use warp_cli::artifact::{
     ArtifactCommand, DownloadArtifactArgs, GetArtifactArgs, UploadArtifactArgs,
@@ -50,40 +50,50 @@ fn parse_run_agent_args(args: &[&str]) -> RunAgentArgs {
 }
 
 #[test]
-fn driver_validation_uses_frozen_complete_policy_membership() {
+fn driver_validation_uses_live_repository_membership() {
     let mut options = agent_driver_options();
     let mut environment =
         AmbientAgentEnvironment::new(String::new(), None, vec![], String::new(), vec![]);
     environment.source_repos = Some(vec![SourceRepo::new(
         CodeForge::GitHub,
         "warpdotdev".to_string(),
-        "added-after-dispatch".to_string(),
+        "warp".to_string(),
     )]);
+    options.additional_source_repos = vec![SourceRepo::new(
+        CodeForge::GitHub,
+        "warpdotdev".to_string(),
+        "added-after-dispatch".to_string(),
+    )];
     options.environment = Some(environment);
     options.repository_preparation_overrides = vec![RepositoryPreparationOverride {
         code_forge: RepositoryForge::GitHub,
         repo_owner: "WarpDotDev".to_string(),
         repo_name: "Warp".to_string(),
-        head: Some(RepositoryHeadRef::CommitSha(
-            "0123456789abcdef0123456789abcdef01234567".to_string(),
-        )),
+        head: RepositoryHeadRef::CommitSha("0123456789abcdef0123456789abcdef01234567".to_string()),
         clone_from: Some(warp_cli::agent::RepositoryIdentity {
             code_forge: RepositoryForge::GitHub,
             repo_owner: "warpdotdev".to_string(),
             repo_name: "warp-for-benchmarks".to_string(),
         }),
-        origin_policy: Some(RepositoryOriginPolicy::Preserve),
+        preserve_origin: true,
     }];
 
     let repositories = validated_driver_repositories_for_preparation(&options).unwrap();
 
     assert_eq!(
         repositories,
-        vec![SourceRepo::new(
-            CodeForge::GitHub,
-            "WarpDotDev".to_string(),
-            "Warp".to_string(),
-        )]
+        vec![
+            SourceRepo::new(
+                CodeForge::GitHub,
+                "warpdotdev".to_string(),
+                "warp".to_string(),
+            ),
+            SourceRepo::new(
+                CodeForge::GitHub,
+                "warpdotdev".to_string(),
+                "added-after-dispatch".to_string(),
+            ),
+        ]
     );
 }
 

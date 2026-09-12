@@ -3,9 +3,7 @@ use std::ffi::OsString;
 use clap::Parser;
 
 use super::*;
-use crate::agent::{
-    AgentCommand, Harness, OutputFormat, RepositoryForge, RepositoryHeadRef, RepositoryOriginPolicy,
-};
+use crate::agent::{AgentCommand, Harness, OutputFormat, RepositoryForge, RepositoryHeadRef};
 use crate::artifact::ArtifactCommand;
 use crate::environment::{EnvironmentCommand, ImageCommand};
 use crate::harness_support::{HarnessSupportCommand, TaskStatus};
@@ -44,7 +42,7 @@ fn runner_list_accepts_team_uid() {
     );
 }
 #[test]
-fn agent_run_parses_complete_repository_preparation_policies() {
+fn agent_run_parses_sparse_repository_substitution() {
     let args = Args::try_parse_from([
         "warp",
         "agent",
@@ -52,9 +50,7 @@ fn agent_run_parses_complete_repository_preparation_policies() {
         "--task-id",
         "550e8400-e29b-41d4-a716-446655440000",
         "--repository-head-override-json",
-        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"COMMIT_SHA","value":"0123456789abcdef0123456789abcdef01234567"},"clone_from":{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp-for-benchmarks"},"origin_policy":"PRESERVE"}"#,
-        "--repository-head-override-json",
-        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"common-skills","head":null,"clone_from":null,"origin_policy":"REMOVE"}"#,
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"COMMIT_SHA","value":"0123456789abcdef0123456789abcdef01234567"},"clone_from":{"code_forge":"GITHUB","owner":"warpdotdev","repo":"warp-for-benchmarks"},"preserve_origin":true}"#,
     ])
     .unwrap();
 
@@ -73,25 +69,21 @@ fn agent_run_parses_complete_repository_preparation_policies() {
             .map(|identity| identity.repo_name.as_str()),
         Some("warp-for-benchmarks")
     );
-    assert_eq!(mapped.origin_policy, Some(RepositoryOriginPolicy::Preserve));
-    let unchanged = &run_args.repository_preparation_overrides[1];
-    assert_eq!(unchanged.head, None);
-    assert_eq!(unchanged.clone_from, None);
+    assert!(mapped.preserve_origin);
     assert_eq!(
-        unchanged.origin_policy,
-        Some(RepositoryOriginPolicy::Remove)
+        mapped.head,
+        RepositoryHeadRef::CommitSha("0123456789abcdef0123456789abcdef01234567".to_string())
     );
 }
 
 #[test]
-fn agent_run_rejects_malformed_complete_repository_preparation_payloads() {
+fn agent_run_rejects_malformed_sparse_repository_substitution_payloads() {
     for invalid_override in [
-        r#"{"code_forge":"GITHUB","repo_owner":"","repo_name":"warp","origin_policy":"REMOVE"}"#,
-        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","clone_from":{"code_forge":"GITHUB","repo_owner":"","repo_name":"target"},"origin_policy":"PRESERVE"}"#,
-        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","origin_policy":"KEEP"}"#,
-        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","clone_from":{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"target"}}"#,
-        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","clone_from":{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"target"},"origin_policy":"PRESERVE"}"#,
-        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"BRANCH","value":"main"},"clone_from":{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"target"},"origin_policy":"PRESERVE"}"#,
+        r#"{"code_forge":"GITHUB","repo_owner":"","repo_name":"warp","head":{"type":"BRANCH","value":"main"}}"#,
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"COMMIT_SHA","value":"0123456789abcdef0123456789abcdef01234567"},"clone_from":{"code_forge":"GITHUB","owner":"","repo":"target"},"preserve_origin":true}"#,
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"COMMIT_SHA","value":"0123456789abcdef0123456789abcdef01234567"},"clone_from":{"code_forge":"GITHUB","owner":"warpdotdev","repo":"target"}}"#,
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"COMMIT_SHA","value":"0123456789abcdef0123456789abcdef01234567"},"preserve_origin":true}"#,
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"BRANCH","value":"main"},"clone_from":{"code_forge":"GITHUB","owner":"warpdotdev","repo":"target"},"preserve_origin":true}"#,
     ] {
         Args::try_parse_from([
             "warp",
@@ -496,9 +488,7 @@ fn agent_run_parses_repeated_repository_head_override_json() {
     );
     assert_eq!(
         run_args.repository_preparation_overrides[0].head,
-        Some(RepositoryHeadRef::CommitSha(
-            "0123456789abcdef0123456789abcdef01234567".to_string()
-        ))
+        RepositoryHeadRef::CommitSha("0123456789abcdef0123456789abcdef01234567".to_string())
     );
     assert_eq!(
         run_args.repository_preparation_overrides[1].code_forge,
@@ -510,7 +500,7 @@ fn agent_run_parses_repeated_repository_head_override_json() {
     );
     assert_eq!(
         run_args.repository_preparation_overrides[1].head,
-        Some(RepositoryHeadRef::Branch("develop".to_string()))
+        RepositoryHeadRef::Branch("develop".to_string())
     );
 }
 

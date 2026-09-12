@@ -72,7 +72,9 @@ impl RepositoryHeadRef {
 #[serde(deny_unknown_fields)]
 pub struct RepositoryIdentity {
     pub code_forge: RepositoryForge,
+    #[serde(rename = "owner")]
     pub repo_owner: String,
+    #[serde(rename = "repo")]
     pub repo_name: String,
 }
 
@@ -99,15 +101,6 @@ impl RepositoryIdentity {
         Ok(())
     }
 }
-
-/// Origin handling for a prepared repository.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum RepositoryOriginPolicy {
-    Remove,
-    Preserve,
-}
-
 /// Server-supplied repository preparation override.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -115,9 +108,10 @@ pub struct RepositoryPreparationOverride {
     pub code_forge: RepositoryForge,
     pub repo_owner: String,
     pub repo_name: String,
-    pub head: Option<RepositoryHeadRef>,
+    pub head: RepositoryHeadRef,
     pub clone_from: Option<RepositoryIdentity>,
-    pub origin_policy: Option<RepositoryOriginPolicy>,
+    #[serde(default)]
+    pub preserve_origin: bool,
 }
 
 impl RepositoryPreparationOverride {
@@ -139,8 +133,8 @@ impl RepositoryPreparationOverride {
         if let Some(clone_from) = &self.clone_from {
             clone_from.validate()?;
         }
-        match self.head.as_ref() {
-            Some(RepositoryHeadRef::CommitSha(commit_sha)) => {
+        match &self.head {
+            RepositoryHeadRef::CommitSha(commit_sha) => {
                 if commit_sha.len() != 40
                     || !commit_sha
                         .bytes()
@@ -152,28 +146,21 @@ impl RepositoryPreparationOverride {
                     );
                 }
             }
-            Some(RepositoryHeadRef::Branch(branch)) => {
+            RepositoryHeadRef::Branch(branch) => {
                 if branch.is_empty() || branch.trim() != branch {
                     return Err(
                         "branch must not be empty or contain surrounding whitespace".to_string()
                     );
                 }
             }
-            None => {}
         }
-        if self.origin_policy.is_none() {
-            if self.head.is_none() {
-                return Err("legacy repository overrides require head".to_string());
-            }
-            if self.clone_from.is_some() {
-                return Err(
-                    "clone_from requires an explicit origin_policy for complete-policy mode"
-                        .to_string(),
-                );
-            }
+        if self.clone_from.is_some() && !self.preserve_origin {
+            return Err("clone_from requires preserve_origin".to_string());
         }
-        if self.clone_from.is_some() && !matches!(self.head, Some(RepositoryHeadRef::CommitSha(_)))
-        {
+        if self.preserve_origin && self.clone_from.is_none() {
+            return Err("preserve_origin requires clone_from".to_string());
+        }
+        if self.clone_from.is_some() && !matches!(self.head, RepositoryHeadRef::CommitSha(_)) {
             return Err("clone_from requires an exact COMMIT_SHA repository head".to_string());
         }
         Ok(())

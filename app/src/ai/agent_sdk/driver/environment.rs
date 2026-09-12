@@ -12,10 +12,7 @@ use cloud_object_models::CodeForge;
 use futures::channel::oneshot;
 use futures::future::join_all;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
-use warp_cli::agent::{
-    Harness, RepositoryForge, RepositoryHeadRef, RepositoryIdentity, RepositoryOriginPolicy,
-    RepositoryPreparationOverride,
-};
+use warp_cli::agent::{RepositoryForge, RepositoryHeadRef, RepositoryPreparationOverride};
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
 use warp_core::command::ExitCode;
 use warp_core::{safe_info, safe_warn};
@@ -25,7 +22,7 @@ use warpui::{ModelContext, ModelSpawner, SingletonEntity};
 #[cfg(feature = "local_fs")]
 use super::cache_setup;
 use super::terminal::TerminalDriver;
-use super::{AgentDriverError, git_credentials};
+use super::{AgentDriverError, Harness, git_credentials};
 use crate::ai::agent_sdk::environment_snapshot::{
     EnvironmentSnapshot, EnvironmentSnapshotReporter, RepositoryRevision,
 };
@@ -188,23 +185,11 @@ impl RepositoryPreparationOptions {
 pub(crate) fn validate_repository_preparation_overrides(
     source_repos: &[SourceRepo],
     overrides: &[RepositoryPreparationOverride],
-    remove_repository_origins: bool,
 ) -> Result<(), PrepareEnvironmentError> {
     if source_repos.is_empty() && !overrides.is_empty() {
         return Err(
             PrepareEnvironmentError::InvalidRepositoryPreparationOverrides {
                 reason: "repository preparation overrides require at least one repository"
-                    .to_string(),
-            },
-        );
-    }
-    let complete_policy_mode = overrides
-        .iter()
-        .any(|preparation_override| preparation_override.origin_policy.is_some());
-    if complete_policy_mode && remove_repository_origins {
-        return Err(
-            PrepareEnvironmentError::InvalidRepositoryPreparationOverrides {
-                reason: "complete-policy overrides conflict with --remove-repository-origins"
                     .to_string(),
             },
         );
@@ -217,23 +202,6 @@ pub(crate) fn validate_repository_preparation_overrides(
 
     let mut override_identities = HashSet::new();
     for preparation_override in overrides {
-        if complete_policy_mode && preparation_override.origin_policy.is_none() {
-            return Err(
-                PrepareEnvironmentError::InvalidRepositoryPreparationOverrides {
-                    reason: "complete-policy overrides require origin_policy on every entry"
-                        .to_string(),
-                },
-            );
-        }
-        if !complete_policy_mode
-            && (preparation_override.head.is_none() || preparation_override.clone_from.is_some())
-        {
-            return Err(
-                PrepareEnvironmentError::InvalidRepositoryPreparationOverrides {
-                    reason: "legacy overrides require head and forbid clone_from".to_string(),
-                },
-            );
-        }
         let identity = preparation_override.identity();
         if !override_identities.insert(identity.clone()) {
             return Err(
@@ -261,94 +229,7 @@ pub(crate) fn validate_repository_preparation_overrides(
         }
     }
 
-    if complete_policy_mode {
-        if override_identities != source_identities {
-            return Err(
-                PrepareEnvironmentError::InvalidRepositoryPreparationOverrides {
-                    reason: "complete-policy overrides must cover every repository exactly once"
-                        .to_string(),
-                },
-            );
-        }
-        let mut effective_remotes = HashSet::new();
-        for preparation_override in overrides {
-            if preparation_override.clone_from.is_some()
-                && !matches!(
-                    preparation_override.head,
-                    Some(RepositoryHeadRef::CommitSha(_))
-                )
-            {
-                return Err(
-                    PrepareEnvironmentError::InvalidRepositoryPreparationOverrides {
-                        reason: "clone_from requires an exact COMMIT_SHA repository head"
-                            .to_string(),
-                    },
-                );
-            }
-            let effective_identity = preparation_override
-                .clone_from
-                .as_ref()
-                .map(RepositoryIdentity::identity)
-                .unwrap_or_else(|| preparation_override.identity());
-            if preparation_override.clone_from.is_some()
-                && source_identities.contains(&effective_identity)
-            {
-                return Err(
-                    PrepareEnvironmentError::InvalidRepositoryPreparationOverrides {
-                        reason: format!(
-                            "clone target {:?}/{}/{} is independently declared",
-                            effective_identity.0, effective_identity.1, effective_identity.2
-                        ),
-                    },
-                );
-            }
-            if !effective_remotes.insert(effective_identity.clone()) {
-                return Err(
-                    PrepareEnvironmentError::InvalidRepositoryPreparationOverrides {
-                        reason: format!(
-                            "duplicate effective remote {:?}/{}/{}",
-                            effective_identity.0, effective_identity.1, effective_identity.2
-                        ),
-                    },
-                );
-            }
-        }
-    }
     Ok(())
-}
-
-pub(crate) fn repositories_for_preparation(
-    environment_repos: Vec<SourceRepo>,
-    additional_source_repos: Vec<SourceRepo>,
-    overrides: &[RepositoryPreparationOverride],
-) -> Result<Vec<SourceRepo>, PrepareEnvironmentError> {
-    if overrides
-        .iter()
-        .any(|preparation_override| preparation_override.origin_policy.is_some())
-    {
-        let live_repositories = environment_repos
-            .iter()
-            .chain(additional_source_repos.iter());
-        return Ok(overrides
-            .iter()
-            .map(|preparation_override| {
-                let checkout_ref = live_repositories
-                    .clone()
-                    .find(|repo| {
-                        source_repo_identity(repo)
-                            .is_ok_and(|identity| identity == preparation_override.identity())
-                    })
-                    .and_then(|repo| repo.checkout_ref.clone());
-                SourceRepo::new(
-                    code_forge_for_repository_forge(preparation_override.code_forge),
-                    preparation_override.repo_owner.clone(),
-                    preparation_override.repo_name.clone(),
-                )
-                .with_checkout_ref(checkout_ref)
-            })
-            .collect());
-    }
-    merge_repos_deduped(environment_repos, additional_source_repos)
 }
 /// Prepare a cloud agent environment within a terminal session. This will:
 /// 1. Materialize all repositories, enforcing server-provided HEAD overrides.
@@ -384,7 +265,6 @@ pub(crate) fn prepare_environment(
         validate_repository_preparation_overrides(
             &source_repos,
             &repository_preparation_overrides,
-            remove_repository_origins,
         )?;
         // Only index the codebase for the Oz harness; third-party harnesses (e.g. Claude)
         // have their own methods for navigating a codebase.
@@ -803,7 +683,7 @@ pub(super) struct RepositoryCloneRequest {
     pub(super) remote: SourceRepo,
     pub(super) checkout_name: String,
     pub(super) checkout: Option<RepositoryHeadRef>,
-    pub(super) origin_policy: RepositoryOriginPolicy,
+    pub(super) remove_origin: bool,
 }
 
 fn repository_clone_requests(
@@ -811,7 +691,7 @@ fn repository_clone_requests(
     overrides: &[RepositoryPreparationOverride],
     remove_repository_origins: bool,
 ) -> Result<Vec<RepositoryCloneRequest>, PrepareEnvironmentError> {
-    validate_repository_preparation_overrides(repos, overrides, remove_repository_origins)?;
+    validate_repository_preparation_overrides(repos, overrides)?;
     repos
         .iter()
         .cloned()
@@ -819,7 +699,7 @@ fn repository_clone_requests(
             source_repo_identity(&repo)?;
             let preparation_override = preparation_override_for_repo(overrides, &repo);
             let checkout = preparation_override
-                .and_then(|preparation_override| preparation_override.head.clone())
+                .map(|preparation_override| preparation_override.head.clone())
                 .or_else(|| repo.checkout_ref.clone().map(RepositoryHeadRef::Branch));
             let remote = match preparation_override
                 .and_then(|preparation_override| preparation_override.clone_from.as_ref())
@@ -831,18 +711,14 @@ fn repository_clone_requests(
                 ),
                 None => repo.clone(),
             };
-            let origin_policy = preparation_override
-                .and_then(|preparation_override| preparation_override.origin_policy)
-                .unwrap_or(if remove_repository_origins {
-                    RepositoryOriginPolicy::Remove
-                } else {
-                    RepositoryOriginPolicy::Preserve
-                });
+            let remove_origin = remove_repository_origins
+                && !preparation_override
+                    .is_some_and(|preparation_override| preparation_override.preserve_origin);
             Ok(RepositoryCloneRequest {
                 remote,
                 checkout_name: repo.repo,
                 checkout,
-                origin_policy,
+                remove_origin,
             })
         })
         .collect()
@@ -865,10 +741,7 @@ fn build_remove_repository_origins_command(
     shell_type: ShellType,
 ) -> String {
     let mut script = String::new();
-    for request in repos
-        .iter()
-        .filter(|request| request.origin_policy == RepositoryOriginPolicy::Remove)
-    {
+    for request in repos.iter().filter(|request| request.remove_origin) {
         let repo_path = working_dir.join(&request.checkout_name);
         let escaped_path =
             shell_escape_single_quotes(&repo_path.to_string_lossy(), ShellType::Bash);
@@ -887,10 +760,7 @@ async fn remove_repository_origins_from_repos(
     working_dir: &Path,
     spawner: &ModelSpawner<TerminalDriver>,
 ) -> Result<(), PrepareEnvironmentError> {
-    if !repos
-        .iter()
-        .any(|request| request.origin_policy == RepositoryOriginPolicy::Remove)
-    {
+    if !repos.iter().any(|request| request.remove_origin) {
         return Ok(());
     }
     let shell_type = active_shell_type(spawner).await;

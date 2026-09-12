@@ -136,19 +136,17 @@ fn maybe_warn_team_api_key(ctx: &AppContext) {
 fn validated_driver_repositories_for_preparation(
     options: &AgentDriverOptions,
 ) -> Result<Vec<SourceRepo>, driver::environment::PrepareEnvironmentError> {
-    let source_repos = driver::environment::repositories_for_preparation(
+    let source_repos = driver::environment::merge_repos_deduped(
         options
             .environment
             .as_ref()
             .map(AmbientAgentEnvironment::effective_repos)
             .unwrap_or_default(),
         options.additional_source_repos.clone(),
-        &options.repository_preparation_overrides,
     )?;
     driver::environment::validate_repository_preparation_overrides(
         &source_repos,
         &options.repository_preparation_overrides,
-        options.remove_repository_origins,
     )?;
     Ok(source_repos)
 }

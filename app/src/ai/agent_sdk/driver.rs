@@ -2218,13 +2218,12 @@ impl AgentDriver {
                 // whether this run gets one by attaching the clone variables,
                 // independent of which environment the run executes in.
                 environment::prepend_factory_definition_clone(&mut setup_commands);
-                let source_repos = environment::repositories_for_preparation(
+                let source_repos = environment::merge_repos_deduped(
                     environment_opt
                         .as_ref()
                         .map(AmbientAgentEnvironment::effective_repos)
                         .unwrap_or_default(),
                     additional_source_repos,
-                    &repository_preparation_overrides,
                 )?;
 
                 if environment_opt.is_some()

@@ -5,8 +5,7 @@ use cloud_object_models::CodeForge;
 use command::blocking::Command;
 use tempfile::TempDir;
 use warp_cli::agent::{
-    RepositoryForge, RepositoryHeadRef, RepositoryIdentity, RepositoryOriginPolicy,
-    RepositoryPreparationOverride,
+    RepositoryForge, RepositoryHeadRef, RepositoryIdentity, RepositoryPreparationOverride,
 };
 use warp_core::command::ExitCode;
 
@@ -14,8 +13,8 @@ use super::{
     PrepareEnvironmentError, RepositoryCloneRequest, build_parallel_clone_command,
     build_remove_repository_origins_command, build_resolved_head_command, checkout_command_for,
     checkout_result, environment_snapshot, is_valid_git_object_id, merge_repos_deduped,
-    parse_resolved_head_sha, parse_resolved_head_shas, repositories_for_preparation,
-    repository_clone_requests, single_repo_name, validate_repository_preparation_overrides,
+    parse_resolved_head_sha, parse_resolved_head_shas, repository_clone_requests, single_repo_name,
+    validate_repository_preparation_overrides,
 };
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::terminal::shell::ShellType;
@@ -30,9 +29,9 @@ fn commit_head_override(
         code_forge,
         repo_owner: owner.to_string(),
         repo_name: repo.to_string(),
-        head: Some(RepositoryHeadRef::CommitSha(sha.to_string())),
+        head: RepositoryHeadRef::CommitSha(sha.to_string()),
         clone_from: None,
-        origin_policy: None,
+        preserve_origin: false,
     }
 }
 
@@ -180,29 +179,30 @@ fn branch_head_override(
         code_forge,
         repo_owner: owner.to_string(),
         repo_name: repo.to_string(),
-        head: Some(RepositoryHeadRef::Branch(branch.to_string())),
+        head: RepositoryHeadRef::Branch(branch.to_string()),
         clone_from: None,
-        origin_policy: None,
+        preserve_origin: false,
     }
 }
-fn complete_policy_override(
+
+fn substitution_override(
     owner: &str,
     repo: &str,
-    head: Option<RepositoryHeadRef>,
-    clone_from: Option<(&str, &str)>,
-    origin_policy: RepositoryOriginPolicy,
+    sha: &str,
+    target_owner: &str,
+    target_repo: &str,
 ) -> RepositoryPreparationOverride {
     RepositoryPreparationOverride {
         code_forge: RepositoryForge::GitHub,
         repo_owner: owner.to_string(),
         repo_name: repo.to_string(),
-        head,
-        clone_from: clone_from.map(|(owner, repo)| RepositoryIdentity {
+        head: RepositoryHeadRef::CommitSha(sha.to_string()),
+        clone_from: Some(RepositoryIdentity {
             code_forge: RepositoryForge::GitHub,
-            repo_owner: owner.to_string(),
-            repo_name: repo.to_string(),
+            repo_owner: target_owner.to_string(),
+            repo_name: target_repo.to_string(),
         }),
-        origin_policy: Some(origin_policy),
+        preserve_origin: true,
     }
 }
 
@@ -212,7 +212,7 @@ fn clone_request(repo: SourceRepo, checkout: Option<RepositoryHeadRef>) -> Repos
         remote: repo,
         checkout_name,
         checkout,
-        origin_policy: RepositoryOriginPolicy::Preserve,
+        remove_origin: false,
     }
 }
 
@@ -305,72 +305,6 @@ fn merge_repos_supports_additional_only_and_empty_inputs() {
     );
 }
 
-#[test]
-fn complete_policy_overrides_are_authoritative_repository_membership() {
-    let live_environment = vec![
-        repo(CodeForge::GitHub, "warpdotdev", "removed-after-dispatch"),
-        repo(CodeForge::GitHub, "warpdotdev", "added-after-dispatch"),
-        repo(CodeForge::GitHub, "warpdotdev", "common-skills")
-            .with_checkout_ref(Some("frozen-branch".to_string())),
-    ];
-    let live_additional = vec![repo(
-        CodeForge::GitHub,
-        "warpdotdev",
-        "additional-after-dispatch",
-    )];
-    let overrides = vec![
-        complete_policy_override(
-            "WarpDotDev",
-            "Warp",
-            Some(RepositoryHeadRef::CommitSha(
-                "0123456789abcdef0123456789abcdef01234567".to_string(),
-            )),
-            Some(("warpdotdev", "warp-for-benchmarks")),
-            RepositoryOriginPolicy::Preserve,
-        ),
-        complete_policy_override(
-            "warpdotdev",
-            "common-skills",
-            None,
-            None,
-            RepositoryOriginPolicy::Remove,
-        ),
-    ];
-
-    let repositories =
-        repositories_for_preparation(live_environment, live_additional, &overrides).unwrap();
-    assert_eq!(
-        repositories,
-        vec![
-            repo(CodeForge::GitHub, "WarpDotDev", "Warp"),
-            repo(CodeForge::GitHub, "warpdotdev", "common-skills")
-                .with_checkout_ref(Some("frozen-branch".to_string())),
-        ]
-    );
-    let requests = repository_clone_requests(&repositories, &overrides, false).unwrap();
-    assert_eq!(requests[0].checkout_name, "Warp");
-    let command = build_parallel_clone_command(&requests, ShellType::Bash);
-    assert!(command.contains("https://github.com/warpdotdev/warp-for-benchmarks.git"));
-    assert!(!command.contains("added-after-dispatch"));
-    assert!(!command.contains("additional-after-dispatch"));
-}
-
-#[test]
-fn legacy_overrides_keep_live_repository_membership() {
-    let environment = vec![repo(CodeForge::GitHub, "warpdotdev", "warp")];
-    let additional = vec![repo(CodeForge::GitHub, "warpdotdev", "common-skills")];
-    let overrides = vec![commit_head_override(
-        RepositoryForge::GitHub,
-        "warpdotdev",
-        "warp",
-        "0123456789abcdef0123456789abcdef01234567",
-    )];
-
-    assert_eq!(
-        repositories_for_preparation(environment.clone(), additional.clone(), &overrides).unwrap(),
-        [environment, additional].concat()
-    );
-}
 #[test]
 fn single_repo_name_returns_none_for_zero_or_many_repos() {
     let no_repos = Vec::<SourceRepo>::new();
@@ -555,7 +489,7 @@ fn checkout_command_absent_when_no_ref() {
 }
 
 #[test]
-fn complete_policy_substitutes_remote_and_preserves_source_checkout_name() {
+fn sparse_substitution_uses_target_remote_and_preserves_source_checkout_name() {
     let source_sha = "0123456789abcdef0123456789abcdef01234567";
     let repos = vec![
         repo(CodeForge::GitHub, "WarpDotDev", "Warp")
@@ -563,24 +497,15 @@ fn complete_policy_substitutes_remote_and_preserves_source_checkout_name() {
         repo(CodeForge::GitHub, "warpdotdev", "common-skills")
             .with_checkout_ref(Some("main".to_string())),
     ];
-    let overrides = vec![
-        complete_policy_override(
-            "warpdotdev",
-            "warp",
-            Some(RepositoryHeadRef::CommitSha(source_sha.to_string())),
-            Some(("warpdotdev", "warp-for-benchmarks")),
-            RepositoryOriginPolicy::Preserve,
-        ),
-        complete_policy_override(
-            "WARPDOTDEV",
-            "COMMON-SKILLS",
-            None,
-            None,
-            RepositoryOriginPolicy::Remove,
-        ),
-    ];
+    let overrides = vec![substitution_override(
+        "warpdotdev",
+        "warp",
+        source_sha,
+        "warpdotdev",
+        "warp-for-benchmarks",
+    )];
 
-    let prepared = repository_clone_requests(&repos, &overrides, false).unwrap();
+    let prepared = repository_clone_requests(&repos, &overrides, true).unwrap();
 
     assert_eq!(prepared[0].remote.owner, "warpdotdev");
     assert_eq!(prepared[0].remote.repo, "warp-for-benchmarks");
@@ -589,28 +514,28 @@ fn complete_policy_substitutes_remote_and_preserves_source_checkout_name() {
         prepared[0].checkout,
         Some(RepositoryHeadRef::CommitSha(source_sha.to_string()))
     );
-    assert_eq!(prepared[0].origin_policy, RepositoryOriginPolicy::Preserve);
+    assert!(!prepared[0].remove_origin);
     assert_eq!(prepared[1].remote.repo, "common-skills");
     assert_eq!(prepared[1].checkout_name, "common-skills");
     assert_eq!(
         prepared[1].checkout,
         Some(RepositoryHeadRef::Branch("main".to_string()))
     );
-    assert_eq!(prepared[1].origin_policy, RepositoryOriginPolicy::Remove);
+    assert!(prepared[1].remove_origin);
 }
 
 #[test]
 fn substituted_request_uses_target_identity_and_source_checkout_path() {
     let source_sha = "0123456789abcdef0123456789abcdef01234567";
     let repos = vec![repo(CodeForge::GitHub, "warpdotdev", "warp")];
-    let overrides = vec![complete_policy_override(
+    let overrides = vec![substitution_override(
         "warpdotdev",
         "warp",
-        Some(RepositoryHeadRef::CommitSha(source_sha.to_string())),
-        Some(("warpdotdev", "warp-for-benchmarks")),
-        RepositoryOriginPolicy::Preserve,
+        source_sha,
+        "warpdotdev",
+        "warp-for-benchmarks",
     )];
-    let requests = repository_clone_requests(&repos, &overrides, false).unwrap();
+    let requests = repository_clone_requests(&repos, &overrides, true).unwrap();
     let command = build_parallel_clone_command(&requests, ShellType::Bash);
 
     assert!(command.contains("https://github.com/warpdotdev/warp-for-benchmarks.git"));
@@ -625,30 +550,19 @@ fn substituted_request_uses_target_identity_and_source_checkout_path() {
 }
 
 #[test]
-fn complete_policy_origin_removal_excludes_preserved_target() {
+fn sparse_substitution_origin_removal_excludes_preserved_target() {
     let repos = vec![
         repo(CodeForge::GitHub, "warpdotdev", "warp"),
         repo(CodeForge::GitHub, "warpdotdev", "common-skills"),
     ];
-    let overrides = vec![
-        complete_policy_override(
-            "warpdotdev",
-            "warp",
-            Some(RepositoryHeadRef::CommitSha(
-                "0123456789abcdef0123456789abcdef01234567".to_string(),
-            )),
-            Some(("warpdotdev", "warp-for-benchmarks")),
-            RepositoryOriginPolicy::Preserve,
-        ),
-        complete_policy_override(
-            "warpdotdev",
-            "common-skills",
-            None,
-            None,
-            RepositoryOriginPolicy::Remove,
-        ),
-    ];
-    let requests = repository_clone_requests(&repos, &overrides, false).unwrap();
+    let overrides = vec![substitution_override(
+        "warpdotdev",
+        "warp",
+        "0123456789abcdef0123456789abcdef01234567",
+        "warpdotdev",
+        "warp-for-benchmarks",
+    )];
+    let requests = repository_clone_requests(&repos, &overrides, true).unwrap();
     let workspace = Path::new("/workspace");
     let command = build_remove_repository_origins_command(&requests, workspace, ShellType::Bash);
     let preserved_target = workspace.join("warp").to_string_lossy().into_owned();
@@ -660,160 +574,6 @@ fn complete_policy_origin_removal_excludes_preserved_target() {
     assert!(command.contains(&removed_source));
 }
 
-#[test]
-fn complete_policy_validation_rejects_incomplete_and_conflicting_sets() {
-    let repos = vec![
-        repo(CodeForge::GitHub, "warpdotdev", "warp"),
-        repo(CodeForge::GitHub, "warpdotdev", "common-skills"),
-    ];
-    let preserved = complete_policy_override(
-        "warpdotdev",
-        "warp",
-        None,
-        None,
-        RepositoryOriginPolicy::Preserve,
-    );
-
-    let cases = [
-        (
-            "partial coverage",
-            vec![preserved.clone()],
-            false,
-            "cover every repository",
-        ),
-        (
-            "mixed policies",
-            vec![
-                preserved.clone(),
-                branch_head_override(
-                    RepositoryForge::GitHub,
-                    "warpdotdev",
-                    "common-skills",
-                    "main",
-                ),
-            ],
-            false,
-            "origin_policy",
-        ),
-        (
-            "global origin flag",
-            vec![
-                preserved.clone(),
-                complete_policy_override(
-                    "warpdotdev",
-                    "common-skills",
-                    None,
-                    None,
-                    RepositoryOriginPolicy::Remove,
-                ),
-            ],
-            true,
-            "remove-repository-origins",
-        ),
-        (
-            "substitution without head",
-            vec![
-                complete_policy_override(
-                    "warpdotdev",
-                    "warp",
-                    None,
-                    Some(("warpdotdev", "warp-for-benchmarks")),
-                    RepositoryOriginPolicy::Preserve,
-                ),
-                complete_policy_override(
-                    "warpdotdev",
-                    "common-skills",
-                    None,
-                    None,
-                    RepositoryOriginPolicy::Remove,
-                ),
-            ],
-            false,
-            "exact COMMIT_SHA",
-        ),
-        (
-            "substitution with branch head",
-            vec![
-                complete_policy_override(
-                    "warpdotdev",
-                    "warp",
-                    Some(RepositoryHeadRef::Branch("main".to_string())),
-                    Some(("warpdotdev", "warp-for-benchmarks")),
-                    RepositoryOriginPolicy::Preserve,
-                ),
-                complete_policy_override(
-                    "warpdotdev",
-                    "common-skills",
-                    None,
-                    None,
-                    RepositoryOriginPolicy::Remove,
-                ),
-            ],
-            false,
-            "exact COMMIT_SHA",
-        ),
-    ];
-
-    for (name, overrides, remove_origins, expected) in cases {
-        let error = validate_repository_preparation_overrides(&repos, &overrides, remove_origins)
-            .unwrap_err();
-        assert!(
-            error.to_string().contains(expected),
-            "{name}: unexpected error: {error}"
-        );
-    }
-}
-
-#[test]
-fn complete_policy_validation_rejects_target_collisions() {
-    let repos = vec![
-        repo(CodeForge::GitHub, "warpdotdev", "warp"),
-        repo(CodeForge::GitHub, "warpdotdev", "common-skills"),
-    ];
-    let shared_target = Some(("warpdotdev", "benchmarks"));
-    let pinned_head = Some(RepositoryHeadRef::CommitSha(
-        "0123456789abcdef0123456789abcdef01234567".to_string(),
-    ));
-    let duplicate_target = vec![
-        complete_policy_override(
-            "warpdotdev",
-            "warp",
-            pinned_head.clone(),
-            shared_target,
-            RepositoryOriginPolicy::Preserve,
-        ),
-        complete_policy_override(
-            "warpdotdev",
-            "common-skills",
-            pinned_head.clone(),
-            shared_target,
-            RepositoryOriginPolicy::Preserve,
-        ),
-    ];
-    let error =
-        validate_repository_preparation_overrides(&repos, &duplicate_target, false).unwrap_err();
-    assert!(error.to_string().contains("duplicate effective remote"));
-
-    let independently_declared = vec![
-        complete_policy_override(
-            "warpdotdev",
-            "warp",
-            pinned_head,
-            Some(("WARPDOTDEV", "COMMON-SKILLS")),
-            RepositoryOriginPolicy::Preserve,
-        ),
-        complete_policy_override(
-            "warpdotdev",
-            "common-skills",
-            None,
-            None,
-            RepositoryOriginPolicy::Remove,
-        ),
-    ];
-    let error = validate_repository_preparation_overrides(&repos, &independently_declared, false)
-        .unwrap_err();
-    assert!(error.to_string().contains("independently declared"));
-}
 #[test]
 fn preparation_overrides_replace_checkout_ref_only_for_matching_repos() {
     let repos = vec![
@@ -1051,7 +811,6 @@ fn head_override_validation_treats_an_unrecognized_forge_repository_as_never_mat
     let error = validate_repository_preparation_overrides(
         &environment.effective_repos(),
         &[override_for_it],
-        false,
     )
     .expect_err("an unrecognized-forge repository can never match an override");
     assert!(error.to_string().contains("support"));
@@ -1074,7 +833,6 @@ fn repository_head_override_validation_rejects_duplicates_and_mismatches() {
     let duplicate_error = validate_repository_preparation_overrides(
         &environment.effective_repos(),
         &[github.clone(), github.clone()],
-        false,
     )
     .expect_err("duplicate repository identity must fail");
     assert!(duplicate_error.to_string().contains("duplicate"));
@@ -1088,7 +846,6 @@ fn repository_head_override_validation_rejects_duplicates_and_mismatches() {
     let mismatch_error = validate_repository_preparation_overrides(
         &environment.effective_repos(),
         &[forge_mismatch],
-        false,
     )
     .expect_err("forge mismatch must fail");
     assert!(mismatch_error.to_string().contains("not declared"));
@@ -1115,12 +872,8 @@ fn repository_head_override_validation_accepts_partial_multi_repo_sets() {
         "0123456789abcdef0123456789abcdef01234567",
     )];
 
-    validate_repository_preparation_overrides(
-        &environment.effective_repos(),
-        &partial_overrides,
-        false,
-    )
-    .expect("repositories without overrides should use their default branches");
+    validate_repository_preparation_overrides(&environment.effective_repos(), &partial_overrides)
+        .expect("repositories without overrides should use their default branches");
 }
 
 #[test]
