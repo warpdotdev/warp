@@ -11,11 +11,12 @@ use itertools::Itertools;
 use warp_core::ui::theme::WarpTheme;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
-use warpui::elements::new_scrollable::SingleAxisConfig;
+use warpui::elements::new_scrollable::{ScrollableAppearance, SingleAxisConfig};
 use warpui::elements::{
     Border, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, DEFAULT_UI_LINE_HEIGHT_RATIO, Fill, Flex, FormattedTextElement,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Point, Radius, Stack, Text,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Point, Radius,
+    ScrollbarWidth, Stack, Text,
 };
 use warpui::event::DispatchedEvent;
 use warpui::geometry::vector::Vector2F;
@@ -69,7 +70,17 @@ const ASK_USER_QUESTION_ACTIVE: &str = "AskUserQuestionActive";
 
 pub(crate) const ASK_USER_QUESTION_AUTO_ADVANCE_DELAY: Duration = Duration::from_millis(300);
 pub(crate) const ASK_USER_QUESTION_MAX_CONTAINER_HEIGHT: f32 = 520.;
-pub(crate) const ASK_USER_QUESTION_SINGLE_MAX_CONTAINER_HEIGHT: f32 = 800.;
+// Matches `ASK_USER_QUESTION_MAX_CONTAINER_HEIGHT`. This cap is the trigger for the option
+// list's internal scroll (see `wrap_scrollable_body`): a list whose content stays under the cap
+// reports no overflow and shows no scrollbar or scroll-into-view behavior at all, regardless of
+// whether the card's actual on-screen space (governed by the surrounding blocklist/terminal
+// scroll position, not this constraint) is shorter. A single-question card has no nav footer, so
+// it used to carry a much larger cap (800) than the multi-question one (520) for no functional
+// reason; that let lists of ~15-20 options (the reported case) silently fit under the cap and
+// leave options unreachable. Keeping both caps equal makes long single-question lists reliably
+// scrollable too.
+pub(crate) const ASK_USER_QUESTION_SINGLE_MAX_CONTAINER_HEIGHT: f32 =
+    ASK_USER_QUESTION_MAX_CONTAINER_HEIGHT;
 // Must match `MARGIN_BETWEEN_BUTTONS` in number_shortcut_buttons.rs so off-screen measurement
 // copies match the interactive option list's height.
 const ASK_USER_QUESTION_OPTION_BUTTON_VERTICAL_SPACING: f32 = 4.;
@@ -1029,6 +1040,16 @@ impl AskUserQuestionView {
             theme.active_ui_detail().into(),
             Fill::None,
         )
+        // Long option lists need a *discoverable* way past the visible area. Keep the
+        // scrollbar thumb visible whenever there's overflow instead of only while hovered
+        // (the default), since keyboard-only navigation through the options never hovers the
+        // card. Also let wheel events this list can't use (no overflow, or already at an
+        // edge) fall through to the surrounding blocklist instead of being swallowed, matching
+        // the other scrollable inline-action cards (e.g. requested_command.rs).
+        .with_vertical_scrollbar(
+            ScrollableAppearance::new(ScrollbarWidth::Auto, false).with_always_show_thumb(true),
+        )
+        .with_propagate_mousewheel_if_not_handled(true)
         .finish();
 
         Self::with_body_insets(Clipped::new(scrollable).finish())
