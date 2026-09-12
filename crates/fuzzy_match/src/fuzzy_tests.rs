@@ -371,3 +371,43 @@ fn test_ignore_spaces_single_word_query() {
     );
     assert_eq!(regular_result.score, space_ignoring_result.score);
 }
+
+// SkimMatcherV2::fuzzy_indices builds an O(pattern_len * text_len) score matrix with no cap
+// by default, which lets a single pathologically long piece of text (e.g. a huge pasted blob
+// recorded as one shell history entry) drive that allocation into the gigabytes.
+// `element_limit` bounds it by falling back to a cheaper greedy match once the matrix would
+// exceed the cap, which scores this input differently (48 vs. 51 below) than the full DP
+// alignment would. That score difference is the only externally observable signal that the
+// bound is actually being applied, so assert on it directly: without `element_limit`, this
+// test would still return `Some(..)`, just with the higher unbounded-DP score.
+#[test]
+fn test_long_text_triggers_element_limit_fallback() {
+    // rows * cols = 3 * 500_001, comfortably over the 1_000_000-cell limit.
+    let text = "a".repeat(500_000);
+
+    assert_eq!(
+        match_indices(&text, "aa").map(|r| (r.score, r.matched_indices)),
+        Some((48, vec![0, 1]))
+    );
+    assert_eq!(
+        match_indices_case_insensitive(&text, "aa").map(|r| (r.score, r.matched_indices)),
+        Some((48, vec![0, 1]))
+    );
+    assert_eq!(
+        match_indices_case_insensitive_ignore_spaces(&text, "a a")
+            .map(|r| (r.score, r.matched_indices)),
+        Some((48, vec![0, 1]))
+    );
+}
+
+#[test]
+fn test_ordinary_matches_unaffected_by_element_limit() {
+    // Ordinary, realistically-sized inputs stay well under the element limit and must keep
+    // producing the exact same results as before the bound was introduced.
+    let text = "git commit --amend --no-edit";
+    let query = "gcae";
+
+    let result = match_indices_case_insensitive(text, query).unwrap();
+    assert_eq!(result.matched_indices, vec![0, 4, 13, 15]);
+    assert!(result.score > 0);
+}
