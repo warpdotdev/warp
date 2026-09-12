@@ -1,7 +1,8 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Result, anyhow};
+use chrono::{DateTime, Utc};
 use warp_core::safe_warn;
 use warp_util::git::run_git_command;
 #[cfg(feature = "local_fs")]
@@ -970,6 +971,357 @@ pub fn is_gh_missing_error(error_msg: &str) -> bool {
             || lower.contains("not found")
             || lower.contains("cannot find")
             || lower.contains("could not find"))
+}
+
+// ── GitHub-native PR stack discovery ────────────────────────────────────────
+//
+// See specs/CODE-1947/TECH.md "Add GitHub stack domain types and discovery"
+// and the "Use GitHub-native membership instead of inference" /
+// "Use `gh api` without requiring `gh stack`" decisions: stack membership is
+// read exclusively from GitHub's public-preview Stacks REST + GraphQL APIs
+// via `gh api`, never inferred from branch names or base-ref chains.
+
+/// Pinned per GitHub's Stacks public-preview API
+/// (<https://docs.github.com/en/rest/pulls/stacks>). Isolated in one place so
+/// the whole discovery path can be revisited together if the preview version
+/// changes (see the "GitHub public-preview API changes" risk in TECH.md).
+#[cfg(feature = "local_fs")]
+const GITHUB_STACKS_API_VERSION_HEADER: &str = "X-GitHub-Api-Version: 2026-03-10";
+
+/// One pull request layer in a GitHub-native stack, ordered bottom to top.
+/// `base_ref`/`base_oid` are always this pull request's own reported base —
+/// never derived from adjacency to the layer below — because GitHub can
+/// retarget the remaining layers' bases after a partial stack merge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrStackLayer {
+    pub pr: PrInfo,
+    pub title: String,
+    pub head_ref: String,
+    pub head_oid: String,
+    pub base_ref: String,
+    pub base_oid: String,
+    pub merged_at: Option<DateTime<Utc>>,
+}
+
+/// A GitHub-native pull request stack containing two or more layers.
+/// Stack membership with fewer than two pull requests normalizes to
+/// [`StackDiscoveryResult::NotStacked`] rather than constructing this type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrStackInfo {
+    /// The stack's own number (`stacks[].number` in the REST response),
+    /// distinct from any pull request number.
+    pub number: u64,
+    pub trunk_ref: String,
+    /// Ordered bottom (closest to `trunk_ref`) to top.
+    pub layers: Vec<PrStackLayer>,
+}
+
+/// Outcome of attempting to discover a GitHub-native stack for a pull
+/// request. `Unavailable` covers every non-authoritative failure (missing
+/// `gh`, auth, network, timeout, malformed response, repositories without
+/// the public-preview feature) so the pane can fall back to today's
+/// single-PR experience instead of surfacing a broken stack UI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StackDiscoveryResult {
+    Available(PrStackInfo),
+    NotStacked,
+    Unavailable { reason: String },
+}
+
+/// Ordered stack topology parsed from GitHub's Stacks REST response, before
+/// GraphQL enrichment fills in per-layer titles and base/head object IDs.
+#[cfg(feature = "local_fs")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StackTopology {
+    stack_number: u64,
+    trunk_ref: String,
+    /// Pull request numbers, bottom to top.
+    layer_numbers: Vec<u64>,
+}
+
+/// Parses the response of
+/// `GET /repos/{owner}/{repo}/stacks?pull_request={number}`.
+///
+/// Verified against a live repository with a real GitHub-native stack: the
+/// endpoint returns a JSON array (0 or 1 elements when filtered by
+/// `pull_request`) of stack objects shaped like:
+/// ```json
+/// [{
+///   "number": 7,
+///   "base": { "ref": "master" },
+///   "pull_requests": [
+///     { "number": 4, "state": "open", "draft": false, "merged_at": null,
+///       "head": { "ref": "demo/stack-1", "sha": "..." } }
+///   ]
+/// }]
+/// ```
+/// `pull_requests` is already ordered bottom to top. The REST response has
+/// no per-PR base ref/oid, which is why GraphQL enrichment is required.
+#[cfg(feature = "local_fs")]
+fn parse_stack_topology_response(json: &str) -> Result<StackTopology> {
+    let parsed: serde_json::Value = serde_json::from_str(json.trim())
+        .map_err(|e| anyhow!("Failed to parse GitHub stacks response: {e}"))?;
+    let stacks = parsed
+        .as_array()
+        .ok_or_else(|| anyhow!("Expected GitHub stacks response to be a JSON array"))?;
+    let Some(stack) = stacks.first() else {
+        // No stack matched the `pull_request` filter — not an error.
+        return Ok(StackTopology {
+            stack_number: 0,
+            trunk_ref: String::new(),
+            layer_numbers: Vec::new(),
+        });
+    };
+    let stack_number = stack["number"]
+        .as_u64()
+        .ok_or_else(|| anyhow!("Missing 'number' in GitHub stacks response"))?;
+    let trunk_ref = stack["base"]["ref"]
+        .as_str()
+        .ok_or_else(|| anyhow!("Missing 'base.ref' in GitHub stacks response"))?
+        .to_string();
+    let pull_requests = stack["pull_requests"]
+        .as_array()
+        .ok_or_else(|| anyhow!("Missing 'pull_requests' in GitHub stacks response"))?;
+    let layer_numbers = pull_requests
+        .iter()
+        .map(|pr| {
+            pr["number"]
+                .as_u64()
+                .ok_or_else(|| anyhow!("Missing 'number' in a stack's pull_requests entry"))
+        })
+        .collect::<Result<Vec<u64>>>()?;
+    Ok(StackTopology {
+        stack_number,
+        trunk_ref,
+        layer_numbers,
+    })
+}
+
+/// Builds a single `gh api graphql` query that enriches every pull request
+/// number in one round trip, using a `prN` alias per pull request so the
+/// response can be matched back to `numbers` positionally. Verified against
+/// a live repository; field list matches TECH.md's enrichment step.
+#[cfg(feature = "local_fs")]
+fn build_stack_enrichment_query(owner: &str, repo: &str, numbers: &[u64]) -> String {
+    let aliased_fields = numbers
+        .iter()
+        .enumerate()
+        .map(|(index, number)| {
+            format!(
+                "pr{index}: pullRequest(number: {number}) {{ title url state isDraft mergedAt baseRefName baseRefOid headRefName headRefOid }}"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("query {{ repository(owner: \"{owner}\", name: \"{repo}\") {{ {aliased_fields} }} }}")
+}
+
+/// Parses the response of [`build_stack_enrichment_query`] into a layer per
+/// expected pull request number. Fails closed: every number in
+/// `expected_numbers` must have enrichment data with base/head object IDs,
+/// since a partial response can't safely be rendered as a stack layer.
+/// Current base refs are not required to form a clean bottom-to-top chain —
+/// a partial stack merge can legitimately retarget the remaining layers.
+#[cfg(feature = "local_fs")]
+fn parse_stack_enrichment_response(
+    json: &str,
+    expected_numbers: &[u64],
+) -> Result<HashMap<u64, PrStackLayer>> {
+    let parsed: serde_json::Value = serde_json::from_str(json.trim())
+        .map_err(|e| anyhow!("Failed to parse GitHub stack enrichment response: {e}"))?;
+    let repository = &parsed["data"]["repository"];
+    if repository.is_null() {
+        return Err(anyhow!(
+            "Missing 'data.repository' in GitHub stack enrichment response"
+        ));
+    }
+
+    let mut layers = HashMap::with_capacity(expected_numbers.len());
+    for (index, number) in expected_numbers.iter().enumerate() {
+        let pr = &repository[format!("pr{index}")];
+        if pr.is_null() {
+            return Err(anyhow!(
+                "Missing enrichment data for pull request #{number}"
+            ));
+        }
+        let title = pr["title"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing 'title' for pull request #{number}"))?
+            .to_string();
+        let url = pr["url"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing 'url' for pull request #{number}"))?
+            .to_string();
+        let state = pr["state"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing 'state' for pull request #{number}"))?
+            .to_string();
+        let draft = pr["isDraft"]
+            .as_bool()
+            .ok_or_else(|| anyhow!("Missing 'isDraft' for pull request #{number}"))?;
+        let head_ref = pr["headRefName"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing 'headRefName' for pull request #{number}"))?
+            .to_string();
+        let head_oid = pr["headRefOid"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing 'headRefOid' for pull request #{number}"))?
+            .to_string();
+        let base_ref = pr["baseRefName"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing 'baseRefName' for pull request #{number}"))?
+            .to_string();
+        let base_oid = pr["baseRefOid"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing 'baseRefOid' for pull request #{number}"))?
+            .to_string();
+        let merged_at = match pr["mergedAt"].as_str() {
+            Some(s) => Some(
+                DateTime::parse_from_rfc3339(s)
+                    .map_err(|e| anyhow!("Invalid 'mergedAt' for pull request #{number}: {e}"))?
+                    .with_timezone(&Utc),
+            ),
+            None => None,
+        };
+
+        layers.insert(
+            *number,
+            PrStackLayer {
+                pr: PrInfo {
+                    number: *number,
+                    url,
+                    state,
+                    draft,
+                    base_branch: base_ref.clone(),
+                },
+                title,
+                head_ref,
+                head_oid,
+                base_ref,
+                base_oid,
+                merged_at,
+            },
+        );
+    }
+    Ok(layers)
+}
+
+/// Classifies a `gh` command failure encountered during stack discovery.
+/// Every path maps to `Unavailable` (missing `gh`, auth, a preview-feature
+/// `404`, or any other transient failure) per TECH.md: stack discovery must
+/// never block normal code review, only suppress the stack UI. Reuses the
+/// existing `gh` heuristics so the diagnostic reason is specific for logs.
+#[cfg(feature = "local_fs")]
+fn classify_stack_discovery_error(error_msg: &str) -> StackDiscoveryResult {
+    let lower = error_msg.to_lowercase();
+    let reason = if is_gh_missing_error(error_msg) {
+        format!("gh CLI not available: {error_msg}")
+    } else if is_gh_auth_error(error_msg) {
+        format!("gh CLI authentication failed: {error_msg}")
+    } else if lower.contains("404") || lower.contains("not found") {
+        format!("GitHub stacks API returned 404 (preview not enabled?): {error_msg}")
+    } else {
+        error_msg.to_string()
+    };
+    StackDiscoveryResult::Unavailable { reason }
+}
+
+/// Discovers the GitHub-native stack containing pull request `pr_number`,
+/// per the local refresh sequence in TECH.md: one REST call for topology,
+/// then (only when the stack has two or more layers) one GraphQL call that
+/// enriches every layer in a single round trip. `owner`/`repo` are passed in
+/// (from the caller's already-loaded `RepositoryInfo`) so this never needs a
+/// second `gh` invocation to resolve them.
+#[cfg(feature = "local_fs")]
+pub async fn get_pr_stack(
+    repo_path: &Path,
+    path_env: Option<&str>,
+    pr_number: u64,
+    owner: &str,
+    repo: &str,
+) -> StackDiscoveryResult {
+    let topology_path = format!("repos/{owner}/{repo}/stacks?pull_request={pr_number}");
+    let topology_json = match run_gh_command(
+        repo_path,
+        &[
+            "api",
+            "--method",
+            "GET",
+            &topology_path,
+            "-H",
+            GITHUB_STACKS_API_VERSION_HEADER,
+        ],
+        path_env,
+    )
+    .await
+    {
+        Ok(stdout) => stdout,
+        Err(e) => return classify_stack_discovery_error(&e.to_string()),
+    };
+
+    let topology = match parse_stack_topology_response(&topology_json) {
+        Ok(topology) => topology,
+        Err(e) => {
+            return StackDiscoveryResult::Unavailable {
+                reason: format!("Malformed GitHub stacks response: {e}"),
+            };
+        }
+    };
+
+    // A successful lookup with no matching stack, or a stack with only one
+    // pull request, is "not stacked" — not an error.
+    if topology.layer_numbers.len() < 2 {
+        return StackDiscoveryResult::NotStacked;
+    }
+
+    let enrichment_query = build_stack_enrichment_query(owner, repo, &topology.layer_numbers);
+    let query_arg = format!("query={enrichment_query}");
+    let enrichment_json =
+        match run_gh_command(repo_path, &["api", "graphql", "-f", &query_arg], path_env).await {
+            Ok(stdout) => stdout,
+            Err(e) => return classify_stack_discovery_error(&e.to_string()),
+        };
+
+    let mut enrichment =
+        match parse_stack_enrichment_response(&enrichment_json, &topology.layer_numbers) {
+            Ok(enrichment) => enrichment,
+            Err(e) => {
+                return StackDiscoveryResult::Unavailable {
+                    reason: format!("Malformed GitHub stack enrichment response: {e}"),
+                };
+            }
+        };
+
+    let mut layers = Vec::with_capacity(topology.layer_numbers.len());
+    for number in &topology.layer_numbers {
+        match enrichment.remove(number) {
+            Some(layer) => layers.push(layer),
+            None => {
+                return StackDiscoveryResult::Unavailable {
+                    reason: format!("Missing enrichment data for pull request #{number}"),
+                };
+            }
+        }
+    }
+
+    StackDiscoveryResult::Available(PrStackInfo {
+        number: topology.stack_number,
+        trunk_ref: topology.trunk_ref,
+        layers,
+    })
+}
+
+#[cfg(not(feature = "local_fs"))]
+pub async fn get_pr_stack(
+    _repo_path: &Path,
+    _path_env: Option<&str>,
+    _pr_number: u64,
+    _owner: &str,
+    _repo: &str,
+) -> StackDiscoveryResult {
+    StackDiscoveryResult::Unavailable {
+        reason: "Not supported without local_fs".to_string(),
+    }
 }
 
 /// PR-ready diff

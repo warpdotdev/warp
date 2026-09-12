@@ -830,6 +830,10 @@ pub enum FeatureFlag {
     /// Enables commit, push, and create-PR actions in the code review panel.
     GitOperationsInCodeReview,
 
+    /// Enables discovery, display, and read-only navigation of GitHub-native pull request
+    /// stacks in the code review panel.
+    PrStackingInCodeReview,
+
     /// Gates the remote control chip and `/remote-control` slash command in the CLI agent footer.
     HOARemoteControl,
 

@@ -177,6 +177,38 @@ pub enum PaneStateChange {
     Maximized,
 }
 
+/// Outcome of a GitHub-native PR stack discovery attempt. Deliberately
+/// carries no repository, branch, or pull request identity — only the shape
+/// of the result — per TECH.md's telemetry section.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum StackDiscoveryOutcome {
+    /// The current branch's pull request belongs to a stack with `layer_count` layers.
+    #[serde(rename = "stacked")]
+    Stacked { layer_count: usize },
+    /// A successful lookup found no stack (or fewer than two layers).
+    #[serde(rename = "not_stacked")]
+    NotStacked,
+    /// Discovery could not run or produced an unusable result (missing `gh`,
+    /// auth failure, network failure, `404`, or a malformed response).
+    #[serde(rename = "unavailable")]
+    Unavailable,
+}
+
+impl StackDiscoveryOutcome {
+    /// `Some(layer_count)` for a stack with two or more layers, `Some(0)` /
+    /// `Some(1)` are treated as not-stacked, `None` covers discovery not
+    /// having produced a usable snapshot (not-yet-discovered or unavailable
+    /// both collapse to `Unavailable` here since the pane can't distinguish
+    /// them from `Option<PrStackInfo>` alone, and both mean "no stack UI").
+    pub fn from_layer_count(layer_count: Option<usize>) -> Self {
+        match layer_count {
+            Some(count) if count >= 2 => Self::Stacked { layer_count: count },
+            Some(_) => Self::NotStacked,
+            None => Self::Unavailable,
+        }
+    }
+}
+
 /// Telemetry events associated with the code review pane.
 #[derive(Serialize, Debug, EnumDiscriminants)]
 #[strum_discriminants(derive(EnumIter))]
@@ -340,6 +372,22 @@ pub enum CodeReviewTelemetryEvent {
         /// Raw error string when `status == Failed`, `None` otherwise.
         error: Option<String>,
     },
+    /// Emitted when a GitHub-native PR stack discovery result changes for
+    /// the current branch's pull request.
+    StackDiscoveryCompleted {
+        is_local: Option<bool>,
+        outcome: StackDiscoveryOutcome,
+    },
+    /// Emitted when the user selects a pull request layer from the stack map.
+    StackLayerSelected {
+        is_local: Option<bool>,
+        /// Whether the selected layer's head branch is the checked-out branch.
+        is_current_branch: bool,
+        stack_size: usize,
+    },
+    /// Emitted when stack-layer review exits back to a branch-based diff
+    /// (working tree or another branch).
+    StackReviewExited { is_local: Option<bool> },
 }
 
 impl TelemetryEvent for CodeReviewTelemetryEvent {
@@ -511,6 +559,21 @@ impl TelemetryEvent for CodeReviewTelemetryEvent {
                 "status": status,
                 "error": error,
             })),
+            CodeReviewTelemetryEvent::StackDiscoveryCompleted { is_local, outcome } => {
+                Some(json!({ "is_local": is_local, "outcome": outcome }))
+            }
+            CodeReviewTelemetryEvent::StackLayerSelected {
+                is_local,
+                is_current_branch,
+                stack_size,
+            } => Some(json!({
+                "is_local": is_local,
+                "is_current_branch": is_current_branch,
+                "stack_size": stack_size,
+            })),
+            CodeReviewTelemetryEvent::StackReviewExited { is_local } => {
+                Some(json!({ "is_local": is_local }))
+            }
         }
     }
 
@@ -565,6 +628,9 @@ impl TelemetryEventDesc for CodeReviewTelemetryEventDiscriminants {
             Self::CommentsAttached => "CodeReview.CommentsAttached",
             Self::GitButtonTriggered => "CodeReview.GitButtonTriggered",
             Self::GitDialogCompleted => "CodeReview.GitDialogCompleted",
+            Self::StackDiscoveryCompleted => "CodeReview.StackDiscoveryCompleted",
+            Self::StackLayerSelected => "CodeReview.StackLayerSelected",
+            Self::StackReviewExited => "CodeReview.StackReviewExited",
         }
     }
 
@@ -603,6 +669,11 @@ impl TelemetryEventDesc for CodeReviewTelemetryEventDiscriminants {
             Self::GitDialogCompleted => {
                 "Git operation dialog reached a terminal state (succeeded, failed, or cancelled)"
             }
+            Self::StackDiscoveryCompleted => {
+                "GitHub-native PR stack discovery result changed for the current branch's pull request"
+            }
+            Self::StackLayerSelected => "User selected a pull request layer from the stack map",
+            Self::StackReviewExited => "Stack-layer review exited back to a branch-based diff",
         }
     }
 
@@ -613,6 +684,9 @@ impl TelemetryEventDesc for CodeReviewTelemetryEventDiscriminants {
             }
             Self::GitButtonTriggered | Self::GitDialogCompleted => {
                 EnablementState::Flag(FeatureFlag::GitOperationsInCodeReview)
+            }
+            Self::StackDiscoveryCompleted | Self::StackLayerSelected | Self::StackReviewExited => {
+                EnablementState::Flag(FeatureFlag::PrStackingInCodeReview)
             }
             _ => EnablementState::Always,
         }

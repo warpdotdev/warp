@@ -10121,6 +10121,7 @@ fn single_general_review_comment(content: &str) -> AgentReviewCommentBatch {
             origin: CommentOrigin::Native,
         }],
         diff_set: HashMap::new(),
+        pull_request: None,
     }
 }
 

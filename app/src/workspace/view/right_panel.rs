@@ -33,6 +33,7 @@ use crate::code_review::code_review_view::{
     CONTENT_LEFT_MARGIN, CONTENT_RIGHT_MARGIN, CodeReviewCommentDebugState, CodeReviewView,
     CodeReviewViewEvent, ReviewActionTargetProvider, render_file_navigation_button,
 };
+use crate::code_review::comments::ReviewCommentBatch;
 use crate::code_review::diff_state::DiffStateModel;
 use crate::code_review::telemetry_event::CodeReviewContextDestination;
 use crate::drive::panel::{MAX_SIDEBAR_WIDTH_RATIO, MIN_SIDEBAR_WIDTH};
@@ -173,6 +174,20 @@ impl ReviewActionTargetProvider for RightPanelReviewActionTargetProvider {
                     .focused_session_view(app)
                     .or_else(|| pane_group.active_session_view(app))
             })
+        })
+    }
+
+    fn get_or_create_stack_layer_comment_batch(
+        &self,
+        repo_path: &LocalOrRemotePath,
+        pr_number: u64,
+        ctx: &mut AppContext,
+    ) -> Option<ModelHandle<ReviewCommentBatch>> {
+        let right_panel = self.right_panel.upgrade(ctx)?;
+        let working_directories_model =
+            right_panel.read(ctx, |panel, _| panel.working_directories_model.clone());
+        working_directories_model.update(ctx, |model, ctx| {
+            model.get_or_create_code_review_comments_for_layer(repo_path, Some(pr_number), ctx)
         })
     }
 }

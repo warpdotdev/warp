@@ -491,6 +491,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::HOAOnboardingFlow,
         #[cfg(feature = "git_operations_in_code_review")]
         FeatureFlag::GitOperationsInCodeReview,
+        #[cfg(feature = "pr_stacking_in_code_review")]
+        FeatureFlag::PrStackingInCodeReview,
         #[cfg(feature = "hoa_remote_control")]
         FeatureFlag::HOARemoteControl,
         #[cfg(feature = "codex_notifications")]
