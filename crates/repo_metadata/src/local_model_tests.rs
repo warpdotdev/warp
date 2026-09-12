@@ -51,6 +51,8 @@ impl LocalRepoMetadataModel {
             symlink_targets: Default::default(),
             #[cfg(feature = "local_fs")]
             repo_watches: Default::default(),
+            #[cfg(feature = "local_fs")]
+            watch_failure_rescans: Default::default(),
         }
     }
 }
@@ -3683,5 +3685,207 @@ fn lazy_root_created_directory_inserted_as_placeholder() {
             eager_root.get(&nested_std).is_some(),
             "eager root should materialize the subtree"
         );
+    });
+}
+
+/// A deletion delivered through a symlinked alias must remove the canonical
+/// tree entry (regression for /tmp → /private/tmp on macOS).
+#[cfg(all(unix, feature = "local_fs"))]
+#[test]
+fn deleted_file_via_symlinked_alias_is_attributed_to_repo() {
+    VirtualFS::test("lazy_delete_via_symlink_alias", |dirs, mut vfs| {
+        vfs.mkdir("real")
+            .with_files(vec![Stub::FileWithContent("real/a.txt", "x")]);
+        let real_dir = dirs.tests().join("real");
+        let alias_dir = dirs.tests().join("alias");
+        if std::os::unix::fs::symlink(&real_dir, &alias_dir).is_err() {
+            eprintln!("skipping: cannot create symlink (filesystem may not support it)");
+            return;
+        }
+
+        let root = StandardizedPath::from_local_canonicalized(&alias_dir).unwrap();
+        let deleted_file_local = alias_dir.join("a.txt");
+        let deleted_file_std =
+            StandardizedPath::from_local_canonicalized(&deleted_file_local).unwrap();
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .index_lazy_loaded_path(&root, ctx)
+                    .expect("should index lazy path");
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+
+            model_handle.read(&app, |model, _ctx| {
+                let Some(IndexedRepoState::Indexed(state)) = model.repository_state(&root) else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                assert!(state.entry.contains(&deleted_file_std));
+            });
+
+            std::fs::remove_file(&deleted_file_local).unwrap();
+
+            let (tx, rx) = oneshot::channel();
+            let sender = Rc::new(RefCell::new(Some(tx)));
+            let root_for_event = root.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                    if let RepositoryMetadataEvent::FileTreeEntryUpdated { path, .. } = event
+                        && path == &root_for_event
+                        && let Some(tx) = sender.borrow_mut().take()
+                    {
+                        let _ = tx.send(());
+                    }
+                });
+            });
+
+            model_handle.update(&mut app, |model, ctx| {
+                model.handle_watcher_event(
+                    &BulkFilesystemWatcherEvent {
+                        deleted: std::collections::HashSet::from([deleted_file_local.clone()]),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+            });
+            rx.with_timeout(Duration::from_secs(5))
+                .await
+                .expect("timed out waiting for tree update")
+                .expect("tree update sender dropped");
+
+            model_handle.read(&app, |model, _ctx| {
+                let Some(IndexedRepoState::Indexed(state)) = model.repository_state(&root) else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                assert!(
+                    !state.entry.contains(&deleted_file_std),
+                    "deletion reported via a symlinked alias should remove the entry from the tree"
+                );
+            });
+        });
+    });
+}
+
+/// When a per-directory watch fails to register (e.g. inotify limit on WSL/Linux),
+/// the subtree receives no events. The fallback re-scan must drop files that were
+/// deleted externally despite the dead watch.
+#[cfg(all(unix, feature = "local_fs"))]
+#[test]
+fn watch_failure_rescan_drops_externally_deleted_file() {
+    VirtualFS::test("watch_failure_rescan", |dirs, mut vfs| {
+        vfs.mkdir("repo/src").with_files(vec![
+            Stub::FileWithContent("repo/src/kept.rs", "old"),
+            Stub::FileWithContent("repo/src/to_delete.rs", "old"),
+        ]);
+        let root_local = dirs.tests().join("repo");
+        let src_local = root_local.join("src");
+        let deleted_std =
+            StandardizedPath::from_local_absolute_unchecked(&root_local.join("src/to_delete.rs"));
+        let kept_std =
+            StandardizedPath::from_local_absolute_unchecked(&root_local.join("src/kept.rs"));
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            let root = StandardizedPath::from_local_canonicalized(&root_local).unwrap();
+            let src = StandardizedPath::from_local_canonicalized(&src_local).unwrap();
+
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .index_lazy_loaded_path(&root, ctx)
+                    .expect("should index lazy path");
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .load_directory(&root, &src, ctx)
+                    .expect("should load src");
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+
+            // Wait for the initial expand to fully apply before driving the rescan.
+            let wait_for_update =
+                |app: &mut App, model_handle: &ModelHandle<LocalRepoMetadataModel>| {
+                    let (tx, rx) = oneshot::channel();
+                    let sender = Rc::new(RefCell::new(Some(tx)));
+                    let root_for_event = root.clone();
+                    app.update(|ctx| {
+                        ctx.subscribe_to_model(model_handle, move |_, event, _ctx| {
+                            if let RepositoryMetadataEvent::FileTreeEntryUpdated { path, .. } =
+                                event
+                                && path == &root_for_event
+                                && let Some(tx) = sender.borrow_mut().take()
+                            {
+                                let _ = tx.send(());
+                            }
+                        });
+                    });
+                    rx
+                };
+            let first_rx = wait_for_update(&mut app, &model_handle);
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .load_directory(&root, &src, ctx)
+                    .expect("should reload src");
+            });
+            first_rx
+                .with_timeout(Duration::from_secs(5))
+                .await
+                .expect("timed out waiting for initial expand to apply")
+                .expect("tree update sender dropped");
+
+            let pre = model_handle.read(&app, |model, _ctx| {
+                let Some(IndexedRepoState::Indexed(state)) = model.repository_state(&root) else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                (
+                    state.entry.contains(&kept_std),
+                    state.entry.contains(&deleted_std),
+                )
+            });
+            assert!(
+                pre.0 && pre.1,
+                "precondition: both files visible before delete"
+            );
+
+            std::fs::remove_file(root_local.join("src/to_delete.rs")).unwrap();
+
+            // Simulate a dead watch (registration failed) and run the fallback re-scan.
+            model_handle.update(&mut app, |model, ctx| {
+                model.schedule_watch_failure_rescan(&root, &src, ctx);
+            });
+
+            // Poll until the re-scan has applied (each `update().await` yields to
+            // the model loop so the build completion runs).
+            let mut applied = false;
+            for _ in 0..100 {
+                let current = model_handle.read(&app, |model, _ctx| {
+                    matches!(
+                        model.repository_state(&root),
+                        Some(IndexedRepoState::Indexed(state))
+                            if !state.entry.contains(&deleted_std)
+                    )
+                });
+                if current {
+                    applied = true;
+                    break;
+                }
+                warpui_core::r#async::Timer::after(Duration::from_millis(10)).await;
+            }
+            assert!(
+                applied,
+                "fallback re-scan should drop an externally deleted file"
+            );
+            model_handle.read(&app, |model, _ctx| {
+                let Some(IndexedRepoState::Indexed(state)) = model.repository_state(&root) else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                assert!(
+                    state.entry.contains(&kept_std),
+                    "fallback re-scan should keep surviving files"
+                );
+            });
+        });
     });
 }

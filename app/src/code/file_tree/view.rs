@@ -2581,9 +2581,20 @@ impl FileTreeView {
         } else {
             std::fs::remove_file(&path)
         };
-        if let Err(e) = result {
-            log::warn!("Failed to delete {}: {e}", path.display());
-        } else {
+        let removed_from_disk = match result {
+            Ok(()) => true,
+            Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // The file was already deleted externally (e.g. by an agent), so
+                // drop the now-stale tree entry instead of keeping it visible.
+                log::debug!("Delete: {} already gone from disk: {e}", path.display());
+                true
+            }
+            Err(e) => {
+                log::error!("Failed to delete {}: {e}", path.display());
+                false
+            }
+        };
+        if removed_from_disk {
             // Update in-memory tree immediately so the UI reflects the deletion.
             // Find all root directories that contain this path (could be nested roots).
             let affected_roots: Vec<StandardizedPath> = self
