@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 pub(crate) use secret_redaction::redact_secrets;
@@ -11,6 +12,16 @@ use crate::ai::agent::{
 /// Redact secrets in-place for all user-provided text fields inside the inputs that will be
 /// sent to the server.
 pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
+    // A batch of inputs (e.g. several completed action results from one `send_query` call)
+    // commonly shares one `Arc<[AIAgentContext]>` cloned from a single `input_context_for_request`
+    // call, which can carry the full skill catalog in an `AIAgentContext::Skills` entry.
+    // Redacting each input's context independently would call `Arc::make_mut` once per sharer,
+    // and since the arc is not uniquely owned until all-but-one sharer has been repointed, that
+    // clones the whole (potentially skill-catalog-sized) context array once per sharer beyond the
+    // first. Tracking already-redacted contexts by their original allocation lets sharers reuse
+    // one redacted copy instead.
+    let mut redacted_contexts: HashMap<*const [AIAgentContext], Arc<[AIAgentContext]>> =
+        HashMap::new();
     for input in inputs.iter_mut() {
         match input {
             AIAgentInput::UserQuery {
@@ -20,37 +31,37 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                 ..
             } => {
                 redact_secrets(query);
-                redact_context(Arc::make_mut(context));
+                redact_shared_context(context, &mut redacted_contexts);
                 referenced_attachments
                     .values_mut()
                     .for_each(redact_attachment);
             }
             AIAgentInput::AutoCodeDiffQuery { query, context, .. } => {
                 redact_secrets(query);
-                redact_context(Arc::make_mut(context));
+                redact_shared_context(context, &mut redacted_contexts);
             }
             AIAgentInput::CreateNewProject { context, .. }
             | AIAgentInput::CloneRepository { context, .. }
             | AIAgentInput::ResumeConversation { context }
             | AIAgentInput::InitProjectRules { context, .. }
             | AIAgentInput::StartFromAmbientRunPrompt { context, .. } => {
-                redact_context(Arc::make_mut(context));
+                redact_shared_context(context, &mut redacted_contexts);
             }
             AIAgentInput::SummarizeConversation { prompt, context } => {
                 if let Some(p) = prompt {
                     redact_secrets(p);
                 }
-                redact_context(Arc::make_mut(context));
+                redact_shared_context(context, &mut redacted_contexts);
             }
             AIAgentInput::CreateEnvironment { context, .. } => {
-                redact_context(Arc::make_mut(context));
+                redact_shared_context(context, &mut redacted_contexts);
             }
             AIAgentInput::TriggerPassiveSuggestion {
                 context,
                 attachments,
                 trigger,
             } => {
-                redact_context(Arc::make_mut(context));
+                redact_shared_context(context, &mut redacted_contexts);
                 attachments.iter_mut().for_each(redact_attachment);
                 if let PassiveSuggestionTrigger::ShellCommandCompleted(shell_trigger) = trigger {
                     redact_secrets(&mut shell_trigger.executed_shell_command.command);
@@ -66,7 +77,7 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                 context,
                 review_comments,
             } => {
-                redact_context(Arc::make_mut(context));
+                redact_shared_context(context, &mut redacted_contexts);
                 for comment in review_comments.comments.iter_mut() {
                     redact_secrets(&mut comment.content);
                     match &mut comment.target {
@@ -92,7 +103,7 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
             | AIAgentInput::EventsFromAgents { .. }
             | AIAgentInput::OrchestrationConfigUpdate { .. } => {}
             AIAgentInput::ActionResult { result, context } => {
-                redact_context(Arc::make_mut(context));
+                redact_shared_context(context, &mut redacted_contexts);
                 match &mut result.result {
                     AIAgentActionResultType::RequestCommandOutput(output) => {
                         if let RequestCommandOutputResult::Completed { output, .. } = output {
@@ -263,7 +274,7 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                 skill,
                 user_query,
             } => {
-                redact_context(Arc::make_mut(context));
+                redact_shared_context(context, &mut redacted_contexts);
                 redact_secrets(&mut skill.content);
                 if let Some(user_query) = user_query {
                     redact_secrets(&mut user_query.query);
@@ -277,7 +288,7 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                 suggestion,
                 context,
             } => {
-                redact_context(Arc::make_mut(context));
+                redact_shared_context(context, &mut redacted_contexts);
                 match suggestion {
                     PassiveSuggestionResultType::Prompt { prompt } => redact_secrets(prompt),
                     PassiveSuggestionResultType::CodeDiff { diffs, .. } => {
@@ -302,6 +313,22 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
             }
         }
     }
+}
+
+/// Redacts `context` in place, reusing an already-redacted copy from `redacted_contexts` when
+/// another input in the same batch was cloned from the same original allocation. See
+/// [`redact_inputs`] for why this sharing matters.
+fn redact_shared_context(
+    context: &mut Arc<[AIAgentContext]>,
+    redacted_contexts: &mut HashMap<*const [AIAgentContext], Arc<[AIAgentContext]>>,
+) {
+    let original_ptr = Arc::as_ptr(context);
+    if let Some(redacted) = redacted_contexts.get(&original_ptr) {
+        *context = Arc::clone(redacted);
+        return;
+    }
+    redact_context(Arc::make_mut(context));
+    redacted_contexts.insert(original_ptr, Arc::clone(context));
 }
 
 fn redact_ask_user_question_result(result: &mut AskUserQuestionResult) {
@@ -401,3 +428,7 @@ fn redact_attachment(attachment: &mut AIAgentAttachment) {
         AIAgentAttachment::FilePathReference { .. } => {}
     }
 }
+
+#[cfg(test)]
+#[path = "redaction_tests.rs"]
+mod redaction_tests;
