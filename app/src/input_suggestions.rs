@@ -826,30 +826,39 @@ impl InputSuggestions {
                                 row.add_child(icon_container);
                             }
 
-                            row.add_child({
-                                let mut display_text = Text::new_inline(
-                                    display_text_str,
-                                    appearance.monospace_font_family(),
-                                    font_size,
-                                )
-                                .with_style(
-                                    Properties::default()
-                                        .weight(appearance.monospace_font_weight()),
-                                )
-                                .autosize_text(warp_core::ui::builder::MIN_FONT_SIZE)
-                                .with_color(main_text);
+                            row.add_child(
+                                // `Flex` lays out non-flexible children (see the "unbounded
+                                // size" comment in `Flex::layout`) at their unconstrained
+                                // natural width, so `display_text` needs `Shrinkable` to
+                                // receive a real bounded max width to clip/fade against.
+                                Shrinkable::new(1., {
+                                    let mut display_text = Text::new_inline(
+                                        display_text_str,
+                                        appearance.monospace_font_family(),
+                                        font_size,
+                                    )
+                                    .with_style(
+                                        Properties::default()
+                                            .weight(appearance.monospace_font_weight()),
+                                    )
+                                    .autosize_text(warp_core::ui::builder::MIN_FONT_SIZE)
+                                    .with_color(main_text);
 
-                                let matches = item.matches.clone();
-                                if let Some(matches) = matches {
-                                    let highlight = Highlight::new()
-                                        .with_properties(Properties::default().weight(Weight::Bold))
-                                        .with_foreground_color(highlight_text);
+                                    let matches = item.matches.clone();
+                                    if let Some(matches) = matches {
+                                        let highlight = Highlight::new()
+                                            .with_properties(
+                                                Properties::default().weight(Weight::Bold),
+                                            )
+                                            .with_foreground_color(highlight_text);
 
-                                    display_text =
-                                        display_text.with_single_highlight(highlight, matches);
-                                }
-                                display_text.finish()
-                            });
+                                        display_text =
+                                            display_text.with_single_highlight(highlight, matches);
+                                    }
+                                    display_text.finish()
+                                })
+                                .finish(),
+                            );
 
                             if let Some(DetailContent::Description(desc)) = &item.details {
                                 row.add_child(
