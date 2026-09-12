@@ -25,6 +25,7 @@ impl HarnessSupportCommand {
             HarnessSupportCommand::NotifyUser(_) => "harness-support notify-user",
             HarnessSupportCommand::FinishTask(_) => "harness-support finish-task",
             HarnessSupportCommand::ReportShutdown(_) => "harness-support report-shutdown",
+            HarnessSupportCommand::WaitForEvents => "harness-support wait-for-events",
         }
     }
 }
@@ -51,6 +52,13 @@ pub enum HarnessSupportCommand {
 
     /// Report that the agent process is shutting down.
     ReportShutdown(ReportShutdownArgs),
+
+    /// Record that this run is intentionally yielding rather than completing, so that
+    /// finishing your turn afterward (e.g. via `/exit`) is treated as a park rather than
+    /// a completion. Call this before ending your turn when you have dispatched work and
+    /// need to wait for a reply instead of finishing the run. A later inbound message
+    /// from this run's family (parent or children) wakes the run again.
+    WaitForEvents,
 }
 
 #[derive(Debug, Clone, Args)]
