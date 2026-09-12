@@ -2752,6 +2752,7 @@ fn render_grouped_tabs_header(
     member_count: usize,
     mouse_states: &TabGroupMouseStates,
     is_collapsed: bool,
+    has_unread_activity: bool,
     is_header_selected: bool,
     show_action_buttons: bool,
     is_being_renamed: bool,
@@ -2808,6 +2809,13 @@ fn render_grouped_tabs_header(
                 .with_color(main_text_color.into())
                 .finish()
         };
+    let title_element = render_row_title_line(
+        title_element,
+        false,
+        is_collapsed && has_unread_activity,
+        None,
+        theme,
+    );
     let subtitle_text = if member_count == 1 {
         "1 tab".to_string()
     } else {
@@ -3022,11 +3030,14 @@ fn render_grouped_tab_container(
         // rendered then, so this skips the per-tab pane walk when expanded.
         let collapsed_member_kinds =
             is_collapsed.then(|| workspace.compute_group_member_kinds(group.id, app));
+        let has_unread_activity =
+            is_collapsed && workspace.tab_group_has_unread_activity(group.id, app);
         let header = render_grouped_tabs_header(
             &group,
             member_count,
             &mouse_states,
             is_collapsed,
+            has_unread_activity,
             is_header_selected,
             hover_state.is_hovered(),
             is_being_renamed,
@@ -3384,6 +3395,13 @@ fn has_unread_activity(typed: &TypedPane<'_>, app: &AppContext) -> bool {
     has_unread_activity_for_terminal_view(terminal_view.as_ref(app).id(), app)
 }
 
+pub(super) fn pane_group_has_unread_activity(pane_group: &PaneGroup, app: &AppContext) -> bool {
+    pane_group
+        .visible_pane_ids()
+        .iter()
+        .any(|pane_id| has_unread_activity(&pane_group.resolve_pane_type(*pane_id, app), app))
+}
+
 fn has_unread_activity_for_terminal_view(terminal_view_id: EntityId, app: &AppContext) -> bool {
     AgentNotificationsModel::as_ref(app)
         .notifications()
@@ -3392,7 +3410,7 @@ fn has_unread_activity_for_terminal_view(terminal_view_id: EntityId, app: &AppCo
 
 const INDICATOR_DOT_SIZE: f32 = 8.;
 
-fn render_title_indicator(theme: &WarpTheme) -> Box<dyn Element> {
+pub(super) fn render_title_indicator(theme: &WarpTheme) -> Box<dyn Element> {
     ConstrainedBox::new(
         WarpIcon::CircleFilled
             .to_warpui_icon(theme.accent())
