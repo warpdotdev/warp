@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use async_channel::TryRecvError;
 use parking_lot::Mutex;
+use settings::Setting;
 use string_offset::CharOffset;
 use tempfile::tempdir;
 use warp_editor::content::mermaid_diagram::mermaid_asset_source;
@@ -15,7 +16,8 @@ use warpui::assets::asset_cache::{AssetCache, AssetState};
 use warpui::r#async::block_on;
 use warpui::event::ModifiersState;
 use warpui::image_cache::ImageType;
-use warpui::platform::WindowStyle;
+use warpui::keymap::{FixedBinding, Keystroke};
+use warpui::platform::{OperatingSystem, WindowStyle};
 use warpui::presenter::ChildView;
 use warpui::units::Pixels;
 use warpui::windowing::WindowManager;
@@ -44,12 +46,14 @@ use crate::terminal::model::session::Session;
 use crate::terminal::shell::ShellType;
 use crate::test_util::assert_eventually;
 use crate::test_util::settings::initialize_settings_for_tests;
-use crate::workspace::ActiveSession;
+use crate::workspace::tab_settings::TabSettings;
+use crate::workspace::{ActiveSession, WorkspaceAction};
 use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider, UserWorkspaces};
 
 /// Container for a [`RichTextEditorView`] in unit tests.
 struct TestView {
     editor: ViewHandle<RichTextEditorView>,
+    vertical_tabs_toggled: bool,
 }
 
 impl Entity for TestView {
@@ -66,7 +70,13 @@ impl View for TestView {
     }
 }
 impl TypedActionView for TestView {
-    type Action = ();
+    type Action = WorkspaceAction;
+
+    fn handle_action(&mut self, action: &WorkspaceAction, _ctx: &mut warpui::ViewContext<Self>) {
+        if matches!(action, WorkspaceAction::ToggleVerticalTabsPanel) {
+            self.vertical_tabs_toggled = true;
+        }
+    }
 }
 
 fn initialize_editor(
@@ -120,13 +130,82 @@ fn initialize_editor(
                 ctx,
             )
         });
-        TestView { editor }
+        TestView {
+            editor,
+            vertical_tabs_toggled: false,
+        }
     });
 
     let editor_view = app.read(|ctx| test_view.as_ref(ctx).editor.clone());
     (window, editor_view, test_view)
 }
 
+#[test]
+fn should_yield_bold_chord_only_on_mac_when_vertical_tabs_enabled() {
+    use super::should_yield_bold_chord_to_vertical_tabs_panel as should_yield;
+
+    // Only macOS binds the panel toggle to `cmd-b`, so only there does the
+    // editor yield the bold chord; and only when vertical tabs are enabled.
+    assert!(should_yield(OperatingSystem::Mac, true));
+    assert!(!should_yield(OperatingSystem::Mac, false));
+    // Linux/Windows bind the toggle to `ctrl-shift-B`, which does not collide
+    // with `ctrl-b` bold, so the editor must keep the chord (no regression).
+    assert!(!should_yield(OperatingSystem::Linux, true));
+    assert!(!should_yield(OperatingSystem::Windows, true));
+}
+
+/// Regression test for APP-5056: with vertical tabs enabled and a plan/rich-text
+/// editor focused, the `cmd-b` (macOS) "toggle vertical tabs panel" shortcut
+/// must reach the workspace instead of being swallowed by the editor's Bold
+/// binding. The behavior is platform-specific because the panel toggle only
+/// collides with Bold on macOS (`cmd-b` vs. Linux/Windows `ctrl-shift-B`).
+#[test]
+fn vertical_tabs_panel_shortcut_not_swallowed_by_editor_bold() {
+    use warpui::keymap::macros::*;
+
+    let _vertical_tabs_guard = FeatureFlag::VerticalTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        let (window, editor_view, test_view) = initialize_editor(&mut app);
+
+        // Register the real editor keybindings (including the Bold binding under
+        // test) and a workspace-style panel-toggle binding on the root view that
+        // competes for the same `cmdorctrl-b` chord.
+        app.update(super::init);
+        app.update(|ctx| {
+            ctx.register_fixed_bindings([FixedBinding::new(
+                "cmdorctrl-b",
+                WorkspaceAction::ToggleVerticalTabsPanel,
+                id!("TestView"),
+            )]);
+        });
+
+        TabSettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings.use_vertical_tabs.set_value(true, ctx).unwrap();
+        });
+        editor_view.update(&mut app, |editor, ctx| {
+            editor.set_interaction_state(InteractionState::Editable, ctx);
+            ctx.focus_self();
+        });
+
+        let bold_keystroke = Keystroke::parse("cmdorctrl-b").unwrap();
+        app.dispatch_keystroke(
+            window,
+            &[test_view.id(), editor_view.id()],
+            &bold_keystroke,
+            false,
+        )
+        .unwrap();
+
+        // On macOS the editor yields `cmd-b` so the workspace panel toggle fires.
+        // On Linux/Windows the editor keeps `ctrl-b` for Bold, so the toggle must
+        // NOT fire (guarding against regressing those platforms' defaults).
+        let expected_toggle = OperatingSystem::get().is_mac();
+        test_view.read(&app, |view, _| {
+            assert_eq!(view.vertical_tabs_toggled, expected_toggle);
+        });
+    });
+}
 async fn reset_editor_with_markdown(
     app: &mut App,
     editor_view: &ViewHandle<RichTextEditorView>,
