@@ -15,7 +15,6 @@ pub use buffer::{
 };
 use buffer::{Buffer, Text};
 pub use display_map::{Bias, DisplayMap, DisplayPoint, MovementResult, ToDisplayPoint};
-use itertools::FoldWhile::{Continue, Done};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use num_traits::SaturatingSub;
@@ -1777,75 +1776,6 @@ impl EditorModel {
                 match direction {
                     Direction::Backward => head.saturating_sub(&(offset_change as usize).into()),
                     Direction::Forward => {
-                        let max_offset = buffer
-                            .max_point()
-                            .to_char_offset(buffer)
-                            .expect("Buffer::max_point must be valid CharOffset");
-                        cmp::min(max_offset, head + offset_change as usize)
-                    }
-                }
-            },
-            ctx,
-        );
-    }
-
-    /// Implements moving left/right using buffer offsets, skipping past newlines.
-    /// See `move_cursors_by_offset` for an explanation of why we use buffer offsets
-    /// instead of the DisplayMap.
-    ///
-    /// This behavior is used by space/backspace navigation in Vim mode.
-    pub fn move_cursor_ignoring_newlines(
-        &mut self,
-        char_count: u32,
-        direction: &Direction,
-        keep_selection: bool,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        self.move_cursor(
-            keep_selection,
-            |buffer, selection| {
-                let head = selection
-                    .head()
-                    .to_char_offset(buffer)
-                    .expect("Selection head must be valid CharOffset");
-
-                match direction {
-                    Direction::Backward => {
-                        let offset_change = buffer
-                            .chars_rev_at(head)
-                            .expect("Buffer must have characters at the current head.")
-                            .enumerate()
-                            .fold_while(0, |chars_so_far, (rev_index, c)| {
-                                if chars_so_far < char_count {
-                                    if c == '\n' {
-                                        Continue(chars_so_far)
-                                    } else {
-                                        Continue(chars_so_far + 1)
-                                    }
-                                } else {
-                                    Done(rev_index as u32)
-                                }
-                            })
-                            .into_inner();
-                        head.saturating_sub(&(offset_change as usize).into())
-                    }
-                    Direction::Forward => {
-                        let offset_change = buffer
-                            .chars_at(head)
-                            .expect("Buffer must have characters at the current selection head.")
-                            .enumerate()
-                            .fold_while(0, |chars_so_far, (index, c)| {
-                                if chars_so_far < char_count {
-                                    if c == '\n' {
-                                        Continue(chars_so_far)
-                                    } else {
-                                        Continue(chars_so_far + 1)
-                                    }
-                                } else {
-                                    Done(index as u32)
-                                }
-                            })
-                            .into_inner();
                         let max_offset = buffer
                             .max_point()
                             .to_char_offset(buffer)

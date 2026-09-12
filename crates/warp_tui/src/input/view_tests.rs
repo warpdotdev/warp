@@ -642,6 +642,167 @@ fn vim_counted_line_delete_is_atomic_and_undoable() {
 }
 
 #[test]
+fn vim_gg_and_ngg_land_on_column_zero_with_leading_whitespace() {
+    App::test((), |mut app| async move {
+        enable_vim_mode(&mut app);
+        let view = app.update(|ctx| {
+            let view = build_view(ctx);
+            view.update(ctx, |view, ctx| view.set_text("  one\n  two\n  three", ctx));
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            view
+        });
+
+        app.update(|ctx| type_str(&view, ctx, "G"));
+        app.update(|ctx| type_str(&view, ctx, "gg"));
+        app.read(|ctx| {
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 0)));
+        });
+
+        app.update(|ctx| type_str(&view, ctx, "2gg"));
+        app.read(|ctx| {
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 1)));
+        });
+    });
+}
+
+#[test]
+fn vim_g_lands_on_first_nonwhitespace_with_leading_whitespace() {
+    App::test((), |mut app| async move {
+        enable_vim_mode(&mut app);
+        let view = app.update(|ctx| {
+            let view = build_view(ctx);
+            view.update(ctx, |view, ctx| view.set_text("  one\n  two\n  three", ctx));
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            view
+        });
+
+        app.update(|ctx| type_str(&view, ctx, "gg"));
+        app.update(|ctx| type_str(&view, ctx, "G"));
+        app.read(|ctx| {
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((2, 2)));
+        });
+    });
+}
+
+#[test]
+fn vim_l_from_last_character_reaches_line_end() {
+    App::test((), |mut app| async move {
+        enable_vim_mode(&mut app);
+        let view = app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "abc");
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            view
+        });
+        app.read(|ctx| assert_eq!(cursor_and_height(&view, ctx).0, Some((2, 0))));
+
+        app.update(|ctx| type_str(&view, ctx, "l"));
+        app.read(|ctx| {
+            assert_eq!(text(&view, ctx), "abc");
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((3, 0)));
+        });
+    });
+}
+
+#[test]
+fn vim_find_char_moves_on_the_current_line() {
+    App::test((), |mut app| async move {
+        enable_vim_mode(&mut app);
+        let view = app.update(|ctx| {
+            let view = build_view(ctx);
+            view.update(ctx, |view, ctx| view.set_text("echo foo bar baz", ctx));
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            view
+        });
+
+        app.update(|ctx| type_str(&view, ctx, "0fb"));
+        app.read(|ctx| assert_eq!(cursor_and_height(&view, ctx).0, Some((9, 0))));
+
+        app.update(|ctx| type_str(&view, ctx, "tz"));
+        app.read(|ctx| assert_eq!(cursor_and_height(&view, ctx).0, Some((14, 0))));
+
+        app.update(|ctx| type_str(&view, ctx, "Tf"));
+        app.read(|ctx| assert_eq!(cursor_and_height(&view, ctx).0, Some((6, 0))));
+
+        app.update(|ctx| type_str(&view, ctx, "Fe"));
+        app.read(|ctx| {
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 0)));
+            assert_eq!(text(&view, ctx), "echo foo bar baz");
+        });
+    });
+}
+
+#[test]
+fn vim_paragraph_motions_move_over_blank_lines() {
+    App::test((), |mut app| async move {
+        enable_vim_mode(&mut app);
+        let view = app.update(|ctx| {
+            let view = build_view(ctx);
+            view.update(ctx, |view, ctx| view.set_text("p1\n\np2\n\np3", ctx));
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            view
+        });
+
+        app.update(|ctx| type_str(&view, ctx, "gg"));
+        app.update(|ctx| type_str(&view, ctx, "}"));
+        app.read(|ctx| assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 1))));
+
+        app.update(|ctx| type_str(&view, ctx, "}"));
+        app.read(|ctx| assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 3))));
+
+        app.update(|ctx| type_str(&view, ctx, "{"));
+        app.read(|ctx| {
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 1)));
+            assert_eq!(text(&view, ctx), "p1\n\np2\n\np3");
+        });
+    });
+}
+
+#[test]
+fn vim_percent_jumps_to_matching_bracket() {
+    App::test((), |mut app| async move {
+        enable_vim_mode(&mut app);
+        let view = app.update(|ctx| {
+            let view = build_view(ctx);
+            view.update(ctx, |view, ctx| view.set_text("(foo)", ctx));
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            view
+        });
+
+        app.update(|ctx| type_str(&view, ctx, "0%"));
+        app.read(|ctx| assert_eq!(cursor_and_height(&view, ctx).0, Some((4, 0))));
+
+        app.update(|ctx| type_str(&view, ctx, "%"));
+        app.read(|ctx| {
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 0)));
+            assert_eq!(text(&view, ctx), "(foo)");
+        });
+    });
+}
+
+#[test]
+fn vim_unmatched_bracket_motions_move_to_open_or_close() {
+    App::test((), |mut app| async move {
+        enable_vim_mode(&mut app);
+        let view = app.update(|ctx| {
+            let view = build_view(ctx);
+            view.update(ctx, |view, ctx| view.set_text("foo (bar) baz", ctx));
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            view
+        });
+
+        app.update(|ctx| type_str(&view, ctx, "0])"));
+        app.read(|ctx| assert_eq!(cursor_and_height(&view, ctx).0, Some((8, 0))));
+
+        app.update(|ctx| type_str(&view, ctx, "$[("));
+        app.read(|ctx| {
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((4, 0)));
+            assert_eq!(text(&view, ctx), "foo (bar) baz");
+        });
+    });
+}
+
+#[test]
 fn vim_counted_uppercase_g_jumps_to_requested_logical_line() {
     App::test((), |mut app| async move {
         enable_vim_mode(&mut app);

@@ -19,13 +19,14 @@ use syntax_tree::{ColorMap, DecorationStateEvent, SyntaxTreeState};
 use vec1::{Vec1, vec1};
 use vim::vim::{
     BracketChar, CharacterMotion, Direction, FindCharMotion, FirstNonWhitespaceMotion,
-    InsertPosition, LineMotion, MotionType, TextObjectInclusion, TextObjectType, VimOperator,
-    VimTextObject, WordBound, WordMotion, WordType,
+    InsertPosition, LineMotion, MotionType, TextObjectInclusion, TextObjectType, VimMotion,
+    VimOperator, VimTextObject, WordBound, WordMotion, WordType,
 };
 use vim::{
-    find_next_paragraph_end, find_previous_paragraph_start, vim_a_block, vim_a_paragraph,
-    vim_a_quote, vim_a_word, vim_find_char_on_line, vim_find_matching_bracket, vim_inner_block,
-    vim_inner_paragraph, vim_inner_quote, vim_inner_word, vim_word_iterator_from_offset,
+    find_next_paragraph_end, find_previous_paragraph_start, motion_destination_with_jump,
+    vim_a_block, vim_a_paragraph, vim_a_quote, vim_a_word, vim_find_char_on_line,
+    vim_find_matching_bracket, vim_inner_block, vim_inner_paragraph, vim_inner_quote,
+    vim_inner_word, vim_word_iterator_from_offset,
 };
 use warp_core::platform::SessionPlatform;
 use warp_core::semantic_selection::SemanticSelection;
@@ -745,6 +746,34 @@ impl CodeEditorModel {
                 render_state.add_pending_edit(delta, version);
             });
         }
+    }
+
+    pub fn map_vim_cursors(
+        &mut self,
+        motion: &VimMotion,
+        count: u32,
+        jump: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let buffer = self.content().as_ref(ctx);
+        let valid = CharOffset::from(1)..buffer.max_charoffset();
+        let current_selections = self.selection_model.as_ref(ctx).selection_offsets();
+        let new_selections = current_selections.mapped(|selection| {
+            let mapped = motion_destination_with_jump(
+                buffer,
+                valid.clone(),
+                selection.head,
+                motion,
+                count,
+                jump,
+            );
+            let native = mapped.min(valid.end).max(valid.start);
+            SelectionOffsets {
+                head: native,
+                tail: native,
+            }
+        });
+        self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
     }
 
     /// Helper fn to set selections easily for vim features

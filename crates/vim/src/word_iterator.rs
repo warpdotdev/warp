@@ -13,7 +13,7 @@ use crate::vim::{Direction, WordBound, WordType};
 /// symbols as their own "words" and hence they need to be tracked as a distinct context from
 /// word-characters and whitespace.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum CharacterKind {
+pub(crate) enum CharacterKind {
     WordChars,
     Symbols,
     Whitespace,
@@ -23,7 +23,7 @@ impl CharacterKind {
     /// This is an alternative to `==` which will treat Self::WordChars and Self::Symbols as equal
     /// to one another for WordType::BigWord. This is useful for motions or text objects
     /// involving bigwords.
-    pub(super) fn equivalent_char_kind(&self, other: &Self, word_type: WordType) -> bool {
+    pub(crate) fn equivalent_char_kind(&self, other: &Self, word_type: WordType) -> bool {
         match word_type {
             WordType::Default => self == other,
             WordType::BigWord => {
