@@ -68,6 +68,7 @@
             [self logMessage:@"User has default icon, resetting dock tile to system default"];
             [tile setContentView:nil];
             [tile display];
+            [NSApp setApplicationIconImage:nil];
             return;
         }
 
@@ -84,7 +85,10 @@
         [imageView setImageScaling:NSImageScaleProportionallyUpOrDown];
         [tile setContentView:imageView];
         [tile display];
-        
+        if (currentImage) {
+            [NSApp setApplicationIconImage:currentImage];
+        }
+
         [self logMessage:[NSString stringWithFormat:@"Dock tile updated with icon: %@", iconFileName]];
     } @catch (NSException *exception) {
         [self logMessage:[NSString stringWithFormat:@"Exception updating dock tile icon: %@\nStack trace: %@\nTile: %@", 
