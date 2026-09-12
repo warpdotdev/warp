@@ -1,8 +1,13 @@
+use std::collections::BTreeMap;
+
 use anyhow::{Context as _, Result};
 use cloud_objects::ids::ServerId;
 use serde::de::DeserializeOwned;
 use warp_core::channel::ChannelState;
 use warp_errors::{ErrorExt, register_error};
+use warp_graphql::platform_error::{
+    PlatformErrorInfo, PlatformErrorMessageFormat, platform_error_code_from_snake_case,
+};
 
 use crate::base_client::{AmbientHeaderPolicy, BaseClient, TEAM_UID_HEADER};
 
@@ -12,6 +17,24 @@ use crate::base_client::{AmbientHeaderPolicy, BaseClient, TEAM_UID_HEADER};
 pub struct HttpStatusError {
     pub status: u16,
     pub body: String,
+    platform_error: Option<PlatformErrorInfo>,
+}
+
+impl HttpStatusError {
+    pub fn new(status: u16, body: String) -> Self {
+        let platform_error = serde_json::from_str::<PublicApiError>(&body)
+            .ok()
+            .and_then(|error| error.platform_error());
+        Self {
+            status,
+            body,
+            platform_error,
+        }
+    }
+
+    pub fn platform_error(&self) -> Option<&PlatformErrorInfo> {
+        self.platform_error.as_ref()
+    }
 }
 
 impl ErrorExt for HttpStatusError {
@@ -25,6 +48,50 @@ register_error!(HttpStatusError);
 #[derive(serde::Deserialize)]
 struct PublicApiError {
     error: String,
+    #[serde(rename = "type")]
+    type_uri: Option<String>,
+    title: Option<String>,
+    status: Option<i32>,
+    detail: Option<String>,
+    #[serde(rename = "instance")]
+    _instance: Option<String>,
+    retryable: Option<bool>,
+    debug: Option<String>,
+    trace_id: Option<String>,
+    #[serde(flatten)]
+    metadata: BTreeMap<String, serde_json::Value>,
+}
+
+impl PublicApiError {
+    fn platform_error(&self) -> Option<PlatformErrorInfo> {
+        let code = self
+            .type_uri
+            .as_deref()?
+            .strip_prefix("https://docs.warp.dev/errors/")
+            .and_then(platform_error_code_from_snake_case)?;
+        let title = self.title.clone()?;
+        let user_facing_messages =
+            BTreeMap::from([(PlatformErrorMessageFormat::PlainText, title.clone())]);
+        let metadata = self
+            .metadata
+            .iter()
+            .filter_map(|(key, value)| value.as_str().map(|value| (key.clone(), value.to_string())))
+            .collect();
+
+        Some(PlatformErrorInfo {
+            error_message: Some(title),
+            code,
+            http_status: self.status,
+            user_facing_messages,
+            detail: self.detail.clone(),
+            retryable: self.retryable?,
+            is_user_error: None,
+            metadata,
+            debug: self.debug.clone(),
+            metrics_category: None,
+            trace_id: self.trace_id.clone(),
+        })
+    }
 }
 
 impl BaseClient {
@@ -71,10 +138,7 @@ impl BaseClient {
             self.observe_iap_challenge(&response);
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            let status_error = HttpStatusError {
-                status: status.as_u16(),
-                body: body.clone(),
-            };
+            let status_error = HttpStatusError::new(status.as_u16(), body.clone());
             match serde_json::from_str::<PublicApiError>(&body) {
                 Ok(error_response) => {
                     Err(anyhow::Error::new(status_error).context(error_response.error))

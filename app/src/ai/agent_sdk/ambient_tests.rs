@@ -439,11 +439,8 @@ fn task_id_from_oz_run_id_env_rejects_invalid_value() {
 }
 
 fn http_error(status: u16, body: &str) -> anyhow::Error {
-    anyhow::Error::new(HttpStatusError {
-        status,
-        body: body.to_string(),
-    })
-    .context(format!("API request failed with status {status}"))
+    anyhow::Error::new(HttpStatusError::new(status, body.to_string()))
+        .context(format!("API request failed with status {status}"))
 }
 
 fn operation_not_supported_error() -> anyhow::Error {

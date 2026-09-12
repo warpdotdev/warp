@@ -466,7 +466,7 @@ fn classify_git_credentials_error(
                 TaskStatusUpdate {
                     message,
                     error_code: Some(info.code),
-                    platform_error: Some(Box::new(info.clone())),
+                    platform_error: Some(info.clone()),
                 },
             )
         }
