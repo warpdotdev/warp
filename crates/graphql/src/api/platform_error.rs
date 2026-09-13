@@ -56,28 +56,6 @@ pub struct PlatformErrorMessage {
     pub message: String,
 }
 
-pub fn platform_error_code_from_snake_case(value: &str) -> Option<PlatformErrorCode> {
-    match value {
-        "authentication_required" => Some(PlatformErrorCode::AuthenticationRequired),
-        "budget_exceeded" => Some(PlatformErrorCode::BudgetExceeded),
-        "content_policy_violation" => Some(PlatformErrorCode::ContentPolicyViolation),
-        "environment_setup_failed" => Some(PlatformErrorCode::EnvironmentSetupFailed),
-        "external_authentication_required" => {
-            Some(PlatformErrorCode::ExternalAuthenticationRequired)
-        }
-        "feature_not_available" => Some(PlatformErrorCode::FeatureNotAvailable),
-        "insufficient_credits" => Some(PlatformErrorCode::InsufficientCredits),
-        "integration_disabled" => Some(PlatformErrorCode::IntegrationDisabled),
-        "integration_not_configured" => Some(PlatformErrorCode::IntegrationNotConfigured),
-        "internal_error" => Some(PlatformErrorCode::InternalError),
-        "invalid_request" => Some(PlatformErrorCode::InvalidRequest),
-        "not_authorized" => Some(PlatformErrorCode::NotAuthorized),
-        "resource_unavailable" => Some(PlatformErrorCode::ResourceUnavailable),
-        "resource_not_found" => Some(PlatformErrorCode::ResourceNotFound),
-        _ => None,
-    }
-}
-
 /// GraphQL output-side representation of [`PlatformErrorInfo`].
 #[derive(cynic::QueryFragment, Clone, Debug)]
 #[cynic(graphql_type = "PlatformErrorInfo")]

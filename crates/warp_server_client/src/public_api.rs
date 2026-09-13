@@ -5,9 +5,7 @@ use cloud_objects::ids::ServerId;
 use serde::de::DeserializeOwned;
 use warp_core::channel::ChannelState;
 use warp_errors::{ErrorExt, register_error};
-use warp_graphql::platform_error::{
-    PlatformErrorInfo, PlatformErrorMessageFormat, platform_error_code_from_snake_case,
-};
+use warp_graphql::platform_error::{PlatformErrorInfo, PlatformErrorMessageFormat};
 
 use crate::base_client::{AmbientHeaderPolicy, BaseClient, TEAM_UID_HEADER};
 
@@ -18,22 +16,28 @@ pub struct HttpStatusError {
     pub status: u16,
     pub body: String,
     platform_error: Option<PlatformErrorInfo>,
+    api_error_message: Option<String>,
 }
 
 impl HttpStatusError {
     pub fn new(status: u16, body: String) -> Self {
-        let platform_error = serde_json::from_str::<PublicApiError>(&body)
-            .ok()
-            .and_then(|error| error.platform_error());
+        let api_error = serde_json::from_str::<PublicApiError>(&body).ok();
+        let platform_error = api_error.as_ref().and_then(PublicApiError::platform_error);
+        let api_error_message = api_error.map(|error| error.error);
         Self {
             status,
             body,
             platform_error,
+            api_error_message,
         }
     }
 
     pub fn platform_error(&self) -> Option<&PlatformErrorInfo> {
         self.platform_error.as_ref()
+    }
+
+    fn api_error_message(&self) -> Option<&str> {
+        self.api_error_message.as_deref()
     }
 }
 
@@ -68,7 +72,7 @@ impl PublicApiError {
             .type_uri
             .as_deref()?
             .strip_prefix("https://docs.warp.dev/errors/")
-            .and_then(platform_error_code_from_snake_case)?;
+            .and_then(|code| code.parse().ok())?;
         let title = self.title.clone()?;
         let user_facing_messages =
             BTreeMap::from([(PlatformErrorMessageFormat::PlainText, title.clone())]);
@@ -138,14 +142,12 @@ impl BaseClient {
             self.observe_iap_challenge(&response);
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            let status_error = HttpStatusError::new(status.as_u16(), body.clone());
-            match serde_json::from_str::<PublicApiError>(&body) {
-                Ok(error_response) => {
-                    Err(anyhow::Error::new(status_error).context(error_response.error))
-                }
-                Err(_) => Err(anyhow::Error::new(status_error)
-                    .context(format!("API request failed with status {status}"))),
-            }
+            let status_error = HttpStatusError::new(status.as_u16(), body);
+            let context = status_error
+                .api_error_message()
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("API request failed with status {status}"));
+            Err(anyhow::Error::new(status_error).context(context))
         }
     }
 
