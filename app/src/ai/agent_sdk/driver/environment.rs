@@ -745,9 +745,18 @@ fn build_remove_repository_origins_command(
         let repo_path = working_dir.join(&request.checkout_name);
         let escaped_path =
             shell_escape_single_quotes(&repo_path.to_string_lossy(), ShellType::Bash);
+        // `git remote remove` deletes every remote-tracking ref as one atomic
+        // transaction, which locks all of them up front. A repository whose
+        // real branch history includes two ref names differing only by case
+        // (e.g. from a case-sensitive host, cloned onto a case-insensitive
+        // filesystem) then fails outright, since both lock paths collide.
+        // Clearing only the remote's config section severs fetch/push access
+        // just as effectively without ever touching a per-ref path, so it
+        // can't hit that collision; the now-unreachable tracking refs are
+        // harmless leftovers.
         script.push_str(&format!(
             "if git -C '{escaped_path}' remote get-url origin >/dev/null 2>&1; then\n\
-             \tgit -C '{escaped_path}' remote remove origin || exit 1\n\
+             \tgit -C '{escaped_path}' config --remove-section remote.origin || exit 1\n\
              fi\n"
         ));
     }

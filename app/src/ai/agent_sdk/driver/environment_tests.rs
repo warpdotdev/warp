@@ -961,7 +961,7 @@ fn repository_origin_removal_targets_all_environment_repositories() {
     assert!(command.contains(&warp_dir));
     assert!(command.contains(&warp_server_dir));
     assert!(command.contains("remote get-url origin"));
-    assert!(command.contains("remote remove origin"));
+    assert!(command.contains("config --remove-section remote.origin"));
 }
 
 #[test]
