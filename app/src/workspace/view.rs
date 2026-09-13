@@ -3915,6 +3915,18 @@ impl Workspace {
         // `start_index + tab_index`.
         let mut restored_indices = Vec::with_capacity(window.tabs.len());
 
+        // Opening into an active window inserts after the active tab, and
+        // `add_tab_with_pane_layout` has that insert inherit the active tab's
+        // group so groups stay contiguous. Overwriting membership below
+        // therefore drops the restored block *inside* a pre-existing group's
+        // run, splitting it in two -- and `tab_bar_slots` renders two runs of
+        // one id as two containers. Remember the host group so the block can be
+        // re-anchored past it once membership is settled.
+        let host_group_id = self
+            .tabs
+            .get(self.active_tab_index)
+            .and_then(|tab| tab.group_id);
+
         window
             .tabs
             .iter()
@@ -3952,6 +3964,13 @@ impl Workspace {
             .or_else(|| restored_indices.first())
             .and_then(|&index| self.tabs.get(index))
             .map(|tab| tab.pane_group.id());
+
+        // Re-anchor the restored block past the host group's last remaining
+        // member, mirroring `new_tab_group_from_selected_tabs`. A no-op when
+        // the block already sits outside the group's run.
+        if let Some(host_group_id) = host_group_id {
+            self.move_restored_block_past_group(&restored_indices, host_group_id);
+        }
 
         for group_id in group_ids.iter().flatten() {
             if self

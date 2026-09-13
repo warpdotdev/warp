@@ -880,3 +880,118 @@ pub fn test_launch_config_restores_pinned_tab_group_into_pinned_prefix() -> Buil
                 .add_assertion(assert_focused_tab_index(0)),
         )
 }
+
+/// Opening a launch config into a window whose active tab already belongs to a
+/// group must not split that group.
+///
+/// `add_tab_with_pane_layout` inserts after the active tab and has the new tab
+/// inherit its group so runs stay contiguous, but the restore path then
+/// overwrites `group_id` from the config. That used to drop the restored block
+/// inside the host group's run, leaving two runs of one id -- which
+/// `tab_bar_slots` renders as two separate containers for the same group.
+pub fn test_launch_config_restore_keeps_existing_group_contiguous() -> Builder {
+    use warp::integration_testing::workspace::assert_tab_groups;
+    use warp::launch_configs::launch_config::{
+        LaunchConfig, PaneMode, PaneTemplateType, TabGroupTemplate, TabTemplate, WindowTemplate,
+    };
+    use warp::themes::theme::AnsiColorIdentifier;
+
+    FeatureFlag::GroupedTabs.set_enabled(true);
+
+    fn tab(title: &str, group: Option<usize>) -> TabTemplate {
+        TabTemplate {
+            group,
+            title: Some(title.to_owned()),
+            layout: PaneTemplateType::PaneTemplate {
+                is_focused: Some(true),
+                cwd: PathBuf::from("/some/path"),
+                commands: Vec::new(),
+                pane_mode: PaneMode::Terminal,
+                shell: None,
+            },
+            commands: Vec::new(),
+            color: None,
+        }
+    }
+
+    /// One group holding both tabs, opened into a new window with the *first*
+    /// member active -- so the insert below lands between the two members.
+    fn grouped_config() -> LaunchConfig {
+        LaunchConfig {
+            name: "Grouped config".to_owned(),
+            active_window_index: Some(0),
+            windows: vec![WindowTemplate {
+                tab_groups: vec![TabGroupTemplate {
+                    name: Some("Existing".to_owned()),
+                    color: Some(AnsiColorIdentifier::Green),
+                    collapsed: false,
+                    pinned: false,
+                }],
+                active_tab_index: Some(0),
+                tabs: vec![tab("alpha", Some(0)), tab("beta", Some(0))],
+            }],
+        }
+    }
+
+    /// Two ungrouped tabs, to be opened into the window above.
+    fn ungrouped_config() -> LaunchConfig {
+        LaunchConfig {
+            name: "Plain config".to_owned(),
+            active_window_index: Some(0),
+            windows: vec![WindowTemplate {
+                tab_groups: vec![],
+                active_tab_index: Some(0),
+                tabs: vec![tab("first", None), tab("last", None)],
+            }],
+        }
+    }
+
+    new_builder()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            new_step_with_default_assertions("Open a grouped launch config in a new window")
+                .with_action(move |app, _, _| {
+                    app.dispatch_global_action(
+                        "root_view:open_launch_config",
+                        warp::root_view::OpenLaunchConfigArg {
+                            launch_config: grouped_config(),
+                            ui_location: get_launch_config_ui_location(),
+                            open_in_active_window: false,
+                        },
+                    );
+                }),
+        )
+        .with_step(
+            new_step_with_default_assertions("Assert the group's first member is active")
+                .add_assertion(assert_tab_count(2))
+                .add_assertion(assert_focused_tab_index(0)),
+        )
+        .with_step(
+            new_step_with_default_assertions("Open ungrouped tabs into that window")
+                .with_action(move |app, _, _| {
+                    app.dispatch_global_action(
+                        "root_view:open_launch_config",
+                        warp::root_view::OpenLaunchConfigArg {
+                            launch_config: ungrouped_config(),
+                            ui_location: get_launch_config_ui_location(),
+                            open_in_active_window: true,
+                        },
+                    );
+                })
+                .set_post_step_pause(Duration::from_secs(1)),
+        )
+        .with_step(
+            new_step_with_default_assertions("Assert the pre-existing group stayed in one run")
+                .add_assertion(assert_tab_count(4))
+                .add_assertion(assert_tab_groups(
+                    // The restored block was re-anchored past "beta". Without
+                    // the move this reads [Some(0), None, None, Some(0)] --
+                    // one group id in two runs.
+                    vec![Some(0), Some(0), None, None],
+                    vec![(Some("Existing"), Some(AnsiColorIdentifier::Green))],
+                ))
+                // The config's active tab is "first", which the move carried
+                // past the group.
+                .add_assertion(assert_focused_tab_index(2)),
+        )
+}
