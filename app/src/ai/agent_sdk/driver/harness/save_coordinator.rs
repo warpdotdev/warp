@@ -100,6 +100,7 @@ impl SaveCoordinator {
     pub(super) async fn finish(
         &self,
         final_save: impl Future<Output = Result<()>>,
+        report_usage: impl Future<Output = ()>,
         budget: Duration,
     ) -> Result<()> {
         let (active, deadline) = {
@@ -141,6 +142,10 @@ impl SaveCoordinator {
             .context("Harness final save timed out")
             .and_then(|result| result);
         self.state.lock().final_succeeded = Some(result.is_ok());
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if !remaining.is_zero() {
+            let _ = report_usage.with_timeout(remaining).await;
+        }
         result
     }
 }

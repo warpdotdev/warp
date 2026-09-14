@@ -36,7 +36,10 @@ fn optional_category_drift_preserves_latest_totals_without_inventing_a_baseline(
         }}}),
     ]);
     let payload = serde_json::to_value(&snapshot.payload).unwrap();
-    assert_eq!(payload["usage"], json!({"input_tokens":30,"output_tokens":10,"total_tokens":40}));
+    assert_eq!(
+        payload["usage"],
+        json!({"input_tokens":30,"output_tokens":10,"total_tokens":40})
+    );
     assert_eq!(
         payload["attribution"],
         json!([
@@ -45,7 +48,12 @@ fn optional_category_drift_preserves_latest_totals_without_inventing_a_baseline(
         ])
     );
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
-    assert!(!snapshot.coverage.reason_codes.contains_key(&ReasonCode::AmbiguousAccounting));
+    assert!(
+        !snapshot
+            .coverage
+            .reason_codes
+            .contains_key(&ReasonCode::AmbiguousAccounting)
+    );
 }
 
 fn checkpoint(total: i64, last: i64) -> Value {

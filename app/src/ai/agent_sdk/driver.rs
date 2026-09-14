@@ -3054,40 +3054,40 @@ impl AgentDriver {
             .map_err(|_| AgentDriverError::InvalidRuntimeState)
             .flatten()?;
 
-        let (prompt_text, system_prompt, resumption_prompt, server_context): (
-            Cow<'_, str>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        ) = match prompt {
-            AgentRunPrompt::Local(text) => (Cow::Borrowed(text), None, None, None),
-            AgentRunPrompt::ServerSide {
-                skill,
-                attachments_dir,
-            } => {
-                let skill = skill
-                    .as_ref()
-                    .map(|parsed_skill| ResolvePromptAttachedSkill {
-                        name: parsed_skill.name.clone(),
-                        content: parsed_skill.content.clone(),
-                        path: Some(parsed_skill.path.display_path()),
-                    });
-                let request = ResolvePromptRequest {
+        let (prompt_text, system_prompt, resumption_prompt, server_context, usage_context) =
+            match prompt {
+                AgentRunPrompt::Local(text) => {
+                    (Cow::Borrowed(text.as_str()), None, None, None, None)
+                }
+                AgentRunPrompt::ServerSide {
                     skill,
-                    attachments_dir: attachments_dir.clone(),
-                };
-                let resolved = server_api
-                    .resolve_prompt(request)
-                    .await
+                    attachments_dir,
+                } => {
+                    let skill = skill
+                        .as_ref()
+                        .map(|parsed_skill| ResolvePromptAttachedSkill {
+                            name: parsed_skill.name.clone(),
+                            content: parsed_skill.content.clone(),
+                            path: Some(parsed_skill.path.display_path()),
+                        });
+                    let request = ResolvePromptRequest {
+                        skill,
+                        attachments_dir: attachments_dir.clone(),
+                    };
+                    let resolved = match task_id.as_ref() {
+                        Some(task_id) => server_api.resolve_prompt_for_task(task_id, request).await,
+                        None => server_api.resolve_prompt(request).await,
+                    }
                     .map_err(AgentDriverError::PromptResolutionFailed)?;
-                (
-                    Cow::Owned(resolved.prompt),
-                    resolved.system_prompt,
-                    resolved.resumption_prompt,
-                    resolved.context,
-                )
-            }
-        };
+                    (
+                        Cow::Owned(resolved.prompt),
+                        resolved.system_prompt,
+                        resolved.resumption_prompt,
+                        resolved.context,
+                        resolved.harness_usage,
+                    )
+                }
+            };
 
         let (secrets, third_party_harness_model_config) = foreground
             .spawn(|me, _| {
@@ -3133,7 +3133,7 @@ impl AgentDriver {
                 &workspace_root,
                 &harness_working_dir,
                 task_id,
-                server_api,
+                server_api.clone(),
                 terminal_driver,
                 resume,
                 &resolved_env_vars,
@@ -3142,6 +3142,9 @@ impl AgentDriver {
                 third_party_harness_model_config.as_ref(),
             )?
             .into();
+        if let Some(reporter) = runner.usage_reporter() {
+            reporter.initialize(server_api, task_id, usage_context);
+        }
 
         let stored_runner = runner.clone();
         foreground
