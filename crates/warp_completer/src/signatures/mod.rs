@@ -1,8 +1,6 @@
-#[cfg_attr(feature = "v2", path = "v2/mod.rs")]
-#[cfg_attr(not(feature = "v2"), path = "legacy/mod.rs")]
-mod imp;
+mod legacy;
 
-pub use imp::*;
+pub use legacy::*;
 
 pub mod clap;
 

@@ -3032,6 +3032,7 @@ impl AIConversation {
                                 );
                                 ctx.emit(BlocklistAIHistoryEvent::UpdatedTodoList {
                                     terminal_surface_id,
+                                    conversation_id: self.id,
                                 });
                             }
                         }
@@ -3357,6 +3358,7 @@ impl AIConversation {
                     update_todo_list_from_todo_op(&mut self.todo_lists, todos_op);
                     ctx.emit(BlocklistAIHistoryEvent::UpdatedTodoList {
                         terminal_surface_id,
+                        conversation_id: self.id,
                     });
                 }
                 ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {
@@ -3406,6 +3408,7 @@ impl AIConversation {
                     update_todo_list_from_todo_op(&mut self.todo_lists, todos_op);
                     ctx.emit(BlocklistAIHistoryEvent::UpdatedTodoList {
                         terminal_surface_id,
+                        conversation_id: self.id,
                     });
                 }
                 ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {

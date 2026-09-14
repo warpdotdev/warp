@@ -1216,10 +1216,10 @@ impl TerminalManager<TerminalView> {
                         server_conversation_token,
                     } => {
                         terminal_view.update(ctx, |view, ctx| {
-                            view.ai_controller().update(ctx, |controller, ctx| {
-                                controller
-                                    .handle_shared_session_cancel_action(*server_conversation_token, ctx);
-                            });
+                            view.handle_shared_session_cancel_action(
+                                *server_conversation_token,
+                                ctx,
+                            );
                         });
                     }
                 }

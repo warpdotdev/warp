@@ -116,6 +116,13 @@ enum SecretInput {
         value_args: ValueArgs,
         base_url: Option<String>,
     },
+    /// Multi-field container registry credential with dedicated CLI flags.
+    DockerRegistry {
+        host: Option<String>,
+        username: Option<String>,
+        password: Option<String>,
+        password_file: Option<std::path::PathBuf>,
+    },
 }
 
 impl SecretInput {
@@ -152,6 +159,12 @@ impl SecretInput {
                 value_args,
                 base_url,
             } => read_openai_api_key_secret_value(&value_args, base_url),
+            SecretInput::DockerRegistry {
+                host,
+                username,
+                password,
+                password_file,
+            } => read_docker_registry_secret_value(host, username, password, password_file),
         }
     }
 }
@@ -202,6 +215,17 @@ fn create_secret(ctx: &mut AppContext, args: CreateSecretArgs) -> Result<()> {
                 a.common.scope,
             ),
         },
+        Some(CreateProvider::DockerRegistry(a)) => (
+            a.common.name,
+            SecretInput::DockerRegistry {
+                host: a.host,
+                username: a.username,
+                password: a.password,
+                password_file: a.password_file,
+            },
+            a.common.description,
+            a.common.scope,
+        ),
         None => {
             let name = args.name.ok_or_else(|| {
                 anyhow::anyhow!("Secret name is required. Usage: oz secret create <NAME>")
@@ -877,6 +901,101 @@ fn read_bedrock_access_key_secret_value(
     )))
 }
 
+/// Mirrors the server's registry-host format check (a bare host, no scheme or path), matching
+/// the same rule the web UI enforces client-side.
+fn validate_registry_host(host: &str) -> Result<()> {
+    if host.contains("://") || host.contains('/') {
+        anyhow::bail!("Registry host must not include a scheme or path.");
+    }
+    Ok(())
+}
+
+/// Read a container registry credential secret from dedicated CLI flags or interactive prompts.
+fn read_docker_registry_secret_value(
+    host: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
+    password_file: Option<std::path::PathBuf>,
+) -> Result<Option<ManagedSecretValue>> {
+    const NON_INTERACTIVE_REQUIRED_MSG: &str = "Container registry credentials require --host, --username, and one of --password or --password-file in non-interactive mode";
+
+    // Check once and reuse: querying terminal status is a syscall.
+    let is_terminal = io::stdin().is_terminal();
+
+    let host = match host {
+        Some(v) if !v.is_empty() => v,
+        _ => {
+            if !is_terminal {
+                return Err(anyhow::anyhow!(NON_INTERACTIVE_REQUIRED_MSG));
+            }
+            match inquire::Text::new("Registry host (e.g. ghcr.io):").prompt() {
+                Ok(value) if !value.is_empty() => value,
+                Ok(_) => return Ok(None),
+                Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => {
+                    return Ok(None);
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+    };
+    validate_registry_host(&host)?;
+
+    let username = match username {
+        Some(v) if !v.is_empty() => v,
+        _ => {
+            if !is_terminal {
+                return Err(anyhow::anyhow!(NON_INTERACTIVE_REQUIRED_MSG));
+            }
+            match inquire::Text::new("Registry username:").prompt() {
+                Ok(value) if !value.is_empty() => value,
+                Ok(_) => return Ok(None),
+                Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => {
+                    return Ok(None);
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+    };
+
+    let password = match password {
+        Some(v) if !v.is_empty() => v,
+        _ => {
+            if let Some(password_file) = password_file {
+                let value = fs::read_to_string(&password_file).with_context(|| {
+                    format!(
+                        "Failed to read registry password from: {}",
+                        password_file.display()
+                    )
+                })?;
+                let value = value.trim_end_matches(['\n', '\r']);
+                if value.is_empty() {
+                    return Ok(None);
+                }
+                value.to_owned()
+            } else if !is_terminal {
+                return Err(anyhow::anyhow!(NON_INTERACTIVE_REQUIRED_MSG));
+            } else {
+                match Password::new("Registry password or access token:")
+                    .with_display_toggle_enabled()
+                    .without_confirmation()
+                    .prompt()
+                {
+                    Ok(value) if !value.is_empty() => value,
+                    Ok(_) => return Ok(None),
+                    Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => {
+                        return Ok(None);
+                    }
+                    Err(err) => return Err(err.into()),
+                }
+            }
+        }
+    };
+
+    Ok(Some(ManagedSecretValue::docker_registry(
+        host, username, password,
+    )))
+}
+
 /// Finds the type of an existing secret by name and owner scope.
 fn find_secret_type(
     secrets: &[ManagedSecret],
@@ -908,3 +1027,7 @@ fn format_secret_type(type_: &ManagedSecretType) -> String {
         ManagedSecretType::DockerRegistry => "Container Registry Credential".to_string(),
     }
 }
+
+#[cfg(test)]
+#[path = "secret_tests.rs"]
+mod tests;

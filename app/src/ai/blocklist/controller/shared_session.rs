@@ -67,27 +67,24 @@ impl BlocklistAIController {
             })
     }
 
-    /// Handle a shared cancel control action and cancel the provided conversation
-    /// (if it exists and is live).
-    pub fn handle_shared_session_cancel_action(
-        &mut self,
+    /// Resolves a shared cancel control action to the live, not-yet-finished conversation bound
+    /// to `server_conversation_token`, if any. A finished conversation is not returned so that a
+    /// late or duplicate cancel cannot overwrite its terminal status.
+    pub fn conversation_for_shared_session_cancel_action(
+        &self,
         server_conversation_token: ServerConversationToken,
         ctx: &mut ModelContext<Self>,
-    ) {
-        let Some(conversation_id) = self.find_existing_conversation_by_server_token(
+    ) -> Option<AIConversationId> {
+        let conversation_id = self.find_existing_conversation_by_server_token(
             &server_conversation_token.to_string(),
             ctx,
-        ) else {
-            return;
-        };
-
-        if BlocklistAIHistoryModel::as_ref(ctx).is_conversation_live(conversation_id) {
-            self.cancel_conversation_progress(
-                conversation_id,
-                super::CancellationReason::ManuallyCancelled,
-                ctx,
-            );
-        }
+        )?;
+        let history = BlocklistAIHistoryModel::as_ref(ctx);
+        let is_cancellable = history.is_conversation_live(conversation_id)
+            && history
+                .conversation(&conversation_id)
+                .is_some_and(|conversation| !conversation.status().is_done());
+        is_cancellable.then_some(conversation_id)
     }
 
     /// Apply agent session events to the current conversation state.
