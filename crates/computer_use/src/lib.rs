@@ -493,29 +493,59 @@ impl RecordingHandle {
 #[cfg(any(linux, macos, windows))]
 impl Drop for RecordingHandle {
     fn drop(&mut self) {
-        // A handle can be abandoned without reaching `Recorder::stop`, notably
-        // when a start action finishes after cancellation. Windows must reap the
-        // child first because open files cannot be unlinked there. A successful
-        // stop disables cleanup and transfers file ownership.
         if self.cleanup_on_drop {
             #[cfg(windows)]
-            if let Some(mut process) = self.process.take() {
-                let _ = process.start_kill();
-                let deadline = std::time::Instant::now() + Duration::from_secs(15);
-                loop {
-                    match process.try_wait() {
-                        Ok(Some(_)) | Err(_) => break,
-                        Ok(None) if std::time::Instant::now() < deadline => {
-                            std::thread::sleep(Duration::from_millis(10));
-                        }
-                        Ok(None) => break,
-                    }
-                }
+            if let Some(process) = self.process.take() {
+                spawn_windows_recording_cleanup(process, self.path.clone());
+                return;
             }
             let _ = std::fs::remove_file(&self.path);
             let _ = std::fs::remove_file(self.path.with_extension("log"));
         }
     }
+}
+#[cfg(windows)]
+fn spawn_windows_recording_cleanup(mut process: tokio::process::Child, path: PathBuf) {
+    let result = std::thread::Builder::new()
+        .name("recording-cleanup".to_string())
+        .spawn(move || {
+            match process.try_wait() {
+                Ok(Some(_)) => {
+                    remove_abandoned_recording_files(&path);
+                    return;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    log::warn!("Failed to poll abandoned recording process: {error}");
+                    return;
+                }
+            }
+            if let Err(error) = process.start_kill() {
+                log::warn!("Failed to terminate abandoned recording process: {error}");
+                return;
+            }
+            loop {
+                match process.try_wait() {
+                    Ok(Some(_)) => {
+                        remove_abandoned_recording_files(&path);
+                        return;
+                    }
+                    Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+                    Err(error) => {
+                        log::warn!("Failed to reap abandoned recording process: {error}");
+                        return;
+                    }
+                }
+            }
+        });
+    if let Err(error) = result {
+        log::warn!("Failed to start abandoned recording cleanup: {error}");
+    }
+}
+#[cfg(windows)]
+fn remove_abandoned_recording_files(path: &Path) {
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(path.with_extension("log"));
 }
 
 /// The finalized output of a stopped recording. Carries the local file path and

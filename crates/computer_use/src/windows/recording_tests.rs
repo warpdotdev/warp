@@ -48,6 +48,34 @@ fn handle_for(process: Child, path: PathBuf) -> RecordingHandle {
         cleanup_on_drop: true,
     }
 }
+async fn decoded_frame(path: &Path, seek_from_end: bool) -> Vec<u8> {
+    let mut command = Command::new("ffmpeg");
+    command.args(["-v", "error"]);
+    if seek_from_end {
+        command.args(["-sseof", "-0.5"]);
+    }
+    let output = command
+        .arg("-i")
+        .arg(path)
+        .args([
+            "-frames:v",
+            "1",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "pipe:1",
+        ])
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output.stdout
+}
 
 #[test]
 fn normalizes_negative_origin_and_odd_dimensions() {
@@ -275,10 +303,10 @@ async fn stop_rejects_empty_and_invalid_media() {
 }
 
 #[tokio::test]
+#[ignore = "requires ffmpeg/gdigrab and an interactive Windows desktop"]
 async fn records_real_virtual_desktop_when_requested() {
-    let Ok(output_dir) = std::env::var("WARP_RECORDING_TEST_OUTPUT_DIR") else {
-        return;
-    };
+    let output_dir = std::env::var("WARP_RECORDING_TEST_OUTPUT_DIR")
+        .expect("set WARP_RECORDING_TEST_OUTPUT_DIR to run the live recording test");
     let geometry = query_virtual_screen_geometry().unwrap();
     let recorder = Recorder::new();
     let handle = recorder
@@ -318,6 +346,28 @@ async fn records_real_virtual_desktop_when_requested() {
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
     let output = recorder.stop(handle).await.unwrap();
+    assert_eq!(
+        (output.width, output.height),
+        (geometry.width, geometry.height)
+    );
+    let expected_frame_bytes = output.width as usize * output.height as usize * 3;
+    let first_frame = decoded_frame(&output.path, false).await;
+    let last_frame = decoded_frame(&output.path, true).await;
+    assert_eq!(first_frame.len(), expected_frame_bytes);
+    assert_eq!(last_frame.len(), expected_frame_bytes);
+    assert_ne!(first_frame, last_frame);
+    let decode = Command::new("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(&output.path)
+        .args(["-f", "null", "-"])
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        decode.status.success(),
+        "{}",
+        String::from_utf8_lossy(&decode.stderr)
+    );
     std::fs::create_dir_all(&output_dir).unwrap();
     let artifact = Path::new(&output_dir).join("windows_raw_recording.mp4");
     std::fs::copy(&output.path, &artifact).unwrap();
@@ -332,18 +382,27 @@ async fn records_real_virtual_desktop_when_requested() {
         output.completion_status,
         artifact.display()
     );
-    let _ = std::fs::remove_file(output.path);
+    let log_path = output.path.with_extension("log");
+    std::fs::remove_file(&output.path).unwrap();
+    assert!(!output.path.exists());
+    assert!(!log_path.exists());
 }
 #[test]
-fn dropping_live_handle_reaps_process_and_removes_partial_files() {
+fn dropping_non_cooperative_live_handle_is_non_blocking_and_cleans_after_exit() {
     let path = temp_path("drop-live", "mp4");
     let log_path = path.with_extension("log");
     std::fs::write(&path, b"video").unwrap();
     std::fs::write(&log_path, b"log").unwrap();
     let process = recording_process("stalled", &path, Stdio::null());
 
+    let started = std::time::Instant::now();
     drop(handle_for(process, path.clone()));
 
+    assert!(started.elapsed() < Duration::from_millis(500));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while (path.exists() || log_path.exists()) && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert!(!path.exists());
     assert!(!log_path.exists());
 }
