@@ -390,6 +390,10 @@ async fn records_real_virtual_desktop_when_requested() {
         geometry.origin_x + width * 3 / 4,
         geometry.origin_y + height * 3 / 4,
     );
+    let click = Vector2I::new(
+        geometry.origin_x + width / 2,
+        geometry.origin_y + height / 4,
+    );
     let actions = vec![
         TargetedAction::screen(Action::MouseMove { to: first }),
         TargetedAction::screen(Action::MouseDown {
@@ -399,6 +403,14 @@ async fn records_real_virtual_desktop_when_requested() {
         TargetedAction::screen(Action::Wait(Duration::from_millis(500))),
         TargetedAction::screen(Action::MouseMove { to: second }),
         TargetedAction::screen(Action::Wait(Duration::from_millis(500))),
+        TargetedAction::screen(Action::MouseUp {
+            button: MouseButton::Left,
+        }),
+        TargetedAction::screen(Action::MouseDown {
+            button: MouseButton::Left,
+            at: click,
+        }),
+        TargetedAction::screen(Action::Wait(Duration::from_millis(250))),
         TargetedAction::screen(Action::MouseUp {
             button: MouseButton::Left,
         }),
