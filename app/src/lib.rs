@@ -2795,6 +2795,12 @@ pub(crate) fn app_callbacks(
             // update check re-detects it (autoupdate state isn't persisted
             // across restarts, so the artifact may be re-downloaded).
             if source == TerminationRequestSource::System {
+                // Also tells the shell-exit handler to stop closing panes, so a
+                // logout / restart doesn't dismantle the session we want to
+                // restore from. On Windows this signal never arrives (winit
+                // reports every quit as user-initiated), which is why
+                // `is_session_ending` queries the OS there instead.
+                crate::system::shutdown::note_session_ending();
                 return ApproveTerminateResult::Terminate;
             }
 
