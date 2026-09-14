@@ -42,11 +42,21 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// primary monitor; `width`/`height` are normalized to even values (see
 /// [`normalize_virtual_screen_geometry`]).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct VirtualScreenGeometry {
-    origin_x: i32,
-    origin_y: i32,
-    width: u32,
-    height: u32,
+pub(super) struct VirtualScreenGeometry {
+    pub(super) origin_x: i32,
+    pub(super) origin_y: i32,
+    pub(super) width: u32,
+    pub(super) height: u32,
+}
+
+impl VirtualScreenGeometry {
+    pub(super) fn frame_point(self, point: crate::Vector2I) -> crate::Vector2I {
+        let max_x = i64::from(self.width - 1);
+        let max_y = i64::from(self.height - 1);
+        let x = (i64::from(point.x()) - i64::from(self.origin_x)).clamp(0, max_x);
+        let y = (i64::from(point.y()) - i64::from(self.origin_y)).clamp(0, max_y);
+        crate::Vector2I::new(x as i32, y as i32)
+    }
 }
 
 pub struct Recorder {
@@ -144,7 +154,7 @@ impl crate::Recorder for Recorder {
 /// `GetSystemMetrics(SM_*VIRTUALSCREEN)` returns DPI-scaled logical coordinates unless the
 /// calling thread is per-monitor DPI aware, which would misalign the capture region on HiDPI
 /// setups; `DpiAwarenessGuard` opts in for the duration of this call.
-fn query_virtual_screen_geometry() -> Result<VirtualScreenGeometry, RecordingError> {
+pub(super) fn query_virtual_screen_geometry() -> Result<VirtualScreenGeometry, RecordingError> {
     let _dpi_guard = DpiAwarenessGuard::enter_per_monitor_v2();
     // SAFETY: `GetSystemMetrics` has no preconditions.
     let origin_x = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
@@ -211,7 +221,7 @@ fn new_ffmpeg_capture_command(
             "-video_size",
             &format!("{}x{}", geometry.width, geometry.height),
         ])
-        .args(["-draw_mouse", "1"])
+        .args(["-draw_mouse", "0"])
         .arg("-t")
         .arg(format!("{:.3}", config.max_duration.as_secs_f64()))
         .args(["-i", "desktop"])

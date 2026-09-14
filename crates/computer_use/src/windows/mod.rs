@@ -8,6 +8,7 @@ mod recording;
 mod screenshot;
 
 use async_trait::async_trait;
+use instant::Instant;
 pub use recording::Recorder;
 pub(crate) use recording::spawn_abandoned_cleanup;
 use warpui_core::r#async::Timer;
@@ -15,7 +16,10 @@ use windows::Win32::System::StationsAndDesktops::{
     CloseDesktop, DESKTOP_ACCESS_FLAGS, DESKTOP_CONTROL_FLAGS, HDESK, OpenInputDesktop,
 };
 
-use crate::{Action, ActionResult, Options, TargetedAction};
+use crate::{
+    Action, ActionResult, MouseButton, Options, PointerEvent, PointerEventKind, PointerSink,
+    TargetedAction, Vector2I,
+};
 
 /// Returns whether computer_use can drive input on this machine right now.
 ///
@@ -54,6 +58,53 @@ impl InputDesktop {
         let handle =
             unsafe { OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_ACCESS_FLAGS(0)) };
         handle.ok().map(Self)
+    }
+}
+
+fn record_positioned_event(
+    pointer_sink: Option<&PointerSink>,
+    geometry: Option<recording::VirtualScreenGeometry>,
+    kind: PointerEventKind,
+    button: Option<MouseButton>,
+    point: Vector2I,
+) {
+    let Some(sink) = pointer_sink else {
+        return;
+    };
+    let Some(geometry) = geometry else {
+        sink.session.clear();
+        return;
+    };
+    let point = geometry.frame_point(point);
+    sink.session.record_press_or_move(kind, button, point);
+    push_pointer_event(sink, point, kind, button);
+}
+
+fn record_up(pointer_sink: Option<&PointerSink>, button: MouseButton) {
+    let Some(sink) = pointer_sink else {
+        return;
+    };
+    if let Some(point) = sink.session.record_release(button) {
+        push_pointer_event(sink, point, PointerEventKind::Up, Some(button));
+    }
+}
+
+fn push_pointer_event(
+    sink: &PointerSink,
+    point: Vector2I,
+    kind: PointerEventKind,
+    button: Option<MouseButton>,
+) {
+    let offset = Instant::now()
+        .checked_duration_since(sink.started_at)
+        .unwrap_or_default();
+    if let Ok(mut events) = sink.events.lock() {
+        events.push(PointerEvent {
+            offset,
+            kind,
+            button,
+            point,
+        });
     }
 }
 
@@ -113,7 +164,7 @@ impl super::Actor for Actor {
     async fn perform_actions(
         &mut self,
         actions: &[TargetedAction],
-        options: Options,
+        mut options: Options,
     ) -> Result<ActionResult, String> {
         // Probe at the top of every call so transient loss of the input desktop (workstation
         // lock, secure desktop swap, RDP reconnect) surfaces as a descriptive error instead of
@@ -123,6 +174,10 @@ impl super::Actor for Actor {
         }
         let keyboard = &mut self.keyboard;
         let mouse = &mut self.mouse;
+        let pointer_sink = options.pointer_sink.take();
+        let recording_geometry = pointer_sink
+            .as_ref()
+            .and_then(|_| recording::query_virtual_screen_geometry().ok());
 
         for targeted in actions {
             // Per-window targeting is not supported on Windows; act on the screen / foreground
@@ -135,9 +190,28 @@ impl super::Actor for Actor {
                 Action::MouseDown { button, at } => {
                     mouse.move_to(*at)?;
                     mouse.button_down(button)?;
+                    record_positioned_event(
+                        pointer_sink.as_ref(),
+                        recording_geometry,
+                        PointerEventKind::Down,
+                        Some(*button),
+                        *at,
+                    );
                 }
-                Action::MouseUp { button } => mouse.button_up(button)?,
-                Action::MouseMove { to } => mouse.move_to(*to)?,
+                Action::MouseUp { button } => {
+                    mouse.button_up(button)?;
+                    record_up(pointer_sink.as_ref(), *button);
+                }
+                Action::MouseMove { to } => {
+                    mouse.move_to(*to)?;
+                    record_positioned_event(
+                        pointer_sink.as_ref(),
+                        recording_geometry,
+                        PointerEventKind::Move,
+                        None,
+                        *to,
+                    );
+                }
                 Action::MouseWheel {
                     at,
                     direction,
@@ -145,6 +219,13 @@ impl super::Actor for Actor {
                 } => {
                     mouse.move_to(*at)?;
                     mouse.scroll(direction, distance)?;
+                    record_positioned_event(
+                        pointer_sink.as_ref(),
+                        recording_geometry,
+                        PointerEventKind::Scroll,
+                        None,
+                        *at,
+                    );
                 }
                 Action::TypeText { text } => {
                     keyboard.type_text(text)?;

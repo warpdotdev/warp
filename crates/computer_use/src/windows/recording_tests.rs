@@ -8,7 +8,10 @@ use instant::Instant;
 use tokio::process::{Child, Command};
 
 use super::*;
-use crate::{Action, Actor as _, Options, Recorder as _, Target, TargetedAction, Vector2I};
+use crate::{
+    Action, ActionLogEntry, Actor as _, MouseButton, Options, PointerEventKind, PointerSession,
+    PointerSink, Recorder as _, ScrollDirection, ScrollDistance, Target, TargetedAction, Vector2I,
+};
 
 fn temp_path(name: &str, extension: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
@@ -136,7 +139,7 @@ fn builds_full_virtual_desktop_capture_command() {
             "-video_size",
             "3838x2158",
             "-draw_mouse",
-            "1",
+            "0",
             "-t",
             "12.345",
             "-i",
@@ -154,6 +157,95 @@ fn builds_full_virtual_desktop_capture_command() {
         ]
     );
     assert!(!args.iter().any(|arg| arg.contains("setpts")));
+}
+
+#[test]
+fn maps_virtual_screen_points_into_even_recording_frame() {
+    let geometry = normalize_virtual_screen_geometry(-1921, -1079, 3839, 2159).unwrap();
+
+    assert_eq!(
+        geometry.frame_point(Vector2I::new(-1921, -1079)),
+        Vector2I::new(0, 0)
+    );
+    assert_eq!(
+        geometry.frame_point(Vector2I::new(-900, 21)),
+        Vector2I::new(1021, 1100)
+    );
+    assert_eq!(
+        geometry.frame_point(Vector2I::new(-5000, -5000)),
+        Vector2I::new(0, 0)
+    );
+    assert_eq!(
+        geometry.frame_point(Vector2I::new(5000, 5000)),
+        Vector2I::new(3837, 2157)
+    );
+}
+
+#[test]
+fn records_pointer_events_in_frame_coordinates() {
+    let geometry = normalize_virtual_screen_geometry(-1921, -1079, 3839, 2159).unwrap();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = PointerSink {
+        started_at: Instant::now(),
+        recording_target: Target::Screen,
+        events: events.clone(),
+        session: PointerSession::new(),
+    };
+
+    super::super::record_positioned_event(
+        Some(&sink),
+        Some(geometry),
+        PointerEventKind::Down,
+        Some(MouseButton::Left),
+        Vector2I::new(-1900, -1000),
+    );
+    super::super::record_positioned_event(
+        Some(&sink),
+        Some(geometry),
+        PointerEventKind::Move,
+        None,
+        Vector2I::new(5000, 5000),
+    );
+    super::super::record_up(Some(&sink), MouseButton::Left);
+
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0].kind, PointerEventKind::Down);
+    assert_eq!(events[0].point, Vector2I::new(21, 79));
+    assert_eq!(events[1].kind, PointerEventKind::Move);
+    assert_eq!(events[1].point, Vector2I::new(3837, 2157));
+    assert_eq!(events[2].kind, PointerEventKind::Up);
+    assert_eq!(events[2].point, Vector2I::new(3837, 2157));
+}
+#[test]
+fn missing_frame_geometry_clears_pointer_session() {
+    let geometry = normalize_virtual_screen_geometry(0, 0, 1920, 1080).unwrap();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = PointerSink {
+        started_at: Instant::now(),
+        recording_target: Target::Screen,
+        events: events.clone(),
+        session: PointerSession::new(),
+    };
+    super::super::record_positioned_event(
+        Some(&sink),
+        Some(geometry),
+        PointerEventKind::Down,
+        Some(MouseButton::Left),
+        Vector2I::new(20, 30),
+    );
+    super::super::record_positioned_event(
+        Some(&sink),
+        None,
+        PointerEventKind::Move,
+        None,
+        Vector2I::new(40, 50),
+    );
+    super::super::record_up(Some(&sink), MouseButton::Left);
+
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, PointerEventKind::Down);
 }
 
 #[tokio::test]
@@ -284,32 +376,59 @@ async fn records_real_virtual_desktop_when_requested() {
         })
         .await
         .unwrap();
+    let started_at = Instant::now();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let group_offset = started_at.elapsed();
     let mut actor = super::super::Actor::new();
     let width = i32::try_from(geometry.width).unwrap();
     let height = i32::try_from(geometry.height).unwrap();
-    for point in [
-        Vector2I::new(
-            geometry.origin_x + width / 4,
-            geometry.origin_y + height / 4,
-        ),
-        Vector2I::new(
-            geometry.origin_x + width * 3 / 4,
-            geometry.origin_y + height * 3 / 4,
-        ),
-    ] {
-        actor
-            .perform_actions(
-                &[TargetedAction::screen(Action::MouseMove { to: point })],
-                Options {
-                    screenshot_params: None,
-                    background_enabled: false,
-                    pointer_sink: None,
-                },
-            )
-            .await
-            .unwrap();
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
+    let first = Vector2I::new(
+        geometry.origin_x + width / 4,
+        geometry.origin_y + height / 4,
+    );
+    let second = Vector2I::new(
+        geometry.origin_x + width * 3 / 4,
+        geometry.origin_y + height * 3 / 4,
+    );
+    let actions = vec![
+        TargetedAction::screen(Action::MouseMove { to: first }),
+        TargetedAction::screen(Action::MouseDown {
+            button: MouseButton::Left,
+            at: first,
+        }),
+        TargetedAction::screen(Action::Wait(Duration::from_millis(500))),
+        TargetedAction::screen(Action::MouseMove { to: second }),
+        TargetedAction::screen(Action::Wait(Duration::from_millis(500))),
+        TargetedAction::screen(Action::MouseUp {
+            button: MouseButton::Left,
+        }),
+        TargetedAction::screen(Action::MouseWheel {
+            at: second,
+            direction: ScrollDirection::Down,
+            distance: ScrollDistance::Clicks(1),
+        }),
+        TargetedAction::screen(Action::TypeText {
+            text: "overlay verification".to_string(),
+        }),
+    ];
+    let events = Arc::new(Mutex::new(Vec::new()));
+    actor
+        .perform_actions(
+            &actions,
+            Options {
+                screenshot_params: None,
+                background_enabled: false,
+                pointer_sink: Some(PointerSink {
+                    started_at,
+                    recording_target: Target::Screen,
+                    events: events.clone(),
+                    session: PointerSession::new(),
+                }),
+            },
+        )
+        .await
+        .unwrap();
+    let finish_offset = started_at.elapsed();
     let output = recorder.stop(handle).await.unwrap();
     assert_eq!(
         (output.width, output.height),
@@ -333,11 +452,29 @@ async fn records_real_virtual_desktop_when_requested() {
         "{}",
         String::from_utf8_lossy(&decode.stderr)
     );
+    let pointer_events = std::mem::take(&mut *events.lock().unwrap());
+    let entries = [ActionLogEntry {
+        offset: group_offset,
+        finish_offset,
+        labels: crate::overlay_labels_for(&actions, "Windows overlay verification"),
+        pointer_events,
+    }];
+    let overlay_path = crate::recording_post_process::post_process_recording(
+        &output.path,
+        &entries,
+        (output.width, output.height),
+        output.duration,
+        15,
+    )
+    .await
+    .unwrap();
     std::fs::create_dir_all(&output_dir).unwrap();
-    let artifact = Path::new(&output_dir).join("windows_raw_recording.mp4");
-    std::fs::copy(&output.path, &artifact).unwrap();
+    let raw_artifact = Path::new(&output_dir).join("windows_raw_recording.mp4");
+    let overlay_artifact = Path::new(&output_dir).join("windows_overlay_recording.mp4");
+    std::fs::copy(&output.path, &raw_artifact).unwrap();
+    std::fs::copy(&overlay_path, &overlay_artifact).unwrap();
     eprintln!(
-        "origin=({}, {}) dimensions={}x{} duration={:?} size={} completion={:?} artifact={}",
+        "origin=({}, {}) dimensions={}x{} duration={:?} size={} completion={:?} raw={} overlay={}",
         geometry.origin_x,
         geometry.origin_y,
         output.width,
@@ -345,11 +482,14 @@ async fn records_real_virtual_desktop_when_requested() {
         output.duration,
         output.size_bytes,
         output.completion_status,
-        artifact.display()
+        raw_artifact.display(),
+        overlay_artifact.display()
     );
     let log_path = output.path.with_extension("log");
     std::fs::remove_file(&output.path).unwrap();
+    std::fs::remove_file(&overlay_path).unwrap();
     assert!(!output.path.exists());
+    assert!(!overlay_path.exists());
     assert!(!log_path.exists());
 }
 #[test]

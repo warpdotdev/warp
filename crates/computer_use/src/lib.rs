@@ -11,6 +11,8 @@ mod noop;
 mod overlay;
 #[cfg(any(macos, linux, windows))]
 mod recording_metadata;
+#[cfg(any(linux, windows))]
+mod recording_post_process;
 #[cfg(any(macos, linux, windows))]
 mod screenshot_utils;
 #[cfg(any(macos, linux, windows))]
@@ -287,8 +289,8 @@ pub fn create_recorder() -> Box<dyn Recorder> {
 }
 
 /// Applies platform-specific post-processing and returns the path to upload.
-/// Linux trims inactive gaps and burns action overlays; other platforms return
-/// `input` unchanged.
+/// Linux and Windows trim inactive gaps and burn action overlays; other
+/// platforms return `input` unchanged.
 pub async fn post_process_recording(
     input: &Path,
     entries: &[ActionLogEntry],
@@ -296,11 +298,18 @@ pub async fn post_process_recording(
     source_duration: Duration,
     frame_rate: u32,
 ) -> Result<PathBuf, RecordingError> {
-    #[cfg(all(linux, not(noop)))]
+    #[cfg(all(any(linux, windows), not(noop)))]
     {
-        imp::post_process_recording(input, entries, dimensions, source_duration, frame_rate).await
+        recording_post_process::post_process_recording(
+            input,
+            entries,
+            dimensions,
+            source_duration,
+            frame_rate,
+        )
+        .await
     }
-    #[cfg(not(all(linux, not(noop))))]
+    #[cfg(not(all(any(linux, windows), not(noop))))]
     {
         let _ = (entries, dimensions, source_duration, frame_rate);
         Ok(input.to_path_buf())
@@ -684,7 +693,7 @@ pub struct Options {
 }
 
 /// Collects resolved pointer events during a recording so the finalize pass can burn in
-/// click/drag annotations. Only the Linux x11 actor populates it.
+/// click/drag annotations. The Linux X11 and Windows actors populate it.
 pub struct PointerSink {
     /// Capture start instant; event offsets are measured from here.
     pub started_at: instant::Instant,
