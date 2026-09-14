@@ -26,6 +26,7 @@ use super::codex_transcript::{
     parse_session_meta, rehydrate_codex_transcript,
 };
 use super::json_utils::read_json_file_or_default;
+use super::save_coordinator::{SaveCoordinator, save_transcript_and_block};
 use super::{
     HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness, write_temp_file,
 };
@@ -219,6 +220,7 @@ struct CodexHarnessRunner {
     client: Arc<dyn HarnessSupportClient>,
     terminal_driver: ModelHandle<TerminalDriver>,
     state: Mutex<CodexRunnerState>,
+    saves: SaveCoordinator,
     /// Codex session UUID. Populated lazily by [`HarnessRunner::handle_session_update`]
     /// once the codex hooks emit `SessionStart`. Set once (using `OnceLock`).
     session_id: OnceLock<Uuid>,
@@ -279,6 +281,7 @@ impl CodexHarnessRunner {
             client,
             terminal_driver,
             state: Mutex::new(CodexRunnerState::Preexec),
+            saves: SaveCoordinator::default(),
             session_id: session_id_cell,
             transcript_path: transcript_path_cell,
             preexisting_conversation_id,
@@ -423,6 +426,10 @@ impl HarnessRunner for CodexHarnessRunner {
         Ok(())
     }
 
+    fn save_coordinator(&self) -> Option<&SaveCoordinator> {
+        Some(&self.saves)
+    }
+
     async fn save_conversation(
         &self,
         save_point: SavePoint,
@@ -451,7 +458,8 @@ impl HarnessRunner for CodexHarnessRunner {
         let client = self.client.as_ref();
 
         let is_final = matches!(save_point, SavePoint::Final);
-        futures::try_join!(
+        save_transcript_and_block(
+            upload_transcript(client, &conversation_id, session_id, rollout_path, is_final),
             super::upload_current_block_snapshot(
                 foreground,
                 &self.terminal_driver,
@@ -459,9 +467,8 @@ impl HarnessRunner for CodexHarnessRunner {
                 &conversation_id,
                 block_id,
             ),
-            upload_transcript(client, &conversation_id, session_id, rollout_path, is_final),
-        )?;
-        Ok(())
+        )
+        .await
     }
 }
 
