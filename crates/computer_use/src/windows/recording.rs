@@ -35,6 +35,8 @@ const START_TIMEOUT: Duration = Duration::from_secs(15);
 const STOP_TIMEOUT: Duration = Duration::from_secs(15);
 /// Poll interval while waiting for capture to begin.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// How long to retry deleting an abandoned recording's files after its process is reaped.
+const ABANDONED_RECORDING_CLEANUP_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The virtual desktop's bounding box, in physical pixels, spanning all monitors.
 ///
@@ -384,7 +386,7 @@ pub(crate) fn spawn_abandoned_cleanup(mut process: Child, path: PathBuf) {
         .spawn(move || {
             match process.try_wait() {
                 Ok(Some(_)) => {
-                    remove_recording_files(&path);
+                    remove_abandoned_recording_files(&path);
                     return;
                 }
                 Ok(None) => {}
@@ -400,7 +402,7 @@ pub(crate) fn spawn_abandoned_cleanup(mut process: Child, path: PathBuf) {
             loop {
                 match process.try_wait() {
                     Ok(Some(_)) => {
-                        remove_recording_files(&path);
+                        remove_abandoned_recording_files(&path);
                         return;
                     }
                     Ok(None) => std::thread::sleep(Duration::from_millis(10)),
@@ -413,6 +415,43 @@ pub(crate) fn spawn_abandoned_cleanup(mut process: Child, path: PathBuf) {
         });
     if let Err(error) = result {
         log::warn!("Failed to start abandoned recording cleanup: {error}");
+    }
+}
+
+/// Deletes an abandoned recording's files, retrying for up to
+/// [`ABANDONED_RECORDING_CLEANUP_TIMEOUT`] instead of failing on the first attempt.
+///
+/// Unlike [`remove_recording_files`] (used right after `stop`/`launch_recording` reap ffmpeg
+/// themselves), the process here was force-killed rather than exiting on its own, so another
+/// process (e.g. antivirus scanning the freshly-written file) can transiently hold it open just
+/// after ffmpeg releases it. Retrying absorbs that race instead of silently leaking the file.
+fn remove_abandoned_recording_files(path: &Path) {
+    let deadline = Instant::now() + ABANDONED_RECORDING_CLEANUP_TIMEOUT;
+    let mut pending = vec![path.to_path_buf(), path.with_extension("log")];
+    loop {
+        let mut failed = Vec::new();
+        for path in pending {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => failed.push((path, error)),
+            }
+        }
+        if failed.is_empty() {
+            return;
+        }
+        if Instant::now() >= deadline {
+            for (path, error) in failed {
+                log::warn!(
+                    "Failed to remove abandoned recording file {}: {}",
+                    path.display(),
+                    error
+                );
+            }
+            return;
+        }
+        pending = failed.into_iter().map(|(path, _)| path).collect();
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 

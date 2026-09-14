@@ -1,4 +1,5 @@
 use std::io::Read as _;
+use std::os::windows::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -10,8 +11,11 @@ use tokio::process::{Child, Command};
 use super::*;
 use crate::{
     Action, ActionLogEntry, Actor as _, MouseButton, Options, PointerEventKind, PointerSession,
-    PointerSink, Recorder as _, ScrollDirection, ScrollDistance, Target, TargetedAction, Vector2I,
+    PointerSink, Recorder as _, RecordingGeometry, ScrollDirection, ScrollDistance, Target,
+    TargetedAction, Vector2I,
 };
+const FILE_SHARE_READ: u32 = 0x00000001;
+const FILE_SHARE_WRITE: u32 = 0x00000002;
 
 fn temp_path(name: &str, extension: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
@@ -495,9 +499,16 @@ async fn records_real_virtual_desktop_when_requested() {
 fn dropping_non_cooperative_live_handle_is_non_blocking_and_cleans_after_exit() {
     let path = temp_path("drop-live", "mp4");
     let log_path = path.with_extension("log");
+    let lock_ready_path = path.with_extension("lock-ready");
     std::fs::write(&path, b"video").unwrap();
     std::fs::write(&log_path, b"log").unwrap();
     let process = recording_process("stalled", &path, Stdio::null());
+    let mut lock_process = recording_process("lock-output", &path, Stdio::null());
+    let lock_deadline = Instant::now() + Duration::from_secs(5);
+    while !lock_ready_path.exists() && Instant::now() < lock_deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(lock_ready_path.exists());
 
     let started = Instant::now();
     drop(handle_for(process, path.clone()));
@@ -509,6 +520,12 @@ fn dropping_non_cooperative_live_handle_is_non_blocking_and_cleans_after_exit() 
     }
     assert!(!path.exists());
     assert!(!log_path.exists());
+    let lock_deadline = Instant::now() + Duration::from_secs(5);
+    while lock_process.try_wait().unwrap().is_none() && Instant::now() < lock_deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(lock_process.try_wait().unwrap().is_some());
+    std::fs::remove_file(lock_ready_path).unwrap();
 }
 
 #[test]
@@ -547,6 +564,16 @@ fn recording_process_helper() {
         "exit-23" => std::process::exit(23),
         "exit-0" => {}
         "stalled" => std::thread::sleep(Duration::from_secs(30)),
+        "lock-output" => {
+            let _file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .open(&path)
+                .unwrap();
+            std::fs::write(path.with_extension("lock-ready"), []).unwrap();
+            std::thread::sleep(Duration::from_millis(500));
+        }
         "read-stdin" => {
             let mut bytes = Vec::new();
             std::io::stdin().read_to_end(&mut bytes).unwrap();
