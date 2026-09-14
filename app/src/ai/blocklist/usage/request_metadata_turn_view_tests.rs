@@ -126,26 +126,8 @@ fn view_starts_with_collapsed_model_rows() {
         RequestMetadataTurnView::new_for_test(vec![record(RequestOutcome::Completed, 120.0, 0.0)]);
     assert_eq!(view.model_rows.len(), 1);
     assert!(!view.model_rows[0].expanded);
-    assert!(!view.raw_record_expanded);
-    assert!(view.raw_json.contains("\"request_id\": \"req\""));
     assert_eq!(view.records().len(), 1);
     assert_eq!(view.records()[0].request_id, "req");
-}
-
-#[test]
-fn view_raw_record_keeps_every_request() {
-    let mut first = record(RequestOutcome::Completed, 120.0, 0.0);
-    first.request_id = "req-1".to_string();
-    let mut second = record(RequestOutcome::Canceled, 0.0, 30.0);
-    second.request_id = "req-2".to_string();
-
-    let mut view = RequestMetadataTurnView::new_for_test(vec![first, second]);
-    assert!(!view.raw_record_expanded);
-    view.raw_record_expanded = !view.raw_record_expanded;
-    assert!(view.raw_record_expanded);
-    // The raw view keeps every record so per-request detail survives aggregation.
-    assert!(view.raw_json.contains("\"req-1\""));
-    assert!(view.raw_json.contains("\"req-2\""));
 }
 
 #[test]

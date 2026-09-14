@@ -57,7 +57,7 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::comment::ReviewComment;
 use crate::ai::agent::conversation::{RecordingSpanInfo, RecordingSpanStatus};
 use crate::ai::agent::icons::{self, gray_stop_icon, yellow_stop_icon};
-use crate::ai::agent::request_metadata::RequestMetadataRecord;
+use crate::ai::agent::request_metadata::TurnPanelData;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
@@ -3479,26 +3479,17 @@ fn footer_icon_button_styles(app: &AppContext) -> (UiComponentStyles, UiComponen
     (style_override, style_override_with_background)
 }
 
-/// The server-authored per-request records for the user-visible turn this block closes
-/// (APP-5720): every record across the turn's exchanges, from the user's query through the last
-/// tool-result round trip. Empty unless this block passes [`AIConversation::turn_panel_records`] —
-/// the shared eligibility check (last exchange of the turn, and every request in the turn has
-/// delivered its record) — so a mid-turn tool-call block, a turn the client cancelled or
-/// disconnected from, a conversation predating the record, and pricing transparency off all
-/// render no trigger.
-fn request_metadata_for_block(props: Props, app: &AppContext) -> Vec<RequestMetadataRecord> {
+/// The Turn panel contents for the user-visible turn this block closes (APP-5720): the
+/// server-authored records when every request in the turn delivered one, otherwise the best
+/// client-derived summary. `None` for a mid-turn tool-call block, with pricing transparency
+/// off, or without a bound exchange/conversation.
+fn turn_panel_data_for_block(props: Props, app: &AppContext) -> Option<TurnPanelData> {
     if !FeatureFlag::PricingTransparency.is_enabled() {
-        return Vec::new();
+        return None;
     }
-    let Some(exchange_id) = props.model.exchange_id(app) else {
-        return Vec::new();
-    };
-    let Some(conversation) = props.model.conversation(app) else {
-        return Vec::new();
-    };
-    conversation
-        .turn_panel_records(exchange_id)
-        .unwrap_or_default()
+    let exchange_id = props.model.exchange_id(app)?;
+    let conversation = props.model.conversation(app)?;
+    conversation.turn_panel_data(exchange_id)
 }
 
 fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Element>> {
@@ -3670,20 +3661,24 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         flex.add_child(fork_button);
     }
 
-    // When this block closes a turn with server-authored per-request records (APP-5720), the
-    // turn's trigger icon replaces the conversation-level credit-count button; blocks without
-    // one keep it.
-    let records = request_metadata_for_block(props, app);
-    if records.is_empty() {
-        flex.add_child(render_usage_button(props, app));
-    } else {
-        flex.add_child(render_turn_panel_button(
-            props,
-            &records,
-            style_override,
-            style_override_with_background,
-            app,
-        ));
+    // The Turn panel is the single per-turn usage surface (APP-5720): the trigger replaces
+    // the legacy credit-count pill on every latest-turn block, whether or not the turn
+    // delivered server-authored records (legacy turns show what the client can derive).
+    if let Some(data) = turn_panel_data_for_block(props, app) {
+        // The full-bleed pie glyph reads tighter against the fork icon than the other
+        // footer glyphs do; the explicit margin gives it the same visual spacing as
+        // the surrounding icon buttons.
+        flex.add_child(
+            Container::new(render_turn_panel_button(
+                props,
+                &data,
+                style_override,
+                style_override_with_background,
+                app,
+            ))
+            .with_margin_left(4.)
+            .finish(),
+        );
     }
 
     // Review changes button.
@@ -3717,18 +3712,19 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
 }
 
 /// Renders the per-turn icon that, on click, opens/closes the docked "Turn" panel backed by the
-/// turn's persisted request-metadata record. Same hover-tooltip/click-to-open pattern as the
-/// usage button, but an independent trigger with no cross-navigation to the usage footer.
+/// turn's usage data. Same hover-tooltip/click-to-open pattern as the old usage button, but an
+/// independent trigger with no cross-navigation to the usage footer.
 fn render_turn_panel_button(
     props: Props,
-    records: &[RequestMetadataRecord],
+    data: &TurnPanelData,
     style_override: UiComponentStyles,
     style_override_with_background: UiComponentStyles,
     app: &AppContext,
 ) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     let ui_builder = appearance.ui_builder().clone();
-    let tooltip_text = turn_panel_tooltip_text(records, AISettings::as_ref(app).usage_display_unit);
+    let tooltip_text =
+        turn_panel_tooltip_text(data.records(), AISettings::as_ref(app).usage_display_unit);
 
     icon_button(
         appearance,
@@ -3749,7 +3745,9 @@ fn render_turn_panel_button(
     .finish()
 }
 
-/// Renders the usage button that, on click, will expand & collapse the usage summary footer.
+/// Renders the legacy usage pill. Unreachable since the Turn panel became the single
+/// per-turn usage surface; kept until the usage-footer plumbing is removed or repurposed.
+#[allow(dead_code)]
 fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
     let Some(conversation) = props.model.conversation(app) else {
         return Empty::new().finish();

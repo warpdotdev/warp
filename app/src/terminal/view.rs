@@ -7318,14 +7318,12 @@ impl TerminalView {
             report_error!("Could not find conversation for turn panel");
             return;
         };
-        let Some(records) = conversation.turn_panel_records(exchange_id) else {
-            log::warn!(
-                "No complete request metadata for the turn of exchange {exchange_id}; not opening turn panel"
-            );
+        let Some(data) = conversation.turn_panel_data(exchange_id) else {
+            log::warn!("Exchange {exchange_id} does not close its turn; not opening turn panel");
             return;
         };
 
-        let turn_view = ctx.add_typed_action_view(|ctx| RequestMetadataTurnView::new(records, ctx));
+        let turn_view = ctx.add_typed_action_view(|ctx| RequestMetadataTurnView::new(data, ctx));
 
         // Close the panel when the user clicks its "X" button.
         ctx.subscribe_to_view(&turn_view, move |me, _, event, ctx| match event {

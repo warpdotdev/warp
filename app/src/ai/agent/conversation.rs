@@ -46,7 +46,9 @@ use crate::ai::agent::icons::{
     failed_icon, gray_stop_icon, in_progress_icon, succeeded_icon, yellow_stop_icon,
 };
 use crate::ai::agent::linearization::compute_task_depths;
-use crate::ai::agent::request_metadata::RequestMetadataRecord;
+use crate::ai::agent::request_metadata::{
+    RequestMetadataRecord, RequestModelCharge, RequestOutcome, RequestPlatformCharge, TurnPanelData,
+};
 use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
     AIAgentOutputMessage, AIAgentOutputMessageType, AIIdentifiers, CancellationOutcome,
@@ -65,7 +67,7 @@ use crate::notebooks::NotebookId;
 use crate::persistence::ModelEvent;
 use crate::persistence::model::{
     AgentConversationData, ChargedUsageTotals, ContextWindowSegment, ConversationUsageMetadata,
-    ModelTokenUsage, PersistedAutoexecuteMode, ToolUsageMetadata,
+    ModelTokenUsage, PRIMARY_AGENT_CATEGORY, PersistedAutoexecuteMode, ToolUsageMetadata,
 };
 use crate::server::ids::ServerId;
 use crate::terminal::general_settings::GeneralSettings;
@@ -3602,6 +3604,142 @@ impl AIConversation {
             .flat_map(|id| self.request_metadata_records_for_exchange(id))
             .filter(|record| seen_message_ids.insert(record.message_id.clone()))
             .collect()
+    }
+
+    /// The Turn panel contents for the turn containing `exchange_id`: the server-authored
+    /// records when the turn's metadata is complete, otherwise the best client-derived
+    /// summary — timing from the exchanges themselves, plus (for the latest turn only) the
+    /// last-block charge snapshots and the conversation's current context-window reading.
+    /// Cumulative conversation totals are never presented as a historical turn's charges.
+    pub fn turn_panel_data(&self, exchange_id: AIAgentExchangeId) -> Option<TurnPanelData> {
+        if !self.is_last_exchange_in_turn(exchange_id) {
+            return None;
+        }
+        if let Some(records) = self.turn_panel_records(exchange_id) {
+            return Some(TurnPanelData::Records(records));
+        }
+
+        let turn_exchange_ids = self.turn_exchange_ids(exchange_id);
+        let turn_exchanges: Vec<&AIAgentExchange> = turn_exchange_ids
+            .iter()
+            .filter_map(|id| self.exchange_with_id(*id))
+            .collect();
+        let started = turn_exchanges
+            .iter()
+            .map(|exchange| exchange.start_time)
+            .min();
+        let ended = turn_exchanges
+            .iter()
+            .filter_map(|exchange| exchange.finish_time)
+            .max();
+        let first_token = turn_exchanges
+            .iter()
+            .filter_map(|exchange| {
+                exchange
+                    .time_to_first_token_ms
+                    .map(|ms| exchange.start_time + chrono::Duration::milliseconds(ms))
+            })
+            .min();
+
+        // The last-block snapshots describe only the most recent turn; for any earlier
+        // turn they would silently attribute that turn's charges to this one.
+        let is_latest_turn = self
+            .latest_visible_exchange()
+            .is_some_and(|latest| turn_exchange_ids.last() == Some(&latest.id));
+        let charges = if is_latest_turn {
+            self.charged_usage_for_last_block()
+        } else {
+            None
+        };
+        let credits = if is_latest_turn {
+            self.credits_spent_for_last_block()
+        } else {
+            None
+        };
+        let context_window_usage = if is_latest_turn {
+            let usage = self.context_window_usage();
+            (usage > 0.0).then_some(usage * 100.0)
+        } else {
+            None
+        };
+        let has_charges = charges.is_some() || credits.is_some();
+
+        let inference_credits = charges.as_ref().map(|c| {
+            c.input_cost_in_credits
+                + c.output_cost_in_credits
+                + c.input_cache_read_cost_in_credits
+                + c.input_cache_write_cost_in_credits
+        });
+        let zero = 0.0;
+        let model_charges = if has_charges {
+            vec![RequestModelCharge {
+                    category: PRIMARY_AGENT_CATEGORY.to_string(),
+                    usage_type: "direct_api",
+                    // The flat totals deliberately discard model attribution.
+                    model_id: "Models".to_string(),
+                    input_tokens: charges.as_ref().map_or(0, |c| c.input_tokens),
+                    output_tokens: charges.as_ref().map_or(0, |c| c.output_tokens),
+                    cache_read_tokens: charges.as_ref().map_or(0, |c| c.input_cache_read_tokens),
+                    cache_write_tokens: charges.as_ref().map_or(0, |c| c.input_cache_write_tokens),
+                    input_cost_in_cents: charges.as_ref().map_or(zero, |c| c.input_cost_in_cents),
+                    output_cost_in_cents: charges.as_ref().map_or(zero, |c| c.output_cost_in_cents),
+                    cache_read_cost_in_cents: charges
+                        .as_ref()
+                        .map_or(zero, |c| c.input_cache_read_cost_in_cents),
+                    cache_write_cost_in_cents: charges
+                        .as_ref()
+                        .map_or(zero, |c| c.input_cache_write_cost_in_cents),
+                    input_cost_in_credits: inference_credits.unwrap_or(credits.unwrap_or(zero)),
+                    output_cost_in_credits: 0.0,
+                    cache_read_cost_in_credits: 0.0,
+                    cache_write_cost_in_credits: 0.0,
+                    web_search_count: charges.as_ref().map_or(0, |c| c.web_search_count),
+                    web_search_cost_in_cents: charges
+                        .as_ref()
+                        .map_or(zero, |c| c.web_search_cost_in_cents),
+                    web_search_cost_in_credits: charges
+                        .as_ref()
+                        .map_or(zero, |c| c.web_search_cost_in_credits),
+                }]
+        } else {
+            Vec::new()
+        };
+        let platform_charges = charges
+            .as_ref()
+            .filter(|c| c.platform_cost_in_cents != 0.0 || c.platform_cost_in_credits != 0.0)
+            .map(|c| {
+                vec![RequestPlatformCharge {
+                    category: PRIMARY_AGENT_CATEGORY.to_string(),
+                    cost_in_cents: c.platform_cost_in_cents,
+                    cost_in_credits: c.platform_cost_in_credits,
+                    // The flat totals carry no platform duration.
+                    duration_seconds: 0.0,
+                }]
+            })
+            .unwrap_or_default();
+
+        Some(TurnPanelData::Legacy {
+            record: Box::new(RequestMetadataRecord {
+                message_id: String::new(),
+                request_id: String::new(),
+                recorded_at: None,
+                outcome: RequestOutcome::Completed,
+                request_started_at: started,
+                first_token_at: first_token,
+                request_ended_at: ended,
+                llm_generation_spans: Vec::new(),
+                model_charges,
+                platform_charges,
+                // Tool totals are conversation-cumulative; a per-turn count is unknown.
+                tool_calls: None,
+                commands_executed: None,
+                files_changed: None,
+                lines_added: None,
+                lines_removed: None,
+                context_window_usage,
+            }),
+            has_charges,
+        })
     }
 
     /// The single eligibility check for the Turn panel, shared by the response footer and the

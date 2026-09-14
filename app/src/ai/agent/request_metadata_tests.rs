@@ -207,40 +207,6 @@ fn non_record_messages_are_ignored() {
     );
 }
 
-#[test]
-fn json_carries_every_section() {
-    let record = RequestMetadataRecord::from_message(&record_message(
-        "req-1",
-        request_metadata::Outcome::Canceled,
-        true,
-    ))
-    .expect("record");
-    let json = record.to_json();
-
-    assert_eq!(json["request_id"], "req-1");
-    assert_eq!(json["outcome"], "Canceled");
-    assert_eq!(json["incomplete"], true);
-    assert_eq!(
-        json["timing"]["llm_generation_timespans"][0]["duration_ms"],
-        7000
-    );
-    assert_eq!(
-        json["charges"]["models"][0]["model_id"],
-        "Claude Sonnet 4.6"
-    );
-    assert_eq!(json["charges"]["models"][0]["tokens"]["input"], 1000);
-    assert_eq!(json["charges"]["platform"][0]["duration_seconds"], 90.0);
-    assert_eq!(json["charges"]["platform"][0]["cost_in_credits"], 1.0);
-    assert_eq!(json["tool_call_summary"]["files_changed"], 3);
-    assert_eq!(json["context_window"]["usage"], 42.0);
-    // Must be a stable, pretty-printable document.
-    assert!(
-        serde_json::to_string_pretty(&json)
-            .unwrap()
-            .contains("\"tool_calls\": 4")
-    );
-}
-
 fn turn_messages(request_id: &str, seconds: i64) -> Vec<api::Message> {
     let user_query = api::Message {
         id: format!("query-{request_id}"),

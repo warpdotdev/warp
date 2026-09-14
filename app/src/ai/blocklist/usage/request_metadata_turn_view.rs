@@ -10,7 +10,9 @@ use warpui::platform::Cursor;
 use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use super::render_context_window_usage_icon;
-use crate::ai::agent::request_metadata::{RequestMetadataRecord, TurnSummary, summarize_turn};
+use crate::ai::agent::request_metadata::{
+    RequestMetadataRecord, TurnPanelData, TurnSummary, summarize_turn,
+};
 use crate::ai::blocklist::view_util::{format_credits, format_usage};
 use crate::appearance::Appearance;
 use crate::features::FeatureFlag;
@@ -32,8 +34,6 @@ pub enum RequestMetadataTurnViewAction {
     /// The user clicked a model row's label to expand/collapse its token breakdown. Carries
     /// the row's index into [`RequestMetadataRecord::model_charges`].
     ToggleModelExpanded(usize),
-    /// The user clicked the "RAW RECORD" header to show/hide the records as JSON.
-    ToggleRawRecord,
 }
 
 /// Emitted so the owning view (the terminal view) can remove this panel from the blocklist
@@ -50,20 +50,18 @@ struct ModelRowState {
 
 /// The docked "Turn" panel view. See module docs for scope/behavior.
 pub struct RequestMetadataTurnView {
-    /// The exchange's records, aggregated once at construction into `summary`.
+    /// The turn's data, aggregated once at construction into `summary`.
     summary: TurnSummary,
-    /// The records pretty-printed (as a JSON array) once at construction; they never change
-    /// afterwards.
-    raw_json: String,
+    /// Legacy turns without any charge data: charges are unknown, not zero, so the
+    /// inference section is hidden rather than showing fabricated zeros.
+    hide_inference_section: bool,
     close_button_mouse_state: MouseStateHandle,
-    raw_record_toggle_mouse_state: MouseStateHandle,
     /// Per-model row UI state, indexed in lockstep with `summary.model_charges`.
     model_rows: Vec<ModelRowState>,
-    raw_record_expanded: bool,
 }
 
 impl RequestMetadataTurnView {
-    pub fn new(records: Vec<RequestMetadataRecord>, ctx: &mut ViewContext<Self>) -> Self {
+    pub fn new(data: TurnPanelData, ctx: &mut ViewContext<Self>) -> Self {
         // The "Credits" rows' visibility depends on the Credits/Dollars usage-display-unit
         // setting, so the panel must re-render when the user flips it — otherwise an
         // already-open panel would show a stale section state until closed and reopened.
@@ -72,29 +70,29 @@ impl RequestMetadataTurnView {
                 ctx.notify();
             }
         });
-        Self::build(records)
+        Self::build(data)
     }
 
     #[cfg(test)]
-    pub(crate) fn new_for_test(records: Vec<RequestMetadataRecord>) -> Self {
-        Self::build(records)
+    pub(crate) fn new_for_test(data: impl Into<TurnPanelData>) -> Self {
+        Self::build(data.into())
     }
 
-    fn build(records: Vec<RequestMetadataRecord>) -> Self {
-        let mut summary = summarize_turn(&records);
+    fn build(data: TurnPanelData) -> Self {
+        let hide_inference_section = matches!(
+            &data,
+            TurnPanelData::Legacy {
+                has_charges: false,
+                ..
+            }
+        );
+        let mut summary = summarize_turn(data.records());
         // Usage-ranked display order: most tokens first, then model id for stability.
         summary.model_charges.sort_by(|a, b| {
             b.tokens()
                 .cmp(&a.tokens())
                 .then_with(|| a.model_id.cmp(&b.model_id))
         });
-        let raw_json = serde_json::to_string_pretty(
-            &records
-                .iter()
-                .map(|record| record.to_json())
-                .collect::<Vec<_>>(),
-        )
-        .unwrap_or_default();
         let model_rows = summary
             .model_charges
             .iter()
@@ -105,11 +103,9 @@ impl RequestMetadataTurnView {
             .collect();
         Self {
             summary,
-            raw_json,
+            hide_inference_section,
             close_button_mouse_state: MouseStateHandle::default(),
-            raw_record_toggle_mouse_state: MouseStateHandle::default(),
             model_rows,
-            raw_record_expanded: false,
         }
     }
 
@@ -130,29 +126,6 @@ impl RequestMetadataTurnView {
             })
             .with_color(blended_colors::text_main(theme, background))
             .finish();
-
-        let outcome = self.summary.outcome;
-        let outcome_color = if outcome.is_interrupted() {
-            theme.ansi_fg_yellow()
-        } else {
-            blended_colors::text_sub(theme, background)
-        };
-        let outcome_badge = Container::new(
-            Text::new(
-                outcome.label().to_string(),
-                appearance.ui_font_family(),
-                appearance.ui_font_size(),
-            )
-            .with_color(outcome_color)
-            .soft_wrap(false)
-            .finish(),
-        )
-        .with_margin_left(8.)
-        .with_horizontal_padding(6.)
-        .with_vertical_padding(1.)
-        .with_border(Border::all(1.).with_border_fill(outcome_color))
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
-        .finish();
 
         let close_icon_size = font_size;
         let close_button = Hoverable::new(self.close_button_mouse_state.clone(), {
@@ -179,31 +152,11 @@ impl RequestMetadataTurnView {
         })
         .finish();
 
-        // When the turn spans several requests, say so in the header so the summed numbers
-        // below are self-explanatory.
-        let mut title_row = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_child(title);
-        if self.summary.request_count > 1 {
-            title_row = title_row.with_child(
-                Text::new(
-                    format!("{} requests", self.summary.request_count),
-                    appearance.ui_font_family(),
-                    appearance.ui_font_size(),
-                )
-                .with_color(blended_colors::text_sub(theme, background))
-                .soft_wrap(false)
-                .finish(),
-            );
-        }
-        title_row = title_row.with_child(outcome_badge);
-
         Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-            .with_child(title_row.finish())
+            .with_child(title)
             .with_child(close_button)
             .finish()
     }
@@ -528,95 +481,6 @@ impl RequestMetadataTurnView {
         (!rows.is_empty()).then_some(rows)
     }
 
-    fn request_rows(&self, appearance: &Appearance) -> Vec<LabelValueRow> {
-        let font_size = appearance.ui_font_size();
-        let mut rows = vec![(
-            render_label_text("Outcome", appearance),
-            render_value_text(
-                self.summary.outcome.label().to_string(),
-                font_size + 2.,
-                appearance,
-            ),
-        )];
-        // A multi-request turn that partially failed says so explicitly, rather than letting the
-        // single worst-outcome badge imply every request failed. Name the interrupted count as
-        // such: it is not the worst-outcome count (one Errored + one Canceled is 2 of 2
-        // interrupted, not "2 of 2 Errored").
-        if self.summary.interrupted_count > 0 && self.summary.request_count > 1 {
-            rows.push((
-                render_label_text("Interrupted", appearance),
-                render_value_text(
-                    format!(
-                        "{} of {} requests interrupted",
-                        self.summary.interrupted_count, self.summary.request_count
-                    ),
-                    font_size,
-                    appearance,
-                ),
-            ));
-        }
-        if let Some(recorded_at) = self.summary.recorded_at {
-            rows.push((
-                render_label_text("Recorded at", appearance),
-                render_value_text(
-                    recorded_at.format("%-m/%-d/%Y %H:%M:%S").to_string(),
-                    font_size,
-                    appearance,
-                ),
-            ));
-        }
-        let request_id = if self.summary.request_count == 1 {
-            self.summary
-                .records
-                .first()
-                .map(|record| record.request_id.clone())
-                .unwrap_or_default()
-        } else {
-            format!("{} requests", self.summary.request_count)
-        };
-        rows.push((
-            render_label_text("Request ID", appearance),
-            render_value_text(request_id, font_size - 1., appearance),
-        ));
-        rows
-    }
-
-    fn raw_record_header(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let header_font_size = appearance.overline_font_size() + 3.;
-        let color = blended_colors::text_disabled(theme, theme.surface_2());
-        let chevron_icon = if self.raw_record_expanded {
-            Icon::ChevronDown
-        } else {
-            Icon::ChevronRight
-        };
-        let font_family = appearance.overline_font_family();
-        Hoverable::new(self.raw_record_toggle_mouse_state.clone(), move |_| {
-            Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_main_axis_size(MainAxisSize::Min)
-                .with_spacing(4.)
-                .with_child(
-                    ConstrainedBox::new(chevron_icon.to_warpui_icon(color.into()).finish())
-                        .with_width(header_font_size)
-                        .with_height(header_font_size)
-                        .finish(),
-                )
-                .with_child(
-                    Text::new("RAW RECORD".to_string(), font_family, header_font_size)
-                        .with_color(color)
-                        .soft_wrap(false)
-                        .finish(),
-                )
-                .finish()
-        })
-        .with_cursor(Cursor::PointingHand)
-        .on_click(|ctx, _, _| {
-            ctx.dispatch_typed_action(RequestMetadataTurnViewAction::ToggleRawRecord);
-        })
-        .finish()
-    }
-
     fn build_label_value_columns(
         &self,
         appearance: &Appearance,
@@ -654,12 +518,16 @@ impl RequestMetadataTurnView {
                 }
             };
 
-        let (inference_label, inference_value) = self.inference_usage_header_row(appearance);
-        push_row(inference_label, inference_value, 8.);
-        push_section_rows(
-            self.model_usage_rows(appearance, usage_display_unit),
-            &mut push_row,
-        );
+        // A legacy turn without charge data hides the inference section entirely:
+        // its charges are unknown, and a zero header would read as "free".
+        if !self.hide_inference_section {
+            let (inference_label, inference_value) = self.inference_usage_header_row(appearance);
+            push_row(inference_label, inference_value, 8.);
+            push_section_rows(
+                self.model_usage_rows(appearance, usage_display_unit),
+                &mut push_row,
+            );
+        }
 
         if let Some(rows) = self.platform_usage_rows(appearance, usage_display_unit) {
             push_section_rows(rows, &mut push_row);
@@ -687,32 +555,7 @@ impl RequestMetadataTurnView {
             push_section_rows(rows, &mut push_row);
         }
 
-        push_row(
-            Self::render_section_header("REQUEST", appearance),
-            Self::render_section_header("", appearance),
-            8.,
-        );
-        push_section_rows(self.request_rows(appearance), &mut push_row);
-
         (labels, values)
-    }
-
-    fn render_raw_record(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        Container::new(
-            Text::new(
-                self.raw_json.clone(),
-                appearance.monospace_font_family(),
-                appearance.monospace_font_size() - 2.,
-            )
-            .with_color(blended_colors::text_main(theme, theme.surface_2()))
-            .with_selectable(true)
-            .finish(),
-        )
-        .with_uniform_padding(8.)
-        .with_background(theme.surface_1())
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
-        .finish()
     }
 }
 
@@ -733,7 +576,7 @@ impl View for RequestMetadataTurnView {
 
         let (labels, values) = self.build_label_value_columns(appearance, usage_display_unit);
 
-        let mut content = Flex::column()
+        let content = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(
                 Container::new(self.render_header(appearance))
@@ -746,15 +589,7 @@ impl View for RequestMetadataTurnView {
                     .with_child(Flex::column().with_children(labels).finish())
                     .with_child(Flex::column().with_children(values).finish())
                     .finish(),
-            )
-            .with_child(
-                Container::new(self.raw_record_header(appearance))
-                    .with_margin_bottom(6.)
-                    .finish(),
             );
-        if self.raw_record_expanded {
-            content.add_child(self.render_raw_record(appearance));
-        }
 
         Container::new(content.finish())
             .with_uniform_padding(12.)
@@ -786,10 +621,6 @@ impl TypedActionView for RequestMetadataTurnView {
                 if let Some(row) = self.model_rows.get_mut(*index) {
                     row.expanded = !row.expanded;
                 }
-                ctx.notify();
-            }
-            RequestMetadataTurnViewAction::ToggleRawRecord => {
-                self.raw_record_expanded = !self.raw_record_expanded;
                 ctx.notify();
             }
         }
