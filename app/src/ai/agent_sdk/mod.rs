@@ -895,6 +895,10 @@ impl AgentDriverRunner {
         foreground: &ModelSpawner<Self>,
         task_id: Option<AmbientAgentTaskId>,
     ) -> Result<(), AgentDriverError> {
+        #[cfg(feature = "crash_reporting")]
+        if let Some(task_id) = task_id {
+            crate::crash_reporting::set_task_id_tag(&task_id.to_string());
+        }
         foreground
             .spawn(move |_, ctx| {
                 ServerApiProvider::handle(ctx)

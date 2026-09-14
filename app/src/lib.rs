@@ -1538,6 +1538,12 @@ pub(crate) fn initialize_app(
                 None
             }
         });
+    #[cfg(all(not(target_family = "wasm"), feature = "crash_reporting"))]
+    if matches!(launch_mode, LaunchMode::CommandLine { .. })
+        && let Some(task_id) = ambient_agent_task_id
+    {
+        crash_reporting::set_task_id_tag(&task_id.to_string());
+    }
     #[cfg(not(target_family = "wasm"))]
     server_api.set_ambient_agent_task_id(ambient_agent_task_id);
     let ai_client = server_api_provider.as_ref(ctx).get_ai_client();
