@@ -691,48 +691,48 @@ impl AgentDriverRunner {
         // Local CLI-created runs may not have a task yet, so those setup events explicitly no-op.
         let mut task_id: Option<AmbientAgentTaskId> =
             args.task_id.as_deref().and_then(|s| s.parse().ok());
-        Self::set_ambient_agent_task_id(&foreground, task_id).await?;
-        let background = foreground.spawn(|_, ctx| ctx.background_executor()).await?;
-        let setup_events = match task_id {
-            Some(task_id) => SetupClientEventReporter::new(task_id, server_api.clone(), background),
-            None => SetupClientEventReporter::noop(server_api.clone(), background),
-        };
-        setup_events
-            .post_timeline_event(OzRunTimelineEvent::WorkerContainerReady)
-            .await;
-
-        // Ensure we've synced team state before starting the driver.
-        setup_events
-            .record_result(
-                SetupStep::TeamMetadataRefresh,
-                Self::refresh_team_metadata(&foreground),
-            )
-            .await?;
-        let args_for_team_scope = args.clone();
-        let agent_driver_team_scope = foreground
-            .spawn(move |_, ctx| resolve_agent_driver_team_scope(&args_for_team_scope, ctx))
-            .await?
-            .map_err(AgentDriverError::ConfigBuildFailed)?;
-
-        // Wait for Warp Drive to sync before building the task config, since
-        // prompt resolution (SavedPrompt -> workflow lookup) and environment
-        // resolution (CloudAmbientAgentEnvironment lookup) depend on it.
-        setup_events
-            .record_result(SetupStep::WarpDriveSync, async {
-                if foreground
-                    .spawn(|_, ctx| common::refresh_warp_drive(ctx))
-                    .await?
-                    .await
-                    .is_err()
-                {
-                    return Err(AgentDriverError::WarpDriveSyncFailed);
-                }
-                Ok(())
-            })
-            .await?;
-
         // Set up and run the driver, reporting any errors back to the server.
         let result: Result<(), AgentDriverError> = async {
+            Self::set_ambient_agent_task_id(&foreground, task_id).await?;
+            let background = foreground.spawn(|_, ctx| ctx.background_executor()).await?;
+            let setup_events = match task_id {
+                Some(task_id) => SetupClientEventReporter::new(task_id, server_api.clone(), background),
+                None => SetupClientEventReporter::noop(server_api.clone(), background),
+            };
+            setup_events
+                .post_timeline_event(OzRunTimelineEvent::WorkerContainerReady)
+                .await;
+
+            // Ensure we've synced team state before starting the driver.
+            setup_events
+                .record_result(
+                    SetupStep::TeamMetadataRefresh,
+                    Self::refresh_team_metadata(&foreground),
+                )
+                .await?;
+            let args_for_team_scope = args.clone();
+            let agent_driver_team_scope = foreground
+                .spawn(move |_, ctx| resolve_agent_driver_team_scope(&args_for_team_scope, ctx))
+                .await?
+                .map_err(AgentDriverError::ConfigBuildFailed)?;
+
+            // Wait for Warp Drive to sync before building the task config, since
+            // prompt resolution (SavedPrompt -> workflow lookup) and environment
+            // resolution (CloudAmbientAgentEnvironment lookup) depend on it.
+            setup_events
+                .record_result(SetupStep::WarpDriveSync, async {
+                    if foreground
+                        .spawn(|_, ctx| common::refresh_warp_drive(ctx))
+                        .await?
+                        .await
+                        .is_err()
+                    {
+                        return Err(AgentDriverError::WarpDriveSyncFailed);
+                    }
+                    Ok(())
+                })
+                .await?;
+
             // Pull relevant variables out of args before moving it into the closure.
             let share_requests = args.share.share.clone();
             let bedrock_inference_role = args.bedrock_inference_role.clone();

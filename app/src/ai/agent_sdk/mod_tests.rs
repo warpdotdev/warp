@@ -2,13 +2,14 @@ use std::sync::Arc;
 
 use clap::Parser;
 use serde_json::json;
-use warp_cli::agent::{AgentCommand, Harness, RunAgentArgs};
+use warp_cli::agent::{AgentCommand, Harness, OutputFormat, RunAgentArgs};
 use warp_cli::artifact::{
     ArtifactCommand, DownloadArtifactArgs, GetArtifactArgs, UploadArtifactArgs,
 };
 use warp_cli::task::{MessageCommand, MessageSendArgs, MessageWatchArgs, TaskCommand};
 use warp_cli::{Args, CliCommand, Command};
 use warp_core::telemetry::TelemetryEvent;
+use warp_graphql::ai::AgentTaskState;
 use warpui::{App, SingletonEntity, WindowId};
 
 use super::{
@@ -113,11 +114,12 @@ fn agent_driver_options() -> AgentDriverOptions {
 }
 
 #[test]
-fn agent_run_setup_propagates_terminal_team_metadata_refresh_failure() {
+fn agent_run_setup_reports_terminal_team_metadata_refresh_failure() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| NetworkStatus::new());
         app.add_singleton_model(TeamTesterStatus::new);
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
 
         let mut team_client = MockTeamClient::new();
         team_client
@@ -125,12 +127,49 @@ fn agent_run_setup_propagates_terminal_team_metadata_refresh_failure() {
             .times(4)
             .returning(|| Err(anyhow::anyhow!("workspace metadata unavailable")));
         app.add_singleton_model(|ctx| TeamUpdateManager::new(Arc::new(team_client), None, ctx));
+        let mut ai_client = MockAIClient::new();
+        ai_client
+            .expect_post_agent_run_client_event()
+            .times(1..=2)
+            .returning(|_, _| Ok(()));
+        ai_client
+            .expect_update_agent_task()
+            .times(1)
+            .withf(
+                |task_id,
+                 task_state,
+                 session_id,
+                 conversation_id,
+                 status_message,
+                 session_debug_until,
+                 debug_agent_active| {
+                    task_id.to_string() == TASK_ID
+                        && *task_state == Some(AgentTaskState::Error)
+                        && session_id.is_none()
+                        && conversation_id.is_none()
+                        && status_message.as_ref().is_some_and(|status| {
+                            status.message
+                                == "Failed to refresh team metadata: workspace metadata unavailable"
+                        })
+                        && session_debug_until.is_none()
+                        && debug_agent_active.is_none()
+                },
+            )
+            .returning(|_, _, _, _, _, _, _| Ok(()));
+        let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
 
         let runner = app.add_singleton_model(|_| AgentDriverRunner);
         let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
-        let error = AgentDriverRunner::refresh_team_metadata(&foreground)
-            .await
-            .expect_err("terminal refresh errors should abort agent run setup");
+        let args = parse_run_agent_args(&["agent", "run", "--task-id", TASK_ID]);
+
+        let error = AgentDriverRunner::setup_and_run_driver(
+            foreground,
+            args,
+            ai_client,
+            OutputFormat::Text,
+        )
+        .await
+        .expect_err("terminal refresh errors should abort agent run setup");
         let AgentDriverError::TeamMetadataRefreshFailed(source) = error else {
             panic!("unexpected setup error: {error:#}");
         };
