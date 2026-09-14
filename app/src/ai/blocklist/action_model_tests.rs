@@ -100,3 +100,32 @@ fn finished_results_stay_in_original_action_order() {
         AIAgentActionId::from("third".to_owned())
     );
 }
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn continuing_conversation_does_not_finalize_recording_when_actions_are_cancelled() {
+    assert!(!should_finalize_recording_after_action_cancellation(Some(
+        CancellationReason::FollowUpSubmitted {
+            is_for_same_conversation: true,
+        }
+    )));
+    assert!(!should_finalize_recording_after_action_cancellation(Some(
+        CancellationReason::CLISubagentUserTakeover
+    )));
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn terminal_conversation_finalizes_recording_when_actions_are_cancelled() {
+    assert!(should_finalize_recording_after_action_cancellation(Some(
+        CancellationReason::ManuallyCancelled
+    )));
+    assert!(should_finalize_recording_after_action_cancellation(Some(
+        CancellationReason::FollowUpSubmitted {
+            is_for_same_conversation: false,
+        }
+    )));
+    assert!(should_finalize_recording_after_action_cancellation(Some(
+        CancellationReason::AgentExitedShell
+    )));
+}
