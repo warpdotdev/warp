@@ -217,7 +217,8 @@ impl AgentDriver {
             && let Some(token) = credentials.as_ref().and_then(builtin::builtin_bearer_token)
         {
             log::info!("Attaching the built-in Factory MCP server to this agent run");
-            installations.push(builtin::factory_mcp_installation(&token));
+            let ambient_headers = Self::factory_mcp_ambient_headers(foreground).await;
+            installations.push(builtin::factory_mcp_installation(&token, &ambient_headers));
         }
         Self::mcp_installations_to_json(installations, secrets.as_ref())
     }
@@ -402,13 +403,17 @@ impl AgentDriver {
     /// usable bearer token, and no configured server already named
     /// `warp-factory` (an explicit configuration wins over the built-in).
     ///
-    /// The token is pinned into the transport at spawn time and is not
+    /// The bearer token is pinned into the transport at spawn time and is not
     /// refreshed mid-run: cloud runs authenticate with API keys, which do not
     /// rotate, so only Firebase-authenticated local runs that outlive their
-    /// token would see factory tool calls start failing.
+    /// token would see factory tool calls start failing. `ambient_headers`
+    /// (workload token, cloud-agent ID) are resolved separately per call via
+    /// [`Self::factory_mcp_ambient_headers`] since they depend on this run's
+    /// active ambient task, if any, rather than on credentials.
     fn builtin_factory_mcp_for_run(
         credentials: Option<&Credentials>,
         taken_server_names: &HashSet<String>,
+        ambient_headers: &[(String, String)],
     ) -> Option<TemplatableMCPServerInstallation> {
         if !FeatureFlag::FactoryMcp.is_enabled() {
             return None;
@@ -422,7 +427,33 @@ impl AgentDriver {
         }
         let token = builtin::builtin_bearer_token(credentials?)?;
         log::info!("Attaching the built-in Factory MCP server to this agent run");
-        Some(builtin::factory_mcp_installation(&token))
+        Some(builtin::factory_mcp_installation(&token, ambient_headers))
+    }
+
+    /// Resolves the ambient headers (workload token, cloud-agent ID) to attach to the
+    /// built-in Factory MCP server, so warp-server can verify the caller is this run's
+    /// own worker instead of soft-failing the check on a missing token. Returns an
+    /// empty list when this run has no active ambient task (e.g. a local session) or
+    /// no isolation platform can issue a workload token.
+    async fn factory_mcp_ambient_headers(foreground: &ModelSpawner<Self>) -> Vec<(String, String)> {
+        let Ok((task_id, server_api)) = foreground
+            .spawn(|me, ctx| (me.task_id, ServerApiProvider::as_ref(ctx).get()))
+            .await
+        else {
+            return Vec::new();
+        };
+        let Some(task_id) = task_id else {
+            return Vec::new();
+        };
+        server_api
+            .ambient_agent_headers_for_task(&task_id)
+            .await
+            .unwrap_or_else(|err| {
+                log::warn!(
+                    "Failed to resolve ambient headers for the built-in Factory MCP server: {err:#}"
+                );
+                Vec::new()
+            })
     }
 
     fn installations_from_user_mcp_json(
@@ -561,9 +592,12 @@ impl AgentDriver {
                 taken_server_names.extend(local_names);
                 credentials
             })?;
-        if let Some(installation) =
-            Self::builtin_factory_mcp_for_run(credentials.as_ref(), &taken_server_names)
-        {
+        let ambient_headers = Self::factory_mcp_ambient_headers(foreground).await;
+        if let Some(installation) = Self::builtin_factory_mcp_for_run(
+            credentials.as_ref(),
+            &taken_server_names,
+            &ambient_headers,
+        ) {
             ephemeral_installations.push(installation);
         }
 

@@ -61,7 +61,7 @@ fn factory_mcp_url_joins_server_roots_with_and_without_trailing_slash() {
 #[test]
 fn factory_installation_resolves_to_a_preauthenticated_http_server() {
     let installation =
-        factory_mcp_installation_for_server_root("https://staging.warp.dev", "tok-123");
+        factory_mcp_installation_for_server_root("https://staging.warp.dev", "tok-123", &[]);
     assert_eq!(installation.uuid(), FACTORY_MCP_INSTALLATION_UUID);
     // Fully resolved: nothing for the variable-prompt UI to ask for, and
     // nothing for handlebars to substitute at spawn time.
@@ -81,6 +81,51 @@ fn factory_installation_resolves_to_a_preauthenticated_http_server() {
             assert_eq!(sse.headers.len(), 1);
             assert_eq!(sse.headers[0].name, "Authorization");
             assert_eq!(sse.headers[0].value, "Bearer tok-123");
+        }
+        TransportType::CLIServer(_) => panic!("expected an HTTP transport"),
+    }
+}
+
+#[test]
+fn factory_installation_attaches_ambient_headers_for_an_active_task() {
+    let ambient_headers = [
+        (
+            "X-Warp-Ambient-Workload-Token".to_string(),
+            "workload-tok".to_string(),
+        ),
+        ("X-Warp-Cloud-Agent-ID".to_string(), "task-abc".to_string()),
+    ];
+    let installation = factory_mcp_installation_for_server_root(
+        "https://staging.warp.dev",
+        "tok-123",
+        &ambient_headers,
+    );
+
+    let resolved = resolve_json(&installation);
+    let mut servers =
+        MCPServer::from_user_json(&resolved).expect("built-in template must parse as MCP config");
+    let server = servers.pop().expect("one server");
+    match server.transport_type {
+        TransportType::ServerSentEvents(sse) => {
+            assert_eq!(sse.headers.len(), 3);
+            let header_value = |name: &str| {
+                sse.headers
+                    .iter()
+                    .find(|header| header.name == name)
+                    .map(|header| header.value.clone())
+            };
+            assert_eq!(
+                header_value("Authorization"),
+                Some("Bearer tok-123".to_string())
+            );
+            assert_eq!(
+                header_value("X-Warp-Ambient-Workload-Token"),
+                Some("workload-tok".to_string())
+            );
+            assert_eq!(
+                header_value("X-Warp-Cloud-Agent-ID"),
+                Some("task-abc".to_string())
+            );
         }
         TransportType::CLIServer(_) => panic!("expected an HTTP transport"),
     }

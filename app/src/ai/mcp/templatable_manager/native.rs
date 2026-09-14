@@ -828,7 +828,10 @@ impl TemplatableMCPServerManager {
         log::info!("Spawning the built-in Factory MCP server");
         self.builtin_server_uuids.insert(installation_uuid);
         self.builtin_server_token = Some(token.clone());
-        self.spawn_ephemeral_server(builtin::factory_mcp_installation(&token), ctx);
+        // No ambient headers here: this path only ever runs for interactive (GUI/TUI)
+        // clients, which have no active ambient task. CLI/cloud agent runs attach their
+        // own run-scoped installation instead (see AgentDriver::builtin_factory_mcp_for_run).
+        self.spawn_ephemeral_server(builtin::factory_mcp_installation(&token, &[]), ctx);
     }
 
     /// Spawns a new MCP server from a given installation UUID.

@@ -544,7 +544,9 @@ impl ServerApi {
             .await
     }
 
-    async fn ambient_agent_headers_for_task(
+    /// Returns ambient agent headers (workload token, cloud-agent ID) scoped to one task,
+    /// without disturbing the client's own inherited ambient-agent-task-ID state.
+    pub async fn ambient_agent_headers_for_task(
         &self,
         task_id: &AmbientAgentTaskId,
     ) -> Result<Vec<(String, String)>> {
