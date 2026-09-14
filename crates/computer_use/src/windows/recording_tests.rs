@@ -441,6 +441,7 @@ async fn records_real_virtual_desktop_when_requested() {
         .await
         .unwrap();
     let finish_offset = started_at.elapsed();
+    tokio::time::sleep(Duration::from_secs(1)).await;
     let output = recorder.stop(handle).await.unwrap();
     assert_eq!(
         (output.width, output.height),
