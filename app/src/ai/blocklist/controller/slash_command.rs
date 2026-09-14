@@ -13,7 +13,7 @@ use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentContext, AIAgentInput, CancellationReason, CloneRepositoryURL, EntrypointType,
-    InvokeSkillUserQuery, RequestMetadata,
+    InvokeSkillUserQuery, RequestMetadata, UserQueryAttribution,
 };
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::context_model::{
@@ -288,6 +288,7 @@ impl SlashCommandRequest {
                             parse_context_attachments(&query, context_model, app);
                         add_pending_file_attachments(&mut referenced_attachments, prompt_files);
                         InvokeSkillUserQuery {
+                            attribution: Some(UserQueryAttribution::fresh_local()),
                             referenced_attachments,
                             query,
                         }

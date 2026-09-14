@@ -2203,6 +2203,26 @@ fn test_shared_followup_on_existing_conversation_converts_user_query_input() {
         let request_id = "new-followup-request";
         let root_task_id = "root-task";
         let followup_query = "follow up";
+        let expected_attribution = api::message::UserQuery {
+            origin: Some(api::UserQueryOrigin {
+                variant: Some(api::user_query_origin::Variant::ExternalPlatform(
+                    api::user_query_origin::ExternalPlatform {},
+                )),
+            }),
+            author: Some(api::QueryAuthor {
+                principal: Some(api::query_author::Principal::User(api::WarpUser {
+                    uid: "external-author".into(),
+                    email: "external@example.com".into(),
+                    team_uid: "external-team".into(),
+                })),
+                resolution: api::IdentityResolution::ExternalAccountBinding.into(),
+            }),
+            source_message: Some(api::ExternalMessage {
+                body: "raw follow up".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
 
         let conversation_id =
             BlocklistAIHistoryModel::handle(&app).update(&mut app, |model, ctx| {
@@ -2273,6 +2293,11 @@ fn test_shared_followup_on_existing_conversation_converts_user_query_input() {
                                                 referenced_attachments: HashMap::new(),
                                                 mode: None,
                                                 intended_agent: Default::default(),
+                                                origin: expected_attribution.origin.clone(),
+                                                author: expected_attribution.author.clone(),
+                                                source_message: expected_attribution
+                                                    .source_message
+                                                    .clone(),
                                             },
                                         )),
                                         request_id: request_id.to_string(),
@@ -2299,7 +2324,13 @@ fn test_shared_followup_on_existing_conversation_converts_user_query_input() {
                 .latest_exchange()
                 .and_then(|exchange| exchange.input.first())
                 .expect("shared-session replay should reconstruct the user query input");
-            assert!(matches!(input, AIAgentInput::UserQuery { .. }));
+            let AIAgentInput::UserQuery { attribution, .. } = input else {
+                panic!("expected user query");
+            };
+            assert_eq!(
+                *attribution,
+                crate::ai::agent::UserQueryAttribution::from_message(&expected_attribution)
+            );
             assert_eq!(input.display_query().as_deref(), Some(followup_query));
         });
     });

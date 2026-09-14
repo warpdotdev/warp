@@ -439,3 +439,7 @@ impl RequestParams {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "api/query_attribution_tests.rs"]
+mod query_attribution_tests;

@@ -8,7 +8,7 @@ use warp_multi_agent_api as api;
 use crate::ai::agent::{
     AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment, AIAgentContext, AIAgentInput,
     DriveObjectPayload, MCPContext, PassiveSuggestionResultType, PassiveSuggestionTrigger,
-    RunningCommand, StaticQueryType, Suggestions, UserQueryMode,
+    RunningCommand, StaticQueryType, Suggestions, UserQueryAttribution, UserQueryMode,
 };
 use crate::ai::block_context::BlockContext;
 
@@ -70,6 +70,7 @@ pub(super) fn convert_input(
                 query,
                 context,
                 static_query_type: Some(query_type),
+                attribution,
                 ..
             } => {
                 return Ok(api::request::Input {
@@ -77,6 +78,7 @@ pub(super) fn convert_input(
                     r#type: Some(api::request::input::Type::QueryWithCannedResponse(
                         api::request::input::QueryWithCannedResponse {
                             query,
+                            attribution: attribution.as_ref().map(UserQueryAttribution::envelope),
                             r#type: Some(query_type.try_into()?),
                         },
                     )),
@@ -224,6 +226,11 @@ pub(super) fn convert_input(
                                         .collect(),
                                     mode: None,
                                     intended_agent: Default::default(),
+                                    ..user_query
+                                        .attribution
+                                        .as_ref()
+                                        .map(UserQueryAttribution::request_fields)
+                                        .unwrap_or_default()
                                 }
                             }),
                         },
@@ -290,6 +297,7 @@ fn convert_input_to_user_input(
             user_query_mode,
             running_command: None,
             intended_agent,
+            attribution,
             ..
         } => Ok(
             api::request::input::user_inputs::user_input::Input::UserQuery(
@@ -298,6 +306,7 @@ fn convert_input_to_user_input(
                     referenced_attachments: referenced_attachments.into_iter().map(|(k, attachment)| (k, attachment.into())).collect(),
                     mode: Some(user_query_mode.into()),
                     intended_agent: intended_agent.map(|agent| agent.into()).unwrap_or_default(),
+                    ..attribution.as_ref().map(UserQueryAttribution::request_fields).unwrap_or_default()
                 },
             ),
         ),
@@ -306,6 +315,7 @@ fn convert_input_to_user_input(
             static_query_type: None,
             referenced_attachments,
             user_query_mode,
+            attribution,
             running_command: Some(RunningCommand{
                 command,
                 block_id,
@@ -323,6 +333,7 @@ fn convert_input_to_user_input(
                             referenced_attachments: referenced_attachments.into_iter().map(|(k, attachment)| (k, attachment.into())).collect(),
                             mode: Some(user_query_mode.into()),
                             intended_agent: api::AgentType::Cli.into(),
+                            ..attribution.as_ref().map(UserQueryAttribution::request_fields).unwrap_or_default()
                         }),
                     running_command: Some(api::RunningShellCommand{
                         command,

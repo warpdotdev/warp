@@ -52,7 +52,8 @@ use crate::ai::agent::{
     CancellationReason, DocumentContentAttachmentSource, EntrypointType, FileContext,
     FinishedAIAgentOutput, PassiveSuggestionResultType, PassiveSuggestionTrigger,
     PassiveSuggestionTriggerType, RenderableAIError, RequestCost, RequestMetadata, RunningCommand,
-    StaticQueryType, TransientNetworkErrorKind, UserQueryMode, extract_user_query_mode,
+    StaticQueryType, TransientNetworkErrorKind, UserQueryAttribution, UserQueryMode,
+    extract_user_query_mode,
 };
 use crate::ai::agent_events::AgentMessageEventMetadata;
 #[cfg(not(target_family = "wasm"))]
@@ -408,6 +409,7 @@ impl LocalClaudeWakeTrigger {
 }
 
 struct InputQuery {
+    attribution: Option<UserQueryAttribution>,
     which_task: WhichTask,
     input_query: InputQueryType,
     /// Additional referenced attachments to include in the query
@@ -831,6 +833,7 @@ impl BlocklistAIController {
                     static_query_type,
                     user_query_mode,
                     running_command,
+                    input_query.attribution,
                     additional_attachments,
                     prompt_attachments,
                     self.context_model.as_ref(ctx),
@@ -978,6 +981,8 @@ impl BlocklistAIController {
             participant_id,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            None,
+            HashMap::new(),
             ctx,
         );
     }
@@ -1002,6 +1007,8 @@ impl BlocklistAIController {
             participant_id,
             /*is_queued_prompt*/ true,
             Some(queued_query_id),
+            None,
+            HashMap::new(),
             ctx,
         );
     }
@@ -1015,6 +1022,8 @@ impl BlocklistAIController {
         participant_id: Option<ParticipantId>,
         is_queued_prompt: bool,
         queued_query_id: Option<QueuedQueryId>,
+        attribution: Option<UserQueryAttribution>,
+        additional_attachments: HashMap<String, AIAgentAttachment>,
         ctx: &mut ModelContext<Self>,
     ) {
         let participant_id = participant_id.or_else(|| self.get_sharer_participant_id());
@@ -1044,6 +1053,7 @@ impl BlocklistAIController {
             };
             self.send_query(
                 InputQuery {
+                    attribution,
                     which_task: WhichTask::Task {
                         conversation_id,
                         task_id,
@@ -1053,7 +1063,7 @@ impl BlocklistAIController {
                         static_query_type,
                         running_command: Some(running_command),
                     },
-                    additional_attachments: HashMap::new(),
+                    additional_attachments,
                     queued_query_id,
                 },
                 entrypoint_type,
@@ -1064,13 +1074,14 @@ impl BlocklistAIController {
         } else {
             self.send_query(
                 InputQuery {
+                    attribution,
                     which_task: WhichTask::NewConversation,
                     input_query: InputQueryType::UserSubmittedQueryFromInput {
                         query,
                         static_query_type,
                         running_command: None,
                     },
-                    additional_attachments: HashMap::new(),
+                    additional_attachments,
                     queued_query_id,
                 },
                 entrypoint_type,
@@ -1098,6 +1109,7 @@ impl BlocklistAIController {
             EntrypointType::AgentInitiated,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            None,
             ctx,
         );
     }
@@ -1120,6 +1132,7 @@ impl BlocklistAIController {
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            None,
             ctx,
         )
     }
@@ -1145,6 +1158,7 @@ impl BlocklistAIController {
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ true,
             Some(queued_query_id),
+            None,
             ctx,
         );
     }
@@ -1156,6 +1170,7 @@ impl BlocklistAIController {
         conversation_id: AIConversationId,
         participant_id: Option<ParticipantId>,
         additional_attachments: HashMap<String, AIAgentAttachment>,
+        attribution: Option<UserQueryAttribution>,
         ctx: &mut ModelContext<Self>,
     ) {
         self.send_user_query_in_conversation_internal(
@@ -1167,6 +1182,7 @@ impl BlocklistAIController {
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            attribution,
             ctx,
         );
     }
@@ -1191,6 +1207,7 @@ impl BlocklistAIController {
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            None,
             ctx,
         );
     }
@@ -1206,6 +1223,7 @@ impl BlocklistAIController {
         entrypoint_type: EntrypointType,
         is_queued_prompt: bool,
         queued_query_id: Option<QueuedQueryId>,
+        attribution: Option<UserQueryAttribution>,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
         let is_viewer = self
@@ -1309,6 +1327,7 @@ impl BlocklistAIController {
         let participant_id = participant_id.or_else(|| self.get_sharer_participant_id());
         self.send_query(
             InputQuery {
+                attribution,
                 which_task: WhichTask::Task {
                     conversation_id,
                     task_id,
@@ -1338,6 +1357,7 @@ impl BlocklistAIController {
         let participant_id = self.get_sharer_participant_id();
         self.send_query(
             InputQuery {
+                attribution: None,
                 which_task: WhichTask::NewConversation,
                 input_query: InputQueryType::UserSubmittedQueryFromInput {
                     query: query_type.query().to_string(),
@@ -1379,6 +1399,7 @@ impl BlocklistAIController {
         };
         self.send_query(
             InputQuery {
+                attribution: None,
                 which_task,
                 input_query: InputQueryType::AIInputType { ai_input },
                 additional_attachments: HashMap::new(),
@@ -1555,6 +1576,7 @@ impl BlocklistAIController {
         );
         self.send_query(
             InputQuery {
+                attribution: None,
                 which_task,
                 input_query: InputQueryType::AIInputType {
                     ai_input: AIAgentInput::PassiveSuggestionResult {
@@ -3532,6 +3554,7 @@ fn input_for_query(
     static_query_type: Option<StaticQueryType>,
     user_query_mode: UserQueryMode,
     running_command: Option<RunningCommand>,
+    attribution: Option<UserQueryAttribution>,
     additional_attachments: HashMap<String, AIAgentAttachment>,
     prompt_attachments: Vec<PendingAttachment>,
     context_model: &BlocklistAIContextModel,
@@ -3580,6 +3603,7 @@ fn input_for_query(
         user_query_mode,
         running_command,
         intended_agent,
+        attribution: Some(attribution.unwrap_or_else(UserQueryAttribution::fresh_local)),
     }
 }
 

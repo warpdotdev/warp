@@ -1,12 +1,14 @@
 //! Conversions from MAA API types to application types.
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use ai::agent::UnknownCitationTypeError;
 use ai::agent::action::ReadSkillRequest;
 use ai::agent::convert::ToolToAIAgentActionError;
 use ai::skills::{
-    SkillPathOrigin, skill_reference_from_api_skill_ref, skill_reference_from_read_skill_ref,
+    ParsedSkill, SkillPathOrigin, skill_reference_from_api_skill_ref,
+    skill_reference_from_read_skill_ref,
 };
 use api::ask_user_question::question::QuestionType;
 use warp_core::channel::ChannelState;
@@ -22,9 +24,10 @@ use crate::ai::agent::util::parse_markdown_into_text_and_code_sections;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionType, AIAgentAttachment, AIAgentCitation, AIAgentInput,
     AIAgentOutputMessage, AIAgentText, AIAgentTodo, ArtifactCreatedData, CloneRepositoryURL,
-    MessageId, RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest, SubagentCall,
-    SubagentType, SuggestedAgentModeWorkflow, SuggestedRule, Suggestions, SummarizationType,
-    TodoOperation, UserQueryMode, WebFetchStatus, WebSearchStatus,
+    InvokeSkillUserQuery, MessageId, RunAgentsAgentRunConfig, RunAgentsExecutionMode,
+    RunAgentsRequest, SubagentCall, SubagentType, SuggestedAgentModeWorkflow, SuggestedRule,
+    Suggestions, SummarizationType, TodoOperation, UserQueryAttribution, UserQueryMode,
+    WebFetchStatus, WebSearchStatus,
 };
 use crate::ai::artifact_download::sanitized_basename;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
@@ -588,6 +591,7 @@ impl ConvertAPIMessageToClientOutputMessage for api::Message {
             | api::message::Message::ServerEvent(_)
             | api::message::Message::InvokeSkill(_)
             | api::message::Message::PassiveSuggestionResult(_)
+            | api::message::Message::RequestMetadata(_)
             // Stage 2 plan-card config snapshot: hydrated separately by the
             // plan card's `AIDocumentModel` subscription, not via the
             // exchange/output stream. No client output message representation.
@@ -867,6 +871,7 @@ pub fn user_inputs_from_messages(messages: &[api::Message]) -> Vec<AIAgentInput>
                     user_query_mode: convert_user_query_mode(uq.mode.as_ref()),
                     running_command: None,
                     intended_agent: Some(uq.intended_agent()),
+                    attribution: UserQueryAttribution::from_message(uq),
                 });
             }
             api::message::Message::SystemQuery(sq) => {
@@ -894,6 +899,34 @@ pub fn user_inputs_from_messages(messages: &[api::Message]) -> Vec<AIAgentInput>
                         }
                         _ => {}
                     }
+                }
+            }
+            api::message::Message::InvokeSkill(invoke_skill) => {
+                if let Some(skill) = invoke_skill.skill.clone()
+                    && let Ok(skill) = ParsedSkill::try_from_api_with_origin(
+                        skill,
+                        &SkillPathOrigin::RestoredDisplayOnly,
+                    )
+                {
+                    inputs.push(AIAgentInput::InvokeSkill {
+                        context: Arc::new([]),
+                        skill,
+                        user_query: invoke_skill.user_query.as_ref().map(|query| {
+                            InvokeSkillUserQuery {
+                                query: query.query.clone(),
+                                referenced_attachments: query
+                                    .referenced_attachments
+                                    .iter()
+                                    .filter_map(|(key, attachment)| {
+                                        AIAgentAttachment::try_from(attachment.clone())
+                                            .ok()
+                                            .map(|attachment| (key.clone(), attachment))
+                                    })
+                                    .collect(),
+                                attribution: UserQueryAttribution::from_message(query),
+                            }
+                        }),
+                    });
                 }
             }
             api::message::Message::ToolCallResult(tcr) => {
