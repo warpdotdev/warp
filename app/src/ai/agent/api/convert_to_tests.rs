@@ -4,10 +4,57 @@ use warp_multi_agent_api as api;
 
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentActionResult, AIAgentActionResultType, AIAgentContext,
-    TransferShellCommandControlToUserResult,
+    AIAgentActionResult, AIAgentActionResultType, AIAgentContext, AIAgentInput,
+    AgentReviewCommentBatch, TransferShellCommandControlToUserResult,
 };
 use crate::terminal::model::block::BlockId;
+
+#[test]
+fn dedicated_inputs_are_not_composable_and_keep_their_api_shape() {
+    let code_review = AIAgentInput::CodeReview {
+        context: Default::default(),
+        review_comments: AgentReviewCommentBatch {
+            comments: vec![],
+            diff_set: Default::default(),
+        },
+    };
+    assert!(!super::is_composable_user_input(&code_review));
+    assert!(matches!(
+        super::convert_input(vec![code_review])
+            .expect("code review should convert")
+            .r#type,
+        Some(api::request::input::Type::CodeReview(_))
+    ));
+
+    let create_environment = AIAgentInput::CreateEnvironment {
+        context: Default::default(),
+        display_query: None,
+        repo_paths: vec!["/workspace/project".to_string()],
+    };
+    assert!(!super::is_composable_user_input(&create_environment));
+    assert!(matches!(
+        super::convert_input(vec![create_environment])
+            .expect("create environment should convert")
+            .r#type,
+        Some(api::request::input::Type::CreateEnvironment(_))
+    ));
+}
+
+#[test]
+fn dedicated_input_is_not_silently_dropped_from_a_mixed_request() {
+    let result = super::convert_input(vec![
+        AIAgentInput::MessagesReceivedFromAgents { messages: vec![] },
+        AIAgentInput::CodeReview {
+            context: Default::default(),
+            review_comments: AgentReviewCommentBatch {
+                comments: vec![],
+                diff_set: Default::default(),
+            },
+        },
+    ]);
+
+    assert!(result.is_err());
+}
 
 #[test]
 fn git_context_converts_repository_and_pull_request_metadata() {
