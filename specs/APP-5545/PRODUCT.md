@@ -13,8 +13,10 @@ implement collection or enable a production rollout.
 ## Behavior
 1. **Supported runs.** Collection applies to Claude Code and Codex running through the managed
    Warp/Oz execution path, including self-hosted workers and local development of that path.
-   Standalone terminal sessions, unmanaged local CLI runs, Gemini, and Warp's own model usage are
-   unchanged. The feature does not require a benchmark, UI, or separate extraction job.
+   Standalone terminal sessions, unmanaged local CLI runs, and Warp's own model usage are unchanged.
+   Gemini remains outside usage collection and continues to save block snapshots only, while using
+   the shared save lifecycle. The feature does not require a benchmark, UI, or separate extraction
+   job.
 
 2. **Enablement and compatibility.** Collection is enabled only when the server supports and enables
    reporting for this execution. An older or disabled server leaves transcript saving, viewing, and

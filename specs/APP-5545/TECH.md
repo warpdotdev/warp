@@ -127,10 +127,11 @@ identifier bounds; an oversized report is a diagnosed non-publication, not silen
 counts or coverage. Do not apply this metrics-body cap to existing raw transcript uploads.
 
 ### Phase 3: One ordered save helper
-Use one helper per Claude/Codex runner, with one owned background save operation, one coalesced
-fresh-save request, and a closing flag. It owns sequence allocation and pending retry state.
-It is not the workspace checkpoint coordinator and must not change handoff checkpoint semantics.
-Keep Gemini behavior unchanged if adapting shared runner interfaces.
+Use one helper per supported third-party runner, with one owned background save operation, one
+coalesced fresh-save request, and a closing flag. It owns sequence allocation and pending retry
+state. It is not the workspace checkpoint coordinator and must not change handoff checkpoint
+semantics. Gemini remains block-snapshot-only and outside native usage extraction/publication, but
+uses the same save lifecycle coordination.
 
 The helper's flow is:
 1. Acquire the single save slot; capture once on the existing blocking worker.
@@ -262,7 +263,8 @@ the existing spec PR #15926 at the bottom and publish three implementation layer
 2. **metrics-saves:** ordered/coalesced save ownership, independent raw/block results, driver triggers,
    and bounded closing/final saves. Branch `varoon/harness-usage-saves`, worktree
    `../warp.varoon-harness-usage-saves`. Own the shared save helper, driver lifecycle, and runner save
-   interfaces, but not extraction or HTTP transport. Preserve cleanup/resume and Gemini behavior.
+   interfaces, but not extraction or HTTP transport. Preserve cleanup/resume and Gemini's block-only
+   payload while applying the shared save lifecycle.
 3. **metrics-publish:** authenticated startup/transport, counting from the saved capture, report
    retries, and end-to-end integration. Branch `varoon/harness-usage-publish`, worktree
    `../warp.varoon-harness-usage-publish`. Own `server_api/harness_support.rs` and app-owned native
