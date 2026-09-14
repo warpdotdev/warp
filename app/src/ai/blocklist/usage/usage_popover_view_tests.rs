@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use chrono::Utc;
-use warpui::{App, SingletonEntity};
+use warpui::elements::ChildView;
+use warpui::platform::WindowStyle;
+use warpui::{App, SingletonEntity, ViewHandle};
 
 use super::*;
 use crate::ai::agent::api::ServerConversationToken;
@@ -13,9 +15,8 @@ use crate::persistence::model::{
 };
 use crate::server::ids::ServerId;
 use crate::settings::UsageDisplayUnit;
-use crate::test_util::terminal::{
-    add_window_with_id_and_terminal, initialize_app_for_terminal_view,
-};
+use crate::test_util::add_window_with_terminal;
+use crate::test_util::terminal::initialize_app_for_terminal_view;
 
 fn identity_labels(config_key: &str) -> String {
     config_key.to_string()
@@ -200,6 +201,38 @@ fn model_usage_rows_does_not_merge_label_colliding_custom_endpoint_charges() {
     assert_eq!(custom_row.cost, Some(CostValue::new(0.0, 200.0)));
     assert_eq!(totals.tokens, Some(300));
     assert_eq!(totals.cost, Some(CostValue::new(0.0, 300.0)));
+}
+
+/// Charged-only custom sources join the same grouping rule: two same-label
+/// custom charges with no token rows produce one merged row (summed tokens
+/// and costs), not two rows sharing an identity.
+#[test]
+fn model_usage_rows_merges_same_label_charged_only_custom_sources() {
+    let messages = [request_metadata_message(api::RequestCharges {
+        usage_by_category: HashMap::from([(
+            PRIMARY_AGENT_CATEGORY.to_string(),
+            charged_usage(
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::from([
+                    ("k1".to_string(), inference_usage(100, 0, 10.0, 0.0)),
+                    ("k2".to_string(), inference_usage(200, 0, 20.0, 0.0)),
+                ]),
+            ),
+        )]),
+    })];
+    let charged_usage_by_key = sum_charged_usage_by_key(messages.iter());
+    let shared_alias = |_config_key: &str| "shared-alias".to_string();
+
+    let rows = model_usage_rows(&[], &charged_usage_by_key, shared_alias);
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].key,
+        ModelRowKey::CustomEndpoint("shared-alias".into())
+    );
+    assert_eq!(rows[0].tokens, 300);
+    assert_eq!(rows[0].cost, Some(CostValue::new(0.0, 30.0)));
 }
 
 /// Ambiguous legacy labels — two custom endpoints configured with the same
@@ -752,14 +785,47 @@ fn server_conversation_metadata() -> ServerAIConversationMetadata {
     }
 }
 
+/// Hosts the popover in a window's rendered tree, so the framework's
+/// invalidation-driven render pass can be observed through render counts.
+struct UsagePopoverHostView {
+    popover: ViewHandle<UsagePopoverView>,
+}
+
+impl Entity for UsagePopoverHostView {
+    type Event = ();
+}
+
+impl TypedActionView for UsagePopoverHostView {
+    type Action = ();
+}
+
+impl UsagePopoverHostView {
+    fn new(conversation_id: AIConversationId, ctx: &mut ViewContext<Self>) -> Self {
+        let popover =
+            ctx.add_typed_action_view(|ctx| UsagePopoverView::new(Some(conversation_id), ctx));
+        Self { popover }
+    }
+}
+
+impl View for UsagePopoverHostView {
+    fn ui_name() -> &'static str {
+        "UsagePopoverHostView"
+    }
+
+    fn render(&self, _app: &AppContext) -> Box<dyn Element> {
+        ChildView::new(&self.popover).finish()
+    }
+}
+
 /// The popover must react to usage events for its own conversation (the
 /// footer's re-renders don't reach it as a child view) and ignore events for
-/// other conversations.
+/// other conversations. The observable is the framework's render pass: a
+/// usage event for the popover's conversation must produce a re-render.
 #[test]
 fn usage_popover_reacts_to_its_conversations_usage_events() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
-        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+        let terminal = add_window_with_terminal(&mut app, None);
 
         let (conversation_id, other_conversation_id) = app.update(|ctx| {
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
@@ -771,12 +837,15 @@ fn usage_popover_reacts_to_its_conversations_usage_events() {
             })
         });
 
-        let popover = app.add_typed_action_view(window_id, |ctx| {
-            UsagePopoverView::new(Some(conversation_id), ctx)
+        let (_, host) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            UsagePopoverHostView::new(conversation_id, ctx)
         });
-
-        let count = popover.update(&mut app, |popover, _| popover.usage_event_count_for_test());
-        assert_eq!(count, 0);
+        let popover_render_count = |app: &mut App, host: &ViewHandle<UsagePopoverHostView>| {
+            host.update(app, |host_view, ctx| {
+                host_view.popover.as_ref(ctx).render_count_for_test()
+            })
+        };
+        let baseline = popover_render_count(&mut app, &host);
 
         // Events flush when the outermost update finishes, so event dispatch
         // and the assertion are kept in separate app-level updates.
@@ -787,10 +856,13 @@ fn usage_popover_reacts_to_its_conversations_usage_events() {
                 model.set_server_metadata_for_conversation(conversation_id, metadata, ctx);
             });
         });
-        let count = popover.update(&mut app, |popover, _| popover.usage_event_count_for_test());
-        assert_eq!(count, 1);
+        let after_own_event = popover_render_count(&mut app, &host);
+        assert!(
+            after_own_event > baseline,
+            "a usage event for the popover's conversation must re-render it"
+        );
 
-        // Another conversation's usage events don't reach this popover.
+        // Another conversation's usage events don't re-render this popover.
         app.update(|ctx| {
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
                 let mut metadata = server_conversation_metadata();
@@ -798,8 +870,8 @@ fn usage_popover_reacts_to_its_conversations_usage_events() {
                 model.set_server_metadata_for_conversation(other_conversation_id, metadata, ctx);
             });
         });
-        let count = popover.update(&mut app, |popover, _| popover.usage_event_count_for_test());
-        assert_eq!(count, 1);
+        let after_other_event = popover_render_count(&mut app, &host);
+        assert_eq!(after_other_event, after_own_event);
 
         // The event changed the headline's data source, not just a flag.
         let headline = app.read(|ctx| {

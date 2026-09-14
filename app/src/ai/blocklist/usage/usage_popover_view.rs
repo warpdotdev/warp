@@ -125,10 +125,10 @@ pub struct UsagePopoverView {
     tool_call_summary_toggle_mouse_state: MouseStateHandle,
     response_time_toggle_mouse_state: MouseStateHandle,
     view_account_usage_mouse_state: MouseStateHandle,
-    /// Count of usage-relevant history events that reached this popover.
-    /// Notification itself has no observable state, so tests count it.
+    /// Number of times this view rendered. Notification has no observable
+    /// state, so tests observe the render pass it should trigger instead.
     #[cfg(test)]
-    usage_event_count_for_test: Cell<usize>,
+    render_count_for_test: Cell<usize>,
 }
 
 impl UsagePopoverView {
@@ -161,9 +161,6 @@ impl UsagePopoverView {
                     _ => None,
                 };
                 if touched_conversation_id.is_some_and(|id| Some(id) == me.conversation_id) {
-                    #[cfg(test)]
-                    me.usage_event_count_for_test
-                        .set(me.usage_event_count_for_test.get() + 1);
                     ctx.notify();
                 }
             },
@@ -180,7 +177,7 @@ impl UsagePopoverView {
             response_time_toggle_mouse_state: MouseStateHandle::default(),
             view_account_usage_mouse_state: MouseStateHandle::default(),
             #[cfg(test)]
-            usage_event_count_for_test: Cell::new(0),
+            render_count_for_test: Cell::new(0),
         }
     }
 
@@ -190,8 +187,8 @@ impl UsagePopoverView {
     }
 
     #[cfg(test)]
-    pub fn usage_event_count_for_test(&self) -> usize {
-        self.usage_event_count_for_test.get()
+    pub fn render_count_for_test(&self) -> usize {
+        self.render_count_for_test.get()
     }
 
     /// Points this (reused) popover at `conversation_id` and resets all
@@ -934,6 +931,9 @@ impl View for UsagePopoverView {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
+        #[cfg(test)]
+        self.render_count_for_test
+            .set(self.render_count_for_test.get() + 1);
         let appearance = Appearance::as_ref(app);
         let usage_display_unit = AISettings::as_ref(app).usage_display_unit;
         let theme = appearance.theme();
@@ -1436,6 +1436,19 @@ fn model_usage_rows(
             cost: charged_usage.as_ref().map(ModelChargedUsage::cost),
             charged_usage,
         });
+    }
+    // Charged-only custom sources join the same grouping: every label gets
+    // one row, whether its tokens came from token rows or only from charges.
+    for key in charged_usage_by_key.keys() {
+        if let ModelChargeKey::CustomEndpoint(config_key) = key {
+            let label = custom_endpoint_label(config_key);
+            custom_rows_by_label
+                .entry(label.clone())
+                .or_insert_with(|| ModelTokenUsage {
+                    model_id: label,
+                    ..Default::default()
+                });
+        }
     }
     for (label, merged) in custom_rows_by_label {
         let reported_tokens = u64::from(merged.custom_endpoint_tokens);

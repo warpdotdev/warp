@@ -899,9 +899,24 @@ impl AgentInputFooter {
                         me.model_selector.update(ctx, |_, ctx| ctx.notify());
                         ctx.notify();
                     }
-                    BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
-                    | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. } => {
-                        me.update_usage_button(ctx);
+                    BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated {
+                        conversation_id,
+                    }
+                    | BlocklistAIHistoryEvent::UpdatedConversationMetadata {
+                        conversation_id,
+                        ..
+                    } => {
+                        // Only the active conversation's usage affects this
+                        // footer's figures, and a metadata-only event can flip
+                        // the usage item's visibility, so the footer must
+                        // repaint too.
+                        let is_active_conversation = BlocklistAIHistoryModel::as_ref(ctx)
+                            .active_conversation(me.terminal_view_id)
+                            .is_some_and(|conversation| conversation.id() == *conversation_id);
+                        if is_active_conversation {
+                            me.update_usage_button(ctx);
+                            ctx.notify();
+                        }
                     }
                     BlocklistAIHistoryEvent::UpdatedTodoList { .. }
                     | BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
