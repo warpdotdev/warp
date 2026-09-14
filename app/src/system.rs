@@ -6,6 +6,8 @@ cfg_if::cfg_if! {
     }
 }
 
+pub mod shutdown;
+
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 #[derive(Clone, Copy, Default, PartialEq)]
