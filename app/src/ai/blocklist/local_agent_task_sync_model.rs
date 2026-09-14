@@ -582,6 +582,13 @@ pub(crate) fn classify_renderable_error(
                 PlatformErrorCode::InsufficientCredits,
             )),
         ),
+        RenderableAIError::ProviderQuotaLimit { provider } => (
+            AgentTaskState::Failed,
+            Some(TaskStatusUpdate::with_error_code(
+                RenderableAIError::provider_quota_message(provider),
+                PlatformErrorCode::ProviderQuotaExceeded,
+            )),
+        ),
         RenderableAIError::ServerOverloaded => (
             AgentTaskState::Error,
             Some(TaskStatusUpdate::with_error_code(

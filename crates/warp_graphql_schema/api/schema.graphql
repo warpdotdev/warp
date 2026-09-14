@@ -2681,6 +2681,8 @@ enum PlatformErrorCode {
 
   """Team has no remaining add-on credits."""
   INSUFFICIENT_CREDITS
+  """An external inference provider account has insufficient quota."""
+  PROVIDER_QUOTA_EXCEEDED
 
   """Integration is disabled and must be enabled."""
   INTEGRATION_DISABLED

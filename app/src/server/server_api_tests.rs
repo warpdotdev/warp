@@ -1,7 +1,12 @@
 use futures::executor::block_on;
 use mockito::Server;
+use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
+use warp_graphql::mutations::update_agent_task::{
+    AgentTaskStatusMessageInput, UpdateAgentTask, UpdateAgentTaskInput, UpdateAgentTaskVariables,
+};
 
 use super::*;
+use crate::server::graphql::get_request_context;
 use crate::server::retry_strategies::is_transient_http_error;
 use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeForTest};
 
@@ -122,5 +127,37 @@ fn team_uid_header_value_includes_only_resolved_team_scope() {
     assert_eq!(
         ServerApi::team_uid_header_value(RequestTeamScope::from_scope(&TeamlessScopeForTest)),
         None
+    );
+}
+
+#[test]
+fn update_agent_task_serializes_provider_quota_error_code() {
+    use cynic::MutationBuilder;
+
+    let operation = UpdateAgentTask::build(UpdateAgentTaskVariables {
+        input: UpdateAgentTaskInput {
+            task_id: "task-id".into(),
+            task_state: Some(AgentTaskState::Failed),
+            session_id: None,
+            conversation_id: None,
+            status_message: Some(AgentTaskStatusMessageInput {
+                error_code: Some(PlatformErrorCode::ProviderQuotaExceeded),
+                message: "Your OpenAI account has insufficient quota.".to_string(),
+            }),
+            session_debug_until: None,
+            debug_agent_active: None,
+        },
+        request_context: get_request_context(),
+    });
+
+    let payload = serde_json::to_value(operation).expect("operation serializes");
+
+    assert_eq!(
+        payload.pointer("/variables/input/taskState"),
+        Some(&serde_json::json!("FAILED"))
+    );
+    assert_eq!(
+        payload.pointer("/variables/input/statusMessage/errorCode"),
+        Some(&serde_json::json!("PROVIDER_QUOTA_EXCEEDED"))
     );
 }

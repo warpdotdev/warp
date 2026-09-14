@@ -68,6 +68,17 @@ fn quota_limit_is_failed_with_insufficient_credits() {
 }
 
 #[test]
+fn provider_quota_limit_is_failed_with_provider_quota_code() {
+    assert_update(
+        classify_renderable_error(&RenderableAIError::ProviderQuotaLimit {
+            provider: "OpenAI".into(),
+        }),
+        AgentTaskState::Failed,
+        Some(PlatformErrorCode::ProviderQuotaExceeded),
+        Some("Check your OpenAI billing and API key settings"),
+    );
+}
+#[test]
 fn server_overloaded_is_error_with_resource_unavailable() {
     assert_update(
         classify_renderable_error(&RenderableAIError::ServerOverloaded),

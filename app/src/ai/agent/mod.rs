@@ -695,6 +695,9 @@ pub enum RenderableAIError {
     QuotaLimit {
         user_display_message: Option<String>,
     },
+    ProviderQuotaLimit {
+        provider: String,
+    },
     ServerOverloaded,
     InternalWarpError,
     ContextWindowExceeded(String),
@@ -742,6 +745,16 @@ pub enum RenderableAIError {
 impl RenderableAIError {
     const TRANSIENT_NETWORK_ERROR_MESSAGE: &'static str =
         "Warp lost connection while receiving the agent response. This is usually temporary.";
+
+    pub(crate) fn provider_quota_message(provider: &str) -> String {
+        match provider {
+            "AWS Bedrock" => "Your AWS account has insufficient quota for Amazon Bedrock. Check your AWS service quotas and model access, then try again.".to_string(),
+            "Gemini Enterprise" => "Your Gemini Enterprise account has insufficient quota. Check your Google Cloud project quota and Gemini Enterprise configuration, then try again.".to_string(),
+            _ => format!(
+                "Your {provider} account has insufficient quota. Check your {provider} billing and API key settings, then try again."
+            ),
+        }
+    }
     /// Creates a transient network error. `kind` is the structured cause (including the raw API
     /// error where one exists), preserved so user reports can disambiguate the different causes
     /// behind the shared user-facing copy.
@@ -891,6 +904,9 @@ impl Display for RenderableAIError {
                 } else {
                     write!(f, "Quota limit reached.")
                 }
+            }
+            Self::ProviderQuotaLimit { provider } => {
+                write!(f, "{}", Self::provider_quota_message(provider))
             }
             Self::ServerOverloaded => {
                 write!(f, "Warp is currently overloaded. Please try again later.")

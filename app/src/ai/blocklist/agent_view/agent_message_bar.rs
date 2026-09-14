@@ -839,6 +839,7 @@ fn should_fork_from_last_known_good_state(
 
     match error {
         RenderableAIError::QuotaLimit { .. }
+        | RenderableAIError::ProviderQuotaLimit { .. }
         | RenderableAIError::ServerOverloaded
         | RenderableAIError::ContextWindowExceeded(_)
         | RenderableAIError::InvalidApiKey { .. }
