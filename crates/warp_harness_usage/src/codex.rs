@@ -125,12 +125,9 @@ pub fn extract_codex(
                 };
             }
             Some("event_msg") => match payload.get("type").and_then(Value::as_str) {
-                Some("token_count") => observe_checkpoint(
-                    &payload["info"],
-                    &attribution,
-                    &mut segment,
-                    &mut findings,
-                ),
+                Some("token_count") => {
+                    observe_checkpoint(&payload["info"], &attribution, &mut segment, &mut findings)
+                }
                 None => {
                     findings.token(ReasonCode::InvalidData);
                     findings.tools_partial = true;
@@ -235,7 +232,10 @@ fn observe_checkpoint(
         }
         let delta = total.delta(previous);
         if delta.any() {
-            if last.as_ref().is_some_and(|last| last.matches_observed(&delta)) {
+            if last
+                .as_ref()
+                .is_some_and(|last| last.matches_observed(&delta))
+            {
                 segment.accounting.attribute(&delta, attribution, findings);
             } else {
                 segment

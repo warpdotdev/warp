@@ -27,15 +27,26 @@ fn a_category_missing_from_one_response_makes_observed_totals_partial() {
         response("a", json!({"input_tokens":10,"output_tokens":1}), json!([])),
         response("b", json!({"output_tokens":2}), json!([])),
     ]);
-    assert_eq!(serde_json::to_value(&snapshot.payload).unwrap()["usage"], json!({"input_tokens":10,"output_tokens":3}));
+    assert_eq!(
+        serde_json::to_value(&snapshot.payload).unwrap()["usage"],
+        json!({"input_tokens":10,"output_tokens":3})
+    );
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
 }
 
 #[test]
 fn conflicting_tool_names_leave_response_usage_unchanged() {
     let snapshot = capture(&[
-        response("a", json!({"input_tokens":4}), json!([{"type":"tool_use","id":"t","name":"Read"}])),
-        response("a", json!({"input_tokens":4}), json!([{"type":"tool_use","id":"t","name":"Write"},{"type":"tool_use","id":"u","name":"Read"}])),
+        response(
+            "a",
+            json!({"input_tokens":4}),
+            json!([{"type":"tool_use","id":"t","name":"Read"}]),
+        ),
+        response(
+            "a",
+            json!({"input_tokens":4}),
+            json!([{"type":"tool_use","id":"t","name":"Write"},{"type":"tool_use","id":"u","name":"Read"}]),
+        ),
     ]);
     let payload = serde_json::to_value(&snapshot.payload).unwrap();
     assert_eq!(payload["usage"], json!({"input_tokens":4}));
