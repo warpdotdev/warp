@@ -126,8 +126,77 @@ fn view_starts_with_collapsed_model_rows() {
         RequestMetadataTurnView::new_for_test(vec![record(RequestOutcome::Completed, 120.0, 0.0)]);
     assert_eq!(view.model_rows.len(), 1);
     assert!(!view.model_rows[0].expanded);
+    assert!(!view.raw_record_expanded);
+    assert!(
+        view.raw_json
+            .as_deref()
+            .is_some_and(|json| json.contains("\"request_id\": \"req\""))
+    );
     assert_eq!(view.records().len(), 1);
     assert_eq!(view.records()[0].request_id, "req");
+}
+
+#[test]
+fn view_raw_record_keeps_every_request() {
+    let mut first = record(RequestOutcome::Completed, 120.0, 0.0);
+    first.request_id = "req-1".to_string();
+    let mut second = record(RequestOutcome::Canceled, 0.0, 30.0);
+    second.request_id = "req-2".to_string();
+
+    let mut view = RequestMetadataTurnView::new_for_test(vec![first, second]);
+    assert!(!view.raw_record_expanded);
+    view.raw_record_expanded = !view.raw_record_expanded;
+    assert!(view.raw_record_expanded);
+    // The raw view keeps every record so per-request detail survives aggregation.
+    let raw_json = view
+        .raw_json
+        .as_deref()
+        .expect("records path keeps raw JSON");
+    assert!(raw_json.contains("\"req-1\""));
+    assert!(raw_json.contains("\"req-2\""));
+}
+
+/// A legacy turn carries no records: the raw-record view is absent (no synthetic JSON),
+/// and an unknown-charges turn exposes no model rows to render zeros from.
+#[test]
+fn view_from_legacy_unknown_has_no_inference_or_raw_record() {
+    let data = TurnPanelData::Legacy {
+        record: Box::new(record(
+            RequestOutcome::Unspecified { incomplete: false },
+            0.0,
+            0.0,
+        )),
+        charges: LegacyCharges::Unknown,
+    };
+    let view = RequestMetadataTurnView::new_for_test(data);
+    assert!(matches!(view.legacy_charges, Some(LegacyCharges::Unknown)));
+    assert!(view.summary.model_charges.is_empty());
+    assert!(view.raw_json.is_none());
+}
+
+/// A credits-only legacy turn shows the credits total without any model row, so no
+/// fabricated "0 tokens / $0.00" can appear; the tooltip leads with the same total in
+/// both display units (dollars falls back to credits when no cent figure is known).
+#[test]
+fn credits_only_legacy_shows_credits_and_never_a_zero_dollar_row() {
+    let data = TurnPanelData::Legacy {
+        record: Box::new(record(
+            RequestOutcome::Unspecified { incomplete: false },
+            0.0,
+            0.0,
+        )),
+        charges: LegacyCharges::CreditsOnly(2.5),
+    };
+    let view = RequestMetadataTurnView::new_for_test(data.clone());
+    assert!(view.summary.model_charges.is_empty());
+    assert_eq!(
+        turn_panel_tooltip_text_for_data(&data, UsageDisplayUnit::Credits),
+        "Turn: 2.5 credits"
+    );
+    assert_eq!(
+        turn_panel_tooltip_text_for_data(&data, UsageDisplayUnit::Dollars),
+        "Turn: 2.5 credits"
+    );
 }
 
 #[test]
@@ -159,6 +228,32 @@ fn view_orders_model_rows_by_descending_tokens() {
     assert_eq!(view.model_rows.len(), 2);
     assert_eq!(view.summary.model_charges[0].model_id, "pricey-model");
     assert_eq!(view.summary.model_charges[1].model_id, "cheap-model");
+}
+
+/// Breakdown charges aggregate into one "Models" row so the flat totals never imply
+/// model attribution.
+#[test]
+fn view_from_legacy_breakdown_has_one_models_row() {
+    let mut breakdown = record(
+        RequestOutcome::Unspecified { incomplete: false },
+        120.0,
+        30.0,
+    );
+    breakdown.model_charges[0].model_id = "Models".to_string();
+    let data = TurnPanelData::Legacy {
+        record: Box::new(breakdown),
+        charges: LegacyCharges::Breakdown(Box::new(
+            crate::persistence::model::ChargedUsageTotals {
+                input_tokens: 10,
+                input_cost_in_cents: 120.0,
+                ..Default::default()
+            },
+        )),
+    };
+    let view = RequestMetadataTurnView::new_for_test(data);
+    assert_eq!(view.model_rows.len(), 1);
+    assert_eq!(view.summary.model_charges[0].model_id, "Models");
+    assert!(view.raw_json.is_none());
 }
 
 #[test]

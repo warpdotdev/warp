@@ -103,7 +103,7 @@ use crate::ai::blocklist::inline_action::web_fetch::WebFetchView;
 use crate::ai::blocklist::inline_action::web_search::WebSearchView;
 use crate::ai::blocklist::keyboard_navigable_buttons::KeyboardNavigableButtons;
 use crate::ai::blocklist::secret_redaction::SecretRedactionState;
-use crate::ai::blocklist::usage::request_metadata_turn_view::turn_panel_tooltip_text;
+use crate::ai::blocklist::usage::request_metadata_turn_view::turn_panel_tooltip_text_for_data;
 use crate::ai::blocklist::usage::rollup::compute_orchestration_rollup;
 use crate::ai::blocklist::view_util::{
     FAILED_OUTPUT_USAGE_NOTICE_TEXT, format_usage, should_show_failed_output_usage_notice,
@@ -3679,6 +3679,8 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
             .with_margin_left(4.)
             .finish(),
         );
+    } else {
+        flex.add_child(render_usage_button(props, app));
     }
 
     // Review changes button.
@@ -3724,7 +3726,7 @@ fn render_turn_panel_button(
     let appearance = Appearance::as_ref(app);
     let ui_builder = appearance.ui_builder().clone();
     let tooltip_text =
-        turn_panel_tooltip_text(data.records(), AISettings::as_ref(app).usage_display_unit);
+        turn_panel_tooltip_text_for_data(data, AISettings::as_ref(app).usage_display_unit);
 
     icon_button(
         appearance,
@@ -3745,9 +3747,9 @@ fn render_turn_panel_button(
     .finish()
 }
 
-/// Renders the legacy usage pill. Unreachable since the Turn panel became the single
-/// per-turn usage surface; kept until the usage-footer plumbing is removed or repurposed.
-#[allow(dead_code)]
+/// Renders the usage button that, on click, will expand & collapse the usage summary footer.
+/// Only reachable with `PricingTransparency` off (the Turn panel replaces it when the flag is
+/// on); the rip-out waits until the flag ships everywhere.
 fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
     let Some(conversation) = props.model.conversation(app) else {
         return Empty::new().finish();

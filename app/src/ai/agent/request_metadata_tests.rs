@@ -20,6 +20,7 @@ use crate::ai::agent::{
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::ai::blocklist::{RequestInput, ResponseStreamId};
 use crate::ai::llms::LLMId;
+use crate::persistence::model::ChargedUsageTotals;
 use crate::test_util::ai_agent_tasks::create_api_task;
 use crate::test_util::settings::initialize_history_persistence_for_tests;
 
@@ -207,6 +208,40 @@ fn non_record_messages_are_ignored() {
     );
 }
 
+#[test]
+fn json_carries_every_section() {
+    let record = RequestMetadataRecord::from_message(&record_message(
+        "req-1",
+        request_metadata::Outcome::Canceled,
+        true,
+    ))
+    .expect("record");
+    let json = record.to_json();
+
+    assert_eq!(json["request_id"], "req-1");
+    assert_eq!(json["outcome"], "Canceled");
+    assert_eq!(json["incomplete"], true);
+    assert_eq!(
+        json["timing"]["llm_generation_timespans"][0]["duration_ms"],
+        7000
+    );
+    assert_eq!(
+        json["charges"]["models"][0]["model_id"],
+        "Claude Sonnet 4.6"
+    );
+    assert_eq!(json["charges"]["models"][0]["tokens"]["input"], 1000);
+    assert_eq!(json["charges"]["platform"][0]["duration_seconds"], 90.0);
+    assert_eq!(json["charges"]["platform"][0]["cost_in_credits"], 1.0);
+    assert_eq!(json["tool_call_summary"]["files_changed"], 3);
+    assert_eq!(json["context_window"]["usage"], 42.0);
+    // Must be a stable, pretty-printable document.
+    assert!(
+        serde_json::to_string_pretty(&json)
+            .unwrap()
+            .contains("\"tool_calls\": 4")
+    );
+}
+
 fn turn_messages(request_id: &str, seconds: i64) -> Vec<api::Message> {
     let user_query = api::Message {
         id: format!("query-{request_id}"),
@@ -281,6 +316,129 @@ fn every_restored_exchange_resolves_its_own_record() {
             vec!["req-4".to_string()],
         ]
     );
+}
+
+/// A turn without its record (the server never delivered one): query + output only.
+fn legacy_turn_messages(request_id: &str, seconds: i64) -> Vec<api::Message> {
+    let mut messages = turn_messages(request_id, seconds);
+    messages.pop();
+    messages
+}
+
+/// A turn the records don't cover (here: a later turn exists and holds the last-block
+/// snapshots) gets a legacy panel with no charge data — the snapshots must never be
+/// presented as an earlier turn's charges.
+#[test]
+fn historical_turn_panel_data_is_timing_only() {
+    let mut messages = legacy_turn_messages("req-1", 1_000);
+    messages.extend(legacy_turn_messages("req-2", 2_000));
+    let task = api::Task {
+        id: "root".to_string(),
+        messages,
+        ..Default::default()
+    };
+    let mut conversation = AIConversation::new_restored(AIConversationId::new(), vec![task], None)
+        .expect("restored conversation");
+    conversation.set_charged_usage_for_last_block_for_test(Some(ChargedUsageTotals {
+        input_tokens: 100,
+        input_cost_in_cents: 1.0,
+        ..Default::default()
+    }));
+
+    let first_exchange_id = conversation
+        .root_task_exchanges()
+        .next()
+        .map(|e| e.id)
+        .unwrap();
+    match conversation.turn_panel_data(first_exchange_id) {
+        Some(TurnPanelData::Legacy { record, charges }) => {
+            assert!(matches!(charges, LegacyCharges::Unknown));
+            assert!(record.model_charges.is_empty());
+            assert!(record.platform_charges.is_empty());
+            // Timing is still derived from the exchanges.
+            assert!(record.request_started_at.is_some());
+            assert!(record.request_ended_at.is_some());
+        }
+        other => panic!("expected a legacy panel for the historical turn, got {other:?}"),
+    }
+}
+
+/// The latest turn's panel shows the last-block breakdown as one aggregated "Models" row.
+#[test]
+fn latest_turn_panel_data_uses_the_breakdown_snapshot() {
+    let mut messages = legacy_turn_messages("req-1", 1_000);
+    messages.extend(legacy_turn_messages("req-2", 2_000));
+    let task = api::Task {
+        id: "root".to_string(),
+        messages,
+        ..Default::default()
+    };
+    let mut conversation = AIConversation::new_restored(AIConversationId::new(), vec![task], None)
+        .expect("restored conversation");
+    conversation.set_charged_usage_for_last_block_for_test(Some(ChargedUsageTotals {
+        input_tokens: 100,
+        output_tokens: 50,
+        input_cost_in_cents: 0.5,
+        output_cost_in_cents: 0.3,
+        input_cost_in_credits: 0.2,
+        platform_cost_in_cents: 2.0,
+        platform_cost_in_credits: 1.0,
+        ..Default::default()
+    }));
+
+    let last_exchange_id = conversation
+        .root_task_exchanges()
+        .last()
+        .map(|e| e.id)
+        .unwrap();
+    match conversation.turn_panel_data(last_exchange_id) {
+        Some(TurnPanelData::Legacy { record, charges }) => {
+            match charges {
+                LegacyCharges::Breakdown(_) => (),
+                other => panic!("expected the breakdown snapshot, got {other:?}"),
+            }
+            let [charge] = record.model_charges.as_slice() else {
+                panic!("expected exactly one aggregated model row");
+            };
+            assert_eq!(charge.model_id, "Models");
+            assert_eq!(charge.tokens(), 150);
+            // The platform split rides along as its own charge.
+            assert_eq!(record.platform_charges.len(), 1);
+            assert_eq!(record.platform_charges[0].cost_in_cents, 2.0);
+            // The conversation's context-window reading (unset here) stays out of the way.
+            assert_eq!(record.context_window_usage, None);
+        }
+        other => panic!("expected a legacy panel for the latest turn, got {other:?}"),
+    }
+}
+
+/// A latest turn with only a credits total (no charge breakdown) must not fabricate a
+/// zero-token/zero-dollar model row.
+#[test]
+fn credits_only_latest_turn_has_no_zero_row() {
+    let messages = legacy_turn_messages("req-1", 1_000);
+    let task = api::Task {
+        id: "root".to_string(),
+        messages,
+        ..Default::default()
+    };
+    let mut conversation = AIConversation::new_restored(AIConversationId::new(), vec![task], None)
+        .expect("restored conversation");
+    conversation.set_credits_spent_for_last_block_for_test(2.5);
+
+    let last_exchange_id = conversation
+        .root_task_exchanges()
+        .last()
+        .map(|e| e.id)
+        .unwrap();
+    match conversation.turn_panel_data(last_exchange_id) {
+        Some(TurnPanelData::Legacy { record, charges }) => {
+            assert!(matches!(charges, LegacyCharges::CreditsOnly(credits) if credits == 2.5));
+            assert!(record.model_charges.is_empty());
+            assert!(record.platform_charges.is_empty());
+        }
+        other => panic!("expected a legacy panel for the latest turn, got {other:?}"),
+    }
 }
 
 /// A tool-result round trip: the request the client sends after executing a tool call. It has no

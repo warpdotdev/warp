@@ -3,9 +3,11 @@
 //! for display.
 
 use chrono::{DateTime, Local};
+use serde_json::{Value, json};
 use warp_multi_agent_api as api;
 
 use super::api::convert_conversation::proto_timestamp_to_local_datetime;
+use crate::persistence::model::ChargedUsageTotals;
 
 /// How the server saw the request end. Mirrors `Message.RequestMetadata.Outcome`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -333,6 +335,77 @@ impl RequestMetadataRecord {
         }
         any.then_some(total)
     }
+
+    /// The record as JSON, for the raw view in the Turn panel.
+    pub fn to_json(&self) -> Value {
+        let rfc3339 = |time: Option<DateTime<Local>>| match time {
+            Some(time) => Value::String(time.to_rfc3339()),
+            None => Value::Null,
+        };
+        json!({
+            "request_id": self.request_id,
+            "message_id": self.message_id,
+            "recorded_at": rfc3339(self.recorded_at),
+            "outcome": self.outcome.label(),
+            "incomplete": self.outcome.is_interrupted(),
+            "timing": {
+                "request_started_at": rfc3339(self.request_started_at),
+                "first_token_at": rfc3339(self.first_token_at),
+                "request_ended_at": rfc3339(self.request_ended_at),
+                "llm_generation_timespans": self.llm_generation_spans.iter().map(|span| json!({
+                    "started_at": rfc3339(span.started_at),
+                    "ended_at": rfc3339(span.ended_at),
+                    "duration_ms": span.duration_ms(),
+                })).collect::<Vec<_>>(),
+            },
+            "charges": {
+                "models": self.model_charges.iter().map(|charge| json!({
+                    "category": charge.category,
+                    "usage_type": charge.usage_type,
+                    "model_id": charge.model_id,
+                    "tokens": {
+                        "input": charge.input_tokens,
+                        "output": charge.output_tokens,
+                        "cache_read": charge.cache_read_tokens,
+                        "cache_write": charge.cache_write_tokens,
+                    },
+                    "cost_in_cents": {
+                        "input": charge.input_cost_in_cents,
+                        "output": charge.output_cost_in_cents,
+                        "cache_read": charge.cache_read_cost_in_cents,
+                        "cache_write": charge.cache_write_cost_in_cents,
+                        "web_search": charge.web_search_cost_in_cents,
+                    },
+                    "cost_in_credits": {
+                        "input": charge.input_cost_in_credits,
+                        "output": charge.output_cost_in_credits,
+                        "cache_read": charge.cache_read_cost_in_credits,
+                        "cache_write": charge.cache_write_cost_in_credits,
+                        "web_search": charge.web_search_cost_in_credits,
+                    },
+                    "web_search_count": charge.web_search_count,
+                })).collect::<Vec<_>>(),
+                "platform": self.platform_charges.iter().map(|charge| json!({
+                    "category": charge.category,
+                    "cost_in_cents": charge.cost_in_cents,
+                    "cost_in_credits": charge.cost_in_credits,
+                    "duration_seconds": charge.duration_seconds,
+                })).collect::<Vec<_>>(),
+                "total_cost_in_cents": self.total_cost_in_cents(),
+                "total_cost_in_credits": self.total_cost_in_credits(),
+            },
+            "tool_call_summary": {
+                "tool_calls": self.tool_calls,
+                "commands_executed": self.commands_executed,
+                "files_changed": self.files_changed,
+                "lines_added": self.lines_added,
+                "lines_removed": self.lines_removed,
+            },
+            "context_window": {
+                "usage": self.context_window_usage,
+            },
+        })
+    }
 }
 
 /// What the Turn panel renders for one turn. Complete server-authored records are preferred;
@@ -341,14 +414,24 @@ impl RequestMetadataRecord {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TurnPanelData {
     Records(Vec<RequestMetadataRecord>),
-    /// One synthetic record built client-side: turn timing from the exchanges, plus (latest
-    /// turn only) the last-block charge snapshots and the conversation's context-window
-    /// reading. `has_charges` false means charges are unknown, not zero — the panel hides
-    /// the inference section instead of showing fabricated zeros.
+    /// A synthetic record built client-side: turn timing from the exchanges, the
+    /// conversation's context-window reading (latest turn only), plus `charges`.
     Legacy {
         record: Box<RequestMetadataRecord>,
-        has_charges: bool,
+        charges: LegacyCharges,
     },
+}
+
+/// The charge data a legacy turn can show. The flat last-block totals deliberately discard
+/// model attribution, so a breakdown renders as one aggregated row.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LegacyCharges {
+    /// No charge data for this turn; the panel hides its charge sections.
+    Unknown,
+    /// Only a credits total is known; the inference section's value is that total.
+    CreditsOnly(f32),
+    /// The last-block charged-usage breakdown.
+    Breakdown(Box<ChargedUsageTotals>),
 }
 
 impl TurnPanelData {

@@ -47,7 +47,8 @@ use crate::ai::agent::icons::{
 };
 use crate::ai::agent::linearization::compute_task_depths;
 use crate::ai::agent::request_metadata::{
-    RequestMetadataRecord, RequestModelCharge, RequestOutcome, RequestPlatformCharge, TurnPanelData,
+    LegacyCharges, RequestMetadataRecord, RequestModelCharge, RequestOutcome,
+    RequestPlatformCharge, TurnPanelData,
 };
 use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
@@ -878,6 +879,14 @@ impl AIConversation {
     ) {
         self.conversation_usage_metadata
             .charged_usage_for_last_block = charged_usage;
+    }
+
+    /// Test-only helper that sets the last block's credits total directly, without wiring
+    /// a full `StreamFinished` event.
+    #[cfg(test)]
+    pub(crate) fn set_credits_spent_for_last_block_for_test(&mut self, credits: f32) {
+        self.conversation_usage_metadata
+            .credits_spent_for_last_block = Some(credits);
     }
 
     /// Test-only helper that simulates the root-task upgrade performed by the
@@ -3642,88 +3651,88 @@ impl AIConversation {
             .min();
 
         // The last-block snapshots describe only the most recent turn; for any earlier
-        // turn they would silently attribute that turn's charges to this one.
+        // turn they would silently attribute that turn's charges to this one. Anchor on the
+        // root task's actual last exchange — no visibility filtering — so a hidden latest
+        // turn keeps its own charges instead of lending them to the previous visible turn.
         let is_latest_turn = self
-            .latest_visible_exchange()
+            .root_task_exchanges()
+            .last()
             .is_some_and(|latest| turn_exchange_ids.last() == Some(&latest.id));
-        let charges = if is_latest_turn {
-            self.charged_usage_for_last_block()
-        } else {
-            None
-        };
-        let credits = if is_latest_turn {
-            self.credits_spent_for_last_block()
-        } else {
-            None
-        };
         let context_window_usage = if is_latest_turn {
             let usage = self.context_window_usage();
             (usage > 0.0).then_some(usage * 100.0)
         } else {
             None
         };
-        let has_charges = charges.is_some() || credits.is_some();
 
-        let inference_credits = charges.as_ref().map(|c| {
-            c.input_cost_in_credits
-                + c.output_cost_in_credits
-                + c.input_cache_read_cost_in_credits
-                + c.input_cache_write_cost_in_credits
-        });
-        let zero = 0.0;
-        let model_charges = if has_charges {
-            vec![RequestModelCharge {
+        let legacy_charges = if !is_latest_turn {
+            LegacyCharges::Unknown
+        } else {
+            match self.charged_usage_for_last_block() {
+                Some(totals) => LegacyCharges::Breakdown(Box::new(totals)),
+                None => match self.credits_spent_for_last_block() {
+                    Some(credits) => LegacyCharges::CreditsOnly(credits),
+                    None => LegacyCharges::Unknown,
+                },
+            }
+        };
+
+        // A Breakdown renders as one aggregated row: the flat totals deliberately discard
+        // model attribution.
+        let (model_charges, platform_charges) = match &legacy_charges {
+            LegacyCharges::Breakdown(totals) => {
+                let inference_credits = (
+                    totals.input_cost_in_credits,
+                    totals.output_cost_in_credits,
+                    totals.input_cache_read_cost_in_credits,
+                    totals.input_cache_write_cost_in_credits,
+                );
+                let model_charge = RequestModelCharge {
                     category: PRIMARY_AGENT_CATEGORY.to_string(),
                     usage_type: "direct_api",
-                    // The flat totals deliberately discard model attribution.
                     model_id: "Models".to_string(),
-                    input_tokens: charges.as_ref().map_or(0, |c| c.input_tokens),
-                    output_tokens: charges.as_ref().map_or(0, |c| c.output_tokens),
-                    cache_read_tokens: charges.as_ref().map_or(0, |c| c.input_cache_read_tokens),
-                    cache_write_tokens: charges.as_ref().map_or(0, |c| c.input_cache_write_tokens),
-                    input_cost_in_cents: charges.as_ref().map_or(zero, |c| c.input_cost_in_cents),
-                    output_cost_in_cents: charges.as_ref().map_or(zero, |c| c.output_cost_in_cents),
-                    cache_read_cost_in_cents: charges
-                        .as_ref()
-                        .map_or(zero, |c| c.input_cache_read_cost_in_cents),
-                    cache_write_cost_in_cents: charges
-                        .as_ref()
-                        .map_or(zero, |c| c.input_cache_write_cost_in_cents),
-                    input_cost_in_credits: inference_credits.unwrap_or(credits.unwrap_or(zero)),
-                    output_cost_in_credits: 0.0,
-                    cache_read_cost_in_credits: 0.0,
-                    cache_write_cost_in_credits: 0.0,
-                    web_search_count: charges.as_ref().map_or(0, |c| c.web_search_count),
-                    web_search_cost_in_cents: charges
-                        .as_ref()
-                        .map_or(zero, |c| c.web_search_cost_in_cents),
-                    web_search_cost_in_credits: charges
-                        .as_ref()
-                        .map_or(zero, |c| c.web_search_cost_in_credits),
-                }]
-        } else {
-            Vec::new()
-        };
-        let platform_charges = charges
-            .as_ref()
-            .filter(|c| c.platform_cost_in_cents != 0.0 || c.platform_cost_in_credits != 0.0)
-            .map(|c| {
-                vec![RequestPlatformCharge {
+                    input_tokens: totals.input_tokens,
+                    output_tokens: totals.output_tokens,
+                    cache_read_tokens: totals.input_cache_read_tokens,
+                    cache_write_tokens: totals.input_cache_write_tokens,
+                    input_cost_in_cents: totals.input_cost_in_cents,
+                    output_cost_in_cents: totals.output_cost_in_cents,
+                    cache_read_cost_in_cents: totals.input_cache_read_cost_in_cents,
+                    cache_write_cost_in_cents: totals.input_cache_write_cost_in_cents,
+                    input_cost_in_credits: inference_credits.0,
+                    output_cost_in_credits: inference_credits.1,
+                    cache_read_cost_in_credits: inference_credits.2,
+                    cache_write_cost_in_credits: inference_credits.3,
+                    web_search_count: totals.web_search_count,
+                    web_search_cost_in_cents: totals.web_search_cost_in_cents,
+                    web_search_cost_in_credits: totals.web_search_cost_in_credits,
+                };
+                let platform_charges = [(
+                    totals.platform_cost_in_cents,
+                    totals.platform_cost_in_credits,
+                )]
+                .iter()
+                .filter(|(cents, credits)| *cents != 0.0 || *credits != 0.0)
+                .map(|&(cents, credits)| RequestPlatformCharge {
                     category: PRIMARY_AGENT_CATEGORY.to_string(),
-                    cost_in_cents: c.platform_cost_in_cents,
-                    cost_in_credits: c.platform_cost_in_credits,
-                    // The flat totals carry no platform duration.
+                    cost_in_cents: cents,
+                    cost_in_credits: credits,
                     duration_seconds: 0.0,
-                }]
-            })
-            .unwrap_or_default();
+                })
+                .collect::<Vec<_>>();
+                (vec![model_charge], platform_charges)
+            }
+            LegacyCharges::CreditsOnly(_) | LegacyCharges::Unknown => (Vec::new(), Vec::new()),
+        };
 
         Some(TurnPanelData::Legacy {
             record: Box::new(RequestMetadataRecord {
                 message_id: String::new(),
                 request_id: String::new(),
                 recorded_at: None,
-                outcome: RequestOutcome::Completed,
+                // No record delivered for this turn: the outcome is unknown, and the
+                // legacy panel does not render outcome anywhere.
+                outcome: RequestOutcome::Unspecified { incomplete: false },
                 request_started_at: started,
                 first_token_at: first_token,
                 request_ended_at: ended,
@@ -3738,7 +3747,7 @@ impl AIConversation {
                 lines_removed: None,
                 context_window_usage,
             }),
-            has_charges,
+            charges: legacy_charges,
         })
     }
 
