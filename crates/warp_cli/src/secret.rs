@@ -12,7 +12,7 @@ pub enum SecretCommand {
     ///
     /// Use `oz secret create claude api-key <NAME>` to create a Claude/Anthropic auth secret,
     /// `oz secret create codex api-key <NAME>` to create a Codex/OpenAI auth secret, or
-    /// `oz secret create docker-registry <NAME>` to create a container registry credential.
+    /// `oz secret create docker-registry <NAME>` to create a private image credential.
     Create(CreateSecretArgs),
     /// Delete a secret.
     Delete(DeleteSecretArgs),
@@ -69,7 +69,7 @@ pub enum CreateProvider {
     Anthropic(AnthropicCreateArgs),
     /// Create a Codex/OpenAI auth secret.
     Codex(CodexCreateArgs),
-    /// Create a container registry credential secret.
+    /// Create a private image credential secret.
     #[command(name = "docker-registry")]
     DockerRegistry(DockerRegistryCreateArgs),
 }
@@ -187,7 +187,7 @@ pub struct BedrockAccessKeyArgs {
     pub region: Option<String>,
 }
 
-/// Arguments for creating a container registry credential secret.
+/// Arguments for creating a private image credential secret.
 #[derive(Debug, Clone, Args)]
 pub struct DockerRegistryCreateArgs {
     #[clap(flatten)]
