@@ -299,7 +299,7 @@ impl BaseClient {
     ) -> Result<Option<String>> {
         let requested_duration = (must_outlive + AMBIENT_WORKLOAD_TOKEN_EXPIRY_MARGIN - Utc::now())
             .to_std()
-            .unwrap_or(AMBIENT_WORKLOAD_TOKEN_DURATION)
+            .unwrap_or_default()
             .max(AMBIENT_WORKLOAD_TOKEN_DURATION);
         let Some(workload_token) = self
             .workload_token_valid_until(must_outlive, requested_duration)
