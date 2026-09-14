@@ -118,7 +118,7 @@ pub fn encrypt_openai_api_key_secret(
     )
 }
 
-/// Encrypt a container registry credential secret.
+/// Encrypt a private image credential secret.
 #[wasm_bindgen]
 pub fn encrypt_docker_registry_secret(
     public_key_base64: &str,

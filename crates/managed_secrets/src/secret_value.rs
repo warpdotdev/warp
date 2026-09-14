@@ -96,7 +96,7 @@ impl ManagedSecretValue {
         }
     }
 
-    /// Construct a container registry credential secret value.
+    /// Construct a private image credential secret value.
     pub fn docker_registry(
         registry_host: impl Into<String>,
         username: impl Into<String>,

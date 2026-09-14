@@ -209,7 +209,7 @@ assert_lines_approx_eq!(actual_lines, INLINE_BANNER_HEIGHT);
 ## Running unit tests
 - Workspace (parallel):
 ```bash
-cargo nextest run --no-fail-fast --workspace --exclude command-signatures-v2
+cargo nextest run --no-fail-fast --workspace
 ```
 - Single crate:
 ```bash

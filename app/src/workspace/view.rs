@@ -3925,7 +3925,74 @@ impl Workspace {
         window: WindowTemplate,
         ctx: &mut ViewContext<Self>,
     ) {
-        let start_index = self.tabs.len();
+        // `tab_bar_slots` turns every *contiguous* run of same-group tabs into
+        // one group container, so interleaved membership would render as two
+        // containers sharing one id. `resolve_group_memberships` collapses that
+        // to the first run of each group; see its docs for why.
+        let group_count = if FeatureFlag::GroupedTabs.is_enabled() {
+            window.tab_groups.len()
+        } else {
+            0
+        };
+        let memberships = crate::launch_configs::launch_config::resolve_group_memberships(
+            &window.tabs,
+            group_count,
+        );
+
+        // Only mint ids for groups that kept a member. A hand-authored config
+        // can name a group no tab joins, and the collapse above can strip a
+        // group's last tab; inserting those anyway would leave empty groups in
+        // workspace state that nothing can reach. This mirrors the save path,
+        // which already drops groups whose members were all unsaveable.
+        //
+        // Ids are minted here rather than restored: a launch config can be
+        // opened repeatedly, and into a workspace that already holds groups, so
+        // reusing saved ids would collide.
+        let group_ids: Vec<Option<TabGroupId>> = window
+            .tab_groups
+            .iter()
+            .enumerate()
+            .map(|(group_index, group_template)| {
+                if !memberships.contains(&Some(group_index)) {
+                    return None;
+                }
+                let group = TabGroup {
+                    id: TabGroupId::new(),
+                    name: group_template.name.clone(),
+                    color: group_template
+                        .color
+                        .map_or(SelectedTabColor::Unset, SelectedTabColor::Color),
+                    collapsed: group_template.collapsed,
+                    draggable_state: Default::default(),
+                    // Mirrors the session-restore path: only honor pinned
+                    // state while the Pinned Tabs feature is enabled.
+                    pinned: FeatureFlag::PinnedTabs.is_enabled() && group_template.pinned,
+                };
+                let id = group.id;
+                self.tab_groups.insert(id, group);
+                Some(id)
+            })
+            .collect();
+
+        // `add_tab_with_pane_layout` honors the `NewTabPlacement` setting, so a
+        // restored tab is not always appended -- opening into the active window
+        // inserts after the current tab by default, which lands before the end
+        // whenever the active tab is not the last one. It activates whatever it
+        // inserted, so read the real index back instead of assuming
+        // `start_index + tab_index`.
+        let mut restored_indices = Vec::with_capacity(window.tabs.len());
+
+        // Opening into an active window inserts after the active tab, and
+        // `add_tab_with_pane_layout` has that insert inherit the active tab's
+        // group so groups stay contiguous. Overwriting membership below
+        // therefore drops the restored block *inside* a pre-existing group's
+        // run, splitting it in two -- and `tab_bar_slots` renders two runs of
+        // one id as two containers. Remember the host group so the block can be
+        // re-anchored past it once membership is settled.
+        let host_group_id = self
+            .tabs
+            .get(self.active_tab_index)
+            .and_then(|tab| tab.group_id);
 
         window
             .tabs
@@ -3938,20 +4005,58 @@ impl Workspace {
                     tab_template.title.clone(),
                     ctx,
                 );
-                self.tabs[start_index + tab_index].selected_color = tab_template
+                let index = self.active_tab_index;
+                restored_indices.push(index);
+                self.tabs[index].selected_color = tab_template
                     .color
                     .map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
+                // The config is the authority on membership, so a tab it leaves
+                // ungrouped stays ungrouped even though the insert above may
+                // have had it inherit the active tab's group.
+                self.tabs[index].group_id = memberships[tab_index]
+                    .and_then(|group_index| group_ids.get(group_index).copied().flatten());
             });
 
-        if !window.tabs.is_empty() {
-            // Focus the active tab from the launch config.
+        // A pinned group makes its members effectively pinned, and the pinned
+        // region is a prefix of the tab list. The inserts above ran while the
+        // tabs were still ungrouped, so `NewTabPlacement` could leave the block
+        // after the active window's unpinned tabs -- assigning membership is
+        // what pins them, so the repositioning has to happen here, not earlier.
+        // This mirrors `pin_tab_group`: move the group's block to the current
+        // pinned boundary. `restored_indices` goes stale across those moves, so
+        // resolve the tab to focus by its pane group id instead.
+        let active_pane_group_id = window
+            .active_tab_index
+            .and_then(|active| restored_indices.get(active))
+            .or_else(|| restored_indices.first())
+            .and_then(|&index| self.tabs.get(index))
+            .map(|tab| tab.pane_group.id());
 
-            let mut index = start_index + window.active_tab_index.unwrap_or_default();
+        // Re-anchor the restored block past the host group's last remaining
+        // member, mirroring `new_tab_group_from_selected_tabs`. A no-op when
+        // the block already sits outside the group's run.
+        if let Some(host_group_id) = host_group_id {
+            self.move_restored_block_past_group(&restored_indices, host_group_id);
+        }
 
-            if index >= self.tab_count() {
-                index = start_index;
+        for group_id in group_ids.iter().flatten() {
+            if self
+                .tab_groups
+                .get(group_id)
+                .is_some_and(|group| group.pinned)
+            {
+                let target = self.pinned_boundary_index(&self.tabs);
+                self.move_group_block(*group_id, target, ctx);
             }
+        }
 
+        // Focus the active tab from the launch config.
+        let active_index = active_pane_group_id.and_then(|pane_group_id| {
+            self.tabs
+                .iter()
+                .position(|tab| tab.pane_group.id() == pane_group_id)
+        });
+        if let Some(index) = active_index {
             self.activate_tab_internal(index, ctx);
         }
     }

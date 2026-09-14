@@ -3,7 +3,8 @@ use warp_graphql::error::{
     PlatformError as GraphqlPlatformError, UserFacingError, UserFacingErrorInterface,
 };
 use warp_graphql::platform_error::{
-    PlatformErrorInfo, PlatformErrorInfoResponse, PlatformErrorMetadataResponse,
+    PlatformErrorInfo, PlatformErrorInfoResponse, PlatformErrorMessage, PlatformErrorMessageFormat,
+    PlatformErrorMetadataResponse,
 };
 use warp_graphql::response_context::ResponseContext;
 
@@ -13,12 +14,20 @@ use crate::server::server_api::ai::TaskGitCredentialsResponse;
 #[test]
 fn from_user_facing_converts_platform_error_preserving_metadata_and_debug() {
     let error = TaskGitCredentialsError::from_user_facing(UserFacingError {
-        error: UserFacingErrorInterface::PlatformError(GraphqlPlatformError {
+        error: UserFacingErrorInterface::PlatformError(Box::new(GraphqlPlatformError {
             message: "GitHub is temporarily unavailable.".to_string(),
             detail: Some("Repository access could not be resolved.".to_string()),
             info: PlatformErrorInfoResponse {
+                error_message: "GitHub is temporarily unavailable.".to_string(),
                 code: PlatformErrorCode::ResourceUnavailable,
+                http_status: 503,
+                user_facing_messages: vec![PlatformErrorMessage {
+                    format: PlatformErrorMessageFormat::PlainText,
+                    message: "GitHub is temporarily unavailable.".to_string(),
+                }],
+                detail: Some("Repository access could not be resolved.".to_string()),
                 retryable: true,
+                is_user_error: false,
                 metadata: vec![
                     PlatformErrorMetadataResponse {
                         key: "provider".to_string(),
@@ -30,8 +39,10 @@ fn from_user_facing_converts_platform_error_preserving_metadata_and_debug() {
                     },
                 ],
                 debug: Some("request-id=dogfood-only".to_string()),
+                metrics_category: "dependency_unavailable".to_string(),
+                trace_id: Some("0123456789abcdef".to_string()),
             },
-        }),
+        })),
         response_context: ResponseContext {
             server_version: None,
         },
@@ -44,8 +55,22 @@ fn from_user_facing_converts_platform_error_preserving_metadata_and_debug() {
             info,
         } => {
             assert_eq!(message, "GitHub is temporarily unavailable.");
+            assert_eq!(
+                info.error_message.as_deref(),
+                Some("GitHub is temporarily unavailable.")
+            );
             assert_eq!(info.code, PlatformErrorCode::ResourceUnavailable);
+            assert_eq!(info.http_status, Some(503));
+            assert_eq!(
+                info.user_facing_messages[&PlatformErrorMessageFormat::PlainText],
+                "GitHub is temporarily unavailable."
+            );
+            assert_eq!(
+                info.detail.as_deref(),
+                Some("Repository access could not be resolved.")
+            );
             assert!(info.retryable);
+            assert_eq!(info.is_user_error, Some(false));
             assert_eq!(
                 detail.as_deref(),
                 Some("Repository access could not be resolved.")
@@ -53,6 +78,11 @@ fn from_user_facing_converts_platform_error_preserving_metadata_and_debug() {
             assert_eq!(info.metadata["provider"], "github");
             assert_eq!(info.metadata["resource"], "installation");
             assert_eq!(info.debug.as_deref(), Some("request-id=dogfood-only"));
+            assert_eq!(
+                info.metrics_category.as_deref(),
+                Some("dependency_unavailable")
+            );
+            assert_eq!(info.trace_id.as_deref(), Some("0123456789abcdef"));
         }
         error => panic!("expected structured platform error, got {error:?}"),
     }
@@ -62,15 +92,25 @@ fn dependency_error(retryable: bool) -> TaskGitCredentialsError {
     TaskGitCredentialsError::Platform {
         message: "GitHub is temporarily unavailable.".to_string(),
         detail: Some("Repository access could not be resolved.".to_string()),
-        info: PlatformErrorInfo {
+        info: Box::new(PlatformErrorInfo {
+            error_message: Some("GitHub is temporarily unavailable.".to_string()),
             code: PlatformErrorCode::ResourceUnavailable,
+            http_status: Some(503),
+            user_facing_messages: std::collections::BTreeMap::from([(
+                PlatformErrorMessageFormat::PlainText,
+                "GitHub is temporarily unavailable.".to_string(),
+            )]),
+            detail: Some("Repository access could not be resolved.".to_string()),
             retryable,
+            is_user_error: Some(false),
             metadata: std::collections::BTreeMap::from([
                 ("provider".to_string(), "github".to_string()),
                 ("resource".to_string(), "installation".to_string()),
             ]),
             debug: None,
-        },
+            metrics_category: Some("dependency_unavailable".to_string()),
+            trace_id: None,
+        }),
     }
 }
 

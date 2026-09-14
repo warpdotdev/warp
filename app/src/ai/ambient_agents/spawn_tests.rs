@@ -755,20 +755,14 @@ async fn spawn_uses_resolved_team_scope() {
 
 fn transient_http_error() -> anyhow::Error {
     use crate::server::server_api::presigned_upload::HttpStatusError;
-    anyhow::Error::new(HttpStatusError {
-        status: 429,
-        body: "Too Many Requests".to_string(),
-    })
-    .context("API request failed with status 429 Too Many Requests")
+    anyhow::Error::new(HttpStatusError::new(429, "Too Many Requests".to_string()))
+        .context("API request failed with status 429 Too Many Requests")
 }
 
 fn permanent_http_error() -> anyhow::Error {
     use crate::server::server_api::presigned_upload::HttpStatusError;
-    anyhow::Error::new(HttpStatusError {
-        status: 403,
-        body: "Forbidden".to_string(),
-    })
-    .context("API request failed with status 403 Forbidden")
+    anyhow::Error::new(HttpStatusError::new(403, "Forbidden".to_string()))
+        .context("API request failed with status 403 Forbidden")
 }
 
 #[tokio::test]

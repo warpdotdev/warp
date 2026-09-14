@@ -877,8 +877,8 @@ pub enum AgentDriverError {
          Check the setup commands for this environment."
     )]
     SetupCommandExitedShell { command: String },
-    #[error("Timed out refreshing team metadata")]
-    TeamMetadataRefreshTimeout,
+    #[error("Failed to refresh team metadata")]
+    TeamMetadataRefreshFailed(#[source] anyhow::Error),
     #[error("{0}")]
     SkillResolutionFailed(String),
     #[error("Failed to fetch git credentials")]

@@ -18,7 +18,7 @@ pub struct PlatformError {
 
 #[derive(cynic::InlineFragments, Debug)]
 pub enum UserFacingErrorInterface {
-    PlatformError(PlatformError),
+    PlatformError(Box<PlatformError>),
     SharedObjectsLimitExceeded(SharedObjectsLimitExceeded),
     PersonalObjectsLimitExceeded(PersonalObjectsLimitExceeded),
     AccountDelinquencyError(AccountDelinquencyError),

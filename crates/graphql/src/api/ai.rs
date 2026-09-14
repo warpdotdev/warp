@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use crate::object::ObjectMetadata;
 use crate::object_permissions::ObjectPermissions;
 use crate::queries::get_conversation_usage::{TokenUsage, ToolUsageMetadata, convert_token_usage};
@@ -109,6 +111,30 @@ pub enum PlatformErrorCode {
     ResourceUnavailable,
     #[cynic(rename = "RESOURCE_NOT_FOUND")]
     ResourceNotFound,
+}
+
+impl FromStr for PlatformErrorCode {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "authentication_required" => Ok(Self::AuthenticationRequired),
+            "budget_exceeded" => Ok(Self::BudgetExceeded),
+            "content_policy_violation" => Ok(Self::ContentPolicyViolation),
+            "environment_setup_failed" => Ok(Self::EnvironmentSetupFailed),
+            "external_authentication_required" => Ok(Self::ExternalAuthenticationRequired),
+            "feature_not_available" => Ok(Self::FeatureNotAvailable),
+            "insufficient_credits" => Ok(Self::InsufficientCredits),
+            "integration_disabled" => Ok(Self::IntegrationDisabled),
+            "integration_not_configured" => Ok(Self::IntegrationNotConfigured),
+            "internal_error" => Ok(Self::InternalError),
+            "invalid_request" => Ok(Self::InvalidRequest),
+            "not_authorized" => Ok(Self::NotAuthorized),
+            "resource_unavailable" => Ok(Self::ResourceUnavailable),
+            "resource_not_found" => Ok(Self::ResourceNotFound),
+            _ => Err(()),
+        }
+    }
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]

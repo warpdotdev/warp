@@ -826,10 +826,7 @@ impl ServerApi {
 
         // Get the response text first since we may need to try multiple deserializations.
         let response_text = response.text().await.unwrap_or_default();
-        let status_error = HttpStatusError {
-            status: status.as_u16(),
-            body: response_text.clone(),
-        };
+        let status_error = HttpStatusError::new(status.as_u16(), response_text.clone());
 
         // Check for AT_CAPACITY error code header.
         if is_at_capacity

@@ -188,7 +188,7 @@ pub enum TaskGitCredentialsError {
     Platform {
         message: String,
         detail: Option<String>,
-        info: PlatformErrorInfo,
+        info: Box<PlatformErrorInfo>,
     },
     #[error("{message}")]
     Unstructured { message: String },
@@ -206,7 +206,7 @@ impl TaskGitCredentialsError {
             UserFacingErrorInterface::PlatformError(error) => Self::Platform {
                 message: error.message,
                 detail: error.detail,
-                info: error.info.into(),
+                info: Box::new(error.info.into()),
             },
             error => Self::Unstructured {
                 message: get_user_facing_error_message(UserFacingError {

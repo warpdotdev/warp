@@ -3035,6 +3035,7 @@ type RunnerInstanceShape {
 enum RunnerOS {
   LINUX
   MACOS
+  WINDOWS
 }
 
 """Target CPU architecture for a runner sandbox."""
@@ -4697,23 +4698,61 @@ type UserFacingError implements Response {
   responseContext: ResponseContext!
 }
 
+"""
+A structured platform error. Internal causes are only exposed through info.debug in dogfood.
+"""
 type PlatformError implements UserFacingErrorInterface {
   detail: String
   info: PlatformErrorInfo!
   message: String!
 }
 
+"""
+Machine-readable platform error information shared by server- and client-sourced errors.
+Debug information is only exposed in dogfood environments.
+"""
 type PlatformErrorInfo {
   code: PlatformErrorCode!
   debug: String
+  detail: String
+  errorMessage: String!
+  httpStatus: Int!
+  isUserError: Boolean!
   metadata: [PlatformErrorMetadata!]!
+  metricsCategory: String!
   retryable: Boolean!
+  traceId: String
+  userFacingMessages: [PlatformErrorMessage!]!
 }
+
 input PlatformErrorInput {
   code: PlatformErrorCode!
   debug: String
+  detail: String
+  errorMessage: String
+  httpStatus: Int
+  isUserError: Boolean
   metadata: [PlatformErrorMetadataInput!]!
+  metricsCategory: String
   retryable: Boolean!
+  traceId: String
+  userFacingMessages: [PlatformErrorMessageInput!]
+}
+
+type PlatformErrorMessage {
+  format: PlatformErrorMessageFormat!
+  message: String!
+}
+
+enum PlatformErrorMessageFormat {
+  MARKDOWN
+  PLAIN_TEXT
+  SLACK_MRKDWN
+}
+
+input PlatformErrorMessageInput {
+  format: PlatformErrorMessageFormat!
+  message: String!
 }
 
 type PlatformErrorMetadata {
