@@ -49,16 +49,6 @@ pub(super) struct VirtualScreenGeometry {
     pub(super) height: u32,
 }
 
-impl VirtualScreenGeometry {
-    pub(super) fn frame_point(self, point: crate::Vector2I) -> crate::Vector2I {
-        let max_x = i64::from(self.width - 1);
-        let max_y = i64::from(self.height - 1);
-        let x = (i64::from(point.x()) - i64::from(self.origin_x)).clamp(0, max_x);
-        let y = (i64::from(point.y()) - i64::from(self.origin_y)).clamp(0, max_y);
-        crate::Vector2I::new(x as i32, y as i32)
-    }
-}
-
 pub struct Recorder {
     ffmpeg: PathBuf,
 }
@@ -82,16 +72,7 @@ impl crate::Recorder for Recorder {
         let geometry = query_virtual_screen_geometry()?;
         let (path, log_path, log_file) = new_recording_path()?;
         let command = new_ffmpeg_capture_command(&self.ffmpeg, &config, geometry);
-        launch_recording(
-            command,
-            path,
-            log_path,
-            log_file,
-            geometry.width,
-            geometry.height,
-            START_TIMEOUT,
-        )
-        .await
+        launch_recording(command, path, log_path, log_file, geometry, START_TIMEOUT).await
     }
 
     async fn stop(&self, mut handle: RecordingHandle) -> Result<RecordingOutput, RecordingError> {
@@ -239,8 +220,7 @@ async fn launch_recording(
     path: PathBuf,
     log_path: PathBuf,
     log_file: File,
-    width: u32,
-    height: u32,
+    geometry: VirtualScreenGeometry,
     timeout: Duration,
 ) -> Result<RecordingHandle, RecordingError> {
     command
@@ -271,8 +251,9 @@ async fn launch_recording(
     }
 
     Ok(RecordingHandle {
-        width,
-        height,
+        width: geometry.width,
+        height: geometry.height,
+        capture_origin: crate::Vector2I::new(geometry.origin_x, geometry.origin_y),
         exit_state: Arc::new(Mutex::new(None)),
         path,
         started_at: Instant::now(),

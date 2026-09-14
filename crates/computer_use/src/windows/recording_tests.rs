@@ -44,6 +44,7 @@ fn handle_for(process: Child, path: PathBuf) -> RecordingHandle {
     RecordingHandle {
         width: 320,
         height: 240,
+        capture_origin: Vector2I::new(0, 0),
         exit_state: Arc::new(Mutex::new(None)),
         path,
         started_at: Instant::now(),
@@ -78,6 +79,27 @@ async fn decoded_frame(path: &Path, seek_from_end: bool) -> Vec<u8> {
         String::from_utf8_lossy(&output.stderr)
     );
     output.stdout
+}
+
+async fn validate_recording(path: &Path, width: u32, height: u32) {
+    let expected_frame_bytes = width as usize * height as usize * 3;
+    let first_frame = decoded_frame(path, false).await;
+    let last_frame = decoded_frame(path, true).await;
+    assert_eq!(first_frame.len(), expected_frame_bytes);
+    assert_eq!(last_frame.len(), expected_frame_bytes);
+    assert_ne!(first_frame, last_frame);
+    let decode = Command::new("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(path)
+        .args(["-f", "null", "-"])
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        decode.status.success(),
+        "{}",
+        String::from_utf8_lossy(&decode.stderr)
+    );
 }
 
 #[test]
@@ -162,46 +184,51 @@ fn builds_full_virtual_desktop_capture_command() {
 #[test]
 fn maps_virtual_screen_points_into_even_recording_frame() {
     let geometry = normalize_virtual_screen_geometry(-1921, -1079, 3839, 2159).unwrap();
+    let recording_geometry = RecordingGeometry::new(
+        Vector2I::new(geometry.origin_x, geometry.origin_y),
+        geometry.width,
+        geometry.height,
+    );
 
     assert_eq!(
-        geometry.frame_point(Vector2I::new(-1921, -1079)),
+        recording_geometry.frame_point(Vector2I::new(-1921, -1079)),
         Vector2I::new(0, 0)
     );
     assert_eq!(
-        geometry.frame_point(Vector2I::new(-900, 21)),
+        recording_geometry.frame_point(Vector2I::new(-900, 21)),
         Vector2I::new(1021, 1100)
     );
     assert_eq!(
-        geometry.frame_point(Vector2I::new(-5000, -5000)),
+        recording_geometry.frame_point(Vector2I::new(-5000, -5000)),
         Vector2I::new(0, 0)
     );
     assert_eq!(
-        geometry.frame_point(Vector2I::new(5000, 5000)),
+        recording_geometry.frame_point(Vector2I::new(5000, 5000)),
         Vector2I::new(3837, 2157)
     );
 }
 
 #[test]
-fn records_pointer_events_in_frame_coordinates() {
-    let geometry = normalize_virtual_screen_geometry(-1921, -1079, 3839, 2159).unwrap();
+fn records_pointer_events_using_capture_start_geometry() {
+    let captured = RecordingGeometry::new(Vector2I::new(-1921, -1079), 3838, 2158);
+    let current = RecordingGeometry::new(Vector2I::new(0, 0), 1920, 1080);
     let events = Arc::new(Mutex::new(Vec::new()));
     let sink = PointerSink {
         started_at: Instant::now(),
         recording_target: Target::Screen,
+        recording_geometry: captured,
         events: events.clone(),
         session: PointerSession::new(),
     };
 
     super::super::record_positioned_event(
         Some(&sink),
-        Some(geometry),
         PointerEventKind::Down,
         Some(MouseButton::Left),
         Vector2I::new(-1900, -1000),
     );
     super::super::record_positioned_event(
         Some(&sink),
-        Some(geometry),
         PointerEventKind::Move,
         None,
         Vector2I::new(5000, 5000),
@@ -212,40 +239,14 @@ fn records_pointer_events_in_frame_coordinates() {
     assert_eq!(events.len(), 3);
     assert_eq!(events[0].kind, PointerEventKind::Down);
     assert_eq!(events[0].point, Vector2I::new(21, 79));
+    assert_ne!(
+        events[0].point,
+        current.frame_point(Vector2I::new(-1900, -1000))
+    );
     assert_eq!(events[1].kind, PointerEventKind::Move);
     assert_eq!(events[1].point, Vector2I::new(3837, 2157));
     assert_eq!(events[2].kind, PointerEventKind::Up);
     assert_eq!(events[2].point, Vector2I::new(3837, 2157));
-}
-#[test]
-fn missing_frame_geometry_clears_pointer_session() {
-    let geometry = normalize_virtual_screen_geometry(0, 0, 1920, 1080).unwrap();
-    let events = Arc::new(Mutex::new(Vec::new()));
-    let sink = PointerSink {
-        started_at: Instant::now(),
-        recording_target: Target::Screen,
-        events: events.clone(),
-        session: PointerSession::new(),
-    };
-    super::super::record_positioned_event(
-        Some(&sink),
-        Some(geometry),
-        PointerEventKind::Down,
-        Some(MouseButton::Left),
-        Vector2I::new(20, 30),
-    );
-    super::super::record_positioned_event(
-        Some(&sink),
-        None,
-        PointerEventKind::Move,
-        None,
-        Vector2I::new(40, 50),
-    );
-    super::super::record_up(Some(&sink), MouseButton::Left);
-
-    let events = events.lock().unwrap();
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].kind, PointerEventKind::Down);
 }
 
 #[tokio::test]
@@ -433,6 +434,7 @@ async fn records_real_virtual_desktop_when_requested() {
                 pointer_sink: Some(PointerSink {
                     started_at,
                     recording_target: Target::Screen,
+                    recording_geometry: handle.geometry(),
                     events: events.clone(),
                     session: PointerSession::new(),
                 }),
@@ -447,24 +449,7 @@ async fn records_real_virtual_desktop_when_requested() {
         (output.width, output.height),
         (geometry.width, geometry.height)
     );
-    let expected_frame_bytes = output.width as usize * output.height as usize * 3;
-    let first_frame = decoded_frame(&output.path, false).await;
-    let last_frame = decoded_frame(&output.path, true).await;
-    assert_eq!(first_frame.len(), expected_frame_bytes);
-    assert_eq!(last_frame.len(), expected_frame_bytes);
-    assert_ne!(first_frame, last_frame);
-    let decode = Command::new("ffmpeg")
-        .args(["-v", "error", "-i"])
-        .arg(&output.path)
-        .args(["-f", "null", "-"])
-        .output()
-        .await
-        .unwrap();
-    assert!(
-        decode.status.success(),
-        "{}",
-        String::from_utf8_lossy(&decode.stderr)
-    );
+    validate_recording(&output.path, output.width, output.height).await;
     let pointer_events = std::mem::take(&mut *events.lock().unwrap());
     let entries = [ActionLogEntry {
         offset: group_offset,
@@ -481,6 +466,7 @@ async fn records_real_virtual_desktop_when_requested() {
     )
     .await
     .unwrap();
+    validate_recording(&overlay_path, output.width, output.height).await;
     std::fs::create_dir_all(&output_dir).unwrap();
     let raw_artifact = Path::new(&output_dir).join("windows_raw_recording.mp4");
     let overlay_artifact = Path::new(&output_dir).join("windows_overlay_recording.mp4");

@@ -63,7 +63,6 @@ impl InputDesktop {
 
 fn record_positioned_event(
     pointer_sink: Option<&PointerSink>,
-    geometry: Option<recording::VirtualScreenGeometry>,
     kind: PointerEventKind,
     button: Option<MouseButton>,
     point: Vector2I,
@@ -71,11 +70,7 @@ fn record_positioned_event(
     let Some(sink) = pointer_sink else {
         return;
     };
-    let Some(geometry) = geometry else {
-        sink.session.clear();
-        return;
-    };
-    let point = geometry.frame_point(point);
+    let point = sink.recording_geometry.frame_point(point);
     sink.session.record_press_or_move(kind, button, point);
     push_pointer_event(sink, point, kind, button);
 }
@@ -175,9 +170,6 @@ impl super::Actor for Actor {
         let keyboard = &mut self.keyboard;
         let mouse = &mut self.mouse;
         let pointer_sink = options.pointer_sink.take();
-        let recording_geometry = pointer_sink
-            .as_ref()
-            .and_then(|_| recording::query_virtual_screen_geometry().ok());
 
         for targeted in actions {
             // Per-window targeting is not supported on Windows; act on the screen / foreground
@@ -192,7 +184,6 @@ impl super::Actor for Actor {
                     mouse.button_down(button)?;
                     record_positioned_event(
                         pointer_sink.as_ref(),
-                        recording_geometry,
                         PointerEventKind::Down,
                         Some(*button),
                         *at,
@@ -206,7 +197,6 @@ impl super::Actor for Actor {
                     mouse.move_to(*to)?;
                     record_positioned_event(
                         pointer_sink.as_ref(),
-                        recording_geometry,
                         PointerEventKind::Move,
                         None,
                         *to,
@@ -221,7 +211,6 @@ impl super::Actor for Actor {
                     mouse.scroll(direction, distance)?;
                     record_positioned_event(
                         pointer_sink.as_ref(),
-                        recording_geometry,
                         PointerEventKind::Scroll,
                         None,
                         *at,

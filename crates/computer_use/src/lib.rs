@@ -423,6 +423,7 @@ impl Default for RecordingConfig {
 pub struct RecordingHandle {
     width: u32,
     height: u32,
+    capture_origin: Vector2I,
     exit_state: RecordingExitState,
     // The live capture process plus the fields used to finalize it are only
     // populated by the real platform recorders; the no-op recorders never
@@ -448,6 +449,11 @@ impl RecordingHandle {
     /// The applied capture height in pixels.
     pub fn height(&self) -> u32 {
         self.height
+    }
+
+    /// The immutable physical-pixel geometry selected when capture started.
+    pub fn geometry(&self) -> RecordingGeometry {
+        RecordingGeometry::new(self.capture_origin, self.width, self.height)
     }
 
     /// Checks whether capture exited without an explicit stop.
@@ -485,6 +491,7 @@ impl RecordingHandle {
         let handle = Self {
             width,
             height,
+            capture_origin: Vector2I::new(0, 0),
             exit_state: exit_state.clone(),
             #[cfg(any(linux, macos, windows))]
             path: PathBuf::new(),
@@ -700,12 +707,41 @@ pub struct PointerSink {
     /// The surface being recorded, so the actor can resolve each event into the recording's
     /// capture-space pixels.
     pub recording_target: Target,
+    /// The immutable physical-pixel capture geometry selected by the recorder.
+    pub recording_geometry: RecordingGeometry,
     /// Events collected in dispatch order; drained by the caller after the batch completes.
     pub events: Arc<Mutex<Vec<PointerEvent>>>,
     /// Recording-scoped pointer session shared with every `UseComputer` call's sink, so a
     /// release in a later call reuses the last resolved capture-space point even when the
     /// press happened in an earlier call. See [`PointerSession`].
     pub session: PointerSession,
+}
+
+/// The physical-pixel bounds selected for a recording when capture starts.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct RecordingGeometry {
+    origin: Vector2I,
+    width: u32,
+    height: u32,
+}
+
+impl RecordingGeometry {
+    pub(crate) fn new(origin: Vector2I, width: u32, height: u32) -> Self {
+        Self {
+            origin,
+            width,
+            height,
+        }
+    }
+
+    /// Maps a physical desktop point into the captured frame and clamps it to the frame bounds.
+    pub fn frame_point(self, point: Vector2I) -> Vector2I {
+        let max_x = i64::from(self.width.saturating_sub(1));
+        let max_y = i64::from(self.height.saturating_sub(1));
+        let x = (i64::from(point.x()) - i64::from(self.origin.x())).clamp(0, max_x);
+        let y = (i64::from(point.y()) - i64::from(self.origin.y())).clamp(0, max_y);
+        Vector2I::new(x as i32, y as i32)
+    }
 }
 
 /// Recording-scoped pointer session state, shared between the recording

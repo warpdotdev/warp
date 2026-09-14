@@ -224,6 +224,7 @@ async fn launch_recording(
     Ok(RecordingHandle {
         width,
         height,
+        capture_origin: Vector2I::new(0, 0),
         exit_state: Arc::new(Mutex::new(None)),
         path,
         started_at: Instant::now(),
