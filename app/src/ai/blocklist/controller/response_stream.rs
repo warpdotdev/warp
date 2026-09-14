@@ -289,6 +289,8 @@ pub struct ResponseStream {
     /// Whether a retry is parked waiting for a backoff or for connectivity. While set,
     /// completion of the failed attempt's underlying stream is ignored.
     deferred_retry_pending: bool,
+    completion_deferred: bool,
+    completion_waiting: bool,
 
     /// Unique, internal id for the current request.
     ///
@@ -298,6 +300,7 @@ pub struct ResponseStream {
     /// Note this is unique compared to `id`; this is unique across retry requests while the response
     /// stream id remains stable.
     current_request_id: Option<Uuid>,
+    pending_start: Option<(Uuid, oneshot::Receiver<()>)>,
 
     /// Captured once at construction, so retries keep the team the request started on.
     team_scope: RequestTeamScope,
@@ -311,9 +314,15 @@ impl ResponseStream {
         event: warp_multi_agent_api::ResponseEvent,
         ctx: &mut ModelContext<Self>,
     ) {
-        ctx.emit(ResponseStreamEvent::ReceivedEvent(Consumable::new(Ok(
-            event,
-        ))));
+        let request_id = self
+            .current_request_id
+            .expect("test response stream has a current request");
+        self.handle_response_stream_event(request_id, Ok(event), ctx);
+    }
+
+    #[cfg(test)]
+    pub fn set_oz_hook_context_for_test(&mut self, context: warp_multi_agent_api::OzHookContext) {
+        self.params.oz_hook_context = Some(context);
     }
 
     /// Emits the natural-completion `AfterStreamFinished` event (no cancellation) through
@@ -343,7 +352,10 @@ impl ResponseStream {
             stream_finished_received: false,
             error_event_emitted: false,
             deferred_retry_pending: false,
+            completion_deferred: false,
+            completion_waiting: false,
             current_request_id: Some(Uuid::new_v4()),
+            pending_start: None,
             team_scope: RequestTeamScope::from_scope(&TeamlessScopeForTest),
         }
     }
@@ -375,8 +387,94 @@ impl ResponseStream {
             stream_finished_received: false,
             error_event_emitted: false,
             deferred_retry_pending: false,
+            completion_deferred: false,
+            completion_waiting: false,
             current_request_id: Some(request_id),
+            pending_start: None,
             team_scope,
+        }
+    }
+
+    pub fn new_deferred(
+        params: api::RequestParams,
+        ai_identifiers: AIIdentifiers,
+        recovery: RecoveryBudget,
+        team_scope: RequestTeamScope,
+    ) -> Self {
+        let (cancellation_tx, cancellation_rx) = oneshot::channel();
+        let request_id = Uuid::new_v4();
+        Self {
+            id: ResponseStreamId(Uuid::new_v4().to_string()),
+            params,
+            start_time: Local::now(),
+            time_to_latest_event: TimeDelta::seconds(0),
+            cancellation_tx: Some(cancellation_tx),
+            recovery,
+            retries_sent: 0,
+            original_error: None,
+            has_received_client_actions: false,
+            ai_identifiers,
+            pending_resume: None,
+            stream_finished_received: false,
+            error_event_emitted: false,
+            deferred_retry_pending: false,
+            completion_deferred: false,
+            completion_waiting: false,
+            current_request_id: None,
+            pending_start: Some((request_id, cancellation_rx)),
+            team_scope,
+        }
+    }
+
+    pub fn start_deferred(&mut self, ctx: &mut ModelContext<Self>) {
+        let Some((request_id, cancellation_rx)) = self.take_pending_start() else {
+            return;
+        };
+        Self::spawn_request(
+            request_id,
+            self.params.clone(),
+            self.team_scope,
+            cancellation_rx,
+            ctx,
+        );
+        self.current_request_id = Some(request_id);
+    }
+
+    pub fn finish_deferred_completion(&mut self, ctx: &mut ModelContext<Self>) {
+        if !std::mem::take(&mut self.completion_deferred) {
+            return;
+        }
+        if std::mem::take(&mut self.completion_waiting)
+            && let Some(request_id) = self.current_request_id
+        {
+            self.on_response_stream_complete(request_id, ctx);
+        }
+    }
+
+    pub fn is_completion_deferred(&self) -> bool {
+        self.completion_deferred
+    }
+    #[cfg(not(target_family = "wasm"))]
+    fn defer_completion_for_oz_stop(&mut self) {
+        self.completion_deferred = self.params.oz_hook_context.as_ref().is_some_and(|context| {
+            context
+                .enabled_events
+                .contains(&(maa_api::OzHookEvent::Stop as i32))
+        });
+    }
+    #[cfg(not(target_family = "wasm"))]
+    fn defer_failed_completion_for_oz_stop(&mut self) {
+        if self.pending_resume.is_none() {
+            self.defer_completion_for_oz_stop();
+        }
+    }
+
+    fn take_pending_start(&mut self) -> Option<(Uuid, oneshot::Receiver<()>)> {
+        if self.cancellation_tx.is_none() {
+            self.pending_start.take();
+            None
+        } else {
+            self.pending_start.take()
         }
     }
 
@@ -433,6 +531,8 @@ impl ResponseStream {
         self.stream_finished_received = false;
         self.error_event_emitted = false;
         self.deferred_retry_pending = false;
+        self.completion_deferred = false;
+        self.completion_waiting = false;
         // A retry supersedes any resume this stream had scheduled. Unreachable today (the
         // eventsource closes on its first error, so a `Resume` decision is never followed by
         // another error on the same stream), but that depends on a transport detail several
@@ -680,6 +780,7 @@ impl ResponseStream {
     fn surface_grok_refresh_failure(&mut self, request_id: Uuid, ctx: &mut ModelContext<Self>) {
         let error = Arc::new(AIApiError::GrokSubscriptionTokenRefreshFailed);
         self.error_event_emitted = true;
+        self.defer_failed_completion_for_oz_stop();
         self.report_request_failure(
             &error,
             NetworkStatus::as_ref(ctx).is_online(),
@@ -767,6 +868,8 @@ impl ResponseStream {
                     NetworkStatus::as_ref(ctx).is_online(),
                     self.recovery.attempts_used(),
                 );
+                #[cfg(not(target_family = "wasm"))]
+                self.defer_failed_completion_for_oz_stop();
                 ctx.emit(ResponseStreamEvent::ReceivedEvent(Consumable::new(Err(
                     error,
                 ))));
@@ -803,6 +906,8 @@ impl ResponseStream {
                         }
                         warp_multi_agent_api::response_event::Type::Finished(finished_event) => {
                             self.stream_finished_received = true;
+                            #[cfg(not(target_family = "wasm"))]
+                            self.defer_completion_for_oz_stop();
                             // Emit retry success telemetry on successful completion
                             if matches!(
                                 finished_event.reason,
@@ -836,6 +941,8 @@ impl ResponseStream {
                     // Don't emit the error event, we're recovering in-request.
                     return;
                 }
+                #[cfg(not(target_family = "wasm"))]
+                self.defer_failed_completion_for_oz_stop();
 
                 ctx.emit(ResponseStreamEvent::ReceivedEvent(Consumable::new(event)));
             }
@@ -849,6 +956,10 @@ impl ResponseStream {
         // A retry is parked waiting for a backoff or for connectivity; the request is
         // logically still active, so don't complete the stream for the failed attempt.
         if self.deferred_retry_pending {
+            return;
+        }
+        if self.completion_deferred {
+            self.completion_waiting = true;
             return;
         }
 
@@ -866,9 +977,15 @@ impl ResponseStream {
             ) {
                 return;
             }
+            #[cfg(not(target_family = "wasm"))]
+            self.defer_failed_completion_for_oz_stop();
             ctx.emit(ResponseStreamEvent::ReceivedEvent(Consumable::new(Err(
                 unexpected_eof,
             ))));
+            if self.completion_deferred {
+                self.completion_waiting = true;
+                return;
+            }
         }
 
         ctx.emit(ResponseStreamEvent::AfterStreamFinished { cancellation: None });

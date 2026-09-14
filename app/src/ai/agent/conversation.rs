@@ -2121,7 +2121,7 @@ impl AIConversation {
         for (task_id, inputs) in input_messages.into_iter() {
             let should_hide = inputs
                 .iter()
-                .any(|input| input.is_passive_suggestion_trigger());
+                .any(|input| input.is_passive_suggestion_trigger() || input.is_oz_hook_result());
 
             let new_exchange = AIAgentExchange {
                 id: AIAgentExchangeId::new(),
@@ -2829,6 +2829,7 @@ impl AIConversation {
                 log::debug!("Rollback transaction.");
                 self.rollback_transaction(response_stream_id);
             }
+            Action::RunOzHook(_) => {}
             Action::CreateTask(CreateTask { task: Some(task) }) => {
                 let task_id = TaskId::new(task.id.clone());
                 // Save an empty task to the transaction

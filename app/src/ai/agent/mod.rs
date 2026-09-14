@@ -2989,6 +2989,7 @@ pub enum AIAgentInput {
         config: OrchestrationConfig,
         status: OrchestrationConfigStatus,
     },
+    OzHookResult(warp_multi_agent_api::OzHookResult),
 }
 
 /// Data for a single message received by an agent from another agent.
@@ -3082,6 +3083,7 @@ impl Display for AIAgentInput {
             }
             Self::PassiveSuggestionResult { .. } => write!(f, "PassiveSuggestionResult"),
             Self::OrchestrationConfigUpdate { .. } => write!(f, "OrchestrationConfigUpdate"),
+            Self::OzHookResult(_) => write!(f, "OzHookResult"),
         }
     }
 }
@@ -3143,7 +3145,8 @@ impl AIAgentInput {
             | Self::MessagesReceivedFromAgents { .. }
             | Self::EventsFromAgents { .. }
             | Self::PassiveSuggestionResult { .. }
-            | Self::OrchestrationConfigUpdate { .. } => None,
+            | Self::OrchestrationConfigUpdate { .. }
+            | Self::OzHookResult(_) => None,
         }
     }
 
@@ -3211,6 +3214,10 @@ impl AIAgentInput {
         matches!(self, AIAgentInput::UserQuery { .. })
     }
 
+    pub fn is_oz_hook_result(&self) -> bool {
+        matches!(self, AIAgentInput::OzHookResult(_))
+    }
+
     pub fn prompt_suggestion_result(&self) -> Option<&String> {
         if let Some(AIAgentActionResult {
             result: AIAgentActionResultType::SuggestPrompt(SuggestPromptResult::Accepted { query }),
@@ -3248,7 +3255,8 @@ impl AIAgentInput {
             Self::SummarizeConversation { context, .. } => Some(context),
             Self::MessagesReceivedFromAgents { .. }
             | Self::EventsFromAgents { .. }
-            | Self::OrchestrationConfigUpdate { .. } => None,
+            | Self::OrchestrationConfigUpdate { .. }
+            | Self::OzHookResult(_) => None,
         }
     }
 
@@ -3279,7 +3287,8 @@ impl AIAgentInput {
             | Self::MessagesReceivedFromAgents { .. }
             | Self::EventsFromAgents { .. }
             | Self::PassiveSuggestionResult { .. }
-            | Self::OrchestrationConfigUpdate { .. } => None,
+            | Self::OrchestrationConfigUpdate { .. }
+            | Self::OzHookResult(_) => None,
         }
     }
 

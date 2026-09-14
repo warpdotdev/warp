@@ -340,6 +340,9 @@ fn convert_input_to_user_input(
             ))
         }
         AIAgentInput::ActionResult { result, .. } => result.try_into(),
+        AIAgentInput::OzHookResult(result) => {
+            Ok(api::request::input::user_inputs::user_input::Input::OzHookResult(result))
+        }
         AIAgentInput::MessagesReceivedFromAgents { messages } => Ok(
             api::request::input::user_inputs::user_input::Input::MessagesReceivedFromAgents(
                 api::request::input::user_inputs::MessagesReceivedFromAgents {
