@@ -669,7 +669,6 @@ default = [
     "agent_harness",
     "hoa_onboarding_flow",
     "hoa_remote_control",
-    "codex_notifications",
     "codex_plugin",
     "trim_trailing_blank_lines",
     "skip_firebase_anonymous_user",
@@ -1019,7 +1018,6 @@ warpify_footer = []
 hoa_onboarding_flow = []
 git_operations_in_code_review = []
 hoa_remote_control = []
-codex_notifications = []
 codex_plugin = []
 cloud_mode_setup_v2 = ["cloud_mode"]
 cloud_mode_input_v2 = ["cloud_mode"]
