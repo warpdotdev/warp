@@ -988,6 +988,26 @@ const fn sandbox_deadline_message(on_free_plan: bool) -> &'static str {
     }
 }
 
+/// Environment variable holding the Unix timestamp (seconds) at which the sandbox
+/// hosting this run will be hard-killed.
+const SANDBOX_DEADLINE_ENV: &str = "WARP_SANDBOX_DEADLINE";
+
+/// Returns the instant at which the sandbox hosting this run will be hard-killed.
+///
+/// `None` outside a Warp-hosted sandbox, since the server only injects a deadline for
+/// Docker Sandbox and Namespace runs. Local and self-hosted runs have no bounded lifetime
+/// to report.
+pub(crate) fn sandbox_deadline() -> Option<SystemTime> {
+    let deadline_unix = std::env::var(SANDBOX_DEADLINE_ENV)
+        .ok()?
+        .parse::<i64>()
+        .ok()?;
+    if deadline_unix <= 0 {
+        return None;
+    }
+    SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(deadline_unix as u64))
+}
+
 impl ErrorExt for AgentDriverError {
     fn is_actionable(&self) -> bool {
         error_classification::classify_driver_error(self).0 == AgentTaskState::Error
@@ -1378,22 +1398,14 @@ impl AgentDriver {
                     /// How far before the sandbox deadline to start the teardown sequence.
                     const SHUTDOWN_WARNING_WINDOW: Duration = Duration::from_secs(5 * 60);
 
-                    let maybe_wait = std::env::var("WARP_SANDBOX_DEADLINE")
-                        .ok()
-                        .and_then(|s| s.parse::<i64>().ok())
-                        .and_then(|deadline_unix| {
-                            if deadline_unix <= 0 {
-                                return None;
-                            }
-                            let deadline = SystemTime::UNIX_EPOCH
-                                .checked_add(Duration::from_secs(deadline_unix as u64))?;
-                            let warning_at = deadline.checked_sub(SHUTDOWN_WARNING_WINDOW)?;
-                            match warning_at.duration_since(SystemTime::now()) {
-                                Ok(wait) => Some(wait),
-                                // Already inside the warning window — trigger immediately.
-                                Err(_) => Some(Duration::ZERO),
-                            }
-                        });
+                    let maybe_wait = sandbox_deadline().and_then(|deadline| {
+                        let warning_at = deadline.checked_sub(SHUTDOWN_WARNING_WINDOW)?;
+                        match warning_at.duration_since(SystemTime::now()) {
+                            Ok(wait) => Some(wait),
+                            // Already inside the warning window — trigger immediately.
+                            Err(_) => Some(Duration::ZERO),
+                        }
+                    });
 
                     // Resolved up front rather than inside the timer arm: `select!` arms
                     // are synchronous (no `ctx` to read the model from), and everything

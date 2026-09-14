@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use futures::channel::oneshot;
 use futures::future::{self, Either};
 use handlebars::get_arguments;
@@ -22,7 +23,7 @@ use warp_managed_secrets::ManagedSecretValue;
 use warpui::r#async::{FutureExt as _, TimeoutError};
 use warpui::{Entity, ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
 
-use super::{AgentDriver, AgentDriverError};
+use super::{AgentDriver, AgentDriverError, sandbox_deadline};
 use crate::ai::agent_sdk::retry::{is_transient_graphql_or_http_error, with_bounded_retry_using};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -407,7 +408,7 @@ impl AgentDriver {
     /// refreshed mid-run: cloud runs authenticate with API keys, which do not
     /// rotate, so only Firebase-authenticated local runs that outlive their
     /// token would see factory tool calls start failing. `ambient_headers`
-    /// (workload token, cloud-agent ID) are resolved separately per call via
+    /// (workload token, cloud-agent ID) are resolved separately via
     /// [`Self::factory_mcp_ambient_headers`] since they depend on this run's
     /// active ambient task, if any, rather than on credentials.
     fn builtin_factory_mcp_for_run(
@@ -435,6 +436,11 @@ impl AgentDriver {
     /// own worker instead of soft-failing the check on a missing token. Returns an
     /// empty list when this run has no active ambient task (e.g. a local session) or
     /// no isolation platform can issue a workload token.
+    ///
+    /// These headers are pinned into the MCP transport for the life of the run, so the
+    /// workload token is resolved against the sandbox deadline: a token that would expire
+    /// first is left off entirely rather than pinned, because warp-server rejects an expired
+    /// workload token but tolerates a missing one.
     async fn factory_mcp_ambient_headers(foreground: &ModelSpawner<Self>) -> Vec<(String, String)> {
         let Ok((task_id, server_api)) = foreground
             .spawn(|me, ctx| (me.task_id, ServerApiProvider::as_ref(ctx).get()))
@@ -445,8 +451,9 @@ impl AgentDriver {
         let Some(task_id) = task_id else {
             return Vec::new();
         };
+        let must_outlive = sandbox_deadline().map(DateTime::<Utc>::from);
         server_api
-            .ambient_agent_headers_for_task(&task_id)
+            .pinned_ambient_agent_headers_for_task(&task_id, must_outlive)
             .await
             .unwrap_or_else(|err| {
                 log::warn!(

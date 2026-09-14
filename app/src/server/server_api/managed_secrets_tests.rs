@@ -22,7 +22,7 @@ fn server_api() -> ServerApi {
     let server_api = ServerApi::new_for_test();
     server_api
         .base_client
-        .set_ambient_workload_token_for_test("test-workload-token".to_string());
+        .set_ambient_workload_token_for_test("test-workload-token".to_string(), None);
     server_api
 }
 

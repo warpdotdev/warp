@@ -312,7 +312,7 @@ fn local_child_dispatch_fails_after_window_team_change() {
         app.read(|ctx| {
             ServerApiProvider::as_ref(ctx)
                 .get()
-                .set_ambient_workload_token_for_test("test-workload-token".to_string());
+                .set_ambient_workload_token_for_test("test-workload-token".to_string(), None);
         });
         let team_a_uid: ServerId = 7.into();
         let team_b_uid: ServerId = 8.into();
