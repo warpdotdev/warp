@@ -89,9 +89,15 @@ async fn burn_overlays_into_cut(
     ass_path: &Path,
     frame_rate: u32,
 ) -> Result<PathBuf, RecordingError> {
-    let input = std::fs::canonicalize(input).map_err(|error| RecordingError::Finalize {
-        reason: format!("failed to resolve cut recording path: {error}"),
-    })?;
+    let input = if input.is_absolute() {
+        input.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| RecordingError::Finalize {
+                reason: format!("failed to resolve the current directory: {error}"),
+            })?
+            .join(input)
+    };
     let output_path = input.with_extension("overlay.mp4");
     let (subtitle_directory, subtitles_filter) = subtitles_filter_context(ass_path)?;
     let status = Command::new("ffmpeg")
