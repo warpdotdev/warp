@@ -252,11 +252,9 @@ async fn launch_recording(
     if let Err(error) = wait_for_first_output(&path, &mut process, timeout).await {
         kill_and_reap(&mut process).await;
         let log = std::fs::read_to_string(&log_path).unwrap_or_default();
-        let diagnostic = diagnostic_tail(&log);
+        let reason = capture_start_failure_reason(&error, &log);
         remove_recording_files(&path);
-        return Err(RecordingError::Start {
-            reason: format!("{error}{diagnostic}"),
-        });
+        return Err(RecordingError::Start { reason });
     }
 
     Ok(RecordingHandle {
@@ -356,6 +354,20 @@ async fn kill_and_reap(process: &mut Child) {
 fn remove_recording_files(path: &Path) {
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(path.with_extension("log"));
+}
+
+fn capture_start_failure_reason(error: &str, log: &str) -> String {
+    let diagnostic = diagnostic_tail(log);
+    if log
+        .to_ascii_lowercase()
+        .contains("failed to capture image (error 5)")
+    {
+        format!(
+            "{error}: gdigrab was denied access to the current Windows desktop session{diagnostic}"
+        )
+    } else {
+        format!("{error}{diagnostic}")
+    }
 }
 
 fn diagnostic_tail(text: &str) -> String {

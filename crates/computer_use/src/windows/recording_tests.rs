@@ -1,3 +1,4 @@
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -23,11 +24,12 @@ fn write_batch(name: &str, body: &str) -> PathBuf {
     path
 }
 
-fn powershell(script: &str, argument: &Path, stdin: Stdio) -> Child {
-    let mut command = Command::new("powershell.exe");
+fn recording_process(mode: &str, path: &Path, stdin: Stdio) -> Child {
+    let mut command = Command::new(std::env::current_exe().unwrap());
     command
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
-        .arg(argument)
+        .args(["recording_process_helper", "--ignored", "--test-threads=1"])
+        .env("WARP_RECORDING_PROCESS_MODE", mode)
+        .env("WARP_RECORDING_PROCESS_PATH", path)
         .stdin(stdin)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -164,12 +166,7 @@ async fn probe_reports_missing_ffmpeg_as_environment_error() {
 #[tokio::test]
 async fn readiness_waits_for_output_growth() {
     let path = temp_path("delayed-output", "mp4");
-    let script = concat!(
-        "[Threading.Thread]::Sleep(150);",
-        "[IO.File]::WriteAllBytes($args[0], [byte[]](1));",
-        "[Threading.Thread]::Sleep(30000)"
-    );
-    let mut process = powershell(script, &path, Stdio::null());
+    let mut process = recording_process("delayed-output", &path, Stdio::null());
 
     wait_for_first_output(&path, &mut process, Duration::from_secs(2))
         .await
@@ -182,7 +179,7 @@ async fn readiness_waits_for_output_growth() {
 #[tokio::test]
 async fn readiness_reports_early_exit_and_timeout() {
     let early_path = temp_path("early-exit", "mp4");
-    let mut early = powershell("exit 23", &early_path, Stdio::null());
+    let mut early = recording_process("exit-23", &early_path, Stdio::null());
     let error = wait_for_first_output(&early_path, &mut early, Duration::from_secs(2))
         .await
         .unwrap_err();
@@ -190,11 +187,7 @@ async fn readiness_reports_early_exit_and_timeout() {
     let _ = early.wait().await;
 
     let timeout_path = temp_path("timeout", "mp4");
-    let mut stalled = powershell(
-        "[Threading.Thread]::Sleep(30000)",
-        &timeout_path,
-        Stdio::null(),
-    );
+    let mut stalled = recording_process("stalled", &timeout_path, Stdio::null());
     let error = wait_for_first_output(&timeout_path, &mut stalled, Duration::from_millis(100))
         .await
         .unwrap_err();
@@ -207,11 +200,7 @@ async fn graceful_finalization_writes_q_and_closes_stdin() {
     let path = temp_path("graceful-output", "mp4");
     let marker = temp_path("graceful-stdin", "bin");
     std::fs::write(&path, b"video").unwrap();
-    let script = concat!(
-        "$bytes=[Text.Encoding]::UTF8.GetBytes([Console]::In.ReadToEnd());",
-        "[IO.File]::WriteAllBytes($args[0], $bytes)"
-    );
-    let mut process = powershell(script, &marker, Stdio::piped());
+    let mut process = recording_process("read-stdin", &marker, Stdio::piped());
 
     let status = finalize_capture(&mut process, &path, Duration::from_secs(2))
         .await
@@ -227,7 +216,7 @@ async fn graceful_finalization_writes_q_and_closes_stdin() {
 async fn finalization_handles_early_exit_missing_stdin_and_timeout() {
     let early_path = temp_path("finalize-early", "mp4");
     std::fs::write(&early_path, b"video").unwrap();
-    let mut early = powershell("exit 0", &early_path, Stdio::piped());
+    let mut early = recording_process("exit-0", &early_path, Stdio::piped());
     let _ = early.wait().await;
     assert_eq!(
         finalize_capture(&mut early, &early_path, Duration::from_secs(1))
@@ -239,11 +228,7 @@ async fn finalization_handles_early_exit_missing_stdin_and_timeout() {
 
     let no_stdin_path = temp_path("finalize-no-stdin", "mp4");
     std::fs::write(&no_stdin_path, b"video").unwrap();
-    let mut no_stdin = powershell(
-        "[Threading.Thread]::Sleep(30000)",
-        &no_stdin_path,
-        Stdio::null(),
-    );
+    let mut no_stdin = recording_process("stalled", &no_stdin_path, Stdio::null());
     let error = finalize_capture(&mut no_stdin, &no_stdin_path, Duration::from_secs(1))
         .await
         .unwrap_err();
@@ -252,11 +237,7 @@ async fn finalization_handles_early_exit_missing_stdin_and_timeout() {
 
     let timeout_path = temp_path("finalize-timeout", "mp4");
     std::fs::write(&timeout_path, b"video").unwrap();
-    let mut stalled = powershell(
-        "$null=[Console]::In.ReadToEnd(); [Threading.Thread]::Sleep(30000)",
-        &timeout_path,
-        Stdio::piped(),
-    );
+    let mut stalled = recording_process("read-stdin-stall", &timeout_path, Stdio::piped());
     let error = finalize_capture(&mut stalled, &timeout_path, Duration::from_millis(100))
         .await
         .unwrap_err();
@@ -268,7 +249,7 @@ async fn finalization_handles_early_exit_missing_stdin_and_timeout() {
 async fn stop_rejects_empty_and_invalid_media() {
     let empty_path = temp_path("empty", "mp4");
     std::fs::write(&empty_path, b"").unwrap();
-    let mut empty_process = powershell("exit 0", &empty_path, Stdio::piped());
+    let mut empty_process = recording_process("exit-0", &empty_path, Stdio::piped());
     let _ = empty_process.wait().await;
     let recorder = Recorder::with_ffmpeg(PathBuf::from("ffmpeg"));
     let error = recorder
@@ -280,7 +261,7 @@ async fn stop_rejects_empty_and_invalid_media() {
 
     let invalid_path = temp_path("invalid", "mp4");
     std::fs::write(&invalid_path, b"not an mp4").unwrap();
-    let mut invalid_process = powershell("exit 0", &invalid_path, Stdio::piped());
+    let mut invalid_process = recording_process("exit-0", &invalid_path, Stdio::piped());
     let _ = invalid_process.wait().await;
     let invalid_probe = write_batch("invalid-probe", "echo invalid media 1>&2\r\nexit /b 1");
     let recorder = Recorder::with_ffmpeg(invalid_probe.clone());
@@ -359,7 +340,7 @@ fn dropping_live_handle_reaps_process_and_removes_partial_files() {
     let log_path = path.with_extension("log");
     std::fs::write(&path, b"video").unwrap();
     std::fs::write(&log_path, b"log").unwrap();
-    let process = powershell("[Threading.Thread]::Sleep(30000)", &path, Stdio::null());
+    let process = recording_process("stalled", &path, Stdio::null());
 
     drop(handle_for(process, path.clone()));
 
@@ -375,4 +356,43 @@ fn diagnostics_are_bounded_to_three_lines_and_512_characters() {
     assert!(diagnostic.chars().count() <= 515);
     assert!(diagnostic.contains("second"));
     assert!(diagnostic.contains("third"));
+}
+
+#[test]
+fn identifies_desktop_session_access_denial() {
+    let reason = capture_start_failure_reason(
+        "ffmpeg exited early with status exit code: 1",
+        "Failed to capture image (error 5)\nOutput file does not contain any stream",
+    );
+
+    assert!(reason.contains("denied access to the current Windows desktop session"));
+    assert!(reason.contains("error 5"));
+}
+
+#[test]
+#[ignore]
+fn recording_process_helper() {
+    let mode = std::env::var("WARP_RECORDING_PROCESS_MODE").unwrap();
+    let path = PathBuf::from(std::env::var_os("WARP_RECORDING_PROCESS_PATH").unwrap());
+
+    match mode.as_str() {
+        "delayed-output" => {
+            std::thread::sleep(Duration::from_millis(150));
+            std::fs::write(path, [1]).unwrap();
+            std::thread::sleep(Duration::from_secs(30));
+        }
+        "exit-23" => std::process::exit(23),
+        "exit-0" => {}
+        "stalled" => std::thread::sleep(Duration::from_secs(30)),
+        "read-stdin" => {
+            let mut bytes = Vec::new();
+            std::io::stdin().read_to_end(&mut bytes).unwrap();
+            std::fs::write(path, bytes).unwrap();
+        }
+        "read-stdin-stall" => {
+            std::io::stdin().read_to_end(&mut Vec::new()).unwrap();
+            std::thread::sleep(Duration::from_secs(30));
+        }
+        _ => panic!("unknown recording process mode: {mode}"),
+    }
 }
