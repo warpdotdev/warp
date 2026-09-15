@@ -262,3 +262,36 @@ fn test_calculate_selection_bounds() {
     assert_selection_bounds(10.into_lines()); // Without scroll clipping (but on the cusp of clipping)
     assert_selection_bounds(80.into_lines()); // With scroll clipping
 }
+
+#[test]
+fn test_cursor_contrast_is_suppressed_only_where_warp_draws_the_cursor() {
+    use grid_renderer::should_apply_cursor_contrast;
+
+    use crate::terminal::model::ansi::CursorShape;
+
+    assert!(should_apply_cursor_contrast(
+        false,
+        true,
+        Some(CursorShape::Block)
+    ));
+
+    // Rich input open: Warp paints no cursor, whether or not the agent draws its own.
+    assert!(!should_apply_cursor_contrast(true, true, None));
+    assert!(!should_apply_cursor_contrast(
+        true,
+        true,
+        Some(CursorShape::Block)
+    ));
+
+    assert!(!should_apply_cursor_contrast(
+        false,
+        false,
+        Some(CursorShape::Block)
+    ));
+    assert!(!should_apply_cursor_contrast(
+        false,
+        true,
+        Some(CursorShape::Underline)
+    ));
+    assert!(!should_apply_cursor_contrast(false, true, None));
+}
