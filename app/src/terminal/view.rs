@@ -2046,17 +2046,6 @@ pub enum Event {
     SwapPaneToConversation {
         conversation_id: AIConversationId,
     },
-    /// Emitted by `OrchestrationViewerModel` when a child of a shared-session
-    /// orchestration first reports a `session_id`. The pane group materializes
-    /// a dedicated hidden shared-session viewer pane for the child, with its
-    /// own `TerminalView`, `BlocklistAIController`, and viewer-side `Network`
-    /// joining the child's session. Subsequent pill clicks navigate to the
-    /// hidden pane via the existing `SwapPaneToConversation` mechanism.
-    EnsureSharedSessionViewerChildPane {
-        conversation_id: AIConversationId,
-        session_id: session_sharing_protocol::common::SessionId,
-    },
-    /// Unified-stack counterpart to [`Self::EnsureSharedSessionViewerChildPane`].
     /// Carries the fetched task snapshot so pane construction uses the same
     /// current-state materialization decision as pill-click restoration.
     EnsureUnifiedViewerChildPane {

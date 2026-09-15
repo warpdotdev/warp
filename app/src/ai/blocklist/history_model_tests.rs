@@ -2478,7 +2478,7 @@ fn test_start_new_child_conversation_persists_child_metadata_for_restore() {
 }
 
 #[test]
-fn test_mark_conversation_as_remote_child_persists_updated_conversation_state() {
+fn test_start_new_remote_child_conversation_does_not_persist() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
 
@@ -2490,25 +2490,30 @@ fn test_mark_conversation_as_remote_child_persists_updated_conversation_state() 
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let terminal_view_id = EntityId::new();
 
-        let conversation_id = history_model.update(&mut app, |history_model, ctx| {
-            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        let remote_child_id = history_model.update(&mut app, |history_model, ctx| {
+            let parent_id =
+                history_model.start_new_conversation(terminal_view_id, false, false, false, ctx);
+            history_model.start_new_child_conversation(
+                terminal_view_id,
+                "Remote child".to_string(),
+                parent_id,
+                None,
+                true,
+                ctx,
+            )
         });
-
-        history_model.update(&mut app, |history_model, ctx| {
-            history_model.mark_conversation_as_remote_child(conversation_id, ctx);
+        history_model.read(&app, |history_model, _| {
+            assert!(
+                history_model
+                    .conversation(&remote_child_id)
+                    .expect("remote child conversation should exist")
+                    .is_remote_child()
+            );
         });
-
-        let persisted_conversation = persisted_agent_conversation_from_update_event(
-            receiver
-                .recv_timeout(Duration::from_secs(1))
-                .expect("remote child mutation should persist conversation state"),
+        assert!(
+            receiver.recv_timeout(Duration::from_millis(100)).is_err(),
+            "remote child creation must not emit a persistence event"
         );
-        let restored =
-            convert_persisted_conversation_to_ai_conversation_with_metadata(persisted_conversation)
-                .expect("persisted remote child conversation should be restorable");
-
-        assert_eq!(restored.id(), conversation_id);
-        assert!(restored.is_remote_child());
     });
 }
 
@@ -2541,11 +2546,8 @@ fn test_persist_with_optimistic_root_emits_event_with_no_task_rows() {
             history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
         });
 
-        // Force a persist while the root is still optimistic.
-        // `mark_conversation_as_remote_child` is one of several early-persist
-        // sites; any of them would exhibit the same writer behavior.
         history_model.update(&mut app, |history_model, ctx| {
-            history_model.mark_conversation_as_remote_child(conversation_id, ctx);
+            history_model.update_event_sequence(conversation_id, 0, ctx);
         });
 
         let event = receiver
@@ -2609,7 +2611,7 @@ fn test_optimistic_root_upgrade_then_persist_emits_event_with_single_server_task
 
         // First persist: while the root is still Optimistic(Root).
         history_model.update(&mut app, |history_model, ctx| {
-            history_model.mark_conversation_as_remote_child(conversation_id, ctx);
+            history_model.update_event_sequence(conversation_id, 0, ctx);
         });
         let first_event = receiver
             .recv_timeout(Duration::from_secs(1))
@@ -2627,8 +2629,7 @@ fn test_optimistic_root_upgrade_then_persist_emits_event_with_single_server_task
         );
 
         // Drive the optimistic→server upgrade in-place and trigger another
-        // persist via mark_conversation_as_remote_child (idempotent setter +
-        // unconditional persist) to keep this test isolated from the full
+        // persist while keeping this test isolated from the full
         // response-stream/CreateTask plumbing.
         let server_root_id = "server-root-task-id".to_string();
         history_model.update(&mut app, |history_model, ctx| {
@@ -2639,7 +2640,7 @@ fn test_optimistic_root_upgrade_then_persist_emits_event_with_single_server_task
                 &server_root_id,
                 vec![],
             ));
-            history_model.mark_conversation_as_remote_child(conversation_id, ctx);
+            history_model.update_event_sequence(conversation_id, 1, ctx);
         });
 
         let second_event = receiver
@@ -2917,7 +2918,7 @@ fn test_two_restart_cycles_keep_exactly_one_server_root_task_row() {
 
         // Early persist while the root is still optimistic.
         history_model.update(&mut app, |history_model, ctx| {
-            history_model.mark_conversation_as_remote_child(conversation_id, ctx);
+            history_model.update_event_sequence(conversation_id, 0, ctx);
         });
         let early_event = receiver
             .recv_timeout(Duration::from_secs(1))
@@ -2944,7 +2945,7 @@ fn test_two_restart_cycles_keep_exactly_one_server_root_task_row() {
                 &server_root_id,
                 vec![],
             ));
-            history_model.mark_conversation_as_remote_child(conversation_id, ctx);
+            history_model.update_event_sequence(conversation_id, 1, ctx);
         });
         let post_upgrade_event = receiver
             .recv_timeout(Duration::from_secs(1))
@@ -2994,7 +2995,7 @@ fn test_two_restart_cycles_keep_exactly_one_server_root_task_row() {
                 vec![restored_after_restart_1],
                 ctx,
             );
-            history_model.mark_conversation_as_remote_child(conversation_id, ctx);
+            history_model.update_event_sequence(conversation_id, 2, ctx);
         });
 
         let post_restart_event = receiver
@@ -3133,7 +3134,6 @@ fn test_assign_run_id_for_conversation_persists_updated_conversation_state() {
 
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let terminal_view_id = EntityId::new();
-
         let conversation_id = history_model.update(&mut app, |history_model, ctx| {
             let conversation_id =
                 history_model.start_new_conversation(terminal_view_id, false, false, false, ctx);
@@ -4171,12 +4171,10 @@ fn test_fork_conversation_title_override_replaces_prefix() {
 /// LoadTranscript -> merge integration coverage for the orchestration
 /// remote-child restore path.
 ///
-/// Simulates the smaller seam that
-/// `pane_group::hydrate_remote_child_transcript_in_place` reaches after a
-/// successful `load_conversation_by_server_token` fetch: it hands the
-/// fetched cloud transcript to
-/// `hydrate_remote_child_placeholder_with_cloud_transcript` on the local
-/// placeholder. Asserts the merged record:
+/// Simulates the smaller seam that `PaneGroup::hydrate_child_transcript` reaches after a
+/// successful `load_conversation_by_server_token` fetch: it hands the fetched cloud transcript
+/// to `hydrate_remote_child_placeholder_with_cloud_transcript` on the local placeholder. Asserts
+/// the merged record:
 ///   1. retains the placeholder's local `AIConversationId` (so it remains the
 ///      canonical `child_agent_panes` key on the pane-group side),
 ///   2. carries the placeholder's orchestration linkage forward
@@ -4184,9 +4182,8 @@ fn test_fork_conversation_title_override_replaces_prefix() {
 ///   3. surfaces the cloud transcript content (non-empty title + at least
 ///      one exchange).
 ///
-/// Also asserts the precondition guard: calling the merge against an
-/// unknown placeholder returns `Err` so the caller's tombstone fallback
-/// runs instead of silently constructing a detached conversation.
+/// Also asserts the precondition guard: calling the merge against an unknown placeholder returns
+/// `Err` so the caller stops instead of silently constructing a detached conversation.
 #[test]
 fn hydrate_remote_child_placeholder_with_cloud_transcript_preserves_placeholder_identity() {
     use crate::ai::agent::conversation::AIConversation;
@@ -4341,9 +4338,8 @@ fn hydrate_remote_child_placeholder_with_cloud_transcript_preserves_placeholder_
             assert!(live.is_remote_child());
         });
 
-        // Precondition guard: merging against an unknown placeholder must
-        // return Err so the caller falls back instead of silently building a
-        // detached conversation.
+        // Precondition guard: merging against an unknown placeholder must return Err so the
+        // caller stops instead of silently building a detached conversation.
         let unknown_placeholder = AIConversationId::new();
         let mut cloud_root_again = create_api_task(
             "cloud-root-task-2",
