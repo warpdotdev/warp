@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use ai::project_context::model::ProjectContextModel;
@@ -90,6 +90,38 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
     AgentNotificationsModel, GlobalResourceHandlesProvider, ObjectActions, experiments, workspace,
 };
+
+#[test]
+fn background_and_anchored_child_joins_do_not_consume_viewer_entry_navigation() {
+    let first_entry_view_id = warpui::EntityId::new();
+    let second_entry_view_id = warpui::EntityId::new();
+    let background_child_view_id = warpui::EntityId::new();
+    let anchored_child_view_id = warpui::EntityId::new();
+    let mut pending_view_ids = HashSet::from([first_entry_view_id, second_entry_view_id]);
+
+    assert!(!take_matching_viewer_entry(
+        &mut pending_view_ids,
+        background_child_view_id
+    ));
+    assert!(!take_matching_viewer_entry(
+        &mut pending_view_ids,
+        anchored_child_view_id
+    ));
+    assert!(take_matching_viewer_entry(
+        &mut pending_view_ids,
+        first_entry_view_id
+    ));
+    assert_eq!(pending_view_ids, HashSet::from([second_entry_view_id]));
+    assert!(!take_matching_viewer_entry(
+        &mut pending_view_ids,
+        first_entry_view_id
+    ));
+    assert!(take_matching_viewer_entry(
+        &mut pending_view_ids,
+        second_entry_view_id
+    ));
+    assert!(pending_view_ids.is_empty());
+}
 pub(crate) fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
 

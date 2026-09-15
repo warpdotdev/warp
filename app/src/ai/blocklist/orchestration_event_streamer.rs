@@ -318,6 +318,11 @@ pub enum OrchestrationEventStreamerEvent {
         run_id: String,
         status: ConversationStatus,
     },
+    #[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
+    ViewerModeSeeded {
+        parent_task_id: AmbientAgentTaskId,
+        child_run_ids: Vec<AmbientAgentTaskId>,
+    },
     /// Lifecycle transition observed on an owner-side stream for a watched run.
     #[cfg_attr(not(feature = "tui"), allow(dead_code))]
     WatchedRunStatusChanged {
@@ -1232,6 +1237,7 @@ impl OrchestrationEventStreamer {
         ctx: &mut ModelContext<Self>,
     ) {
         let needs_seed;
+        let seeded;
         {
             let entry = self
                 .viewer_mode_orchestrators
@@ -1245,6 +1251,7 @@ impl OrchestrationEventStreamer {
             if needs_seed {
                 entry.seed_fetch_in_flight = true;
             }
+            seeded = entry.seeded;
         }
         // Hydrate the orchestrator placeholder's persisted cursor into the
         // per-orchestrator entry so a restart-from-disk picks up where the
@@ -1258,11 +1265,34 @@ impl OrchestrationEventStreamer {
         }
         if needs_seed {
             self.spawn_ancestor_seed_fetch(parent_task_id, ctx);
-        } else {
+        } else if seeded {
             // Already seeded: open the SSE immediately if it's not running
             // (e.g. after a transient teardown).
             self.start_ancestor_sse_if_seeded(parent_task_id, ctx);
             self.emit_known_viewer_mode_children(parent_task_id, ctx);
+            let child_run_ids = self
+                .viewer_mode_orchestrators
+                .get(&parent_task_id)
+                .map(|entry| {
+                    entry
+                        .known_children
+                        .iter()
+                        .filter_map(|run_id| match run_id.parse() {
+                            Ok(task_id) => Some(task_id),
+                            Err(_) => {
+                                log::warn!(
+                                    "[orch-viewer-streamer] ignoring malformed known child run_id={run_id:?}"
+                                );
+                                None
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            ctx.emit(OrchestrationEventStreamerEvent::ViewerModeSeeded {
+                parent_task_id,
+                child_run_ids,
+            });
         }
     }
 
@@ -1315,24 +1345,38 @@ impl OrchestrationEventStreamer {
         parent_task_id: AmbientAgentTaskId,
         ctx: &mut ModelContext<Self>,
     ) {
-        let run_ids = self
+        let task_ids = self
             .viewer_mode_orchestrators
             .get(&parent_task_id)
-            .map(|entry| entry.known_children.iter().cloned().collect::<Vec<_>>())
+            .map(|entry| {
+                entry
+                    .known_children
+                    .iter()
+                    .filter_map(|run_id| match run_id.parse() {
+                        Ok(task_id) => Some(task_id),
+                        Err(_) => {
+                            log::warn!(
+                                "[orch-viewer-streamer] ignoring malformed known child run_id={run_id:?}"
+                            );
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
-        self.emit_viewer_mode_child_spawns(parent_task_id, run_ids, ctx);
+        self.emit_viewer_mode_child_spawns(parent_task_id, task_ids, ctx);
     }
 
     fn emit_viewer_mode_child_spawns(
         &self,
         parent_task_id: AmbientAgentTaskId,
-        run_ids: Vec<String>,
+        task_ids: Vec<AmbientAgentTaskId>,
         ctx: &mut ModelContext<Self>,
     ) {
-        for run_id in run_ids {
+        for task_id in task_ids {
             ctx.emit(OrchestrationEventStreamerEvent::ChildSpawned {
                 parent_task_id,
-                run_id,
+                run_id: task_id.to_string(),
             });
         }
     }
@@ -1397,7 +1441,7 @@ impl OrchestrationEventStreamer {
         match result {
             Ok(tasks) => {
                 let tasks_received = tasks.len();
-                let mut seeded_run_ids = Vec::new();
+                let mut seeded_task_ids = Vec::new();
                 {
                     let Some(entry) = self.viewer_mode_orchestrators.get_mut(&parent_task_id)
                     else {
@@ -1413,7 +1457,7 @@ impl OrchestrationEventStreamer {
                         }
                         let run_id = task.task_id.to_string();
                         if entry.known_children.insert(run_id.clone()) {
-                            seeded_run_ids.push(run_id);
+                            seeded_task_ids.push(task.task_id);
                         }
                         if let Some(seq) = task.last_event_sequence {
                             seed = seed.max(seq);
@@ -1425,11 +1469,15 @@ impl OrchestrationEventStreamer {
                         "[orch-viewer-streamer] ancestor seed applied for parent_task_id={parent_task_id}: \
                          tasks_received={tasks_received} children_seeded={} known_children_total={} \
                          seed_cursor={seed} local_cursor_before={local_cursor}",
-                        seeded_run_ids.len(),
+                        seeded_task_ids.len(),
                         entry.known_children.len(),
                     );
                 }
-                self.emit_viewer_mode_child_spawns(parent_task_id, seeded_run_ids, ctx);
+                self.emit_viewer_mode_child_spawns(parent_task_id, seeded_task_ids.clone(), ctx);
+                ctx.emit(OrchestrationEventStreamerEvent::ViewerModeSeeded {
+                    parent_task_id,
+                    child_run_ids: seeded_task_ids,
+                });
                 self.start_ancestor_sse_if_seeded(parent_task_id, ctx);
             }
             Err(err) => {
@@ -1437,6 +1485,12 @@ impl OrchestrationEventStreamer {
                     "[orch-viewer-streamer] ancestor seed fetch failed for \
                      parent_task_id={parent_task_id}: {err:#}"
                 );
+                if !is_transient_http_error(&err) {
+                    ctx.emit(OrchestrationEventStreamerEvent::ViewerModeSeeded {
+                        parent_task_id,
+                        child_run_ids: Vec::new(),
+                    });
+                }
                 // No retry timer here: the next viewer-mode registration
                 // (or an explicit reconnect) re-issues the fetch. Closed
                 // orchestrators with no consumers wouldn't benefit from

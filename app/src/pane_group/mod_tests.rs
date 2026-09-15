@@ -927,6 +927,58 @@ fn test_pane_focus_on_close() {
 }
 
 #[test]
+fn route_sync_preserves_viewer_url_for_linkless_non_child_pane() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let focused_pane_id = panes.focused_pane_id(ctx);
+            let current_url = Url::parse(&format!(
+                "{}/conversation/root",
+                crate::ChannelState::server_root_url()
+            ))
+            .unwrap();
+            let requested_url = panes.browser_route_sync_url(focused_pane_id, None);
+            let navigation = crate::uri::browser_url_resolution::resolve_browser_url(
+                Some(current_url.clone()),
+                requested_url,
+                crate::uri::browser_url_resolution::BrowserNavigationOrigin::RouteSync,
+            );
+
+            assert_eq!(navigation.url, Some(current_url));
+            assert_eq!(
+                navigation.write,
+                crate::uri::browser_url_resolution::BrowserHistoryWrite::None
+            );
+        });
+    });
+}
+
+#[test]
+fn route_sync_suppresses_child_pane_shareable_link() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, _| {
+            let child_pane_id = PaneId::dummy_pane_id();
+            panes
+                .child_agent_panes
+                .insert(AIConversationId::new(), child_pane_id);
+            let child_url =
+                Url::parse("https://app.warp.dev/session/33333333-3333-3333-3333-333333333333")
+                    .unwrap();
+
+            assert_eq!(
+                panes.browser_route_sync_url(child_pane_id, Some(child_url)),
+                None
+            );
+        });
+    });
+}
+
+#[test]
 fn test_insert_hidden_child_agent_pane_keeps_focus_and_active_session() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

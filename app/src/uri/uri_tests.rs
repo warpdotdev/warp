@@ -37,6 +37,138 @@ fn test_find_matching_config() {
 }
 
 #[test]
+fn anchor_selection_pushes_once_but_repeated_selection_does_not_write() {
+    let root = Url::parse("https://app.warp.dev/conversation/root").unwrap();
+    let child = Url::parse(
+        "https://app.warp.dev/conversation/root#child=22222222-2222-2222-2222-222222222222",
+    )
+    .unwrap();
+
+    let changed = browser_url_resolution::resolve_browser_url(
+        Some(root),
+        Some(child.clone()),
+        browser_url_resolution::BrowserNavigationOrigin::AnchorSelection,
+    );
+    assert_eq!(
+        changed.write,
+        browser_url_resolution::BrowserHistoryWrite::Push
+    );
+
+    let repeated = browser_url_resolution::resolve_browser_url(
+        Some(child.clone()),
+        Some(child),
+        browser_url_resolution::BrowserNavigationOrigin::AnchorSelection,
+    );
+    assert_eq!(
+        repeated.write,
+        browser_url_resolution::BrowserHistoryWrite::None
+    );
+
+    let root = Url::parse("https://app.warp.dev/conversation/root").unwrap();
+    let selected_root = browser_url_resolution::resolve_browser_url(
+        repeated.url,
+        Some(root),
+        browser_url_resolution::BrowserNavigationOrigin::AnchorSelection,
+    );
+    assert_eq!(
+        selected_root.write,
+        browser_url_resolution::BrowserHistoryWrite::Push
+    );
+}
+
+#[test]
+fn route_sync_preserves_anchor_and_standalone_state() {
+    for (current, expected_standalone) in [
+        (
+            format!(
+                "{}/conversation/root#child=22222222-2222-2222-2222-222222222222",
+                ChannelState::server_root_url()
+            ),
+            false,
+        ),
+        (
+            format!(
+                "{}/conversation/root?view=standalone#child=22222222-2222-2222-2222-222222222222",
+                ChannelState::server_root_url()
+            ),
+            true,
+        ),
+    ] {
+        let current = Url::parse(&current).unwrap();
+        let resolved = browser_url_resolution::resolve_browser_url(
+            Some(current),
+            Some(
+                Url::parse(&format!(
+                    "{}/session/33333333-3333-3333-3333-333333333333",
+                    ChannelState::server_root_url()
+                ))
+                .unwrap(),
+            ),
+            browser_url_resolution::BrowserNavigationOrigin::RouteSync,
+        );
+        let resolved = resolved.url.unwrap();
+        assert_eq!(
+            resolved.path(),
+            "/session/33333333-3333-3333-3333-333333333333"
+        );
+        assert_eq!(
+            resolved.fragment(),
+            Some("child=22222222-2222-2222-2222-222222222222")
+        );
+        assert_eq!(
+            resolved
+                .query_pairs()
+                .any(|(key, value)| key == "view" && value == "standalone"),
+            expected_standalone
+        );
+        assert_eq!(
+            browser_url_resolution::resolve_browser_url(
+                Some(resolved.clone()),
+                Some(resolved),
+                browser_url_resolution::BrowserNavigationOrigin::RouteSync,
+            )
+            .write,
+            browser_url_resolution::BrowserHistoryWrite::None
+        );
+    }
+}
+
+#[test]
+fn initial_restoration_does_not_write() {
+    let url = Url::parse(
+        "https://app.warp.dev/conversation/root#child=22222222-2222-2222-2222-222222222222",
+    )
+    .unwrap();
+    let resolved = browser_url_resolution::resolve_browser_url(
+        Some(url),
+        None,
+        browser_url_resolution::BrowserNavigationOrigin::InitialAnchorRestoration,
+    );
+    assert_eq!(
+        resolved.write,
+        browser_url_resolution::BrowserHistoryWrite::None
+    );
+}
+
+#[test]
+fn cold_child_canonicalization_replaces_by_navigation() {
+    let child = Url::parse("https://app.warp.dev/conversation/child").unwrap();
+    let root = Url::parse(
+        "https://app.warp.dev/conversation/root#child=22222222-2222-2222-2222-222222222222",
+    )
+    .unwrap();
+    let resolved = browser_url_resolution::resolve_browser_url(
+        Some(child),
+        Some(root),
+        browser_url_resolution::BrowserNavigationOrigin::ColdChildCanonicalization,
+    );
+    assert_eq!(
+        resolved.write,
+        browser_url_resolution::BrowserHistoryWrite::NavigateReplace
+    );
+}
+
+#[test]
 fn test_find_matching_config_with_spaces() {
     let mut configs: Vec<LaunchConfig> = vec![];
     for i in 0..3 {
@@ -275,32 +407,6 @@ fn test_app_web_link_rewrites_to_new_cloud_agent_conversation() {
     );
 }
 
-// `resolve_browser_url` is what both browser-URL write paths
-// (`PaneGroup::focus` and the `JoinedSession` handler) delegate to, so
-// testing it here covers both.
-
-#[test]
-fn resolve_browser_url_keeps_parent_conversation_view_when_child_pane_has_its_own_link() {
-    let parent_url = Url::parse(&format!(
-        "{}/conversation/parent-token",
-        ChannelState::server_root_url()
-    ))
-    .unwrap();
-    let child_session_url = Url::parse(&format!(
-        "{}/session/317d0686-7a0b-4b67-806b-aaa3e9df501b",
-        ChannelState::server_root_url()
-    ))
-    .unwrap();
-
-    let resolved = browser_url_resolution::resolve_browser_url(
-        Some(parent_url.clone()),
-        Some(child_session_url),
-        false,
-    );
-
-    assert_eq!(resolved, Some(parent_url));
-}
-
 #[test]
 fn resolve_browser_url_keeps_parent_conversation_view_when_focused_pane_has_no_link() {
     let parent_url = Url::parse(&format!(
@@ -309,10 +415,17 @@ fn resolve_browser_url_keeps_parent_conversation_view_when_focused_pane_has_no_l
     ))
     .unwrap();
 
-    let resolved =
-        browser_url_resolution::resolve_browser_url(Some(parent_url.clone()), None, false);
+    let resolved = browser_url_resolution::resolve_browser_url(
+        Some(parent_url.clone()),
+        None,
+        browser_url_resolution::BrowserNavigationOrigin::RouteSync,
+    );
 
-    assert_eq!(resolved, Some(parent_url));
+    assert_eq!(resolved.url, Some(parent_url));
+    assert_eq!(
+        resolved.write,
+        browser_url_resolution::BrowserHistoryWrite::None
+    );
 }
 
 #[test]
@@ -327,10 +440,10 @@ fn resolve_browser_url_uses_requested_url_outside_the_viewer() {
     let resolved = browser_url_resolution::resolve_browser_url(
         Some(base_app_url),
         Some(requested_url.clone()),
-        false,
+        browser_url_resolution::BrowserNavigationOrigin::RouteSync,
     );
 
-    assert_eq!(resolved, Some(requested_url));
+    assert_eq!(resolved.url, Some(requested_url));
 }
 
 #[test]
@@ -341,10 +454,14 @@ fn resolve_browser_url_falls_back_to_base_app_url_outside_the_viewer() {
     ))
     .unwrap();
 
-    let resolved = browser_url_resolution::resolve_browser_url(Some(current_url), None, false);
+    let resolved = browser_url_resolution::resolve_browser_url(
+        Some(current_url),
+        None,
+        browser_url_resolution::BrowserNavigationOrigin::RouteSync,
+    );
 
     assert_eq!(
-        resolved,
+        resolved.url,
         Some(Url::parse(&format!("{}/app", ChannelState::server_root_url())).unwrap())
     );
 }
@@ -361,17 +478,25 @@ fn resolve_browser_url_bypasses_the_guard_when_force_redirect_is_set() {
     let resolved = browser_url_resolution::resolve_browser_url(
         Some(parent_url),
         Some(login_url.clone()),
-        true,
+        browser_url_resolution::BrowserNavigationOrigin::Forced,
     );
 
-    assert_eq!(resolved, Some(login_url));
+    assert_eq!(resolved.url, Some(login_url));
+    assert_eq!(
+        resolved.write,
+        browser_url_resolution::BrowserHistoryWrite::Navigate
+    );
 }
 
 #[test]
 fn resolve_browser_url_returns_none_when_neither_url_is_known() {
-    let resolved = browser_url_resolution::resolve_browser_url(None, None, false);
+    let resolved = browser_url_resolution::resolve_browser_url(
+        None,
+        None,
+        browser_url_resolution::BrowserNavigationOrigin::RouteSync,
+    );
 
-    assert_eq!(resolved, None);
+    assert_eq!(resolved.url, None);
 }
 
 #[test]

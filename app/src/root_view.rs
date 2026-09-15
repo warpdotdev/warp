@@ -3215,7 +3215,7 @@ impl RootView {
         if let AuthOnboardingState::Terminal(handle) = &self.auth_onboarding_state {
             handle.update(ctx, |workspace, ctx| {
                 // Generic session link: ambient-ness (if any) is discovered at SessionJoined.
-                workspace.add_tab_for_joining_shared_session(*session_id, false, ctx);
+                workspace.add_entry_tab_for_joining_shared_session(*session_id, ctx);
             });
         } else if !self
             .auth_onboarding_state
