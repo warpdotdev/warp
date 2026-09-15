@@ -101,6 +101,81 @@ impl ColorSampler {
         self.total_samples = 0;
     }
 }
+fn braille_pattern_for_char(c: char) -> Option<u8> {
+    let codepoint = c as u32;
+    (0x2800..=0x28ff)
+        .contains(&codepoint)
+        .then(|| (codepoint - 0x2800) as u8)
+}
+
+fn braille_dot_rect(cell_bounds: RectF, bit: usize) -> Option<RectF> {
+    let x_eighth = cell_bounds.width() / 8.;
+    let padding_y = cell_bounds.height() * 0.1;
+    let usable_height = cell_bounds.height() * 0.8;
+    let y_eighth = usable_height / 8.;
+    let radius = x_eighth.min(y_eighth);
+    if radius <= 0. {
+        return None;
+    }
+
+    let (x, y) = BRAILLE_DOT_POSITIONS[bit];
+    let center = cell_bounds.origin() + vec2f((x + 1.) * x_eighth, padding_y + (y + 1.) * y_eighth);
+    Some(RectF::new(
+        center - vec2f(radius, radius),
+        vec2f(radius * 2., radius * 2.),
+    ))
+}
+
+fn braille_cell_bounds(cell_bounds: RectF, baseline_position: Vector2F, font_size: f32) -> RectF {
+    let line_height = (font_size * DEFAULT_UI_LINE_HEIGHT_RATIO).min(cell_bounds.height());
+    if line_height <= 0. {
+        return cell_bounds;
+    }
+
+    let top = (baseline_position.y() - line_height * DEFAULT_TOP_BOTTOM_RATIO)
+        .clamp(0., cell_bounds.height() - line_height);
+    RectF::new(
+        cell_bounds.origin() + vec2f(0., top),
+        vec2f(cell_bounds.width(), line_height),
+    )
+}
+
+fn native_glyph_cell_bounds(
+    glyph_type: &NativeGlyphType,
+    cell_bounds: RectF,
+    baseline_position: Vector2F,
+    font_size: f32,
+) -> RectF {
+    match glyph_type {
+        NativeGlyphType::Braille { .. } => {
+            braille_cell_bounds(cell_bounds, baseline_position, font_size)
+        }
+        NativeGlyphType::BoxDrawing(_)
+        | NativeGlyphType::UpperHalfBlock
+        | NativeGlyphType::PowerlineLeftHardDivider
+        | NativeGlyphType::PowerlineRightHardDivider
+        | NativeGlyphType::BottomAlignedFractionalBlock { .. }
+        | NativeGlyphType::LeftAlignedFractionalBlock { .. }
+        | NativeGlyphType::RightHalfBlock
+        | NativeGlyphType::Shade { .. }
+        | NativeGlyphType::UpperOneEighthBlock
+        | NativeGlyphType::RightOneEighthBlock
+        | NativeGlyphType::Quadrant { .. }
+        | NativeGlyphType::QuadrantUpperLeftUpperRightLowerLeft
+        | NativeGlyphType::QuadrantUpperLeftUpperRightLowerRight
+        | NativeGlyphType::QuadrantUpperLeftLowerLeftLowerRight
+        | NativeGlyphType::QuadrantUpperRightLowerLeftLowerRight
+        | NativeGlyphType::NFHalfCircleLeftThin
+        | NativeGlyphType::NFHalfCircleRightThin
+        | NativeGlyphType::NFHalfCircleLeft
+        | NativeGlyphType::NFHalfCircleLeftThick
+        | NativeGlyphType::NFHalfCircleRightThick
+        | NativeGlyphType::NFSlantTriangleTopLeft
+        | NativeGlyphType::NFSlantTriangleBottomLeft
+        | NativeGlyphType::NFSlantTriangleTopRight
+        | NativeGlyphType::NFSlantTriangleBottomRight => cell_bounds,
+    }
+}
 
 lazy_static! {
     pub static ref MATCH_COLOR: ColorU = ColorU::new(255, 254, 61, 255);
@@ -157,12 +232,17 @@ struct NativeGlyph {
 }
 
 /// Describes a specific type of glyph that we are able to render natively.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum NativeGlyphType {
     /// A solid box-drawing line glyph (a supported subset of U+2500..=U+257F),
     /// rendered as cell-filling, non-overlapping rects so adjacent cells tile
     /// with no seam.
     BoxDrawing(char),
+    /// A Braille pattern glyph (U+2800..=U+28FF), rendered as synthetic dots so
+    /// it is independent of font glyph side bearings.
+    Braille {
+        pattern: u8,
+    },
     UpperHalfBlock,
     PowerlineLeftHardDivider,
     PowerlineRightHardDivider,
@@ -209,6 +289,21 @@ enum NativeGlyphType {
     NFSlantTriangleTopRight,
     NFSlantTriangleBottomRight,
 }
+
+/// Braille dot positions in an 8x8 octant grid, matching the convention used by
+/// xterm.js custom glyphs: left column at x=1, right column at x=5, and rows at
+/// y=0,2,4,6. Each dot is drawn with radius one octant, leaving a small margin
+/// while avoiding font-dependent side bearings.
+const BRAILLE_DOT_POSITIONS: [(f32, f32); 8] = [
+    (1., 0.), // dot 1
+    (1., 2.), // dot 2
+    (1., 4.), // dot 3
+    (5., 0.), // dot 4
+    (5., 2.), // dot 5
+    (5., 4.), // dot 6
+    (1., 6.), // dot 7
+    (5., 6.), // dot 8
+];
 
 #[derive(Clone, Copy)]
 struct CachedBackgroundColor {
@@ -1439,8 +1534,14 @@ fn render_grid_with_ligatures<'a>(
                 ) {
                     string_builder.append_content(secret_content, col);
                 } else if let Some(glyph_type) = native_glyph_for_cell(cell) {
+                    let cell_bounds = RectF::new(grid_origin + glyph_offset, actual_cell_size);
                     native_glyphs_to_render.push(NativeGlyph {
-                        cell_bounds: RectF::new(grid_origin + glyph_offset, actual_cell_size),
+                        cell_bounds: native_glyph_cell_bounds(
+                            &glyph_type,
+                            cell_bounds,
+                            baseline_position,
+                            font_size,
+                        ),
                         foreground_color: cell_colors.foreground_color,
                         glyph_type,
                     });
@@ -1780,8 +1881,14 @@ fn render_cell_glyph(
     // rendering instead of using glyphs from the font.
     match native_glyph_for_cell(cell) {
         Some(glyph_type) => {
+            let cell_bounds = RectF::new(grid_origin + glyph_offset, cell_size);
             native_glyphs_to_render.push(NativeGlyph {
-                cell_bounds: RectF::new(grid_origin + glyph_offset, cell_size),
+                cell_bounds: native_glyph_cell_bounds(
+                    &glyph_type,
+                    cell_bounds,
+                    baseline_position,
+                    font_size,
+                ),
                 foreground_color,
                 glyph_type,
             });
@@ -1914,6 +2021,9 @@ fn render_image(
 /// if it should be rendered with a font glyph.
 fn native_glyph_for_cell(cell: &Cell) -> Option<NativeGlyphType> {
     let glyph_type = match cell.c {
+        c @ '\u{2800}'..='\u{28ff}' => NativeGlyphType::Braille {
+            pattern: braille_pattern_for_char(c).expect("Braille range should map to a pattern"),
+        },
         // Supported solid box-drawing lines render as cell-filling rects so
         // adjacent cells tile seamlessly. Other box-drawing glyphs use the font.
         c @ '\u{2500}'..='\u{257F}'
@@ -2078,6 +2188,21 @@ fn render_native_glyph(native_glyph: NativeGlyph, ctx: &mut PaintContext, app: &
                 ctx.scene
                     .draw_rect_without_hit_recording(rect)
                     .with_background(Fill::Solid(foreground_color));
+            }
+            None
+        }
+        NativeGlyphType::Braille { pattern } => {
+            for bit in 0..8 {
+                if pattern & (1_u8 << bit) == 0 {
+                    continue;
+                }
+                let Some(rect) = braille_dot_rect(cell_bounds, bit) else {
+                    continue;
+                };
+                ctx.scene
+                    .draw_rect_without_hit_recording(rect)
+                    .with_background(Fill::Solid(foreground_color))
+                    .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)));
             }
             None
         }
