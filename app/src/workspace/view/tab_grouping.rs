@@ -49,11 +49,19 @@ impl Workspace {
             self.expand_tab_group(*group_id, ctx);
         }
 
-        // Add tabs in the selected range to the multi-selection.
+        // Add tabs in the selected range to the multi-selection. In project mode
+        // the range is additionally restricted to the selected project's visible
+        // tabs, so a shift-click never sweeps in tabs the user cannot see.
+        let project_visible = self.project_visible_indices(ctx);
         self.tabs
             .iter_mut()
             .enumerate()
-            .filter(|(index, _)| (lo_index..=hi_index).contains(index))
+            .filter(|(index, _)| {
+                (lo_index..=hi_index).contains(index)
+                    && project_visible
+                        .as_ref()
+                        .is_none_or(|visible| visible.contains(index))
+            })
             .for_each(|(_, tab)| tab.in_multi_selection = true);
 
         ctx.dispatch_global_action("workspace:save_app", ());

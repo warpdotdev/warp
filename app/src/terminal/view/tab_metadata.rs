@@ -42,6 +42,18 @@ impl TerminalView {
             })
     }
 
+    /// The GitHub PR for this terminal's current branch, but only when a
+    /// `GitHubRepoModel` subscription already exists (see `needs_pr_info`).
+    /// Read-only on purpose: callers that want PR state for every terminal
+    /// must extend the subscription gate rather than bypass it here.
+    pub fn current_pr_info(&self, ctx: &AppContext) -> Option<crate::util::git::PrInfo> {
+        self.github_repo_model
+            .as_ref()?
+            .as_ref(ctx)
+            .pr_info(ctx)
+            .cloned()
+    }
+
     pub fn last_completed_command_text(&self) -> Option<String> {
         let model = self.model.lock();
         model.block_list().blocks().iter().rev().find_map(|block| {
