@@ -9,7 +9,10 @@ use warp_util::host_id::HostId;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::{App, ModelHandle, SingletonEntity};
 
-use super::{BufferSource, CharOffsetEdit, GlobalBufferModel, PendingEditBatch};
+use super::{
+    BufferSource, CharOffsetEdit, GlobalBufferModel, GlobalBufferModelEvent, PendingEditBatch,
+};
+use crate::code::buffer_location::LocalOrRemotePath;
 use crate::test_util::settings::initialize_settings_for_tests;
 
 // ── Test-only helpers on GlobalBufferModel ────────────────────────
@@ -319,5 +322,230 @@ fn pending_batch_bumps_client_version_immediately() {
             // server_version unchanged
             assert_eq!(clock.server_version, ContentVersion::from_raw(1));
         });
+    })
+}
+
+// ── APP-5266: opening a path that does not exist ──────────────────
+
+/// Investigation for APP-5266: if a nonexistent path is going to open as an empty buffer instead
+/// of an error, saving that buffer has to actually create the file. It does — including creating
+/// missing parent directories — and merely opening the path does not touch the disk.
+#[cfg(feature = "local_fs")]
+#[test]
+fn saving_a_buffer_opened_at_a_nonexistent_path_creates_the_file() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        app.add_singleton_model(GlobalBufferModel::new);
+
+        let directory = tempfile::tempdir().expect("temp dir");
+        // A missing intermediate directory also exercises the parent-creation path.
+        let path = directory.path().join("nested").join("new-file.md");
+        assert!(!path.exists());
+
+        let buffer_state = gbm(&app).update(&mut app, |model, ctx| {
+            model.open(LocalOrRemotePath::Local(path.clone()), ctx)
+        });
+        let file_id = buffer_state.file_id;
+
+        // Let the read fail.
+        let future_id = app.read(|ctx| {
+            FileModel::as_ref(ctx)
+                .get_future_handle(file_id)
+                .expect("Loading future should be present")
+                .future_id()
+        });
+        app.update(|ctx| ctx.await_spawned_future(future_id)).await;
+
+        assert!(
+            !path.exists(),
+            "opening a path must not create it; only saving should"
+        );
+        assert!(
+            gbm(&app).read(&app, |model, _| model.opened_as_new_file(file_id)),
+            "the buffer should be adopted as a file that has not been written yet"
+        );
+
+        // The buffer is still writable and still knows its path, so the user can type and save.
+        let saved = save_events(&mut app);
+        let version = ContentVersion::new();
+        buffer_state.buffer.update(&mut app, |buffer, ctx| {
+            buffer.replace_all("typed into an empty buffer\n", ctx);
+            buffer.set_version(version);
+        });
+        let content = content(&app, file_id);
+        gbm(&app)
+            .update(&mut app, |model, ctx| {
+                model.save(file_id, content, version, ctx)
+            })
+            .expect("save should dispatch");
+
+        assert!(saved.recv().await.expect("a save outcome"), "save failed");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the file should now exist"),
+            "typed into an empty buffer\n"
+        );
+    })
+}
+
+/// Streams save outcomes (`true` = saved, `false` = failed) so tests can await a save completing.
+#[cfg(feature = "local_fs")]
+fn save_events(app: &mut App) -> async_channel::Receiver<bool> {
+    let (sender, receiver) = async_channel::unbounded();
+    let handle = gbm(app);
+    app.update(|ctx| {
+        ctx.subscribe_to_model(&handle, move |_, event, _| match event {
+            GlobalBufferModelEvent::FileSaved { .. } => {
+                let _ = sender.try_send(true);
+            }
+            GlobalBufferModelEvent::FailedToSave { .. } => {
+                let _ = sender.try_send(false);
+            }
+            _ => {}
+        });
+    });
+    receiver
+}
+
+/// APP-5266: a path with nothing at it opens as an empty, loaded buffer with no error, and is
+/// marked as not-yet-written so the editor can hold back auto-save.
+#[cfg(feature = "local_fs")]
+#[test]
+fn opening_a_nonexistent_path_yields_an_empty_loaded_buffer() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        app.add_singleton_model(GlobalBufferModel::new);
+
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("not-written-yet.md");
+
+        let load = load_events(&mut app);
+        // Hold the `BufferState`: it owns the only strong handle to the buffer.
+        let buffer_state = gbm(&app).update(&mut app, |model, ctx| {
+            model.open(LocalOrRemotePath::Local(path.clone()), ctx)
+        });
+        let file_id = buffer_state.file_id;
+        await_load(&mut app, file_id).await;
+
+        assert!(
+            load.recv().await.expect("a load outcome"),
+            "a missing path should load, not fail"
+        );
+        assert_eq!(content(&app, file_id), "");
+        gbm(&app).read(&app, |model, _| {
+            assert!(model.buffer_loaded(file_id));
+            assert!(model.opened_as_new_file(file_id));
+            // A base version is what lets the editor track edits as unsaved changes.
+            assert!(model.base_version(file_id).is_some());
+        });
+    })
+}
+
+/// A path that exists but cannot be read is still a failure — only absence is special-cased.
+#[cfg(feature = "local_fs")]
+#[test]
+fn opening_an_unreadable_path_still_fails() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        app.add_singleton_model(GlobalBufferModel::new);
+
+        // A directory exists, so reading it is a genuine error rather than a new file.
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().to_path_buf();
+
+        let load = load_events(&mut app);
+        // Hold the `BufferState`: it owns the only strong handle to the buffer.
+        let buffer_state = gbm(&app).update(&mut app, |model, ctx| {
+            model.open(LocalOrRemotePath::Local(path), ctx)
+        });
+        let file_id = buffer_state.file_id;
+        await_load(&mut app, file_id).await;
+
+        assert!(
+            !load.recv().await.expect("a load outcome"),
+            "an unreadable path should report a load failure"
+        );
+        gbm(&app).read(&app, |model, _| {
+            assert!(!model.buffer_loaded(file_id));
+            assert!(!model.opened_as_new_file(file_id));
+        });
+    })
+}
+
+/// Waits for the read that `FileModel::open` spawned for `file_id` to settle.
+#[cfg(feature = "local_fs")]
+async fn await_load(app: &mut App, file_id: warp_util::file::FileId) {
+    let future_id = app.read(|ctx| {
+        FileModel::as_ref(ctx)
+            .get_future_handle(file_id)
+            .expect("Loading future should be present")
+            .future_id()
+    });
+    app.update(|ctx| ctx.await_spawned_future(future_id)).await;
+}
+
+/// Streams load outcomes (`true` = loaded, `false` = failed).
+#[cfg(feature = "local_fs")]
+fn load_events(app: &mut App) -> async_channel::Receiver<bool> {
+    let (sender, receiver) = async_channel::unbounded();
+    let handle = gbm(app);
+    app.update(|ctx| {
+        ctx.subscribe_to_model(&handle, move |_, event, _| match event {
+            GlobalBufferModelEvent::BufferLoaded { .. } => {
+                let _ = sender.try_send(true);
+            }
+            GlobalBufferModelEvent::FailedToLoad { .. } => {
+                let _ = sender.try_send(false);
+            }
+            _ => {}
+        });
+    });
+    receiver
+}
+
+/// APP-5266: a remote path that does not exist is a new file too. The daemon reports it in the
+/// `OpenBuffer` response and the client has to record it, otherwise auto-save would write a
+/// remote file the user never saved.
+#[test]
+fn a_remote_buffer_records_whether_it_was_opened_as_a_new_file() {
+    use remote_server::proto::{OpenBufferResponse, OpenBufferSuccess, open_buffer_response};
+
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        app.add_singleton_model(GlobalBufferModel::new);
+
+        let response = |opened_as_new_file: bool| OpenBufferResponse {
+            result: Some(open_buffer_response::Result::Success(OpenBufferSuccess {
+                content: String::new(),
+                server_version: 1,
+                opened_as_new_file,
+            })),
+        };
+
+        for opened_as_new_file in [true, false] {
+            let buffer_state = gbm(&app).update(&mut app, |gbm, ctx| {
+                gbm.seed_remote_buffer_for_test(
+                    test_host_id(),
+                    StandardizedPath::try_new(if opened_as_new_file {
+                        "/test/new.txt"
+                    } else {
+                        "/test/existing.txt"
+                    })
+                    .unwrap(),
+                    "",
+                    1,
+                    ctx,
+                )
+            });
+            let file_id = buffer_state.file_id;
+
+            gbm(&app).update(&mut app, |gbm, ctx| {
+                gbm.apply_open_buffer_response(file_id, Ok(response(opened_as_new_file)), ctx);
+            });
+
+            assert_eq!(
+                gbm(&app).read(&app, |gbm, _| gbm.opened_as_new_file(file_id)),
+                opened_as_new_file,
+            );
+        }
     })
 }
