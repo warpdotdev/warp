@@ -5,6 +5,8 @@ mod config;
 mod language_server_candidate;
 pub use language_server_candidate::LanguageServerCandidate;
 pub mod install;
+#[cfg(not(target_arch = "wasm32"))]
+mod logs;
 mod manager;
 mod model;
 
