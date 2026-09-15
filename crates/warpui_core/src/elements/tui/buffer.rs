@@ -215,7 +215,12 @@ impl<'a> TuiPaintSurface<'a> {
         ))
     }
 
-    fn buffer_point(&self, position: TuiScreenPosition) -> Option<TuiPoint> {
+    /// Maps an absolute screen position to this surface's buffer cell
+    /// coordinates, or `None` if it falls outside the active clip. Exposed
+    /// crate-wide so callers that paint through a ratatui widget (e.g.
+    /// `TuiText`'s hyperlink recording) can locate a cell after the widget
+    /// has already painted it, without direct buffer access.
+    pub(crate) fn buffer_point(&self, position: TuiScreenPosition) -> Option<TuiPoint> {
         let (x, y) = self.signed_buffer_point(position)?;
         let point = TuiPoint::new(u16::try_from(x).ok()?, u16::try_from(y).ok()?);
         self.clip.contains_point(point).then_some(point)

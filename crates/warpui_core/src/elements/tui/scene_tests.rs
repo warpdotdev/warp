@@ -45,7 +45,7 @@ fn overlay_layer_covers_normal_layer_below_it() {
             TuiSize::new(3, 3),
         ));
     });
-    let (scene, _, _) = ctx.finish();
+    let (scene, _, _, _) = ctx.finish();
 
     assert!(scene.is_covered(TuiScreenPoint::new(1, 1, TuiZIndex::Normal(0))));
 }
@@ -65,7 +65,7 @@ fn higher_overlay_layer_covers_lower_overlay_layer() {
         });
         lower
     });
-    let (scene, _, _) = ctx.finish();
+    let (scene, _, _, _) = ctx.finish();
 
     assert!(scene.is_covered(lower));
 }
@@ -82,7 +82,7 @@ fn click_through_overlay_does_not_cover_lower_targets() {
             TuiSize::new(3, 3),
         ));
     });
-    let (scene, _, _) = ctx.finish();
+    let (scene, _, _, _) = ctx.finish();
 
     assert!(!scene.is_covered(TuiScreenPoint::new(1, 1, TuiZIndex::Normal(0))));
 }
