@@ -15764,6 +15764,7 @@ dependencies = [
  "console_error_panic_hook",
  "dirs 6.0.0",
  "env_logger",
+ "flate2",
  "js-sys",
  "log",
  "log-panics",
