@@ -528,18 +528,22 @@ impl RequestMetadataTurnView {
 
         // A legacy turn without any charge data hides the inference section entirely:
         // its charges are unknown, and a zero header would read as "free".
-        match self.legacy_charges {
+        match &self.legacy_charges {
             Some(LegacyCharges::Unknown) => (),
             Some(LegacyCharges::CreditsOnly(credits)) => {
                 // Only a credits total is known: no token/cost rows anywhere.
                 let header_font_size = appearance.overline_font_size() + 3.;
                 push_row(
                     Self::render_section_header("INFERENCE USAGE", appearance),
-                    render_value_text(format_credits(credits), header_font_size, appearance),
+                    render_value_text(
+                        format_credits_amount(*credits),
+                        header_font_size,
+                        appearance,
+                    ),
                     8.,
                 );
             }
-            _ => {
+            Some(LegacyCharges::Breakdown(_)) | None => {
                 let (inference_label, inference_value) =
                     self.inference_usage_header_row(appearance, usage_display_unit);
                 push_row(inference_label, inference_value, 8.);

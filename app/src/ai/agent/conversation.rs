@@ -3643,9 +3643,14 @@ impl AIConversation {
         let legacy_charges = if !is_latest_turn {
             LegacyCharges::Unknown
         } else {
+            // The unrounded credits figure: the footer's one-decimal rounding would turn a real
+            // sub-0.1 charge into zero before the panel could label it "<0.1 credits".
+            let credits_spent_for_last_block = self
+                .conversation_usage_metadata
+                .credits_spent_for_last_block;
             match self.charged_usage_for_last_block() {
                 Some(totals) => LegacyCharges::Breakdown(Box::new(totals)),
-                None => match self.credits_spent_for_last_block() {
+                None => match credits_spent_for_last_block {
                     Some(credits) => LegacyCharges::CreditsOnly(credits),
                     None => LegacyCharges::Unknown,
                 },

@@ -195,6 +195,15 @@ fn credits_only_legacy_shows_credits_and_never_a_zero_dollar_row() {
         turn_panel_tooltip_text_for_data(&data, UsageDisplayUnit::Dollars),
         "Turn: 2.5 credits"
     );
+
+    let tiny = TurnPanelData::Legacy {
+        records: vec![record(0.0, 0.0)],
+        charges: LegacyCharges::CreditsOnly(0.03),
+    };
+    assert_eq!(
+        turn_panel_tooltip_text_for_data(&tiny, UsageDisplayUnit::Credits),
+        "Turn: <0.1 credits"
+    );
 }
 
 #[test]

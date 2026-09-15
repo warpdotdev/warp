@@ -390,6 +390,32 @@ fn credits_only_latest_turn_has_no_zero_row() {
     }
 }
 
+/// A sub-0.1 credit charge must reach the panel unrounded so it can be labelled "<0.1 credits"
+/// rather than collapsing to zero.
+#[test]
+fn credits_only_latest_turn_keeps_a_tiny_charge_unrounded() {
+    let task = api::Task {
+        id: "root".to_string(),
+        messages: legacy_turn_messages("req-1", 1_000),
+        ..Default::default()
+    };
+    let mut conversation = AIConversation::new_restored(AIConversationId::new(), vec![task], None)
+        .expect("restored conversation");
+    conversation.set_credits_spent_for_last_block_for_test(0.03);
+
+    let last_exchange_id = conversation
+        .root_task_exchanges()
+        .last()
+        .map(|e| e.id)
+        .unwrap();
+    match conversation.turn_panel_data(last_exchange_id) {
+        Some(TurnPanelData::Legacy { charges, .. }) => {
+            assert!(matches!(charges, LegacyCharges::CreditsOnly(credits) if credits == 0.03));
+        }
+        other => panic!("expected a credits-only legacy panel, got {other:?}"),
+    }
+}
+
 /// A legacy turn with a tool round trip yields one timing record per exchange, so the panel
 /// can report the agent's own processing time separately from the wall-clock span that
 /// includes the tool execution gap. The turn-level charges ride on the last record only.
