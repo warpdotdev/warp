@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use pathfinder_geometry::vector::{Vector2F, vec2f};
 use unindent::Unindent;
+use vec1::vec1;
 use vim::vim::{MotionType, VimMode};
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
@@ -11,6 +12,7 @@ use warp_core::ui::appearance::Appearance;
 use warp_editor::content::buffer::{InitialBufferState, ToBufferCharOffset, ToBufferPoint};
 use warp_editor::model::CoreEditorModel;
 use warp_editor::render::element::VerticalExpansionBehavior;
+use warp_editor::render::model::ColumnUnit;
 use warp_editor::render::model::viewport::SizeInfo;
 use warp_util::user_input::UserInput;
 use warpui::keymap::Keystroke;
@@ -2347,5 +2349,146 @@ fn test_clicking_find_input_after_vim_search_word_restores_editing() {
 
         assert!(is_find_input_editable(&find_bar, &app));
         assert!(is_find_input_focused(&find_editor, &app));
+    });
+}
+
+#[test]
+fn test_vim_inner_word_text_object_delete() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("hello world", &mut app);
+        vim_user_insert(&editor, "diw", &mut app);
+        assert_eq!(buffer_text(&editor, &app), " world");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_change_word_enters_insert() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("hello world", &mut app);
+        vim_user_insert(&editor, "cw", &mut app);
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Insert));
+        vim_user_insert(&editor, "hey", &mut app);
+        editor.update(&mut app, |view, ctx| {
+            view.vim_keystroke(&Keystroke::parse("escape").unwrap(), ctx);
+        });
+        assert!(buffer_text(&editor, &app).starts_with("hey"));
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_toggle_case_and_yank_word() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("abc def", &mut app);
+        vim_user_insert(&editor, "gUl", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "Abc def");
+
+        set_cursor_position(&editor, 1, 4, &mut app);
+        vim_user_insert(&editor, "yw", &mut app);
+        let yanked = VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
+            registers.read_from_register('"', ctx)
+        });
+        let yanked = yanked.expect("yw writes the unnamed register");
+        assert_eq!(yanked.text, "def");
+        assert_eq!(yanked.motion_type, MotionType::Charwise);
+
+        vim_user_insert(&editor, "P", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "Abc defdef");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_visual_delete_and_find_char_operator() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("abcdef", &mut app);
+        vim_user_insert(&editor, "vllld", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "ef");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+
+        let editor = add_code_editor("abXcd", &mut app);
+        vim_user_insert(&editor, "dfX", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "cd");
+    });
+}
+
+#[test]
+fn test_vim_vertical_restores_goal_column_after_short_line() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("xxxx\nab\nxxxx", &mut app);
+        set_cursor_position(&editor, 1, 3, &mut app);
+        vim_user_insert(&editor, "j", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (2, 1));
+        vim_user_insert(&editor, "j", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (3, 3));
+    });
+}
+
+#[test]
+fn test_vim_visual_vertical_keeps_tail_and_goal_column() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("xxxx\nab\nxxxx", &mut app);
+        set_cursor_position(&editor, 1, 3, &mut app);
+        vim_user_insert(&editor, "vjj", &mut app);
+        assert_eq!(
+            vim_mode(&editor, &app),
+            Some(VimMode::Visual(MotionType::Charwise))
+        );
+        assert_eq!(cursor_position(&editor, &app), (3, 3));
+    });
+}
+
+#[test]
+fn test_vim_j_does_not_consume_native_pixel_goal_xs() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("xxxx\nab\nxxxx", &mut app);
+        set_cursor_position(&editor, 1, 3, &mut app);
+        editor.update(&mut app, |view, ctx| {
+            view.model.update(ctx, |model, ctx| {
+                model.selection().update(ctx, |selection, _| {
+                    selection.goal_xs = Some(vec1![ColumnUnit::Pixels((800usize).into_pixels())]);
+                });
+            });
+        });
+        vim_user_insert(&editor, "jj", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (3, 3));
+    });
+}
+
+#[test]
+fn test_vim_j_after_direct_cursor_mutation_starts_from_new_column() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("xxxx\nab\nxxxx\nzzzz", &mut app);
+        set_cursor_position(&editor, 1, 3, &mut app);
+        vim_user_insert(&editor, "j", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (2, 1));
+        set_cursor_position(&editor, 3, 0, &mut app);
+        vim_user_insert(&editor, "j", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (4, 0));
     });
 }

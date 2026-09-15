@@ -570,7 +570,13 @@ impl NotebookView {
             }
             ActiveNotebookDataEvent::SwitchedToEditMode => {
                 log::info!("Edit mode confirmed from server");
+                let already_editable = self.input.as_ref(ctx).is_editable(ctx);
                 self.set_editor_interaction_state(InteractionState::Editable, ctx);
+                if !already_editable {
+                    self.input.update(ctx, |input, ctx| {
+                        input.enter_vim_normal_mode(ctx);
+                    });
+                }
             }
             ActiveNotebookDataEvent::EditRejected => {
                 log::info!("Edit rejected, switching to view mode");
@@ -1096,6 +1102,9 @@ impl NotebookView {
         });
 
         self.set_editor_interaction_state(InteractionState::Editable, ctx);
+        self.input.update(ctx, |input, ctx| {
+            input.enter_vim_normal_mode(ctx);
+        });
 
         // Reset edit-tracking state to prevent a false initial event.
         self.send_edit_telemetry = false;

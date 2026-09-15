@@ -3,15 +3,19 @@ use std::sync::Arc;
 use chrono::{Duration, Utc};
 use futures_util::future::BoxFuture;
 use itertools::Itertools;
+use settings::Setting as _;
+use vim::vim::VimMode;
 use warp_core::ui::appearance::Appearance;
 use warp_editor::editor::EditorView;
+use warp_util::user_input::UserInput;
 use warpui::r#async::Timer;
+use warpui::keymap::Keystroke;
 use warpui::platform::WindowStyle;
 use warpui::presenter::ChildView;
 use warpui::telemetry::EventPayload;
 use warpui::{
-    AddSingletonModel, App, AppContext, Element, Entity, SingletonEntity, TypedActionView, View,
-    ViewHandle, WindowId,
+    AddSingletonModel, App, AppContext, Element, Entity, SingletonEntity, TypedActionView,
+    UpdateModel, View, ViewHandle, WindowId,
 };
 
 use super::{EDIT_WINDOW_DURATION, NotebookEvent, NotebookView};
@@ -26,8 +30,9 @@ use crate::cloud_object::{
 };
 use crate::drive::OpenWarpDriveObjectSettings;
 use crate::editor::{DisplayPoint, EditorAction, InteractionState, SelectAction};
+use crate::features::FeatureFlag;
 use crate::network::NetworkStatus;
-use crate::notebooks::active_notebook_data::Mode;
+use crate::notebooks::active_notebook_data::{ActiveNotebookDataEvent, Mode};
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::editor::notebook_command::NotebookCommand;
 use crate::notebooks::editor::view::EditorViewAction;
@@ -41,10 +46,12 @@ use crate::server::ids::SyncId::ServerId;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::{QueueItem, SyncQueue, SyncQueueEvent};
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
+use crate::settings::AppEditorSettings;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::test_util::assert_eventually;
 use crate::test_util::settings::initialize_settings_for_tests;
+use crate::vim_registers::VimRegisters;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{WorkflowSource, WorkflowType};
 use crate::workspace::ActiveSession;
@@ -81,6 +88,7 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
     app.add_singleton_model(AuthManager::new_for_test);
+    app.add_singleton_model(|_| VimRegisters::new());
     #[cfg(feature = "voice_input")]
     app.add_singleton_model(voice_input::VoiceInput::new);
 }
@@ -929,5 +937,206 @@ fn test_untitled_notebook() {
             });
             assert_eq!(notebook.title(ctx), "My Notebook");
         });
+    });
+}
+
+fn enable_vim_notebook_flag() -> impl Drop {
+    FeatureFlag::VimNotebook.override_enabled(true)
+}
+
+fn set_vim_mode(app: &mut App, enabled: bool) {
+    app.update_model(
+        &AppEditorSettings::handle(app),
+        |settings: &mut AppEditorSettings, ctx| {
+            settings.vim_mode.set_value(enabled, ctx).unwrap();
+        },
+    );
+}
+
+fn vim_type_input(
+    input: &ViewHandle<crate::notebooks::editor::view::RichTextEditorView>,
+    text: &str,
+    app: &mut App,
+) {
+    input.update(app, |view, ctx| {
+        ctx.focus_self();
+        view.handle_action(
+            &EditorViewAction::VimUserTyped(UserInput::new(text.to_string())),
+            ctx,
+        );
+    });
+}
+
+fn input_markdown(
+    input: &ViewHandle<crate::notebooks::editor::view::RichTextEditorView>,
+    app: &App,
+) -> String {
+    input.read(app, |view, ctx| view.markdown(ctx))
+}
+
+fn input_vim_mode(
+    input: &ViewHandle<crate::notebooks::editor::view::RichTextEditorView>,
+    app: &App,
+) -> Option<VimMode> {
+    input.read(app, |view, ctx| view.vim_mode(ctx))
+}
+
+fn reenter_edit(notebook: &ViewHandle<NotebookView>, app: &mut App) {
+    notebook.update(app, |notebook, ctx| {
+        notebook.switch_to_view(ctx);
+        notebook.switch_to_edit(ctx);
+        notebook.focus_input(ctx);
+    });
+}
+
+#[test]
+fn personal_notebook_enters_clean_vim_normal_on_edit_and_reacquisition() {
+    let _vim_notebook = enable_vim_notebook_flag();
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        initial_load(&mut app, []).await;
+        set_vim_mode(&mut app, true);
+
+        let (_window, notebook, _root) = create_notebook(&mut app);
+        notebook.update(&mut app, |notebook, ctx| {
+            notebook.open_new_notebook(
+                Some("Personal".into()),
+                Owner::mock_current_user(),
+                None,
+                ctx,
+            );
+            notebook.focus_input(ctx);
+        });
+
+        let input = notebook.read(&app, |notebook, _| notebook.input.clone());
+        input.update(&mut app, |view, ctx| {
+            view.reset_with_markdown("hello world", ctx);
+            view.model().update(ctx, |model, ctx| {
+                vim::handler::jump_to_first_line(model, false, ctx);
+            });
+        });
+        assert_eq!(input_vim_mode(&input, &app), Some(VimMode::Normal));
+
+        let before = input_markdown(&input, &app);
+        vim_type_input(&input, "l", &mut app);
+        assert_eq!(input_markdown(&input, &app), before);
+        assert_eq!(input_vim_mode(&input, &app), Some(VimMode::Normal));
+
+        vim_type_input(&input, "v", &mut app);
+        assert!(matches!(
+            input_vim_mode(&input, &app),
+            Some(VimMode::Visual(_))
+        ));
+        reenter_edit(&notebook, &mut app);
+        assert_eq!(input_vim_mode(&input, &app), Some(VimMode::Normal));
+        vim_type_input(&input, "l", &mut app);
+        assert_eq!(input_markdown(&input, &app), before);
+
+        vim_type_input(&input, "R", &mut app);
+        assert_eq!(input_vim_mode(&input, &app), Some(VimMode::Replace));
+        reenter_edit(&notebook, &mut app);
+        assert_eq!(input_vim_mode(&input, &app), Some(VimMode::Normal));
+        vim_type_input(&input, "l", &mut app);
+        assert_eq!(input_markdown(&input, &app), before);
+
+        vim_type_input(&input, "d", &mut app);
+        assert_eq!(input_vim_mode(&input, &app), Some(VimMode::Normal));
+        reenter_edit(&notebook, &mut app);
+        assert_eq!(input_vim_mode(&input, &app), Some(VimMode::Normal));
+        vim_type_input(&input, "w", &mut app);
+        assert_eq!(input_markdown(&input, &app), before);
+
+        vim_type_input(&input, "i", &mut app);
+        assert_eq!(input_vim_mode(&input, &app), Some(VimMode::Insert));
+        vim_type_input(&input, "x", &mut app);
+        let inserted = input_markdown(&input, &app);
+        assert_ne!(inserted, before);
+        notebook.update(&mut app, |notebook, ctx| {
+            notebook.active_notebook_data.update(ctx, |_, ctx| {
+                ctx.emit(ActiveNotebookDataEvent::SwitchedToEditMode);
+            });
+        });
+        assert_eq!(input_vim_mode(&input, &app), Some(VimMode::Insert));
+        assert_eq!(input_markdown(&input, &app), inserted);
+
+        input.update(&mut app, |view, ctx| {
+            ctx.focus_self();
+            view.handle_action(&EditorViewAction::VimEscape, ctx);
+        });
+        vim_type_input(&input, "v", &mut app);
+        assert!(matches!(
+            input_vim_mode(&input, &app),
+            Some(VimMode::Visual(_))
+        ));
+        notebook.update(&mut app, |notebook, ctx| {
+            notebook.switch_to_view(ctx);
+            notebook.grab_edit_access(false, ctx);
+            notebook.active_notebook_data.update(ctx, |_, ctx| {
+                ctx.emit(ActiveNotebookDataEvent::SwitchedToEditMode);
+            });
+            notebook.focus_input(ctx);
+        });
+        assert_eq!(input_vim_mode(&input, &app), Some(VimMode::Normal));
+        assert!(input.read(&app, |view, ctx| view.is_editable(ctx)));
+    });
+}
+
+#[test]
+fn personal_notebook_escape_keybinding_exits_insert_without_inserting() {
+    let _vim_notebook = enable_vim_notebook_flag();
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.update(crate::notebooks::init);
+        initial_load(&mut app, []).await;
+        set_vim_mode(&mut app, true);
+
+        let (window, notebook, _root) = create_notebook(&mut app);
+        notebook.update(&mut app, |notebook, ctx| {
+            notebook.open_new_notebook(
+                Some("Personal".into()),
+                Owner::mock_current_user(),
+                None,
+                ctx,
+            );
+            notebook.focus_input(ctx);
+        });
+
+        let input = notebook.read(&app, |notebook, _| notebook.input.clone());
+        input.update(&mut app, |view, ctx| {
+            view.reset_with_markdown("hello world", ctx);
+            view.model().update(ctx, |model, ctx| {
+                vim::handler::jump_to_first_line(model, false, ctx);
+            });
+            ctx.focus_self();
+        });
+        assert_eq!(input_vim_mode(&input, &app), Some(VimMode::Normal));
+
+        vim_type_input(&input, "i", &mut app);
+        assert_eq!(input_vim_mode(&input, &app), Some(VimMode::Insert));
+        vim_type_input(&input, "x", &mut app);
+        let after_insert = input_markdown(&input, &app);
+
+        let handled = app
+            .dispatch_keystroke(
+                window,
+                &[input.id()],
+                &Keystroke::parse("escape").expect("escape parses"),
+                false,
+            )
+            .expect("escape keybinding dispatch succeeds");
+        assert!(
+            handled,
+            "escape should match VimEscape, not command selection"
+        );
+        assert_eq!(input_vim_mode(&input, &app), Some(VimMode::Normal));
+        assert_eq!(input_markdown(&input, &app), after_insert);
+
+        vim_type_input(&input, "h", &mut app);
+        assert_eq!(input_markdown(&input, &app), after_insert);
+        assert_eq!(input_vim_mode(&input, &app), Some(VimMode::Normal));
+
+        vim_type_input(&input, "/", &mut app);
+        assert!(input.read(&app, |view, _| view.is_find_bar_open()));
+        assert_eq!(input_vim_mode(&input, &app), Some(VimMode::Normal));
     });
 }
