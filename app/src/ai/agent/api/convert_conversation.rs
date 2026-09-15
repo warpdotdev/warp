@@ -1930,15 +1930,18 @@ fn create_exchange_from_messages(
                 _ => None,
             })
         })
-        // Fall back to any timestamp from the messages in this exchange
+        // Fall back to the earliest message timestamp in this exchange
         .or_else(|| {
-            message_ids.iter().find_map(|message_id| {
-                message_map.get(message_id.as_str()).and_then(|message| {
-                    message.timestamp.as_ref().map(|timestamp| {
-                        proto_timestamp_to_local_datetime(timestamp.seconds, timestamp.nanos)
+            message_ids
+                .iter()
+                .filter_map(|message_id| {
+                    message_map.get(message_id.as_str()).and_then(|message| {
+                        message.timestamp.as_ref().map(|timestamp| {
+                            proto_timestamp_to_local_datetime(timestamp.seconds, timestamp.nanos)
+                        })
                     })
                 })
-            })
+                .min()
         })
         .unwrap_or_default();
 

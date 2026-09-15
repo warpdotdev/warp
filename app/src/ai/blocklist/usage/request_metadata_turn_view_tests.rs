@@ -63,10 +63,7 @@ fn format_dollars_never_rounds_a_real_charge_to_zero() {
 /// Every panel amount follows the display-unit setting; there is no separate Credits row.
 #[test]
 fn format_cost_follows_the_display_unit() {
-    assert_eq!(
-        format_cost(150.0, 0.5, UsageDisplayUnit::Dollars),
-        "$1.50"
-    );
+    assert_eq!(format_cost(150.0, 0.5, UsageDisplayUnit::Dollars), "$1.50");
     assert_eq!(
         format_cost(150.0, 0.5, UsageDisplayUnit::Credits),
         "0.5 credits"
@@ -150,7 +147,7 @@ fn view_starts_with_collapsed_model_rows() {
 #[test]
 fn view_from_legacy_unknown_has_no_model_rows() {
     let data = TurnPanelData::Legacy {
-        record: Box::new(record(0.0, 0.0)),
+        records: vec![record(0.0, 0.0)],
         charges: LegacyCharges::Unknown,
     };
     let view = RequestMetadataTurnView::new_for_test(data);
@@ -164,7 +161,7 @@ fn view_from_legacy_unknown_has_no_model_rows() {
 #[test]
 fn credits_only_legacy_shows_credits_and_never_a_zero_dollar_row() {
     let data = TurnPanelData::Legacy {
-        record: Box::new(record(0.0, 0.0)),
+        records: vec![record(0.0, 0.0)],
         charges: LegacyCharges::CreditsOnly(2.5),
     };
     let view = RequestMetadataTurnView::new_for_test(data.clone());
@@ -214,7 +211,7 @@ fn view_from_legacy_breakdown_has_one_models_row() {
     let mut breakdown = record(120.0, 30.0);
     breakdown.model_charges[0].model_id = "Models".to_string();
     let data = TurnPanelData::Legacy {
-        record: Box::new(breakdown),
+        records: vec![breakdown],
         charges: LegacyCharges::Breakdown(Box::new(
             crate::persistence::model::ChargedUsageTotals {
                 input_tokens: 10,

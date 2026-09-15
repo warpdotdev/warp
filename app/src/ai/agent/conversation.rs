@@ -3611,26 +3611,31 @@ impl AIConversation {
         }
 
         let turn_exchange_ids = self.turn_exchange_ids(exchange_id);
-        let turn_exchanges: Vec<&AIAgentExchange> = turn_exchange_ids
+        // One timing-only record per exchange, so the panel can tell the agent's own
+        // processing time (the sum of exchange durations) apart from the wall-clock span that
+        // includes tool execution between exchanges.
+        let mut records: Vec<RequestMetadataRecord> = turn_exchange_ids
             .iter()
             .filter_map(|id| self.exchange_with_id(*id))
-            .collect();
-        let started = turn_exchanges
-            .iter()
-            .map(|exchange| exchange.start_time)
-            .min();
-        let ended = turn_exchanges
-            .iter()
-            .filter_map(|exchange| exchange.finish_time)
-            .max();
-        let first_token = turn_exchanges
-            .iter()
-            .filter_map(|exchange| {
-                exchange
+            .map(|exchange| RequestMetadataRecord {
+                message_id: String::new(),
+                request_id: String::new(),
+                request_started_at: Some(exchange.start_time),
+                first_token_at: exchange
                     .time_to_first_token_ms
-                    .map(|ms| exchange.start_time + chrono::Duration::milliseconds(ms))
+                    .map(|ms| exchange.start_time + chrono::Duration::milliseconds(ms)),
+                request_ended_at: exchange.finish_time,
+                llm_generation_spans: Vec::new(),
+                model_charges: Vec::new(),
+                platform_charges: Vec::new(),
+                tool_calls: None,
+                commands_executed: None,
+                files_changed: None,
+                lines_added: None,
+                lines_removed: None,
+                context_window_usage: None,
             })
-            .min();
+            .collect();
 
         let is_latest_turn = self
             .root_task_exchanges()
@@ -3706,23 +3711,34 @@ impl AIConversation {
             LegacyCharges::CreditsOnly(_) | LegacyCharges::Unknown => (Vec::new(), Vec::new()),
         };
 
-        Some(TurnPanelData::Legacy {
-            record: Box::new(RequestMetadataRecord {
+        // The turn-level charges and context reading belong to the turn as a whole; the panel
+        // sums charges across records and reads the context window off the latest one.
+        if records.is_empty() {
+            records.push(RequestMetadataRecord {
                 message_id: String::new(),
                 request_id: String::new(),
-                request_started_at: started,
-                first_token_at: first_token,
-                request_ended_at: ended,
+                request_started_at: None,
+                first_token_at: None,
+                request_ended_at: None,
                 llm_generation_spans: Vec::new(),
-                model_charges,
-                platform_charges,
+                model_charges: Vec::new(),
+                platform_charges: Vec::new(),
                 tool_calls: None,
                 commands_executed: None,
                 files_changed: None,
                 lines_added: None,
                 lines_removed: None,
-                context_window_usage,
-            }),
+                context_window_usage: None,
+            });
+        }
+        if let Some(last) = records.last_mut() {
+            last.model_charges = model_charges;
+            last.platform_charges = platform_charges;
+            last.context_window_usage = context_window_usage;
+        }
+
+        Some(TurnPanelData::Legacy {
+            records,
             charges: legacy_charges,
         })
     }

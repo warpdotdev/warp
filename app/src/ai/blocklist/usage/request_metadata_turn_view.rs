@@ -80,7 +80,7 @@ impl RequestMetadataTurnView {
     fn build(data: TurnPanelData) -> Self {
         let (records, legacy_charges) = match data {
             TurnPanelData::Records(records) => (records, None),
-            TurnPanelData::Legacy { record, charges } => (vec![*record], Some(charges)),
+            TurnPanelData::Legacy { records, charges } => (records, Some(charges)),
         };
         let mut summary = summarize_turn(&records);
         // Usage-ranked display order: most tokens first, then model id for stability.
@@ -478,11 +478,9 @@ impl RequestMetadataTurnView {
                 render_value_text(format_seconds(total), font_size, appearance),
             ));
         }
-        // Earliest request start to latest request end. Includes tool execution, so it only
-        // adds information (and is only shown) when tools ran between requests.
-        if let Some(wall_ms) = self.summary.request_duration_ms()
-            && per_request_total_ms.is_none_or(|total| wall_ms > total)
-        {
+        // Earliest request start to latest request end, including tool execution between
+        // requests.
+        if let Some(wall_ms) = self.summary.request_duration_ms() {
             rows.push((
                 render_label_text("Total time (including tool calls)", appearance),
                 render_value_text(format_seconds(wall_ms), font_size, appearance),
@@ -747,7 +745,11 @@ fn format_tokens_with_cost(
 }
 
 /// Formats a charge in the user's display unit.
-fn format_cost(cost_in_cents: f32, cost_in_credits: f32, usage_display_unit: UsageDisplayUnit) -> String {
+fn format_cost(
+    cost_in_cents: f32,
+    cost_in_credits: f32,
+    usage_display_unit: UsageDisplayUnit,
+) -> String {
     match usage_display_unit {
         UsageDisplayUnit::Dollars => format_dollars(cost_in_cents),
         UsageDisplayUnit::Credits => format_credits_amount(cost_in_credits),

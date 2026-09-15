@@ -294,10 +294,10 @@ impl RequestMetadataRecord {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TurnPanelData {
     Records(Vec<RequestMetadataRecord>),
-    /// A synthetic record built client-side: turn timing from the exchanges, the
-    /// conversation's context-window reading (latest turn only), plus `charges`.
+    /// Synthetic records built client-side: one per exchange carrying that exchange's timing,
+    /// with the turn's context-window reading (latest turn only) and `charges` on the last.
     Legacy {
-        record: Box<RequestMetadataRecord>,
+        records: Vec<RequestMetadataRecord>,
         charges: LegacyCharges,
     },
 }
@@ -318,8 +318,7 @@ impl TurnPanelData {
     /// The record(s) backing the tooltip and the panel's aggregation.
     pub fn records(&self) -> &[RequestMetadataRecord] {
         match self {
-            TurnPanelData::Records(records) => records,
-            TurnPanelData::Legacy { record, .. } => std::slice::from_ref(record),
+            TurnPanelData::Records(records) | TurnPanelData::Legacy { records, .. } => records,
         }
     }
 }

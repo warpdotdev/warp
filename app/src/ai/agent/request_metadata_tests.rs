@@ -283,8 +283,11 @@ fn historical_turn_panel_data_is_timing_only() {
         .map(|e| e.id)
         .unwrap();
     match conversation.turn_panel_data(first_exchange_id) {
-        Some(TurnPanelData::Legacy { record, charges }) => {
+        Some(TurnPanelData::Legacy { records, charges }) => {
             assert!(matches!(charges, LegacyCharges::Unknown));
+            let [record] = records.as_slice() else {
+                panic!("expected one record for a single-exchange turn");
+            };
             assert!(record.model_charges.is_empty());
             assert!(record.platform_charges.is_empty());
             // Timing is still derived from the exchanges.
@@ -327,11 +330,14 @@ fn latest_turn_panel_data_uses_the_breakdown_snapshot() {
         .map(|e| e.id)
         .unwrap();
     match conversation.turn_panel_data(last_exchange_id) {
-        Some(TurnPanelData::Legacy { record, charges }) => {
+        Some(TurnPanelData::Legacy { records, charges }) => {
             match charges {
                 LegacyCharges::Breakdown(_) => (),
                 other => panic!("expected the breakdown snapshot, got {other:?}"),
             }
+            let [record] = records.as_slice() else {
+                panic!("expected one record for a single-exchange turn");
+            };
             let [charge] = record.model_charges.as_slice() else {
                 panic!("expected exactly one aggregated model row");
             };
@@ -369,13 +375,57 @@ fn credits_only_latest_turn_has_no_zero_row() {
         .map(|e| e.id)
         .unwrap();
     match conversation.turn_panel_data(last_exchange_id) {
-        Some(TurnPanelData::Legacy { record, charges }) => {
+        Some(TurnPanelData::Legacy { records, charges }) => {
             assert!(matches!(charges, LegacyCharges::CreditsOnly(credits) if credits == 2.5));
-            assert!(record.model_charges.is_empty());
-            assert!(record.platform_charges.is_empty());
+            assert!(records.iter().all(|record| record.model_charges.is_empty()));
+            assert!(
+                records
+                    .iter()
+                    .all(|record| record.platform_charges.is_empty())
+            );
         }
         other => panic!("expected a legacy panel for the latest turn, got {other:?}"),
     }
+}
+
+/// A legacy turn with a tool round trip yields one timing record per exchange, so the panel
+/// can report the agent's own processing time separately from the wall-clock span that
+/// includes the tool execution gap. The turn-level charges ride on the last record only.
+#[test]
+fn legacy_turn_with_tool_round_trip_has_one_timing_record_per_exchange() {
+    // Query exchange: 1_000 -> 1_001; tool result exchange: 1_060 -> 1_061 (a 59s tool gap).
+    let mut messages = legacy_turn_messages("req-1", 1_000);
+    let mut round_trip = tool_round_trip_messages("req-2", 1_060);
+    round_trip.pop();
+    messages.extend(round_trip);
+    let task = api::Task {
+        id: "root".to_string(),
+        messages,
+        ..Default::default()
+    };
+    let mut conversation = AIConversation::new_restored(AIConversationId::new(), vec![task], None)
+        .expect("restored conversation");
+    conversation.set_credits_spent_for_last_block_for_test(2.5);
+
+    let last_exchange_id = conversation
+        .root_task_exchanges()
+        .last()
+        .map(|e| e.id)
+        .unwrap();
+    let Some(TurnPanelData::Legacy { records, .. }) =
+        conversation.turn_panel_data(last_exchange_id)
+    else {
+        panic!("expected a legacy panel");
+    };
+    assert_eq!(records.len(), 2);
+    let per_exchange_ms: Vec<Option<i64>> = records
+        .iter()
+        .map(|record| record.request_duration_ms())
+        .collect();
+    assert_eq!(per_exchange_ms, [Some(1_000), Some(1_000)]);
+
+    let summary = summarize_turn(&records);
+    assert_eq!(summary.request_duration_ms(), Some(61_000));
 }
 
 /// A tool-result round trip: the request the client sends after executing a tool call. It has no
