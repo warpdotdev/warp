@@ -4,7 +4,7 @@ use ai::agent::action_result::{AIAgentActionResultType, RecordingStarted, StartR
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use uuid::Uuid;
-use warp_core::features::FeatureFlag;
+use warp_core::features::{FeatureFlag, video_recording_enabled};
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
@@ -31,7 +31,7 @@ impl StartRecordingExecutor {
         // Recording is only offered within an already-approved computer-use
         // subagent, so approval extends to it. Still require the feature flag.
         matches!(action.action, AIAgentActionType::StartRecording { .. })
-            && FeatureFlag::VideoRecording.is_enabled()
+            && video_recording_enabled()
     }
 
     pub(super) fn execute(
