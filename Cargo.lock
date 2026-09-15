@@ -15853,6 +15853,7 @@ dependencies = [
  "serde",
  "serde_json",
  "string-offset",
+ "tempfile",
  "warp_cli",
 ]
 
