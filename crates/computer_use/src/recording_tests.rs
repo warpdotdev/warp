@@ -43,6 +43,7 @@ fn removes_unclaimed_output_when_handle_is_dropped_windows() {
         height: 1,
         exit_state: Arc::new(Mutex::new(None)),
         path: path.clone(),
+        started_at: instant::Instant::now(),
         process: None,
         cleanup_on_drop: true,
     };

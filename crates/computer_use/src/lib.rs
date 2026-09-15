@@ -270,10 +270,10 @@ pub trait Actor: Send + Sync + 'static {
 
 /// Returns a recorder that can capture a video of the computer-use display.
 ///
-/// A real recorder is available on Linux (X11) and macOS (avfoundation); every
-/// other platform, and any `test-util` build, gets a no-op recorder that reports
-/// recording as unsupported. On macOS, setting `WARP_MOCK_RECORDER` opts into a
-/// mock recorder for UI testing (see `mock`).
+/// Real recorders are available on Linux (X11), macOS (avfoundation), and
+/// Windows (gdigrab). Other platforms and any `test-util` build get a no-op
+/// recorder. On macOS, setting `WARP_MOCK_RECORDER` opts into a mock recorder
+/// for UI testing (see `mock`).
 pub fn create_recorder() -> Box<dyn Recorder> {
     #[cfg(macos)]
     if std::env::var_os("WARP_MOCK_RECORDER").is_some() {
@@ -420,7 +420,7 @@ pub struct RecordingHandle {
     // construct a handle.
     #[cfg(any(linux, macos, windows))]
     path: PathBuf,
-    #[cfg(any(linux, macos))]
+    #[cfg(any(linux, macos, windows))]
     started_at: instant::Instant,
     #[cfg(any(linux, macos, windows))]
     process: Option<tokio::process::Child>,
@@ -479,7 +479,7 @@ impl RecordingHandle {
             exit_state: exit_state.clone(),
             #[cfg(any(linux, macos, windows))]
             path: PathBuf::new(),
-            #[cfg(any(linux, macos))]
+            #[cfg(any(linux, macos, windows))]
             started_at: instant::Instant::now(),
             #[cfg(any(linux, macos, windows))]
             process: None,
@@ -493,15 +493,59 @@ impl RecordingHandle {
 #[cfg(any(linux, macos, windows))]
 impl Drop for RecordingHandle {
     fn drop(&mut self) {
-        // A handle can be abandoned without reaching `Recorder::stop`, notably
-        // when a start action finishes after cancellation. The child process's
-        // kill-on-drop handles ffmpeg; this removes its partial output. A
-        // successful stop disables cleanup and transfers file ownership.
         if self.cleanup_on_drop {
+            #[cfg(windows)]
+            if let Some(process) = self.process.take() {
+                spawn_windows_recording_cleanup(process, self.path.clone());
+                return;
+            }
             let _ = std::fs::remove_file(&self.path);
             let _ = std::fs::remove_file(self.path.with_extension("log"));
         }
     }
+}
+#[cfg(windows)]
+fn spawn_windows_recording_cleanup(mut process: tokio::process::Child, path: PathBuf) {
+    let result = std::thread::Builder::new()
+        .name("recording-cleanup".to_string())
+        .spawn(move || {
+            match process.try_wait() {
+                Ok(Some(_)) => {
+                    remove_abandoned_recording_files(&path);
+                    return;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    log::warn!("Failed to poll abandoned recording process: {error}");
+                    return;
+                }
+            }
+            if let Err(error) = process.start_kill() {
+                log::warn!("Failed to terminate abandoned recording process: {error}");
+                return;
+            }
+            loop {
+                match process.try_wait() {
+                    Ok(Some(_)) => {
+                        remove_abandoned_recording_files(&path);
+                        return;
+                    }
+                    Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+                    Err(error) => {
+                        log::warn!("Failed to reap abandoned recording process: {error}");
+                        return;
+                    }
+                }
+            }
+        });
+    if let Err(error) = result {
+        log::warn!("Failed to start abandoned recording cleanup: {error}");
+    }
+}
+#[cfg(windows)]
+fn remove_abandoned_recording_files(path: &Path) {
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(path.with_extension("log"));
 }
 
 /// The finalized output of a stopped recording. Carries the local file path and
