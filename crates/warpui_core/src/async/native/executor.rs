@@ -180,23 +180,6 @@ impl Background {
         }
     }
 
-    /// Spawn a future on the background Tokio runtime and return its join handle.
-    ///
-    /// The handle can be awaited from a non-Tokio executor; the task still runs
-    /// on this runtime.
-    pub fn spawn_future<T>(
-        &self,
-        future: impl Send + Future<Output = T> + 'static,
-    ) -> tokio::task::JoinHandle<T>
-    where
-        T: Send + 'static,
-    {
-        self.runtime
-            .as_ref()
-            .expect("background executor shut down")
-            .spawn(future)
-    }
-
     /// Schedule an asynchronous task to run on a background thread.
     ///
     /// If you have a boxed future, use `spawn_boxed` instead.

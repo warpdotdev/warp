@@ -36,8 +36,6 @@ use warp_errors::{ErrorExt, register_error, report_error, report_if_error};
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_managed_secrets::ManagedSecretValue;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
-#[cfg(unix)]
-use warpui::r#async::executor::Background;
 use warpui::r#async::{FutureExt, TimeoutError, Timer};
 use warpui::{
     AppContext, Entity, EntityId, ModelContext, ModelHandle, ModelSpawner, SingletonEntity,
@@ -120,11 +118,15 @@ mod mcp_startup;
 pub(super) mod output;
 mod snapshot;
 pub(crate) mod terminal;
+mod termination;
 
 use environment::PrepareEnvironmentError;
 use mcp_startup::MCP_SERVER_STARTUP_TIMEOUT;
 pub(crate) use snapshot::upload_snapshot_for_handoff;
 use terminal::TerminalDriverEvent;
+use termination::{InterruptSignal, RunEndCause};
+#[cfg(unix)]
+use termination::{emulate_default_and_exit, watch_interrupt_signals};
 
 /// Races `run_future` against optional background credential refresh loops,
 /// dropping the loops automatically when `run_future` resolves.
@@ -966,198 +968,12 @@ pub enum AgentDriverError {
         /// whether the message points the user at upgrading.
         on_free_plan: bool,
     },
-    /// The process received SIGTERM while the run was still in progress.
-    /// SIGTERM is how instance teardown reaches the client — server-initiated
-    /// sandbox shutdown, container-runtime stops, and self-hosted worker
-    /// termination — and the client cannot distinguish which initiated it, so
-    /// it is reported as `FAILED` (externally-originating).
-    #[error(
-        "The agent process was terminated (SIGTERM) before the run completed, most likely \
-         because the instance or worker hosting the run was shut down."
-    )]
-    #[allow(dead_code)]
-    TerminatedBySignal,
-}
-
-/// Unix signal that aborts an in-progress agent run so a handoff snapshot can be
-/// saved before the default terminate disposition is restored.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum InterruptSignal {
-    /// SIGTERM from instance teardown, container stop, or worker termination.
-    Term,
-    /// SIGINT from Ctrl-C.
-    Int,
-}
-
-impl InterruptSignal {
-    #[cfg(unix)]
-    fn as_raw(self) -> libc::c_int {
-        match self {
-            Self::Term => libc::SIGTERM,
-            Self::Int => libc::SIGINT,
-        }
-    }
-}
-
-/// Why `run_internal` stopped.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RunEndCause {
-    /// `run_internal` returned on its own (success or a non-signal error).
-    Completed,
-    /// `WARP_SANDBOX_DEADLINE` warning window fired.
-    SandboxDeadline,
-    /// A Unix interrupt arrived while the run was still in progress.
-    Signal(InterruptSignal),
-}
-
-#[derive(Clone)]
-struct InterruptFlags {
-    term: Arc<std::sync::atomic::AtomicBool>,
-    int: Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl InterruptFlags {
-    fn pending(&self) -> Option<InterruptSignal> {
-        use std::sync::atomic::Ordering;
-        if self.term.load(Ordering::Acquire) {
-            Some(InterruptSignal::Term)
-        } else if self.int.load(Ordering::Acquire) {
-            Some(InterruptSignal::Int)
-        } else {
-            None
-        }
-    }
-}
-
-const fn should_attempt_handoff_snapshot(
-    oz_handoff_enabled: bool,
-    has_task_id: bool,
-    snapshot_disabled: bool,
-) -> bool {
-    oz_handoff_enabled && has_task_id && !snapshot_disabled
-}
-
-#[cfg(unix)]
-struct InterruptWatch {
-    sig_ids: Vec<signal_hook::SigId>,
-    handle: signal_hook_tokio::Handle,
-    abort: tokio::task::AbortHandle,
-}
-
-#[cfg(unix)]
-impl InterruptWatch {
-    fn unregister(self) {
-        self.handle.close();
-        self.abort.abort();
-        for id in self.sig_ids {
-            signal_hook::low_level::unregister(id);
-        }
-    }
-}
-
-#[cfg(unix)]
-async fn watch_interrupt_signals(
-    background: &Background,
-) -> Option<(
-    impl Future<Output = InterruptSignal>,
-    InterruptFlags,
-    InterruptWatch,
-)> {
-    use std::sync::atomic::AtomicBool;
-
-    use futures::StreamExt as _;
-    use signal_hook::flag;
-    use signal_hook_tokio::Signals;
-
-    let shutdown_armed = Arc::new(AtomicBool::new(false));
-    let flags = InterruptFlags {
-        term: Arc::new(AtomicBool::new(false)),
-        int: Arc::new(AtomicBool::new(false)),
-    };
-    let mut sig_ids = Vec::new();
-
-    for (signal, pending) in [
-        (signal_hook::consts::SIGTERM, &flags.term),
-        (signal_hook::consts::SIGINT, &flags.int),
-    ] {
-        // First delivery starts graceful snapshot; a second emulates default terminate so a
-        // stuck snapshot cannot trap Ctrl-C / SIGTERM.
-        let result = (|| {
-            sig_ids.push(flag::register_conditional_default(
-                signal,
-                Arc::clone(&shutdown_armed),
-            )?);
-            sig_ids.push(flag::register(signal, Arc::clone(&shutdown_armed))?);
-            sig_ids.push(flag::register(signal, Arc::clone(pending))?);
-            std::io::Result::Ok(())
-        })();
-        if let Err(error) = result {
-            for id in sig_ids.drain(..) {
-                signal_hook::low_level::unregister(id);
-            }
-            log::warn!("Failed to register Unix signal handlers: {error}");
-            return None;
-        }
-    }
-    let signals = match background
-        .spawn_future(async {
-            Signals::new([signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT])
-        })
-        .await
-    {
-        Ok(Ok(signals)) => signals,
-        Ok(Err(error)) => {
-            for id in sig_ids.drain(..) {
-                signal_hook::low_level::unregister(id);
-            }
-            log::warn!("Failed to initialize Unix signal watcher: {error}");
-            return None;
-        }
-        Err(error) => {
-            for id in sig_ids.drain(..) {
-                signal_hook::low_level::unregister(id);
-            }
-            log::warn!("Unix signal watcher initialization task failed: {error}");
-            return None;
-        }
-    };
-    let handle = signals.handle();
-
-    let wait_flags = flags.clone();
-    let join = background.spawn_future(async move {
-        let mut signals = signals;
-        loop {
-            if let Some(signal) = wait_flags.pending() {
-                return signal;
-            }
-            match signals.next().await {
-                Some(_) => {}
-                None => future::pending::<()>().await,
-            }
-        }
-    });
-    let abort = join.abort_handle();
-    let fut = async move {
-        match join.await {
-            Ok(signal) => signal,
-            Err(_) => future::pending().await,
-        }
-    };
-    Some((
-        fut,
-        flags,
-        InterruptWatch {
-            sig_ids,
-            handle,
-            abort,
-        },
-    ))
-}
-
-#[cfg(unix)]
-fn emulate_default_and_exit(signal: InterruptSignal) -> ! {
-    let _ = signal_hook::low_level::emulate_default_handler(signal.as_raw());
-    signal_hook::low_level::abort();
+    /// The Unix interrupt handlers that let an in-progress run save a handoff
+    /// snapshot before the process dies could not be installed. Reported as a
+    /// Warp-side failure rather than silently running without them, since the
+    /// run would then be unable to honor a graceful shutdown request.
+    #[error("Failed to set up graceful shutdown handling: {0}")]
+    GracefulShutdownSetupFailed(String),
 }
 
 /// User-facing message for [`AgentDriverError::SandboxDeadlineReached`].
@@ -1582,7 +1398,20 @@ impl AgentDriver {
                 // When WARP_SANDBOX_DEADLINE is absent and no interrupt arrives,
                 // run_internal runs to completion as before (local and self-hosted runs
                 // are unaffected).
-                let select_result = {
+                #[cfg(unix)]
+                let (signal_rx, interrupt_watch) = match watch_interrupt_signals(&background).await
+                {
+                    Ok(watch) => watch,
+                    Err(error) => {
+                        let error =
+                            AgentDriverError::GracefulShutdownSetupFailed(error.to_string());
+                        if tx.send(Err(error)).is_err() {
+                            report_error!("Caller did not wait for agent driver to finish");
+                        }
+                        return;
+                    }
+                };
+                let (finished, observed_signal) = {
                     /// How far before the sandbox deadline to start the teardown sequence.
                     const SHUTDOWN_WARNING_WINDOW: Duration = Duration::from_secs(5 * 60);
 
@@ -1624,87 +1453,31 @@ impl AgentDriver {
                         .unwrap_or_else(|| Either::Right(future::pending::<()>()));
 
                     #[cfg(unix)]
-                    let (signal, interrupt_flags, interrupt_watch) =
-                        match watch_interrupt_signals(&background).await {
-                            Some((fut, flags, watch)) => {
-                                (Either::Left(fut), Some(flags), Some(watch))
-                            }
-                            None => (
-                                Either::Right(future::pending::<InterruptSignal>()),
-                                None,
-                                None,
-                            ),
-                        };
+                    let signal_fut = async move {
+                        match signal_rx.await {
+                            Ok(signal) => signal,
+                            // The watch only stops reporting once it is unregistered,
+                            // which happens after this race has already been decided.
+                            Err(Canceled) => future::pending().await,
+                        }
+                    };
+                    #[cfg(not(unix))]
+                    let signal_fut = future::pending::<InterruptSignal>();
+
                     let run = Self::run_internal(task, foreground.clone()).fuse();
                     let timer = timer_fut.fuse();
-                    #[cfg(unix)]
-                    let signal = signal.fuse();
-                    #[cfg(not(unix))]
-                    let signal = future::pending::<InterruptSignal>().fuse();
+                    let signal = signal_fut.fuse();
                     futures::pin_mut!(run, timer, signal);
 
-                    let (finished, observed_signal) = futures::select_biased! {
+                    futures::select_biased! {
                         s = signal => (None, Some(s)),
                         r = run => (Some(r), None),
                         _ = timer => (
                             Some(Err(AgentDriverError::SandboxDeadlineReached { on_free_plan })),
                             None,
                         ),
-                    };
-                    #[cfg(unix)]
-                    let observed_signal = interrupt_flags
-                        .as_ref()
-                        .and_then(InterruptFlags::pending)
-                        .or(observed_signal);
-
-                    let cause = match &observed_signal {
-                        Some(signal) => RunEndCause::Signal(*signal),
-                        None => match &finished {
-                            Some(Err(AgentDriverError::SandboxDeadlineReached { .. })) => {
-                                RunEndCause::SandboxDeadline
-                            }
-                            Some(_) => RunEndCause::Completed,
-                            None => RunEndCause::Completed,
-                        },
-                    };
-                    match cause {
-                        RunEndCause::SandboxDeadline => {
-                            log::info!(
-                                "Sandbox deadline approaching (WARP_SANDBOX_DEADLINE); \
-                                 aborting run_internal to allow recording finalization"
-                            );
-                        }
-                        RunEndCause::Signal(InterruptSignal::Term) => {
-                            log::warn!(
-                                "SIGTERM received; aborting run_internal to save a \
-                                 handoff snapshot before remaining teardown (limited \
-                                 grace period before SIGKILL)"
-                            );
-                        }
-                        RunEndCause::Signal(InterruptSignal::Int) => {
-                            log::warn!(
-                                "SIGINT received; aborting run_internal to save a \
-                                 handoff snapshot before restoring default terminate"
-                            );
-                        }
-                        RunEndCause::Completed => {}
                     }
-                    (finished, observed_signal, {
-                        #[cfg(unix)]
-                        {
-                            interrupt_watch
-                        }
-                        #[cfg(not(unix))]
-                        {
-                            ()
-                        }
-                    })
                 };
-
-                #[cfg(unix)]
-                let (finished, observed_signal, interrupt_watch) = select_result;
-                #[cfg(not(unix))]
-                let (finished, observed_signal, _) = select_result;
 
                 let cause = match observed_signal {
                     Some(signal) => RunEndCause::Signal(signal),
@@ -1715,15 +1488,39 @@ impl AgentDriver {
                         _ => RunEndCause::Completed,
                     },
                 };
+                match cause {
+                    RunEndCause::SandboxDeadline => {
+                        tracing::event!(
+                            tracing::Level::INFO,
+                            tags.cloud_agent = true,
+                            "sandbox deadline approaching"
+                        );
+                        log::info!(
+                            "Sandbox deadline approaching (WARP_SANDBOX_DEADLINE); aborting \
+                             run_internal to allow recording finalization"
+                        );
+                    }
+                    RunEndCause::Signal(InterruptSignal::Term) => {
+                        log::warn!(
+                            "SIGTERM received; aborting run_internal to save a handoff snapshot \
+                             before remaining teardown (limited grace period before SIGKILL)"
+                        );
+                    }
+                    RunEndCause::Signal(InterruptSignal::Int) => {
+                        log::warn!(
+                            "SIGINT received; aborting run_internal to save a handoff snapshot \
+                             before restoring default terminate"
+                        );
+                    }
+                    RunEndCause::Completed => {}
+                }
+
                 let snapshot_disabled = foreground
                     .spawn(|me, _| me.snapshot_disabled)
                     .await
                     .unwrap_or(true);
-                let snapshot_allowed = should_attempt_handoff_snapshot(
-                    FeatureFlag::OzHandoff.is_enabled(),
-                    task_id.is_some(),
-                    snapshot_disabled,
-                );
+                let snapshot_allowed =
+                    FeatureFlag::OzHandoff.is_enabled() && task_id.is_some() && !snapshot_disabled;
 
                 match cause {
                     RunEndCause::Signal(signal) => {
@@ -1740,9 +1537,7 @@ impl AgentDriver {
                     }
                     RunEndCause::Completed | RunEndCause::SandboxDeadline => {
                         #[cfg(unix)]
-                        if let Some(interrupt_watch) = interrupt_watch {
-                            interrupt_watch.unregister();
-                        }
+                        interrupt_watch.unregister();
                         Self::unregister_end_of_run_consumers(&foreground).await;
                         Self::save_run_artifacts(&foreground, snapshot_allowed).await;
                         if let Some(task_id) = task_id {
@@ -4500,16 +4295,16 @@ impl AgentDriver {
     }
 
     async fn unregister_end_of_run_consumers(foreground: &ModelSpawner<Self>) {
-        // Stop accepting CLI session status updates now that the run is done.
-        // Already accepted task updates remain queued until delivery finishes.
         let _ = foreground
-            .spawn(|me, ctx| me.unregister_cli_agent_task_sync(ctx))
-            .await;
-        // Unregister the driver consumer now that the run is done. The streamer
-        // will tear down the SSE if no other consumer remains and the conversation
-        // isn't a child.
-        let _ = foreground
-            .spawn(|me, ctx| me.unregister_streamer_consumer(ctx))
+            .spawn(|me, ctx| {
+                // Stop accepting CLI session status updates now that the run is done.
+                // Already accepted task updates remain queued until delivery finishes.
+                me.unregister_cli_agent_task_sync(ctx);
+                // Unregister the driver consumer now that the run is done. The streamer
+                // will tear down the SSE if no other consumer remains and the
+                // conversation isn't a child.
+                me.unregister_streamer_consumer(ctx);
+            })
             .await;
     }
 
@@ -4571,19 +4366,13 @@ impl AgentDriver {
         else {
             return;
         };
-        if !should_attempt_handoff_snapshot(
-            oz_handoff_enabled,
-            task_id.is_some(),
-            snapshot_disabled,
-        ) {
-            if oz_handoff_enabled && task_id.is_some() && snapshot_disabled {
-                log::info!("Skipping snapshot upload because --no-snapshot was specified");
-            }
-            return;
-        }
-        let Some(task_id) = task_id else {
+        let Some(task_id) = task_id.filter(|_| oz_handoff_enabled) else {
             return;
         };
+        if snapshot_disabled {
+            log::info!("Skipping snapshot upload because --no-snapshot was specified");
+            return;
+        }
 
         // An active coordinator replaces the legacy upload below. Budget must come from
         // `finalize_budget`: the coordinator's floor is `script_timeout + upload_timeout`,
