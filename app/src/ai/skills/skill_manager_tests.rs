@@ -895,7 +895,6 @@ fn get_skills_for_working_directory_respects_location() {
         app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
         app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
         let handle = app.add_singleton_model(SkillManager::new);
-        let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
 
         handle.update(&mut app, |manager, _| {
             manager.directory_skills = directory_skills;
@@ -1056,7 +1055,6 @@ fn feature_gated_bundled_skill_is_listed_only_when_enabled() {
         app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
         app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
         let handle = app.add_singleton_model(SkillManager::new);
-        let bundled_skills_guard = FeatureFlag::BundledSkills.override_enabled(true);
         let warp_control_cli = FeatureFlag::WarpControlCli.override_enabled(false);
 
         handle.update(&mut app, |manager, _| {
@@ -1094,7 +1092,6 @@ fn feature_gated_bundled_skill_is_listed_only_when_enabled() {
         assert!(enabled_names.contains("warpctrl"));
         assert!(enabled_names.contains("always"));
         drop(warp_control_cli_enabled);
-        drop(bundled_skills_guard);
     });
 }
 
@@ -1112,7 +1109,6 @@ fn tui_only_bundled_skill_is_listed_and_resolved_only_in_tui() {
             app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
             app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
             let handle = app.add_singleton_model(SkillManager::new);
-            let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
             let reference = SkillReference::BundledSkillId("tui-migrate-setup".to_owned());
 
             handle.update(&mut app, |manager, _| {
