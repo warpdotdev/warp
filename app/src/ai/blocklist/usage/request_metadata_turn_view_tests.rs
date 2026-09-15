@@ -60,6 +60,31 @@ fn format_dollars_never_rounds_a_real_charge_to_zero() {
     assert_eq!(format_dollars(150.0), "$1.50");
 }
 
+/// Every panel amount follows the display-unit setting; there is no separate Credits row.
+#[test]
+fn format_cost_follows_the_display_unit() {
+    assert_eq!(
+        format_cost(150.0, 0.5, UsageDisplayUnit::Dollars),
+        "$1.50"
+    );
+    assert_eq!(
+        format_cost(150.0, 0.5, UsageDisplayUnit::Credits),
+        "0.5 credits"
+    );
+    assert_eq!(
+        format_tokens_with_cost(1200, 150.0, 0.5, UsageDisplayUnit::Credits),
+        "1200 tokens  /  0.5 credits"
+    );
+}
+
+#[test]
+fn format_credits_amount_never_rounds_a_real_charge_to_zero() {
+    assert_eq!(format_credits_amount(0.0), "0 credits");
+    assert_eq!(format_credits_amount(0.03), "<0.1 credits");
+    assert_eq!(format_credits_amount(1.0), "1 credit");
+    assert_eq!(format_credits_amount(2.5), "2.5 credits");
+}
+
 #[test]
 fn format_tokens_and_searches_pluralize() {
     assert_eq!(format_tokens(1), "1 token");

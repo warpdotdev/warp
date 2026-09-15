@@ -61,9 +61,9 @@ pub struct RequestMetadataTurnView {
 
 impl RequestMetadataTurnView {
     pub fn new(data: TurnPanelData, ctx: &mut ViewContext<Self>) -> Self {
-        // The "Credits" rows' visibility depends on the Credits/Dollars usage-display-unit
-        // setting, so the panel must re-render when the user flips it — otherwise an
-        // already-open panel would show a stale section state until closed and reopened.
+        // Every amount is rendered in the Credits/Dollars usage-display-unit setting, so the
+        // panel must re-render when the user flips it — otherwise an already-open panel would
+        // show stale units until closed and reopened.
         ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
             if matches!(event, AISettingsChangedEvent::UsageDisplayUnit { .. }) {
                 ctx.notify();
@@ -171,7 +171,12 @@ impl RequestMetadataTurnView {
         .finish()
     }
 
-    fn model_row(&self, index: usize, appearance: &Appearance) -> Vec<LabelValueRow> {
+    fn model_row(
+        &self,
+        index: usize,
+        appearance: &Appearance,
+        usage_display_unit: UsageDisplayUnit,
+    ) -> Vec<LabelValueRow> {
         let charge = &self.summary.model_charges[index];
         let font_size = appearance.ui_font_size() + 1.;
         let theme = appearance.theme();
@@ -180,7 +185,12 @@ impl RequestMetadataTurnView {
         let expanded = row_state.expanded;
 
         let value = Text::new(
-            format_tokens_with_cost(charge.tokens(), charge.cost_in_cents()),
+            format_tokens_with_cost(
+                charge.tokens(),
+                charge.cost_in_cents(),
+                charge.cost_in_credits(),
+                usage_display_unit,
+            ),
             appearance.ui_font_family(),
             font_size,
         )
@@ -224,23 +234,39 @@ impl RequestMetadataTurnView {
         let mut rows = vec![(label, value)];
         if expanded {
             let breakdown_font_size = appearance.ui_font_size() - 1.;
-            let mut push = |label: &str, tokens: u32, cents: f32| {
+            let mut push = |label: &str, tokens: u32, cents: f32, credits: f32| {
                 rows.push((
                     render_indented_label_text(label, breakdown_font_size, appearance),
                     render_value_text(
-                        format_tokens_with_cost(u64::from(tokens), cents),
+                        format_tokens_with_cost(
+                            u64::from(tokens),
+                            cents,
+                            credits,
+                            usage_display_unit,
+                        ),
                         breakdown_font_size,
                         appearance,
                     ),
                 ));
             };
-            push("Input", charge.input_tokens, charge.input_cost_in_cents);
-            push("Output", charge.output_tokens, charge.output_cost_in_cents);
+            push(
+                "Input",
+                charge.input_tokens,
+                charge.input_cost_in_cents,
+                charge.input_cost_in_credits,
+            );
+            push(
+                "Output",
+                charge.output_tokens,
+                charge.output_cost_in_cents,
+                charge.output_cost_in_credits,
+            );
             if charge.cache_read_tokens > 0 {
                 push(
                     "Cache read",
                     charge.cache_read_tokens,
                     charge.cache_read_cost_in_cents,
+                    charge.cache_read_cost_in_credits,
                 );
             }
             if charge.cache_write_tokens > 0 {
@@ -248,6 +274,7 @@ impl RequestMetadataTurnView {
                     "Cache write",
                     charge.cache_write_tokens,
                     charge.cache_write_cost_in_cents,
+                    charge.cache_write_cost_in_credits,
                 );
             }
             if charge.web_search_count > 0 {
@@ -257,7 +284,11 @@ impl RequestMetadataTurnView {
                         format!(
                             "{}  /  {}",
                             format_web_searches(charge.web_search_count),
-                            format_dollars(charge.web_search_cost_in_cents)
+                            format_cost(
+                                charge.web_search_cost_in_cents,
+                                charge.web_search_cost_in_credits,
+                                usage_display_unit,
+                            )
                         ),
                         breakdown_font_size,
                         appearance,
@@ -268,40 +299,29 @@ impl RequestMetadataTurnView {
         rows
     }
 
-    /// The per-model rows, plus (in Credits mode) a trailing "Credits" row for the turn's
-    /// inference-only credit total.
     fn model_usage_rows(
         &self,
         appearance: &Appearance,
         usage_display_unit: UsageDisplayUnit,
     ) -> Vec<LabelValueRow> {
-        let mut rows: Vec<LabelValueRow> = (0..self.summary.model_charges.len())
-            .flat_map(|index| self.model_row(index, appearance))
-            .collect();
-        // A credits-only legacy turn already shows its credits total as the section's
-        // header value; a rows-level Credits row would repeat it.
-        if usage_display_unit == UsageDisplayUnit::Credits
-            && !matches!(self.legacy_charges, Some(LegacyCharges::CreditsOnly(_)))
-        {
-            rows.push((
-                render_label_text("Credits", appearance),
-                render_value_text(
-                    format_credits(self.summary.inference_cost_in_credits()),
-                    appearance.ui_font_size() + 2.,
-                    appearance,
-                ),
-            ));
-        }
-        rows
+        (0..self.summary.model_charges.len())
+            .flat_map(|index| self.model_row(index, appearance, usage_display_unit))
+            .collect()
     }
 
-    fn inference_usage_header_row(&self, appearance: &Appearance) -> LabelValueRow {
+    fn inference_usage_header_row(
+        &self,
+        appearance: &Appearance,
+        usage_display_unit: UsageDisplayUnit,
+    ) -> LabelValueRow {
         let header_font_size = appearance.overline_font_size() + 3.;
         let theme = appearance.theme();
         let value = Text::new(
             format_tokens_with_cost(
                 self.summary.total_tokens(),
                 self.summary.inference_cost_in_cents(),
+                self.summary.inference_cost_in_credits(),
+                usage_display_unit,
             ),
             appearance.ui_font_family(),
             header_font_size,
@@ -318,37 +338,27 @@ impl RequestMetadataTurnView {
         )
     }
 
-    /// The "PLATFORM USAGE" section: a header row with the dollar amount in the value column,
-    /// plus (in Credits mode, if any) a trailing "Credits" row for the platform-only credit
-    /// total. `None` when there was no platform charge, to avoid a noisy `$0.00` section.
+    /// The "PLATFORM USAGE" section: a header row with the platform charge in the value
+    /// column. `None` when there was no platform charge, to avoid a noisy zero section.
     fn platform_usage_rows(
         &self,
         appearance: &Appearance,
         usage_display_unit: UsageDisplayUnit,
     ) -> Option<Vec<LabelValueRow>> {
         let platform_cents = self.summary.platform_cost_in_cents();
-        if platform_cents <= 0.0 {
+        let platform_credits = self.summary.platform_cost_in_credits();
+        if platform_cents <= 0.0 && platform_credits <= 0.0 {
             return None;
         }
         let header_font_size = appearance.overline_font_size() + 3.;
-        let mut rows = vec![(
+        Some(vec![(
             Self::render_section_header("PLATFORM USAGE", appearance),
-            render_value_text(format_dollars(platform_cents), header_font_size, appearance),
-        )];
-        if usage_display_unit == UsageDisplayUnit::Credits {
-            let credits = self.summary.platform_cost_in_credits();
-            if credits > 0.0 {
-                rows.push((
-                    render_label_text("Credits", appearance),
-                    render_value_text(
-                        format_credits(credits),
-                        appearance.ui_font_size() + 2.,
-                        appearance,
-                    ),
-                ));
-            }
-        }
-        Some(rows)
+            render_value_text(
+                format_cost(platform_cents, platform_credits, usage_display_unit),
+                header_font_size,
+                appearance,
+            ),
+        )])
     }
 
     fn context_window_usage_row(&self, appearance: &Appearance) -> Option<LabelValueRow> {
@@ -533,7 +543,7 @@ impl RequestMetadataTurnView {
             }
             _ => {
                 let (inference_label, inference_value) =
-                    self.inference_usage_header_row(appearance);
+                    self.inference_usage_header_row(appearance, usage_display_unit);
                 push_row(inference_label, inference_value, 8.);
                 push_section_rows(
                     self.model_usage_rows(appearance, usage_display_unit),
@@ -723,12 +733,36 @@ pub(crate) fn format_tokens(tokens: u64) -> String {
     format!("{tokens} token{}", if tokens == 1 { "" } else { "s" })
 }
 
-fn format_tokens_with_cost(tokens: u64, cost_in_cents: f32) -> String {
+fn format_tokens_with_cost(
+    tokens: u64,
+    cost_in_cents: f32,
+    cost_in_credits: f32,
+    usage_display_unit: UsageDisplayUnit,
+) -> String {
     format!(
         "{}  /  {}",
         format_tokens(tokens),
-        format_dollars(cost_in_cents)
+        format_cost(cost_in_cents, cost_in_credits, usage_display_unit)
     )
+}
+
+/// Formats a charge in the user's display unit.
+fn format_cost(cost_in_cents: f32, cost_in_credits: f32, usage_display_unit: UsageDisplayUnit) -> String {
+    match usage_display_unit {
+        UsageDisplayUnit::Dollars => format_dollars(cost_in_cents),
+        UsageDisplayUnit::Credits => format_credits_amount(cost_in_credits),
+    }
+}
+
+/// Formats a credit amount. A non-zero amount that `format_credits` would round to `0 credits`
+/// is shown as `<0.1 credits`, since rounding it to zero would misleadingly suggest no cost
+/// was incurred.
+fn format_credits_amount(credits: f32) -> String {
+    if credits > 0.0 && credits < 0.1 {
+        "<0.1 credits".to_string()
+    } else {
+        format_credits(credits)
+    }
 }
 
 pub(crate) fn format_web_searches(count: u32) -> String {
