@@ -30,6 +30,10 @@ use crate::ai::ambient_agents::{
 };
 use crate::ai::blocklist::ResponseStreamId;
 use crate::ai::blocklist::controller::RequestInput;
+use crate::ai::blocklist::orchestration_topology::{
+    OrchestrationParticipantKind, ResolvedOrchestrationParticipant,
+    child_conversations_in_pill_order, resolve_orchestration_participant,
+};
 use crate::ai::llms::LLMId;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
@@ -1007,13 +1011,53 @@ fn test_initialize_historical_conversations_skips_unrestorable_and_unlisted_summ
     });
 }
 
+fn child_conversation_data(
+    parent_id: AIConversationId,
+    parent_run_id: &str,
+    child_run_id: &str,
+    agent_name: &str,
+) -> AgentConversationData {
+    AgentConversationData {
+        server_conversation_token: Some("child-token".to_string()),
+        conversation_usage_metadata: None,
+        reverted_action_ids: None,
+        forked_from_server_conversation_token: None,
+        artifacts_json: None,
+        parent_agent_id: Some(parent_run_id.to_string()),
+        agent_name: Some(agent_name.to_string()),
+        orchestration_harness_type: None,
+        parent_conversation_id: Some(parent_id.to_string()),
+        is_remote_child: false,
+        root_task_is_optimistic: None,
+        run_id: Some(child_run_id.to_string()),
+        autoexecute_override: None,
+        last_event_sequence: None,
+        pinned: false,
+    }
+}
+
+fn parent_conversation_data(parent_run_id: &str) -> AgentConversationData {
+    AgentConversationData {
+        server_conversation_token: Some("parent-token".to_string()),
+        conversation_usage_metadata: None,
+        reverted_action_ids: None,
+        forked_from_server_conversation_token: None,
+        artifacts_json: None,
+        parent_agent_id: None,
+        agent_name: None,
+        orchestration_harness_type: None,
+        parent_conversation_id: None,
+        is_remote_child: false,
+        root_task_is_optimistic: None,
+        run_id: Some(parent_run_id.to_string()),
+        autoexecute_override: None,
+        last_event_sequence: None,
+        pinned: false,
+    }
+}
+
 #[test]
-fn test_initialize_historical_conversations_eagerly_hydrates_orchestration_children() {
-    // Fix C: orchestration children should be inserted into `conversations_by_id`
-    // eagerly during `initialize_historical_conversations` so the pill bar and
-    // orchestration transcript name resolution can find them before the parent's
-    // hidden child pane materializes lazily. Non-orchestration historical rows
-    // must stay on the lazy path.
+fn test_initialize_historical_conversations_indexes_child_names_without_bodies() {
     App::test((), |app| async move {
         let parent_id = AIConversationId::new();
         let child_id = AIConversationId::new();
@@ -1024,46 +1068,13 @@ fn test_initialize_historical_conversations_eagerly_hydrates_orchestration_child
         let conversations = vec![
             persisted_agent_conversation(
                 child_id,
-                AgentConversationData {
-                    server_conversation_token: Some("child-token".to_string()),
-                    conversation_usage_metadata: None,
-                    reverted_action_ids: None,
-                    forked_from_server_conversation_token: None,
-                    artifacts_json: None,
-                    parent_agent_id: Some(parent_run_id.clone()),
-                    agent_name: Some("Agent 1".to_string()),
-                    orchestration_harness_type: None,
-                    parent_conversation_id: Some(parent_id.to_string()),
-                    is_remote_child: false,
-                    root_task_is_optimistic: None,
-                    run_id: Some(child_run_id.clone()),
-                    autoexecute_override: None,
-                    last_event_sequence: None,
-                    pinned: false,
-                },
+                child_conversation_data(parent_id, &parent_run_id, &child_run_id, "Agent 1"),
                 now,
-                // Child needs at least one root task so `AIConversation::new_restored` succeeds.
-                Some("Child query"),
+                None,
             ),
             persisted_agent_conversation(
                 parent_id,
-                AgentConversationData {
-                    server_conversation_token: Some("parent-token".to_string()),
-                    conversation_usage_metadata: None,
-                    reverted_action_ids: None,
-                    forked_from_server_conversation_token: None,
-                    artifacts_json: None,
-                    parent_agent_id: None,
-                    agent_name: None,
-                    orchestration_harness_type: None,
-                    parent_conversation_id: None,
-                    is_remote_child: false,
-                    root_task_is_optimistic: None,
-                    run_id: Some(parent_run_id.clone()),
-                    autoexecute_override: None,
-                    last_event_sequence: None,
-                    pinned: false,
-                },
+                parent_conversation_data(&parent_run_id),
                 now - chrono::Duration::seconds(1),
                 Some("Parent query"),
             ),
@@ -1073,48 +1084,269 @@ fn test_initialize_historical_conversations_eagerly_hydrates_orchestration_child
             .add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &conversations));
 
         history_model.read(&app, |model, _| {
-            // Child is hydrated into conversations_by_id eagerly so the pill
-            // bar / transcript name resolution can find it.
             assert!(
-                model.conversation(&child_id).is_some(),
-                "Fix C: orchestration child should be eagerly hydrated into conversations_by_id",
+                model.conversation(&child_id).is_none(),
+                "orchestration child task bodies must stay lazy at startup",
             );
-            // children_by_parent still gets populated as before.
             assert_eq!(
-                model.child_conversation_ids_of(&parent_id),
-                &[child_id],
-                "orchestration children should still be indexed in children_by_parent",
+                model.agent_name_for_conversation(&child_id),
+                Some("Agent 1"),
             );
-            // run_id index seeded for the child so name resolution succeeds.
+            assert_eq!(
+                resolve_orchestration_participant(model, &child_run_id, Some(&parent_run_id)),
+                ResolvedOrchestrationParticipant {
+                    kind: OrchestrationParticipantKind::Agent {
+                        name: "Agent 1".to_string(),
+                    },
+                    conversation_id: Some(child_id),
+                },
+            );
+            assert_eq!(
+                child_conversations_in_pill_order(model, parent_id)
+                    .into_iter()
+                    .map(|descendant| descendant.conversation_id)
+                    .collect::<Vec<_>>(),
+                vec![child_id],
+            );
+            assert_eq!(model.child_conversation_ids_of(&parent_id), &[child_id]);
             assert_eq!(
                 model.conversation_id_for_agent_id(&child_run_id),
                 Some(child_id),
-                "child run_id should be indexed in agent_id_to_conversation_id",
             );
-            // Parent run_id index is also seeded (matches existing behavior).
             assert_eq!(
                 model.conversation_id_for_agent_id(&parent_run_id),
                 Some(parent_id),
-                "parent run_id should still be indexed in agent_id_to_conversation_id",
             );
-            // Parent must NOT be in conversations_by_id yet; it remains on the
-            // existing lazy path via `restore_conversations`.
+            assert!(model.conversation(&parent_id).is_none());
+            assert!(model.get_conversation_metadata(&parent_id).is_some());
+            assert!(model.get_conversation_metadata(&child_id).is_none());
+        });
+    });
+}
+
+#[test]
+fn test_initialize_historical_conversations_does_not_retain_child_task_payloads() {
+    App::test((), |app| async move {
+        let parent_id = AIConversationId::new();
+        let child_id = AIConversationId::new();
+        let parent_run_id = Uuid::new_v4().to_string();
+        let child_run_id = Uuid::new_v4().to_string();
+        let now = Utc::now().naive_utc();
+        let huge_query = "x".repeat(64 * 1024);
+
+        let conversations = vec![
+            persisted_agent_conversation(
+                child_id,
+                child_conversation_data(parent_id, &parent_run_id, &child_run_id, "Researcher"),
+                now,
+                Some(&huge_query),
+            ),
+            persisted_agent_conversation(
+                parent_id,
+                parent_conversation_data(&parent_run_id),
+                now - chrono::Duration::seconds(1),
+                Some("Parent query"),
+            ),
+        ];
+
+        let history_model = app
+            .add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &conversations));
+
+        history_model.read(&app, |model, _| {
             assert!(
-                model.conversation(&parent_id).is_none(),
-                "Fix C: parent conversation should NOT be eagerly loaded into conversations_by_id",
+                model.conversation(&child_id).is_none(),
+                "startup must not decode or retain child task payloads",
             );
-            // Parent metadata is still recorded in all_conversations_metadata.
-            assert!(
-                model.get_conversation_metadata(&parent_id).is_some(),
-                "parent metadata should be recorded in all_conversations_metadata",
-            );
-            // Child metadata must NOT be recorded in all_conversations_metadata
-            // (orchestration children are managed by their parent and excluded from navigation).
-            assert!(
-                model.get_conversation_metadata(&child_id).is_none(),
-                "child metadata should NOT be recorded in all_conversations_metadata",
+            assert_eq!(
+                model.agent_name_for_conversation(&child_id),
+                Some("Researcher"),
             );
         });
+    });
+}
+
+#[test]
+fn overlay_only_child_pin_toggle_persists_without_loading_task_body() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(4);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let parent_id = AIConversationId::new();
+        let child_id = AIConversationId::new();
+        let parent_run_id = Uuid::new_v4().to_string();
+        let child_run_id = Uuid::new_v4().to_string();
+        let now = Utc::now().naive_utc();
+        let conversations = vec![
+            persisted_agent_conversation(
+                child_id,
+                child_conversation_data(parent_id, &parent_run_id, &child_run_id, "Agent 1"),
+                now,
+                None,
+            ),
+            persisted_agent_conversation(
+                parent_id,
+                parent_conversation_data(&parent_run_id),
+                now - chrono::Duration::seconds(1),
+                Some("Parent query"),
+            ),
+        ];
+        let history_model = app
+            .add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &conversations));
+
+        history_model.update(&mut app, |model, ctx| {
+            assert!(model.conversation(&child_id).is_none());
+            assert!(!model.is_pinned_conversation(&child_id));
+            model.set_conversation_pinned(child_id, true, ctx);
+        });
+
+        history_model.read(&app, |model, _| {
+            assert!(
+                model.conversation(&child_id).is_none(),
+                "pinning an overlay child must not load its task body",
+            );
+            assert!(model.is_pinned_conversation(&child_id));
+        });
+
+        let event = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("expected UpdateAgentConversationData after overlay pin");
+        let pinned_data = match event {
+            ModelEvent::UpdateAgentConversationData {
+                conversation_id: persisted_id,
+                conversation_data,
+            } => {
+                assert_eq!(persisted_id, child_id.to_string());
+                assert!(conversation_data.pinned);
+                conversation_data
+            }
+            other => panic!("expected UpdateAgentConversationData, got {other:?}"),
+        };
+
+        let restarted = vec![
+            persisted_agent_conversation(child_id, pinned_data, now, None),
+            persisted_agent_conversation(
+                parent_id,
+                parent_conversation_data(&parent_run_id),
+                now - chrono::Duration::seconds(1),
+                Some("Parent query"),
+            ),
+        ];
+        let restarted_model = BlocklistAIHistoryModel::new(vec![], vec![], &restarted);
+        assert!(restarted_model.conversation(&child_id).is_none());
+        assert!(
+            restarted_model.is_pinned_conversation(&child_id),
+            "overlay pin must survive history re-init from persisted conversation_data",
+        );
+        assert_eq!(
+            child_conversations_in_pill_order(&restarted_model, parent_id)
+                .into_iter()
+                .map(|descendant| descendant.conversation_id)
+                .collect::<Vec<_>>(),
+            vec![child_id],
+        );
+    });
+}
+
+#[test]
+fn overlay_pin_then_hydrate_before_writer_then_unpin_restarts_unpinned() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(8);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let parent_id = AIConversationId::new();
+        let child_id = AIConversationId::new();
+        let parent_run_id = Uuid::new_v4().to_string();
+        let child_run_id = Uuid::new_v4().to_string();
+        let now = Utc::now().naive_utc();
+        let unpinned_data =
+            child_conversation_data(parent_id, &parent_run_id, &child_run_id, "Agent 1");
+        let conversations = vec![
+            persisted_agent_conversation(child_id, unpinned_data.clone(), now, None),
+            persisted_agent_conversation(
+                parent_id,
+                parent_conversation_data(&parent_run_id),
+                now - chrono::Duration::seconds(1),
+                Some("Parent query"),
+            ),
+        ];
+        let history_model = app
+            .add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &conversations));
+        let terminal_view_id = EntityId::new();
+        let stale_snapshot = AIConversation::new_restored(
+            child_id,
+            vec![create_api_task(
+                &format!("task-{child_id}"),
+                vec![create_user_query_message(
+                    "message-1",
+                    &format!("task-{child_id}"),
+                    "request-1",
+                    "Child query",
+                )],
+            )],
+            Some(unpinned_data.clone()),
+        )
+        .expect("stale pre-pin snapshot should restore");
+
+        history_model.update(&mut app, |model, ctx| {
+            model.set_conversation_pinned(child_id, true, ctx);
+            model.restore_conversations(terminal_view_id, vec![stale_snapshot], ctx);
+            assert!(
+                model.conversation(&child_id).is_some_and(|c| c.is_pinned()),
+                "hydration must take overlay pin over the stale DB snapshot",
+            );
+            model.set_conversation_pinned(child_id, false, ctx);
+            assert!(!model.is_pinned_conversation(&child_id));
+        });
+
+        let mut events = Vec::new();
+        while let Ok(event) = receiver.recv_timeout(Duration::from_millis(200)) {
+            events.push(event);
+        }
+        let mut folded = unpinned_data;
+        for event in events {
+            match event {
+                ModelEvent::UpdateAgentConversationData {
+                    conversation_id: persisted_id,
+                    conversation_data,
+                } if persisted_id == child_id.to_string() => {
+                    folded = conversation_data;
+                }
+                ModelEvent::UpdateMultiAgentConversation {
+                    conversation_id: persisted_id,
+                    conversation_data,
+                    ..
+                } if persisted_id == child_id.to_string() => {
+                    folded = conversation_data;
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            !folded.pinned,
+            "ordered persistence must end unpinned after hydrate-then-unpin",
+        );
+
+        let restarted = vec![
+            persisted_agent_conversation(child_id, folded, now, None),
+            persisted_agent_conversation(
+                parent_id,
+                parent_conversation_data(&parent_run_id),
+                now - chrono::Duration::seconds(1),
+                Some("Parent query"),
+            ),
+        ];
+        let restarted_model = BlocklistAIHistoryModel::new(vec![], vec![], &restarted);
+        assert!(restarted_model.conversation(&child_id).is_none());
+        assert!(
+            !restarted_model.is_pinned_conversation(&child_id),
+            "restart from ordered writes must not resurrect the overlay pin",
+        );
     });
 }
 

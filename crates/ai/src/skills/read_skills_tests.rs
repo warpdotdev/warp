@@ -55,9 +55,8 @@ This is the second test skill.
         LocalOrRemotePath::Local(skill1_dir.join("SKILL.md"))
     );
     assert_eq!(skill1.description, "First test skill");
-    assert!(skill1.content.contains("# Test Skill 1"));
-    assert!(skill1.content.contains("---"));
-    assert!(skill1.content.contains("name: test-skill-1"));
+    assert!(skill1.content.is_empty());
+    assert!(skill1.content_hash.is_some());
     assert_eq!(skill1.line_range, Some(5..8)); // Front matter is lines 1-4, markdown starts at line 5
 
     let skill2 = skills.iter().find(|s| s.name == "test-skill-2").unwrap();
@@ -66,9 +65,8 @@ This is the second test skill.
         LocalOrRemotePath::Local(skill2_dir.join("SKILL.md"))
     );
     assert_eq!(skill2.description, "Second test skill");
-    assert!(skill2.content.contains("# Test Skill 2"));
-    assert!(skill2.content.contains("---"));
-    assert!(skill2.content.contains("name: test-skill-2"));
+    assert!(skill2.content.is_empty());
+    assert!(skill2.content_hash.is_some());
     assert_eq!(skill2.line_range, Some(5..8)); // Front matter is lines 1-4, markdown starts at line 5
 }
 
@@ -127,7 +125,7 @@ No front matter here.
 
     let valid_skill = skills.iter().find(|s| s.name == "valid-skill").unwrap();
     assert_eq!(valid_skill.description, "Valid skill");
-    assert!(valid_skill.content.contains("---"));
+    assert!(valid_skill.content.is_empty());
     assert_eq!(valid_skill.line_range, Some(5..7));
 
     let fallback_name_skill = skills.iter().find(|s| s.name == "invalid-skill").unwrap();
@@ -135,7 +133,7 @@ No front matter here.
         fallback_name_skill.description,
         "Invalid skill missing name"
     );
-    assert!(fallback_name_skill.content.contains("# Invalid Skill"));
+    assert!(fallback_name_skill.content.is_empty());
 
     let no_fm_skill = skills
         .iter()

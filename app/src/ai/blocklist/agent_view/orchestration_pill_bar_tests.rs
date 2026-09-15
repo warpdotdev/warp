@@ -123,12 +123,9 @@ fn pill_bar_scrollable_finite_under_capped_drag_preview() {
 /// The data layer that `OrchestrationPillBar::pill_specs` reads must
 /// surface restored orchestration children before any pane has been created.
 ///
-/// `pill_specs` (defined privately on `OrchestrationPillBar`) walks
-/// `descendant_conversation_ids_in_spawn_order(history, orchestrator_id)` and
-/// then `filter_map(|id| history.conversation(&id))`. The
-/// `history.conversation(&id)` lookup must return `Some` for restored
-/// children even before the parent's hidden pane materializes, or the pill
-/// bar renders nothing. This test asserts both layers work after
+/// `pill_specs` walks `child_conversations_in_pill_order` and resolves names
+/// via `agent_name_for_conversation`, which uses the startup overlay when the
+/// child's task body has not been loaded. This test asserts that path after
 /// `BlocklistAIHistoryModel::new` runs, before any `restore_conversations` /
 /// pane materialization.
 #[test]
@@ -138,7 +135,9 @@ fn pill_bar_data_layer_finds_restored_children_before_pane_creation() {
     use warpui::App;
 
     use crate::ai::blocklist::BlocklistAIHistoryModel;
-    use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
+    use crate::ai::blocklist::orchestration_topology::{
+        child_conversations_in_pill_order, descendant_conversation_ids_in_spawn_order,
+    };
     use crate::persistence::model::{
         AgentConversation, AgentConversationData, AgentConversationRecord,
     };
@@ -269,25 +268,118 @@ fn pill_bar_data_layer_finds_restored_children_before_pane_creation() {
                 "orchestration topology must surface restored children before any pane is created",
             );
 
-            // pill_specs then collects pill specs via
-            // `descendants.into_iter().filter_map(|id| history.conversation(&id))`.
-            // The child must be hydrated eagerly so this lookup succeeds and
-            // the pill bar renders; otherwise the filter_map would drop the
-            // child (because `conversation(&child_id)` returned `None`) and
-            // `pill_specs` would return `None` from the
-            // `children.is_empty()` early-exit.
-            let resolved_children: Vec<&AIConversation> = descendants
-                .iter()
-                .filter_map(|id| model.conversation(id))
-                .collect();
-            assert_eq!(
-                resolved_children.len(),
-                1,
-                "restored child conversation must be available in conversations_by_id so \
-                 OrchestrationPillBar::pill_specs renders a child pill",
+            assert!(
+                model.conversation(&child_id).is_none(),
+                "startup must not retain child task bodies just to render the pill bar",
             );
-            assert_eq!(resolved_children[0].id(), child_id);
-            assert_eq!(resolved_children[0].agent_name(), Some("Agent 1"));
+            assert_eq!(
+                child_conversations_in_pill_order(model, parent_id)
+                    .into_iter()
+                    .map(|descendant| descendant.conversation_id)
+                    .collect::<Vec<_>>(),
+                vec![child_id],
+                "pill order must include overlay-only children before pane materialization",
+            );
+            assert_eq!(
+                model.agent_name_for_conversation(&child_id),
+                Some("Agent 1"),
+            );
+        });
+    });
+}
+
+#[test]
+fn overlay_only_child_overflow_menu_includes_view_in_oz() {
+    use chrono::Utc;
+    use uuid::Uuid;
+    use warpui::App;
+
+    use crate::ai::blocklist::BlocklistAIHistoryModel;
+    use crate::persistence::model::{
+        AgentConversation, AgentConversationData, AgentConversationRecord,
+    };
+
+    App::test((), |app| async move {
+        let parent_id = AIConversationId::new();
+        let child_id = AIConversationId::new();
+        let parent_run_id = Uuid::new_v4().to_string();
+        let child_run_id = Uuid::new_v4().to_string();
+        let now = Utc::now().naive_utc();
+        let conversations = vec![
+            AgentConversation {
+                conversation: AgentConversationRecord {
+                    id: 1,
+                    conversation_id: child_id.to_string(),
+                    conversation_data: serde_json::to_string(&AgentConversationData {
+                        server_conversation_token: Some("child-token".to_string()),
+                        conversation_usage_metadata: None,
+                        reverted_action_ids: None,
+                        forked_from_server_conversation_token: None,
+                        artifacts_json: None,
+                        parent_agent_id: Some(parent_run_id.clone()),
+                        agent_name: Some("Agent 1".to_string()),
+                        orchestration_harness_type: None,
+                        parent_conversation_id: Some(parent_id.to_string()),
+                        is_remote_child: false,
+                        root_task_is_optimistic: None,
+                        run_id: Some(child_run_id.clone()),
+                        autoexecute_override: None,
+                        last_event_sequence: None,
+                        pinned: false,
+                    })
+                    .expect("child conversation data should serialize"),
+                    last_modified_at: now,
+                    summary: None,
+                },
+                tasks: vec![],
+            },
+            AgentConversation {
+                conversation: AgentConversationRecord {
+                    id: 2,
+                    conversation_id: parent_id.to_string(),
+                    conversation_data: serde_json::to_string(&AgentConversationData {
+                        server_conversation_token: Some("parent-token".to_string()),
+                        conversation_usage_metadata: None,
+                        reverted_action_ids: None,
+                        forked_from_server_conversation_token: None,
+                        artifacts_json: None,
+                        parent_agent_id: None,
+                        agent_name: None,
+                        orchestration_harness_type: None,
+                        parent_conversation_id: None,
+                        is_remote_child: false,
+                        root_task_is_optimistic: None,
+                        run_id: Some(parent_run_id),
+                        autoexecute_override: None,
+                        last_event_sequence: None,
+                        pinned: false,
+                    })
+                    .expect("parent conversation data should serialize"),
+                    last_modified_at: now - chrono::Duration::seconds(1),
+                    summary: None,
+                },
+                tasks: vec![],
+            },
+        ];
+
+        let history_model = app
+            .add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &conversations));
+
+        history_model.read(&app, |model, _| {
+            assert!(model.conversation(&child_id).is_none());
+            assert_eq!(
+                model.run_id_for_conversation(&child_id),
+                Some(child_run_id.clone())
+            );
+        });
+
+        app.read(|ctx| {
+            let url = OrchestrationPillBar::oz_run_url_for_conversation(child_id, ctx)
+                .expect("overlay-only children with a run_id should expose View in Oz");
+            assert!(
+                url.ends_with(&format!("/runs/{child_run_id}")),
+                "View in Oz URL should use the overlay run_id, got {url}",
+            );
         });
     });
 }

@@ -13,6 +13,7 @@ use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_cli::agent::Harness;
+use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api::client_action::{Action, StartNewConversation};
 use warp_multi_agent_api::message::tool_call::Tool;
@@ -46,6 +47,7 @@ use crate::persistence::model::{AgentConversation, AgentConversationData};
 #[cfg(feature = "local_fs")]
 use crate::persistence::{database_file_path_for_current_scope, establish_ro_connection};
 use crate::server::server_api::ServerApiProvider;
+use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::view::blocklist_filter;
 use crate::ui_components::icons::Icon;
@@ -246,6 +248,16 @@ pub(crate) struct PromptHistoryEntry {
     pub(crate) start_ts: DateTime<Local>,
 }
 
+/// Overlay for an orchestration child whose task body has not been loaded.
+///
+/// Startup indexes children from `agent_conversations` without decoding
+/// `agent_tasks`. Pill-bar labels and transcript name resolution read these
+/// fields until the child's pane materializes the full conversation.
+#[derive(Debug, Clone)]
+struct OrchestrationChildIdentity {
+    conversation_data: AgentConversationData,
+}
+
 /// Responsible for managing the history of user and AI exchanges.
 #[derive(Default)]
 pub struct BlocklistAIHistoryModel {
@@ -321,6 +333,10 @@ pub struct BlocklistAIHistoryModel {
     /// Populated at startup from the local DB and kept in sync at runtime
     /// via `set_parent_for_conversation` and `restore_conversations`.
     children_by_parent: HashMap<AIConversationId, Vec<AIConversationId>>,
+
+    /// Display overlay for orchestration children indexed at startup before
+    /// their task bodies are loaded into `conversations_by_id`.
+    orchestration_child_identities: HashMap<AIConversationId, OrchestrationChildIdentity>,
 
     /// Conversations that have had at least one AIBlock receive imported review comments.
     conversations_with_imported_comments: HashSet<AIConversationId>,
@@ -540,6 +556,70 @@ impl BlocklistAIHistoryModel {
         if !children.contains(&child_id) {
             children.push(child_id);
         }
+    }
+
+    fn index_orchestration_child_identity(
+        &mut self,
+        child_id: AIConversationId,
+        conversation_data: &AgentConversationData,
+    ) {
+        self.orchestration_child_identities.insert(
+            child_id,
+            OrchestrationChildIdentity {
+                conversation_data: conversation_data.clone(),
+            },
+        );
+    }
+
+    /// Display name for a conversation, including orchestration children that
+    /// have been indexed but whose task body has not been loaded yet.
+    pub fn agent_name_for_conversation(&self, conversation_id: &AIConversationId) -> Option<&str> {
+        self.conversations_by_id
+            .get(conversation_id)
+            .and_then(AIConversation::agent_name)
+            .or_else(|| {
+                self.orchestration_child_identities
+                    .get(conversation_id)
+                    .and_then(|identity| identity.conversation_data.agent_name.as_deref())
+            })
+    }
+
+    pub(crate) fn is_remote_child_conversation(&self, conversation_id: &AIConversationId) -> bool {
+        self.conversations_by_id
+            .get(conversation_id)
+            .map(AIConversation::is_remote_child)
+            .or_else(|| {
+                self.orchestration_child_identities
+                    .get(conversation_id)
+                    .map(|identity| identity.conversation_data.is_remote_child)
+            })
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn is_pinned_conversation(&self, conversation_id: &AIConversationId) -> bool {
+        self.conversations_by_id
+            .get(conversation_id)
+            .map(AIConversation::is_pinned)
+            .or_else(|| {
+                self.orchestration_child_identities
+                    .get(conversation_id)
+                    .map(|identity| identity.conversation_data.pinned)
+            })
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn run_id_for_conversation(
+        &self,
+        conversation_id: &AIConversationId,
+    ) -> Option<String> {
+        self.conversations_by_id
+            .get(conversation_id)
+            .and_then(AIConversation::run_id)
+            .or_else(|| {
+                self.orchestration_child_identities
+                    .get(conversation_id)
+                    .and_then(|identity| identity.conversation_data.run_id.clone())
+            })
     }
 
     /// Creates a new child agent conversation.
@@ -922,22 +1002,94 @@ impl BlocklistAIHistoryModel {
         pinned: bool,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
+        if self.conversations_by_id.contains_key(&conversation_id) {
+            self.apply_overlay_identity_on_materialize(conversation_id, ctx);
+            let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
+                return;
+            };
+            if conversation.is_pinned() == pinned {
+                return;
+            }
+            conversation.set_pinned(pinned);
+            conversation.write_updated_conversation_state(ctx);
+        } else if let Some(identity) = self
+            .orchestration_child_identities
+            .get_mut(&conversation_id)
+        {
+            if identity.conversation_data.pinned == pinned {
+                return;
+            }
+            identity.conversation_data.pinned = pinned;
+            let conversation_data = identity.conversation_data.clone();
+            Self::persist_overlay_conversation_data(conversation_id, conversation_data, ctx);
+        } else {
             log::warn!(
                 "set_conversation_pinned called for conversation {conversation_id:?} that is \
                  not loaded; pin state change to {pinned} will not be persisted."
             );
             return;
-        };
-        if conversation.is_pinned() == pinned {
-            return;
         }
-        conversation.set_pinned(pinned);
-        conversation.write_updated_conversation_state(ctx);
         ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationMetadata {
             terminal_surface_id: self.terminal_surface_id_for_conversation(&conversation_id),
             conversation_id,
         });
+    }
+
+    fn persist_overlay_conversation_data(
+        conversation_id: AIConversationId,
+        conversation_data: AgentConversationData,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if conversation_data.is_remote_child && FeatureFlag::OrchestrationUnifiedStack.is_enabled()
+        {
+            return;
+        }
+        if !*GeneralSettings::as_ref(ctx).restore_session
+            || !AppExecutionMode::as_ref(ctx).can_save_session()
+        {
+            return;
+        }
+        let Some(sqlite_sender) = GlobalResourceHandlesProvider::as_ref(ctx)
+            .get()
+            .model_event_sender
+            .clone()
+        else {
+            return;
+        };
+        let event = ModelEvent::UpdateAgentConversationData {
+            conversation_id: conversation_id.to_string(),
+            conversation_data,
+        };
+        ctx.spawn(
+            async move {
+                if let Err(e) = sqlite_sender.send(event) {
+                    log::warn!(
+                        "Failed to send overlay conversation data to sqlite writer thread: {e:?}"
+                    );
+                }
+            },
+            |_, _, _| {},
+        );
+    }
+
+    fn apply_overlay_identity_on_materialize(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(identity) = self.orchestration_child_identities.remove(&conversation_id) else {
+            return;
+        };
+        let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
+            self.orchestration_child_identities
+                .insert(conversation_id, identity);
+            return;
+        };
+        if conversation.is_pinned() == identity.conversation_data.pinned {
+            return;
+        }
+        conversation.set_pinned(identity.conversation_data.pinned);
+        conversation.write_updated_conversation_state(ctx);
     }
 
     /// Sets a live conversation's server token, updates the reverse index, and
@@ -1255,6 +1407,7 @@ impl BlocklistAIHistoryModel {
             let new_status = conversation.status().clone();
             self.conversations_by_id
                 .insert(conversation_id, conversation);
+            self.apply_overlay_identity_on_materialize(conversation_id, ctx);
 
             // Emit UpdatedConversationStatus for restored conversations so that
             // the workspace can set tab indicators appropriately
@@ -2977,6 +3130,7 @@ impl BlocklistAIHistoryModel {
         self.agent_id_to_conversation_id.clear();
         self.server_token_to_conversation_id.clear();
         self.children_by_parent.clear();
+        self.orchestration_child_identities.clear();
     }
 }
 

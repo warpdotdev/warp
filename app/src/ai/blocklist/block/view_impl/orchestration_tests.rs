@@ -102,11 +102,8 @@ fn participant_for_agent_id_uses_pill_style_child_agent_avatar() {
 }
 
 /// A restored child run id (persisted via run_id in the SQLite
-/// `agent_conversations` row) must resolve to the child's display name
-/// after `BlocklistAIHistoryModel::new` eagerly hydrates the orchestration
-/// child into `conversations_by_id`. Otherwise this falls back to
-/// "Unknown agent" because the child conversation is not loaded into memory
-/// until its hidden pane materializes lazily.
+/// `agent_conversations` row) must resolve to the child's display name from
+/// the startup overlay, even before the child's task body is loaded.
 #[test]
 fn participant_for_restored_child_run_id_resolves_to_agent_name() {
     use chrono::Utc;
@@ -236,10 +233,6 @@ fn participant_for_restored_child_run_id_resolves_to_agent_name() {
 
         app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[child, parent]));
 
-        // Before Fix C the child would not be loaded into
-        // `conversations_by_id`, so `participant_for_agent_id` would return
-        // "Unknown agent". With Fix C, the child is eagerly hydrated and the
-        // display name resolves.
         let participant =
             app.read(|ctx| participant_for_agent_id(&child_run_id, Some(&parent_run_id), ctx));
         assert_eq!(

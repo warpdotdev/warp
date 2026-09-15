@@ -596,7 +596,7 @@ impl SkillWatcher {
 
             if is_skill_file(&to_target_path) {
                 // read the skill from the file system
-                let skill = parse_skill(&to_target_path);
+                let skill = parse_listed_local_skill(&to_target_path);
                 if let Ok(skill) = skill {
                     self.register_symlink_watches(std::slice::from_ref(&skill), ctx);
                     let _ = self
@@ -616,7 +616,7 @@ impl SkillWatcher {
             if is_skill_file(&target_file_path) {
                 // read the skill from the file system
                 ctx.spawn(
-                    async move { parse_skill(&target_file_path) },
+                    async move { parse_listed_local_skill(&target_file_path) },
                     move |me, skill, ctx| {
                         if let Ok(skill) = skill {
                             me.register_symlink_watches(std::slice::from_ref(&skill), ctx);
@@ -636,7 +636,7 @@ impl SkillWatcher {
                 // rather than waiting for the queued directory reprocessing cycle.
                 let skill_file_path = target_file.path.join("SKILL.md");
                 ctx.spawn(
-                    async move { parse_skill(&skill_file_path) },
+                    async move { parse_listed_local_skill(&skill_file_path) },
                     move |me, skill, ctx| {
                         if let Ok(skill) = skill {
                             me.register_symlink_watches(std::slice::from_ref(&skill), ctx);
@@ -846,7 +846,7 @@ impl SkillWatcher {
             {
                 for original_path in original_paths.clone() {
                     ctx.spawn(
-                        async move { parse_skill(&original_path) },
+                        async move { parse_listed_local_skill(&original_path) },
                         |me, skill, _| {
                             if let Ok(skill) = skill {
                                 let _ =
@@ -867,7 +867,7 @@ impl SkillWatcher {
                 // exists from a previous registration. Parse the skill and re-register.
                 let skill_file_path = target_file.path.join("SKILL.md");
                 ctx.spawn(
-                    async move { parse_skill(&skill_file_path) },
+                    async move { parse_listed_local_skill(&skill_file_path) },
                     move |me, skill, ctx| {
                         if let Ok(skill) = skill {
                             me.register_symlink_watches(std::slice::from_ref(&skill), ctx);
@@ -1084,14 +1084,27 @@ fn read_local_project_skill_contents(
         .collect()
 }
 
+fn parse_listed_local_skill(path: &Path) -> anyhow::Result<ParsedSkill> {
+    let mut skill = parse_skill(path)?;
+    skill.drop_listing_body();
+    Ok(skill)
+}
+
 fn parse_project_skill_contents(
     skill_contents: Vec<(LocalOrRemotePath, String)>,
 ) -> Vec<ParsedSkill> {
     skill_contents
         .into_iter()
         .filter_map(|(path, content)| {
+            let is_local = path.to_local_path().is_some();
             let provider = get_provider_for_path(&path).unwrap_or(SkillProvider::Agents);
-            parse_skill_content_at_location(path, &content, provider, SkillScope::Project).ok()
+            let mut skill =
+                parse_skill_content_at_location(path, &content, provider, SkillScope::Project)
+                    .ok()?;
+            if is_local {
+                skill.drop_listing_body();
+            }
+            Some(skill)
         })
         .collect()
 }
