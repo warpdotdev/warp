@@ -83,6 +83,20 @@ CARGO_BUILD_JOBS=2 cargo build -p warp_tui --bin warp-tui-oss
   `warp-channel-config` generator required). `./script/run-tui` does the
   equivalent, selecting the internal `local` binary when the generator is
   available and falling back to `warp-tui-oss` otherwise.
+- **On a fresh cloud/Linux runner, install native build deps first** — the
+  `warp_tui` binary pulls in the full `warp` tree, so the build fails partway
+  through on missing system libraries (first seen: `alsa-sys` → `The system
+  library 'alsa' ... was not found`). Install the toolchain deps up front so you
+  don't discover them one panic at a time:
+  ```bash
+  sudo apt-get update && sudo apt-get install -y \
+    pkg-config protobuf-compiler cmake clang libclang-dev build-essential \
+    libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev \
+    libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+    libfontconfig1-dev libfreetype6-dev libgtk-3-dev libssl-dev libdbus-1-dev
+  ```
+  (`script/install_cargo_build_deps` covers only macOS/cargo-managed deps, not
+  these Linux system libraries.)
 - Fix all compile errors before running (see `fix-errors`). The first build of
   this tree takes a while; **incremental rebuilds after a one-line change are
   fast (~10s)**, so the edit → rebuild → re-capture loop below is quick.
@@ -147,6 +161,22 @@ When it works you'll see the **zero state** (`Warp Agent` + input view + model
 selector) instead of `Sign in to continue`, and you can `send-keys` a real prompt
 and read the agent's reply back with `capture-pane`. (This login path was added
 in warpdotdev/warp#13583.)
+
+**Caveat — an inherited key can sign you in but still be invalid for
+inference.** In some sandboxes the inherited `WARP_API_KEY` gets you to the
+logged-in surface (the status footer/`/status` shows `Signed in`) yet backend
+requests fail: sending a prompt returns an error card like `Request failed with
+error: ErrorStatus(401, "Unauthorized: Invalid API key")`. When that happens, AI
+is effectively *not* enabled, so **only `Availability::ALWAYS` slash commands
+render** in the `/` menu (`/view-logs`, `/theme`, `/statusline`, `/status`,
+`/logout`, `/exit`) — AI-gated commands and surfaces (`/clear`, `/mcp`, `/voice`,
+`/model`, `/compact`, `/handoff`, approval/diff cards, tool-call output, review
+threads, MCP confirmation cards) never appear and can't be driven live. Don't
+mistake a hidden AI-gated command for a regression: confirm the command's
+`supported_surfaces`/`availability` in
+`app/src/search/slash_command_menu/static_commands/commands.rs`, verify those
+surfaces against source instead, and say in the PR/thread that the live pass was
+limited to the logged-out / `ALWAYS`-available surfaces.
 
 ## Step 2 — Run under tmux and read the frame back
 
