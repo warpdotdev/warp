@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures_util::StreamExt;
-use warp_core::features::FeatureFlag;
+use warp_core::features::{FeatureFlag, video_recording_enabled};
 use warp_multi_agent_api as api;
 
 use super::convert_to::convert_input;
@@ -265,7 +265,7 @@ fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
         supported_tools.extend(&[api::ToolType::UseComputer]);
         supported_tools.extend(&[api::ToolType::RequestComputerUse]);
 
-        if FeatureFlag::VideoRecording.is_enabled() {
+        if video_recording_enabled() {
             supported_tools.extend(&[api::ToolType::StartRecording, api::ToolType::StopRecording]);
         }
     }

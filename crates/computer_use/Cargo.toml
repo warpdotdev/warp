@@ -71,6 +71,8 @@ zbus.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 image.workspace = true
+tokio = { workspace = true, features = ["io-util", "process", "time"] }
+uuid.workspace = true
 warpui_core.workspace = true
 windows = { workspace = true, features = [
     "Win32_Foundation",
