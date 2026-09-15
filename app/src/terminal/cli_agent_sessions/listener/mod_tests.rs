@@ -299,6 +299,31 @@ fn droid_default_handler_forwards_permission_request() {
 }
 
 #[test]
+fn muse_is_supported_via_default_listener() {
+    assert!(is_agent_supported(&CLIAgent::Muse));
+    let mut handler = create_handler(&CLIAgent::Muse).expect("Muse should support OSC 777");
+
+    let stop_body = r#"{"v":1,"agent":"muse","event":"stop"}"#;
+    let parsed_stop = handler
+        .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), stop_body, false)
+        .expect("should parse muse stop");
+    assert_eq!(parsed_stop.agent, CLIAgent::Muse);
+    assert_eq!(parsed_stop.event, CLIAgentEventType::Stop);
+    assert!(handler.handle_event(parsed_stop).is_some());
+
+    let claude_body = r#"{"v":1,"agent":"claude","event":"stop"}"#;
+    let parsed_claude = handler
+        .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), claude_body, false)
+        .expect("structured events still parse");
+    assert_eq!(parsed_claude.agent, CLIAgent::Claude);
+
+    assert!(
+        handler.try_parse(None, "Turn complete", false).is_none(),
+        "Muse must not treat OSC 9 text as a stop event"
+    );
+}
+
+#[test]
 fn warp_tui_notifications_are_supported() {
     assert!(is_agent_supported(&CLIAgent::WarpTui));
     let mut handler = create_handler(&CLIAgent::WarpTui).expect("should create handler");
