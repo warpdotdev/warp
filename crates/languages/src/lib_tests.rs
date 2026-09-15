@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use arborium::tree_sitter::Parser;
 use warp_util::standardized_path::StandardizedPath;
 
 use crate::{SUPPORTED_LANGUAGES, language_by_filename, language_by_local_filename, load_language};
@@ -94,4 +95,55 @@ fn markdown_extensions_resolve_to_markdown() {
             "{filename} should resolve to Markdown",
         );
     }
+}
+
+#[test]
+fn dart_extension_resolves_to_dart() {
+    let standardized_path =
+        StandardizedPath::try_new("/tmp/main.dart").expect("test path should be absolute");
+    let language = language_by_filename(&standardized_path)
+        .expect("`.dart` files should resolve to a language");
+    assert_eq!(language.display_name(), "Dart");
+
+    let language = language_by_local_filename(Path::new("main.dart"))
+        .expect("local `.dart` files should resolve to a language");
+    assert_eq!(language.display_name(), "Dart");
+}
+
+#[test]
+fn dart_grammar_parses_modern_flutter_code() {
+    let language = language_by_local_filename(Path::new("main.dart"))
+        .expect("`.dart` files should resolve to a language");
+    let source = r#"
+import 'package:flutter/material.dart';
+
+sealed class LoadState {}
+class Loaded<T> extends LoadState {
+  Loaded(this.value);
+  final T value;
+}
+
+class Probe extends StatelessWidget {
+  const Probe({super.key});
+
+  @override
+  Widget build(BuildContext context) => switch (<String, List<int>>{}) {
+    final values when values.isEmpty => const SizedBox.shrink(),
+    _ => const Text('Loaded'),
+  };
+}
+"#;
+
+    let mut parser = Parser::new();
+    parser
+        .set_language(&language.grammar)
+        .expect("Dart grammar should be compatible with tree-sitter");
+    let tree = parser
+        .parse(source, None)
+        .expect("Dart parser should produce a syntax tree");
+
+    assert!(
+        !tree.root_node().has_error(),
+        "modern Dart and Flutter syntax should parse without errors",
+    );
 }

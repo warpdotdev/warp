@@ -667,6 +667,7 @@ dependencies = [
  "arborium-c-sharp",
  "arborium-cpp",
  "arborium-css",
+ "arborium-dart",
  "arborium-dockerfile",
  "arborium-elixir",
  "arborium-go",
@@ -752,6 +753,17 @@ name = "arborium-css"
 version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c3f38e4a1fbceafce1853134db903f09c8bc4cefe627a1cca3ac62d4d4dad5b"
+dependencies = [
+ "arborium-sysroot",
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "arborium-dart"
+version = "2.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a58169ac16f6d22dcf6bcad164e94889e9b30c14ac13f2ca8ff365afcbcf4b5d"
 dependencies = [
  "arborium-sysroot",
  "cc",
