@@ -24,6 +24,7 @@ use vec1::{Vec1, vec1};
 use warp_core::send_telemetry_from_ctx;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _};
 
+use super::file_revisions::FileRevisionTracker;
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
@@ -50,12 +51,15 @@ pub struct RequestFileEditsExecutor {
 }
 
 impl RequestFileEditsExecutor {
-    pub fn new(
+    pub(super) fn new(
         active_session: ModelHandle<ActiveSession>,
         terminal_view_id: EntityId,
+        file_revision_tracker: FileRevisionTracker,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        let apply_diff_model = ctx.add_model(|_| ApplyDiffModel::new(active_session.clone()));
+        let apply_diff_model = ctx.add_model(|_| {
+            ApplyDiffModel::new(active_session.clone(), file_revision_tracker.clone())
+        });
         Self {
             active_session,
             apply_diff_model,
@@ -149,10 +153,10 @@ impl RequestFileEditsExecutor {
             action:
                 AIAgentAction {
                     id,
-                    action: AIAgentActionType::RequestFileEdits { .. },
+                    action: AIAgentActionType::RequestFileEdits { file_edits, .. },
                     ..
                 },
-            ..
+            conversation_id,
         } = input
         else {
             return ActionExecution::InvalidAction;
@@ -167,23 +171,44 @@ impl RequestFileEditsExecutor {
             ));
         }
 
-        // The storage surface persists its (possibly user-edited) diffs and
-        // resolves with the assembled result. The entry stays registered until
-        // the action's terminal result funnels through `discard_pending`.
-        let Some(storage) = self.diff_storages.get(id) else {
+        if !self.diff_storages.contains_key(id) {
             log::warn!("Tried to execute a RequestFileEdits action without a registered storage");
             return ActionExecution::NotReady;
+        }
+
+        let expected_revisions = self.apply_diff_model.update(ctx, |model, ctx| {
+            model.persistence_revisions(file_edits, conversation_id, ctx)
+        });
+        let (result_tx, result_rx) = oneshot::channel();
+        let Some(storage) = self.diff_storages.get(id) else {
+            return ActionExecution::NotReady;
         };
-        let result_future = storage.accept_and_save(ctx);
+        let result_future = storage.accept_and_save(expected_revisions, ctx);
+        ctx.spawn(result_future, move |me, persisted, ctx| {
+            if matches!(persisted.result, RequestFileEditsResult::Success { .. }) {
+                me.apply_diff_model.update(ctx, |model, _ctx| {
+                    model.track_persisted_revisions(&persisted.files, conversation_id);
+                });
+            }
+            result_tx.send(persisted.result).ok();
+        });
+        let result_future = async move {
+            result_rx
+                .await
+                .unwrap_or_else(|_| RequestFileEditsResult::DiffApplicationFailed {
+                    error: "The file edit operation ended before saving".to_string(),
+                })
+        }
+        .boxed();
 
         let identifiers = self
-            .generate_ai_identifiers(&input.conversation_id, id, ctx)
+            .generate_ai_identifiers(&conversation_id, id, ctx)
             .unwrap_or_else(|| AIIdentifiers {
-                client_conversation_id: Some(input.conversation_id),
+                client_conversation_id: Some(conversation_id),
                 ..Default::default()
             });
-        let passive_diff = BlocklistAIHistoryModel::as_ref(ctx)
-            .is_entirely_passive_conversation(&input.conversation_id);
+        let passive_diff =
+            BlocklistAIHistoryModel::as_ref(ctx).is_entirely_passive_conversation(&conversation_id);
 
         ActionExecution::new_async(result_future, move |result, ctx| {
             if let RequestFileEditsResult::Success {
@@ -250,7 +275,13 @@ impl RequestFileEditsExecutor {
         let id = id.clone();
 
         let apply_future = self.apply_diff_model.update(ctx, |model, ctx| {
-            model.apply_diffs(files, &ai_identifiers, passive_diff, ctx)
+            model.apply_diffs(
+                files,
+                input.conversation_id,
+                &ai_identifiers,
+                passive_diff,
+                ctx,
+            )
         });
 
         ctx.spawn(

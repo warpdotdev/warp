@@ -21,6 +21,102 @@ enum TestFileModelEvent {
     FailedToSave,
 }
 
+#[test]
+fn guarded_save_rejects_mutation_before_write_dispatch() {
+    App::test((), |mut app| async move {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("guarded-save.txt");
+        std::fs::write(&path, "observed\n").unwrap();
+        let expected_revision = ExpectedFileRevision::from_content("observed\n");
+
+        std::fs::write(&path, "external mutation\n").unwrap();
+        let files = app.add_singleton_model(FileModel::new);
+        let file_id = files.update(&mut app, |model, ctx| {
+            model.register_file_path(&path, false, ctx)
+        });
+        let save = files.update(&mut app, |model, ctx| {
+            model
+                .save_with_expected_revision(
+                    file_id,
+                    "agent write\n".to_string(),
+                    ContentVersion::new(),
+                    expected_revision,
+                    ctx,
+                )
+                .unwrap()
+        });
+
+        let result = save.await;
+
+        assert!(matches!(
+            result,
+            Err(error) if matches!(error.as_ref(), FileSaveError::Other(message) if message.contains("Call read_files"))
+        ));
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            "external mutation\n"
+        );
+    });
+}
+
+#[test]
+fn digest_only_guard_accepts_non_millisecond_filesystem_mtime() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let path = temp_dir.path().join("submillisecond-mtime.txt");
+    std::fs::write(&path, "observed\n").unwrap();
+    let modified = SystemTime::UNIX_EPOCH + Duration::new(1_700_000_000, 123_456_789);
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+    let actual_modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+    let millisecond_precision = SystemTime::UNIX_EPOCH
+        + Duration::from_millis(
+            actual_modified
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
+        );
+    assert_ne!(actual_modified, millisecond_precision);
+
+    let saved = guarded_write(
+        &path,
+        b"agent write\n",
+        ExpectedFileRevision::from_content("observed\n"),
+    )
+    .unwrap();
+
+    assert!(saved);
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "agent write\n");
+}
+#[test]
+fn concurrent_guarded_writes_from_one_revision_only_commit_once() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let path = Arc::new(temp_dir.path().join("guarded-race.txt"));
+    std::fs::write(path.as_ref(), "observed\n").unwrap();
+    let expected_revision = ExpectedFileRevision::from_content("observed\n");
+    let barrier = Arc::new(std::sync::Barrier::new(3));
+    let handles = ["first\n", "second\n"].map(|content| {
+        let path = path.clone();
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            barrier.wait();
+            guarded_write(path.as_ref(), content.as_bytes(), expected_revision).unwrap()
+        })
+    });
+
+    barrier.wait();
+    let results = handles.map(|handle| handle.join().unwrap());
+
+    assert_eq!(results.into_iter().filter(|saved| *saved).count(), 1);
+    assert!(matches!(
+        std::fs::read_to_string(path.as_ref()).unwrap().as_str(),
+        "first\n" | "second\n"
+    ));
+}
+
 impl From<&FileModelEvent> for TestFileModelEvent {
     fn from(event: &FileModelEvent) -> Self {
         match event {

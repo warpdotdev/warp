@@ -4,9 +4,12 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
+use super::file_revisions::{
+    FileRevision, FileRevisionTracker, is_missing_error, revision_from_remote_context,
+};
 use super::{
     ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput,
-    describe_failed_files, read_local_file_context,
+    ReadFileContextResult, describe_failed_files, read_local_file_context,
 };
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionResultType, AIAgentActionType, ReadFilesFailedFile,
@@ -21,13 +24,67 @@ use crate::workspaces::user_workspaces::TeamContext;
 pub struct ReadFilesExecutor {
     active_session: ModelHandle<ActiveSession>,
     terminal_view_id: EntityId,
+    file_revision_tracker: FileRevisionTracker,
+}
+
+fn revisions_from_local_result(result: &ReadFileContextResult) -> Vec<(String, FileRevision)> {
+    result
+        .file_revisions
+        .iter()
+        .map(|observed| {
+            let revision = observed
+                .content_digest
+                .map(FileRevision::from_digest)
+                .unwrap_or(FileRevision::Uneditable);
+            (observed.path.clone(), revision)
+        })
+        .chain(
+            result
+                .failed_files
+                .iter()
+                .filter(|failed| is_missing_error(&failed.message))
+                .map(|failed| (failed.path.clone(), FileRevision::Missing)),
+        )
+        .collect()
+}
+
+fn revisions_from_remote_response(
+    response: &remote_server::proto::ReadFileContextResponse,
+) -> Vec<(String, FileRevision)> {
+    response
+        .file_contexts
+        .iter()
+        .map(|context| {
+            (
+                context.file_name.clone(),
+                revision_from_remote_context(context.clone()),
+            )
+        })
+        .chain(
+            response
+                .failed_files
+                .iter()
+                .filter(|failed| {
+                    failed
+                        .error
+                        .as_ref()
+                        .is_some_and(|error| is_missing_error(&error.message))
+                })
+                .map(|failed| (failed.path.clone(), FileRevision::Missing)),
+        )
+        .collect()
 }
 
 impl ReadFilesExecutor {
-    pub fn new(active_session: ModelHandle<ActiveSession>, terminal_view_id: EntityId) -> Self {
+    pub(super) fn new(
+        active_session: ModelHandle<ActiveSession>,
+        terminal_view_id: EntityId,
+        file_revision_tracker: FileRevisionTracker,
+    ) -> Self {
         Self {
             active_session,
             terminal_view_id,
+            file_revision_tracker,
         }
     }
 
@@ -111,6 +168,7 @@ impl ReadFilesExecutor {
         let shell = self.active_session.as_ref(ctx).shell_launch_data(ctx);
 
         let locations = locations.clone();
+        let file_revision_tracker = self.file_revision_tracker.clone();
 
         // Check if this is a remote session with a connected host.
         let session_type = self.active_session.as_ref(ctx).session_type(ctx);
@@ -142,17 +200,23 @@ impl ReadFilesExecutor {
         if let Some(handle) = host_request_handle {
             return ActionExecution::Async {
                 execute_future: Box::pin(async move {
+                    let absolute_paths = locations
+                        .iter()
+                        .map(|location| {
+                            host_native_absolute_path(
+                                &location.name,
+                                &shell,
+                                &current_working_directory,
+                            )
+                        })
+                        .collect::<Vec<_>>();
                     let request = remote_server::proto::ReadFileContextRequest {
                         files: locations
                             .iter()
-                            .map(|loc| {
-                                let absolute_path = host_native_absolute_path(
-                                    &loc.name,
-                                    &shell,
-                                    &current_working_directory,
-                                );
-                                remote_server::proto::ReadFileContextFile {
-                                    path: absolute_path,
+                            .zip(&absolute_paths)
+                            .map(
+                                |(loc, absolute_path)| remote_server::proto::ReadFileContextFile {
+                                    path: absolute_path.clone(),
                                     line_ranges: loc
                                         .lines
                                         .iter()
@@ -161,8 +225,8 @@ impl ReadFilesExecutor {
                                             end: r.end as u32,
                                         })
                                         .collect(),
-                                }
-                            })
+                                },
+                            )
                             .collect(),
                         max_file_bytes: None,
                         max_batch_bytes: None,
@@ -172,6 +236,10 @@ impl ReadFilesExecutor {
                         .read_file_context(request)
                         .await
                         .map_err(|e| anyhow::anyhow!("Remote read failed: {e}"))?;
+                    file_revision_tracker.record_revisions(
+                        conversation_id,
+                        revisions_from_remote_response(&response),
+                    );
 
                     let failed_files = response
                         .failed_files
@@ -244,6 +312,8 @@ impl ReadFilesExecutor {
                     None,
                 )
                 .await?;
+                file_revision_tracker
+                    .record_revisions(conversation_id, revisions_from_local_result(&result));
                 if result.failed_files.is_empty() {
                     Ok(ReadFilesResult::Success {
                         files: result.file_contexts,
@@ -280,3 +350,7 @@ impl ReadFilesExecutor {
 impl Entity for ReadFilesExecutor {
     type Event = ();
 }
+
+#[cfg(all(test, not(target_family = "wasm")))]
+#[path = "read_files_tests.rs"]
+mod tests;

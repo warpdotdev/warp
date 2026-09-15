@@ -23,6 +23,7 @@ fn abort_host_request_removes_pending_request_and_resolves_caller() {
             host_scoped_request::Message::WriteFile(WriteFile {
                 path: "/tmp/test".to_string(),
                 content: String::new(),
+                expected_revision: None,
             }),
         );
 

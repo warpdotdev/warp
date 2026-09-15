@@ -11,6 +11,7 @@ use ::ai::index::full_source_code_embedding::{
     ContentHash, FragmentMetadata as LocalFragmentMetadata, NodeHash,
 };
 use ::ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
+use remote_server::ExpectedFileRevision;
 use remote_server::proto::OpenBufferSuccess;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
@@ -145,6 +146,27 @@ fn remote_agent_context_snapshot(
         home_dir,
         skills,
         global_rules,
+    }
+}
+
+fn expected_file_revision_from_proto(
+    revision: super::proto::ExpectedFileRevision,
+) -> ExpectedFileRevision {
+    match revision.state {
+        Some(super::proto::expected_file_revision::State::ContentSha256(digest)) => digest
+            .try_into()
+            .map(|content_digest| ExpectedFileRevision::Present {
+                content_digest,
+                last_modified: None,
+            })
+            .unwrap_or(ExpectedFileRevision::Uneditable),
+        Some(super::proto::expected_file_revision::State::Missing(_)) => {
+            ExpectedFileRevision::Missing
+        }
+        Some(super::proto::expected_file_revision::State::Uneditable(_)) => {
+            ExpectedFileRevision::Uneditable
+        }
+        None => ExpectedFileRevision::Uneditable,
     }
 }
 
@@ -2290,9 +2312,15 @@ impl ServerModel {
                 .insert(path, request_id.clone(), conn_id, FileOpKind::Write, ctx);
 
         let file_model = FileModel::handle(ctx);
-        if let Err(err) =
-            file_model.update(ctx, |m, ctx| m.save(file_id, msg.content, version, ctx))
-        {
+        let content = msg.content;
+        let expected_revision = msg.expected_revision.map(expected_file_revision_from_proto);
+        if let Err(err) = file_model.update(ctx, |m, ctx| {
+            if let Some(expected_revision) = expected_revision {
+                m.save_with_expected_revision(file_id, content, version, expected_revision, ctx)
+            } else {
+                m.save(file_id, content, version, ctx)
+            }
+        }) {
             self.pending_file_ops.remove(file_id, ctx);
             return HandlerOutcome::Sync(server_message::Message::WriteFileResponse(
                 WriteFileResponse {
@@ -2335,7 +2363,14 @@ impl ServerModel {
         );
 
         let file_model = FileModel::handle(ctx);
-        if let Err(err) = file_model.update(ctx, |m, ctx| m.delete(file_id, version, ctx)) {
+        let expected_revision = msg.expected_revision.map(expected_file_revision_from_proto);
+        if let Err(err) = file_model.update(ctx, |m, ctx| {
+            if let Some(expected_revision) = expected_revision {
+                m.delete_with_expected_revision(file_id, version, expected_revision, ctx)
+            } else {
+                m.delete(file_id, version, ctx)
+            }
+        }) {
             self.pending_file_ops.remove(file_id, ctx);
             return HandlerOutcome::Sync(server_message::Message::DeleteFileResponse(
                 DeleteFileResponse {
@@ -3835,11 +3870,22 @@ fn fragment_metadata_to_proto(
 /// Converts a [`ReadFileContextResult`] into its protobuf equivalent.
 fn file_context_result_to_proto(result: ReadFileContextResult) -> ReadFileContextResponse {
     use crate::ai::agent::AnyFileContent;
+    let revisions = result
+        .file_revisions
+        .into_iter()
+        .map(|revision| (revision.path, revision.content_digest))
+        .collect::<HashMap<_, _>>();
 
     let file_contexts = result
         .file_contexts
         .into_iter()
         .map(|fc| {
+            let content_sha256 = revisions
+                .get(&fc.file_name)
+                .copied()
+                .flatten()
+                .map(|digest| digest.to_vec())
+                .unwrap_or_default();
             let content = match fc.content {
                 AnyFileContent::StringContent(text) => {
                     super::proto::file_context_proto::Content::TextContent(text)
@@ -3859,6 +3905,7 @@ fn file_context_result_to_proto(result: ReadFileContextResult) -> ReadFileContex
                 line_range_end: fc.line_range.as_ref().map(|r| r.end as u32),
                 last_modified_epoch_millis,
                 line_count: fc.line_count as u32,
+                content_sha256,
             }
         })
         .collect();

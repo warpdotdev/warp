@@ -321,6 +321,7 @@ async fn send_host_scoped_returns_ok_when_connected() {
         host_scoped_request::Message::WriteFile(WriteFile {
             path: "/tmp/foo.txt".to_string(),
             content: "hello".to_string(),
+            expected_revision: None,
         }),
     );
 
