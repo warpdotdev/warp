@@ -178,6 +178,8 @@ pub enum ButtonSize {
     InputPrompt,
     /// Sizing for buttons at the bottom of the UDI.
     UDIButton,
+    /// Touch target sizing for UDI buttons in WASM/mobile surfaces.
+    UDITouchButton,
     /// Sizing for prompt chips in the UDI.
     UDIPromptChip,
     /// Sizing for buttons in the AgentView input, e.g. when `FeatureFlag::AgentView` is enabled.
@@ -1330,6 +1332,7 @@ impl ButtonSize {
             ButtonSize::InlineActionHeader => appearance.monospace_font_size(),
             ButtonSize::InputPrompt => appearance.monospace_font_size(),
             ButtonSize::UDIButton => appearance.monospace_font_size() - 1.0,
+            ButtonSize::UDITouchButton => 18.0,
             ButtonSize::UDIPromptChip => appearance.monospace_font_size() - 1.0,
             ButtonSize::AgentInputButton => app.font_cache().line_height(
                 appearance.monospace_font_size(),
@@ -1346,6 +1349,7 @@ impl ButtonSize {
             ButtonSize::InlineActionHeader => appearance.monospace_font_size() - 2.,
             ButtonSize::InputPrompt => appearance.monospace_font_size(),
             ButtonSize::UDIButton => appearance.monospace_font_size() - 1.0,
+            ButtonSize::UDITouchButton => appearance.monospace_font_size() - 1.0,
             ButtonSize::UDIPromptChip => appearance.monospace_font_size() - 1.0,
             ButtonSize::AgentInputButton => appearance.monospace_font_size() - 1.0,
         }
@@ -1359,6 +1363,7 @@ impl ButtonSize {
             ButtonSize::InlineActionHeader => Properties::default().weight(Weight::Semibold),
             ButtonSize::InputPrompt => Properties::default(),
             ButtonSize::UDIButton => Properties::default(),
+            ButtonSize::UDITouchButton => Properties::default(),
             ButtonSize::UDIPromptChip => Properties::default().weight(Weight::Semibold),
             ButtonSize::AgentInputButton => Properties::default(),
         }
@@ -1373,6 +1378,7 @@ impl ButtonSize {
             ButtonSize::InlineActionHeader => 6.,
             ButtonSize::InputPrompt => 5.,
             ButtonSize::UDIButton => 5.,
+            ButtonSize::UDITouchButton => 5.,
             ButtonSize::UDIPromptChip => 4.,
             ButtonSize::AgentInputButton => 4.,
         }
@@ -1437,6 +1443,13 @@ impl ButtonSize {
                 padding: Some(Coords::default()),
                 ..Default::default()
             },
+            ButtonSize::UDITouchButton => UiComponentStyles {
+                font_size: Some(appearance.monospace_font_size() - 4.),
+                width: Some(44.0),
+                height: Some(44.0),
+                padding: Some(Coords::default()),
+                ..Default::default()
+            },
             ButtonSize::UDIPromptChip => UiComponentStyles {
                 font_size: Some(appearance.monospace_font_size() - 4.),
                 width: Some(appearance.monospace_font_size()),
@@ -1468,6 +1481,7 @@ impl ButtonSize {
             // Should be 20px high at a 14px font size, and scale accordingly.
             ButtonSize::InputPrompt => 6. + appearance.monospace_font_size(),
             ButtonSize::UDIButton => 6. + appearance.monospace_font_size(),
+            ButtonSize::UDITouchButton => 44.0,
             ButtonSize::UDIPromptChip => {
                 // Add 1 to the vertical padding to account for the border.
                 let vertical_padding =
@@ -1495,6 +1509,7 @@ impl ButtonSize {
             ButtonSize::InlineActionHeader => None,
             ButtonSize::InputPrompt => Some(-2.),
             ButtonSize::UDIButton => None,
+            ButtonSize::UDITouchButton => None,
             ButtonSize::UDIPromptChip => None,
             ButtonSize::AgentInputButton => None,
         }
@@ -1509,6 +1524,7 @@ impl ButtonSize {
             ButtonSize::InlineActionHeader => 8.,
             ButtonSize::InputPrompt => 4.,
             ButtonSize::UDIButton => 4.,
+            ButtonSize::UDITouchButton => 8.,
             ButtonSize::UDIPromptChip | ButtonSize::AgentInputButton => {
                 crate::context_chips::spacing::UDI_CHIP_HORIZONTAL_PADDING
             }
@@ -1525,6 +1541,7 @@ impl ButtonSize {
             // Account for the negative margin on prompt buttons.
             ButtonSize::InputPrompt => -8.,
             ButtonSize::UDIButton => -8.,
+            ButtonSize::UDITouchButton => -10.,
             ButtonSize::UDIPromptChip | ButtonSize::AgentInputButton => -8.,
         }
     }
@@ -1538,6 +1555,7 @@ impl ButtonSize {
             ButtonSize::InlineActionHeader => Padding::uniform(2.),
             ButtonSize::InputPrompt => Padding::default().with_vertical(1.).with_horizontal(2.),
             ButtonSize::UDIButton => Padding::default().with_vertical(1.).with_horizontal(2.),
+            ButtonSize::UDITouchButton => Padding::default().with_vertical(1.).with_horizontal(2.),
             ButtonSize::UDIPromptChip | ButtonSize::AgentInputButton => {
                 Padding::default().with_vertical(1.).with_horizontal(2.)
             }
