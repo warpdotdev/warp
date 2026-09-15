@@ -55,6 +55,17 @@
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 
+/// Upper bound on the number of cells (`(pattern_len + 1) * (text_len + 1)`) in the score
+/// matrix `SkimMatcherV2::fuzzy_indices` allocates to run its Smith-Waterman-style DP. Each
+/// cell is ~16 bytes, so this caps that allocation at ~16MB, versus the multi-gigabyte
+/// allocations seen with unbounded input. When the limit is exceeded, `fuzzy-matcher` falls
+/// back to a linear-time greedy match instead of erroring or dropping the match, so callers
+/// still get a result, just a potentially less globally-optimal one. Realistic queries (a
+/// handful to a few hundred characters) still get the full DP match against texts tens of
+/// thousands of characters long; only pathological inputs (e.g. a multi-megabyte pasted blob
+/// recorded as a single shell history entry) hit the fallback.
+const FUZZY_MATCH_ELEMENT_LIMIT: usize = 1_000_000;
+
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct FuzzyMatchResult {
     pub score: i64,
@@ -79,14 +90,24 @@ impl FuzzyMatchResult {
 /// Returns struct that contains the score of the match and a vector
 /// of matching byte indices.
 pub fn match_indices(text: &str, query: &str) -> Option<FuzzyMatchResult> {
-    match_internal(text, query, SkimMatcherV2::default())
+    match_internal(
+        text,
+        query,
+        SkimMatcherV2::default().element_limit(FUZZY_MATCH_ELEMENT_LIMIT),
+    )
 }
 
 /// Performs a case insensitive fuzzy matching algorithm on text and query strings.
 /// Returns struct that contains the score of the match and a vector
 /// of matching byte indices.
 pub fn match_indices_case_insensitive(text: &str, query: &str) -> Option<FuzzyMatchResult> {
-    match_internal(text, query, SkimMatcherV2::default().ignore_case())
+    match_internal(
+        text,
+        query,
+        SkimMatcherV2::default()
+            .ignore_case()
+            .element_limit(FUZZY_MATCH_ELEMENT_LIMIT),
+    )
 }
 
 /// Performs a case insensitive fuzzy matching algorithm on text and query strings,
@@ -121,7 +142,9 @@ pub fn match_indices_case_insensitive_ignore_spaces(
     match_internal(
         text,
         &query_no_spaces,
-        SkimMatcherV2::default().ignore_case(),
+        SkimMatcherV2::default()
+            .ignore_case()
+            .element_limit(FUZZY_MATCH_ELEMENT_LIMIT),
     )
 }
 
