@@ -8,6 +8,7 @@ use futures::channel::oneshot;
 use futures::future::{AbortHandle, Abortable, Shared};
 use instant::Instant;
 use parking_lot::Mutex;
+use warp_errors::report_if_error;
 use warpui::r#async::executor::Background;
 use warpui::r#async::{BoxFuture, FutureExt as _};
 
@@ -15,6 +16,9 @@ use super::SavePoint;
 
 const FINAL_SAVE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// An active runner worker's operation, which may service initial and coalesced save points.
+///
+/// It must reread runner state rather than capture state from an individual request.
 type SaveOperation = Arc<dyn Fn(SavePoint) -> BoxFuture<'static, Result<()>> + Send + Sync>;
 
 #[derive(Default)]
@@ -38,17 +42,22 @@ impl Drop for ActiveSave {
     }
 }
 
-/// Serializes transcript captures and coalesces requests without blocking driver events.
+/// Runs one save at a time, retaining at most one pending request with `PostTurn` precedence.
+///
+/// Closing rejects new requests and retains the final deadline and outcome across calls.
 #[derive(Default)]
 pub(crate) struct SaveCoordinator {
     state: Arc<Mutex<SaveState>>,
 }
 
 impl SaveCoordinator {
+    /// Starts a runner-scoped worker or coalesces this save point into its pending work.
+    // TODO(vkodithala): Separate request coalescing from worker startup so this only accepts a
+    // SavePoint.
     pub(super) fn request(
         &self,
         save_point: SavePoint,
-        operation: SaveOperation,
+        worker_operation: SaveOperation,
         background: &Background,
     ) {
         let mut state = self.state.lock();
@@ -85,9 +94,11 @@ impl SaveCoordinator {
                                 }
                             }
                         };
-                        if operation(save_point).await.is_err() {
-                            log::warn!("Harness conversation save failed");
-                        }
+                        report_if_error!(
+                            worker_operation(save_point)
+                                .await
+                                .context("Failed to save harness conversation")
+                        );
                     }
                 };
                 let _ = Abortable::new(worker, registration).await;
@@ -96,7 +107,7 @@ impl SaveCoordinator {
             .detach();
     }
 
-    /// Stops ordinary requests, then drains or cancels current work before a fresh final save.
+    /// Stops ordinary requests, then drains or cancels current work before a bounded final save.
     pub(super) async fn finish(
         &self,
         final_save: impl Future<Output = Result<()>>,
@@ -163,6 +174,7 @@ fn remaining_final_save_budget(now: SystemTime, deadline: Option<SystemTime>) ->
     })
 }
 
+/// Waits for both saves so either can complete independently if the other fails.
 pub(super) async fn save_transcript_and_block(
     transcript: impl Future<Output = Result<()>>,
     block: impl Future<Output = Result<()>>,

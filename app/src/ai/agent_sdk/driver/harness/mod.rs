@@ -16,6 +16,7 @@ use warp_cli::{
     WARP_PARENT_RUN_ID_ENV, WARP_RUN_ID_ENV, WS_SERVER_URL_OVERRIDE_ENV,
 };
 use warp_core::channel::ChannelState;
+use warp_errors::report_if_error;
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
@@ -492,7 +493,7 @@ pub(crate) enum SavePoint {
     Periodic,
     /// The final save of conversation state, after the harness has completed.
     Final,
-    /// A save after the harness reports it finished an agent turn.
+    /// A save after session activity such as prompt submission or completed tool use.
     PostTurn,
 }
 
@@ -538,23 +539,17 @@ pub(crate) trait HarnessRunner: Send + Sync + 'static {
         save_point: SavePoint,
         foreground: &ModelSpawner<AgentDriver>,
     ) -> Result<()>;
-    fn save_coordinator(&self) -> Option<&SaveCoordinator> {
-        None
-    }
+    /// Returns the coordinator owned by this runner for its full lifecycle.
+    fn save_coordinator(&self) -> &SaveCoordinator;
+
+    /// Queues a save without waiting for persistence; overlapping requests are coalesced.
 
     async fn request_save(
         self: Arc<Self>,
         save_point: SavePoint,
         foreground: &ModelSpawner<AgentDriver>,
     ) -> Result<()> {
-        let Some(coordinator) = self.save_coordinator() else {
-            if matches!(save_point, SavePoint::PostTurn)
-                && self.handle_session_update(foreground).await.is_err()
-            {
-                log::warn!("Harness session update before save failed");
-            }
-            return self.save_conversation(save_point, foreground).await;
-        };
+        let coordinator = self.save_coordinator();
         let background = foreground.spawn(|_, ctx| ctx.background_executor()).await?;
         let runner = self.clone();
         let foreground = foreground.clone();
@@ -564,10 +559,13 @@ pub(crate) trait HarnessRunner: Send + Sync + 'static {
                 let runner = runner.clone();
                 let foreground = foreground.clone();
                 Box::pin(async move {
-                    if matches!(save_point, SavePoint::PostTurn)
-                        && runner.handle_session_update(&foreground).await.is_err()
-                    {
-                        log::warn!("Harness session update before save failed");
+                    if matches!(save_point, SavePoint::PostTurn) {
+                        report_if_error!(
+                            runner
+                                .handle_session_update(&foreground)
+                                .await
+                                .context("Failed to handle harness session update before save")
+                        );
                     }
                     runner.save_conversation(save_point, &foreground).await
                 })
@@ -577,16 +575,16 @@ pub(crate) trait HarnessRunner: Send + Sync + 'static {
         Ok(())
     }
 
+    /// Stops ordinary requests and runs one final save within the remaining shutdown budget.
     async fn finish_saves(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
-        let Some(coordinator) = self.save_coordinator() else {
-            return self.save_conversation(SavePoint::Final, foreground).await;
-        };
-        coordinator
+        self.save_coordinator()
             .finish(
                 async {
-                    if self.handle_session_update(foreground).await.is_err() {
-                        log::warn!("Harness session update before final save failed");
-                    }
+                    report_if_error!(
+                        self.handle_session_update(foreground)
+                            .await
+                            .context("Failed to handle harness session update before final save")
+                    );
                     self.save_conversation(SavePoint::Final, foreground).await
                 },
                 final_save_budget(),

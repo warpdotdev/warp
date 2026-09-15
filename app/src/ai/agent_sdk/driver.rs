@@ -1549,19 +1549,17 @@ impl AgentDriver {
                     result,
                     Err(AgentDriverError::SandboxDeadlineReached { .. })
                         | Err(AgentDriverError::TerminatedBySignal)
-                ) && let Ok(Some(runner)) = foreground
-                    .spawn(|me, _| {
-                        me.harness
-                            .clone()
-                            .filter(|runner| runner.save_coordinator().is_some())
-                    })
-                    .await
+                ) && let Ok(Some(runner)) = foreground.spawn(|me, _| me.harness.clone()).await
                 {
                     // These interrupts drop run_harness before its ordinary final-save path.
                     Self::force_kill_harness(&foreground).await;
-                    if runner.finish_saves(&foreground).await.is_err() {
-                        log::warn!("Harness final save after interruption failed");
-                    }
+                    report_if_error!(
+                        runner.finish_saves(&foreground).await.context(
+                            "Failed to save final harness conversation after interruption"
+                        )
+                    );
+                    // TODO(vkodithala): Decide how runner cleanup fits within the remaining
+                    // shutdown budget; force-killing skips bridge and resumption-state cleanup.
                 }
                 // Stop accepting CLI session status updates now that the run
                 // is done. Already accepted task updates remain queued until
@@ -3308,13 +3306,12 @@ impl AgentDriver {
 
         // Final save after the command finishes.
         log::debug!("Triggering final save of harness conversation data");
-        let final_save_succeeded = match runner.finish_saves(foreground).await {
-            Ok(()) => true,
-            Err(_) => {
-                log::warn!("Harness final conversation save failed");
-                false
-            }
-        };
+        let final_save_result = runner
+            .finish_saves(foreground)
+            .await
+            .context("Failed to save final harness conversation");
+        let final_save_succeeded = final_save_result.is_ok();
+        report_if_error!(final_save_result);
         let cleanup_disposition = if final_save_succeeded
             && detected_runtime_failure.is_none()
             && matches!(command_result.as_ref(), Ok(exit_code) if exit_code.was_successful())
@@ -4222,11 +4219,7 @@ impl AgentDriver {
                         | CLIAgentSessionStatus::Failed { .. }
                         | CLIAgentSessionStatus::Blocked { .. }
                         | CLIAgentSessionStatus::Cancelled => {
-                            if me
-                                .harness
-                                .as_ref()
-                                .is_some_and(|runner| runner.save_coordinator().is_some())
-                            {
+                            if me.harness.is_some() {
                                 me.request_harness_save(ctx);
                             }
                             let idle_window = idle_window_for_cli_session_status(

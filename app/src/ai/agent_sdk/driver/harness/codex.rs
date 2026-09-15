@@ -426,8 +426,8 @@ impl HarnessRunner for CodexHarnessRunner {
         Ok(())
     }
 
-    fn save_coordinator(&self) -> Option<&SaveCoordinator> {
-        Some(&self.saves)
+    fn save_coordinator(&self) -> &SaveCoordinator {
+        &self.saves
     }
 
     async fn save_conversation(

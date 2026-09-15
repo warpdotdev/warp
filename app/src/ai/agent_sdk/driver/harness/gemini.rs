@@ -156,8 +156,8 @@ impl HarnessRunner for GeminiHarnessRunner {
     fn harness_name(&self) -> &str {
         &self.cli_name
     }
-    fn save_coordinator(&self) -> Option<&SaveCoordinator> {
-        Some(&self.saves)
+    fn save_coordinator(&self) -> &SaveCoordinator {
+        &self.saves
     }
 
     async fn start(

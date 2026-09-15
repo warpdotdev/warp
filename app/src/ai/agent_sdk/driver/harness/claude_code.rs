@@ -554,8 +554,8 @@ impl HarnessRunner for ClaudeHarnessRunner {
     async fn handle_session_update(&self, _foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
         self.handle_parent_bridge_session_update().await
     }
-    fn save_coordinator(&self) -> Option<&SaveCoordinator> {
-        Some(&self.saves)
+    fn save_coordinator(&self) -> &SaveCoordinator {
+        &self.saves
     }
 
     async fn save_conversation(
