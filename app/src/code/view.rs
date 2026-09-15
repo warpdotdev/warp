@@ -10,6 +10,7 @@ use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::ICON_DIMENSIONS;
 use warp_editor::render::element::VerticalExpansionBehavior;
+use warp_util::file::FileLoadError;
 use warp_util::path::LineAndColumnArg;
 #[cfg(feature = "local_fs")]
 use warpui::clipboard::ClipboardContent;
@@ -41,7 +42,10 @@ use crate::code::editor::view::CodeEditorRenderOptions;
 use crate::code::editor_management::CodeEditorStatus;
 use crate::code::global_buffer_model::GlobalBufferModel;
 use crate::code::local_code_editor::ShowFindReferencesCard;
-use crate::code::{EditorTabBarDropTargetData, ImmediateSaveError, SaveOutcome, SaveStatus};
+use crate::code::{
+    EditorTabBarDropTargetData, ImmediateSaveError, SaveOutcome, SaveStatus,
+    file_load_error_message,
+};
 use crate::editor::InteractionState;
 use crate::input::Vector2F;
 use crate::menu::{MenuItem, MenuItemFields};
@@ -516,7 +520,7 @@ impl CodeView {
                     return;
                 }
                 log::warn!("Failed to load file. {err:?}");
-                CodeView::display_load_failure(ctx.window_id(), ctx);
+                CodeView::display_load_failure(ctx.window_id(), err, ctx);
             }
             LocalCodeEditorEvent::SelectionAddedAsContext {
                 relative_file_path,
@@ -943,9 +947,13 @@ impl CodeView {
         }
     }
 
-    fn display_load_failure(window_id: WindowId, ctx: &mut ViewContext<Self>) {
+    fn display_load_failure(
+        window_id: WindowId,
+        error: &FileLoadError,
+        ctx: &mut ViewContext<Self>,
+    ) {
         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-            let toast = DismissibleToast::error(String::from("Failed to load file."))
+            let toast = DismissibleToast::error(file_load_error_message(error))
                 .with_object_id("failed_to_load_file".to_string());
             toast_stack.add_ephemeral_toast(toast, window_id, ctx);
         });
