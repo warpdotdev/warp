@@ -1010,8 +1010,6 @@ dependencies = [
 [[package]]
 name = "arborium-sql"
 version = "2.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b06c5820b032879818e31e627d2252fc83534b5fd97976c62fefb7b1fd8fad6c"
 dependencies = [
  "arborium-sysroot",
  "cc",

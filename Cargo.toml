@@ -577,6 +577,18 @@ tink-hybrid = { git = "https://github.com/warpdotdev/tink-rust", rev = "54b9ac9a
 tikv-jemallocator = { git = "https://github.com/warpdotdev/jemallocator.git", rev = "2ee30bfdf7059223b54810e4ea6c666f0a379e0b" }
 tikv-jemalloc-sys = { git = "https://github.com/warpdotdev/jemallocator.git", rev = "2ee30bfdf7059223b54810e4ea6c666f0a379e0b" }
 
+# Vendored copy of arborium-sql 2.13.0 (unmodified besides `grammar/scanner.c`)
+# with a fix for `tree_sitter_sql_external_scanner_deserialize` leaking the
+# previous `LexerState.start_tag` allocation on every restore of saved
+# external-scanner state (APP-5840). The root cause lives two layers
+# upstream: DerekStride/tree-sitter-sql#361 fixes it but is not merged, and
+# bearcove/arborium has not picked it up either (still present as of the
+# latest published arborium-sql, 2.18.2). No git revision exists yet to pin
+# to, so the crate is vendored locally under `vendor/` until one of those
+# upstreams ships a release with the fix, at which point this override
+# should be removed in favor of bumping the `arborium` version.
+arborium-sql = { path = "vendor/arborium-sql-2.13.0" }
+
 [patch."https://github.com/warpdotdev/warp-proto-apis.git"]
 # Uncomment for local development of warp-proto-apis
 # warp_multi_agent_api = { path = "../warp-proto-apis/apis/multi_agent/v1/gen/rust" }
