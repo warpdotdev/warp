@@ -8,6 +8,8 @@ pub(crate) struct Tools {
 }
 
 impl Tools {
+    // Repeated observations of one invocation are idempotent; a conflicting name invalidates
+    // that identity instead of choosing one name arbitrarily.
     pub(crate) fn observe(
         &mut self,
         session: &str,

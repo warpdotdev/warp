@@ -20,6 +20,7 @@ impl<const N: usize> Default for Counters<N> {
 }
 
 impl<const N: usize> Counters<N> {
+    /// Parse known nonnegative counters while preserving absent fields as unknown.
     pub(crate) fn parse(value: &Value, paths: [&str; N], findings: &mut Findings) -> Option<Self> {
         if !value.is_object() {
             findings.token(ReasonCode::InvalidData);
@@ -58,6 +59,8 @@ impl<const N: usize> Counters<N> {
                 continue;
             }
             if let Some(value) = other.values[index] {
+                // An overflowed component stays unknown so later observations cannot make it
+                // appear exact again.
                 let sum = self.values[index].unwrap_or_default().checked_add(value);
                 self.values[index] = sum;
                 if sum.is_none() {
