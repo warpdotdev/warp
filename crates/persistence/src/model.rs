@@ -746,7 +746,7 @@ pub struct NewBlock<'a> {
     pub agent_view_visibility: Option<String>,
 }
 
-#[derive(Identifiable, Queryable, Selectable, Associations)]
+#[derive(Identifiable, Queryable, QueryableByName, Selectable, Associations)]
 #[diesel(table_name = blocks)]
 #[diesel(belongs_to(TerminalSession, foreign_key = pane_leaf_uuid))]
 pub struct Block {
