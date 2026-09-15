@@ -528,9 +528,6 @@ pub enum FeatureFlag {
     /// the conversation usage card.
     ContextWindowUsageBreakdown,
 
-    /// Enables global search
-    GlobalSearch,
-
     /// Enables embedded code review comments.
     EmbeddedCodeReviewComments,
 
@@ -1170,7 +1167,6 @@ impl FeatureFlag {
             CreateEnvironmentSlashCommand => Some(
                 "Enables the /create environment slash command for setting up Warp Environments with custom configurations.",
             ),
-            GlobalSearch => Some("Enables global search in the left panel"),
             BlocklistMarkdownTableRendering => {
                 Some("Enables rendering markdown tables inline in AI block list responses.")
             }

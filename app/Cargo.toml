@@ -604,7 +604,6 @@ default = [
     "pluggable_notifications",
     "agent_onboarding",
     "account_first_onboarding",
-    "global_search",
     "cloud_conversations",
     "list_skills",
     "ask_user_question",
@@ -949,7 +948,6 @@ web_fetch_ui = []
 fork_from_command = []
 context_window_usage_v2 = []
 context_window_usage_breakdown = []
-global_search = []
 file_and_diff_set_comments = []
 revert_to_checkpoints = []
 rewind_slash_command = []
