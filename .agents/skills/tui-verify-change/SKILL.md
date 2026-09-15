@@ -63,7 +63,8 @@ path below.
   binary; otherwise it falls back to `warp-tui-oss`. Both accept the inherited
   `WARP_API_KEY`, so prefer the maintained runner unless you need a specific
   binary or profile. In the cloud, the inherited key signs you in without the
-  browser device-auth flow.
+  browser device-auth flow — provided it is a *user*-account key; see **Key
+  constraints** below before assuming it is.
 
 The logged-**out** surface (the `Sign in to continue` placeholder and any pure
 element/layout) needs neither login path — a plain OSS build is enough in either
@@ -132,6 +133,13 @@ Key constraints:
   print, or inline the secret value in a command — just rely on the inherited
   environment variable. (`--api-key <key>` on the command line also works but
   would expose the secret, so prefer the env var.)
+- **The key must be a *user*-account key.** Some cloud sandboxes inject a
+  service-account key as `WARP_API_KEY`; the user fetch then fails with
+  `Unauthorized: Expected a user account` and the TUI stays on `Sign in to
+  continue`. When the environment provides a separate user key, map that variable
+  in for the launch instead of relying on the inherited value —
+  `WARP_API_KEY="$THE_USER_KEY_VAR" ./script/run-tui`, referencing the variable so
+  the secret is still never printed.
 
 ```bash
 cd <warp-repo-root>
