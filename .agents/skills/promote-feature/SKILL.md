@@ -84,9 +84,15 @@ pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
 ### Validate
 
 ```bash
+cargo clippy -p warp_core --all-targets --tests -- -D warnings
+# Also lint the GUI app when app/Cargo.toml or app/src/lib.rs changed.
+cargo clippy -p warp --all-targets --tests -- -D warnings
+# Also lint the TUI when crates/warp_tui/Cargo.toml changed.
+cargo clippy -p warp_tui --all-targets --tests -- -D warnings
 ./script/format
-cargo clippy --workspace --all-targets --all-features --tests -- -D warnings
 ```
+
+If the promotion changes behavior beyond flag lists or configuration, run affected tests before Clippy. Format once after all other changes are complete. Do not rerun earlier checks after formatting or add a full presubmit unless explicitly required; CI owns broader platform and workspace coverage.
 
 ### Create a follow-up Linear issue
 
