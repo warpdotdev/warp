@@ -15,7 +15,7 @@ use warpui_core::text_layout::{
 };
 use warpui_core::units::{IntoPixels, Pixels};
 
-use super::model::{BlockSpacing, ParagraphStyles, RenderState, RichTextStyles};
+use super::model::{BlockSpacing, ParagraphStyles, RenderState, RichTextStyles, WidthSetting};
 use crate::content::text::{BufferBlockStyle, TextStylesWithMetadata};
 
 const HYPERLINK_UNDERLINE_COLOR: u32 = 0x7aa6daff;
@@ -29,20 +29,24 @@ const HYPERLINK_UNDERLINE_COLOR: u32 = 0x7aa6daff;
 /// content length rather than from the shaped frame, and consumers that map an offset or coordinate
 /// into a frame already clamp to its end. The cap sits far past what can be read on screen, so a
 /// cursor pinning at the truncation point is only reachable in lines nobody edits visually.
-const MAX_LAYOUT_LINE_CHARS: usize = 2 * 1024 * 1024;
+pub(crate) const MAX_LAYOUT_LINE_CHARS: usize = 2 * 1024 * 1024;
 
 /// Shortens `text` to at most [`MAX_LAYOUT_LINE_CHARS`], returning it unchanged when it already
 /// fits.
 fn truncate_text_for_layout(text: &str) -> &str {
+    truncate_text_for_layout_with_max_chars(text, MAX_LAYOUT_LINE_CHARS)
+}
+
+fn truncate_text_for_layout_with_max_chars(text: &str, max_chars: usize) -> &str {
     // Every `char` occupies at least one byte, so a byte length within the cap puts the char count
     // within it too. This keeps the common case off the linear `char_indices` walk below.
-    if text.len() <= MAX_LAYOUT_LINE_CHARS {
+    if text.len() <= max_chars {
         return text;
     }
 
-    // `nth` yields the byte offset at which the first `MAX_LAYOUT_LINE_CHARS` chars end, and `None`
-    // when the text holds no more chars than that. Slicing there is always on a char boundary.
-    match text.char_indices().nth(MAX_LAYOUT_LINE_CHARS) {
+    // `nth` yields the byte offset at which the admitted chars end, and `None` when the text holds
+    // no more chars than that. Slicing there is always on a char boundary.
+    match text.char_indices().nth(max_chars) {
         Some((truncate_at, _)) => &text[..truncate_at],
         None => text,
     }
@@ -50,13 +54,21 @@ fn truncate_text_for_layout(text: &str) -> &str {
 
 /// Drops style runs starting past [`MAX_LAYOUT_LINE_CHARS`] and clamps the tail of a run straddling
 /// it, keeping char-indexed runs consistent with text shortened by [`truncate_text_for_layout`].
+#[cfg(test)]
 fn clamp_style_runs_for_layout(
     style_runs: &[(Range<usize>, StyleAndFont)],
 ) -> Vec<(Range<usize>, StyleAndFont)> {
+    clamp_style_runs_for_layout_with_max_chars(style_runs, MAX_LAYOUT_LINE_CHARS)
+}
+
+fn clamp_style_runs_for_layout_with_max_chars(
+    style_runs: &[(Range<usize>, StyleAndFont)],
+    max_chars: usize,
+) -> Vec<(Range<usize>, StyleAndFont)> {
     style_runs
         .iter()
-        .filter(|(range, _)| range.start < MAX_LAYOUT_LINE_CHARS)
-        .map(|(range, style)| (range.start..range.end.min(MAX_LAYOUT_LINE_CHARS), *style))
+        .filter(|(range, _)| range.start < max_chars)
+        .map(|(range, style)| (range.start..range.end.min(max_chars), *style))
         .collect()
 }
 
@@ -103,6 +115,9 @@ impl<'a> TextLayout<'a> {
         self.container_scrolls_horizontally
     }
 
+    pub(crate) fn supports_deferred_paragraphs(&self) -> bool {
+        self.max_width == f32::MAX
+    }
     /// Builds a [`TextLayout`] for an editor render state.
     pub fn for_render_state(app: &'a AppContext, model: &'a RenderState) -> Self {
         Self::new(
@@ -111,6 +126,14 @@ impl<'a> TextLayout<'a> {
             model.viewport().width().as_f32(),
         )
         .with_container_scrolls_horizontally(model.container_scrolls_horizontally())
+    }
+
+    pub fn for_materialization(app: &'a AppContext, model: &'a RenderState) -> Self {
+        let mut layout = Self::for_render_state(app, model);
+        if matches!(model.width_setting(), WidthSetting::InfiniteWidth) {
+            layout.max_width = f32::MAX;
+        }
+        layout
     }
 
     /// Lay out a single frame of text. The caller is responsible for mapping rich text into
@@ -124,15 +147,32 @@ impl<'a> TextLayout<'a> {
         spacing: &BlockSpacing,
         style_runs: &[(Range<usize>, StyleAndFont)],
     ) -> Arc<TextFrame> {
-        self.layout_text_with_options(
+        self.layout_text_prefix(
+            text,
+            paragraph_style,
+            spacing,
+            style_runs,
+            MAX_LAYOUT_LINE_CHARS,
+        )
+    }
+
+    pub(crate) fn layout_text_prefix(
+        &self,
+        text: &str,
+        paragraph_style: &ParagraphStyles,
+        spacing: &BlockSpacing,
+        style_runs: &[(Range<usize>, StyleAndFont)],
+        max_chars: usize,
+    ) -> Arc<TextFrame> {
+        self.layout_text_with_options_and_max_chars(
             text,
             paragraph_style,
             style_runs,
             self.content_width(spacing),
             Default::default(),
+            max_chars.min(MAX_LAYOUT_LINE_CHARS),
         )
     }
-
     pub fn layout_text_with_options(
         &self,
         text: &str,
@@ -141,6 +181,25 @@ impl<'a> TextLayout<'a> {
         max_width: f32,
         alignment: TextAlignment,
     ) -> Arc<TextFrame> {
+        self.layout_text_with_options_and_max_chars(
+            text,
+            paragraph_style,
+            style_runs,
+            max_width,
+            alignment,
+            MAX_LAYOUT_LINE_CHARS,
+        )
+    }
+
+    fn layout_text_with_options_and_max_chars(
+        &self,
+        text: &str,
+        paragraph_style: &ParagraphStyles,
+        style_runs: &[(Range<usize>, StyleAndFont)],
+        max_width: f32,
+        alignment: TextAlignment,
+        max_chars: usize,
+    ) -> Arc<TextFrame> {
         if text.is_empty() {
             return Arc::new(TextFrame::empty(
                 paragraph_style.font_size,
@@ -148,10 +207,10 @@ impl<'a> TextLayout<'a> {
             ));
         }
 
-        let shaped_text = truncate_text_for_layout(text);
+        let shaped_text = truncate_text_for_layout_with_max_chars(text, max_chars);
         let clamped_style_runs = (shaped_text.len() < text.len()).then(|| {
             // Only pay for a new run list when the text actually lost characters.
-            clamp_style_runs_for_layout(style_runs)
+            clamp_style_runs_for_layout_with_max_chars(style_runs, max_chars)
         });
 
         Arc::new(self.font_cache.layout_text_uncached(
