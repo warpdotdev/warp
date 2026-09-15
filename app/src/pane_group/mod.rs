@@ -47,6 +47,7 @@ use warpui::{
 };
 
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{AIAgentHarness, AIConversation, AIConversationId};
 use crate::ai::agent_conversations_model::{
     AgentConversationEntryId, AgentConversationNavigationSubject, AgentConversationsModel,
@@ -57,7 +58,7 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::blocklist::BlocklistAIHistoryEvent;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
-use crate::ai::blocklist::history_model::CloudConversationData;
+use crate::ai::blocklist::history_model::{CloudConversationData, load_conversation_from_server};
 use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffView;
 use crate::ai::blocklist::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use crate::ai::blocklist::suggested_rule_modal::SuggestedRuleAndId;
@@ -774,6 +775,12 @@ pub enum Event {
     },
     #[cfg(not(target_family = "wasm"))]
     OpenPluginInstructionsPane(crate::terminal::CLIAgent, PluginModalKind),
+    /// A conversation transcript load (initial or retry) finished. Lets the workspace run
+    /// its post-load side effects (WASM details panel auto-open, focus refresh) on success,
+    /// or surface an ephemeral toast on failure, regardless of which path started the load.
+    ConversationTranscriptLoadCompleted {
+        succeeded: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3751,6 +3758,124 @@ impl PaneGroup {
         );
     }
 
+    /// Marks the active conversation transcript viewer as failed, retaining `server_token`
+    /// and `ambient_agent_task_id` so a later retry can load the same conversation again.
+    pub fn fail_conversation_transcript_viewer(
+        &mut self,
+        server_token: ServerConversationToken,
+        ambient_agent_task_id: Option<AmbientAgentTaskId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(terminal_view) = self.active_session_view(ctx) else {
+            report_error!("No active terminal view to mark as a failed conversation load");
+            return;
+        };
+        let Some(terminal_manager) = self.terminal_manager_for_terminal_view(&terminal_view, ctx)
+        else {
+            report_error!("No terminal manager for the failed conversation transcript viewer");
+            return;
+        };
+
+        terminal_manager.update(ctx, |terminal_manager, _ctx| {
+            terminal_manager
+                .model()
+                .lock()
+                .set_conversation_transcript_viewer_status(Some(
+                    ConversationTranscriptViewerStatus::Failed {
+                        server_token,
+                        ambient_agent_task_id,
+                    },
+                ));
+        });
+        ctx.notify();
+    }
+
+    /// Retries loading the active conversation transcript viewer after a failed load,
+    /// reusing the token retained on its `Failed` status. A no-op if the viewer isn't
+    /// currently in that state (e.g. a stale retry click after a previous retry already
+    /// resolved it).
+    pub fn retry_conversation_transcript_load(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(terminal_view) = self.active_session_view(ctx) else {
+            return;
+        };
+        let Some((server_token, ambient_agent_task_id)) = terminal_view.read(ctx, |view, _| {
+            view.model
+                .lock()
+                .conversation_transcript_load_retry_target()
+        }) else {
+            return;
+        };
+
+        if let Some(terminal_manager) = self.terminal_manager_for_terminal_view(&terminal_view, ctx)
+        {
+            terminal_manager.update(ctx, |terminal_manager, _ctx| {
+                terminal_manager
+                    .model()
+                    .lock()
+                    .set_conversation_transcript_viewer_status(Some(
+                        ConversationTranscriptViewerStatus::Loading,
+                    ));
+            });
+            ctx.notify();
+        }
+
+        self.load_conversation_transcript_from_server(server_token, ambient_agent_task_id, ctx);
+    }
+
+    /// Fetches a conversation transcript from the server and applies the outcome to the
+    /// active session view: on success, displays the loaded conversation; on failure,
+    /// marks the viewer failed, retaining the token so it can be retried again.
+    pub fn load_conversation_transcript_from_server(
+        &mut self,
+        server_token: ServerConversationToken,
+        ambient_agent_task_id: Option<AmbientAgentTaskId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let local_conversation_id =
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+                history.get_or_set_canonical_conversation_id_for_server_token(&server_token)
+            });
+        let retry_server_token = server_token.clone();
+
+        ctx.spawn(
+            async move {
+                load_conversation_from_server(local_conversation_id, server_token, ai_client).await
+            },
+            move |pane_group, cloud_conversation, ctx| {
+                let Some(cloud_conversation) = cloud_conversation else {
+                    report_error!("Failed to load conversation from server");
+                    pane_group.fail_conversation_transcript_viewer(
+                        retry_server_token,
+                        ambient_agent_task_id,
+                        ctx,
+                    );
+                    ctx.emit(Event::ConversationTranscriptLoadCompleted { succeeded: false });
+                    return;
+                };
+                pane_group.load_data_into_conversation_transcript_viewer(
+                    cloud_conversation,
+                    ambient_agent_task_id,
+                    ctx,
+                );
+                ctx.emit(Event::ConversationTranscriptLoadCompleted { succeeded: true });
+            },
+        );
+    }
+
+    /// Locates the `TerminalManager` backing `terminal_view`, if it's a terminal pane
+    /// currently tracked by this pane group.
+    fn terminal_manager_for_terminal_view(
+        &self,
+        terminal_view: &ViewHandle<TerminalView>,
+        ctx: &AppContext,
+    ) -> Option<ModelHandle<Box<dyn TerminalManager>>> {
+        self.find_pane_id_for_terminal_view(terminal_view.id(), ctx)
+            .and_then(|pid| pid.as_terminal_pane_id())
+            .and_then(|tpid| self.terminal_session_by_id(tpid))
+            .map(|session| session.terminal_manager(ctx))
+    }
+
     /// Load conversation data into a specific transcript viewer terminal view.
     fn load_data_into_transcript_viewer(
         &mut self,
@@ -3759,11 +3884,7 @@ impl PaneGroup {
         ambient_agent_task_id: Option<AmbientAgentTaskId>,
         ctx: &mut ViewContext<Self>,
     ) {
-        let terminal_manager = self
-            .find_pane_id_for_terminal_view(terminal_view.id(), ctx)
-            .and_then(|pid| pid.as_terminal_pane_id())
-            .and_then(|tpid| self.terminal_session_by_id(tpid))
-            .map(|session| session.terminal_manager(ctx));
+        let terminal_manager = self.terminal_manager_for_terminal_view(&terminal_view, ctx);
 
         let ambient_agent_task_id =
             ambient_agent_task_id.or_else(|| Self::ambient_agent_task_id(&cloud_conversation));
