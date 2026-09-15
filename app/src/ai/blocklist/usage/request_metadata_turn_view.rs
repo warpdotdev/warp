@@ -13,7 +13,7 @@ use super::render_context_window_usage_icon;
 use crate::ai::agent::request_metadata::{
     LegacyCharges, RequestMetadataRecord, TurnPanelData, TurnSummary, summarize_turn,
 };
-use crate::ai::blocklist::view_util::{format_credits, format_usage};
+use crate::ai::blocklist::view_util::format_credits;
 use crate::appearance::Appearance;
 use crate::features::FeatureFlag;
 use crate::settings::UsageDisplayUnit;
@@ -659,10 +659,7 @@ pub(crate) fn turn_panel_tooltip_text_for_data(
         TurnPanelData::Legacy {
             charges: LegacyCharges::CreditsOnly(credits),
             ..
-        } => format!(
-            "Turn: {}",
-            format_usage(*credits, None, None, usage_display_unit)
-        ),
+        } => format!("Turn: {}", format_credits_amount(*credits)),
         _ => turn_panel_tooltip_text(data.records(), usage_display_unit),
     }
 }
@@ -684,16 +681,16 @@ pub(crate) fn turn_panel_tooltip_text(
         .sum();
     let turn_cost = Some(total_cost_in_cents).filter(|&cost| cost > 0.0);
     let credits = Some(total_credits).filter(|&credits| credits > 0.0);
-    match (credits, turn_cost) {
-        (Some(credits), _) => format!(
-            "Turn: {}",
-            format_usage(credits, None, turn_cost, usage_display_unit)
-        ),
-        (None, Some(cost)) if usage_display_unit == UsageDisplayUnit::Dollars => {
-            format!("Turn: ${:.2}", cost / 100.0)
+    let value = match (usage_display_unit, turn_cost, credits) {
+        (UsageDisplayUnit::Dollars, Some(cost), _) => format_dollars(cost),
+        (UsageDisplayUnit::Dollars | UsageDisplayUnit::Credits, _, Some(credits)) => {
+            format_credits_amount(credits)
         }
-        (None, _) => "Turn".to_string(),
-    }
+        (UsageDisplayUnit::Dollars | UsageDisplayUnit::Credits, _, None) => {
+            return "Turn".to_string();
+        }
+    };
+    format!("Turn: {value}")
 }
 fn render_label_text(text: &str, appearance: &Appearance) -> Box<dyn Element> {
     render_label_text_sized(text, appearance.ui_font_size() + 2., appearance)

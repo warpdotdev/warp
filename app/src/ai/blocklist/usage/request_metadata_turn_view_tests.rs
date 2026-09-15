@@ -110,6 +110,20 @@ fn tooltip_names_the_charge_in_the_user_s_display_unit() {
 }
 
 #[test]
+fn tooltip_never_rounds_a_real_charge_to_zero() {
+    let mut tiny = record(0.3, 0.0);
+    tiny.model_charges[0].input_cost_in_credits = 0.03;
+    assert_eq!(
+        turn_panel_tooltip_text(&[tiny.clone()], UsageDisplayUnit::Dollars),
+        "Turn: <$0.01"
+    );
+    assert_eq!(
+        turn_panel_tooltip_text(&[tiny], UsageDisplayUnit::Credits),
+        "Turn: <0.1 credits"
+    );
+}
+
+#[test]
 fn tooltip_sums_multi_request_turns() {
     let mut first = record(120.0, 30.0);
     first.request_id = "req-1".to_string();
