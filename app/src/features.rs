@@ -319,8 +319,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::WebSearchUI,
         #[cfg(feature = "web_fetch_ui")]
         FeatureFlag::WebFetchUI,
-        #[cfg(feature = "fork_from_command")]
-        FeatureFlag::ForkFromCommand,
         #[cfg(feature = "context_window_usage_v2")]
         FeatureFlag::ContextWindowUsageV2,
         #[cfg(feature = "context_window_usage_breakdown")]
