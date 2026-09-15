@@ -162,3 +162,34 @@ fn test_is_unsupported_intel_uhd_adapter() {
         limit_bucket: None,
     }));
 }
+
+#[test]
+fn test_should_vsync_present_for_adapter() {
+    assert!(should_vsync_present_for_adapter(&wgpu::AdapterInfo {
+        name: String::from("AMD Radeon(TM) Graphics"),
+        vendor: 0,
+        device: 0,
+        device_type: wgpu::DeviceType::IntegratedGpu,
+        driver: String::from("AMD Radeon Graphics driver"),
+        driver_info: String::new(),
+        backend: wgpu::Backend::Dx12,
+        device_pci_bus_id: "01:00.0".to_owned(),
+        subgroup_min_size: wgpu::MINIMUM_SUBGROUP_MIN_SIZE,
+        subgroup_max_size: wgpu::MAXIMUM_SUBGROUP_MAX_SIZE,
+        transient_saves_memory: false,
+    }));
+
+    assert!(!should_vsync_present_for_adapter(&wgpu::AdapterInfo {
+        name: String::from("NVIDIA GeForce RTX 4090"),
+        vendor: 0,
+        device: 0,
+        device_type: wgpu::DeviceType::DiscreteGpu,
+        driver: String::from("NVIDIA"),
+        driver_info: String::new(),
+        backend: wgpu::Backend::Dx12,
+        device_pci_bus_id: "01:00.0".to_owned(),
+        subgroup_min_size: wgpu::MINIMUM_SUBGROUP_MIN_SIZE,
+        subgroup_max_size: wgpu::MAXIMUM_SUBGROUP_MAX_SIZE,
+        transient_saves_memory: false,
+    }));
+}
