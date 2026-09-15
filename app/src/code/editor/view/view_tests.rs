@@ -6,7 +6,7 @@ use warp_util::user_input::UserInput;
 use warpui::elements::ScrollbarWidth;
 use warpui::elements::new_scrollable::ScrollableAppearance;
 use warpui::platform::WindowStyle;
-use warpui::{App, TypedActionView, ViewHandle, WindowId};
+use warpui::{App, TypedActionView, View, ViewHandle, WindowId};
 
 use super::{CodeEditorRenderOptions, CodeEditorView, CodeEditorViewAction};
 use crate::AuthStateProvider;
@@ -85,5 +85,26 @@ fn test_interaction_state_prevents_editing() {
         });
 
         assert_eq!(text.as_str(), "abc");
+    });
+}
+
+#[test]
+fn test_active_cursor_position_requires_editable_interaction_state() {
+    App::test((), |mut app| async move {
+        let (_window, editor_view) = initialize_editor(&mut app);
+
+        editor_view.update(&mut app, |view, ctx| {
+            view.set_interaction_state(InteractionState::Selectable, ctx);
+            assert!(
+                view.active_cursor_position(ctx).is_none(),
+                "a selectable-only code editor must not report an active text caret"
+            );
+
+            view.set_interaction_state(InteractionState::Disabled, ctx);
+            assert!(
+                view.active_cursor_position(ctx).is_none(),
+                "a disabled code editor must not report an active text caret"
+            );
+        });
     });
 }
