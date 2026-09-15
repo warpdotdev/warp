@@ -27,6 +27,30 @@ use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::server::server_api::ServerApiProvider;
 use crate::workspaces::user_workspaces::ResolvedTeamScope;
 
+/// Resolution of the local conversation a shared-session-injected prompt should target. See
+/// [`BlocklistAIController::resolve_shared_session_prompt_target`].
+pub(super) enum SharedSessionPromptTarget {
+    /// Deliver to this existing local conversation -- either `server_token` resolved directly
+    /// to it, or (no token) this controller is bound to it for native startup injections.
+    Existing(AIConversationId),
+    /// No `server_token` was supplied at all, and this controller isn't bound to a native
+    /// conversation; the caller may create or reuse one via its own bootstrap logic. Only ever
+    /// returned when no token was supplied -- a token that fails to resolve locally must never
+    /// take this path, since the prompt names a specific conversation that already exists
+    /// somewhere (just not known to this client), and creating a new one would silently
+    /// duplicate it rather than deliver to it.
+    NoToken,
+    /// The prompt cannot be safely delivered anywhere and must be dropped, never used to create
+    /// a new conversation. `target` is `Some` when `server_token` resolves to a different local
+    /// conversation than the one this controller is bound to for native startup injections --
+    /// neither is safe to use, since the token addresses a conversation this controller doesn't
+    /// own and the binding addresses a conversation the prompt wasn't actually sent to. `target`
+    /// is `None` when `server_token` was supplied but doesn't resolve to any locally known
+    /// conversation at all (and this controller isn't bound, so there's no binding to fall back
+    /// to either).
+    Rejected { target: Option<AIConversationId> },
+}
+
 #[derive(Default)]
 pub(super) struct SharedSessionState {
     // The current active request id for the shared session (used if subsequent events do not provide a request id)
@@ -502,6 +526,43 @@ impl BlocklistAIController {
             })
     }
 
+    /// Resolves which local conversation a shared-session-injected prompt should target, given
+    /// an optional server-supplied `server_token` and this controller's native startup binding
+    /// (if any). Computed once so `route_native_startup_injection` and
+    /// `execute_warp_agent_prompt_from_shared_session_injection` agree on the same precedence: a
+    /// `server_token` that resolves locally is authoritative over the native binding, and an
+    /// explicit token that *doesn't* resolve locally is never treated the same as no token at
+    /// all -- see [`SharedSessionPromptTarget::NoToken`].
+    pub(super) fn resolve_shared_session_prompt_target(
+        &self,
+        server_token: Option<&ServerConversationToken>,
+        ctx: &mut ModelContext<Self>,
+    ) -> SharedSessionPromptTarget {
+        let Some(server_token) = server_token else {
+            return match self.native_prompt_conversation_id {
+                Some(bound) => SharedSessionPromptTarget::Existing(bound),
+                None => SharedSessionPromptTarget::NoToken,
+            };
+        };
+        let resolved =
+            self.find_existing_conversation_by_server_token(&server_token.to_string(), ctx);
+        match (resolved, self.native_prompt_conversation_id) {
+            (Some(target), Some(bound)) if target != bound => SharedSessionPromptTarget::Rejected {
+                target: Some(target),
+            },
+            (Some(target), _) => SharedSessionPromptTarget::Existing(target),
+            // A token was supplied but doesn't resolve locally. While bound, trust the binding
+            // regardless -- routinely true for early startup follow-ups before the
+            // conversation's token has synced locally (see `route_native_startup_injection`'s
+            // doc comment).
+            (None, Some(bound)) => SharedSessionPromptTarget::Existing(bound),
+            // Otherwise, this token names a conversation this client doesn't know
+            // about, so it must be rejected rather than mistaken for an explicit no-token
+            // request that's free to bootstrap a new conversation.
+            (None, None) => SharedSessionPromptTarget::Rejected { target: None },
+        }
+    }
+
     /// Sends a synthetic cancellation event to viewers when the sharer cancels a conversation.
     /// This ensures viewers see the conversation as cancelled and update their UI accordingly.
     pub(super) fn send_cancellation_to_viewers(&mut self, ctx: &mut ModelContext<Self>) {
@@ -691,11 +752,16 @@ impl BlocklistAIController {
         ) {
             return;
         }
-        let conversation_id = server_conversation_token
-            .and_then(|id| self.find_existing_conversation_by_server_token(&id.to_string(), ctx))
-            .and_then(
-                |id| match BlocklistAIHistoryModel::as_ref(ctx).conversation(&id) {
-                    Some(c) => Some(c),
+        // Not bound to a native conversation (checked by `route_native_startup_injection`
+        // above), so the resolver only ever resolves via `server_conversation_token`, allows
+        // bootstrapping a new conversation for an explicit no-token request (`NoToken`), or
+        // rejects outright -- never bound-vs-token mismatch, since that requires a binding.
+        let conversation_id = match self
+            .resolve_shared_session_prompt_target(server_conversation_token.as_ref(), ctx)
+        {
+            SharedSessionPromptTarget::Existing(id) => {
+                match BlocklistAIHistoryModel::as_ref(ctx).conversation(&id) {
+                    Some(_) => Some(id),
                     None => {
                         report_error!(
                             "Tried to execute prompt for non-existent conversation",
@@ -703,9 +769,21 @@ impl BlocklistAIController {
                         );
                         None
                     }
-                },
-            )
-            .map(|conversation| conversation.id());
+                }
+            }
+            SharedSessionPromptTarget::NoToken => None,
+            SharedSessionPromptTarget::Rejected { target } => {
+                // A server token was supplied but doesn't resolve to any conversation known to
+                // this client. Never fall back to creating a new conversation here -- that would
+                // silently duplicate a conversation the prompt was actually addressed to.
+                report_error!(
+                    "Dropped a shared-session prompt whose server token does not resolve to a \
+                     known local conversation",
+                    extra: { "target_conversation_id" => ?target, "terminal_id" => ?self.terminal_surface_id }
+                );
+                return;
+            }
+        };
 
         // Process attachments and set them in the context model
         let (block_ids, selected_text_parts, file_downloads) =

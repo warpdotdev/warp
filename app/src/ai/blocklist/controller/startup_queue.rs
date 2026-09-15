@@ -6,6 +6,7 @@ use warp_errors::report_error;
 use warpui::{ModelContext, SingletonEntity};
 
 use super::BlocklistAIController;
+use super::shared_session::SharedSessionPromptTarget;
 use crate::ai::agent::AIAgentAttachment;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::attachment_utils::{
@@ -105,7 +106,7 @@ impl BlocklistAIController {
         participant_id: &ParticipantId,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
-        let Some(id) = self.native_prompt_conversation_id else {
+        let Some(bound_id) = self.native_prompt_conversation_id else {
             log::info!(
                 "event=injection_bypassed_queue task_id={:?} terminal_id={:?} participant_id={participant_id} reason=no_native_binding has_target_token={}",
                 self.ambient_agent_task_id,
@@ -114,17 +115,28 @@ impl BlocklistAIController {
             );
             return false;
         };
-        if let Some(token) = token
-            && let Some(target) =
-                self.find_existing_conversation_by_server_token(&token.to_string(), ctx)
-            && target != id
-        {
-            report_error!(
-                "Rejected a startup injection targeting a different native conversation",
-                extra: { "conversation_id" => %id, "target_conversation_id" => %target, "terminal_id" => ?self.terminal_surface_id }
-            );
-            return true;
-        }
+        let id = match self.resolve_shared_session_prompt_target(token, ctx) {
+            SharedSessionPromptTarget::Existing(id) => id,
+            SharedSessionPromptTarget::Rejected { target } => {
+                report_error!(
+                    "Rejected a startup injection targeting a different native conversation",
+                    extra: { "conversation_id" => %bound_id, "target_conversation_id" => ?target, "terminal_id" => ?self.terminal_surface_id }
+                );
+                return true;
+            }
+            // Defensive: while bound, the resolver should always resolve to `bound_id` when
+            // there's no conflicting token (see its doc comment), so this shouldn't happen in
+            // practice -- but nothing in the resolver's signature guarantees that, so drop the
+            // prompt rather than assume it can't occur.
+            SharedSessionPromptTarget::NoToken => {
+                report_error!(
+                    "Shared-session prompt resolver unexpectedly returned NoToken while bound \
+                     to a native conversation",
+                    extra: { "conversation_id" => %bound_id, "terminal_id" => ?self.terminal_surface_id }
+                );
+                return true;
+            }
+        };
         let row = QueuedQuery::new_shared_session_prompt(
             prompt.to_owned(),
             participant_id.clone(),
