@@ -219,7 +219,7 @@ where
                         ManagedSecretValue::raw_value(raw.value)
                     }
                     GqlManagedSecretValue::ManagedSecretAnthropicApiKeyValue(v) => {
-                        ManagedSecretValue::anthropic_api_key(v.api_key)
+                        ManagedSecretValue::anthropic_api_key(v.api_key, v.base_url)
                     }
                     GqlManagedSecretValue::ManagedSecretAnthropicBedrockAccessKeyValue(v) => {
                         ManagedSecretValue::anthropic_bedrock_access_key(
