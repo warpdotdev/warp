@@ -5,13 +5,16 @@ use std::sync::Arc;
 
 use warp_core::sync_queue::SyncQueueTaskTrait;
 
-use super::diff_state::{DiffMode, DiffStateError, FileDiffAndContent, LocalDiffStateModel};
+use super::diff_state::{
+    DiffMode, DiffStateError, FileDiffAndContent, HeadMaterializationAllowance, LocalDiffStateModel,
+};
 
 pub(crate) struct FileInvalidationTask {
     pub(crate) file: PathBuf,
     pub(crate) repo_path: PathBuf,
     pub(crate) mode: DiffMode,
     pub(crate) merge_base: Option<String>,
+    pub(crate) head_materialization_allowance: Option<HeadMaterializationAllowance>,
 }
 
 impl SyncQueueTaskTrait for FileInvalidationTask {
@@ -28,6 +31,7 @@ impl SyncQueueTaskTrait for FileInvalidationTask {
         let file = self.file.clone();
         let mode = self.mode.clone();
         let merge_base = self.merge_base.clone();
+        let head_materialization_allowance = self.head_materialization_allowance;
         Box::pin(async move {
             // File invalidation runs local git commands against a local repo path,
             // so using LocalDiffStateModel directly is correct — remote repos use a
@@ -37,6 +41,7 @@ impl SyncQueueTaskTrait for FileInvalidationTask {
                 &file,
                 &mode,
                 merge_base.as_deref(),
+                head_materialization_allowance,
             )
             .await
             .map_err(DiffStateError::from)
