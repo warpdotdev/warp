@@ -3244,14 +3244,21 @@ impl PaneGroup {
         pane_group
     }
 
-    /// Returns the terminal view currently owning `conversation_id`, even if
-    /// that owner lives outside this pane group.
+    /// Returns the conversation's owner, excluding panes detached for undo-close.
     fn terminal_view_id_for_owned_conversation(
         &self,
         conversation_id: AIConversationId,
         ctx: &AppContext,
     ) -> Option<EntityId> {
-        BlocklistAIHistoryModel::as_ref(ctx).terminal_surface_id_for_conversation(&conversation_id)
+        BlocklistAIHistoryModel::as_ref(ctx)
+            .terminal_surface_id_for_conversation(&conversation_id)
+            .filter(|terminal_view_id| {
+                // Undo-close retains views and their conversations after their panes detach.
+                self.find_pane_id_for_terminal_view(*terminal_view_id, ctx)
+                    .is_some_and(|pane_id| !self.is_pane_hidden_for_close(pane_id))
+                    || ActiveAgentViewsModel::as_ref(ctx)
+                        .is_terminal_view_attached(*terminal_view_id, ctx)
+            })
     }
 
     fn pane_id_for_owned_conversation(
@@ -4728,6 +4735,8 @@ impl PaneGroup {
         let tracked_child_pane = self.child_agent_panes.remove(&conversation_id);
         self.failed_viewer_child_sessions.remove(&conversation_id);
         self.pending_child_hydrations
+            .retain(|_, child_id| *child_id != conversation_id);
+        self.pending_remote_child_hydrations
             .retain(|_, child_id| *child_id != conversation_id);
         let split_off_child_pane = self.child_agent_origin.as_ref().and_then(|origin| {
             (origin.conversation_id == conversation_id)
@@ -7288,7 +7297,8 @@ impl PaneGroup {
             if let Some(owner_view_id) = BlocklistAIHistoryModel::as_ref(ctx)
                 .terminal_surface_id_for_conversation(&conversation_id)
             {
-                ctx.dispatch_typed_action(&WorkspaceAction::FocusTerminalViewInWorkspace {
+                // Workspace navigation reads this pane group, so it must wait until we return.
+                ctx.dispatch_typed_action_deferred(WorkspaceAction::FocusTerminalViewInWorkspace {
                     terminal_view_id: owner_view_id,
                 });
                 return;
@@ -7848,6 +7858,7 @@ impl PaneGroup {
 
     /// Reattach all panes to this group. This is called when a closed tab is restored.
     pub fn reattach_panes(&mut self, ctx: &mut ViewContext<Self>) {
+        self.remove_transferred_child_agent_panes(ctx);
         let pane_ids = self.pane_contents.keys().copied().collect_vec();
         for pane_id in pane_ids {
             let Some(pane) = self.pane_contents.get(&pane_id) else {
@@ -7855,6 +7866,23 @@ impl PaneGroup {
             };
             self.attach_pane(pane.as_ref(), ctx);
             self.restore_missing_child_agent_panes_for_terminal_pane_if_needed(pane_id, ctx);
+        }
+    }
+
+    fn remove_transferred_child_agent_panes(&mut self, ctx: &mut ViewContext<Self>) {
+        let transferred_children = self
+            .child_agent_panes
+            .iter()
+            .filter_map(|(conversation_id, pane_id)| {
+                let owner = BlocklistAIHistoryModel::as_ref(ctx)
+                    .terminal_surface_id_for_conversation(conversation_id)?;
+                let terminal_view = self.terminal_view_from_pane_id(*pane_id, ctx)?;
+                (owner != terminal_view.id()).then_some(*conversation_id)
+            })
+            .collect_vec();
+
+        for conversation_id in transferred_children {
+            self.discard_child_agent_pane_for_conversation(conversation_id, ctx);
         }
     }
 

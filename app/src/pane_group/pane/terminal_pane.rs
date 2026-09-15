@@ -384,8 +384,10 @@ impl PaneContent for TerminalPane {
             // Only immediately clear conversations and delete blocks if the session is being
             // permanently closed.
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-                history_model
-                    .clear_conversations_for_terminal_surface(self.terminal_view(ctx).id(), ctx);
+                history_model.clear_conversations_for_closed_terminal_surface(
+                    self.terminal_view(ctx).id(),
+                    ctx,
+                );
             });
             self.delete_blocks(ctx);
         }

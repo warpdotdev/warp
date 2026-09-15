@@ -2904,6 +2904,102 @@ fn test_ensure_hidden_child_agent_pane_skips_child_owned_by_another_pane_group()
 }
 
 #[test]
+fn test_ensure_hidden_child_agent_pane_restores_child_from_detached_group() {
+    let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let closed_pane_group = mock_pane_group(&mut app, Default::default());
+        let reopened_pane_group = mock_pane_group(&mut app, Default::default());
+
+        let (parent_conversation, child_conversation_id, previous_owner) = closed_pane_group
+            .update(&mut app, |panes, ctx| {
+                let parent_pane_id = panes.focused_pane_id(ctx);
+                let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
+                let mut child = AIConversation::new(false, false);
+                child.set_parent_conversation_id(parent_conversation_id);
+                child.set_agent_name("architect".to_string());
+                let child_conversation_id = child.id();
+                panes.create_hidden_child_agent_pane(child, parent_pane_id, ctx);
+
+                let previous_owner = panes
+                    .terminal_view_from_pane_id(
+                        panes.child_agent_panes[&child_conversation_id],
+                        ctx,
+                    )
+                    .unwrap();
+                let parent_conversation = BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&parent_conversation_id)
+                    .unwrap()
+                    .clone();
+                panes.swap_active_pane_to_conversation(parent_pane_id, child_conversation_id, ctx);
+                panes.detach_panes(ctx);
+
+                (parent_conversation, child_conversation_id, previous_owner)
+            });
+
+        let restored_child = reopened_pane_group.update(&mut app, |panes, ctx| {
+            let parent_pane_id = panes.focused_pane_id(ctx);
+            let parent_view = panes
+                .terminal_view_from_pane_id(parent_pane_id, ctx)
+                .unwrap();
+            let parent_conversation_id =
+                restore_conversation_for_terminal_view(parent_view.id(), parent_conversation, ctx);
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.set_active_conversation_id(parent_conversation_id, parent_view.id(), ctx);
+            });
+
+            assert!(
+                panes.ensure_hidden_child_agent_pane_for_conversation(child_conversation_id, ctx)
+            );
+            let child_pane_id = *panes
+                .child_agent_panes
+                .get(&child_conversation_id)
+                .expect("an undo-retained owner must not prevent restoring the child");
+            panes.swap_active_pane_to_conversation(parent_pane_id, child_conversation_id, ctx);
+
+            assert_eq!(panes.focused_pane_id(ctx), child_pane_id);
+            let child_view = panes
+                .terminal_view_from_pane_id(child_pane_id, ctx)
+                .unwrap();
+            assert_eq!(
+                child_view.as_ref(ctx).active_conversation_id(ctx),
+                Some(child_conversation_id)
+            );
+            child_view
+        });
+
+        assert_ne!(restored_child.id(), previous_owner.id());
+        closed_pane_group.update(&mut app, |panes, ctx| {
+            panes.reattach_panes(ctx);
+            assert!(!panes.child_agent_panes.contains_key(&child_conversation_id));
+            assert_eq!(
+                panes.find_pane_id_for_terminal_view(previous_owner.id(), ctx),
+                None
+            );
+            assert_eq!(panes.visible_pane_count(), 1);
+            assert!(
+                panes.ensure_hidden_child_agent_pane_for_conversation(child_conversation_id, ctx)
+            );
+        });
+        closed_pane_group.update(&mut app, |panes, ctx| {
+            panes.clean_up_panes(ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .terminal_surface_id_for_conversation(&child_conversation_id),
+                Some(restored_child.id())
+            );
+            assert_eq!(
+                restored_child.as_ref(ctx).active_conversation_id(ctx),
+                Some(child_conversation_id)
+            );
+        });
+    });
+}
+
+#[test]
 fn test_entering_parent_agent_view_skips_child_owned_by_another_pane_group() {
     let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 
