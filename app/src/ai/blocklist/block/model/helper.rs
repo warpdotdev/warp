@@ -25,6 +25,10 @@ pub trait AIBlockModelHelper {
 
     fn is_latest_visible_exchange_in_root_task(&self, app: &AppContext) -> bool;
 
+    /// Whether this block closes a user-visible turn other than the conversation's latest one
+    /// (see `AIConversation::is_last_visible_exchange_in_turn`).
+    fn closes_earlier_visible_turn(&self, app: &AppContext) -> bool;
+
     fn is_latest_exchange_in_terminal_pane(
         &self,
         terminal_view_id: EntityId,
@@ -108,6 +112,16 @@ impl<T: ?Sized + AIBlockModel> AIBlockModelHelper for T {
                 _ => false,
             }
         })
+    }
+
+    fn closes_earlier_visible_turn(&self, app: &AppContext) -> bool {
+        if self.is_latest_visible_exchange_in_root_task(app) {
+            return false;
+        }
+        match (self.conversation(app), self.exchange_id(app)) {
+            (Some(conversation), Some(id)) => conversation.is_last_visible_exchange_in_turn(id),
+            _ => false,
+        }
     }
 
     fn is_latest_exchange_in_terminal_pane(

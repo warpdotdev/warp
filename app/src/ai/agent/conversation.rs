@@ -3601,6 +3601,29 @@ impl AIConversation {
         self.turn_exchange_ids(exchange_id).last() == Some(&exchange_id)
     }
 
+    /// Whether `exchange_id` is a root-task exchange that renders the last visible AI block of
+    /// its turn (see [`Self::turn_exchange_ids`]): passive exchanges render no turn-level
+    /// controls and hidden exchanges have been removed from the blocklist, so a turn whose
+    /// strictly-last exchange is passive or hidden is closed by the visible block before it.
+    /// Mirrors [`Self::latest_visible_exchange`] for turns other than the latest one.
+    pub fn is_last_visible_exchange_in_turn(&self, exchange_id: AIAgentExchangeId) -> bool {
+        if !self
+            .root_task_exchanges()
+            .any(|exchange| exchange.id == exchange_id)
+        {
+            return false;
+        }
+        self.turn_exchange_ids(exchange_id)
+            .into_iter()
+            .rev()
+            .find(|id| {
+                self.exchange_with_id(*id).is_some_and(|exchange| {
+                    !exchange.has_passive_request() && !self.is_exchange_hidden(exchange.id)
+                })
+            })
+            == Some(exchange_id)
+    }
+
     /// Every per-request record for the turn containing `exchange_id`, in task order: the union
     /// of [`Self::request_metadata_records_for_exchange`] over [`Self::turn_exchange_ids`].
     pub fn request_metadata_records_for_turn(

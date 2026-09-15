@@ -520,6 +520,16 @@ fn tool_round_trips_group_into_the_user_query_turn() {
     assert!(conversation.is_last_exchange_in_turn(third));
     assert!(conversation.is_last_exchange_in_turn(fourth));
 
+    // Turn-level controls belong on the closing block of *every* turn, not only the latest.
+    assert!(!conversation.is_last_visible_exchange_in_turn(first));
+    assert!(!conversation.is_last_visible_exchange_in_turn(second));
+    assert!(conversation.is_last_visible_exchange_in_turn(third));
+    assert!(conversation.is_last_visible_exchange_in_turn(fourth));
+    // Every turn-closing block, historical or latest, gets Turn panel data.
+    assert!(conversation.turn_panel_data(first).is_none());
+    assert!(conversation.turn_panel_data(third).is_some());
+    assert!(conversation.turn_panel_data(fourth).is_some());
+
     let turn_a_request_ids: Vec<String> = conversation
         .request_metadata_records_for_turn(third)
         .into_iter()
@@ -546,6 +556,47 @@ fn tool_round_trips_group_into_the_user_query_turn() {
         .map(|record| record.total_cost_in_cents())
         .sum();
     assert!((total_cost_in_cents - 3.0 * 3.11).abs() < 1e-4);
+}
+
+/// Hiding a turn's strictly-last block removes it from the blocklist, so the turn's controls
+/// move to the last block that is still visible (mirroring `latest_visible_exchange` for the
+/// latest turn).
+#[test]
+fn hidden_turn_closer_hands_controls_to_the_previous_visible_block() {
+    App::test((), |mut app| async move {
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+
+        let mut messages = turn_messages("req-1", 1_000);
+        messages.extend(tool_round_trip_messages("req-2", 2_000));
+        messages.extend(turn_messages("req-3", 3_000));
+        let task = api::Task {
+            id: "root".to_string(),
+            messages,
+            ..Default::default()
+        };
+        let mut conversation =
+            AIConversation::new_restored(AIConversationId::new(), vec![task], None)
+                .expect("restored conversation");
+        let exchange_ids: Vec<_> = conversation
+            .root_task_exchanges()
+            .map(|exchange| exchange.id)
+            .collect();
+        let [first, second, third] = exchange_ids[..] else {
+            unreachable!()
+        };
+        assert!(conversation.is_last_visible_exchange_in_turn(second));
+
+        history_model.update(&mut app, |_, ctx| {
+            conversation.set_is_exchange_hidden(second, true, EntityId::new(), ctx);
+        });
+
+        assert!(conversation.is_last_visible_exchange_in_turn(first));
+        assert!(!conversation.is_last_visible_exchange_in_turn(second));
+        assert!(conversation.is_last_visible_exchange_in_turn(third));
+        // The hidden block is still the turn's strict closer for the panel's data lookup.
+        assert!(conversation.is_last_exchange_in_turn(second));
+    });
 }
 
 /// A turn whose final request was cancelled or disconnected mid-stream never receives that
@@ -916,6 +967,9 @@ fn records_resolve_in_restored_summarized_history() {
         .collect();
     assert_eq!(resolved, ["req-1".to_string()]);
     assert!(conversation.turn_panel_records(exchange.id).is_some());
+    // Per-turn block controls (fork at the turn boundary, rating, the Turn panel trigger) are
+    // defined over root-task turns only; a relocated exchange does not close one.
+    assert!(!conversation.is_last_visible_exchange_in_turn(exchange.id));
 }
 
 fn with_timing(
