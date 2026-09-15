@@ -6336,7 +6336,7 @@ pub enum AIBlockAction {
     ForkConversation,
 
     /// Fork the conversation at the boundary of the turn this block closes: the fork keeps
-    /// everything through this block's exchange and nothing after it.
+    /// everything through the end of this block's turn and nothing after it.
     ForkConversationFromTurn,
 
     /// Manually cancel sending an AI request or streaming an AI response for a requested action.

@@ -3595,8 +3595,7 @@ impl AIConversation {
             .collect()
     }
 
-    /// Whether `exchange_id` is the last exchange of its turn (see [`Self::turn_exchange_ids`]),
-    /// i.e. the block where turn-level controls belong.
+    /// Whether `exchange_id` is the last exchange of its turn (see [`Self::turn_exchange_ids`]).
     pub fn is_last_exchange_in_turn(&self, exchange_id: AIAgentExchangeId) -> bool {
         self.turn_exchange_ids(exchange_id).last() == Some(&exchange_id)
     }
@@ -3644,7 +3643,10 @@ impl AIConversation {
     /// last-block charge snapshots and the conversation's current context-window reading.
     /// Cumulative conversation totals are never presented as a historical turn's charges.
     pub fn turn_panel_data(&self, exchange_id: AIAgentExchangeId) -> Option<TurnPanelData> {
-        if !self.is_last_exchange_in_turn(exchange_id) {
+        // Root-task only, and the *visible* closer: the block that renders the turn's
+        // controls is the one that must resolve its data, so eligibility and footer
+        // placement agree even when the turn's strictly-last exchange is passive or hidden.
+        if !self.is_last_visible_exchange_in_turn(exchange_id) {
             return None;
         }
         if let Some(records) = self.turn_panel_records(exchange_id) {
@@ -3775,10 +3777,10 @@ impl AIConversation {
     }
 
     /// The single eligibility check for the Turn panel, shared by the response footer and the
-    /// panel opener: the turn's per-request records when the turn closes at `exchange_id` (see
-    /// [`Self::is_last_exchange_in_turn`]) and its metadata is complete — every exchange in the
-    /// turn has request ids, and all of them have delivered their `Message.RequestMetadata`
-    /// record to this client.
+    /// panel opener: the turn's per-request records when `exchange_id` is the turn's visible
+    /// closer (see [`Self::is_last_visible_exchange_in_turn`]) and its metadata is complete —
+    /// every exchange in the turn has request ids, and all of them have delivered their
+    /// `Message.RequestMetadata` record to this client.
     ///
     /// Request membership is resolved from the exchanges' messages, not from the records, and
     /// every exchange must contribute some: a request cancelled or failed before the server's
@@ -3789,7 +3791,7 @@ impl AIConversation {
         &self,
         exchange_id: AIAgentExchangeId,
     ) -> Option<Vec<RequestMetadataRecord>> {
-        if !self.is_last_exchange_in_turn(exchange_id) {
+        if !self.is_last_visible_exchange_in_turn(exchange_id) {
             return None;
         }
         let records = self.request_metadata_records_for_turn(exchange_id);

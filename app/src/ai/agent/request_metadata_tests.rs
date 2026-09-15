@@ -594,8 +594,19 @@ fn hidden_turn_closer_hands_controls_to_the_previous_visible_block() {
         assert!(conversation.is_last_visible_exchange_in_turn(first));
         assert!(!conversation.is_last_visible_exchange_in_turn(second));
         assert!(conversation.is_last_visible_exchange_in_turn(third));
-        // The hidden block is still the turn's strict closer for the panel's data lookup.
-        assert!(conversation.is_last_exchange_in_turn(second));
+        // The Turn panel follows the controls to the visible closer, and its data still
+        // covers the whole turn (both requests' records), hidden tail included.
+        assert!(conversation.turn_panel_data(second).is_none());
+        match conversation.turn_panel_data(first) {
+            Some(TurnPanelData::Records(records)) => assert_eq!(
+                records
+                    .iter()
+                    .map(|record| record.request_id.as_str())
+                    .collect::<Vec<_>>(),
+                ["req-1", "req-2"]
+            ),
+            other => panic!("expected the turn's records on the visible closer, got {other:?}"),
+        }
     });
 }
 
@@ -905,8 +916,8 @@ fn records_resolve_after_a_summarization_move() {
 }
 
 /// After a restore (or fork), the moved messages live in the summary subtask and the exchange
-/// is rebuilt there rather than in the root: the non-root singleton turn fallback plus the
-/// cross-task lookup must still resolve the record.
+/// is rebuilt there rather than in the root: the cross-task lookup must still resolve the
+/// record, but a relocated exchange closes no root-task turn and so gets no Turn panel.
 #[test]
 fn records_resolve_in_restored_summarized_history() {
     use crate::ai::agent::task::TaskId;
@@ -966,10 +977,11 @@ fn records_resolve_in_restored_summarized_history() {
         .map(|record| record.request_id)
         .collect();
     assert_eq!(resolved, ["req-1".to_string()]);
-    assert!(conversation.turn_panel_records(exchange.id).is_some());
-    // Per-turn block controls (fork at the turn boundary, rating, the Turn panel trigger) are
-    // defined over root-task turns only; a relocated exchange does not close one.
+    // Per-turn block controls (fork at the turn boundary, rating, the Turn panel) are defined
+    // over root-task turns only; a relocated exchange does not close one.
     assert!(!conversation.is_last_visible_exchange_in_turn(exchange.id));
+    assert!(conversation.turn_panel_records(exchange.id).is_none());
+    assert!(conversation.turn_panel_data(exchange.id).is_none());
 }
 
 fn with_timing(
