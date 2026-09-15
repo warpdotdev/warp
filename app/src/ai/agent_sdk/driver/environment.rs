@@ -786,9 +786,10 @@ async fn remove_repository_origins_from_repos(
 fn build_parallel_clone_command(
     repos: &[RepositoryCloneRequest],
     shell_type: ShellType,
-    failed_repos_path: &str,
+    failed_repos_path: &Path,
 ) -> String {
-    let escaped_failed_repos_path = shell_escape_single_quotes(failed_repos_path, ShellType::Bash);
+    let escaped_failed_repos_path =
+        shell_escape_single_quotes(&failed_repos_path.to_string_lossy(), ShellType::Bash);
     let mut script = String::from(
         r#"set +e
 failed=0
@@ -931,7 +932,8 @@ async fn clone_checkout_requests(
                 full: ("Cloning repositories via terminal: {}", repo_names.join(", "))
             );
 
-            let failed_repos_path = format!("/tmp/.warp-clone-failed-{}", Uuid::new_v4());
+            let failed_repos_path =
+                std::env::temp_dir().join(format!(".warp-clone-failed-{}", Uuid::new_v4()));
             let command = build_parallel_clone_command(repos, shell_type, &failed_repos_path);
             let exit_code = execute_command(command, spawner).await?;
             if exit_code != 0.into() {
@@ -939,9 +941,8 @@ async fn clone_checkout_requests(
                 // recorded as failed. Fall back to the whole batch if the
                 // marker file couldn't be read, e.g. the script errored
                 // before reaching the wait loop.
-                let failed_repo_names = read_failed_repo_names(&failed_repos_path, spawner)
-                    .await
-                    .unwrap_or(repo_names);
+                let failed_repo_names =
+                    read_failed_repo_names(&failed_repos_path).unwrap_or(repo_names);
                 return Err(PrepareEnvironmentError::CloneRepo {
                     repo_name: failed_repo_names.join(", "),
                 });
@@ -960,16 +961,10 @@ async fn clone_checkout_requests(
 /// `failed_repos_path`, then removes the marker file. Returns `None` when
 /// nothing could be read, so the caller can fall back to reporting the whole
 /// batch instead of an empty list.
-async fn read_failed_repo_names(
-    failed_repos_path: &str,
-    spawner: &ModelSpawner<TerminalDriver>,
-) -> Option<Vec<String>> {
-    let shell_type = active_shell_type(spawner).await;
-    let escaped_path = shell_escape_single_quotes(failed_repos_path, shell_type);
-    let command = format!("cat '{escaped_path}' 2>/dev/null; rm -f '{escaped_path}'");
-    let output = execute_silent_command(command, spawner).await.ok()?;
-    let names = output
-        .to_string()
+fn read_failed_repo_names(failed_repos_path: &Path) -> Option<Vec<String>> {
+    let contents = std::fs::read_to_string(failed_repos_path);
+    let _ = std::fs::remove_file(failed_repos_path);
+    let names = contents
         .ok()?
         .lines()
         .map(str::trim)
