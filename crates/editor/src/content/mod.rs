@@ -7,6 +7,7 @@ pub mod edit;
 pub mod find;
 pub mod hidden_lines_model;
 pub mod markdown;
+pub mod memory_profile;
 pub mod mermaid_diagram;
 pub mod outline;
 mod segmentation;
