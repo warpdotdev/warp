@@ -6179,8 +6179,7 @@ pub enum AIBlockEvent {
     /// Emitted when we want to show or hide the per-turn request-metadata "Turn" panel.
     TurnPanelToggled {
         conversation_id: AIConversationId,
-        /// The exchange this block renders, used to look up that turn's record rather than
-        /// whatever the conversation's latest turn happens to be.
+        /// The exchange this block renders, used to look up that turn's record
         exchange_id: AIAgentExchangeId,
         is_expanded: bool,
     },

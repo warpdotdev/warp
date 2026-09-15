@@ -1,6 +1,8 @@
 //! The client's read-only view of the server-authored `Message.RequestMetadata` records that
-//! ride in the task tree (APP-5720). The client never authors or mutates these; it decodes them
+//! ride in the task tree. The client never authors or mutates these; it decodes them
 //! for display.
+
+use std::time::Duration;
 
 use chrono::{DateTime, Local};
 use warp_multi_agent_api as api;
@@ -8,13 +10,20 @@ use warp_multi_agent_api as api;
 use super::api::convert_conversation::proto_timestamp_to_local_datetime;
 use crate::persistence::model::ChargedUsageTotals;
 
+/// How a model's inference was paid for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InferenceUsageType {
+    DirectApi,
+    Byok,
+    CustomEndpoint,
+}
+
 /// Token counts and costs (US cents and credits) charged for one model within one usage
 /// category.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RequestModelCharge {
     pub category: String,
-    /// `direct_api`, `byok`, or `custom_endpoint`.
-    pub usage_type: &'static str,
+    pub usage_type: InferenceUsageType,
     pub model_id: String,
     pub input_tokens: u32,
     pub output_tokens: u32,
@@ -86,7 +95,7 @@ impl RequestLlmGenerationSpan {
 }
 
 /// One decoded `Message.RequestMetadata`, keyed by the request it describes.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct RequestMetadataRecord {
     pub message_id: String,
     pub request_id: String,
@@ -102,7 +111,7 @@ pub struct RequestMetadataRecord {
     pub files_changed: Option<u32>,
     pub lines_added: Option<u32>,
     pub lines_removed: Option<u32>,
-    /// Percentage (0-100) of the context window in use after the request.
+    /// Fraction 0-1 of the context window in use after the request.
     pub context_window_usage: Option<f32>,
 }
 
@@ -115,19 +124,19 @@ impl RequestMetadataRecord {
         };
 
         let timing = metadata.timing.as_ref();
-        let timestamp = |ts: Option<&prost_types::Timestamp>| {
-            ts.map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos))
-        };
-        let seconds = |duration: Option<&prost_types::Duration>| {
-            duration.map(|d| d.seconds as f64 + f64::from(d.nanos) / 1e9)
-        };
 
         let (request_started_at, request_ended_at) = timing
             .and_then(|t| t.request_timespan.as_ref())
             .map(|timespan| {
                 (
-                    timestamp(timespan.started_at.as_ref()),
-                    timestamp(timespan.ended_at.as_ref()),
+                    timespan
+                        .started_at
+                        .as_ref()
+                        .map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos)),
+                    timespan
+                        .ended_at
+                        .as_ref()
+                        .map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos)),
                 )
             })
             .unwrap_or((None, None));
@@ -136,8 +145,14 @@ impl RequestMetadataRecord {
                 t.llm_generation_timespans
                     .iter()
                     .map(|timespan| RequestLlmGenerationSpan {
-                        started_at: timestamp(timespan.started_at.as_ref()),
-                        ended_at: timestamp(timespan.ended_at.as_ref()),
+                        started_at: timespan
+                            .started_at
+                            .as_ref()
+                            .map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos)),
+                        ended_at: timespan
+                            .ended_at
+                            .as_ref()
+                            .map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos)),
                     })
                     .collect()
             })
@@ -149,10 +164,16 @@ impl RequestMetadataRecord {
             let mut categories: Vec<_> = charges.usage_by_category.iter().collect();
             categories.sort_by(|(a, _), (b, _)| a.cmp(b));
             for (category, charged) in categories {
-                let sections: [(&str, &_); 3] = [
-                    ("direct_api", &charged.direct_api_inference_usage),
-                    ("byok", &charged.byok_inference_usage),
-                    ("custom_endpoint", &charged.custom_endpoint_inference_usage),
+                let sections = [
+                    (
+                        InferenceUsageType::DirectApi,
+                        &charged.direct_api_inference_usage,
+                    ),
+                    (InferenceUsageType::Byok, &charged.byok_inference_usage),
+                    (
+                        InferenceUsageType::CustomEndpoint,
+                        &charged.custom_endpoint_inference_usage,
+                    ),
                 ];
                 for (usage_type, by_model) in sections {
                     let mut models: Vec<_> = by_model.iter().collect();
@@ -190,8 +211,10 @@ impl RequestMetadataRecord {
                         category: category.clone(),
                         cost_in_cents: charged.platform_usage_in_cents,
                         cost_in_credits: charged.platform_usage_in_credits,
-                        duration_seconds: seconds(charged.platform_usage_duration.as_ref())
-                            .unwrap_or(0.0),
+                        duration_seconds: charged
+                            .platform_usage_duration
+                            .and_then(|duration| Duration::try_from(duration).ok())
+                            .map_or(0.0, |duration| duration.as_secs_f64()),
                     });
                 }
             }
@@ -204,7 +227,9 @@ impl RequestMetadataRecord {
             message_id: message.id.clone(),
             request_id: message.request_id.clone(),
             request_started_at,
-            first_token_at: timestamp(timing.and_then(|t| t.first_token_at.as_ref())),
+            first_token_at: timing
+                .and_then(|t| t.first_token_at.as_ref())
+                .map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos)),
             request_ended_at,
             llm_generation_spans,
             model_charges,
@@ -288,14 +313,10 @@ impl RequestMetadataRecord {
     }
 }
 
-/// What the Turn panel renders for one turn. Complete server-authored records are preferred;
-/// turns without them (conversations that predate the records, or requests that never delivered
-/// one) fall back to the best client-derived summary of that turn.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TurnPanelData {
     Records(Vec<RequestMetadataRecord>),
-    /// Synthetic records built client-side: one per exchange carrying that exchange's timing,
-    /// with the turn's context-window reading (latest turn only) and `charges` on the last.
+    /// Synthetic records built using the legacy conversation metadata
     Legacy {
         records: Vec<RequestMetadataRecord>,
         charges: LegacyCharges,
@@ -416,10 +437,6 @@ impl TurnSummary {
     }
 }
 
-/// Aggregates one turn's records for display. Charges are summed per model and per platform
-/// category; timing uses the widest span (earliest start / first token, latest end) plus every
-/// record's LLM generation spans; tool counts sum; the context window comes from the latest
-/// record that reports one.
 pub fn summarize_turn(records: &[RequestMetadataRecord]) -> TurnSummary {
     let mut model_charges: Vec<RequestModelCharge> = Vec::new();
     let mut platform_charges: Vec<RequestPlatformCharge> = Vec::new();

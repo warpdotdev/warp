@@ -2,6 +2,7 @@
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
+use thousands::Separable;
 use warpui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow, Empty, Flex,
     Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
@@ -374,9 +375,8 @@ impl RequestMetadataTurnView {
         )
         .with_color(text_color)
         .finish();
-        // The record carries a 0-100 percentage; the ring icon reads a 0-1 fraction.
-        let fraction = (usage / 100.).clamp(0., 1.);
-        let percent = usage.round();
+        let fraction = usage.clamp(0., 1.);
+        let percent = (fraction * 100.).round();
         let value = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Min)
@@ -648,9 +648,6 @@ impl TypedActionView for RequestMetadataTurnView {
     }
 }
 
-/// The trigger icon's hover tooltip for whatever the panel will show: the turn's charge,
-/// honoring the user's credits/dollars display-unit setting. Stays quiet ("Turn") rather than
-/// fabricating a total when nothing is known.
 pub(crate) fn turn_panel_tooltip_text_for_data(
     data: &TurnPanelData,
     usage_display_unit: UsageDisplayUnit,
@@ -725,7 +722,11 @@ fn render_value_text(text: String, font_size: f32, appearance: &Appearance) -> B
 }
 
 pub(crate) fn format_tokens(tokens: u64) -> String {
-    format!("{tokens} token{}", if tokens == 1 { "" } else { "s" })
+    format!(
+        "{} token{}",
+        tokens.separate_with_commas(),
+        if tokens == 1 { "" } else { "s" }
+    )
 }
 
 fn format_tokens_with_cost(
@@ -753,14 +754,25 @@ fn format_cost(
     }
 }
 
-/// Formats a credit amount. A non-zero amount that `format_credits` would round to `0 credits`
-/// is shown as `<0.1 credits`, since rounding it to zero would misleadingly suggest no cost
-/// was incurred.
+/// Formats a credit amount with thousands separators. A non-zero amount that would round to
+/// `0 credits` is shown as `<0.1 credits`, since rounding it to zero would misleadingly suggest
+/// no cost was incurred.
 fn format_credits_amount(credits: f32) -> String {
     if credits > 0.0 && credits < 0.1 {
-        "<0.1 credits".to_string()
+        return "<0.1 credits".to_string();
+    }
+    let text = format_credits(credits);
+    let Some((amount, unit)) = text.split_once(' ') else {
+        return text;
+    };
+    let (whole, fraction) = amount.split_once('.').unwrap_or((amount, ""));
+    let whole = whole
+        .parse::<i64>()
+        .map_or_else(|_| whole.to_string(), |whole| whole.separate_with_commas());
+    if fraction.is_empty() {
+        format!("{whole} {unit}")
     } else {
-        format_credits(credits)
+        format!("{whole}.{fraction} {unit}")
     }
 }
 

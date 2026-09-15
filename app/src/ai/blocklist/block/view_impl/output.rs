@@ -3479,14 +3479,8 @@ fn footer_icon_button_styles(app: &AppContext) -> (UiComponentStyles, UiComponen
     (style_override, style_override_with_background)
 }
 
-/// The Turn panel contents for the user-visible turn this block closes (APP-5720): the
-/// server-authored records when every request in the turn delivered one, otherwise the best
-/// client-derived summary. `None` for a mid-turn tool-call block, with pricing transparency
-/// off, or without a bound exchange/conversation.
+/// The Turn panel contents for the user-visible turn this block closes
 fn turn_panel_data_for_block(props: Props, app: &AppContext) -> Option<TurnPanelData> {
-    if !FeatureFlag::PricingTransparency.is_enabled() {
-        return None;
-    }
     let exchange_id = props.model.exchange_id(app)?;
     let conversation = props.model.conversation(app)?;
     conversation.turn_panel_data(exchange_id)
@@ -3661,13 +3655,11 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         flex.add_child(fork_button);
     }
 
-    // The Turn panel is the single per-turn usage surface (APP-5720): the trigger replaces
-    // the legacy credit-count pill on every latest-turn block, whether or not the turn
-    // delivered server-authored records (legacy turns show what the client can derive).
-    if let Some(data) = turn_panel_data_for_block(props, app) {
-        // The full-bleed pie glyph reads tighter against the fork icon than the other
-        // footer glyphs do; the explicit margin gives it the same visual spacing as
-        // the surrounding icon buttons.
+    let turn_panel_data = FeatureFlag::PricingTransparency
+        .is_enabled()
+        .then(|| turn_panel_data_for_block(props, app))
+        .flatten();
+    if let Some(data) = turn_panel_data {
         flex.add_child(
             Container::new(render_turn_panel_button(
                 props,
@@ -3714,8 +3706,7 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
 }
 
 /// Renders the per-turn icon that, on click, opens/closes the docked "Turn" panel backed by the
-/// turn's usage data. Same hover-tooltip/click-to-open pattern as the old usage button, but an
-/// independent trigger with no cross-navigation to the usage footer.
+/// turn's usage data.
 fn render_turn_panel_button(
     props: Props,
     data: &TurnPanelData,
@@ -3748,8 +3739,6 @@ fn render_turn_panel_button(
 }
 
 /// Renders the usage button that, on click, will expand & collapse the usage summary footer.
-/// Only reachable with `PricingTransparency` off (the Turn panel replaces it when the flag is
-/// on); the rip-out waits until the flag ships everywhere.
 fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
     let Some(conversation) = props.model.conversation(app) else {
         return Empty::new().finish();

@@ -7304,9 +7304,6 @@ impl TerminalView {
             return;
         }
 
-        // The panel is a pricing-transparency surface. If the flag turned off while the
-        // trigger was on screen, the block still dispatches the toggle: close-only, no
-        // new panel (the trigger itself disappears on the block's next render).
         if !FeatureFlag::PricingTransparency.is_enabled() {
             ctx.notify();
             return;

@@ -96,7 +96,7 @@ fn record_message(request_id: &str, with_charges: bool) -> api::Message {
                     lines_added: 40,
                     lines_removed: 8,
                 }),
-                context_window: Some(request_metadata::ContextWindow { usage: 42.0 }),
+                context_window: Some(request_metadata::ContextWindow { usage: 0.42 }),
                 ..Default::default()
             },
         )),
@@ -115,7 +115,10 @@ fn decodes_a_completed_record() {
     assert_eq!(record.llm_generation_ms(), Some(7000));
     assert_eq!(record.total_tokens(), 1250);
     assert_eq!(record.model_charges.len(), 1);
-    assert_eq!(record.model_charges[0].usage_type, "direct_api");
+    assert_eq!(
+        record.model_charges[0].usage_type,
+        InferenceUsageType::DirectApi
+    );
     assert!((record.inference_cost_in_cents() - 1.11).abs() < 1e-5);
     assert!((record.inference_cost_in_credits() - 0.82).abs() < 1e-5);
     assert!((record.platform_cost_in_cents() - 2.0).abs() < 1e-5);
@@ -128,8 +131,7 @@ fn decodes_a_completed_record() {
     assert_eq!(record.files_changed, Some(3));
     assert_eq!(record.lines_added, Some(40));
     assert_eq!(record.lines_removed, Some(8));
-    // The merged schema's context window is a 0-100 percentage.
-    assert_eq!(record.context_window_usage, Some(42.0));
+    assert_eq!(record.context_window_usage, Some(0.42));
 }
 
 #[test]
@@ -976,7 +978,7 @@ fn summarize_turn_sums_charges_timing_and_tools_across_records() {
     assert_eq!(summary.files_changed, Some(9));
     assert_eq!(summary.lines_added, Some(120));
     assert_eq!(summary.lines_removed, Some(24));
-    assert_eq!(summary.context_window_usage, Some(42.0));
+    assert_eq!(summary.context_window_usage, Some(0.42));
 }
 
 #[test]

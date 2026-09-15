@@ -1,6 +1,6 @@
 use super::*;
 use crate::ai::agent::request_metadata::{
-    RequestLlmGenerationSpan, RequestModelCharge, RequestPlatformCharge,
+    InferenceUsageType, RequestLlmGenerationSpan, RequestModelCharge, RequestPlatformCharge,
 };
 use crate::settings::UsageDisplayUnit;
 
@@ -15,7 +15,7 @@ fn record(inference_cents: f32, platform_cents: f32) -> RequestMetadataRecord {
         model_charges: (inference_cents > 0.0)
             .then(|| RequestModelCharge {
                 category: "primary_agent".to_string(),
-                usage_type: "direct_api",
+                usage_type: InferenceUsageType::DirectApi,
                 model_id: "model".to_string(),
                 input_tokens: 10,
                 output_tokens: 5,
@@ -70,7 +70,7 @@ fn format_cost_follows_the_display_unit() {
     );
     assert_eq!(
         format_tokens_with_cost(1200, 150.0, 0.5, UsageDisplayUnit::Credits),
-        "1200 tokens  /  0.5 credits"
+        "1,200 tokens  /  0.5 credits"
     );
 }
 
@@ -80,6 +80,13 @@ fn format_credits_amount_never_rounds_a_real_charge_to_zero() {
     assert_eq!(format_credits_amount(0.03), "<0.1 credits");
     assert_eq!(format_credits_amount(1.0), "1 credit");
     assert_eq!(format_credits_amount(2.5), "2.5 credits");
+}
+
+#[test]
+fn large_token_and_credit_amounts_use_thousands_separators() {
+    assert_eq!(format_tokens(1_234_567), "1,234,567 tokens");
+    assert_eq!(format_credits_amount(1_234.0), "1,234 credits");
+    assert_eq!(format_credits_amount(12_345.5), "12,345.5 credits");
 }
 
 #[test]
