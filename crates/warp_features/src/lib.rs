@@ -845,10 +845,6 @@ pub enum FeatureFlag {
     /// Redux of the setup/initial user query UI for cloud mode.
     CloudModeSetupV2,
 
-    /// Enables summary mode in vertical tabs, showing condensed tab summaries
-    /// instead of individual pane rows.
-    VerticalTabsSummaryMode,
-
     CloudModeInputV2,
 
     /// Enables continuing cloud mode conversations in the cloud after an execution ends.
