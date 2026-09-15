@@ -19,6 +19,12 @@ use crate::{TelemetryEvent, send_telemetry_from_app_ctx, send_telemetry_sync_fro
 /// The threshold at which we emit a memory usage warning, in bytes.
 const MEMORY_USAGE_WARNING_THRESHOLD_BYTES: u64 = Byte::GIGABYTE.as_u64() * 10;
 
+/// The number of foreground-task spawn sites to include (ranked by live task
+/// count) when attaching the task census to an excessive-memory Sentry
+/// event.
+#[cfg(feature = "heap_usage_tracking")]
+const TOP_N_FOREGROUND_SPAWN_SITES: usize = 20;
+
 /// The refresh interval for system information, in seconds.
 const REFRESH_INTERVAL_S: usize = 5;
 /// The refresh interval for system information.
@@ -225,8 +231,14 @@ impl SystemInfo {
         #[cfg(feature = "heap_usage_tracking")]
         {
             let breakdown_for_sentry = memory_breakdown.clone();
+            let foreground_task_census = ctx
+                .foreground_executor()
+                .task_census_snapshot(TOP_N_FOREGROUND_SPAWN_SITES);
             ctx.spawn(
-                crate::profiling::dump_jemalloc_heap_profile(breakdown_for_sentry),
+                crate::profiling::dump_jemalloc_heap_profile(
+                    breakdown_for_sentry,
+                    foreground_task_census,
+                ),
                 |_, _, _| {},
             );
         }

@@ -92,7 +92,10 @@ pub async fn dump_heap_profile_to_disk() -> anyhow::Result<std::path::PathBuf> {
 /// the local HTTP server.  Either way, the resulting profile is attached to a
 /// Sentry event.
 #[cfg(feature = "heap_usage_tracking")]
-pub async fn dump_jemalloc_heap_profile(memory_breakdown: serde_json::Value) {
+pub async fn dump_jemalloc_heap_profile(
+    memory_breakdown: serde_json::Value,
+    foreground_task_census: warpui::r#async::executor::ForegroundTaskCensusSnapshot,
+) {
     use sentry::protocol::{Attachment, AttachmentType};
 
     let result = dump_jemalloc_heap_profile_inner().await;
@@ -117,6 +120,25 @@ pub async fn dump_jemalloc_heap_profile(memory_breakdown: serde_json::Value) {
                         > = map.into_iter().collect();
                         scope.set_context(
                             "memory_breakdown",
+                            sentry::protocol::Context::Other(context_map),
+                        );
+                    }
+
+                    // Attach the live foreground-task census as its own
+                    // context, alongside the memory breakdown. When the
+                    // profile's own frames dead-end in the executor's boxed
+                    // `Future::poll` (every main-thread task looks the same
+                    // there), this names the call sites actually holding
+                    // tasks open.
+                    if let Ok(serde_json::Value::Object(map)) =
+                        serde_json::to_value(&foreground_task_census)
+                    {
+                        let context_map: std::collections::BTreeMap<
+                            String,
+                            sentry::protocol::Value,
+                        > = map.into_iter().collect();
+                        scope.set_context(
+                            "foreground_task_census",
                             sentry::protocol::Context::Other(context_map),
                         );
                     }
