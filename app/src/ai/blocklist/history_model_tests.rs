@@ -5451,6 +5451,65 @@ fn fork_exact_reconciles_fork_point_client_tool_calls() {
     });
 }
 
+/// The per-turn fork button forks from the block that closes an earlier turn (which is
+/// usually a tool-result follow-up, not the exchange carrying the user's query) in non-exact
+/// mode: the fork keeps that whole turn and nothing from the turns after it.
+#[test]
+fn fork_from_an_earlier_turns_closing_exchange_keeps_exactly_that_turn() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let _receiver = install_mock_model_event_sender(&mut app);
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+
+        let root_task_id = "root-task";
+        let call_id = "toolu_1";
+        // Turn A: query (req-1) → tool round trip (req-2). Turn B: query (req-3).
+        let root_task = create_api_task(
+            root_task_id,
+            vec![
+                create_user_query_message("m1", root_task_id, "req-1", "first"),
+                regular_tool_call_message("m2", root_task_id, call_id, "req-1"),
+                regular_tool_call_result_message("m3", root_task_id, call_id, "req-2"),
+                agent_output_message("m4", root_task_id, "req-2", "done with first"),
+                create_user_query_message("m5", root_task_id, "req-3", "second"),
+                agent_output_message("m6", root_task_id, "req-3", "done with second"),
+            ],
+        );
+        let source = AIConversation::new_restored(AIConversationId::new(), vec![root_task], None)
+            .expect("source conversation should build");
+        let (source_id, _) = restore_and_find_exchange(&mut app, &history_model, source, "first");
+
+        let turn_a_closer = history_model.read(&app, |model, _| {
+            let conversation = model.conversation(&source_id).unwrap();
+            let exchange_ids: Vec<_> = conversation
+                .root_task_exchanges()
+                .map(|exchange| exchange.id)
+                .collect();
+            assert_eq!(exchange_ids.len(), 3, "one exchange per request");
+            let closer = exchange_ids[1];
+            assert!(conversation.is_last_visible_exchange_in_turn(closer));
+            assert!(!conversation.is_last_visible_exchange_in_turn(exchange_ids[0]));
+            closer
+        });
+
+        let forked = history_model.update(&mut app, |model, ctx| {
+            let source = model.conversation(&source_id).unwrap().clone();
+            model
+                .fork_conversation_at_exchange(&source, turn_a_closer, false, "[Fork] ", None, ctx)
+                .expect("fork should succeed")
+        });
+
+        let root = forked_root_task(&forked);
+        let message_ids: Vec<&str> = root.messages.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(
+            message_ids,
+            ["m1", "m2", "m3", "m4"],
+            "the fork keeps turn A in full and nothing from turn B"
+        );
+    });
+}
+
 #[test]
 fn todo_projections_delegate_to_the_conversation() {
     App::test((), |mut app| async move {
