@@ -225,7 +225,7 @@ cargo test --doc
 ```
 
 ## Final validation order
-After the relevant tests pass, run the applicable Clippy invocation from `./script/presubmit`, fix its findings, and then format once:
+After the relevant tests pass, run Clippy, fix its findings, and then format once:
 ```bash
 cargo clippy -p <package_name> --all-targets --tests -- -D warnings
 ./script/format
