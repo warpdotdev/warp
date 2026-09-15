@@ -443,7 +443,7 @@ fn remote_arm_propagates_skills_into_skill_references() {
         &RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: true,
+            computer_use_enabled: Some(true),
             runner_id: String::new(),
         },
         "oz",
@@ -473,7 +473,7 @@ fn remote_arm_propagates_skills_into_skill_references() {
     assert_eq!(worker_host, "warp");
     assert_eq!(harness_type, "oz");
     assert_eq!(model_id, "auto");
-    assert!(computer_use_enabled);
+    assert_eq!(computer_use_enabled, Some(true));
     assert_eq!(title, "Child");
     assert_eq!(auth_secret_name, None);
     assert_eq!(agent_identity_uid, None);
@@ -487,7 +487,7 @@ fn remote_arm_propagates_agent_identity_uid() {
         &RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: false,
+            computer_use_enabled: None,
             runner_id: String::new(),
         },
         "oz",
@@ -522,7 +522,7 @@ fn remote_arm_with_empty_skills_propagates_empty_vec() {
         &RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: false,
+            computer_use_enabled: None,
             runner_id: String::new(),
         },
         "claude",
@@ -547,7 +547,7 @@ fn remote_arm_rejects_opencode() {
         &RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: false,
+            computer_use_enabled: None,
             runner_id: String::new(),
         },
         "opencode",
@@ -600,7 +600,7 @@ fn remote_arm_propagates_claude_auth_secret_into_mode() {
         &RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: false,
+            computer_use_enabled: None,
             runner_id: String::new(),
         },
         "claude",
@@ -625,7 +625,7 @@ fn remote_arm_filters_whitespace_auth_secret_name_to_none() {
         &RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: false,
+            computer_use_enabled: None,
             runner_id: String::new(),
         },
         "codex",

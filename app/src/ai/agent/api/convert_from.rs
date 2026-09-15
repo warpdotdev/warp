@@ -92,6 +92,13 @@ pub(crate) fn convert_run_agents_harness(harness: Option<&api::Harness>) -> Opti
     )
 }
 
+/// The generated Rust proto has no field presence here, so omitted and explicit `false` values
+/// both decode as `false`. Treating that value as unspecified preserves the server default;
+/// explicit `false` requires field presence on the wire.
+fn convert_run_agents_computer_use_enabled(computer_use_enabled: bool) -> Option<bool> {
+    computer_use_enabled.then_some(true)
+}
+
 fn convert_run_agents_execution_mode(
     execution_mode: Option<api::run_agents::ExecutionModeOneOf>,
 ) -> RunAgentsExecutionMode {
@@ -100,7 +107,9 @@ fn convert_run_agents_execution_mode(
             RunAgentsExecutionMode::Remote {
                 environment_id: remote.environment_id,
                 worker_host: remote.worker_host,
-                computer_use_enabled: remote.computer_use_enabled,
+                computer_use_enabled: convert_run_agents_computer_use_enabled(
+                    remote.computer_use_enabled,
+                ),
                 runner_id: remote.runner_id,
             }
         }
