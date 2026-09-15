@@ -3,7 +3,10 @@
 //! Subcommands:
 //! - [`ping`] — fetches the current run by task ID and prints its info.
 //! - [`report_artifact`] — reports an artifact (e.g. a PR) back to the Oz platform.
+
 use anyhow::Result;
+#[cfg(target_os = "linux")]
+use command::blocking::Command;
 use warp_cli::GlobalOptions;
 use warp_cli::agent::OutputFormat;
 use warp_cli::harness_support::{
@@ -277,9 +280,17 @@ fn finish_task(
 fn report_shutdown(
     ctx: &mut AppContext,
     runner: ModelHandle<HarnessSupportRunner>,
-    args: ReportShutdownArgs,
+    mut args: ReportShutdownArgs,
     output_format: OutputFormat,
 ) -> Result<()> {
+    let error_pair_is_valid = matches!(
+        (&args.error_category, &args.error_message),
+        (Some(_), Some(_)) | (None, None)
+    );
+    if error_pair_is_valid && let Some(message) = detect_oom_shutdown(args.exit_code, args.pid) {
+        args.error_category = Some("oom".to_string());
+        args.error_message = Some(message);
+    }
     runner.update(ctx, |_, ctx| {
         let client = ServerApiProvider::as_ref(ctx).get_harness_support_client();
 
@@ -317,6 +328,77 @@ fn report_shutdown(
     Ok(())
 }
 
+fn detect_oom_shutdown(exit_code: Option<u8>, pid: Option<u32>) -> Option<String> {
+    let exit_code = exit_code.filter(|exit_code| *exit_code != 0)?;
+    let kernel_evidence = pid.is_some_and(kernel_logs_contain_oom_for_pid);
+    oom_shutdown_message(exit_code == 137, kernel_evidence)
+}
+
+fn oom_shutdown_message(exit_137: bool, kernel_evidence: bool) -> Option<String> {
+    match (exit_137, kernel_evidence) {
+        (true, true) => {
+            Some("agent process was OOM-killed (exit status 137 and kernel evidence)".to_string())
+        }
+        (true, false) => Some("agent process was OOM-killed (exit status 137)".to_string()),
+        (false, true) => Some("agent process was OOM-killed (kernel evidence)".to_string()),
+        (false, false) => None,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn kernel_logs_contain_oom_for_pid(pid: u32) -> bool {
+    [
+        ("dmesg", &[][..]),
+        ("journalctl", &["-k", "--no-pager"][..]),
+    ]
+    .into_iter()
+    .filter_map(|(program, args)| Command::new(program).args(args).output().ok())
+    .filter(|output| output.status.success())
+    .any(|output| {
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| oom_kill_line_matches_pid(line, pid))
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn kernel_logs_contain_oom_for_pid(_: u32) -> bool {
+    false
+}
+
+fn oom_kill_line_matches_pid(line: &str, pid: u32) -> bool {
+    let pid = pid.to_string();
+    let killed_process = (line.contains("Out of memory:") || line.contains("out of memory:"))
+        && line
+            .match_indices("Killed process ")
+            .any(|(index, prefix)| {
+                let suffix = &line[index + prefix.len()..];
+                suffix
+                    .strip_prefix(&pid)
+                    .is_some_and(|suffix| suffix.starts_with(" ("))
+            });
+    if killed_process {
+        return true;
+    }
+
+    line.contains("oom-kill:")
+        && line.match_indices("pid=").any(|(index, prefix)| {
+            let field_start = index + prefix.len();
+            let valid_start = index == 0
+                || line[..index].chars().next_back().is_some_and(|character| {
+                    character == ',' || character == ':' || character.is_ascii_whitespace()
+                });
+            valid_start
+                && line[field_start..]
+                    .strip_prefix(&pid)
+                    .is_some_and(|suffix| {
+                        suffix.chars().next().is_none_or(|character| {
+                            character == ',' || character.is_ascii_whitespace()
+                        })
+                    })
+        })
+}
+
 /// Singleton model for running async harness-support operations.
 struct HarnessSupportRunner;
 
@@ -325,3 +407,7 @@ impl warpui::Entity for HarnessSupportRunner {
 }
 
 impl SingletonEntity for HarnessSupportRunner {}
+
+#[cfg(test)]
+#[path = "harness_support_tests.rs"]
+mod tests;

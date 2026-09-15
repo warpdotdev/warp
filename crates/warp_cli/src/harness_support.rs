@@ -130,4 +130,12 @@ pub struct ReportShutdownArgs {
     /// Omit for clean shutdown.
     #[arg(long)]
     pub error_message: Option<String>,
+
+    /// PID of the agent process that exited.
+    #[arg(long)]
+    pub pid: Option<u32>,
+
+    /// Exit status of the agent process.
+    #[arg(long)]
+    pub exit_code: Option<u8>,
 }

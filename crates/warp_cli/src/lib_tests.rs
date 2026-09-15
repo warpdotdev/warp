@@ -3273,6 +3273,8 @@ fn report_shutdown_clean_parses() {
 
     assert!(shutdown_args.error_category.is_none());
     assert!(shutdown_args.error_message.is_none());
+    assert!(shutdown_args.pid.is_none());
+    assert!(shutdown_args.exit_code.is_none());
 }
 
 #[test]
@@ -3379,6 +3381,10 @@ fn report_shutdown_abnormal_parses() {
         "oom",
         "--error-message",
         "out of memory",
+        "--pid",
+        "1234",
+        "--exit-code",
+        "137",
     ])
     .unwrap();
 
@@ -3397,6 +3403,8 @@ fn report_shutdown_abnormal_parses() {
         shutdown_args.error_message.as_deref(),
         Some("out of memory")
     );
+    assert_eq!(shutdown_args.pid, Some(1234));
+    assert_eq!(shutdown_args.exit_code, Some(137));
 }
 
 #[test]
