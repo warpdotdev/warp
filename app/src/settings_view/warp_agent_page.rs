@@ -97,8 +97,8 @@ use crate::settings::{
     NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled, OrchestrationMessageDisplayMode,
     PromptSubmissionMode, SharedBlockTitleGenerationEnabled,
     ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
-    ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VOICE_INPUT_LANGUAGES,
-    VoiceInputEnabled, VoiceInputLanguage, VoiceInputToggleKey,
+    ShowConversationHistory, ShowHintText, ShowResponseFooter, ThinkingDisplayMode,
+    VOICE_INPUT_LANGUAGES, VoiceInputEnabled, VoiceInputLanguage, VoiceInputToggleKey,
 };
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
@@ -533,6 +533,15 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 )),
                 &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
                 flags::SHOW_CONVERSATION_HISTORY,
+            )
+            .with_group(bindings::BindingGroup::WarpAi),
+            ToggleSettingActionPair::new(
+                "agent response footer",
+                builder(SettingsAction::WarpAgent(
+                    WarpAgentPageAction::ToggleShowResponseFooter,
+                )),
+                &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
+                flags::SHOW_AGENT_RESPONSE_FOOTER,
             )
             .with_group(bindings::BindingGroup::WarpAi),
         ],
@@ -2190,6 +2199,7 @@ impl WarpAgentPageView {
             Box::new(UseAgentFooterWidget::default()),
             Box::new(AgentToolbarLayoutEditorWidget),
             Box::new(ShowConversationHistoryWidget::default()),
+            Box::new(ShowResponseFooterWidget::default()),
             Box::new(ThinkingDisplayModeWidget),
             Box::new(OrchestrationMessageDisplayModeWidget),
         ];
@@ -2373,6 +2383,7 @@ pub enum WarpAgentPageAction {
     ToggleAmpersandHandoff,
     ToggleAutoHandoffOnSleep,
     ToggleShowConversationHistory,
+    ToggleShowResponseFooter,
 }
 
 impl TypedActionView for WarpAgentPageView {
@@ -2862,6 +2873,12 @@ impl TypedActionView for WarpAgentPageView {
                             .show_conversation_history
                             .toggle_and_save_value(ctx)
                     );
+                });
+                ctx.notify();
+            }
+            WarpAgentPageAction::ToggleShowResponseFooter => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.show_response_footer.toggle_and_save_value(ctx));
                 });
                 ctx.notify();
             }
@@ -4202,6 +4219,38 @@ impl SettingsWidget for ShowConversationHistoryWidget {
             "Show conversation history in tools panel",
             WarpAgentPageAction::ToggleShowConversationHistory,
             *ai_settings.show_conversation_history,
+            is_toggleable,
+            self.toggle.clone(),
+            &view.local_only_icon_tooltip_states,
+            app,
+        )
+    }
+}
+
+#[derive(Default)]
+struct ShowResponseFooterWidget {
+    toggle: SwitchStateHandle,
+}
+
+impl SettingsWidget for ShowResponseFooterWidget {
+    type View = WarpAgentPageView;
+
+    fn search_terms(&self) -> &str {
+        "other response footer rating thumbs fork usage credits hide"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        _appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ai_settings = AISettings::as_ref(app);
+        let is_toggleable = ai_settings.is_any_ai_enabled(app);
+        render_ai_setting_toggle::<ShowResponseFooter>(
+            "Show response footer",
+            WarpAgentPageAction::ToggleShowResponseFooter,
+            *ai_settings.show_response_footer,
             is_toggleable,
             self.toggle.clone(),
             &view.local_only_icon_tooltip_states,
