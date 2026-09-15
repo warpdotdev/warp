@@ -418,6 +418,16 @@ mod windows_custom_theme_path_tests {
 }
 
 #[test]
+fn olive_grove_theme_is_registered_and_searchable() {
+    let theme_config = WarpThemeConfig::new();
+    let theme = theme_config.theme(&ThemeKind::OliveGrove);
+
+    assert_eq!(ThemeKind::OliveGrove.to_string(), "Olive Grove");
+    assert_eq!(theme.name(), Some("Olive Grove".to_string()));
+    assert!(ThemeKind::OliveGrove.matches("olive"));
+}
+
+#[test]
 #[cfg(not(target_family = "wasm"))]
 fn in_memory_theme_generation_test() {
     let mountains_bg_path: PathBuf = [
