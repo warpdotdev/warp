@@ -373,51 +373,54 @@ impl BlockFindResults {
             return;
         }
 
-        // If the dirty range is before all existing matches, insert at the start.
-        if matches
+        let replace_range = if matches
             .first()
             .is_some_and(|first_match| *dirty_range.end() < first_match.start_row())
         {
-            matches.splice(0..0, new_matches);
-            return;
-        }
-
-        // If the dirty range is after all existing matches, append at the end.
-        if matches
+            // The dirty range is before all existing matches: insert at the start.
+            0..0
+        } else if matches
             .last()
             .is_some_and(|last_match| last_match.end_row() < *dirty_range.start())
         {
-            matches.extend(new_matches);
-            return;
-        }
-
-        // Find the range of matches that overlap with the dirty range.
-        // A match overlaps if: match.start <= dirty.end AND match.end >= dirty.start
-        let replace_start = matches
-            .iter()
-            .position(|m| m.end_row() >= *dirty_range.start())
-            .unwrap_or(matches.len());
-
-        let replace_end = matches
-            .iter()
-            .rposition(|m| m.start_row() <= *dirty_range.end())
-            .map(|pos| pos + 1)
-            .unwrap_or(replace_start);
-
-        let replace_range = if replace_start <= replace_end {
-            replace_start..replace_end
+            // The dirty range is after all existing matches: append at the end.
+            matches.len()..matches.len()
         } else {
-            // Dirty range lies between two adjacent matches; insert without replacing.
-            replace_start..replace_start
+            // Find the range of matches that overlap with the dirty range.
+            // A match overlaps if: match.start <= dirty.end AND match.end >= dirty.start
+            let replace_start = matches
+                .iter()
+                .position(|m| m.end_row() >= *dirty_range.start())
+                .unwrap_or(matches.len());
+
+            let replace_end = matches
+                .iter()
+                .rposition(|m| m.start_row() <= *dirty_range.end())
+                .map(|pos| pos + 1)
+                .unwrap_or(replace_start);
+
+            if replace_start <= replace_end {
+                replace_start..replace_end
+            } else {
+                // Dirty range lies between two adjacent matches; insert without replacing.
+                replace_start..replace_start
+            }
         };
 
         matches.splice(replace_range, new_matches);
 
-        // Assert that matches are still in ascending order.
-        debug_assert!(
-            matches.windows(2).all(|w| w[0] <= w[1]),
-            "Matches should be in ascending order after update_dirty_matches"
-        );
+        // The splice window above is computed from row overlap only, but
+        // `AbsoluteMatch` ordering compares full (row, col) end points. A new
+        // match that spans past the dirty-range boundary row can therefore
+        // land next to a retained same-row neighbor that sorts before it by
+        // column, breaking ascending order — on the prepend fast path just as
+        // much as on the general path. Restore the invariant when that seam
+        // breaks; the `is_sorted` fast-path keeps the common case cheap, and
+        // per-block match counts are bounded with throttled updates, so the
+        // occasional re-sort is negligible.
+        if !matches.is_sorted() {
+            matches.sort_unstable();
+        }
     }
 }
 
