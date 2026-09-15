@@ -1982,6 +1982,24 @@ fn test_parse_empty_underline() {
 }
 
 #[test]
+fn test_unclosed_underline_roundtrips_literal() {
+    assert_eq!(
+        parse_all("<u><u>", parse_inline),
+        vec![FormattedTextFragment::plain_text("<u><u>")]
+    );
+    assert_eq!(
+        parse_all("<u>a<u>", parse_inline),
+        vec![FormattedTextFragment::plain_text("<u>a<u>")]
+    );
+    assert_eq!(
+        parse_all("a <u>word<u> b", parse_inline),
+        vec![
+            FormattedTextFragment::plain_text("a <u>word<u> b"),
+        ]
+    );
+}
+
+#[test]
 fn test_unordered_list_indentation_level_relative() {
     // Test that both 2-space and 4-space relative indentation produce the same structure
     let source_2space = "- top level\n  - sublevel\n    - subsublevel";
