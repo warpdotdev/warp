@@ -977,7 +977,58 @@ fn team_catalog_hydration_preserves_shared_profile_and_resolves_against_active_t
 }
 
 #[test]
-fn reconcile_clears_unavailable_and_unentitled_base_model_preferences() {
+fn reconcile_clears_unavailable_base_model_preference() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+
+        let profiles_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+        let profile_id = profiles_model.read(&app, |profiles, _| profiles.default_profile_id());
+        let unavailable_model_id = LLMId::from("unavailable-model");
+        let mut unavailable_model = server_llm(
+            unavailable_model_id.as_str(),
+            Some(DisableReason::Unavailable),
+        );
+        unavailable_model.context_window.is_configurable = true;
+        profiles_model.update(&mut app, |profiles, ctx| {
+            profiles.set_base_model(&profile_id, Some(unavailable_model_id), ctx);
+            profiles.set_context_window_limit(&profile_id, Some(200_000), ctx);
+        });
+        llm_preferences.update(&mut app, |preferences, ctx| {
+            preferences.update_feature_model_choices(
+                Ok(ModelsByFeature {
+                    agent_mode: available(
+                        "auto-genius",
+                        vec![server_llm("auto-genius", None), unavailable_model],
+                    ),
+                    ..Default::default()
+                }),
+                ctx,
+            );
+        });
+
+        profiles_model.read(&app, |profiles, ctx| {
+            let profile = profiles.default_profile(ctx);
+            assert_eq!(profile.data().base_model, None);
+            assert_eq!(profile.data().context_window_limit, None);
+        });
+    });
+}
+
+#[test]
+fn reconcile_clears_requires_upgrade_base_model_preference_without_byok() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
         app.add_singleton_model(|_| ServerApiProvider::new_for_test());
@@ -997,36 +1048,34 @@ fn reconcile_clears_unavailable_and_unentitled_base_model_preferences() {
         let llm_preferences = app.add_singleton_model(LLMPreferences::new);
         let profile_id = profiles_model.read(&app, |profiles, _| profiles.default_profile_id());
 
-        for (model_id, disable_reason) in [
-            ("unavailable-model", DisableReason::Unavailable),
-            ("upgrade-model", DisableReason::RequiresUpgrade),
-        ] {
-            let model_id = LLMId::from(model_id);
-            let mut disabled_model = server_llm(model_id.as_str(), Some(disable_reason));
-            disabled_model.context_window.is_configurable = true;
-            profiles_model.update(&mut app, |profiles, ctx| {
-                profiles.set_base_model(&profile_id, Some(model_id.clone()), ctx);
-                profiles.set_context_window_limit(&profile_id, Some(200_000), ctx);
-            });
-            llm_preferences.update(&mut app, |preferences, ctx| {
-                preferences.update_feature_model_choices(
-                    Ok(ModelsByFeature {
-                        agent_mode: available(
-                            "auto-genius",
-                            vec![server_llm("auto-genius", None), disabled_model],
-                        ),
-                        ..Default::default()
-                    }),
-                    ctx,
-                );
-            });
+        let upgrade_model_id = LLMId::from("upgrade-model");
+        let mut upgrade_model = server_llm(
+            upgrade_model_id.as_str(),
+            Some(DisableReason::RequiresUpgrade),
+        );
+        upgrade_model.context_window.is_configurable = true;
+        profiles_model.update(&mut app, |profiles, ctx| {
+            profiles.set_base_model(&profile_id, Some(upgrade_model_id), ctx);
+            profiles.set_context_window_limit(&profile_id, Some(200_000), ctx);
+        });
+        llm_preferences.update(&mut app, |preferences, ctx| {
+            preferences.update_feature_model_choices(
+                Ok(ModelsByFeature {
+                    agent_mode: available(
+                        "auto-genius",
+                        vec![server_llm("auto-genius", None), upgrade_model],
+                    ),
+                    ..Default::default()
+                }),
+                ctx,
+            );
+        });
 
-            profiles_model.read(&app, |profiles, ctx| {
-                let profile = profiles.default_profile(ctx);
-                assert_eq!(profile.data().base_model, None);
-                assert_eq!(profile.data().context_window_limit, None);
-            });
-        }
+        profiles_model.read(&app, |profiles, ctx| {
+            let profile = profiles.default_profile(ctx);
+            assert_eq!(profile.data().base_model, None);
+            assert_eq!(profile.data().context_window_limit, None);
+        });
     });
 }
 

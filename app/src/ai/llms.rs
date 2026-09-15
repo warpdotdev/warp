@@ -1987,7 +1987,11 @@ impl LLMPreferences {
         ctx.emit(LLMPreferencesEvent::UpdatedAvailableLLMs);
     }
 
-    /// Clear model selections where the model is no longer supported or effectively disabled.
+    /// Reconcile stored model selections with the current model catalog and credentials.
+    ///
+    /// An `AdminDisabled` base-model selection and its context limit are preserved because
+    /// profiles are shared across teams. Other unusable base, coding, CLI agent, and computer use
+    /// selections are cleared.
     ///
     /// Called both when the model list is refreshed from the server and when
     /// BYOK API keys change (since `RequiresUpgrade` usability is BYOK-aware).
