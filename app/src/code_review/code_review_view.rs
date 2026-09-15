@@ -5708,9 +5708,7 @@ impl CodeReviewView {
                         }
                     }
 
-                    if self.find_model.as_ref(ctx).is_find_bar_open()
-                        && FeatureFlag::CodeReviewFind.is_enabled()
-                    {
+                    if self.find_model.as_ref(ctx).is_find_bar_open() {
                         self.find_model.update(ctx, |model, model_ctx| {
                             model.run_search(self.editor_handles(), model_ctx);
                         });
@@ -7236,9 +7234,7 @@ impl TypedActionView for CodeReviewView {
                     self.viewported_list_state.scroll_to(file_index);
                 }
 
-                if self.find_model.as_ref(ctx).is_find_bar_open()
-                    && FeatureFlag::CodeReviewFind.is_enabled()
-                {
+                if self.find_model.as_ref(ctx).is_find_bar_open() {
                     self.find_model.update(ctx, |model, model_ctx| {
                         model.run_search(self.editor_handles(), model_ctx);
                     });
@@ -7284,10 +7280,7 @@ impl TypedActionView for CodeReviewView {
                 self.viewported_list_state
                     .invalidate_height_for_index(*file_index);
 
-                if !was_expanded
-                    && self.find_model.as_ref(ctx).is_find_bar_open()
-                    && FeatureFlag::CodeReviewFind.is_enabled()
-                {
+                if !was_expanded && self.find_model.as_ref(ctx).is_find_bar_open() {
                     self.find_model.update(ctx, |model, model_ctx| {
                         model.run_search(self.editor_handles(), model_ctx);
                     });
