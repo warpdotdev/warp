@@ -39,10 +39,10 @@ async fn watch_network_status_changed_internal(
     let mut state_changed_stream = network_manager_proxy.receive_state_changed().await?;
     while let Some(msg) = state_changed_stream.next().await {
         if let Ok(args) = msg.args() {
-            // Treat NM_STATE_CONNECTED_LOCAL, NM_STATE_CONNECTED_SITE, NM_STATE_CONNECTED_GLOBAL,
-            // and NM_STATE_UNKNOWN as connected. Previously only NM_STATE_CONNECTED_GLOBAL counted,
-            // which falsely reported disconnection because NetworkManager's connectivity check
-            // misroutes probes when tun interfaces are present.
+            // NetworkManager's connectivity check can report `NM_STATE_CONNECTED_LOCAL` or
+            // `NM_STATE_CONNECTED_SITE` when tun interfaces misroute its probes, even though the app
+            // can still reach the internet. `NM_STATE_UNKNOWN` is also documented as an unknown
+            // state, not as disconnected.
             // See also: https://networkmanager.dev/docs/api/1.32.10/nm-dbus-types.html
             match args.state {
                 0 | 50 | 60 | 70 => {
