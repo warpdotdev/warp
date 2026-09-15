@@ -808,6 +808,10 @@ pub enum FeatureFlag {
     /// Enables tab configs — user-definable TOML templates for launching custom tab layouts.
     TabConfigs,
 
+    /// Enables keybindings derived from saved launch configurations and tab configs
+    /// (`launch_config:open:<name>` / `tab_config:open:<file stem>`).
+    ConfigKeybindings,
+
     /// Enables Warp local control through the standalone warpctrl CLI.
     WarpControlCli,
 
@@ -1020,6 +1024,7 @@ pub const LOCAL_FLAGS: &[FeatureFlag] = &[FeatureFlag::LocalClaudeCodexChildHarn
 /// Features enabled for the development team.  The expectation is that, over
 /// time, these will move on to PREVIEW_FLAGS before being launched.
 pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
+    FeatureFlag::ConfigKeybindings,
     FeatureFlag::LogExpensiveFramesInSentry,
     FeatureFlag::ToggleBootstrapBlock,
     FeatureFlag::CreatingSharedSessions,

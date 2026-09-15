@@ -47,6 +47,11 @@ Defaults are compiled into Warp and are **not** discoverable from the keybinding
 
 2. **By description or current key combo** ("rebind the command palette to cmd-p", "change ctrl+space to ctrl+s"): you don't have the action name and cannot reliably guess it. Do not invent one. Direct the user to the **keybindings editor** (`workspace:show_keybinding_settings`, default `cmd-ctrl-k` on macOS; **Settings → Keyboard Shortcuts** on other platforms) — they can search by description or current shortcut there and either edit the binding in place or share the canonical `namespace:action_name` so you can write it.
 
+3. **By saved config** ("open my `backend` launch config with ctrl-alt-1"): every saved launch configuration and tab config registers its own action, so the name is derivable:
+   - `launch_config:open:<name>` — `<name>` is the launch configuration's `name` field, exactly as written in its YAML (same identifier `warp://launch/<name>` accepts).
+   - `tab_config:open:<file-stem>` — the tab config's file name without the `.toml` extension (same identifier `warp://tab_config/<stem>` accepts).
+   These appear in the keybindings editor as `Open Launch Configuration "<name>"` / `Open Tab Config "<name>"` and have no default keystroke.
+
 ## Workflow
 
 1. Determine which action to remap and the new trigger (see "Identifying the action").

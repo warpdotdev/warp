@@ -788,10 +788,7 @@ fn find_matching_config_name<'a>(
     target_name: &str,
     configs: &'a [LaunchConfig],
 ) -> Option<&'a LaunchConfig> {
-    let target_name_lower = target_name.to_lowercase();
-    configs
-        .iter()
-        .find(|&config| config.name.to_lowercase() == target_name_lower)
+    crate::launch_configs::launch_config::find_by_name(configs, target_name)
 }
 
 /// Handles `warp://tab_config/<name>` deeplinks.

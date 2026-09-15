@@ -505,11 +505,12 @@ impl ActionButton {
                 ctx.subscribe_to_model(
                     &KeybindingChangedNotifier::handle(ctx),
                     move |me, _, event, ctx| {
-                        let KeybindingChangedEvent::BindingChanged {
+                        if let KeybindingChangedEvent::BindingChanged {
                             binding_name,
                             new_trigger,
-                        } = event;
-                        if binding_name == name {
+                        } = event
+                            && binding_name == name
+                        {
                             me.cached_keystroke = new_trigger.clone();
                             ctx.notify();
                         }
