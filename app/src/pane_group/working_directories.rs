@@ -267,8 +267,8 @@ pub struct WorkingDirectoriesModel {
     /// not the raw working directories reported by each pane.
     ///
     /// Concretely, for each pane group's active paths we store:
-    /// - the detected repository root when the path belongs to a repo
-    /// - otherwise, the normalized path itself (local) or the remote CWD/editor path
+    /// - a linked git worktree checkout (`.git` file) as its own root
+    /// - otherwise the detected repository root, or the normalized path itself
     ///
     /// IndexSet maintains insertion order - most recently added directories appear later.
     pane_groups: HashMap<EntityId, IndexSet<LocalOrRemotePath>>,
@@ -629,13 +629,8 @@ impl WorkingDirectoriesModel {
         let old_focused_repo: Option<LocalOrRemotePath> =
             self.focused_repo.get(&pane_group_id).cloned().flatten();
 
-        // Resolve a local path to its detected repository root, or keep the path as-is if no repo is found.
-        let root_for_path = |path: PathBuf| {
-            DetectedRepositories::as_ref(ctx)
-                .get_root_for_path(&LocalOrRemotePath::Local(path.clone()))
-                .and_then(|r| PathBuf::try_from(r).ok())
-                .unwrap_or(path)
-        };
+        // Resolve a local path to its explorer display root.
+        let root_for_path = |path: PathBuf| display_root_for_local_path(path, ctx);
 
         let root_for_raw_path = |raw_path: &str| normalize_cwd(raw_path).map(root_for_path);
 
@@ -653,7 +648,7 @@ impl WorkingDirectoriesModel {
             }
         }
 
-        // Collapse working directories to their nearest repository root (when detected).
+        // Collapse ordinary repo subdirectories to the repo root. Linked worktrees stay put.
         let mut file_path_ancestors: HashSet<PathBuf> = local_terminal_cwds
             .iter()
             .filter_map(|(_, cwd)| root_for_raw_path(cwd))
@@ -1140,6 +1135,24 @@ fn normalize_cwd(raw_cwd: &str) -> Option<PathBuf> {
     // Use dunce::canonicalize to avoid Windows extended-length path prefix (\\?\)
     // which would cause path comparison mismatches with CanonicalizedPath.
     dunce::canonicalize(&path).ok()
+}
+
+/// Linked worktrees use a `.git` file; keep that checkout as the explorer root.
+#[cfg(feature = "local_fs")]
+fn is_linked_git_worktree(path: &Path) -> bool {
+    path.join(".git").is_file()
+}
+
+/// Linked worktree checkout, else detected repo root, else the path itself.
+#[cfg(feature = "local_fs")]
+fn display_root_for_local_path(path: PathBuf, ctx: &AppContext) -> PathBuf {
+    if is_linked_git_worktree(&path) {
+        return path;
+    }
+    DetectedRepositories::as_ref(ctx)
+        .get_root_for_path(&LocalOrRemotePath::Local(path.clone()))
+        .and_then(|r| PathBuf::try_from(r).ok())
+        .unwrap_or(path)
 }
 
 #[cfg(test)]
