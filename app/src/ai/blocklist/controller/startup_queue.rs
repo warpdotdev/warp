@@ -8,14 +8,15 @@ use warpui::{ModelContext, SingletonEntity};
 use super::BlocklistAIController;
 use crate::ai::agent::AIAgentAttachment;
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::attachment_utils::{build_file_attachment_map, download_task_file_attachments};
+use crate::ai::attachment_utils::{
+    build_file_attachment_map, download_task_file_attachments, resolve_agent_attachments,
+};
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::{
     AutofireAction, BlocklistAIHistoryModel, QueuedPromptDeliveryMode, QueuedQuery, QueuedQueryId,
     QueuedQueryModel,
 };
 use crate::server::server_api::ServerApiProvider;
-use crate::terminal::model::BlockId;
 
 impl BlocklistAIController {
     /// Binds this controller to a native conversation before session sharing can begin
@@ -258,25 +259,8 @@ impl BlocklistAIController {
         let query_id = row.id();
         let text = row.text().to_owned();
 
-        let mut block_ids = Vec::new();
-        let mut selected_text_parts = Vec::new();
-        let mut file_downloads: Vec<(String, String)> = Vec::new();
-        for attachment in attachments {
-            match attachment {
-                AgentAttachment::BlockReference { block_id } => {
-                    block_ids.push(BlockId::from(block_id.to_string()));
-                }
-                AgentAttachment::PlainText { content } => {
-                    selected_text_parts.push(content);
-                }
-                AgentAttachment::FileReference {
-                    attachment_id,
-                    file_name,
-                } => {
-                    file_downloads.push((attachment_id, file_name));
-                }
-            }
-        }
+        let (block_ids, selected_text_parts, file_downloads) =
+            resolve_agent_attachments(attachments);
         self.context_model.update(ctx, |context_model, ctx| {
             if !block_ids.is_empty() {
                 context_model.set_pending_context_block_ids(block_ids, false, ctx);

@@ -18,12 +18,13 @@ use crate::ai::agent::conversation::{AIConversationId, ConversationStatus, TaskS
 use crate::ai::agent::{AIAgentActionId, AIAgentAttachment, EntrypointType};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::attachment_utils::{build_file_attachment_map, download_task_file_attachments};
+use crate::ai::attachment_utils::{
+    build_file_attachment_map, download_task_file_attachments, resolve_agent_attachments,
+};
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::server::server_api::ServerApiProvider;
-use crate::terminal::model::block::BlockId;
 use crate::workspaces::user_workspaces::ResolvedTeamScope;
 
 #[derive(Default)]
@@ -707,26 +708,8 @@ impl BlocklistAIController {
             .map(|conversation| conversation.id());
 
         // Process attachments and set them in the context model
-        let mut block_ids = Vec::new();
-        let mut selected_text_parts = Vec::new();
-        let mut file_downloads: Vec<(String, String)> = Vec::new();
-        for attachment in attachments {
-            match attachment {
-                AgentAttachment::BlockReference { block_id } => {
-                    // Convert protocol BlockId to app BlockId
-                    block_ids.push(BlockId::from(block_id.to_string()));
-                }
-                AgentAttachment::PlainText { content } => {
-                    selected_text_parts.push(content);
-                }
-                AgentAttachment::FileReference {
-                    attachment_id,
-                    file_name,
-                } => {
-                    file_downloads.push((attachment_id, file_name));
-                }
-            }
-        }
+        let (block_ids, selected_text_parts, file_downloads) =
+            resolve_agent_attachments(attachments);
 
         // Set block and text attachments in the context model.
         self.context_model.update(ctx, |context_model, ctx| {
