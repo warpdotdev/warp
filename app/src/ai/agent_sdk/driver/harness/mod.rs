@@ -458,7 +458,9 @@ pub(crate) fn task_env_vars(
 ///
 /// We use the `ANTHROPIC_MODEL` env var rather than the `--model` CLI flag because
 /// the env var is the most reliable mechanism and avoids precedence conflicts with
-/// Claude Code's `settings.json`.
+/// Claude Code's `settings.json`. For Claude, a selected reasoning level is mirrored
+/// into `CLAUDE_CODE_EFFORT_LEVEL`; when no reasoning level was chosen, the variable
+/// is left unset so Claude Code falls back to its own per-model default effort.
 pub(crate) fn harness_model_env_vars(
     selected_harness: Harness,
     third_party_harness_model_config: Option<&HarnessModelConfig>,
@@ -474,6 +476,15 @@ pub(crate) fn harness_model_env_vars(
     match selected_harness {
         Harness::Claude => {
             env_vars.insert(OsString::from("ANTHROPIC_MODEL"), OsString::from(model_id));
+            if let Some(reasoning_level) = third_party_harness_model_config
+                .and_then(|config| config.reasoning_level.as_deref())
+                .filter(|level| !level.is_empty())
+            {
+                env_vars.insert(
+                    OsString::from("CLAUDE_CODE_EFFORT_LEVEL"),
+                    OsString::from(reasoning_level),
+                );
+            }
         }
         Harness::Oz | Harness::OpenCode | Harness::Gemini | Harness::Codex | Harness::Unknown => {}
     }
