@@ -11,6 +11,8 @@ mod noop;
 mod overlay;
 #[cfg(any(macos, linux, windows))]
 mod recording_metadata;
+#[cfg(any(linux, windows))]
+mod recording_post_process;
 #[cfg(any(macos, linux, windows))]
 mod screenshot_utils;
 #[cfg(any(macos, linux, windows))]
@@ -287,8 +289,8 @@ pub fn create_recorder() -> Box<dyn Recorder> {
 }
 
 /// Applies platform-specific post-processing and returns the path to upload.
-/// Linux trims inactive gaps and burns action overlays; other platforms return
-/// `input` unchanged.
+/// Linux and Windows trim inactive gaps and burn action overlays; other
+/// platforms return `input` unchanged.
 pub async fn post_process_recording(
     input: &Path,
     entries: &[ActionLogEntry],
@@ -296,11 +298,18 @@ pub async fn post_process_recording(
     source_duration: Duration,
     frame_rate: u32,
 ) -> Result<PathBuf, RecordingError> {
-    #[cfg(all(linux, not(noop)))]
+    #[cfg(all(any(linux, windows), not(noop)))]
     {
-        imp::post_process_recording(input, entries, dimensions, source_duration, frame_rate).await
+        recording_post_process::post_process_recording(
+            input,
+            entries,
+            dimensions,
+            source_duration,
+            frame_rate,
+        )
+        .await
     }
-    #[cfg(not(all(linux, not(noop))))]
+    #[cfg(not(all(any(linux, windows), not(noop))))]
     {
         let _ = (entries, dimensions, source_duration, frame_rate);
         Ok(input.to_path_buf())
@@ -414,6 +423,7 @@ impl Default for RecordingConfig {
 pub struct RecordingHandle {
     width: u32,
     height: u32,
+    capture_origin: Vector2I,
     exit_state: RecordingExitState,
     // The live capture process plus the fields used to finalize it are only
     // populated by the real platform recorders; the no-op recorders never
@@ -439,6 +449,11 @@ impl RecordingHandle {
     /// The applied capture height in pixels.
     pub fn height(&self) -> u32 {
         self.height
+    }
+
+    /// The immutable physical-pixel geometry selected when capture started.
+    pub fn geometry(&self) -> RecordingGeometry {
+        RecordingGeometry::new(self.capture_origin, self.width, self.height)
     }
 
     /// Checks whether capture exited without an explicit stop.
@@ -476,6 +491,7 @@ impl RecordingHandle {
         let handle = Self {
             width,
             height,
+            capture_origin: Vector2I::new(0, 0),
             exit_state: exit_state.clone(),
             #[cfg(any(linux, macos, windows))]
             path: PathBuf::new(),
@@ -504,6 +520,9 @@ impl Drop for RecordingHandle {
         }
     }
 }
+#[cfg(windows)]
+const ABANDONED_RECORDING_CLEANUP_TIMEOUT: Duration = Duration::from_secs(15);
+
 #[cfg(windows)]
 fn spawn_windows_recording_cleanup(mut process: tokio::process::Child, path: PathBuf) {
     let result = std::thread::Builder::new()
@@ -544,8 +563,33 @@ fn spawn_windows_recording_cleanup(mut process: tokio::process::Child, path: Pat
 }
 #[cfg(windows)]
 fn remove_abandoned_recording_files(path: &Path) {
-    let _ = std::fs::remove_file(path);
-    let _ = std::fs::remove_file(path.with_extension("log"));
+    let deadline = std::time::Instant::now() + ABANDONED_RECORDING_CLEANUP_TIMEOUT;
+    let mut pending = vec![path.to_path_buf(), path.with_extension("log")];
+    loop {
+        let mut failed = Vec::new();
+        for path in pending {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => failed.push((path, error)),
+            }
+        }
+        if failed.is_empty() {
+            return;
+        }
+        if std::time::Instant::now() >= deadline {
+            for (path, error) in failed {
+                log::warn!(
+                    "Failed to remove abandoned recording file {}: {}",
+                    path.display(),
+                    error
+                );
+            }
+            return;
+        }
+        pending = failed.into_iter().map(|(path, _)| path).collect();
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// The finalized output of a stopped recording. Carries the local file path and
@@ -723,19 +767,48 @@ pub struct Options {
 }
 
 /// Collects resolved pointer events during a recording so the finalize pass can burn in
-/// click/drag annotations. Only the Linux x11 actor populates it.
+/// click/drag annotations. The Linux X11 and Windows actors populate it.
 pub struct PointerSink {
     /// Capture start instant; event offsets are measured from here.
     pub started_at: instant::Instant,
     /// The surface being recorded, so the actor can resolve each event into the recording's
     /// capture-space pixels.
     pub recording_target: Target,
+    /// The immutable physical-pixel capture geometry selected by the recorder.
+    pub recording_geometry: RecordingGeometry,
     /// Events collected in dispatch order; drained by the caller after the batch completes.
     pub events: Arc<Mutex<Vec<PointerEvent>>>,
     /// Recording-scoped pointer session shared with every `UseComputer` call's sink, so a
     /// release in a later call reuses the last resolved capture-space point even when the
     /// press happened in an earlier call. See [`PointerSession`].
     pub session: PointerSession,
+}
+
+/// The physical-pixel bounds selected for a recording when capture starts.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct RecordingGeometry {
+    origin: Vector2I,
+    width: u32,
+    height: u32,
+}
+
+impl RecordingGeometry {
+    pub(crate) fn new(origin: Vector2I, width: u32, height: u32) -> Self {
+        Self {
+            origin,
+            width,
+            height,
+        }
+    }
+
+    /// Maps a physical desktop point into the captured frame and clamps it to the frame bounds.
+    pub fn frame_point(self, point: Vector2I) -> Vector2I {
+        let max_x = i64::from(self.width.saturating_sub(1));
+        let max_y = i64::from(self.height.saturating_sub(1));
+        let x = (i64::from(point.x()) - i64::from(self.origin.x())).clamp(0, max_x);
+        let y = (i64::from(point.y()) - i64::from(self.origin.y())).clamp(0, max_y);
+        Vector2I::new(x as i32, y as i32)
+    }
 }
 
 /// Recording-scoped pointer session state, shared between the recording

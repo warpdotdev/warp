@@ -120,6 +120,8 @@ pub(crate) struct ActiveRecording {
     /// The surface being recorded, used to resolve pointer-event coordinates
     /// into capture space for the post-stop burn-in.
     pub(crate) target: computer_use::Target,
+    /// The immutable physical-pixel geometry selected when capture started.
+    pub(crate) geometry: computer_use::RecordingGeometry,
     /// Recording-scoped pointer session shared with each `UseComputer` call's
     /// `PointerSink`, persisting the last resolved point and active button across
     /// calls so a drag split into separate `Down`/`Move`/`Up` calls records its
@@ -255,6 +257,7 @@ impl RecordingController {
                 conversation_id: owner
             } if owner == conversation_id
         ) {
+            let geometry = handle.geometry();
             self.state = RecordingState::Active(Box::new(ActiveRecording {
                 id: recording_id,
                 conversation_id,
@@ -262,6 +265,7 @@ impl RecordingController {
                 started_at: Instant::now(),
                 frame_rate,
                 target,
+                geometry,
                 pointer_session: computer_use::PointerSession::new(),
                 actions: Vec::new(),
                 summary,
@@ -273,10 +277,10 @@ impl RecordingController {
 
     /// Begins an in-flight `UseComputer` action group for the owning
     /// conversation, recording the group's start offset and labels. Returns the
-    /// recording's capture start instant, its capture target, and a clone of the
-    /// recording-scoped pointer session so the caller can share it with this
-    /// call's `PointerSink` and a later split-call release can reuse the last
-    /// resolved point. A pointer-only group is begun with empty labels;
+    /// recording's capture start instant, capture target and geometry, and a
+    /// clone of the recording-scoped pointer session so the caller can share it
+    /// with this call's `PointerSink` and a later split-call release can reuse
+    /// the last resolved point. A pointer-only group is begun with empty labels;
     /// wait-only/no-op calls should not call this. The pending group is
     /// committed with its finish offset on success ([`commit_action_group`]) or
     /// discarded on failure ([`discard_action_group`]). Returns `None` (and
@@ -289,7 +293,12 @@ impl RecordingController {
         &mut self,
         conversation_id: AIConversationId,
         labels: Vec<String>,
-    ) -> Option<(Instant, computer_use::Target, computer_use::PointerSession)> {
+    ) -> Option<(
+        Instant,
+        computer_use::Target,
+        computer_use::RecordingGeometry,
+        computer_use::PointerSession,
+    )> {
         if let RecordingState::Active(recording) = &mut self.state
             && recording.conversation_id == conversation_id
         {
@@ -306,6 +315,7 @@ impl RecordingController {
             return Some((
                 recording.started_at,
                 recording.target,
+                recording.geometry,
                 recording.pointer_session.clone(),
             ));
         }

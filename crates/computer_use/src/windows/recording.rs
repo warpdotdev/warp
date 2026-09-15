@@ -24,11 +24,11 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct VirtualScreenGeometry {
-    origin_x: i32,
-    origin_y: i32,
-    width: u32,
-    height: u32,
+pub(super) struct VirtualScreenGeometry {
+    pub(super) origin_x: i32,
+    pub(super) origin_y: i32,
+    pub(super) width: u32,
+    pub(super) height: u32,
 }
 
 pub struct Recorder {
@@ -55,16 +55,7 @@ impl crate::Recorder for Recorder {
         let geometry = query_virtual_screen_geometry()?;
         let (path, log_path, log_file) = new_recording_path()?;
         let command = new_ffmpeg_capture_command(&self.ffmpeg, &config, geometry);
-        launch_recording(
-            command,
-            path,
-            log_path,
-            log_file,
-            geometry.width,
-            geometry.height,
-            START_TIMEOUT,
-        )
-        .await
+        launch_recording(command, path, log_path, log_file, geometry, START_TIMEOUT).await
     }
 
     async fn stop(&self, mut handle: RecordingHandle) -> Result<RecordingOutput, RecordingError> {
@@ -116,7 +107,7 @@ impl crate::Recorder for Recorder {
     }
 }
 
-fn query_virtual_screen_geometry() -> Result<VirtualScreenGeometry, RecordingError> {
+pub(super) fn query_virtual_screen_geometry() -> Result<VirtualScreenGeometry, RecordingError> {
     let _dpi_guard = DpiAwarenessGuard::enter_per_monitor_v2();
     // SAFETY: `GetSystemMetrics` has no preconditions.
     let origin_x = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
@@ -211,7 +202,7 @@ fn new_ffmpeg_capture_command(
             "-video_size",
             &format!("{}x{}", geometry.width, geometry.height),
         ])
-        .args(["-draw_mouse", "1"])
+        .args(["-draw_mouse", "0"])
         .arg("-t")
         .arg(format!("{:.3}", config.max_duration.as_secs_f64()))
         .args(["-i", "desktop"])
@@ -229,8 +220,7 @@ async fn launch_recording(
     path: PathBuf,
     log_path: PathBuf,
     log_file: File,
-    width: u32,
-    height: u32,
+    geometry: VirtualScreenGeometry,
     timeout: Duration,
 ) -> Result<RecordingHandle, RecordingError> {
     command
@@ -258,8 +248,9 @@ async fn launch_recording(
     }
 
     Ok(RecordingHandle {
-        width,
-        height,
+        width: geometry.width,
+        height: geometry.height,
+        capture_origin: crate::Vector2I::new(geometry.origin_x, geometry.origin_y),
         exit_state: Arc::new(Mutex::new(None)),
         path,
         started_at: Instant::now(),
