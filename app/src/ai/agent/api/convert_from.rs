@@ -218,6 +218,13 @@ impl ConvertAPIMessageToClientOutputMessage for api::Message {
                     .with_citations(citations),
             )),
             api::message::Message::AgentReasoning(reasoning) => {
+                // A provider can return a reasoning item that carries only encrypted content for
+                // its own continuity, which arrives here with a duration and no text. There is
+                // nothing to draw, and a reasoning message that draws nothing still costs layout
+                // height, so it has no client representation at all — matching the TUI transcript.
+                if reasoning.reasoning.trim().is_empty() {
+                    return Ok(MaybeAIAgentOutputMessage::NoClientRepresentation);
+                }
                 let duration = reasoning
                     .finished_duration
                     .map(|d| Duration::from_secs(d.seconds as u64));
