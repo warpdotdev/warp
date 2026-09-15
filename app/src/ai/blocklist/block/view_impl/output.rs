@@ -107,7 +107,7 @@ use crate::ai::blocklist::view_util::{
     FAILED_OUTPUT_USAGE_NOTICE_TEXT, format_usage, should_show_failed_output_usage_notice,
 };
 use crate::ai::blocklist::{AIBlockResponseRating, BlocklistAIActionModel, SuggestionChipView};
-use crate::ai::paths::shell_native_absolute_path;
+use crate::ai::paths::shell_native_absolute_path_for_display;
 use crate::ai::skills::{
     SkillManager, SkillOpenOrigin, icon_override_for_skill_name, render_skill_button,
     skill_path_from_location,
@@ -536,7 +536,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                 let file_locations = files
                                     .iter()
                                     .map(|file| {
-                                        let path = shell_native_absolute_path(
+                                        let path = shell_native_absolute_path_for_display(
                                             &file.name,
                                             props.shell_launch_data,
                                             props.current_working_directory,
@@ -1756,7 +1756,7 @@ pub fn render_read_files_text<A: Action>(
     let file_names = file_names
         .into_iter()
         .map(|name| {
-            shell_native_absolute_path(
+            shell_native_absolute_path_for_display(
                 name.as_ref(),
                 render_read_file_args.render_context.shell_launch_data,
                 render_read_file_args
@@ -1948,7 +1948,7 @@ fn render_read_files_partial(
     let failed_paths = failed_files
         .iter()
         .map(|file| {
-            shell_native_absolute_path(
+            shell_native_absolute_path_for_display(
                 &file.path,
                 props.shell_launch_data,
                 props.current_working_directory,
@@ -2541,7 +2541,7 @@ fn create_formatted_text_for_grep(
     let display_path = if path == "." {
         "the current directory".to_string()
     } else {
-        shell_native_absolute_path(
+        shell_native_absolute_path_for_display(
             path,
             props.shell_launch_data,
             props.current_working_directory,
@@ -2644,7 +2644,7 @@ fn create_formatted_text_for_file_glob(
 
     let path = path
         .map(|path| {
-            shell_native_absolute_path(
+            shell_native_absolute_path_for_display(
                 path,
                 props.shell_launch_data,
                 props.current_working_directory,
