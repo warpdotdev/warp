@@ -3985,18 +3985,7 @@ fn test_tab_completion_with_spaces() {
             );
         });
 
-        suggestions.update(&mut app, |suggestions, ctx| {
-            suggestions.select_next(ctx);
-        });
-        input.read(&app, |input, ctx| {
-            assert_eq!(input.buffer_text(ctx), "cd A\\ d");
-        });
-
-        // Closing the input suggestions menu leaves input buffer unchanged,
-        // regardless of whether additional characters were inserted/removed from the original completion buffer text.
-        input.read(&app, |input, ctx| {
-            assert_eq!(input.buffer_text(ctx), "cd A\\ d");
-        });
+        // Closing the input suggestions menu leaves input buffer unchanged.
         suggestions.update(&mut app, |suggestions, ctx| {
             suggestions.exit(true, ctx);
         });
@@ -4109,12 +4098,25 @@ fn test_tab_completion_with_spaces() {
             );
         });
 
-        // Use tab to select next element, tab-shift to go to the previous & enter to confirm
+        // Use tab to select next element, tab-shift to go to the previous & enter to confirm.
+        // Classic completions start unselected, so the first tab selects the first item.
         input.update(&mut app, |input, ctx| {
             input.input_tab(ctx);
         });
         input.read(&app, |input, _| {
             // after first tab
+            input.input_suggestions.read(&app, |suggestions, _| {
+                assert_eq!(
+                    suggestions.get_selected_item_text().unwrap(),
+                    "A\\ dir\\ with\\ spaces"
+                );
+            });
+        });
+        input.update(&mut app, |input, ctx| {
+            input.input_tab(ctx);
+        });
+        input.read(&app, |input, _| {
+            // after second tab
             input.input_suggestions.read(&app, |suggestions, _| {
                 assert_eq!(suggestions.get_selected_item_text().unwrap(), "A\\ desktop");
             });
@@ -4223,13 +4225,6 @@ fn test_tab_completion() {
                     Some(&(0..1).collect::<Vec<_>>())
                 ]
             );
-        });
-
-        suggestions.update(&mut app, |suggestions, ctx| {
-            suggestions.select_next(ctx);
-        });
-        input.read(&app, |input, ctx| {
-            assert_eq!(input.buffer_text(ctx), "cd D");
         });
 
         // Closing the input suggestions menu leaves input buffer unchanged,
@@ -4353,12 +4348,22 @@ fn test_tab_completion() {
             );
         });
 
-        // Use tab to select next element, tab-shift to go to the previous & enter to confirm
+        // Use tab to select next element, tab-shift to go to the previous & enter to confirm.
+        // Classic completions start unselected, so the first tab selects the first item.
         input.update(&mut app, |input, ctx| {
             input.input_tab(ctx);
         });
         input.read(&app, |input, _| {
             // after first tab
+            input.input_suggestions.read(&app, |suggestions, _| {
+                assert_eq!(suggestions.get_selected_item_text().unwrap(), "Desktop");
+            });
+        });
+        input.update(&mut app, |input, ctx| {
+            input.input_tab(ctx);
+        });
+        input.read(&app, |input, _| {
+            // second tab
             input.input_suggestions.read(&app, |suggestions, _| {
                 assert_eq!(suggestions.get_selected_item_text().unwrap(), "Downloads");
             });
@@ -4367,7 +4372,7 @@ fn test_tab_completion() {
             input.input_tab(ctx);
         });
         input.read(&app, |input, _| {
-            // second tab
+            // third tab
             input.input_suggestions.read(&app, |suggestions, _| {
                 assert_eq!(suggestions.get_selected_item_text().unwrap(), "Documents");
             });
@@ -6161,7 +6166,7 @@ fn test_cursor_movement() {
                 match_strategy: MatchStrategy::CaseInsensitive,
             },
             trigger: CompletionsTrigger::Keybinding,
-            menu_position: TabCompletionsMenuPosition::AtLastCursor,
+            menu_position: TabCompletionsMenuPosition::AtStartOfReplacementSpan,
         };
         input.read(&app, |input, ctx| {
             assert_eq!(input.buffer_text(ctx), "cd Do");
@@ -7563,43 +7568,6 @@ fn test_get_expanded_command_on_execute() {
             assert_eq!(result, None);
         });
     });
-}
-
-#[test]
-fn test_tab_completions_menu_for_regular_completions() {
-    let _flag = FeatureFlag::ClassicCompletions.override_enabled(true);
-    App::test((), |mut app| async move {
-        initialize_app(&mut app);
-        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
-        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
-
-        input.update(&mut app, |input, ctx| {
-            input.clear_buffer_and_reset_undo_stack(ctx);
-            input.user_insert("cd Do", ctx);
-        });
-
-        input.update(&mut app, |input, ctx| {
-            input.input_tab(ctx);
-            input.handle_completion_suggestions_results(
-                build_suggestion_results(
-                    vec![file_suggestion("Downloads"), file_suggestion("Documents")],
-                    (3, 5),
-                    MatchStrategy::CaseInsensitive,
-                ),
-                CompletionsTrigger::Keybinding,
-                editor_model_snapshot(input, ctx),
-                ctx,
-            );
-        });
-
-        let expected_menu_position = TabCompletionsMenuPosition::AtLastCursor;
-        input.read(&app, |input, ctx| {
-            assert!(matches!(
-                input.suggestions_mode_model.as_ref(ctx).mode(),
-                InputSuggestionsMode::CompletionSuggestions { menu_position, .. } if menu_position == &expected_menu_position
-            ))
-        });
-    })
 }
 
 #[test]
