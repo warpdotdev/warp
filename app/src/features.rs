@@ -169,8 +169,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::JupyterNotebookRendering,
         #[cfg(feature = "blocklist_markdown_table_rendering")]
         FeatureFlag::BlocklistMarkdownTableRendering,
-        #[cfg(feature = "blocklist_markdown_images")]
-        FeatureFlag::BlocklistMarkdownImages,
         #[cfg(feature = "markdown_mermaid")]
         FeatureFlag::MarkdownMermaid,
         #[cfg(feature = "editable_markdown_mermaid")]
