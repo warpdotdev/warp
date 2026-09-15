@@ -171,6 +171,10 @@ impl HarnessSupportClient for TestClient {
         unimplemented!("not used by upload_snapshot_from_declarations_file")
     }
 
+    async fn wait_for_events(&self) -> Result<()> {
+        unimplemented!("not used by upload_snapshot_from_declarations_file")
+    }
+
     async fn get_snapshot_upload_targets(
         &self,
         request: &SnapshotUploadRequest,

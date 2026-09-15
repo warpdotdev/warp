@@ -50,6 +50,9 @@ pub fn run(
         HarnessSupportCommand::ReportShutdown(shutdown_args) => {
             report_shutdown(ctx, runner, shutdown_args, global_options.output_format)
         }
+        HarnessSupportCommand::WaitForEvents => {
+            wait_for_events(ctx, runner, global_options.output_format)
+        }
     }
 }
 
@@ -303,6 +306,39 @@ fn report_shutdown(
                         }
                         OutputFormat::Pretty | OutputFormat::Text => {
                             println!("Shutdown reported.");
+                        }
+                    }
+                    ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                }
+                Err(err) => {
+                    super::report_fatal_error(err, ctx);
+                }
+            },
+        );
+    });
+
+    Ok(())
+}
+
+/// Record that this run is intentionally yielding rather than completing.
+fn wait_for_events(
+    ctx: &mut AppContext,
+    runner: ModelHandle<HarnessSupportRunner>,
+    output_format: OutputFormat,
+) -> Result<()> {
+    runner.update(ctx, |_, ctx| {
+        let client = ServerApiProvider::as_ref(ctx).get_harness_support_client();
+
+        ctx.spawn(
+            async move { client.wait_for_events().await },
+            move |_, result, ctx| match result {
+                Ok(()) => {
+                    match output_format {
+                        OutputFormat::Json | OutputFormat::Ndjson => {
+                            println!("{{}}");
+                        }
+                        OutputFormat::Pretty | OutputFormat::Text => {
+                            println!("Waiting for events recorded.");
                         }
                     }
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
