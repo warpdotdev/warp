@@ -117,12 +117,21 @@ const DETAIL_SIDECAR_CORNER_RADIUS: f32 = 4.;
 const METADATA_ROW_HEIGHT: f32 = BADGE_ICON_SIZE + 2.;
 const TAB_COLOR_OPACITY: Opacity = 15;
 const TAB_COLOR_HOVER_OPACITY: Opacity = 50;
+const PARKED_TAB_OPACITY: Opacity = 45;
 /// Opacity for a colored row that is part of a multi-selection.
 const TAB_COLOR_MULTI_SELECT_OPACITY: Opacity = 30;
 
 // Circular icon constants
 const ICON_WITH_STATUS_GAP: f32 = 8.;
 pub(super) const VERTICAL_TABS_DETAIL_SIDECAR_POSITION_ID: &str = "vertical_tabs:detail_sidecar";
+
+fn parked_tab_text_color(color: WarpThemeFill, is_parked: bool) -> WarpThemeFill {
+    if FeatureFlag::ParkedTabs.is_enabled() && is_parked {
+        color.with_opacity(PARKED_TAB_OPACITY)
+    } else {
+        color
+    }
+}
 
 /// Total size of the icon-with-status component rendered for each vertical-tabs row.
 /// Sub-components (circle, badge, cloud) are derived inside `render_icon_with_status`.
@@ -410,6 +419,7 @@ fn render_pane_row_element(
         is_pane_being_renamed,
         pane_rename_editor: _,
         is_pinned,
+        is_parked: _,
         container_is_hovered,
         shortcut_hint_binding_name: _,
     } = props;
@@ -854,6 +864,8 @@ struct PaneProps<'a> {
     pane_rename_editor: Option<ViewHandle<EditorView>>,
     /// Whether the tab this pane belongs to is pinned.
     is_pinned: bool,
+    /// Whether the tab this pane belongs to is parked.
+    is_parked: bool,
     /// True when the tab container containing this pane is hovered.
     /// The pin icon is hidden when a tab is hovered.
     container_is_hovered: bool,
@@ -1239,6 +1251,7 @@ impl VerticalTabsPanelState {
                                 false,
                                 None,
                                 tab.pinned,
+                                tab.parked,
                                 false,
                                 None,
                                 app,
@@ -1847,6 +1860,7 @@ fn render_groups(
                                     false,
                                     None,
                                     tab.pinned,
+                                    tab.parked,
                                     false,
                                     None,
                                     app,
@@ -1879,6 +1893,7 @@ fn render_groups(
                                 false,
                                 None,
                                 tab.pinned,
+                                tab.parked,
                                 false,
                                 None,
                                 app,
@@ -2239,6 +2254,7 @@ fn render_tab_group_internal(
                     false,
                     None,
                     tab.pinned,
+                    tab.parked,
                     group_state.is_hovered(),
                     tab_activate_binding_name(tab_index, workspace.tabs.len()),
                     app,
@@ -2299,6 +2315,7 @@ fn render_tab_group_internal(
                     is_pane_being_renamed,
                     is_pane_being_renamed.then_some(workspace.pane_rename_editor.clone()),
                     tab.pinned,
+                    tab.parked,
                     group_state.is_hovered(),
                     tab_activate_binding_name(tab_index, workspace.tabs.len()),
                     app,
@@ -3501,6 +3518,10 @@ fn render_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
     let font_family = appearance.ui_font_family();
+    let main_text_color =
+        parked_tab_text_color(theme.main_text_color(theme.background()), props.is_parked);
+    let sub_text_color =
+        parked_tab_text_color(theme.sub_text_color(theme.background()), props.is_parked);
 
     let icon = render_pane_icon_with_status(
         resolve_icon_with_status_variant(&props.typed, &props.title, appearance, app),
@@ -3538,11 +3559,11 @@ fn render_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn Element> {
                     || {
                         Text::new_inline(props.displayed_title().to_string(), font_family, 12.)
                             .with_clip(ClipConfig::ellipsis())
-                            .with_color(theme.main_text_color(theme.background()).into())
+                            .with_color(main_text_color.into())
                             .finish()
                     },
                     12.,
-                    theme.main_text_color(theme.background()),
+                    main_text_color,
                     ClipConfig::ellipsis(),
                     appearance,
                     app,
@@ -3580,7 +3601,7 @@ fn render_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn Element> {
             content_col.add_child(
                 Text::new_inline(effective_subtitle, font_family, 12.)
                     .with_clip(subtitle_clip)
-                    .with_color(theme.sub_text_color(theme.background()).into())
+                    .with_color(sub_text_color.into())
                     .finish(),
             );
         }
@@ -3905,6 +3926,7 @@ impl<'a> PaneProps<'a> {
         is_pane_being_renamed: bool,
         pane_rename_editor: Option<ViewHandle<EditorView>>,
         is_pinned: bool,
+        is_parked: bool,
         container_is_hovered: bool,
         shortcut_hint_binding_name: Option<&'static str>,
         app: &AppContext,
@@ -3960,6 +3982,7 @@ impl<'a> PaneProps<'a> {
             is_pane_being_renamed,
             pane_rename_editor,
             is_pinned,
+            is_parked,
             container_is_hovered,
             shortcut_hint_binding_name,
         })
@@ -4422,8 +4445,10 @@ fn render_terminal_row_content(
     app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
-    let main_text_color = theme.main_text_color(theme.background());
-    let sub_text_color = theme.sub_text_color(theme.background());
+    let main_text_color =
+        parked_tab_text_color(theme.main_text_color(theme.background()), props.is_parked);
+    let sub_text_color =
+        parked_tab_text_color(theme.sub_text_color(theme.background()), props.is_parked);
     let primary_info = *TabSettings::as_ref(app).vertical_tabs_primary_info.value();
 
     let title_text = terminal_view.terminal_title_from_shell();
@@ -4731,8 +4756,10 @@ fn render_summary_tab_item(
 
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
-    let main_text_color = theme.main_text_color(theme.background());
-    let sub_text_color = theme.sub_text_color(theme.background());
+    let main_text_color =
+        parked_tab_text_color(theme.main_text_color(theme.background()), props.is_parked);
+    let sub_text_color =
+        parked_tab_text_color(theme.sub_text_color(theme.background()), props.is_parked);
     let icon = summary_pane_kind_icons
         .map(|icons| render_summary_pane_kind_icons(icons, VERTICAL_TABS_ICON_SIZE, appearance))
         .unwrap_or_else(|| {
@@ -6800,6 +6827,7 @@ fn detail_pane_props<'a>(
         None,
         false,
         false,
+        false,
         None,
         app,
     )
@@ -7251,8 +7279,10 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
     let effective_subtitle = props.subtitle.clone();
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
-    let main_text_color = theme.main_text_color(theme.background());
-    let sub_text_color = theme.sub_text_color(theme.background());
+    let main_text_color =
+        parked_tab_text_color(theme.main_text_color(theme.background()), props.is_parked);
+    let sub_text_color =
+        parked_tab_text_color(theme.sub_text_color(theme.background()), props.is_parked);
     let font_family = appearance.ui_font_family();
     let has_indicator = props.typed.badge(app).is_some() || has_unread_activity(&props.typed, app);
 
