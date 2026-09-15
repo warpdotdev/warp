@@ -808,6 +808,15 @@ impl RemoteDiffStateModel {
             return;
         }
 
+        // Stack review is local-only in V1 (remote/SSH panes never expose the
+        // stack control), so this should be unreachable in practice. Guard
+        // defensively rather than issuing a `PullRequestLayer` diff request
+        // the daemon has no support for.
+        if mode.is_read_only() {
+            log::warn!("RemoteDiffStateModel: ignoring unsupported read-only diff mode {mode:?}");
+            return;
+        }
+
         // Unsubscribe from the old mode before switching, then re-send
         // GetDiffState for the new mode over `preferred_session` (the
         // triggering view's session) when provided, else any connected

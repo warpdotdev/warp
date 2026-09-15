@@ -4,7 +4,7 @@ use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::GitHubRepoEvent;
 use crate::remote_server::proto;
-use crate::util::git::{PrInfo, RepositoryInfo};
+use crate::util::git::{PrInfo, PrStackInfo, RepositoryInfo};
 
 /// Client-side per-repo GitHub info for a repository on an SSH host.
 ///
@@ -135,6 +135,18 @@ impl RemoteGitHubRepoModel {
     /// Always `false`: the remote backend does not track refresh state, since
     /// results arrive as broadcasts with no request correlation.
     pub fn is_refreshing_pr_info(&self) -> bool {
+        false
+    }
+
+    /// Always `None`: PR stacking is scoped to local repositories in V1
+    /// (`specs/CODE-1947/PRODUCT.md` assumption A5), so remote/SSH panes
+    /// never show the stack control.
+    pub fn stack_info(&self) -> Option<&PrStackInfo> {
+        None
+    }
+
+    /// Always `false`: remote repositories never perform stack discovery.
+    pub fn is_refreshing_stack_info(&self) -> bool {
         false
     }
 
