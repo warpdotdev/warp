@@ -980,14 +980,12 @@ impl LLMPreferences {
         team_uid: Option<ServerId>,
         app: &'a AppContext,
     ) -> impl Iterator<Item = &'a LLMInfo> + use<'a> {
-        // Don't show admin-disabled models in the dropdown
         let routers_enabled = FeatureFlag::CustomModelRouters.is_enabled();
         UserWorkspaces::as_ref(app)
             .feature_model_choice_for_team_uid(team_uid)
             .agent_mode
             .choices
             .iter()
-            .filter(|llm| !matches!(llm.disable_reason, Some(DisableReason::AdminDisabled)))
             // Gate cloud/team routers behind the same flag as local routers so
             // the entire custom-router feature is controlled by one flag.
             .filter(move |llm| {
@@ -1977,9 +1975,8 @@ impl LLMPreferences {
         ctx.emit(LLMPreferencesEvent::UpdatedAvailableLLMs);
     }
 
-    /// Clear any model selections where the model is no longer supported
-    /// or effectively disabled, and clear orphaned context window limits
-    /// for non-configurable or unusable models.
+    /// Clear coding, CLI agent, and computer use selections where the model is
+    /// no longer supported or effectively disabled.
     ///
     /// Called both when the model list is refreshed from the server and when
     /// BYOK API keys change (since `RequiresUpgrade` usability is BYOK-aware).
@@ -2002,51 +1999,9 @@ impl LLMPreferences {
         profiles_model.update(ctx, |profiles, ctx| {
             for profile_id in profiles.get_all_profile_ids() {
                 if let Some(profile) = profiles.get_profile_by_id(&profile_id, ctx) {
-                    let profile_data = profile.data();
-                    let preferred_base_model = profile_data.base_model.clone();
-                    let effective_base_model_id = preferred_base_model
-                        .as_ref()
-                        .unwrap_or(&models_by_feature.agent_mode.default_id);
-
-                    // Only reconcile a preferred model when this device recognizes its ID.
-                    // If neither the server catalog nor local custom endpoints know it, the ID
-                    // likely belongs to a custom endpoint configured on another device. Clearing
-                    // it here would sync the removal back to cloud and erase the user's setting
-                    // on every other device.
-                    let preferred_base_model_is_recognized = preferred_base_model.is_none()
-                        || models_by_feature
-                            .agent_mode
-                            .info_for_id(effective_base_model_id)
-                            .is_some()
-                        || self
-                            .custom_llm_info_for_id(effective_base_model_id)
-                            .is_some();
-
-                    let effective_base_model_usable = models_by_feature
-                        .agent_mode
-                        .usable_info_for_id(effective_base_model_id, ctx)
-                        .or_else(|| {
-                            self.custom_llm_info_for_id_if_enabled(effective_base_model_id, ctx)
-                        });
-                    let effective_base_model_unusable = effective_base_model_usable.is_none();
-                    let effective_base_model_is_configurable = effective_base_model_usable
-                        .is_some_and(|info| info.context_window.is_configurable);
-                    let has_context_window_limit = profile_data.context_window_limit.is_some();
-
-                    if preferred_base_model.is_some()
-                        && preferred_base_model_is_recognized
-                        && effective_base_model_unusable
-                    {
-                        profiles.set_base_model(&profile_id, None, ctx);
-                    }
-                    if has_context_window_limit
-                        && preferred_base_model_is_recognized
-                        && (effective_base_model_unusable || !effective_base_model_is_configurable)
-                    {
-                        profiles.set_context_window_limit(&profile_id, None, ctx);
-                    }
+                    // Base-model preferences are shared across teams, so team-scoped catalogs
+                    // affect availability without mutating the stored selection.
                     if let Some(preferred_llm_id) = &profile.data().coding_model {
-                        // Same guard: only clear recognized IDs.
                         let is_recognized = models_by_feature
                             .coding
                             .info_for_id(preferred_llm_id)
@@ -2065,7 +2020,6 @@ impl LLMPreferences {
                         }
                     }
                     if let Some(preferred_llm_id) = &profile.data().cli_agent_model {
-                        // Same guard: only clear recognized IDs.
                         let is_recognized = self
                             .get_cli_agent_available(team_uid, ctx)
                             .info_for_id(preferred_llm_id)

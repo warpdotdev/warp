@@ -1,5 +1,6 @@
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use warpui::App;
 
@@ -12,11 +13,17 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::team::MockTeamClient;
+use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::sync_queue::SyncQueue;
 use crate::terminal::input::models::query_model_picker_choices;
 use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workspaces::team::Team;
 use crate::workspaces::team_tester::TeamTesterStatus;
-use crate::workspaces::user_workspaces::{TeamlessScopeForTest, UserWorkspaces};
+use crate::workspaces::user_workspaces::{
+    TeamContextForOperation, TeamlessScopeForTest, UserWorkspaces,
+};
+use crate::workspaces::workspace::Workspace;
 use crate::{LaunchMode, TuiEntryPoint};
 
 // -- DisableReason::should_clear_preference tests --
@@ -840,6 +847,125 @@ fn reconcile_preserves_custom_models_saved_on_execution_profile() {
             assert_eq!(
                 profile.data().cli_agent_model.as_ref(),
                 Some(&custom_model_id)
+            );
+        });
+    });
+}
+
+#[test]
+fn team_catalog_hydration_preserves_shared_profile_and_resolves_against_active_team() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+
+        let fable_id = LLMId::from("claude-5-1-fable");
+        let enabled_models = ModelsByFeature {
+            agent_mode: available(
+                "auto-genius",
+                vec![
+                    server_llm("auto-genius", None),
+                    server_llm(fable_id.as_str(), None),
+                ],
+            ),
+            ..Default::default()
+        };
+        let disabled_models = ModelsByFeature {
+            agent_mode: available(
+                "auto-genius",
+                vec![
+                    server_llm("auto-genius", None),
+                    server_llm(fable_id.as_str(), Some(DisableReason::AdminDisabled)),
+                ],
+            ),
+            ..Default::default()
+        };
+        let engineering_team_uid = ServerId::from(101);
+        let disabled_team_uid = ServerId::from(102);
+        let engineering_team = Team::from_local_cache(
+            engineering_team_uid,
+            "Engineering".to_string(),
+            None,
+            None,
+            None,
+            Some(enabled_models.clone()),
+        );
+        let disabled_team = Team::from_local_cache(
+            disabled_team_uid,
+            "Disabled team".to_string(),
+            None,
+            None,
+            None,
+            Some(disabled_models.clone()),
+        );
+        let workspace = Workspace::from_local_cache(
+            ServerId::from(100).into(),
+            "Warp".to_string(),
+            Some(vec![engineering_team, disabled_team]),
+            Some(disabled_models.clone()),
+        );
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(MockTeamClient::new()),
+                Arc::new(MockWorkspaceClient::new()),
+                vec![workspace],
+                ctx,
+            )
+        });
+
+        let profiles_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+        let profile_id = profiles_model.read(&app, |profiles, _| profiles.default_profile_id());
+        profiles_model.update(&mut app, |profiles, ctx| {
+            profiles.set_base_model(&profile_id, Some(fable_id.clone()), ctx);
+            profiles.set_context_window_limit(&profile_id, Some(200_000), ctx);
+        });
+
+        llm_preferences.update(&mut app, |preferences, ctx| {
+            preferences.reconcile_disabled_model_preferences_for_known_scopes(ctx);
+        });
+
+        let engineering_scope = TeamContextForOperation::new_for_test(engineering_team_uid);
+        let disabled_scope = TeamContextForOperation::new_for_test(disabled_team_uid);
+        llm_preferences.read(&app, |preferences, ctx| {
+            assert_eq!(
+                preferences
+                    .get_active_base_model(&engineering_scope, ctx, None)
+                    .id,
+                fable_id
+            );
+            assert_eq!(
+                preferences
+                    .get_active_base_model(&disabled_scope, ctx, None)
+                    .id,
+                fable_id
+            );
+            let disabled_fable = preferences
+                .get_base_llm_choices_for_agent_mode(&disabled_scope, ctx)
+                .find(|llm| llm.id == fable_id)
+                .expect("the preferred model should remain visible on the disabled team");
+            assert_eq!(
+                disabled_fable.disable_reason,
+                Some(DisableReason::AdminDisabled)
+            );
+        });
+        profiles_model.read(&app, |profiles, ctx| {
+            assert_eq!(
+                profiles.default_profile(ctx).data().base_model.as_ref(),
+                Some(&fable_id)
+            );
+            assert_eq!(
+                profiles.default_profile(ctx).data().context_window_limit,
+                Some(200_000)
             );
         });
     });
