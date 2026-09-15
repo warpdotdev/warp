@@ -48,12 +48,15 @@ RUN set -eux; \
   rustc --version
 
 # Install go and go command-line tools we use.
+# GOBIN must be set in this RUN: a bare `go install` as root writes to /root/go/bin,
+# which is neither on PATH nor readable by the non-root agent.
 RUN set -eux; \
   dpkgArch="$(dpkg --print-architecture)"; ARCH="${dpkgArch##*-}"; \
   curl --proto '=https' --tlsv1.2 -fsSLO https://go.dev/dl/go1.26.5.linux-$ARCH.tar.gz; \
   tar -C /usr/local -xzf go1.26.5.linux-$ARCH.tar.gz; \
   go version; \
   go env -w "GOPRIVATE=github.com/warpdotdev/*"; \
+  export GOBIN=/usr/local/go/bin; \
   CGO_ENABLED=0 go install -tags='no_clickhouse no_libsql no_mssql no_mysql no_sqlite3 no_vertica no_ydb' github.com/pressly/goose/v3/cmd/goose@v3.24.1; \
   echo "Installed goose"; \
   go install github.com/vektra/mockery/v2@v2.53.5; \
@@ -62,6 +65,10 @@ RUN set -eux; \
   echo "Installed protoc-gen-go"; \
   go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.2.0; \
   echo "Installed protoc-gen-go-grpc"; \
+  goose --version; \
+  mockery --version; \
+  protoc-gen-go --version; \
+  protoc-gen-go-grpc --version; \
   rm go1.26.5.linux-$ARCH.tar.gz
 
 # Install golangci-lint. It refuses to load a config that targets a newer Go
