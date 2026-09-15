@@ -522,6 +522,16 @@ impl SearcherWriterWrapper {
                     ops.push(WriterOperation::Insert(self.entry_to_document(entry)?));
                 }
                 SearcherEvent::IndexCleared => ops.push(WriterOperation::Clear),
+                SearcherEvent::BulkDocumentsInserted(entries) => {
+                    for entry in entries {
+                        // Overwrite the document if it already exists.
+                        let composite_key_hash = self.generate_composite_key_hash(&entry);
+                        let term =
+                            Term::from_field_bytes(self.composite_key_field, &composite_key_hash);
+                        ops.push(WriterOperation::Delete(term));
+                        ops.push(WriterOperation::Insert(self.entry_to_document(entry)?));
+                    }
+                }
             }
         }
 
@@ -1176,6 +1186,11 @@ pub enum SearcherEvent {
     DocumentInserted(FullTextSearchDocumentEntry),
     DocumentDeleted(FullTextSearchDocumentEntry),
     IndexCleared,
+    /// A bulk insert of many documents, all committed in a single Tantivy transaction.
+    /// This prevents segment accumulation that would occur when sending documents one-by-one
+    /// via [`SearcherEvent::DocumentInserted`], where each 75ms batch window creates a separate
+    /// segment. Use this for full index rebuilds to keep the segment count low.
+    BulkDocumentsInserted(Vec<FullTextSearchDocumentEntry>),
 }
 
 /// A strictly increasing logical position assigned to every write requested on an
@@ -1456,14 +1471,26 @@ impl<C: SearchSchemaConfig> AsyncSearcher<C> {
         self.publish_event(SearcherEvent::IndexCleared)
     }
 
+    /// Asynchronously builds the index from `documents`, committing all of them in a **single**
+    /// Tantivy transaction (one segment). This avoids the segment accumulation that would result
+    /// from sending documents one-by-one, where each 75 ms batch window causes an independent
+    /// `commit()` and therefore a new segment.
+    ///
+    /// Prefer this over calling [`Self::insert_document_async`] in a loop for bulk index
+    /// rebuilds. Use [`Self::insert_document_async`] only for low-frequency incremental updates.
     pub fn build_index_async(
         &self,
         documents: impl IntoIterator<Item = C::SearchDocEntry>,
     ) -> anyhow::Result<()> {
-        for document in documents {
-            self.insert_document_async(document)?;
+        let entries: Vec<FullTextSearchDocumentEntry> = documents
+            .into_iter()
+            .map(|doc| doc.into_document_entry())
+            .collect();
+        if entries.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        block_on(self.tx.send(SearcherEvent::BulkDocumentsInserted(entries)))
+            .map_err(|e| anyhow::anyhow!("Failed to send bulk document insertion event: {}", e))
     }
 
     /// Clears the index and inserts `documents`, coalescing a burst of rebuild requests into at
