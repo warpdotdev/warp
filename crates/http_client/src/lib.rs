@@ -462,14 +462,19 @@ impl<'a> RequestBuilder<'a> {
     }
 
     pub fn json<T: Serialize + ?Sized>(self, json: &T) -> RequestBuilder<'a> {
-        let serialized_payload =
+        // Pretty-printing a second copy of the payload is pure overhead unless a
+        // before_request_sent hook is registered to actually consume it.
+        let serialized_payload = if self.client.before_request_sent.is_some() {
             match serde_json::to_string_pretty(json).map_err(anyhow::Error::from) {
                 Ok(payload) => Some(payload),
                 Err(err) => {
                     report_error!(err.context("Failed to serialize JSON request payload."));
                     None
                 }
-            };
+            }
+        } else {
+            None
+        };
         Self {
             wrapped: self.wrapped.json(json),
             serialized_payload,
@@ -479,7 +484,14 @@ impl<'a> RequestBuilder<'a> {
 
     pub fn proto<T: prost::Message>(self, proto: &T) -> RequestBuilder<'a> {
         let bytes = proto.encode_to_vec();
-        let serialized = String::from_utf8(bytes.clone());
+        // Cloning `bytes` into a String is pure overhead unless a before_request_sent
+        // hook is registered to consume it; the UTF-8 conversion also fails for most
+        // real protobuf payloads anyway.
+        let serialized_payload = if self.client.before_request_sent.is_some() {
+            String::from_utf8(bytes.clone()).ok()
+        } else {
+            None
+        };
 
         Self {
             wrapped: self
@@ -489,7 +501,7 @@ impl<'a> RequestBuilder<'a> {
                     HeaderValue::from_static("application/x-protobuf"),
                 )
                 .body(bytes),
-            serialized_payload: serialized.ok(),
+            serialized_payload,
             ..self
         }
     }
