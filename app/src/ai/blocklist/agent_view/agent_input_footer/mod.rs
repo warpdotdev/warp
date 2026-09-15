@@ -995,7 +995,6 @@ impl AgentInputFooter {
 
     fn should_render_cloud_mode_v2(&self, app: &AppContext) -> bool {
         FeatureFlag::CloudModeInputV2.is_enabled()
-            && FeatureFlag::CloudMode.is_enabled()
             && self
                 .ambient_agent_view_model
                 .as_ref()
@@ -2378,13 +2377,10 @@ impl View for AgentInputFooter {
             .with_run_spacing(4.)
             .with_spacing(4.);
 
-        let is_ambient_agent = FeatureFlag::CloudMode.is_enabled()
-            && self
-                .ambient_agent_view_model
-                .as_ref()
-                .is_some_and(|ambient_agent_model| {
-                    ambient_agent_model.as_ref(app).is_ambient_agent()
-                });
+        let is_ambient_agent = self
+            .ambient_agent_view_model
+            .as_ref()
+            .is_some_and(|ambient_agent_model| ambient_agent_model.as_ref(app).is_ambient_agent());
         if is_ambient_agent {
             if let Some(environment_selector) = self.environment_selector.as_ref() {
                 left_buttons =

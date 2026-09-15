@@ -560,9 +560,6 @@ pub enum FeatureFlag {
     /// Enables the inline repo switcher menu for switching between indexed repos.
     InlineRepoMenu,
 
-    /// Enables cloud mode functionality for ambient agents.
-    CloudMode,
-
     /// Enables starting cloud mode from a local session.
     CloudModeFromLocalSession,
 
