@@ -383,6 +383,9 @@ fn latest_turn_panel_data_uses_the_breakdown_snapshot() {
         input_cost_in_credits: 0.2,
         platform_cost_in_cents: 2.0,
         platform_cost_in_credits: 1.0,
+        web_search_count: 2,
+        web_search_cost_in_cents: 1.0,
+        web_search_cost_in_credits: 1.0,
         ..Default::default()
     }));
 
@@ -402,6 +405,8 @@ fn latest_turn_panel_data_uses_the_breakdown_snapshot() {
             };
             assert_eq!(charge.model_id, "Models");
             assert_eq!(charge.tokens(), 150);
+            // Web-search charges ride along like the records path renders them.
+            assert_eq!(charge.web_search_count, 2);
             // The platform split rides along as its own charge.
             assert_eq!(record.platform_charges.len(), 1);
             assert_eq!(record.platform_charges[0].cost_in_cents, 2.0);
