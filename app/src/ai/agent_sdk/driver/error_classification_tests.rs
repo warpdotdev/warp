@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
-use warp_graphql::platform_error::PlatformErrorInfo;
+use warp_graphql::platform_error::{PlatformErrorInfo, PlatformErrorMessageFormat};
 
 use super::classify_driver_error;
+use crate::ai::agent::{RenderableAIError, TransientNetworkErrorKind};
 use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::agent_sdk::driver::terminal::{BootstrapError, ShareSessionError};
 use crate::server::server_api::ai::TaskGitCredentialsError;
@@ -23,19 +24,36 @@ fn assert_state_and_code(
 
 #[test]
 fn retryable_dependency_credentials_failure_is_error_with_structured_metadata() {
+    let info = PlatformErrorInfo {
+        error_message: Some("GitHub is temporarily unavailable.".to_string()),
+        code: PlatformErrorCode::ResourceUnavailable,
+        http_status: Some(503),
+        user_facing_messages: BTreeMap::from([
+            (
+                PlatformErrorMessageFormat::PlainText,
+                "GitHub is temporarily unavailable.".to_string(),
+            ),
+            (
+                PlatformErrorMessageFormat::Markdown,
+                "**GitHub** is temporarily unavailable.".to_string(),
+            ),
+        ]),
+        detail: Some("Repository access could not be resolved.".to_string()),
+        retryable: true,
+        is_user_error: Some(false),
+        metadata: BTreeMap::from([
+            ("provider".to_string(), "github".to_string()),
+            ("resource".to_string(), "installation".to_string()),
+        ]),
+        debug: Some("request-id=dogfood-only".to_string()),
+        metrics_category: Some("dependency_unavailable".to_string()),
+        trace_id: Some("0123456789abcdef".to_string()),
+    };
     let (state, update) = classify_driver_error(&AgentDriverError::GitCredentialsFetchFailed(
         TaskGitCredentialsError::Platform {
             message: "External dependency is unavailable.".to_string(),
             detail: Some("Repository access could not be resolved.".to_string()),
-            info: PlatformErrorInfo {
-                code: PlatformErrorCode::ResourceUnavailable,
-                retryable: true,
-                metadata: BTreeMap::from([
-                    ("provider".to_string(), "github".to_string()),
-                    ("resource".to_string(), "installation".to_string()),
-                ]),
-                debug: None,
-            },
+            info: Box::new(info.clone()),
         },
     ));
 
@@ -45,9 +63,7 @@ fn retryable_dependency_credentials_failure_is_error_with_structured_metadata() 
         Some(PlatformErrorCode::ResourceUnavailable)
     );
     let platform_error = update.platform_error.expect("structured platform error");
-    assert!(platform_error.retryable);
-    assert_eq!(platform_error.metadata["provider"], "github");
-    assert_eq!(platform_error.metadata["resource"], "installation");
+    assert_eq!(*platform_error, info);
     assert!(
         update
             .message
@@ -61,15 +77,25 @@ fn user_credentials_failure_remains_failed() {
         TaskGitCredentialsError::Platform {
             message: "Repository was not found.".to_string(),
             detail: None,
-            info: PlatformErrorInfo {
+            info: Box::new(PlatformErrorInfo {
+                error_message: Some("Repository was not found.".to_string()),
                 code: PlatformErrorCode::ResourceNotFound,
+                http_status: Some(404),
+                user_facing_messages: BTreeMap::from([(
+                    PlatformErrorMessageFormat::PlainText,
+                    "Repository was not found.".to_string(),
+                )]),
+                detail: None,
                 retryable: false,
+                is_user_error: Some(true),
                 metadata: BTreeMap::from([
                     ("provider".to_string(), "github".to_string()),
                     ("resource".to_string(), "repository".to_string()),
                 ]),
                 debug: None,
-            },
+                metrics_category: Some("resource_not_found".to_string()),
+                trace_id: None,
+            }),
         },
     ));
 
@@ -358,6 +384,42 @@ fn share_session_failed_includes_reason() {
 }
 
 // --- Conversation-level outcomes ---
+
+#[test]
+fn conversation_error_classifies_network_failure() {
+    let error = AgentDriverError::ConversationError {
+        error: RenderableAIError::transient_network_error(
+            false,
+            false,
+            TransientNetworkErrorKind::UnfinishedExchange,
+        ),
+    };
+
+    let (state, update) = classify_driver_error(&error);
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::AgentStreamNetworkError)
+    );
+    assert!(!update.platform_error.unwrap().retryable);
+}
+
+#[test]
+fn conversation_error_classifies_server_stream_failure() {
+    let error = AgentDriverError::ConversationError {
+        error: RenderableAIError::AgentStreamFailure {
+            error_message: "Response stream finished with an internal error.".into(),
+        },
+    };
+
+    let (state, update) = classify_driver_error(&error);
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::AgentStreamFailure)
+    );
+    assert!(!update.platform_error.unwrap().retryable);
+}
 
 #[test]
 fn conversation_cancelled_is_cancelled() {

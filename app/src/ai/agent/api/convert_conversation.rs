@@ -519,7 +519,8 @@ impl ConvertToExchanges for &api::Task {
                 | api::message::Message::ArtifactEvent(_)
                 | api::message::Message::MessagesReceivedFromAgents(_)
                 | api::message::Message::ModelUsed(_)
-                | api::message::Message::OrchestrationConfigSnapshot(_) => false,
+                | api::message::Message::OrchestrationConfigSnapshot(_)
+                | api::message::Message::RequestMetadata(_) => false,
             };
 
             if !added_message_as_exchange_input
@@ -2081,7 +2082,8 @@ where
                 | api::message::Message::UpdateTodos(_)
                 | api::message::Message::MessagesReceivedFromAgents(_)
                 | api::message::Message::EventsFromAgents(_)
-                | api::message::Message::PassiveSuggestionResult(_) => None,
+                | api::message::Message::PassiveSuggestionResult(_)
+                | api::message::Message::RequestMetadata(_) => None,
                 // Anything else is considered agent/stream activity we want to measure
                 api::message::Message::AgentOutput(_)
                 | api::message::Message::AgentReasoning(_)

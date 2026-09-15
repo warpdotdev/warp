@@ -2308,7 +2308,7 @@ impl AIConversation {
     pub fn update_cost_and_usage_for_request(
         &mut self,
         request_cost: Option<RequestCost>,
-        request_charges: Option<stream_finished::RequestCharges>,
+        request_charges: Option<api::RequestCharges>,
         token_usage: Vec<TokenUsage>,
         usage_metadata: Option<stream_finished::ConversationUsageMetadata>,
         was_user_initiated_request: bool,
@@ -3032,6 +3032,7 @@ impl AIConversation {
                                 );
                                 ctx.emit(BlocklistAIHistoryEvent::UpdatedTodoList {
                                     terminal_surface_id,
+                                    conversation_id: self.id,
                                 });
                             }
                         }
@@ -3357,6 +3358,7 @@ impl AIConversation {
                     update_todo_list_from_todo_op(&mut self.todo_lists, todos_op);
                     ctx.emit(BlocklistAIHistoryEvent::UpdatedTodoList {
                         terminal_surface_id,
+                        conversation_id: self.id,
                     });
                 }
                 ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {
@@ -3406,6 +3408,7 @@ impl AIConversation {
                     update_todo_list_from_todo_op(&mut self.todo_lists, todos_op);
                     ctx.emit(BlocklistAIHistoryEvent::UpdatedTodoList {
                         terminal_surface_id,
+                        conversation_id: self.id,
                     });
                 }
                 ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {

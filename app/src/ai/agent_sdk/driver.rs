@@ -26,7 +26,7 @@ use repo_metadata::{RepoMetadataModel, RepositoryIdentifier};
 use session_sharing_protocol::sharer::SessionRetentionReason;
 use tracing::Instrument as _;
 use uuid::Uuid;
-use warp_cli::agent::{Harness, OutputFormat, RepositoryHeadOverride};
+use warp_cli::agent::{Harness, OutputFormat, RepositoryPreparationOverride};
 use warp_cli::mcp::MCPSpec;
 use warp_cli::share::ShareRequest;
 use warp_cli::skill::SkillSpec;
@@ -606,8 +606,8 @@ pub struct AgentDriverOptions {
     /// Additional per-task repositories supplied by the server, such as a webhook's
     /// originating repository. Empty for local runs.
     pub additional_source_repos: Vec<SourceRepo>,
-    /// Overrides for repository HEADs in the agent's session.
-    pub repository_head_overrides: Vec<RepositoryHeadOverride>,
+    /// Server-owned repository preparation overrides for the agent's session.
+    pub repository_preparation_overrides: Vec<RepositoryPreparationOverride>,
     /// Whether origin remotes should be removed from environment repositories.
     pub remove_repository_origins: bool,
     /// Selected execution harness for this run.
@@ -699,7 +699,7 @@ pub struct AgentDriver {
     environment: Option<AmbientAgentEnvironment>,
     /// Additional per-task repositories supplied by the server.
     additional_source_repos: Vec<SourceRepo>,
-    repository_head_overrides: Vec<RepositoryHeadOverride>,
+    repository_preparation_overrides: Vec<RepositoryPreparationOverride>,
     remove_repository_origins: bool,
 
     // End-of-run snapshot upload controls.
@@ -877,8 +877,8 @@ pub enum AgentDriverError {
          Check the setup commands for this environment."
     )]
     SetupCommandExitedShell { command: String },
-    #[error("Timed out refreshing team metadata")]
-    TeamMetadataRefreshTimeout,
+    #[error("Failed to refresh team metadata")]
+    TeamMetadataRefreshFailed(#[source] anyhow::Error),
     #[error("{0}")]
     SkillResolutionFailed(String),
     #[error("Failed to fetch git credentials")]
@@ -988,6 +988,26 @@ const fn sandbox_deadline_message(on_free_plan: bool) -> &'static str {
     }
 }
 
+/// Environment variable holding the Unix timestamp (seconds) at which the sandbox
+/// hosting this run will be hard-killed.
+const SANDBOX_DEADLINE_ENV: &str = "WARP_SANDBOX_DEADLINE";
+
+/// Returns the instant at which the sandbox hosting this run will be hard-killed.
+///
+/// `None` outside a Warp-hosted sandbox, since the server only injects a deadline for
+/// Docker Sandbox and Namespace runs. Local and self-hosted runs have no bounded lifetime
+/// to report.
+pub(crate) fn sandbox_deadline() -> Option<SystemTime> {
+    let deadline_unix = std::env::var(SANDBOX_DEADLINE_ENV)
+        .ok()?
+        .parse::<i64>()
+        .ok()?;
+    if deadline_unix <= 0 {
+        return None;
+    }
+    SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(deadline_unix as u64))
+}
+
 impl ErrorExt for AgentDriverError {
     fn is_actionable(&self) -> bool {
         error_classification::classify_driver_error(self).0 == AgentTaskState::Error
@@ -1034,7 +1054,7 @@ impl AgentDriver {
             cloud_providers,
             environment,
             additional_source_repos,
-            repository_head_overrides,
+            repository_preparation_overrides,
             remove_repository_origins,
             selected_harness,
             third_party_harness_model_config,
@@ -1206,7 +1226,7 @@ impl AgentDriver {
             cloud_providers,
             environment,
             additional_source_repos,
-            repository_head_overrides,
+            repository_preparation_overrides,
             remove_repository_origins,
             snapshot_disabled: snapshot_disabled_value,
             snapshot_upload_timeout: snapshot_upload_timeout
@@ -1258,7 +1278,7 @@ impl AgentDriver {
             cloud_providers: Vec::new(),
             environment: None,
             additional_source_repos: Vec::new(),
-            repository_head_overrides: Vec::new(),
+            repository_preparation_overrides: Vec::new(),
             remove_repository_origins: false,
             snapshot_disabled: false,
             snapshot_upload_timeout: snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT,
@@ -1378,22 +1398,14 @@ impl AgentDriver {
                     /// How far before the sandbox deadline to start the teardown sequence.
                     const SHUTDOWN_WARNING_WINDOW: Duration = Duration::from_secs(5 * 60);
 
-                    let maybe_wait = std::env::var("WARP_SANDBOX_DEADLINE")
-                        .ok()
-                        .and_then(|s| s.parse::<i64>().ok())
-                        .and_then(|deadline_unix| {
-                            if deadline_unix <= 0 {
-                                return None;
-                            }
-                            let deadline = SystemTime::UNIX_EPOCH
-                                .checked_add(Duration::from_secs(deadline_unix as u64))?;
-                            let warning_at = deadline.checked_sub(SHUTDOWN_WARNING_WINDOW)?;
-                            match warning_at.duration_since(SystemTime::now()) {
-                                Ok(wait) => Some(wait),
-                                // Already inside the warning window — trigger immediately.
-                                Err(_) => Some(Duration::ZERO),
-                            }
-                        });
+                    let maybe_wait = sandbox_deadline().and_then(|deadline| {
+                        let warning_at = deadline.checked_sub(SHUTDOWN_WARNING_WINDOW)?;
+                        match warning_at.duration_since(SystemTime::now()) {
+                            Ok(wait) => Some(wait),
+                            // Already inside the warning window — trigger immediately.
+                            Err(_) => Some(Duration::ZERO),
+                        }
+                    });
 
                     // Resolved up front rather than inside the timer arm: `select!` arms
                     // are synchronous (no `ctx` to read the model from), and everything
@@ -2198,14 +2210,14 @@ impl AgentDriver {
                 let (
                     environment_opt,
                     additional_source_repos,
-                    repository_head_overrides,
+                    repository_preparation_overrides,
                     remove_repository_origins,
                 ) = foreground
                     .spawn(|me, _| {
                         (
                             me.environment.clone(),
                             me.additional_source_repos.clone(),
-                            me.repository_head_overrides.clone(),
+                            me.repository_preparation_overrides.clone(),
                             me.remove_repository_origins,
                         )
                     })
@@ -2274,7 +2286,7 @@ impl AgentDriver {
                                     environment::RepositoryPreparationOptions::new(
                                         source_repos_for_prepare,
                                         setup_commands,
-                                        repository_head_overrides,
+                                        repository_preparation_overrides,
                                         remove_repository_origins,
                                     ),
                                     setup_events_for_environment,

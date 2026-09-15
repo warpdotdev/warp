@@ -2839,11 +2839,8 @@ fn test_harness_filter_is_filtering_and_reset() {
 #[test]
 fn test_task_fetch_error_extracts_access_denied_http_status() {
     for status in [401, 403] {
-        let error = anyhow::Error::new(HttpStatusError {
-            status,
-            body: String::new(),
-        })
-        .context("run metadata unavailable");
+        let error = anyhow::Error::new(HttpStatusError::new(status, String::new()))
+            .context("run metadata unavailable");
         let fetch_error = TaskFetchError::from_error(&error);
 
         assert_eq!(fetch_error.message(), "run metadata unavailable");
@@ -2854,11 +2851,8 @@ fn test_task_fetch_error_extracts_access_denied_http_status() {
     }
 
     for error in [
-        anyhow::Error::new(HttpStatusError {
-            status: 404,
-            body: String::new(),
-        })
-        .context("permission denied text alone should not decide the UI"),
+        anyhow::Error::new(HttpStatusError::new(404, String::new()))
+            .context("permission denied text alone should not decide the UI"),
         anyhow::anyhow!("API error 403: forbidden"),
     ] {
         assert!(!TaskFetchError::from_error(&error).is_access_denied());

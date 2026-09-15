@@ -239,10 +239,10 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
         ),
 
         // --- Setup errors ---
-        AgentDriverError::TeamMetadataRefreshTimeout => (
+        AgentDriverError::TeamMetadataRefreshFailed(err) => (
             AgentTaskState::Error,
             TaskStatusUpdate::with_error_code(
-                "Timed out refreshing team metadata. Please check your network connection and try again.",
+                format!("Failed to refresh team metadata: {err:#}"),
                 PlatformErrorCode::InternalError,
             ),
         ),
@@ -430,7 +430,9 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
 /// `PlatformErrorCode` first, then share this mapping.
 fn task_state_for_platform_error_code(code: PlatformErrorCode) -> AgentTaskState {
     match code {
-        PlatformErrorCode::AuthenticationRequired
+        PlatformErrorCode::AgentStreamFailure
+        | PlatformErrorCode::AgentStreamNetworkError
+        | PlatformErrorCode::AuthenticationRequired
         | PlatformErrorCode::InternalError
         | PlatformErrorCode::ResourceUnavailable => AgentTaskState::Error,
         PlatformErrorCode::BudgetExceeded
@@ -466,7 +468,7 @@ fn classify_git_credentials_error(
                 TaskStatusUpdate {
                     message,
                     error_code: Some(info.code),
-                    platform_error: Some(Box::new(info.clone())),
+                    platform_error: Some(info.clone()),
                 },
             )
         }

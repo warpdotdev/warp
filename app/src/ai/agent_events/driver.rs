@@ -281,10 +281,8 @@ impl AgentEventSource for ServerApiAgentEventSource {
                                 .text()
                                 .await
                                 .unwrap_or_else(|err| format!("(no response body: {err:#})"));
-                            let status_err = HttpStatusError {
-                                status: status_code.as_u16(),
-                                body: body.clone(),
-                            };
+                            let status_err =
+                                HttpStatusError::new(status_code.as_u16(), body.clone());
                             anyhow::Error::new(status_err).context(format!(
                                 "SSE stream error: invalid status code {status_code}: {body}"
                             ))

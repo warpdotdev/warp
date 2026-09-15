@@ -1,6 +1,8 @@
 use crate::ai::{AgentTaskState, PlatformErrorCode};
 use crate::error::UserFacingError;
-pub use crate::platform_error::{PlatformErrorInput, PlatformErrorMetadataInput};
+pub use crate::platform_error::{
+    PlatformErrorInput, PlatformErrorMessageInput, PlatformErrorMetadataInput,
+};
 use crate::request_context::RequestContext;
 use crate::response_context::ResponseContext;
 use crate::schema;

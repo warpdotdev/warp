@@ -59,7 +59,9 @@ use crate::ai::ambient_agents::task::{HarnessConfig, TaskScope};
 use crate::ai::attachment_utils::attachments_download_dir;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::aws_credentials::refresh_aws_credentials;
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::cloud_environments::{
+    AmbientAgentEnvironment, CloudAmbientAgentEnvironment, SourceRepo,
+};
 use crate::ai::llms::LLMId;
 use crate::ai::skills::{
     ResolveSkillError, ResolvedSkill, clone_repo_for_skill, resolve_skill_spec,
@@ -129,6 +131,24 @@ fn maybe_warn_team_api_key(ctx: &AppContext) {
         "\x1b[33mWarning: Free cloud credits apply to personal runs only but this run uses \
          a team API key. If you want to use free cloud credits, consider using a personal API key instead.\x1b[0m"
     );
+}
+
+fn validated_driver_repositories_for_preparation(
+    options: &AgentDriverOptions,
+) -> Result<Vec<SourceRepo>, driver::environment::PrepareEnvironmentError> {
+    let source_repos = driver::environment::merge_repos_deduped(
+        options
+            .environment
+            .as_ref()
+            .map(AmbientAgentEnvironment::effective_repos)
+            .unwrap_or_default(),
+        options.additional_source_repos.clone(),
+    )?;
+    driver::environment::validate_repository_preparation_overrides(
+        &source_repos,
+        &options.repository_preparation_overrides,
+    )?;
+    Ok(source_repos)
 }
 
 /// Run a Warp CLI command.
@@ -691,48 +711,48 @@ impl AgentDriverRunner {
         // Local CLI-created runs may not have a task yet, so those setup events explicitly no-op.
         let mut task_id: Option<AmbientAgentTaskId> =
             args.task_id.as_deref().and_then(|s| s.parse().ok());
-        Self::set_ambient_agent_task_id(&foreground, task_id).await?;
-        let background = foreground.spawn(|_, ctx| ctx.background_executor()).await?;
-        let setup_events = match task_id {
-            Some(task_id) => SetupClientEventReporter::new(task_id, server_api.clone(), background),
-            None => SetupClientEventReporter::noop(server_api.clone(), background),
-        };
-        setup_events
-            .post_timeline_event(OzRunTimelineEvent::WorkerContainerReady)
-            .await;
-
-        // Ensure we've synced team state before starting the driver.
-        setup_events
-            .record_result(
-                SetupStep::TeamMetadataRefresh,
-                Self::refresh_team_metadata(&foreground),
-            )
-            .await?;
-        let args_for_team_scope = args.clone();
-        let agent_driver_team_scope = foreground
-            .spawn(move |_, ctx| resolve_agent_driver_team_scope(&args_for_team_scope, ctx))
-            .await?
-            .map_err(AgentDriverError::ConfigBuildFailed)?;
-
-        // Wait for Warp Drive to sync before building the task config, since
-        // prompt resolution (SavedPrompt -> workflow lookup) and environment
-        // resolution (CloudAmbientAgentEnvironment lookup) depend on it.
-        setup_events
-            .record_result(SetupStep::WarpDriveSync, async {
-                if foreground
-                    .spawn(|_, ctx| common::refresh_warp_drive(ctx))
-                    .await?
-                    .await
-                    .is_err()
-                {
-                    return Err(AgentDriverError::WarpDriveSyncFailed);
-                }
-                Ok(())
-            })
-            .await?;
-
         // Set up and run the driver, reporting any errors back to the server.
         let result: Result<(), AgentDriverError> = async {
+            Self::set_ambient_agent_task_id(&foreground, task_id).await?;
+            let background = foreground.spawn(|_, ctx| ctx.background_executor()).await?;
+            let setup_events = match task_id {
+                Some(task_id) => SetupClientEventReporter::new(task_id, server_api.clone(), background),
+                None => SetupClientEventReporter::noop(server_api.clone(), background),
+            };
+            setup_events
+                .post_timeline_event(OzRunTimelineEvent::WorkerContainerReady)
+                .await;
+
+            // Ensure we've synced team state before starting the driver.
+            setup_events
+                .record_result(
+                    SetupStep::TeamMetadataRefresh,
+                    Self::refresh_team_metadata(&foreground),
+                )
+                .await?;
+            let args_for_team_scope = args.clone();
+            let agent_driver_team_scope = foreground
+                .spawn(move |_, ctx| resolve_agent_driver_team_scope(&args_for_team_scope, ctx))
+                .await?
+                .map_err(AgentDriverError::ConfigBuildFailed)?;
+
+            // Wait for Warp Drive to sync before building the task config, since
+            // prompt resolution (SavedPrompt -> workflow lookup) and environment
+            // resolution (CloudAmbientAgentEnvironment lookup) depend on it.
+            setup_events
+                .record_result(SetupStep::WarpDriveSync, async {
+                    if foreground
+                        .spawn(|_, ctx| common::refresh_warp_drive(ctx))
+                        .await?
+                        .await
+                        .is_err()
+                    {
+                        return Err(AgentDriverError::WarpDriveSyncFailed);
+                    }
+                    Ok(())
+                })
+                .await?;
+
             // Pull relevant variables out of args before moving it into the closure.
             let share_requests = args.share.share.clone();
             let bedrock_inference_role = args.bedrock_inference_role.clone();
@@ -888,13 +908,17 @@ impl AgentDriverRunner {
             )
             .await?
             .await
-            .map_err(|_| AgentDriverError::TeamMetadataRefreshTimeout)
+            .map_err(AgentDriverError::TeamMetadataRefreshFailed)
     }
 
     async fn set_ambient_agent_task_id(
         foreground: &ModelSpawner<Self>,
         task_id: Option<AmbientAgentTaskId>,
     ) -> Result<(), AgentDriverError> {
+        #[cfg(feature = "crash_reporting")]
+        if let Some(task_id) = task_id {
+            crate::crash_reporting::set_task_id_tag(&task_id.to_string());
+        }
         foreground
             .spawn(move |_, ctx| {
                 ServerApiProvider::handle(ctx)
@@ -1165,7 +1189,7 @@ impl AgentDriverRunner {
                     cloud_providers: Vec::new(),
                     environment: None,
                     additional_source_repos: Vec::new(),
-                    repository_head_overrides: args.repository_head_overrides.clone(),
+                    repository_preparation_overrides: args.repository_preparation_overrides.clone(),
                     remove_repository_origins: args.remove_repository_origins,
                     selected_harness: args.harness,
                     third_party_harness_model_config,
@@ -1239,17 +1263,7 @@ impl AgentDriverRunner {
                 Self::resolve_environment(foreground, environment_id, &mut driver_options),
             )
             .await?;
-        driver::environment::validate_repository_head_overrides(
-            &driver::environment::merge_repos_deduped(
-                driver_options
-                    .environment
-                    .as_ref()
-                    .map(crate::ai::cloud_environments::AmbientAgentEnvironment::effective_repos)
-                    .unwrap_or_default(),
-                driver_options.additional_source_repos.clone(),
-            )?,
-            &driver_options.repository_head_overrides,
-        )?;
+        validated_driver_repositories_for_preparation(&driver_options)?;
 
         Ok((driver_options, task, task_conversation_id))
     }

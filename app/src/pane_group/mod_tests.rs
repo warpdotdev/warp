@@ -312,7 +312,7 @@ fn local_child_dispatch_fails_after_window_team_change() {
         app.read(|ctx| {
             ServerApiProvider::as_ref(ctx)
                 .get()
-                .set_ambient_workload_token_for_test("test-workload-token".to_string());
+                .set_ambient_workload_token_for_test("test-workload-token".to_string(), None);
         });
         let team_a_uid: ServerId = 7.into();
         let team_b_uid: ServerId = 8.into();
@@ -1947,10 +1947,7 @@ fn finish_seed_child_conversations_from_task_gives_up_on_permanent_failure() {
             let parent_task_id = new_ambient_agent_task_id();
 
             panes.seed_child_conversations_from_task(parent_conversation_id, parent_task_id, ctx);
-            let err = anyhow::Error::new(HttpStatusError {
-                status: 404,
-                body: String::new(),
-            });
+            let err = anyhow::Error::new(HttpStatusError::new(404, String::new()));
             panes.finish_seed_child_conversations_from_task(
                 parent_conversation_id,
                 parent_task_id,

@@ -25,6 +25,8 @@ pub enum RunnerOsArg {
     Linux,
     #[value(name = "macos")]
     Macos,
+    #[value(name = "windows")]
+    Windows,
 }
 
 /// Target CPU architecture for a runner sandbox.
@@ -206,7 +208,7 @@ pub struct DeleteRunnerArgs {
 ///
 /// Mirrors the server rule: Linux config (`--docker-image`) is only valid for
 /// `--os linux`, and macOS config (`--macos-version`) is only valid for
-/// `--os macos`.
+/// `--os macos`. Windows accepts neither, since it has no OS-specific config.
 pub fn validate_os_config(
     os: RunnerOsArg,
     docker_image: Option<&str>,
@@ -221,6 +223,14 @@ pub fn validate_os_config(
         RunnerOsArg::Macos => {
             if docker_image.is_some() {
                 return Err("--docker-image can only be used with --os linux".to_string());
+            }
+        }
+        RunnerOsArg::Windows => {
+            if docker_image.is_some() {
+                return Err("--docker-image can only be used with --os linux".to_string());
+            }
+            if macos_version.is_some() {
+                return Err("--macos-version can only be used with --os macos".to_string());
             }
         }
     }

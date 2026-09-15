@@ -3362,11 +3362,8 @@ impl BlocklistAIController {
                 let error_message = "Response stream finished unexpectedly (with finish reason `Other`).";
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_with_error(
-                        RenderableAIError::Other {
+                        RenderableAIError::AgentStreamFailure {
                             error_message: error_message.to_owned(),
-                            will_attempt_resume: false,
-                            waiting_for_network: false,
-                            is_user_error: false,
                         },
                         /*recovery_pending*/ false,
                         stream_id,
@@ -3407,11 +3404,8 @@ impl BlocklistAIController {
                 let error_message = "The LLM is currently unavailable.";
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_with_error(
-                        RenderableAIError::Other {
+                        RenderableAIError::AgentStreamFailure {
                             error_message: error_message.to_owned(),
-                            will_attempt_resume: false,
-                            waiting_for_network: false,
-                            is_user_error: false,
                         },
                         /*recovery_pending*/ false,
                         stream_id,
@@ -3475,12 +3469,7 @@ impl BlocklistAIController {
                 );
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_with_error(
-                        RenderableAIError::Other {
-                            error_message,
-                            will_attempt_resume: false,
-                            waiting_for_network: false,
-                            is_user_error: false,
-                        },
+                        RenderableAIError::AgentStreamFailure { error_message },
                         /*recovery_pending*/ false,
                         stream_id,
                         conversation_id,

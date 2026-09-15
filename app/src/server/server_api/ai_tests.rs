@@ -2,6 +2,8 @@ use chrono::{TimeZone, Utc};
 use futures::executor::block_on;
 use itertools::Itertools;
 use mockito::{Matcher, Server};
+use warp_graphql::ai::PlatformErrorCode;
+use warp_graphql::platform_error::{PlatformErrorInfo, PlatformErrorMessageFormat};
 use warp_server_client::base_client::{CLOUD_AGENT_ID_HEADER, TEAM_UID_HEADER};
 
 use super::super::ServerApi;
@@ -11,9 +13,9 @@ use super::{
     ConnectedSelfHostedWorker, CreateAgentRequest, ExecutionLocation, ForkConversationResponse,
     ListConnectedSelfHostedWorkersResponse, ListRunsResponse, PrepareAttachmentUploadsResponse,
     ReadAgentMessageResponse, RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest,
-    TaskGitCredentialsError, TaskListFilter, UploadFieldValue, UserQueryMode,
-    build_fork_conversation_url, build_list_agent_runs_url, build_run_followup_url,
-    is_unknown_git_credential_schema_error,
+    TaskGitCredentialsError, TaskListFilter, TaskStatusUpdate, UploadFieldValue, UserQueryMode,
+    agent_task_status_message_input, build_fork_conversation_url, build_list_agent_runs_url,
+    build_run_followup_url, is_unknown_git_credential_schema_error,
 };
 use crate::notebooks::NotebookId;
 use crate::server::ids::ServerId;
@@ -23,6 +25,59 @@ use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeF
 
 fn request_scope_for_team(team_uid: ServerId) -> RequestTeamScope {
     RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid))
+}
+
+#[test]
+fn task_status_message_input_preserves_full_platform_error() {
+    let input = agent_task_status_message_input(TaskStatusUpdate {
+        message: "Repository access failed.".to_string(),
+        error_code: Some(PlatformErrorCode::ResourceUnavailable),
+        platform_error: Some(Box::new(PlatformErrorInfo {
+            error_message: Some("GitHub is temporarily unavailable.".to_string()),
+            code: PlatformErrorCode::ResourceUnavailable,
+            http_status: Some(503),
+            user_facing_messages: std::collections::BTreeMap::from([(
+                PlatformErrorMessageFormat::PlainText,
+                "GitHub is temporarily unavailable.".to_string(),
+            )]),
+            detail: Some("Repository access could not be resolved.".to_string()),
+            retryable: true,
+            is_user_error: Some(false),
+            metadata: std::collections::BTreeMap::from([(
+                "provider".to_string(),
+                "github".to_string(),
+            )]),
+            debug: Some("request-id=dogfood-only".to_string()),
+            metrics_category: Some("dependency_unavailable".to_string()),
+            trace_id: Some("0123456789abcdef".to_string()),
+        })),
+    });
+    let error = input.error.unwrap();
+
+    assert_eq!(
+        error.error_message.as_deref(),
+        Some("GitHub is temporarily unavailable.")
+    );
+    assert_eq!(error.code, PlatformErrorCode::ResourceUnavailable);
+    assert_eq!(error.http_status, Some(503));
+    let messages = error.user_facing_messages.unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].format, PlatformErrorMessageFormat::PlainText);
+    assert_eq!(messages[0].message, "GitHub is temporarily unavailable.");
+    assert_eq!(
+        error.detail.as_deref(),
+        Some("Repository access could not be resolved.")
+    );
+    assert!(error.retryable);
+    assert_eq!(error.is_user_error, Some(false));
+    assert_eq!(error.metadata[0].key, "provider");
+    assert_eq!(error.metadata[0].value, "github");
+    assert_eq!(error.debug.as_deref(), Some("request-id=dogfood-only"));
+    assert_eq!(
+        error.metrics_category.as_deref(),
+        Some("dependency_unavailable")
+    );
+    assert_eq!(error.trace_id.as_deref(), Some("0123456789abcdef"));
 }
 
 #[test]

@@ -242,7 +242,8 @@ fn write_task_messages(
             | Message::CodeReview(_)
             | Message::ServerEvent(_)
             | Message::InvokeSkill(_)
-            | Message::OrchestrationConfigSnapshot(_) => {}
+            | Message::OrchestrationConfigSnapshot(_)
+            | Message::RequestMetadata(_) => {}
         }
     }
     Ok(())

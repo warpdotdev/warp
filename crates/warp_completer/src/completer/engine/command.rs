@@ -93,43 +93,22 @@ fn sorted_top_level_commands(
 
 /// Return a top-level command's `Suggestion`
 fn command_suggestion(command: &str, context: &dyn CompletionContext) -> Option<Suggestion> {
-    cfg_if::cfg_if! {
-        if #[cfg(feature = "v2")] {
-            let command_suggestion =
-                context
-                    .command_registry()
-                    .get_signature(command)
-                    .map(|signature| {
-                        Suggestion::with_same_display_and_replacement(
-                            signature.command.name.clone(),
-                            signature.command.description.as_ref().cloned(),
-                            // TODO(CORE-2795) This needs to be overrideable by
-                            // signature.parser_directives.always_case_insensitive
-                            SuggestionType::Command(context.command_case_sensitivity()),
-                            signature.command.priority.into(),
-                        )
-
-                    });
-        } else {
-            let command_suggestion =
-                context
-                    .command_registry()
-                    .signature(command)
-                    .map(|signature| {
-                    let case_sensitivity = if signature.parser_directives.always_case_insensitive {
-                        TopLevelCommandCaseSensitivity::CaseInsensitive
-                    } else {
-                        context.command_case_sensitivity()
-                    };
-                        Suggestion::with_same_display_and_replacement(
-                            signature.name.clone(),
-                            signature.description.as_ref().cloned(),
-                            SuggestionType::Command(case_sensitivity),
-                            signature.priority.into(),
-                        )
-                    });
-        }
-    }
+    let command_suggestion = context
+        .command_registry()
+        .signature(command)
+        .map(|signature| {
+            let case_sensitivity = if signature.parser_directives.always_case_insensitive {
+                TopLevelCommandCaseSensitivity::CaseInsensitive
+            } else {
+                context.command_case_sensitivity()
+            };
+            Suggestion::with_same_display_and_replacement(
+                signature.name.clone(),
+                signature.description.as_ref().cloned(),
+                SuggestionType::Command(case_sensitivity),
+                signature.priority.into(),
+            )
+        });
 
     command_suggestion
         .or_else(|| alias_suggestion(command, context))
