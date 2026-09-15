@@ -32,7 +32,7 @@ Environment variables:
 ### Linting and Formatting
 - `./script/presubmit` - Run the full local presubmit only when explicitly requested
 - `./script/format` - Format code
-- `cargo clippy -p <package> --all-targets --tests -- -D warnings` - Run targeted Clippy; use the applicable invocation from `./script/presubmit`
+- `cargo clippy -p <package> --all-targets --tests -- -D warnings` - Run targeted Clippy
 - `./script/run-clang-format.py -r --extensions 'c,h,cpp,m' ./crates/warpui/src/ ./app/src/` - Check C/C++/Obj-C formatting
 - `./script/run-clang-format.py -i -r --extensions 'c,h,cpp,m' ./crates/warpui/src/ ./app/src/` - Format C/C++/Obj-C code in place
 - `find . -name "*.wgsl" -exec wgslfmt --check {} +` - Check WGSL shader formatting
@@ -41,7 +41,7 @@ Environment variables:
 ### Implementation Validation Order
 Optimize for fast delivery and let CI catch uncommon failures outside targeted local coverage.
 
-1. While editing, run only the smallest targeted `cargo check` or `cargo nextest` command that gives useful feedback.
+1. While editing, run only the smallest targeted `cargo check` or `cargo nextest` command that gives useful feedback; defer checks and tests until after implementation where possible.
 2. Once the code and self-review are complete, run the relevant tests and fix the code until they pass.
 3. Run the relevant Clippy and other lint, typecheck, or build checks and fix their findings. Return to affected tests only when a fix materially changes behavior.
 4. Run every applicable mutating formatter once, after all other code changes are complete.
