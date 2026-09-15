@@ -824,7 +824,7 @@ impl LLMPreferences {
             let raw_override = self.base_llm_for_terminal_view.get(&terminal_view_id);
             if let Some(llm_id) = raw_override
                 && let Some(llm_info) =
-                    self.model_info_for_id(&models_by_feature.agent_mode, llm_id, app)
+                    self.usable_model_info_for_id(&models_by_feature.agent_mode, llm_id, app)
             {
                 return llm_info;
             }
@@ -834,7 +834,7 @@ impl LLMPreferences {
             .data()
             .base_model
             .clone()
-            .and_then(|id| self.model_info_for_id(&models_by_feature.agent_mode, &id, app))
+            .and_then(|id| self.usable_model_info_for_id(&models_by_feature.agent_mode, &id, app))
             .unwrap_or_else(|| self.fallback_llm_info(&models_by_feature.agent_mode, app))
     }
 
@@ -850,7 +850,7 @@ impl LLMPreferences {
             let raw_override = self.base_llm_for_terminal_view.get(&terminal_view_id);
             if let Some(llm_id) = raw_override
                 && let Some(llm_info) =
-                    self.model_info_for_id(&models_by_feature.agent_mode, llm_id, app)
+                    self.usable_model_info_for_id(&models_by_feature.agent_mode, llm_id, app)
             {
                 return llm_info;
             }
@@ -884,7 +884,7 @@ impl LLMPreferences {
             .data()
             .base_model
             .clone()
-            .and_then(|id| self.model_info_for_id(&models_by_feature.agent_mode, &id, app))
+            .and_then(|id| self.usable_model_info_for_id(&models_by_feature.agent_mode, &id, app))
             .unwrap_or_else(|| self.fallback_llm_info(&models_by_feature.agent_mode, app))
     }
 
@@ -917,6 +917,18 @@ impl LLMPreferences {
         app: &'a AppContext,
     ) -> Option<&'a LLMInfo> {
         Self::server_info_for_id_router_gated(available, id)
+            .or_else(|| self.custom_llm_info_for_id_if_enabled(id, app))
+            .or_else(|| self.custom_router_llm_info_for_id_if_enabled(id))
+    }
+
+    fn usable_model_info_for_id<'a>(
+        &'a self,
+        available: &'a AvailableLLMs,
+        id: &LLMId,
+        app: &'a AppContext,
+    ) -> Option<&'a LLMInfo> {
+        Self::server_info_for_id_router_gated(available, id)
+            .filter(|info| is_usable_llm(info, app))
             .or_else(|| self.custom_llm_info_for_id_if_enabled(id, app))
             .or_else(|| self.custom_router_llm_info_for_id_if_enabled(id))
     }
@@ -1975,8 +1987,7 @@ impl LLMPreferences {
         ctx.emit(LLMPreferencesEvent::UpdatedAvailableLLMs);
     }
 
-    /// Clear coding, CLI agent, and computer use selections where the model is
-    /// no longer supported or effectively disabled.
+    /// Clear model selections where the model is no longer supported or effectively disabled.
     ///
     /// Called both when the model list is refreshed from the server and when
     /// BYOK API keys change (since `RequiresUpgrade` usability is BYOK-aware).
@@ -1999,8 +2010,48 @@ impl LLMPreferences {
         profiles_model.update(ctx, |profiles, ctx| {
             for profile_id in profiles.get_all_profile_ids() {
                 if let Some(profile) = profiles.get_profile_by_id(&profile_id, ctx) {
-                    // Base-model preferences are shared across teams, so team-scoped catalogs
-                    // affect availability without mutating the stored selection.
+                    let profile_data = profile.data();
+                    let preferred_base_model = profile_data.base_model.clone();
+                    let effective_base_model_id = preferred_base_model
+                        .as_ref()
+                        .unwrap_or(&models_by_feature.agent_mode.default_id);
+                    let preferred_base_model_info = models_by_feature
+                        .agent_mode
+                        .info_for_id(effective_base_model_id);
+                    let preferred_base_model_is_recognized = preferred_base_model.is_none()
+                        || preferred_base_model_info.is_some()
+                        || self
+                            .custom_llm_info_for_id(effective_base_model_id)
+                            .is_some();
+                    let preferred_base_model_is_admin_disabled = preferred_base_model_info
+                        .is_some_and(|info| {
+                            info.disable_reason == Some(DisableReason::AdminDisabled)
+                        });
+                    let effective_base_model_usable = models_by_feature
+                        .agent_mode
+                        .usable_info_for_id(effective_base_model_id, ctx)
+                        .or_else(|| {
+                            self.custom_llm_info_for_id_if_enabled(effective_base_model_id, ctx)
+                        });
+                    let effective_base_model_unusable = effective_base_model_usable.is_none();
+                    let effective_base_model_is_configurable = effective_base_model_usable
+                        .is_some_and(|info| info.context_window.is_configurable);
+                    let has_context_window_limit = profile_data.context_window_limit.is_some();
+
+                    if preferred_base_model.is_some()
+                        && preferred_base_model_is_recognized
+                        && !preferred_base_model_is_admin_disabled
+                        && effective_base_model_unusable
+                    {
+                        profiles.set_base_model(&profile_id, None, ctx);
+                    }
+                    if has_context_window_limit
+                        && preferred_base_model_is_recognized
+                        && !preferred_base_model_is_admin_disabled
+                        && (effective_base_model_unusable || !effective_base_model_is_configurable)
+                    {
+                        profiles.set_context_window_limit(&profile_id, None, ctx);
+                    }
                     if let Some(preferred_llm_id) = &profile.data().coding_model {
                         let is_recognized = models_by_feature
                             .coding

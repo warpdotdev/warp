@@ -5,6 +5,7 @@ use std::sync::Arc;
 use warpui::App;
 
 use super::*;
+use crate::ai::aws_credentials::AwsCredentialRefresher;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::auth::AuthStateProvider;
@@ -16,6 +17,7 @@ use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::sync_queue::SyncQueue;
+use crate::settings::PrivacySettings;
 use crate::terminal::input::models::query_model_picker_choices;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team::Team;
@@ -864,26 +866,25 @@ fn team_catalog_hydration_preserves_shared_profile_and_resolves_against_active_t
         app.add_singleton_model(TeamTesterStatus::mock);
         app.add_singleton_model(SyncQueue::mock);
         app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(PrivacySettings::mock);
         app.add_singleton_model(|_| TemplatableMCPServerManager::default());
 
         let fable_id = LLMId::from("claude-5-1-fable");
+        let mut enabled_fable = server_llm(fable_id.as_str(), None);
+        enabled_fable.context_window.is_configurable = true;
+        let mut disabled_fable = server_llm(fable_id.as_str(), Some(DisableReason::AdminDisabled));
+        disabled_fable.context_window.is_configurable = true;
         let enabled_models = ModelsByFeature {
             agent_mode: available(
                 "auto-genius",
-                vec![
-                    server_llm("auto-genius", None),
-                    server_llm(fable_id.as_str(), None),
-                ],
+                vec![server_llm("auto-genius", None), enabled_fable],
             ),
             ..Default::default()
         };
         let disabled_models = ModelsByFeature {
             agent_mode: available(
                 "auto-genius",
-                vec![
-                    server_llm("auto-genius", None),
-                    server_llm(fable_id.as_str(), Some(DisableReason::AdminDisabled)),
-                ],
+                vec![server_llm("auto-genius", None), disabled_fable],
             ),
             ..Default::default()
         };
@@ -911,6 +912,7 @@ fn team_catalog_hydration_preserves_shared_profile_and_resolves_against_active_t
             Some(vec![engineering_team, disabled_team]),
             Some(disabled_models.clone()),
         );
+        let refreshed_workspace = workspace.clone();
         app.add_singleton_model(|ctx| {
             UserWorkspaces::mock(
                 Arc::new(MockTeamClient::new()),
@@ -918,6 +920,9 @@ fn team_catalog_hydration_preserves_shared_profile_and_resolves_against_active_t
                 vec![workspace],
                 ctx,
             )
+        });
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.subscribe_to_settings_changes(ctx);
         });
 
         let profiles_model = app.add_singleton_model(|ctx| {
@@ -929,9 +934,8 @@ fn team_catalog_hydration_preserves_shared_profile_and_resolves_against_active_t
             profiles.set_base_model(&profile_id, Some(fable_id.clone()), ctx);
             profiles.set_context_window_limit(&profile_id, Some(200_000), ctx);
         });
-
-        llm_preferences.update(&mut app, |preferences, ctx| {
-            preferences.reconcile_disabled_model_preferences_for_known_scopes(ctx);
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.update_workspaces(vec![refreshed_workspace], ctx);
         });
 
         let engineering_scope = TeamContextForOperation::new_for_test(engineering_team_uid);
@@ -946,8 +950,9 @@ fn team_catalog_hydration_preserves_shared_profile_and_resolves_against_active_t
             assert_eq!(
                 preferences
                     .get_active_base_model(&disabled_scope, ctx, None)
-                    .id,
-                fable_id
+                    .id
+                    .as_str(),
+                "auto-genius"
             );
             let disabled_fable = preferences
                 .get_base_llm_choices_for_agent_mode(&disabled_scope, ctx)
@@ -968,6 +973,60 @@ fn team_catalog_hydration_preserves_shared_profile_and_resolves_against_active_t
                 Some(200_000)
             );
         });
+    });
+}
+
+#[test]
+fn reconcile_clears_unavailable_and_unentitled_base_model_preferences() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+
+        let profiles_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+        let profile_id = profiles_model.read(&app, |profiles, _| profiles.default_profile_id());
+
+        for (model_id, disable_reason) in [
+            ("unavailable-model", DisableReason::Unavailable),
+            ("upgrade-model", DisableReason::RequiresUpgrade),
+        ] {
+            let model_id = LLMId::from(model_id);
+            let mut disabled_model = server_llm(model_id.as_str(), Some(disable_reason));
+            disabled_model.context_window.is_configurable = true;
+            profiles_model.update(&mut app, |profiles, ctx| {
+                profiles.set_base_model(&profile_id, Some(model_id.clone()), ctx);
+                profiles.set_context_window_limit(&profile_id, Some(200_000), ctx);
+            });
+            llm_preferences.update(&mut app, |preferences, ctx| {
+                preferences.update_feature_model_choices(
+                    Ok(ModelsByFeature {
+                        agent_mode: available(
+                            "auto-genius",
+                            vec![server_llm("auto-genius", None), disabled_model],
+                        ),
+                        ..Default::default()
+                    }),
+                    ctx,
+                );
+            });
+
+            profiles_model.read(&app, |profiles, ctx| {
+                let profile = profiles.default_profile(ctx);
+                assert_eq!(profile.data().base_model, None);
+                assert_eq!(profile.data().context_window_limit, None);
+            });
+        }
     });
 }
 
