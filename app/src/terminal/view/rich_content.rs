@@ -234,8 +234,6 @@ pub enum RichContentMetadata {
         exchange_id: AIAgentExchangeId,
     },
     UsageFooter,
-    /// A docked, closeable per-turn "Turn" panel backed by the turn's persisted request-metadata
-    /// record. See `RequestMetadataTurnView`.
     TurnPanel,
     InitStep {
         step_kind: InitStepKind,

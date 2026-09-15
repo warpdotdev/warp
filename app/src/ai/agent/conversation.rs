@@ -880,8 +880,7 @@ impl AIConversation {
             .charged_usage_for_last_block = charged_usage;
     }
 
-    /// Test-only helper that sets the last block's credits total directly, without wiring
-    /// a full `StreamFinished` event.
+    /// Test-only helper to set credits directly without generating a full `StreamFinished` event.
     #[cfg(test)]
     pub(crate) fn set_credits_spent_for_last_block_for_test(&mut self, credits: f32) {
         self.conversation_usage_metadata
@@ -3528,10 +3527,8 @@ impl AIConversation {
         self.task_store.get(task_id)
     }
 
-    /// The request ids of the messages added to `exchange_id`, resolved across the whole task
-    /// store: summarization (`Action::MoveMessagesToNewTask`) moves an exchange's messages into
-    /// a subtask without touching the exchange's `added_message_ids`, so message membership
-    /// cannot be read off the single task the exchange happens to live in.
+    /// We have to check all tasks for the messages because summarization moves them to a new task
+    /// (`Action::MoveMessagesToNewTask`)
     fn exchange_request_ids(&self, exchange_id: AIAgentExchangeId) -> HashSet<String> {
         let Some(exchange) = self.all_tasks().find_map(|task| task.exchange(exchange_id)) else {
             return HashSet::new();
@@ -3548,9 +3545,6 @@ impl AIConversation {
             .collect()
     }
 
-    /// Every per-request record for the requests that produced `exchange_id`, in task order.
-    /// An exchange can hold several records — one per underlying API request (retries, resumes,
-    /// multi-request turns) — so the Turn panel groups these rather than showing one per request.
     pub fn request_metadata_records_for_exchange(
         &self,
         exchange_id: AIAgentExchangeId,
@@ -3568,40 +3562,31 @@ impl AIConversation {
             .collect()
     }
 
-    /// The root-task exchanges that make up the user-visible turn containing `exchange_id`:
-    /// from the exchange carrying the user's query through every follow-up exchange (tool-result
-    /// round trips are separate requests, and so separate exchanges) up to, but not including,
-    /// the next exchange that carries a user query. An exchange outside the root task is its own
-    /// turn.
+    /// Given the provided exchange id, get all exchange ids for the turn containing that exchange
     pub fn turn_exchange_ids(&self, exchange_id: AIAgentExchangeId) -> Vec<AIAgentExchangeId> {
-        let root_exchanges: Vec<&AIAgentExchange> = self.root_task_exchanges().collect();
-        let Some(index) = root_exchanges
-            .iter()
-            .position(|exchange| exchange.id == exchange_id)
-        else {
-            return vec![exchange_id];
-        };
-        let start = (0..=index)
-            .rev()
-            .find(|&i| root_exchanges[i].has_user_query())
-            .unwrap_or(0);
-        let end = ((index + 1)..root_exchanges.len())
-            .find(|&i| root_exchanges[i].has_user_query())
-            .unwrap_or(root_exchanges.len());
-        root_exchanges[start..end]
-            .iter()
-            .map(|exchange| exchange.id)
-            .collect()
+        let mut turn = Vec::new();
+        let mut turn_contains_exchange = false;
+        for exchange in self.root_task_exchanges() {
+            if exchange.has_user_query() {
+                if turn_contains_exchange {
+                    break;
+                }
+                turn.clear();
+            }
+            turn.push(exchange.id);
+            turn_contains_exchange |= exchange.id == exchange_id;
+        }
+        if turn_contains_exchange {
+            turn
+        } else {
+            vec![exchange_id]
+        }
     }
 
-    /// Whether `exchange_id` is the last exchange of its turn (see [`Self::turn_exchange_ids`]),
-    /// i.e. the block where turn-level controls belong.
     pub fn is_last_exchange_in_turn(&self, exchange_id: AIAgentExchangeId) -> bool {
         self.turn_exchange_ids(exchange_id).last() == Some(&exchange_id)
     }
 
-    /// Every per-request record for the turn containing `exchange_id`, in task order: the union
-    /// of [`Self::request_metadata_records_for_exchange`] over [`Self::turn_exchange_ids`].
     pub fn request_metadata_records_for_turn(
         &self,
         exchange_id: AIAgentExchangeId,
@@ -3614,11 +3599,9 @@ impl AIConversation {
             .collect()
     }
 
-    /// The Turn panel contents for the turn containing `exchange_id`: the server-authored
-    /// records when the turn's metadata is complete, otherwise the best client-derived
-    /// summary — timing from the exchanges themselves, plus (for the latest turn only) the
-    /// last-block charge snapshots and the conversation's current context-window reading.
-    /// Cumulative conversation totals are never presented as a historical turn's charges.
+    /// Because this panel relies on `RequestMetadata` to populate its fields, and that message
+    /// does not exist for historical conversations, we fallback to `conversation_metadata` to
+    /// display what we have
     pub fn turn_panel_data(&self, exchange_id: AIAgentExchangeId) -> Option<TurnPanelData> {
         if !self.is_last_exchange_in_turn(exchange_id) {
             return None;
@@ -3649,20 +3632,21 @@ impl AIConversation {
             })
             .min();
 
-        // The last-block snapshots describe only the most recent turn; for any earlier
-        // turn they would silently attribute that turn's charges to this one. Anchor on the
-        // root task's actual last exchange — no visibility filtering — so a hidden latest
-        // turn keeps its own charges instead of lending them to the previous visible turn.
         let is_latest_turn = self
             .root_task_exchanges()
             .last()
             .is_some_and(|latest| turn_exchange_ids.last() == Some(&latest.id));
-        let context_window_usage = if is_latest_turn {
-            let usage = self.context_window_usage();
-            (usage > 0.0).then_some(usage * 100.0)
-        } else {
-            None
-        };
+        let context_window_usage = self
+            .request_metadata_records_for_turn(exchange_id)
+            .iter()
+            .rev()
+            .find_map(|record| record.context_window_usage)
+            .or_else(|| {
+                is_latest_turn
+                    .then(|| self.context_window_usage())
+                    .filter(|usage| *usage > 0.0)
+                    .map(|usage| usage * 100.0)
+            });
 
         let legacy_charges = if !is_latest_turn {
             LegacyCharges::Unknown
@@ -3676,8 +3660,6 @@ impl AIConversation {
             }
         };
 
-        // A Breakdown renders as one aggregated row: the flat totals deliberately discard
-        // model attribution.
         let (model_charges, platform_charges) = match &legacy_charges {
             LegacyCharges::Breakdown(totals) => {
                 let inference_credits = (
@@ -3734,7 +3716,6 @@ impl AIConversation {
                 llm_generation_spans: Vec::new(),
                 model_charges,
                 platform_charges,
-                // Tool totals are conversation-cumulative; a per-turn count is unknown.
                 tool_calls: None,
                 commands_executed: None,
                 files_changed: None,
@@ -3746,17 +3727,9 @@ impl AIConversation {
         })
     }
 
-    /// The single eligibility check for the Turn panel, shared by the response footer and the
-    /// panel opener: the turn's per-request records when the turn closes at `exchange_id` (see
-    /// [`Self::is_last_exchange_in_turn`]) and its metadata is complete — every exchange in the
-    /// turn has request ids, and all of them have delivered their `Message.RequestMetadata`
-    /// record to this client.
-    ///
-    /// Request membership is resolved from the exchanges' messages, not from the records, and
-    /// every exchange must contribute some: a request cancelled or failed before the server's
-    /// input echo lands (or disconnected mid-stream) leaves its exchange without messages or
-    /// record, and the non-empty record set of its earlier requests must not be presented as
-    /// the turn's total.
+    /// Get all request metadata for the turn that ENDS with the provided exchange_id
+    /// If the exchange_id is not the last in its turn, this will return `None`, indicating that the
+    /// turn details panel should not be displayed for that exchange
     pub fn turn_panel_records(
         &self,
         exchange_id: AIAgentExchangeId,
