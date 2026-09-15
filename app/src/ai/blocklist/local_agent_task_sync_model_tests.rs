@@ -648,6 +648,94 @@ fn emit_cli_status(
     });
 }
 
+fn install_model_with_failed_attempts(
+    app: &mut App,
+    fail_first_terminal_delivery: bool,
+) -> (
+    warpui::ModelHandle<LocalAgentTaskSyncModel>,
+    warpui::ModelHandle<CLIAgentSessionsModel>,
+    Arc<AtomicUsize>,
+) {
+    app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+    let cli_sessions_model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+    let failed_attempts = Arc::new(AtomicUsize::new(0));
+    let failed_attempts_for_mock = failed_attempts.clone();
+    let mut mock = MockAIClient::new();
+    mock.expect_update_agent_task()
+        .returning(move |_, task_state, _, _, _, _, _| {
+            if task_state != Some(AgentTaskState::Failed) {
+                return Ok(());
+            }
+            let attempt = failed_attempts_for_mock.fetch_add(1, Ordering::SeqCst);
+            if fail_first_terminal_delivery && attempt == 0 {
+                Err(anyhow!("network error"))
+            } else {
+                Ok(())
+            }
+        });
+    let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+    let model = app.add_singleton_model(|ctx| {
+        LocalAgentTaskSyncModel::new_with_ai_client_for_test(ai_client, ctx)
+    });
+    (model, cli_sessions_model, failed_attempts)
+}
+
+async fn wait_for_task_idle(
+    model: &warpui::ModelHandle<LocalAgentTaskSyncModel>,
+    app: &mut App,
+    task_id: AmbientAgentTaskId,
+) {
+    model
+        .update(app, |model, _| model.wait_for_idle(task_id))
+        .await;
+}
+
+async fn emit_cli_status_and_wait(
+    model: &warpui::ModelHandle<LocalAgentTaskSyncModel>,
+    cli_sessions_model: &warpui::ModelHandle<CLIAgentSessionsModel>,
+    app: &mut App,
+    terminal_view_id: warpui::EntityId,
+    task_id: AmbientAgentTaskId,
+    status: CLIAgentSessionStatus,
+) {
+    emit_cli_status(cli_sessions_model, app, terminal_view_id, status);
+    wait_for_task_idle(model, app, task_id).await;
+}
+
+async fn register_cli_task_and_wait(
+    model: &warpui::ModelHandle<LocalAgentTaskSyncModel>,
+    app: &mut App,
+) -> (warpui::EntityId, AmbientAgentTaskId) {
+    let terminal_view_id = warpui::EntityId::new();
+    let task_id = fixed_task_id();
+    model.update(app, |model, ctx| {
+        model.register_cli_session(terminal_view_id, task_id, ctx);
+    });
+    wait_for_task_idle(model, app, task_id).await;
+    (terminal_view_id, task_id)
+}
+
+async fn emit_failed_cli_status_and_wait(
+    model: &warpui::ModelHandle<LocalAgentTaskSyncModel>,
+    cli_sessions_model: &warpui::ModelHandle<CLIAgentSessionsModel>,
+    app: &mut App,
+    terminal_view_id: warpui::EntityId,
+    task_id: AmbientAgentTaskId,
+) {
+    emit_cli_status_and_wait(
+        model,
+        cli_sessions_model,
+        app,
+        terminal_view_id,
+        task_id,
+        CLIAgentSessionStatus::Failed {
+            error_type: Some("billing_error".into()),
+            message: Some("out of credits".into()),
+        },
+    )
+    .await;
+}
+
 #[test]
 fn wait_for_idle_resolves_immediately_when_task_is_idle() {
     App::test((), |mut app| async move {
@@ -753,6 +841,105 @@ fn failed_delivery_does_not_confirm_terminal_state() {
             model.confirmed_terminal_state(&task_id)
         });
         assert_eq!(confirmed, None);
+    });
+}
+
+#[test]
+fn acknowledged_failed_state_is_not_sent_again() {
+    App::test((), |mut app| async move {
+        let (model, cli_sessions_model, failed_attempts) =
+            install_model_with_failed_attempts(&mut app, false);
+        let (terminal_view_id, task_id) = register_cli_task_and_wait(&model, &mut app).await;
+
+        emit_failed_cli_status_and_wait(
+            &model,
+            &cli_sessions_model,
+            &mut app,
+            terminal_view_id,
+            task_id,
+        )
+        .await;
+        emit_failed_cli_status_and_wait(
+            &model,
+            &cli_sessions_model,
+            &mut app,
+            terminal_view_id,
+            task_id,
+        )
+        .await;
+
+        assert_eq!(failed_attempts.load(Ordering::SeqCst), 1);
+    });
+}
+
+#[test]
+fn failed_terminal_delivery_can_be_retried() {
+    App::test((), |mut app| async move {
+        let (model, cli_sessions_model, failed_attempts) =
+            install_model_with_failed_attempts(&mut app, true);
+        let (terminal_view_id, task_id) = register_cli_task_and_wait(&model, &mut app).await;
+
+        emit_failed_cli_status_and_wait(
+            &model,
+            &cli_sessions_model,
+            &mut app,
+            terminal_view_id,
+            task_id,
+        )
+        .await;
+        emit_failed_cli_status_and_wait(
+            &model,
+            &cli_sessions_model,
+            &mut app,
+            terminal_view_id,
+            task_id,
+        )
+        .await;
+
+        assert_eq!(failed_attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            model.update(&mut app, |model, _| {
+                model.confirmed_terminal_state(&task_id)
+            }),
+            Some(AgentTaskState::Failed)
+        );
+    });
+}
+
+#[test]
+fn reopened_task_can_report_failed_again() {
+    App::test((), |mut app| async move {
+        let (model, cli_sessions_model, failed_attempts) =
+            install_model_with_failed_attempts(&mut app, false);
+        let (terminal_view_id, task_id) = register_cli_task_and_wait(&model, &mut app).await;
+
+        emit_failed_cli_status_and_wait(
+            &model,
+            &cli_sessions_model,
+            &mut app,
+            terminal_view_id,
+            task_id,
+        )
+        .await;
+        emit_cli_status_and_wait(
+            &model,
+            &cli_sessions_model,
+            &mut app,
+            terminal_view_id,
+            task_id,
+            CLIAgentSessionStatus::InProgress,
+        )
+        .await;
+        emit_failed_cli_status_and_wait(
+            &model,
+            &cli_sessions_model,
+            &mut app,
+            terminal_view_id,
+            task_id,
+        )
+        .await;
+
+        assert_eq!(failed_attempts.load(Ordering::SeqCst), 2);
     });
 }
 

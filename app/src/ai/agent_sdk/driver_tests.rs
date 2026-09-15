@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use chrono::Local;
@@ -27,12 +27,14 @@ use warpui::r#async::Timer;
 use warpui::{App, SingletonEntity as _};
 
 use super::{
-    AgentDriver, AgentRunPrompt, CLIAgentSessionStatus, DebugWindowController, IdleTimeoutSender,
-    LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
-    OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
-    PlatformErrorCode, SDKConversationOutputStatus, WARP_MESSAGE_LISTENER_STATE_ROOT_ENV,
-    build_secret_env_vars, debug_turn_task_state, idle_window_for_cli_session_status,
-    idle_window_for_terminal_status, setup_failure_status_update, terminal_status_log_outcome,
+    AgentDriver, AgentDriverError, AgentRunPrompt, CLIAgentSessionStatus, DebugWindowController,
+    IdleTimeoutSender, LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
+    LEGACY_OZ_PARENT_STATE_ROOT_ENV, OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
+    OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, PlatformErrorCode, SDKConversationOutputStatus,
+    WARP_MESSAGE_LISTENER_STATE_ROOT_ENV, build_secret_env_vars, debug_turn_task_state,
+    debug_window_deadline, idle_window_for_cli_session_status, idle_window_for_terminal_status,
+    report_driver_error, report_driver_task_update, setup_failure_status_update,
+    terminal_status_log_outcome,
 };
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::task::TaskId;
@@ -43,6 +45,7 @@ use crate::ai::agent::{
 };
 use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_events::{
     OrchestrationEventService, PendingEvent, PendingEventDetail,
 };
@@ -52,6 +55,8 @@ use crate::ai::blocklist::{
 use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
 use crate::ai::llms::LLMId;
 use crate::ai::skills::SkillManager;
+use crate::server::server_api::ai::{AIClient, MockAIClient};
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::test_util::assert_eventually;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
@@ -435,6 +440,48 @@ fn setup_failure_is_reported_as_an_environment_setup_failure() {
     );
 }
 
+#[test]
+fn retained_setup_failure_reports_failed_once_across_exit_fallback() {
+    App::test((), |mut app| async move {
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let request_count_for_mock = Arc::clone(&request_count);
+        let mut mock = MockAIClient::new();
+        mock.expect_update_agent_task().returning(
+            move |_, task_state, _, _, _, session_debug_until, _| {
+                assert_eq!(task_state, Some(AgentTaskState::Failed));
+                assert!(session_debug_until.is_some());
+                request_count_for_mock.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        );
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        app.add_singleton_model(|ctx| {
+            LocalAgentTaskSyncModel::new_with_ai_client_for_test(ai_client, ctx)
+        });
+        let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440a00"
+            .parse()
+            .expect("valid task id");
+        let setup_error = AgentDriverError::EnvironmentSetupFailed("bad command".to_string());
+        let foreground = history_model.update(&mut app, |_, ctx| ctx.spawner());
+
+        assert!(
+            report_driver_task_update(
+                task_id,
+                AgentTaskState::Failed,
+                setup_failure_status_update(setup_error.to_string()),
+                Some(debug_window_deadline(Duration::from_secs(15 * 60))),
+                &foreground,
+            )
+            .await
+        );
+        report_driver_error(task_id, &setup_error, &foreground).await;
+
+        assert_eq!(request_count.load(Ordering::SeqCst), 1);
+    });
+}
 #[test]
 fn debug_window_refresh_uses_the_most_recently_armed_outcome() {
     // A run can fail, be resumed, and fail again. The refresh subscription is installed once and
