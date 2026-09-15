@@ -33,6 +33,7 @@ integration_tests! {
     test_open_and_close_resource_center,
     test_open_and_close_context_menu_with_keybinding,
     test_open_and_close_settings,
+    test_close_settings_split_and_reopen_during_cleanup,
     #[ignore = "Affected by agent_view feature flag UI changes"]
     test_scroll_to_hidden_block_and_open_context_menu_with_keybinding,
     #[ignore = "Affected by agent_view feature flag UI changes"]

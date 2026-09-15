@@ -790,6 +790,15 @@ impl View for AppearanceSettingsPageView {
 }
 
 impl AppearanceSettingsPageView {
+    #[cfg(feature = "integration_tests")]
+    pub fn input_mode_widget_id() -> &'static str {
+        InputModeWidget::static_widget_id()
+    }
+
+    #[cfg(feature = "integration_tests")]
+    pub fn input_mode_dropdown_position_id(&self, app: &AppContext) -> String {
+        self.input_mode_dropdown.as_ref(app).top_bar_position_id()
+    }
     fn editor<F>(
         mut event_handler: F,
         buffer_text: &str,
