@@ -406,6 +406,14 @@ fn build_host_shell_command(
         "WARP_PROMPT_NODE_VERSION_ENABLED",
         if node_version_chip_enabled { "1" } else { "0" },
     );
+    builder.env(
+        "WARP_POWERSHELL_RICH_TABLES",
+        if FeatureFlag::PowerShellRichTables.is_enabled() {
+            "1"
+        } else {
+            "0"
+        },
+    );
 
     // Pass through any additional entries to add to PATH.
     let path_append = extra_path_entries()

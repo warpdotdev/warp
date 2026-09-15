@@ -16,7 +16,7 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::terminal::color;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ObfuscateSecrets;
-use crate::terminal::model::ansi::{CompletionMetadata, Handler, Processor};
+use crate::terminal::model::ansi::{CompletionMetadata, Handler, PowerShellTableColumn, Processor};
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::bootstrap::BootstrapStage;
 use crate::terminal::model::grid::Dimensions as _;
@@ -985,6 +985,128 @@ fn compare_within_block_points() {
     let i = WithinBlock::new(Point::new(1, 5), 2.into(), GridType::PromptAndCommand);
     let j = WithinBlock::new(Point::new(1, 5), 2.into(), GridType::PromptAndCommand);
     assert!(i == j);
+}
+
+fn powershell_table_event_ids(
+    event_rx: &async_channel::Receiver<Event>,
+) -> Vec<(&'static str, String)> {
+    let mut events = Vec::new();
+    while let Ok(event) = event_rx.try_recv() {
+        match event {
+            Event::Handler(HandlerEvent::PowerShellTableBegin(data)) => {
+                events.push(("begin", data.table_id));
+            }
+            Event::Handler(HandlerEvent::PowerShellTableRows(data)) => {
+                events.push(("rows", data.table_id));
+            }
+            Event::Handler(HandlerEvent::PowerShellTableEnd(data, _)) => {
+                events.push(("end", data.table_id));
+            }
+            _ => {}
+        }
+    }
+    events
+}
+
+fn powershell_table_begin_value(table_id: &str) -> PowerShellTableBeginValue {
+    PowerShellTableBeginValue {
+        table_id: table_id.to_owned(),
+        columns: vec![PowerShellTableColumn {
+            name: "Name".to_owned(),
+            property_name: "Name".to_owned(),
+            type_name: "System.String".to_owned(),
+        }],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn powershell_table_packets_are_rejected_after_plaintext_starts() {
+    FeatureFlag::PowerShellRichTables.set_enabled(true);
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let event_proxy = ChannelEventListener::builder_for_test()
+        .with_terminal_events_tx(event_tx)
+        .build();
+    let mut terminal = TerminalModel::mock(None, Some(event_proxy));
+    while event_rx.try_recv().is_ok() {}
+
+    terminal.start_command_execution();
+    terminal.preexec(PreexecValue {
+        command: "Get-Thing".to_owned(),
+        session_id: None,
+    });
+    while event_rx.try_recv().is_ok() {}
+
+    terminal.powershell_table_begin(powershell_table_begin_value("first"));
+    terminal.powershell_table_rows(PowerShellTableRowsValue {
+        table_id: "first".to_owned(),
+        rows: vec![vec!["one".to_owned()]],
+        ..Default::default()
+    });
+    terminal.powershell_table_end(PowerShellTableEndValue {
+        table_id: "first".to_owned(),
+        ..Default::default()
+    });
+    terminal.input('p');
+    terminal.powershell_table_begin(powershell_table_begin_value("late"));
+    terminal.powershell_table_rows(PowerShellTableRowsValue {
+        table_id: "late".to_owned(),
+        rows: vec![vec!["two".to_owned()]],
+        ..Default::default()
+    });
+    terminal.powershell_table_end(PowerShellTableEndValue {
+        table_id: "late".to_owned(),
+        ..Default::default()
+    });
+
+    assert_eq!(
+        powershell_table_event_ids(&event_rx),
+        vec![
+            ("begin", "first".to_owned()),
+            ("rows", "first".to_owned()),
+            ("end", "first".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn powershell_table_packets_are_discarded_across_alt_screen_transitions() {
+    FeatureFlag::PowerShellRichTables.set_enabled(true);
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let event_proxy = ChannelEventListener::builder_for_test()
+        .with_terminal_events_tx(event_tx)
+        .build();
+    let mut terminal = TerminalModel::mock(None, Some(event_proxy));
+    while event_rx.try_recv().is_ok() {}
+
+    terminal.start_command_execution();
+    terminal.preexec(PreexecValue {
+        command: "Get-Thing".to_owned(),
+        session_id: None,
+    });
+    while event_rx.try_recv().is_ok() {}
+
+    terminal.powershell_table_begin(powershell_table_begin_value("crossing"));
+    terminal.powershell_table_rows(PowerShellTableRowsValue {
+        table_id: "crossing".to_owned(),
+        rows: vec![vec!["one".to_owned()]],
+        ..Default::default()
+    });
+    terminal.enter_alt_screen(true);
+    terminal.powershell_table_end(PowerShellTableEndValue {
+        table_id: "crossing".to_owned(),
+        ..Default::default()
+    });
+    terminal.exit_alt_screen(true);
+    terminal.powershell_table_begin(powershell_table_begin_value("after"));
+
+    assert_eq!(
+        powershell_table_event_ids(&event_rx),
+        vec![
+            ("begin", "crossing".to_owned()),
+            ("rows", "crossing".to_owned()),
+        ]
+    );
 }
 
 #[test]
