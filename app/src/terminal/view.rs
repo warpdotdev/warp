@@ -8034,7 +8034,7 @@ impl TerminalView {
         self.sessions.as_ref(ctx)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "integration_tests"))]
     pub fn model_event_dispatcher(&self) -> &ModelHandle<ModelEventDispatcher> {
         &self.model_events_handle
     }

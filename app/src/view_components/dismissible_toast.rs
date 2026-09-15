@@ -214,6 +214,14 @@ impl<A: Action + Clone> DismissibleToastStack<A> {
     pub fn has_toasts(&self) -> bool {
         !self.toasts.is_empty()
     }
+
+    #[cfg(feature = "integration_tests")]
+    pub fn integration_test_object_id_count(&self, object_id: &str) -> usize {
+        self.toasts
+            .iter()
+            .filter(|toast| toast.dismissible_toast.object_id.as_deref() == Some(object_id))
+            .count()
+    }
 }
 
 impl<A: Action + Clone> View for DismissibleToastStack<A> {
