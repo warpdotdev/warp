@@ -557,6 +557,9 @@ inherits = "dev"
 opt-level = "s"
 
 [patch.crates-io]
+# Remove this local patch after Arborium includes the scanner fix:
+# https://github.com/DerekStride/tree-sitter-sql/pull/361
+arborium-sql = { path = "vendor/arborium-sql" }
 # Pinned to the merge commit of servo/core-foundation-rs#746, which fixes a
 # double-retain bug in `CTFontCollection::get_descriptors` that leaks the
 # CoreText font-descriptor NSArray on every call. The fix is not yet in any
