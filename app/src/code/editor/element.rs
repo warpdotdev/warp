@@ -977,11 +977,7 @@ impl<V: EditorView> EditorWrapper<V> {
         appearance: &Appearance,
         gutter_button: &dyn GutterButton,
     ) -> Box<dyn Element> {
-        let vertical_padding = if FeatureFlag::InlineCodeReview.is_enabled() {
-            2.
-        } else {
-            4.
-        };
+        let vertical_padding = 2.;
 
         let button_size = gutter_element_height;
         let icon_size = button_size - (vertical_padding * 2.);
@@ -1193,8 +1189,7 @@ impl<V: EditorView> EditorWrapper<V> {
             FeatureFlag::RevertDiffHunk.is_enabled() && self.revert_hunk_button.is_some();
 
         // Show comment button independently of diff hunk state when requested
-        let show_comment_button = FeatureFlag::InlineCodeReview.is_enabled()
-            && self.comment_button.is_some()
+        let show_comment_button = self.comment_button.is_some()
             && (should_show_comment_button || is_active_comment_on_current_line);
 
         if should_show_diff_hunk_icons || is_active_comment_on_current_line || show_comment_button {
@@ -1331,9 +1326,7 @@ impl<V: EditorView> Element for EditorWrapper<V> {
             for gutter_element in gutter_elements {
                 let gutter_element_size = gutter_element.element.layout(constraint, ctx, app);
 
-                if FeatureFlag::InlineCodeReview.is_enabled()
-                    && let Some(comment_box) = &mut self.comment_box
-                {
+                if let Some(comment_box) = &mut self.comment_box {
                     let highlight_line = &comment_box.line;
                     if gutter_element.line == *highlight_line {
                         let highlight_width = size.x();
@@ -1533,8 +1526,7 @@ impl<V: EditorView> Element for EditorWrapper<V> {
 
             ctx.scene.stop_layer();
 
-            if FeatureFlag::InlineCodeReview.is_enabled()
-                && let Some(comment_box) = &mut self.comment_box
+            if let Some(comment_box) = &mut self.comment_box
                 && let Some((offset, height)) = inline_comment_gutter_element
             {
                 let gutter_origin = origin + vec2f(0., offset);
