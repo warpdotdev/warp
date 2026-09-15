@@ -249,6 +249,7 @@ fn empty_input_skip_filters_out_non_query_inputs() {
         user_query_mode: UserQueryMode::default(),
         running_command: None,
         intended_agent: None,
+        attribution_token: None,
     };
     let non_query = AIAgentInput::ResumeConversation {
         context: Default::default(),

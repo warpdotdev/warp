@@ -393,6 +393,7 @@ impl ConvertToExchanges for &api::Task {
                         user_query_mode: convert_user_query_mode(user_query.mode.as_ref()),
                         running_command: None,
                         intended_agent: Some(user_query.intended_agent()),
+                        attribution_token: None,
                     });
                     true
                 }
@@ -411,6 +412,7 @@ impl ConvertToExchanges for &api::Task {
                                 user_query_mode: UserQueryMode::default(), // SystemQuery doesn't have mode field
                                 running_command: None,
                                 intended_agent: None,
+                                attribution_token: None,
                             });
                             true
                         }
