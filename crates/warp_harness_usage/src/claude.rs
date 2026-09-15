@@ -87,6 +87,9 @@ struct Response {
 /// tool-use blocks are deduplicated independently by session and invocation identity. The
 /// returned snapshot can remain usable with partial token or tool coverage when input is
 /// malformed, incomplete, or ambiguous; it is unavailable when no usable category remains.
+///
+/// The root records, subagent records, and diagnostics must describe the same frozen capture.
+/// Subagent scopes must have matching entries in `diagnostics.subagents`.
 pub fn extract_claude<'a>(
     session_id: &str,
     root: &[Value],

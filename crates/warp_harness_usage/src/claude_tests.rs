@@ -1,8 +1,14 @@
 use serde_json::{Value, json};
 
 use crate::{
-    CaptureDiagnostics, CoverageStatus, ExtractionOutcome, JsonlDiagnostics, JsonlReadStatus,
-    ReasonCode, UsageSnapshot, extract_claude, parse_jsonl,
+    CaptureDiagnostics, CoverageStatus, ExtractionOutcome, JsonlDiagnostics, JsonlLimits,
+    JsonlReadStatus, ReasonCode, UsageSnapshot, extract_claude, parse_jsonl,
+};
+
+const JSONL_LIMITS: JsonlLimits = JsonlLimits {
+    max_line_bytes: 4 * 1024,
+    max_total_bytes: 16 * 1024,
+    max_records: 16,
 };
 
 fn capture(entries: &[Value]) -> UsageSnapshot {
@@ -61,7 +67,10 @@ fn response(id: &str, usage: Value, content: Value) -> Value {
 
 #[test]
 fn evolving_responses_do_not_deduplicate_distinct_tool_blocks() {
-    let entries = parse_jsonl(include_bytes!("fixtures/claude.jsonl").as_slice());
+    let entries = parse_jsonl(
+        include_bytes!("fixtures/claude.jsonl").as_slice(),
+        JSONL_LIMITS,
+    );
     let snapshot = capture(&entries.entries);
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
     assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Known);

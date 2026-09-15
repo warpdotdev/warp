@@ -1,8 +1,14 @@
 use serde_json::{Value, json};
 
 use crate::{
-    CaptureDiagnostics, CoverageStatus, ExtractionOutcome, JsonlDiagnostics, JsonlReadStatus,
-    ReasonCode, UsageSnapshot, extract_codex, parse_jsonl,
+    CaptureDiagnostics, CoverageStatus, ExtractionOutcome, JsonlDiagnostics, JsonlLimits,
+    JsonlReadStatus, ReasonCode, UsageSnapshot, extract_codex, parse_jsonl,
+};
+
+const JSONL_LIMITS: JsonlLimits = JsonlLimits {
+    max_line_bytes: 4 * 1024,
+    max_total_bytes: 16 * 1024,
+    max_records: 16,
 };
 
 fn capture(entries: &[Value]) -> UsageSnapshot {
@@ -63,7 +69,10 @@ fn checkpoint(total: i64, last: i64) -> Value {
 
 #[test]
 fn cumulative_checkpoints_preserve_distinct_equal_sized_requests() {
-    let entries = parse_jsonl(include_bytes!("fixtures/codex.jsonl").as_slice());
+    let entries = parse_jsonl(
+        include_bytes!("fixtures/codex.jsonl").as_slice(),
+        JSONL_LIMITS,
+    );
     let snapshot = capture(&entries.entries);
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Known);
     assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Known);

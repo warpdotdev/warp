@@ -12,7 +12,7 @@ mod tools;
 use std::collections::BTreeMap;
 
 pub use capture::{
-    CaptureDiagnostics, JsonlCapture, JsonlDiagnostics, JsonlReadStatus, parse_jsonl,
+    CaptureDiagnostics, JsonlCapture, JsonlDiagnostics, JsonlLimits, JsonlReadStatus, parse_jsonl,
 };
 pub use claude::{CacheCreation, ClaudeUsage, extract_claude};
 pub use codex::{CodexUsage, extract_codex};
@@ -118,6 +118,9 @@ pub struct UsagePayload<T> {
     pub tool_calls: Option<ToolCalls>,
 }
 /// Classifications that can be attached to an observed usage group.
+///
+/// When every classification is absent, the group contains usage whose attribution could not be
+/// established from the native history.
 #[derive(Clone, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Attribution {
     /// Model identifier reported by the provider.
@@ -188,6 +191,7 @@ impl Findings {
                     self.reason(ReasonCode::IncompleteInput)
                 }
                 JsonlReadStatus::Readable => {}
+                JsonlReadStatus::ResourceLimited => self.limit(ReasonCode::ResourceLimit),
             }
             if file.malformed_records > 0 {
                 let count = self.reasons.entry(ReasonCode::InvalidData).or_default();

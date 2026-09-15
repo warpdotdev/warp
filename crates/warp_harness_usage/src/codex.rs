@@ -83,6 +83,8 @@ impl Segment {
 ///
 /// The result can remain usable with partial token or tool coverage when events are incomplete
 /// or ambiguous; it is unavailable when no usable category remains.
+///
+/// The records and diagnostics must describe the same frozen capture.
 pub fn extract_codex(
     session_id: &str,
     entries: &[Value],

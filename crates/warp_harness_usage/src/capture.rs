@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::io::BufRead;
+use std::io::{self, BufRead};
 
 use serde_json::Value;
 
@@ -13,6 +13,18 @@ pub enum JsonlReadStatus {
     Readable,
     /// Reading stopped because the source returned an I/O error.
     Unreadable,
+    /// Reading stopped because a configured resource limit was exceeded.
+    ResourceLimited,
+}
+/// Resource limits applied while parsing one JSONL source.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct JsonlLimits {
+    /// Maximum raw bytes retained for one line, including its newline terminator.
+    pub max_line_bytes: usize,
+    /// Maximum raw bytes read across the source.
+    pub max_total_bytes: usize,
+    /// Maximum number of valid records retained.
+    pub max_records: usize,
 }
 
 /// Diagnostics collected while parsing one JSONL source.
@@ -48,6 +60,9 @@ pub struct CaptureDiagnostics {
     pub subagent_discovery_incomplete: bool,
 }
 /// Valid JSON records and read diagnostics from one JSONL source.
+///
+/// A resource-limited capture contains only a prefix and must not be persisted as a complete raw
+/// transcript.
 #[derive(Debug)]
 pub struct JsonlCapture {
     /// JSON values retained from valid, non-empty lines.
@@ -60,8 +75,9 @@ pub struct JsonlCapture {
 ///
 /// Valid records are returned in source order. Malformed interior lines are skipped and counted,
 /// while an incomplete trailing JSON record is reported separately so extractors can degrade
-/// coverage instead of treating the source as an empty history.
-pub fn parse_jsonl(mut reader: impl BufRead) -> JsonlCapture {
+/// coverage instead of treating the source as an empty history. Parsing stops before retaining
+/// data beyond `limits`.
+pub fn parse_jsonl(mut reader: impl BufRead, limits: JsonlLimits) -> JsonlCapture {
     let mut capture = JsonlCapture {
         entries: Vec::new(),
         diagnostics: JsonlDiagnostics {
@@ -70,11 +86,21 @@ pub fn parse_jsonl(mut reader: impl BufRead) -> JsonlCapture {
         },
     };
     let mut line = Vec::new();
+    let mut total_bytes = 0;
     loop {
         line.clear();
-        match reader.read_until(b'\n', &mut line) {
-            Ok(0) => break,
-            Ok(_) => {}
+        let remaining_bytes = limits.max_total_bytes.saturating_sub(total_bytes);
+        match read_line(
+            &mut reader,
+            &mut line,
+            limits.max_line_bytes.min(remaining_bytes),
+        ) {
+            Ok(ReadLine::Eof) => break,
+            Ok(ReadLine::Complete) => total_bytes += line.len(),
+            Ok(ReadLine::ResourceLimited) => {
+                capture.diagnostics.status = JsonlReadStatus::ResourceLimited;
+                break;
+            }
             Err(_) => {
                 capture.diagnostics.status = JsonlReadStatus::Unreadable;
                 break;
@@ -84,7 +110,13 @@ pub fn parse_jsonl(mut reader: impl BufRead) -> JsonlCapture {
             continue;
         }
         match serde_json::from_slice(&line) {
-            Ok(value) => capture.entries.push(value),
+            Ok(value) => {
+                if capture.entries.len() >= limits.max_records {
+                    capture.diagnostics.status = JsonlReadStatus::ResourceLimited;
+                    break;
+                }
+                capture.entries.push(value);
+            }
             Err(error) if !line.ends_with(b"\n") && error.is_eof() => {
                 capture.diagnostics.incomplete_trailing_record = true;
             }
@@ -96,6 +128,43 @@ pub fn parse_jsonl(mut reader: impl BufRead) -> JsonlCapture {
     }
     capture.diagnostics.records_read = capture.entries.len();
     capture
+}
+enum ReadLine {
+    Eof,
+    Complete,
+    ResourceLimited,
+}
+
+fn read_line(
+    reader: &mut impl BufRead,
+    line: &mut Vec<u8>,
+    max_bytes: usize,
+) -> io::Result<ReadLine> {
+    loop {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            return Ok(if line.is_empty() {
+                ReadLine::Eof
+            } else {
+                ReadLine::Complete
+            });
+        }
+        let end = buffer
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(buffer.len(), |index| index + 1);
+        let Some(next_len) = line.len().checked_add(end) else {
+            return Ok(ReadLine::ResourceLimited);
+        };
+        if next_len > max_bytes {
+            return Ok(ReadLine::ResourceLimited);
+        }
+        line.extend_from_slice(&buffer[..end]);
+        reader.consume(end);
+        if line.ends_with(b"\n") {
+            return Ok(ReadLine::Complete);
+        }
+    }
 }
 
 #[cfg(test)]
