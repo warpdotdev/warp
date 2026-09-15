@@ -32,11 +32,7 @@ fn duration(seconds: i64, nanos: i32) -> prost_types::Duration {
     prost_types::Duration { seconds, nanos }
 }
 
-fn record_message(
-    request_id: &str,
-    outcome: request_metadata::Outcome,
-    with_charges: bool,
-) -> api::Message {
+fn record_message(request_id: &str, with_charges: bool) -> api::Message {
     let charges = with_charges.then(|| api::RequestCharges {
         usage_by_category: HashMap::from([(
             "primary_agent".to_string(),
@@ -93,8 +89,6 @@ fn record_message(
                     }],
                 }),
                 charges,
-                incomplete: outcome != request_metadata::Outcome::Completed,
-                outcome: outcome as i32,
                 tool_call_summary: Some(request_metadata::ToolCallSummary {
                     tool_calls: 4,
                     commands_executed: 2,
@@ -103,6 +97,7 @@ fn record_message(
                     lines_removed: 8,
                 }),
                 context_window: Some(request_metadata::ContextWindow { usage: 42.0 }),
+                ..Default::default()
             },
         )),
         ..Default::default()
@@ -111,16 +106,10 @@ fn record_message(
 
 #[test]
 fn decodes_a_completed_record() {
-    let record = RequestMetadataRecord::from_message(&record_message(
-        "req-1",
-        request_metadata::Outcome::Completed,
-        true,
-    ))
-    .expect("record");
+    let record =
+        RequestMetadataRecord::from_message(&record_message("req-1", true)).expect("record");
 
     assert_eq!(record.request_id, "req-1");
-    assert_eq!(record.outcome, RequestOutcome::Completed);
-    assert!(!record.outcome.is_interrupted());
     assert_eq!(record.time_to_first_token_ms(), Some(1000));
     assert_eq!(record.request_duration_ms(), Some(12_000));
     assert_eq!(record.llm_generation_ms(), Some(7000));
@@ -145,36 +134,13 @@ fn decodes_a_completed_record() {
 
 #[test]
 fn errored_record_has_no_charges_but_keeps_timing() {
-    let record = RequestMetadataRecord::from_message(&record_message(
-        "req-err",
-        request_metadata::Outcome::Errored,
-        false,
-    ))
-    .expect("record");
+    let record =
+        RequestMetadataRecord::from_message(&record_message("req-err", false)).expect("record");
 
-    assert_eq!(record.outcome, RequestOutcome::Errored);
-    assert!(record.outcome.is_interrupted());
-    assert_eq!(record.outcome.label(), "Errored");
     assert!(record.model_charges.is_empty());
     assert!(record.platform_charges.is_empty());
     assert_eq!(record.total_cost_in_cents(), 0.0);
     assert_eq!(record.request_duration_ms(), Some(12_000));
-}
-
-#[test]
-fn legacy_record_without_outcome_falls_back_to_incomplete_flag() {
-    let mut message = record_message("req-legacy", request_metadata::Outcome::Completed, false);
-    if let Some(api::message::Message::RequestMetadata(metadata)) = message.message.as_mut() {
-        metadata.outcome = 0;
-        metadata.incomplete = true;
-    }
-    let record = RequestMetadataRecord::from_message(&message).expect("record");
-    assert_eq!(
-        record.outcome,
-        RequestOutcome::Unspecified { incomplete: true }
-    );
-    assert!(record.outcome.is_interrupted());
-    assert_eq!(record.outcome.label(), "Incomplete");
 }
 
 #[test]
@@ -192,8 +158,8 @@ fn non_record_messages_are_ignored() {
 
     let messages = [
         message,
-        record_message("req-1", request_metadata::Outcome::Completed, true),
-        record_message("req-2", request_metadata::Outcome::Canceled, false),
+        record_message("req-1", true),
+        record_message("req-2", false),
     ];
     let records: Vec<_> = messages
         .iter()
@@ -205,40 +171,6 @@ fn non_record_messages_are_ignored() {
             .map(|r| r.request_id.as_str())
             .collect::<Vec<_>>(),
         ["req-1", "req-2"]
-    );
-}
-
-#[test]
-fn json_carries_every_section() {
-    let record = RequestMetadataRecord::from_message(&record_message(
-        "req-1",
-        request_metadata::Outcome::Canceled,
-        true,
-    ))
-    .expect("record");
-    let json = record.to_json();
-
-    assert_eq!(json["request_id"], "req-1");
-    assert_eq!(json["outcome"], "Canceled");
-    assert_eq!(json["incomplete"], true);
-    assert_eq!(
-        json["timing"]["llm_generation_timespans"][0]["duration_ms"],
-        7000
-    );
-    assert_eq!(
-        json["charges"]["models"][0]["model_id"],
-        "Claude Sonnet 4.6"
-    );
-    assert_eq!(json["charges"]["models"][0]["tokens"]["input"], 1000);
-    assert_eq!(json["charges"]["platform"][0]["duration_seconds"], 90.0);
-    assert_eq!(json["charges"]["platform"][0]["cost_in_credits"], 1.0);
-    assert_eq!(json["tool_call_summary"]["files_changed"], 3);
-    assert_eq!(json["context_window"]["usage"], 42.0);
-    // Must be a stable, pretty-printable document.
-    assert!(
-        serde_json::to_string_pretty(&json)
-            .unwrap()
-            .contains("\"tool_calls\": 4")
     );
 }
 
@@ -266,7 +198,7 @@ fn turn_messages(request_id: &str, seconds: i64) -> Vec<api::Message> {
         )),
         ..Default::default()
     };
-    let mut record = record_message(request_id, request_metadata::Outcome::Completed, true);
+    let mut record = record_message(request_id, true);
     record.timestamp = Some(timestamp(seconds + 2));
     vec![user_query, agent_output, record]
 }
@@ -474,7 +406,7 @@ fn tool_round_trip_messages(request_id: &str, seconds: i64) -> Vec<api::Message>
         )),
         ..Default::default()
     };
-    let mut record = record_message(request_id, request_metadata::Outcome::Completed, true);
+    let mut record = record_message(request_id, true);
     record.timestamp = Some(timestamp(seconds + 2));
     vec![tool_result, agent_output, record]
 }
@@ -540,7 +472,7 @@ fn tool_round_trips_group_into_the_user_query_turn() {
 
     let turn_records = conversation.request_metadata_records_for_turn(third);
     let summary = summarize_turn(&turn_records);
-    assert_eq!(summary.request_count, 3);
+    assert_eq!(summary.records.len(), 3);
     let total_cost_in_cents: f32 = turn_records
         .iter()
         .map(|record| record.total_cost_in_cents())
@@ -941,27 +873,27 @@ fn with_timing(
 }
 
 /// The Turn panel groups an exchange's records (one per underlying API request) into one summed
-/// view: charges merge per model, timing spans the whole turn, tool counts add up, the context
-/// window comes from the latest record, and the outcome surfaces the worst case.
+/// view: charges merge per model, timing spans the whole turn, tool counts add up, and the
+/// context window comes from the latest record.
 #[test]
 fn summarize_turn_sums_charges_timing_and_tools_across_records() {
     let records = vec![
         RequestMetadataRecord::from_message(&with_timing(
-            record_message("req-1", request_metadata::Outcome::Completed, true),
+            record_message("req-1", true),
             1_000,
             1_001,
             1_010,
         ))
         .unwrap(),
         RequestMetadataRecord::from_message(&with_timing(
-            record_message("req-2", request_metadata::Outcome::Canceled, true),
+            record_message("req-2", true),
             2_000,
             2_002,
             2_030,
         ))
         .unwrap(),
         RequestMetadataRecord::from_message(&with_timing(
-            record_message("req-3", request_metadata::Outcome::Errored, false),
+            record_message("req-3", false),
             3_000,
             3_004,
             3_060,
@@ -970,9 +902,7 @@ fn summarize_turn_sums_charges_timing_and_tools_across_records() {
     ];
 
     let summary = summarize_turn(&records);
-    assert_eq!(summary.request_count, 3);
-    assert_eq!(summary.interrupted_count, 2);
-    assert_eq!(summary.outcome, RequestOutcome::Errored);
+    assert_eq!(summary.records.len(), 3);
 
     // Both charged records use the same model, so they merge into one row with summed
     // tokens and costs; the errored record carried no charges.
@@ -1001,16 +931,8 @@ fn summarize_turn_sums_charges_timing_and_tools_across_records() {
 
 #[test]
 fn summarize_turn_of_one_record_matches_the_record() {
-    let record = RequestMetadataRecord::from_message(&record_message(
-        "req-1",
-        request_metadata::Outcome::Completed,
-        true,
-    ))
-    .unwrap();
+    let record = RequestMetadataRecord::from_message(&record_message("req-1", true)).unwrap();
     let summary = summarize_turn(std::slice::from_ref(&record));
-    assert_eq!(summary.request_count, 1);
-    assert_eq!(summary.interrupted_count, 0);
-    assert_eq!(summary.outcome, RequestOutcome::Completed);
     assert_eq!(summary.model_charges, record.model_charges);
     assert_eq!(summary.platform_charges, record.platform_charges);
     assert_eq!(

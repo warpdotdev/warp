@@ -47,8 +47,7 @@ use crate::ai::agent::icons::{
 };
 use crate::ai::agent::linearization::compute_task_depths;
 use crate::ai::agent::request_metadata::{
-    LegacyCharges, RequestMetadataRecord, RequestModelCharge, RequestOutcome,
-    RequestPlatformCharge, TurnPanelData,
+    LegacyCharges, RequestMetadataRecord, RequestModelCharge, RequestPlatformCharge, TurnPanelData,
 };
 use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
@@ -3729,10 +3728,6 @@ impl AIConversation {
             record: Box::new(RequestMetadataRecord {
                 message_id: String::new(),
                 request_id: String::new(),
-                recorded_at: None,
-                // No record delivered for this turn: the outcome is unknown, and the
-                // legacy panel does not render outcome anywhere.
-                outcome: RequestOutcome::Unspecified { incomplete: false },
                 request_started_at: started,
                 first_token_at: first_token,
                 request_ended_at: ended,

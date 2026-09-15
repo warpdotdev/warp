@@ -1,19 +1,13 @@
 use super::*;
 use crate::ai::agent::request_metadata::{
-    RequestLlmGenerationSpan, RequestModelCharge, RequestOutcome, RequestPlatformCharge,
+    RequestLlmGenerationSpan, RequestModelCharge, RequestPlatformCharge,
 };
 use crate::settings::UsageDisplayUnit;
 
-fn record(
-    outcome: RequestOutcome,
-    inference_cents: f32,
-    platform_cents: f32,
-) -> RequestMetadataRecord {
+fn record(inference_cents: f32, platform_cents: f32) -> RequestMetadataRecord {
     RequestMetadataRecord {
         message_id: "m".to_string(),
         request_id: "req".to_string(),
-        recorded_at: None,
-        outcome,
         request_started_at: None,
         first_token_at: None,
         request_ended_at: None,
@@ -76,7 +70,7 @@ fn format_tokens_and_searches_pluralize() {
 
 #[test]
 fn tooltip_names_the_charge_in_the_user_s_display_unit() {
-    let records = [record(RequestOutcome::Completed, 120.0, 30.0)];
+    let records = [record(120.0, 30.0)];
     assert_eq!(
         turn_panel_tooltip_text(&records, UsageDisplayUnit::Dollars),
         "Turn: $1.50"
@@ -88,19 +82,16 @@ fn tooltip_names_the_charge_in_the_user_s_display_unit() {
         "Turn"
     );
     assert_eq!(
-        turn_panel_tooltip_text(
-            &[record(RequestOutcome::Errored, 0.0, 0.0)],
-            UsageDisplayUnit::Dollars
-        ),
+        turn_panel_tooltip_text(&[record(0.0, 0.0)], UsageDisplayUnit::Dollars),
         "Turn"
     );
 }
 
 #[test]
 fn tooltip_sums_multi_request_turns() {
-    let mut first = record(RequestOutcome::Completed, 120.0, 30.0);
+    let mut first = record(120.0, 30.0);
     first.request_id = "req-1".to_string();
-    let mut second = record(RequestOutcome::Canceled, 60.0, 0.0);
+    let mut second = record(60.0, 0.0);
     second.request_id = "req-2".to_string();
     assert_eq!(
         turn_panel_tooltip_text(&[first, second], UsageDisplayUnit::Dollars),
@@ -110,7 +101,7 @@ fn tooltip_sums_multi_request_turns() {
 
 #[test]
 fn tooltip_honors_credits_when_the_records_carry_them() {
-    let mut record = record(RequestOutcome::Completed, 120.0, 30.0);
+    let mut record = record(120.0, 30.0);
     record.model_charges[0].input_cost_in_credits = 1.0;
     record.model_charges[0].output_cost_in_credits = 0.5;
     record.platform_charges[0].cost_in_credits = 1.0;
@@ -122,56 +113,24 @@ fn tooltip_honors_credits_when_the_records_carry_them() {
 
 #[test]
 fn view_starts_with_collapsed_model_rows() {
-    let view =
-        RequestMetadataTurnView::new_for_test(vec![record(RequestOutcome::Completed, 120.0, 0.0)]);
+    let view = RequestMetadataTurnView::new_for_test(vec![record(120.0, 0.0)]);
     assert_eq!(view.model_rows.len(), 1);
     assert!(!view.model_rows[0].expanded);
-    assert!(!view.raw_record_expanded);
-    assert!(
-        view.raw_json
-            .as_deref()
-            .is_some_and(|json| json.contains("\"request_id\": \"req\""))
-    );
     assert_eq!(view.records().len(), 1);
     assert_eq!(view.records()[0].request_id, "req");
 }
 
+/// A legacy turn carries no records: an unknown-charges turn exposes no model rows to
+/// render zeros from.
 #[test]
-fn view_raw_record_keeps_every_request() {
-    let mut first = record(RequestOutcome::Completed, 120.0, 0.0);
-    first.request_id = "req-1".to_string();
-    let mut second = record(RequestOutcome::Canceled, 0.0, 30.0);
-    second.request_id = "req-2".to_string();
-
-    let mut view = RequestMetadataTurnView::new_for_test(vec![first, second]);
-    assert!(!view.raw_record_expanded);
-    view.raw_record_expanded = !view.raw_record_expanded;
-    assert!(view.raw_record_expanded);
-    // The raw view keeps every record so per-request detail survives aggregation.
-    let raw_json = view
-        .raw_json
-        .as_deref()
-        .expect("records path keeps raw JSON");
-    assert!(raw_json.contains("\"req-1\""));
-    assert!(raw_json.contains("\"req-2\""));
-}
-
-/// A legacy turn carries no records: the raw-record view is absent (no synthetic JSON),
-/// and an unknown-charges turn exposes no model rows to render zeros from.
-#[test]
-fn view_from_legacy_unknown_has_no_inference_or_raw_record() {
+fn view_from_legacy_unknown_has_no_model_rows() {
     let data = TurnPanelData::Legacy {
-        record: Box::new(record(
-            RequestOutcome::Unspecified { incomplete: false },
-            0.0,
-            0.0,
-        )),
+        record: Box::new(record(0.0, 0.0)),
         charges: LegacyCharges::Unknown,
     };
     let view = RequestMetadataTurnView::new_for_test(data);
     assert!(matches!(view.legacy_charges, Some(LegacyCharges::Unknown)));
     assert!(view.summary.model_charges.is_empty());
-    assert!(view.raw_json.is_none());
 }
 
 /// A credits-only legacy turn shows the credits total without any model row, so no
@@ -180,11 +139,7 @@ fn view_from_legacy_unknown_has_no_inference_or_raw_record() {
 #[test]
 fn credits_only_legacy_shows_credits_and_never_a_zero_dollar_row() {
     let data = TurnPanelData::Legacy {
-        record: Box::new(record(
-            RequestOutcome::Unspecified { incomplete: false },
-            0.0,
-            0.0,
-        )),
+        record: Box::new(record(0.0, 0.0)),
         charges: LegacyCharges::CreditsOnly(2.5),
     };
     let view = RequestMetadataTurnView::new_for_test(data.clone());
@@ -201,15 +156,12 @@ fn credits_only_legacy_shows_credits_and_never_a_zero_dollar_row() {
 
 #[test]
 fn view_aggregates_a_multi_record_turn() {
-    let mut first = record(RequestOutcome::Completed, 120.0, 30.0);
+    let mut first = record(120.0, 30.0);
     first.request_id = "req-1".to_string();
-    let mut second = record(RequestOutcome::Canceled, 60.0, 0.0);
+    let mut second = record(60.0, 0.0);
     second.request_id = "req-2".to_string();
 
     let view = RequestMetadataTurnView::new_for_test(vec![first, second]);
-    assert_eq!(view.summary.request_count, 2);
-    assert_eq!(view.summary.interrupted_count, 1);
-    assert_eq!(view.summary.outcome, RequestOutcome::Canceled);
     // Charges merge per model: one row, summed tokens and cost.
     assert_eq!(view.model_rows.len(), 1);
     assert_eq!(view.summary.total_tokens(), 30);
@@ -218,9 +170,9 @@ fn view_aggregates_a_multi_record_turn() {
 
 #[test]
 fn view_orders_model_rows_by_descending_tokens() {
-    let mut cheap = record(RequestOutcome::Completed, 10.0, 0.0);
+    let mut cheap = record(10.0, 0.0);
     cheap.model_charges[0].model_id = "cheap-model".to_string();
-    let mut pricey = record(RequestOutcome::Completed, 120.0, 0.0);
+    let mut pricey = record(120.0, 0.0);
     pricey.model_charges[0].model_id = "pricey-model".to_string();
     pricey.model_charges[0].input_tokens = 100;
 
@@ -234,11 +186,7 @@ fn view_orders_model_rows_by_descending_tokens() {
 /// model attribution.
 #[test]
 fn view_from_legacy_breakdown_has_one_models_row() {
-    let mut breakdown = record(
-        RequestOutcome::Unspecified { incomplete: false },
-        120.0,
-        30.0,
-    );
+    let mut breakdown = record(120.0, 30.0);
     breakdown.model_charges[0].model_id = "Models".to_string();
     let data = TurnPanelData::Legacy {
         record: Box::new(breakdown),
@@ -253,17 +201,16 @@ fn view_from_legacy_breakdown_has_one_models_row() {
     let view = RequestMetadataTurnView::new_for_test(data);
     assert_eq!(view.model_rows.len(), 1);
     assert_eq!(view.summary.model_charges[0].model_id, "Models");
-    assert!(view.raw_json.is_none());
 }
 
 #[test]
 fn view_rolls_up_llm_generation_spans_across_records() {
-    let mut first = record(RequestOutcome::Completed, 120.0, 0.0);
+    let mut first = record(120.0, 0.0);
     first.llm_generation_spans = vec![RequestLlmGenerationSpan {
         started_at: None,
         ended_at: None,
     }];
-    let mut second = record(RequestOutcome::Completed, 60.0, 0.0);
+    let mut second = record(60.0, 0.0);
     second.request_id = "req-2".to_string();
 
     let view = RequestMetadataTurnView::new_for_test(vec![first, second]);

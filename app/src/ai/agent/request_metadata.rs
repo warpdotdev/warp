@@ -3,43 +3,10 @@
 //! for display.
 
 use chrono::{DateTime, Local};
-use serde_json::{Value, json};
 use warp_multi_agent_api as api;
 
 use super::api::convert_conversation::proto_timestamp_to_local_datetime;
 use crate::persistence::model::ChargedUsageTotals;
-
-/// How the server saw the request end. Mirrors `Message.RequestMetadata.Outcome`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RequestOutcome {
-    Completed,
-    Canceled,
-    Errored,
-    /// The record predates the outcome enum; its `incomplete` flag is all we know.
-    Unspecified {
-        incomplete: bool,
-    },
-}
-
-impl RequestOutcome {
-    pub fn label(self) -> &'static str {
-        match self {
-            RequestOutcome::Completed => "Completed",
-            RequestOutcome::Canceled => "Canceled",
-            RequestOutcome::Errored => "Errored",
-            RequestOutcome::Unspecified { incomplete: true } => "Incomplete",
-            RequestOutcome::Unspecified { incomplete: false } => "Completed",
-        }
-    }
-
-    /// Whether the request did not run to a clean finish.
-    pub fn is_interrupted(self) -> bool {
-        !matches!(
-            self,
-            RequestOutcome::Completed | RequestOutcome::Unspecified { incomplete: false }
-        )
-    }
-}
 
 /// Token counts and costs (US cents and credits) charged for one model within one usage
 /// category.
@@ -123,9 +90,6 @@ impl RequestLlmGenerationSpan {
 pub struct RequestMetadataRecord {
     pub message_id: String,
     pub request_id: String,
-    /// The message envelope timestamp: when the server recorded the request as finished.
-    pub recorded_at: Option<DateTime<Local>>,
-    pub outcome: RequestOutcome,
     pub request_started_at: Option<DateTime<Local>>,
     pub first_token_at: Option<DateTime<Local>>,
     pub request_ended_at: Option<DateTime<Local>>,
@@ -148,17 +112,6 @@ impl RequestMetadataRecord {
         let Some(api::message::Message::RequestMetadata(metadata)) = message.message.as_ref()
         else {
             return None;
-        };
-
-        let outcome = match api::message::request_metadata::Outcome::try_from(metadata.outcome) {
-            Ok(api::message::request_metadata::Outcome::Completed) => RequestOutcome::Completed,
-            Ok(api::message::request_metadata::Outcome::Canceled) => RequestOutcome::Canceled,
-            Ok(api::message::request_metadata::Outcome::Errored) => RequestOutcome::Errored,
-            Ok(api::message::request_metadata::Outcome::Unspecified) | Err(_) => {
-                RequestOutcome::Unspecified {
-                    incomplete: metadata.incomplete,
-                }
-            }
         };
 
         let timing = metadata.timing.as_ref();
@@ -250,8 +203,6 @@ impl RequestMetadataRecord {
         Some(Self {
             message_id: message.id.clone(),
             request_id: message.request_id.clone(),
-            recorded_at: timestamp(message.timestamp.as_ref()),
-            outcome,
             request_started_at,
             first_token_at: timestamp(timing.and_then(|t| t.first_token_at.as_ref())),
             request_ended_at,
@@ -335,77 +286,6 @@ impl RequestMetadataRecord {
         }
         any.then_some(total)
     }
-
-    /// The record as JSON, for the raw view in the Turn panel.
-    pub fn to_json(&self) -> Value {
-        let rfc3339 = |time: Option<DateTime<Local>>| match time {
-            Some(time) => Value::String(time.to_rfc3339()),
-            None => Value::Null,
-        };
-        json!({
-            "request_id": self.request_id,
-            "message_id": self.message_id,
-            "recorded_at": rfc3339(self.recorded_at),
-            "outcome": self.outcome.label(),
-            "incomplete": self.outcome.is_interrupted(),
-            "timing": {
-                "request_started_at": rfc3339(self.request_started_at),
-                "first_token_at": rfc3339(self.first_token_at),
-                "request_ended_at": rfc3339(self.request_ended_at),
-                "llm_generation_timespans": self.llm_generation_spans.iter().map(|span| json!({
-                    "started_at": rfc3339(span.started_at),
-                    "ended_at": rfc3339(span.ended_at),
-                    "duration_ms": span.duration_ms(),
-                })).collect::<Vec<_>>(),
-            },
-            "charges": {
-                "models": self.model_charges.iter().map(|charge| json!({
-                    "category": charge.category,
-                    "usage_type": charge.usage_type,
-                    "model_id": charge.model_id,
-                    "tokens": {
-                        "input": charge.input_tokens,
-                        "output": charge.output_tokens,
-                        "cache_read": charge.cache_read_tokens,
-                        "cache_write": charge.cache_write_tokens,
-                    },
-                    "cost_in_cents": {
-                        "input": charge.input_cost_in_cents,
-                        "output": charge.output_cost_in_cents,
-                        "cache_read": charge.cache_read_cost_in_cents,
-                        "cache_write": charge.cache_write_cost_in_cents,
-                        "web_search": charge.web_search_cost_in_cents,
-                    },
-                    "cost_in_credits": {
-                        "input": charge.input_cost_in_credits,
-                        "output": charge.output_cost_in_credits,
-                        "cache_read": charge.cache_read_cost_in_credits,
-                        "cache_write": charge.cache_write_cost_in_credits,
-                        "web_search": charge.web_search_cost_in_credits,
-                    },
-                    "web_search_count": charge.web_search_count,
-                })).collect::<Vec<_>>(),
-                "platform": self.platform_charges.iter().map(|charge| json!({
-                    "category": charge.category,
-                    "cost_in_cents": charge.cost_in_cents,
-                    "cost_in_credits": charge.cost_in_credits,
-                    "duration_seconds": charge.duration_seconds,
-                })).collect::<Vec<_>>(),
-                "total_cost_in_cents": self.total_cost_in_cents(),
-                "total_cost_in_credits": self.total_cost_in_credits(),
-            },
-            "tool_call_summary": {
-                "tool_calls": self.tool_calls,
-                "commands_executed": self.commands_executed,
-                "files_changed": self.files_changed,
-                "lines_added": self.lines_added,
-                "lines_removed": self.lines_removed,
-            },
-            "context_window": {
-                "usage": self.context_window_usage,
-            },
-        })
-    }
 }
 
 /// What the Turn panel renders for one turn. Complete server-authored records are preferred;
@@ -457,17 +337,10 @@ impl From<Vec<RequestMetadataRecord>> for TurnPanelData {
 pub struct TurnSummary {
     /// Every locally-held record for the turn, in task order.
     pub records: Vec<RequestMetadataRecord>,
-    pub request_count: usize,
-    /// How many records did not run to a clean finish.
-    pub interrupted_count: usize,
-    /// The worst outcome across the records (Errored > Canceled > Incomplete > Completed);
-    /// among equally-severe outcomes, the latest one wins.
-    pub outcome: RequestOutcome,
     /// Per-model charges summed across the records.
     pub model_charges: Vec<RequestModelCharge>,
     /// Per-category platform charges summed across the records.
     pub platform_charges: Vec<RequestPlatformCharge>,
-    pub recorded_at: Option<DateTime<Local>>,
     /// Earliest non-nil `request_started_at` across the records.
     pub request_started_at: Option<DateTime<Local>>,
     /// Earliest non-nil `first_token_at` across the records.
@@ -484,15 +357,6 @@ pub struct TurnSummary {
     pub lines_removed: Option<u32>,
     /// The latest record's context-window reading: it reflects the most recent state.
     pub context_window_usage: Option<f32>,
-}
-
-fn outcome_severity(outcome: RequestOutcome) -> u8 {
-    match outcome {
-        RequestOutcome::Errored => 3,
-        RequestOutcome::Canceled => 2,
-        RequestOutcome::Unspecified { incomplete: true } => 1,
-        RequestOutcome::Completed | RequestOutcome::Unspecified { incomplete: false } => 0,
-    }
 }
 
 fn sum_option_u32(values: impl Iterator<Item = Option<u32>>) -> Option<u32> {
@@ -558,11 +422,8 @@ impl TurnSummary {
 /// record's LLM generation spans; tool counts sum; the context window comes from the latest
 /// record that reports one.
 pub fn summarize_turn(records: &[RequestMetadataRecord]) -> TurnSummary {
-    let mut outcome = RequestOutcome::Completed;
-    let mut interrupted_count = 0usize;
     let mut model_charges: Vec<RequestModelCharge> = Vec::new();
     let mut platform_charges: Vec<RequestPlatformCharge> = Vec::new();
-    let mut recorded_at = None;
     let mut request_started_at = None;
     let mut first_token_at = None;
     let mut request_ended_at = None;
@@ -570,11 +431,6 @@ pub fn summarize_turn(records: &[RequestMetadataRecord]) -> TurnSummary {
     let mut context_window_usage = None;
 
     for record in records {
-        if outcome_severity(record.outcome) >= outcome_severity(outcome) {
-            outcome = record.outcome;
-        }
-        interrupted_count += usize::from(record.outcome.is_interrupted());
-
         for charge in &record.model_charges {
             if let Some(existing) = model_charges.iter_mut().find(|existing| {
                 existing.category == charge.category
@@ -613,7 +469,6 @@ pub fn summarize_turn(records: &[RequestMetadataRecord]) -> TurnSummary {
             }
         }
 
-        recorded_at = record.recorded_at.or(recorded_at);
         request_started_at = record
             .request_started_at
             .into_iter()
@@ -630,12 +485,8 @@ pub fn summarize_turn(records: &[RequestMetadataRecord]) -> TurnSummary {
     }
 
     TurnSummary {
-        request_count: records.len(),
-        interrupted_count,
-        outcome,
         model_charges,
         platform_charges,
-        recorded_at,
         request_started_at,
         first_token_at,
         request_ended_at,
