@@ -63,9 +63,11 @@ do not request or use `last_capture_sequence`. Do not infer a current ID from re
 add a writer registry. Missing safe context disables reporting with a bounded diagnostic, not runs.
 
 ### Phase 2: Capture diagnostics and pure extractors
-Introduce a small `harness/usage` module with shared typed results and Claude/Codex adapters. Extraction
-takes captured records and diagnostics and returns usable native metrics or an unavailable outcome;
-it does no I/O and cannot call the server. Capture time is taken at read start. This is one frozen
+Introduce the focused `crates/warp_harness_usage` library with shared typed results and Claude/Codex
+extractors. Extraction borrows captured records and diagnostics and returns usable native metrics or
+an unavailable outcome; it does no I/O and cannot call the server. The library also provides JSONL
+reader diagnostics. Filesystem capture adapters remain app-owned and are wired in the publication
+layer without changing native envelope types. Capture time is taken at read start. This is one frozen
 in-memory observation, not an atomic snapshot of every file while the native CLI keeps appending.
 
 Extend the JSONL capture path to distinguish missing/unreadable files, an incomplete trailing record,
@@ -252,17 +254,19 @@ Use three local agents in independent worktrees, based initially on the updated 
 the existing spec PR #15926 at the bottom and publish three implementation layers above it with
 `gh stack`. Tests ship with their logical change, not in a fourth validation layer.
 
-1. **metrics-extractors:** native counting, additive read diagnostics, bounded coverage, and fixtures.
+1. **metrics-extractors:** native counting, reusable read diagnostics, bounded coverage, and fixtures.
    Branch `varoon/harness-usage-extractors`, worktree `../warp.varoon-harness-usage-extractors`.
-   Own `harness/usage`, read diagnostics in `claude_transcript.rs`, and its module declaration.
-   No live reporting or changes to existing save behavior.
+   Own `crates/warp_harness_usage` and its workspace registration. Keep the domain library independently
+   consumable without exposing app internals or suppressing dead-code checks. No live reporting or
+   changes to existing save behavior.
 2. **metrics-saves:** ordered/coalesced save ownership, independent raw/block results, driver triggers,
    and bounded closing/final saves. Branch `varoon/harness-usage-saves`, worktree
    `../warp.varoon-harness-usage-saves`. Own the shared save helper, driver lifecycle, and runner save
    interfaces, but not extraction or HTTP transport. Preserve cleanup/resume and Gemini behavior.
 3. **metrics-publish:** authenticated startup/transport, counting from the saved capture, report
    retries, and end-to-end integration. Branch `varoon/harness-usage-publish`, worktree
-   `../warp.varoon-harness-usage-publish`. Own `server_api/harness_support.rs`; edit driver/runner
+   `../warp.varoon-harness-usage-publish`. Own `server_api/harness_support.rs` and app-owned native
+   capture adapters that preserve the tolerant readers and raw envelope formats; edit driver/runner
    integration only after the save agent hands it off. Do not edit the separately owned server code.
 
 Local execution lets agents exchange committed branches without uploading intermediate code. The
