@@ -597,9 +597,6 @@ pub enum FeatureFlag {
     /// Enables team API key creation in the API key management UI.
     TeamApiKeys,
 
-    /// Enables cloud conversation loading via the CLI --conversation flag.
-    CloudConversations,
-
     /// Enables the "New agent" prompt chip in terminal mode when AgentView is enabled.
     ///
     /// When disabled (the default), the terminal message bar is shown instead.
