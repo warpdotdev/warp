@@ -177,7 +177,10 @@ impl CLIAgent {
             CLIAgent::Codex => &["codex"],
             CLIAgent::Amp => &["amp"],
             CLIAgent::Droid => &["droid"],
-            CLIAgent::OpenCode => &["opencode"],
+            // `opencode2` is the v2 binary (Homebrew `opencode2`, `opencode v2.x`).
+            // Both map to the same agent so tabs get the OpenCode logo and
+            // the Warp notification plugin activates for either binary.
+            CLIAgent::OpenCode => &["opencode", "opencode2"],
             CLIAgent::Copilot => &["copilot"],
             CLIAgent::Pi => &["pi"],
             CLIAgent::OhMyPi => &["omp"],
