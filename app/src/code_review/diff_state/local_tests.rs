@@ -435,6 +435,44 @@ async fn staged_rename_and_modify_produces_non_empty_diff() {
 }
 
 #[tokio::test]
+async fn file_diff_exceeding_stdout_capture_budget_is_marked_unrenderable() {
+    let repo_dir = tempfile::tempdir().expect("create temp repo dir");
+    let repo_path = repo_dir.path();
+
+    run_git_command(repo_path, &["init", "-b", "main"])
+        .await
+        .expect("git init");
+
+    // An untracked file whose diff exceeds MAX_DIFF_STDOUT_CAPTURE_BYTES must
+    // be caught by the incremental stdout cap in `run_git_command_capped`
+    // (APP-5462), not just the post-capture MAX_DIFF_SIZE check below it —
+    // this exercises the earlier, budget-based path.
+    let line = "x".repeat(200) + "\n";
+    let mut content = String::new();
+    while content.len() <= MAX_DIFF_STDOUT_CAPTURE_BYTES {
+        content.push_str(&line);
+    }
+    std::fs::write(repo_path.join("huge.txt"), &content).expect("write huge file");
+
+    let diff = LocalDiffStateModel::get_file_diff(
+        repo_path,
+        "huge.txt",
+        &GitFileStatus::Untracked,
+        false,
+        None,
+    )
+    .await
+    .expect("get_file_diff should succeed even when the diff exceeds the capture budget");
+
+    assert!(!diff.is_binary);
+    assert!(diff.hunks.is_empty());
+    assert_eq!(
+        diff.size,
+        DiffSize::Unrenderable(UnrenderableReason::DiffTooLarge)
+    );
+}
+
+#[tokio::test]
 async fn num_lines_in_file_if_non_binary_counts_lines_in_text_file() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let file_path = dir.path().join("file.txt");
