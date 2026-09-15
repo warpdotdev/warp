@@ -648,7 +648,7 @@ impl DirectoryWatcher {
         self.processing_queue.update(ctx, |queue, ctx| {
             for (repo_handle, repo_update) in repo_updates {
                 let subscriber_updates =
-                    repo_handle.read(ctx, |repo, _| repo.subscriber_updates(&repo_update));
+                    repo_handle.read(ctx, move |repo, _| repo.subscriber_updates(repo_update));
                 for (subscriber_id, subscriber_update) in subscriber_updates {
                     queue.enqueue_incremental_update(
                         repo_handle.downgrade(),
