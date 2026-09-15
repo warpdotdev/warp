@@ -53,6 +53,40 @@ pub fn mock_paragraph(height: f32, width: f32, content_length: usize) -> BlockIt
     )
 }
 
+/// Like [`mock_paragraph`], but its text frame reports a missing glyph, as if a character in it
+/// required a fallback font that hasn't loaded yet.
+pub fn mock_paragraph_with_missing_glyphs(
+    height: f32,
+    width: f32,
+    content_length: usize,
+) -> BlockItem {
+    let frame = TextFrame::new(
+        vec1![Line {
+            width,
+            trailing_whitespace_width: 0.,
+            runs: Vec::new(),
+            font_size: height,
+            line_height_ratio: 1.,
+            baseline_ratio: TEST_BASELINE_OFFSET,
+            ascent: height * TEST_BASELINE_OFFSET,
+            descent: height * (1. - TEST_BASELINE_OFFSET),
+            clip_config: None,
+            caret_positions: Vec::new(),
+            chars_with_missing_glyphs: vec!['\u{2603}'],
+        }],
+        width,
+        Default::default(),
+    );
+
+    BlockItem::paragraph(
+        Arc::new(frame),
+        OffsetMap::direct(content_length),
+        content_length.into(),
+        TEXT_SPACING,
+        Some(PARAGRAPH_MIN_HEIGHT),
+    )
+}
+
 /// Create a new paragraph block laid out via [`layout`].
 pub fn laid_out_paragraph(
     text: &str,
