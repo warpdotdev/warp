@@ -270,9 +270,6 @@ pub struct AgentInputFooter {
     /// Used to anchor the usage popover above or below the input box, matching the
     /// surrounding menu positioning.
     menu_positioning_provider: Arc<dyn MenuPositioningProvider>,
-    /// The "Conversation" usage popover. A single long-lived instance, pointed at
-    /// the active conversation via `UsagePopoverView::reset_for_conversation` each
-    /// time it opens.
     usage_popover: ViewHandle<UsagePopoverView>,
     usage_popover_open: bool,
 }
