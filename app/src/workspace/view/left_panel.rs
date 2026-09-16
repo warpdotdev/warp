@@ -185,9 +185,9 @@ mod active_view_state {
         let was_conversation_list_open = previous == ToolPanelView::ConversationListView;
         let is_conversation_list_open = new_view == ToolPanelView::ConversationListView;
         if was_conversation_list_open && !is_conversation_list_open {
-            left_panel.on_conversation_list_view_visibility_changed(false, ctx);
+            left_panel.sync_conversation_list_view_registration(false, ctx);
         } else if !was_conversation_list_open && is_conversation_list_open {
-            left_panel.on_conversation_list_view_visibility_changed(true, ctx);
+            left_panel.sync_conversation_list_view_registration(true, ctx);
         }
 
         left_panel.update_active_file_tree_subscription_state(ctx);
@@ -534,7 +534,7 @@ impl LeftPanelView {
             .as_ref()
             .and_then(|pane_group| pane_group.upgrade(ctx))
             .is_some_and(|pane_group| pane_group.as_ref(ctx).left_panel_open);
-        self.on_conversation_list_view_visibility_changed(is_left_panel_open, ctx);
+        self.sync_conversation_list_view_registration(is_left_panel_open, ctx);
 
         ctx.notify();
     }
@@ -1194,7 +1194,7 @@ impl LeftPanelView {
 
     pub fn on_left_panel_visibility_changed(&self, is_now_open: bool, ctx: &mut ViewContext<Self>) {
         if ToolPanelView::ConversationListView == self.active_view.get() {
-            self.on_conversation_list_view_visibility_changed(is_now_open, ctx);
+            self.sync_conversation_list_view_registration(is_now_open, ctx);
         }
 
         self.update_active_file_tree_subscription_state(ctx);
@@ -1242,7 +1242,7 @@ impl LeftPanelView {
     /// When the conversation list view's visibility changes,
     /// we need to update the conversation and tasks model to reflect the new state
     /// (this information is used to decide whether or not we should poll for new tasks).
-    fn on_conversation_list_view_visibility_changed(
+    pub(crate) fn sync_conversation_list_view_registration(
         &self,
         is_now_open: bool,
         ctx: &mut ViewContext<Self>,

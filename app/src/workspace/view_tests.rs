@@ -1,7 +1,12 @@
 use std::collections::HashMap;
+use std::time::Duration as StdDuration;
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use ai::project_context::model::ProjectContextModel;
+use chrono::{DateTime, Duration, Utc};
+use futures::future::{Either, select};
+use futures::pin_mut;
+use mockito::{Matcher, Mock};
 use pane_group::{NotebookPane, PaneState, SplitPaneState, TerminalPaneId};
 #[cfg(feature = "local_fs")]
 use repo_metadata::CanonicalizedPath;
@@ -17,6 +22,7 @@ use terminal::view::ActiveSessionState;
 use warp_editor::editor::NavigationKey;
 #[cfg(feature = "local_fs")]
 use warp_files::FileModel;
+use warpui::r#async::Timer;
 use warpui::platform::WindowStyle;
 use warpui::{AddSingletonModel, App, ViewHandle};
 use watcher::HomeDirectoryWatcher;
@@ -56,7 +62,7 @@ use crate::pricing::PricingInfoModel;
 use crate::remote_server::codebase_index_model::RemoteCodebaseIndexModel;
 use crate::resource_center::Tip;
 use crate::server::cloud_objects::listener::Listener;
-use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::cloud_objects::update_manager::{UpdateManager, UpdateManagerEvent};
 use crate::server::experiments::ServerExperiments;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
@@ -270,6 +276,100 @@ pub(crate) fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
     workspace
 }
 
+fn mock_rtc_list_request(timestamp: DateTime<Utc>) -> Mock {
+    let mut server = warp_core::channel::ChannelState::mock_server();
+    server
+        .mock("GET", "/api/v1/agent/runs")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("limit".to_string(), "100".to_string()),
+            Matcher::UrlEncoded(
+                "updated_after".to_string(),
+                (timestamp - Duration::seconds(1)).to_rfc3339(),
+            ),
+        ]))
+        .with_status(200)
+        .with_body(serde_json::json!({ "runs": [] }).to_string())
+        .expect(1)
+        .create()
+}
+
+async fn wait_for_mock(request: &Mock) {
+    let request_matched = async {
+        while !request.matched() {
+            Timer::after(StdDuration::from_millis(10)).await;
+        }
+    };
+    let deadline = Timer::after(StdDuration::from_secs(1));
+    pin_mut!(request_matched, deadline);
+    match select(request_matched, deadline).await {
+        Either::Left(_) => {}
+        Either::Right(_) => panic!("timed out waiting for request"),
+    }
+}
+
+#[test]
+fn test_workspace_close_and_reopen_syncs_agent_management_consumer() {
+    let _management_guard = FeatureFlag::AgentManagementView.override_enabled(true);
+    let _rtc_guard = FeatureFlag::AmbientAgentsRTC.override_enabled(true);
+    let timestamp = Utc::now();
+    let request = mock_rtc_list_request(timestamp);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.read(|ctx| {
+            ServerApiProvider::as_ref(ctx)
+                .get()
+                .set_ambient_workload_token_for_test("test-workload-token".to_string(), None);
+        });
+
+        let reopened_workspace = mock_workspace(&mut app);
+        let other_workspace = mock_workspace(&mut app);
+        let reopened_window_id = reopened_workspace.update(&mut app, |workspace, ctx| {
+            workspace.set_is_agent_management_view_open(true, ctx);
+            ctx.window_id()
+        });
+        let other_window_id = other_workspace.update(&mut app, |workspace, ctx| {
+            workspace.set_is_agent_management_view_open(true, ctx);
+            ctx.window_id()
+        });
+
+        reopened_workspace.update(&mut app, |workspace, ctx| {
+            workspace.on_window_closed(ctx);
+        });
+        app.read(|ctx| {
+            let model = AgentConversationsModel::as_ref(ctx);
+            assert!(!model.has_data_consumers_for_window(reopened_window_id));
+            assert!(model.has_data_consumers_for_window(other_window_id));
+        });
+
+        reopened_workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_reopen(ctx);
+        });
+        app.read(|ctx| {
+            let model = AgentConversationsModel::as_ref(ctx);
+            assert!(model.has_data_consumers_for_window(reopened_window_id));
+            assert!(model.has_data_consumers_for_window(other_window_id));
+        });
+
+        other_workspace.update(&mut app, |workspace, ctx| {
+            workspace.on_window_closed(ctx);
+        });
+        app.read(|ctx| {
+            let model = AgentConversationsModel::as_ref(ctx);
+            assert!(model.has_data_consumers_for_window(reopened_window_id));
+            assert!(!model.has_data_consumers_for_window(other_window_id));
+        });
+
+        UpdateManager::handle(&app).update(&mut app, |_, ctx| {
+            ctx.emit(UpdateManagerEvent::AmbientTaskUpdated {
+                task_id: "00000000-0000-0000-0000-000000009804".parse().unwrap(),
+                timestamp,
+            });
+        });
+        wait_for_mock(&request).await;
+        request.assert();
+    });
+}
 #[test]
 fn test_team_navigation_mode() {
     assert_eq!(
