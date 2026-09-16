@@ -916,6 +916,10 @@ fn default_orchestration_collapsible_state(expanded: bool) -> CollapsibleElement
     }
 }
 
+fn telemetry_duration_ms(duration: Duration) -> Option<u128> {
+    duration.num_milliseconds().try_into().ok()
+}
+
 pub struct AIBlock {
     model: Rc<dyn AIBlockModel<View = AIBlock>>,
 
@@ -1903,10 +1907,9 @@ impl AIBlock {
         let time_to_first_token_ms = self
             .time_to_first_token
             .get()
-            .map(|duration| duration.num_milliseconds() as u128);
-        let time_to_last_token_ms = self
-            .time_to_last_token
-            .map(|duration| duration.num_milliseconds() as u128);
+            .copied()
+            .and_then(telemetry_duration_ms);
+        let time_to_last_token_ms = self.time_to_last_token.and_then(telemetry_duration_ms);
         let status = self.model.status(ctx);
         let is_udi_enabled = InputSettings::as_ref(ctx).is_universal_developer_input_enabled(ctx);
 
