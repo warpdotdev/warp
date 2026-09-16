@@ -543,7 +543,6 @@ pub(crate) trait HarnessRunner: Send + Sync + 'static {
     fn save_coordinator(&self) -> &SaveCoordinator;
 
     /// Queues a save without waiting for persistence; overlapping requests are coalesced.
-
     async fn request_save(
         self: Arc<Self>,
         save_point: SavePoint,
