@@ -40,8 +40,9 @@ use crate::settings_view::SettingsSection;
 use crate::ui_components::blended_colors;
 use crate::workspace::WorkspaceAction;
 
-/// Fixed popover width, matching the Figma reference (`336px`).
-const POPOVER_WIDTH: f32 = 336.;
+/// Fixed popover width: the Figma reference (`336px`) widened by 15% so long
+/// model names and their values fit on one row.
+const POPOVER_WIDTH: f32 = 386.;
 /// Height of the segmented usage/context-window bars.
 const BAR_HEIGHT: f32 = 6.;
 /// Width/height of the small color swatch next to each row label.
