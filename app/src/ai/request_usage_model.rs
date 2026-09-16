@@ -549,8 +549,7 @@ impl AIRequestUsageModel {
             return true;
         }
         let has_custom_endpoint_key = api_keys
-            .keys()
-            .custom_endpoints
+            .custom_endpoints()
             .iter()
             .any(|endpoint| !endpoint.api_key.trim().is_empty());
         if user_workspaces.is_byo_endpoint_enabled(ctx)
