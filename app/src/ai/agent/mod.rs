@@ -3,6 +3,7 @@ pub(crate) mod conversation_yaml;
 pub(crate) mod todos;
 
 pub(crate) mod api;
+pub(crate) mod base_user_query;
 pub(crate) mod comment;
 pub(crate) mod icons;
 pub(crate) mod linearization;
@@ -42,6 +43,7 @@ use warp_editor::render::model::LineCount;
 use warp_multi_agent_api::{AgentEvent, AgentType, diff_hunk as diff_hunk_api};
 
 pub use self::api::{MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError};
+pub use self::base_user_query::BaseUserQuery;
 use super::llms::LLMId;
 use crate::TelemetryEvent;
 use crate::ai::block_context::BlockContext;
@@ -2893,6 +2895,12 @@ pub enum AIAgentInput {
         user_query_mode: UserQueryMode,
         running_command: Option<RunningCommand>,
         intended_agent: Option<AgentType>,
+        /// The `Request.Input.UserQuery` this input starts from, when warp-server injected one
+        /// with a shared-session prompt. `query`, `user_query_mode`, and `intended_agent` were
+        /// seeded from it (see [`BaseUserQuery::seed_input_fields`]) and `convert_to` writes
+        /// them back over it, so fields this client does not model travel through untouched.
+        /// `None` for everything typed locally.
+        base: Option<BaseUserQuery>,
     },
 
     AutoCodeDiffQuery {

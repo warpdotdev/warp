@@ -1,5 +1,7 @@
 //! Conversions from application types to MAA API types.
 
+use std::collections::HashMap;
+
 use ai::agent::convert::ConvertToAPITypeError;
 use anyhow::anyhow;
 use chrono::{DateTime, Local, Timelike};
@@ -7,8 +9,8 @@ use warp_multi_agent_api as api;
 
 use crate::ai::agent::{
     AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment, AIAgentContext, AIAgentInput,
-    DriveObjectPayload, MCPContext, PassiveSuggestionResultType, PassiveSuggestionTrigger,
-    RunningCommand, StaticQueryType, Suggestions, UserQueryMode,
+    BaseUserQuery, DriveObjectPayload, MCPContext, PassiveSuggestionResultType,
+    PassiveSuggestionTrigger, RunningCommand, StaticQueryType, Suggestions, UserQueryMode,
 };
 use crate::ai::block_context::BlockContext;
 
@@ -224,6 +226,9 @@ pub(super) fn convert_input(
                                         .collect(),
                                     mode: None,
                                     intended_agent: Default::default(),
+                                    origin: None,
+                                    author: None,
+                                    source_message: None,
                                 }
                             }),
                         },
@@ -279,6 +284,34 @@ pub(super) fn convert_input(
     })
 }
 
+/// Builds the outgoing `Request.Input.UserQuery` by writing the fields this client models over
+/// `base`, the query warp-server injected with a shared-session prompt (if any).
+///
+/// `query`, `mode`, and `intended_agent` were seeded from the base when the input was built
+/// (see `BaseUserQuery::seed_input_fields`), so writing them back wholesale drops nothing the
+/// server sent. Attachments are the one field this client does not model losslessly
+/// (`TryFrom<api::Attachment>` keeps only file path references), so the base's entries stay
+/// and the ones this client resolved locally are added alongside them.
+fn user_query_proto(
+    base: Option<&BaseUserQuery>,
+    query: String,
+    referenced_attachments: HashMap<String, api::Attachment>,
+    mode: api::UserQueryMode,
+    intended_agent: i32,
+) -> api::request::input::UserQuery {
+    let mut proto = base.map(BaseUserQuery::to_proto).unwrap_or_default();
+    proto.query = query;
+    proto.mode = Some(mode);
+    proto.intended_agent = intended_agent;
+    for (key, attachment) in referenced_attachments {
+        proto
+            .referenced_attachments
+            .entry(key)
+            .or_insert(attachment);
+    }
+    proto
+}
+
 fn convert_input_to_user_input(
     input: AIAgentInput,
 ) -> Result<api::request::input::user_inputs::user_input::Input, ConvertToAPITypeError> {
@@ -290,22 +323,24 @@ fn convert_input_to_user_input(
             user_query_mode,
             running_command: None,
             intended_agent,
+            base,
             ..
         } => Ok(
-            api::request::input::user_inputs::user_input::Input::UserQuery(
-                api::request::input::UserQuery {
-                    query,
-                    referenced_attachments: referenced_attachments.into_iter().map(|(k, attachment)| (k, attachment.into())).collect(),
-                    mode: Some(user_query_mode.into()),
-                    intended_agent: intended_agent.map(|agent| agent.into()).unwrap_or_default(),
-                },
-            ),
+            api::request::input::user_inputs::user_input::Input::UserQuery(user_query_proto(
+                base.as_ref(),
+                query,
+                referenced_attachments.into_iter().map(|(k, attachment)| (k, attachment.into())).collect(),
+                user_query_mode.into(),
+                intended_agent.map(|agent| agent.into()).unwrap_or_default(),
+            )),
         ),
         AIAgentInput::UserQuery {
             query,
             static_query_type: None,
             referenced_attachments,
             user_query_mode,
+            intended_agent,
+            base,
             running_command: Some(RunningCommand{
                 command,
                 block_id,
@@ -318,12 +353,14 @@ fn convert_input_to_user_input(
         } => {
             Ok(api::request::input::user_inputs::user_input::Input::CliAgentUserQuery(
                 api::request::input::CliAgentUserQuery {
-                    user_query: Some(api::request::input::UserQuery {
-                            query,
-                            referenced_attachments: referenced_attachments.into_iter().map(|(k, attachment)| (k, attachment.into())).collect(),
-                            mode: Some(user_query_mode.into()),
-                            intended_agent: api::AgentType::Cli.into(),
-                        }),
+                    user_query: Some(user_query_proto(
+                        base.as_ref(),
+                        query,
+                        referenced_attachments.into_iter().map(|(k, attachment)| (k, attachment.into())).collect(),
+                        user_query_mode.into(),
+                        // A CLI subagent query is for the CLI agent unless the base named one.
+                        intended_agent.unwrap_or(api::AgentType::Cli).into(),
+                    )),
                     running_command: Some(api::RunningShellCommand{
                         command,
                         snapshot: Some(api::LongRunningShellCommandSnapshot {
@@ -967,6 +1004,7 @@ impl From<MCPContext> for api::request::McpContext {
                     id: server.id,
                     name: server.name,
                     description: server.description,
+                    identity: None,
                     resources: server
                         .resources
                         .into_iter()

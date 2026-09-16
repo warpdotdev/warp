@@ -125,8 +125,8 @@ fn conversation_usage_metadata_preserves_known_zero_provider_cost() {
 }
 
 fn inference_usage_with_web_search(
-    input: u32,
-    output: u32,
+    input: u64,
+    output: u64,
     input_cost_in_cents: f32,
     output_cost_in_cents: f32,
     web_search_count: u32,
@@ -501,4 +501,42 @@ fn model_token_usage_replay_skips_non_custom_endpoint_entries() {
         ..Default::default()
     };
     assert!(warp_only.to_proto_custom_endpoint_usage().is_none());
+}
+
+#[test]
+fn charged_usage_totals_saturates_wide_wire_counts_and_cumulative_totals() {
+    let charges = api::RequestCharges {
+        usage_by_category: HashMap::from([(
+            "primary_agent".to_string(),
+            api::ChargedUsage {
+                direct_api_inference_usage: HashMap::from([(
+                    "model".to_string(),
+                    api::InferenceUsage {
+                        token_count: Some(api::TokenCount {
+                            input: u64::MAX,
+                            output: u64::from(u32::MAX) + 1,
+                            input_cache_read: u64::from(u32::MAX),
+                            input_cache_write: 1,
+                        }),
+                        ..Default::default()
+                    },
+                )]),
+                ..Default::default()
+            },
+        )]),
+    };
+
+    let mut totals = ChargedUsageTotals::from(&charges);
+    assert_eq!(totals.input_tokens, u32::MAX);
+    assert_eq!(totals.output_tokens, u32::MAX);
+    assert_eq!(totals.input_cache_read_tokens, u32::MAX);
+    assert_eq!(totals.input_cache_write_tokens, 1);
+    assert_eq!(totals.total_tokens(), u32::MAX);
+
+    totals += totals;
+    assert_eq!(totals.input_tokens, u32::MAX);
+    assert_eq!(totals.output_tokens, u32::MAX);
+    assert_eq!(totals.input_cache_read_tokens, u32::MAX);
+    assert_eq!(totals.input_cache_write_tokens, 2);
+    assert_eq!(totals.total_tokens(), u32::MAX);
 }

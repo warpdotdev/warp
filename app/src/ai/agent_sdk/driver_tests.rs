@@ -1623,6 +1623,7 @@ fn native_startup_queue_prevents_exit_until_pending_rows_are_removed() {
                     "followup".into(),
                     ParticipantId::new(),
                     vec![],
+                    None,
                 ),
                 ctx,
             )
@@ -1677,6 +1678,7 @@ fn prepared_native_followup_starts_before_the_last_queued_row_allows_exit() {
                         attachment_id: "attachment-id".into(),
                         file_name: "event-payload.json".into(),
                     }],
+                    None,
                 ),
                 ctx,
             )
@@ -1790,6 +1792,7 @@ fn native_promptless_setup_dispatches_only_the_head_queued_prompt() {
                 None,
                 vec![],
                 ParticipantId::new(),
+                None,
                 ctx,
             );
             controller.execute_warp_agent_prompt_from_shared_session_injection(
@@ -1797,6 +1800,7 @@ fn native_promptless_setup_dispatches_only_the_head_queued_prompt() {
                 None,
                 vec![],
                 ParticipantId::new(),
+                None,
                 ctx,
             );
             id

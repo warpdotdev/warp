@@ -1,11 +1,14 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
 use warp_core::command::ExitCode;
 use warp_multi_agent_api as api;
 
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentActionResult, AIAgentActionResultType, AIAgentContext,
-    TransferShellCommandControlToUserResult,
+    AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment, AIAgentContext, AIAgentInput,
+    BaseUserQuery, RunningCommand, TransferShellCommandControlToUserResult, UserQueryMode,
 };
 use crate::terminal::model::block::BlockId;
 
@@ -202,4 +205,220 @@ fn transfer_control_finished_result_converts_to_tool_call_result_input() {
         }
         other => panic!("Expected tool-call-result input, got {other:?}"),
     }
+}
+
+fn user_query_input(
+    query: &str,
+    base: Option<BaseUserQuery>,
+    referenced_attachments: HashMap<String, AIAgentAttachment>,
+) -> AIAgentInput {
+    AIAgentInput::UserQuery {
+        query: query.to_string(),
+        context: Arc::new([]),
+        static_query_type: None,
+        referenced_attachments,
+        user_query_mode: UserQueryMode::Normal,
+        running_command: None,
+        intended_agent: None,
+        base,
+    }
+}
+
+fn cli_user_query_input(
+    query: &str,
+    base: Option<BaseUserQuery>,
+    intended_agent: Option<api::AgentType>,
+) -> AIAgentInput {
+    AIAgentInput::UserQuery {
+        query: query.to_string(),
+        context: Arc::new([]),
+        static_query_type: None,
+        referenced_attachments: HashMap::new(),
+        user_query_mode: UserQueryMode::Normal,
+        running_command: Some(RunningCommand {
+            command: "cargo build".to_string(),
+            block_id: BlockId::from("block-1".to_string()),
+            grid_contents: "Compiling...".to_string(),
+            cursor: String::new(),
+            requested_command_id: None,
+            is_alt_screen_active: false,
+        }),
+        intended_agent,
+        base,
+    }
+}
+
+fn converted_user_query(input: AIAgentInput) -> api::request::input::UserQuery {
+    let Ok(api::request::input::user_inputs::user_input::Input::UserQuery(query)) =
+        super::convert_input_to_user_input(input)
+    else {
+        panic!("expected a user query input");
+    };
+    query
+}
+
+fn converted_cli_user_query(input: AIAgentInput) -> api::request::input::UserQuery {
+    let Ok(api::request::input::user_inputs::user_input::Input::CliAgentUserQuery(cli)) =
+        super::convert_input_to_user_input(input)
+    else {
+        panic!("expected a CLI agent user query input");
+    };
+    cli.user_query.expect("CLI agent user query")
+}
+
+fn normal_mode() -> api::UserQueryMode {
+    api::UserQueryMode { r#type: None }
+}
+
+fn plan_mode() -> api::UserQueryMode {
+    api::UserQueryMode {
+        r#type: Some(api::user_query_mode::Type::Plan(())),
+    }
+}
+
+#[test]
+fn local_user_query_converts_without_a_base() {
+    let query = converted_user_query(user_query_input("hello", None, HashMap::new()));
+
+    assert_eq!(query.query, "hello");
+    assert_eq!(query.mode, Some(normal_mode()));
+    assert_eq!(query.intended_agent, 0);
+    assert!(query.origin.is_none());
+    assert!(query.author.is_none());
+    assert!(query.source_message.is_none());
+}
+
+#[test]
+fn base_fields_this_client_does_not_model_pass_through() {
+    let base = BaseUserQuery::from_proto(api::request::input::UserQuery {
+        origin: Some(api::UserQueryOrigin::default()),
+        author: Some(api::QueryAuthor::default()),
+        source_message: Some(api::ExternalMessage {
+            body: "raw comment".to_string(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+
+    let query = converted_user_query(user_query_input(
+        "from the client",
+        Some(base),
+        HashMap::new(),
+    ));
+
+    assert_eq!(query.query, "from the client");
+    assert_eq!(query.mode, Some(normal_mode()));
+    assert_eq!(query.origin, Some(api::UserQueryOrigin::default()));
+    assert_eq!(query.author, Some(api::QueryAuthor::default()));
+    assert_eq!(
+        query.source_message.map(|message| message.body),
+        Some("raw comment".to_string())
+    );
+}
+
+#[test]
+fn modeled_fields_are_written_over_the_base() {
+    // The input's text, mode, and agent were seeded from the base when it was built, so they
+    // are authoritative here even where they differ from what the base still carries.
+    let base = BaseUserQuery::from_proto(api::request::input::UserQuery {
+        query: "base text".to_string(),
+        mode: Some(plan_mode()),
+        intended_agent: api::AgentType::Cli.into(),
+        origin: Some(api::UserQueryOrigin::default()),
+        ..Default::default()
+    });
+    let input = AIAgentInput::UserQuery {
+        query: "seeded text".to_string(),
+        context: Arc::new([]),
+        static_query_type: None,
+        referenced_attachments: HashMap::new(),
+        user_query_mode: UserQueryMode::Orchestrate,
+        running_command: None,
+        intended_agent: Some(api::AgentType::Primary),
+        base: Some(base),
+    };
+
+    let query = converted_user_query(input);
+
+    assert_eq!(query.query, "seeded text");
+    assert_eq!(
+        query.mode,
+        Some(api::UserQueryMode {
+            r#type: Some(api::user_query_mode::Type::Orchestrate(())),
+        })
+    );
+    assert_eq!(query.intended_agent, i32::from(api::AgentType::Primary));
+    assert_eq!(query.origin, Some(api::UserQueryOrigin::default()));
+}
+
+#[test]
+fn client_resolved_attachments_are_added_without_overriding_base_ones() {
+    let plain_text = |text: &str| api::Attachment {
+        value: Some(api::attachment::Value::PlainText(text.to_string())),
+    };
+    let base = BaseUserQuery::from_proto(api::request::input::UserQuery {
+        referenced_attachments: HashMap::from([(
+            "notes.md".to_string(),
+            plain_text("server copy"),
+        )]),
+        ..Default::default()
+    });
+    let client_attachments = HashMap::from([
+        (
+            "notes.md".to_string(),
+            AIAgentAttachment::PlainText("client copy".to_string()),
+        ),
+        (
+            "extra.txt".to_string(),
+            AIAgentAttachment::PlainText("client only".to_string()),
+        ),
+    ]);
+
+    let query = converted_user_query(user_query_input("prompt", Some(base), client_attachments));
+
+    assert_eq!(query.referenced_attachments.len(), 2);
+    assert_eq!(
+        query.referenced_attachments["notes.md"],
+        plain_text("server copy")
+    );
+    assert_eq!(
+        query.referenced_attachments["extra.txt"],
+        plain_text("client only")
+    );
+}
+
+#[test]
+fn cli_agent_user_query_carries_the_base_fields_and_defaults_to_the_cli_agent() {
+    let base = BaseUserQuery::from_proto(api::request::input::UserQuery {
+        source_message: Some(api::ExternalMessage {
+            body: "raw comment".to_string(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+
+    let query = converted_cli_user_query(cli_user_query_input("check the build", Some(base), None));
+
+    assert_eq!(query.query, "check the build");
+    assert_eq!(query.intended_agent, i32::from(api::AgentType::Cli));
+    assert_eq!(
+        query.source_message.map(|message| message.body),
+        Some("raw comment".to_string())
+    );
+}
+
+#[test]
+fn cli_agent_user_query_keeps_a_seeded_intended_agent() {
+    let base = BaseUserQuery::from_proto(api::request::input::UserQuery {
+        intended_agent: api::AgentType::Primary.into(),
+        ..Default::default()
+    });
+
+    let query = converted_cli_user_query(cli_user_query_input(
+        "check the build",
+        Some(base),
+        Some(api::AgentType::Primary),
+    ));
+
+    assert_eq!(query.intended_agent, i32::from(api::AgentType::Primary));
 }
