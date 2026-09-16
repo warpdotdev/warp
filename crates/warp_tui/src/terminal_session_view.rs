@@ -2092,7 +2092,8 @@ impl TuiTerminalSessionView {
                     }
                 }
                 QueuedQueryEvent::DefaultModeChanged => ctx.notify(),
-                QueuedQueryEvent::Appended { .. }
+                QueuedQueryEvent::PromptReady { .. }
+                | QueuedQueryEvent::Appended { .. }
                 | QueuedQueryEvent::DispatchStateChanged { .. }
                 | QueuedQueryEvent::RowUnlocked { .. }
                 | QueuedQueryEvent::Removed { .. }

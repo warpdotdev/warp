@@ -636,7 +636,7 @@ impl BlocklistAIController {
                 && QueuedQueryModel::as_ref(ctx)
                     .ready_query(*conversation_id, *query_id)
                     .is_some()
-                && me.conversation_ready_for_pending_events(*conversation_id, ctx)
+                && me.can_dispatch_queued_warp_agent_prompt(*conversation_id, ctx)
             {
                 me.dispatch_queued_warp_agent_prompt(*conversation_id, None, ctx);
             }

@@ -188,10 +188,10 @@ impl BlocklistAIController {
             self.terminal_surface_id,
         );
         if row.shared_session_prompt().is_some() {
+            self.send_native_startup_injection(conversation_id, row, ctx);
             QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
                 queue.remove_fired_row(conversation_id, row_id, ctx);
             });
-            self.send_native_startup_injection(conversation_id, row, ctx);
         } else {
             // The send path resolves this row's attachments by id, so it must still be in the
             // queue when this is called; remove it only afterward.

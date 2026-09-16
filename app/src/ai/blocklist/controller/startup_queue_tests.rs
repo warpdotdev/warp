@@ -103,7 +103,7 @@ fn prepared_file_prompt_steers_without_interrupting_or_redownloading() {
 }
 
 #[test]
-fn ready_event_dispatches_only_when_the_conversation_is_idle() {
+fn ready_event_dispatches_only_when_the_conversation_is_idle_after_an_exchange() {
     for status in [
         ConversationStatus::Success,
         ConversationStatus::InProgress,
@@ -114,7 +114,17 @@ fn ready_event_dispatches_only_when_the_conversation_is_idle() {
             let terminal = add_window_with_terminal(&mut app, None);
             let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
             let id = controller.update(&mut app, |controller, ctx| {
-                controller.bind_native_prompt_conversation(None, ctx)
+                let id = controller.bind_native_prompt_conversation(None, ctx);
+                controller.send_user_query_in_conversation("initial".into(), id, None, ctx);
+                for stream_id in controller
+                    .in_flight_response_streams
+                    .stream_ids_for_conversation(id, ctx)
+                {
+                    controller
+                        .in_flight_response_streams
+                        .cleanup_stream(&stream_id);
+                }
+                id
             });
             BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
                 history.update_conversation_status(terminal.id(), id, status.clone(), ctx);
@@ -129,13 +139,52 @@ fn ready_event_dispatches_only_when_the_conversation_is_idle() {
             BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
                 let queries = user_queries_in_order(history, id);
                 if status == ConversationStatus::Success {
-                    assert_eq!(queries, vec!["file followup"]);
+                    assert_eq!(queries, vec!["initial", "file followup"]);
                 } else {
-                    assert!(queries.is_empty());
+                    assert_eq!(queries, vec!["initial"]);
                 }
             });
         });
     }
+}
+
+#[test]
+fn delayed_file_prompt_dispatches_after_promptless_startup_setup_finishes() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        let (id, query_id) = controller.update(&mut app, |controller, ctx| {
+            let id = controller.bind_native_prompt_conversation(None, ctx);
+            let query_id = QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+                queue.append(id, file_prompt(ParticipantId::new()), ctx)
+            });
+
+            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+                queue.finish_native_setup(id, ctx);
+            });
+            controller.dispatch_queued_warp_agent_prompt(id, None, ctx);
+
+            let conversation = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&id)
+                .unwrap();
+            assert_eq!(conversation.status(), &ConversationStatus::InProgress);
+            assert_eq!(conversation.exchange_count(), 0);
+            assert_eq!(QueuedQueryModel::as_ref(ctx).queue(id).len(), 1);
+            (id, query_id)
+        });
+
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.complete_preparation(id, query_id, prepared_file(), ctx);
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(user_queries_in_order(history, id), vec!["file followup"]);
+        });
+        QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+            assert!(!queue.has_queue(id));
+        });
+    });
 }
 
 #[test]
