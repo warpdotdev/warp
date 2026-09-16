@@ -1,4 +1,14 @@
 //! Windows screen recording via a supervised ffmpeg `gdigrab` process.
+//!
+//! `start` spawns ffmpeg capturing the full virtual desktop and waits for the output file to
+//! begin growing before returning a live [`RecordingHandle`]. `stop` finalizes the capture and
+//! validates the resulting file before handing it back to the caller.
+//!
+//! Finalization here differs from the macOS/Linux recorders (which send `SIGINT`): Windows
+//! processes have no POSIX signals, and there is no reliable way to deliver a console control
+//! event to only this child, so `stop` instead asks ffmpeg to quit gracefully over its own stdin
+//! (`q\n`), which ffmpeg treats the same as an interactive quit and flushes the container
+//! accordingly. See [`finalize_capture`] for the full sequence.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -19,10 +29,18 @@ use crate::{
     RecordingCompletionStatus, RecordingConfig, RecordingError, RecordingHandle, RecordingOutput,
 };
 
+/// How long to wait for ffmpeg to open the desktop capture device and produce first output.
 const START_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long to wait for ffmpeg to finalize the container after requesting a graceful quit.
 const STOP_TIMEOUT: Duration = Duration::from_secs(15);
+/// Poll interval while waiting for capture to begin.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
+/// The virtual desktop's bounding box, in physical pixels, spanning all monitors.
+///
+/// `origin_x`/`origin_y` can be negative when a monitor is positioned left of or above the
+/// primary monitor; `width`/`height` are normalized to even values (see
+/// [`normalize_virtual_screen_geometry`]).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct VirtualScreenGeometry {
     origin_x: i32,
@@ -78,6 +96,8 @@ impl crate::Recorder for Recorder {
                 reason: "recording process is unavailable".to_string(),
             })?;
 
+        // Ask ffmpeg to quit gracefully so the moov atom is written; on failure
+        // `finalize_capture` has already killed the process and deleted the output.
         let completion_status = match finalize_capture(&mut process, &path, STOP_TIMEOUT).await {
             Ok(status) => status,
             Err(error) => {
@@ -85,6 +105,8 @@ impl crate::Recorder for Recorder {
                 return Err(error);
             }
         };
+        // The progress log is only useful for diagnosing a failed start/finalize; drop it now
+        // that the recording finished.
         let _ = std::fs::remove_file(path.with_extension("log"));
 
         let size_bytes = std::fs::metadata(&path)
@@ -96,6 +118,8 @@ impl crate::Recorder for Recorder {
                 reason: "recording produced an empty file".to_string(),
             });
         }
+        // A nonempty file can still be an unplayable, truncated container (e.g. a missing moov
+        // atom) if ffmpeg exited uncleanly; probe it before handing it back to the caller.
         if let Err(error) =
             crate::recording_metadata::video_duration_with_ffmpeg(&self.ffmpeg, &path).await
         {
@@ -115,6 +139,11 @@ impl crate::Recorder for Recorder {
     }
 }
 
+/// Queries the virtual desktop's bounding box across all monitors, in physical pixels.
+///
+/// `GetSystemMetrics(SM_*VIRTUALSCREEN)` returns DPI-scaled logical coordinates unless the
+/// calling thread is per-monitor DPI aware, which would misalign the capture region on HiDPI
+/// setups; `DpiAwarenessGuard` opts in for the duration of this call.
 fn query_virtual_screen_geometry() -> Result<VirtualScreenGeometry, RecordingError> {
     let _dpi_guard = DpiAwarenessGuard::enter_per_monitor_v2();
     // SAFETY: `GetSystemMetrics` has no preconditions.
@@ -136,6 +165,7 @@ fn normalize_virtual_screen_geometry(
             reason: format!("invalid virtual screen dimensions {width}x{height}"),
         });
     }
+    // libx264 with yuv420p requires even dimensions.
     let width = (width as u32) & !1;
     let height = (height as u32) & !1;
     if width == 0 || height == 0 {
@@ -200,6 +230,7 @@ async fn launch_recording(
 ) -> Result<RecordingHandle, RecordingError> {
     command
         .arg(&path)
+        // Piped so `finalize_capture` can later send ffmpeg its graceful quit command.
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::from(log_file))
@@ -214,6 +245,8 @@ async fn launch_recording(
         }
     };
 
+    // Resolves once capture is confirmed live (the output file has grown, meaning ffmpeg opened
+    // the desktop capture device and the muxer is writing).
     if let Err(error) = wait_for_first_output(&path, &mut process, timeout).await {
         kill_and_reap(&mut process).await;
         let log = std::fs::read_to_string(&log_path).unwrap_or_default();
@@ -233,6 +266,8 @@ async fn launch_recording(
     })
 }
 
+/// Polls `path`'s size until it grows above zero (capture is live), the process exits early, or
+/// `timeout` elapses.
 async fn wait_for_first_output(
     path: &Path,
     process: &mut Child,
@@ -260,11 +295,21 @@ async fn wait_for_first_output(
     }
 }
 
+/// Finalizes a gdigrab recording by asking ffmpeg to quit gracefully so it writes the moov atom,
+/// instead of leaving a truncated, unplayable container.
+///
+/// Windows processes have no POSIX signals, and there is no reliable way to deliver a console
+/// control event to only this child process, so this sends ffmpeg's own interactive quit command
+/// (`q\n`) over stdin rather than signaling it, unlike the macOS/Linux recorders. Any failure
+/// along the way kills and reaps the process (see [`kill_and_reap`] for why that must happen
+/// before the file is removed) and discards the recording rather than risking a corrupt file.
 async fn finalize_capture(
     process: &mut Child,
     path: &Path,
     timeout: Duration,
 ) -> Result<RecordingCompletionStatus, RecordingError> {
+    // ffmpeg may have already exited on its own (e.g. crashed, or hit the `-fs` size cap) before
+    // `stop` was called; there's nothing to finalize in that case.
     if process
         .try_wait()
         .map_err(|error| RecordingError::Finalize {
@@ -290,6 +335,7 @@ async fn finalize_capture(
             reason: format!("failed to request ffmpeg finalization: {error}"),
         });
     }
+    // Dropping stdin closes the pipe, signaling EOF so ffmpeg processes the queued quit command.
     drop(stdin);
 
     match tokio::time::timeout(timeout, process.wait()).await {
@@ -302,6 +348,9 @@ async fn finalize_capture(
             })
         }
         Err(_) => {
+            // ffmpeg missed the finalization deadline, so the container is likely missing its
+            // moov atom and unplayable. Force-kill and discard the file rather than returning a
+            // corrupt recording.
             kill_and_reap(process).await;
             remove_recording_files(path);
             Err(RecordingError::Finalize {
@@ -311,6 +360,10 @@ async fn finalize_capture(
     }
 }
 
+/// Kills `process` and waits for it to exit.
+///
+/// Unlike POSIX, Windows won't let a file be deleted while another process still holds it open;
+/// callers must reap ffmpeg here before removing its output, or cleanup will silently fail.
 async fn kill_and_reap(process: &mut Child) {
     let _ = process.start_kill();
     let _ = process.wait().await;
@@ -321,6 +374,9 @@ fn remove_recording_files(path: &Path) {
     let _ = std::fs::remove_file(path.with_extension("log"));
 }
 
+/// Enriches a capture-start failure with a diagnostic tail from ffmpeg's log, special-casing the
+/// known gdigrab access-denied signature (e.g. a locked or UAC-secured desktop) with an
+/// actionable message.
 fn capture_start_failure_reason(error: &str, log: &str) -> String {
     let diagnostic = diagnostic_tail(log);
     if log
@@ -335,6 +391,8 @@ fn capture_start_failure_reason(error: &str, log: &str) -> String {
     }
 }
 
+/// Returns a bounded, single-line tail of `text`'s last few non-empty lines (formatted as
+/// `" (...)"`, or empty if `text` has no content), suitable for appending to an error message.
 fn diagnostic_tail(text: &str) -> String {
     const MAX_CHARS: usize = 512;
     let lines: Vec<&str> = text
