@@ -332,6 +332,56 @@ fn agent_footer_usage_tooltip_updates_on_usage_events() {
     });
 }
 
+/// Opening the popover makes the footer consult the terminal's menu positioning provider,
+/// which locks the terminal model. Rendering must not still be holding that lock.
+#[test]
+fn agent_footer_usage_popover_renders_with_terminal_positioning_provider() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        app.update(|ctx| {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
+                let conversation_id =
+                    model.start_new_conversation(terminal.id(), false, false, false, ctx);
+                model.set_active_conversation_id(conversation_id, terminal.id(), ctx);
+                model.update_conversation_cost_and_usage_for_request(
+                    conversation_id,
+                    None,
+                    None,
+                    vec![],
+                    Some(charged_usage_metadata()),
+                    false,
+                    ctx,
+                );
+            });
+        });
+
+        let footer = terminal.read(&app, |view, ctx| {
+            view.input().as_ref(ctx).agent_input_footer().clone()
+        });
+        footer.read(&app, |footer, ctx| {
+            let child_ids = footer.render(ctx).debug_child_view_ids();
+            assert!(child_ids.contains(&footer.usage_button.id()));
+            assert!(!child_ids.contains(&footer.usage_popover.id()));
+        });
+
+        footer.update(&mut app, |footer, ctx| {
+            footer.handle_action(&AgentInputFooterAction::ToggleUsagePopover, ctx);
+        });
+
+        footer.read(&app, |footer, ctx| {
+            assert!(
+                footer
+                    .render(ctx)
+                    .debug_child_view_ids()
+                    .contains(&footer.usage_popover.id()),
+            );
+        });
+    });
+}
+
 #[test]
 fn cli_footer_omits_cloud_indicator_for_local_cli_session() {
     App::test((), |mut app| async move {

@@ -2562,20 +2562,31 @@ impl View for AgentInputFooter {
                 .with_child(ChildView::new(&self.handoff_environment_selector).finish());
         }
 
-        let terminal_model = self.terminal_model.lock();
-        let shared_status = terminal_model.shared_session_status();
-        let is_cloud_context = super::is_in_cloud_context(&terminal_model);
-        let is_conversation_transcript_context =
-            is_conversation_transcript_context(self.terminal_view_id, &terminal_model, app);
+        // The lock is released before rendering toolbar items: the usage popover's menu
+        // positioning provider re-locks the same non-reentrant model.
+        let (
+            shared_status,
+            is_cloud_context,
+            is_conversation_transcript_context,
+            cloud_routing_indicator,
+        ) = {
+            let terminal_model = self.terminal_model.lock();
+            (
+                terminal_model.shared_session_status().clone(),
+                super::is_in_cloud_context(&terminal_model),
+                is_conversation_transcript_context(self.terminal_view_id, &terminal_model, app),
+                self.cloud_routing_indicator_view(&terminal_model, app),
+            )
+        };
 
-        if let Some(indicator) = self.cloud_routing_indicator_view(&terminal_model, app) {
+        if let Some(indicator) = cloud_routing_indicator {
             left_buttons.add_child(indicator);
         }
 
         for item in &left_items {
             if let Some(element) = self.render_toolbar_item(
                 item,
-                shared_status,
+                &shared_status,
                 is_cloud_context,
                 is_conversation_transcript_context,
                 app,
@@ -2602,7 +2613,7 @@ impl View for AgentInputFooter {
             for item in &right_items {
                 if let Some(element) = self.render_toolbar_item(
                     item,
-                    shared_status,
+                    &shared_status,
                     is_cloud_context,
                     is_conversation_transcript_context,
                     app,
