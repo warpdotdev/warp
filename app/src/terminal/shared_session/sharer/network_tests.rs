@@ -1,27 +1,35 @@
+use std::convert::Infallible;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_channel::Sender;
 use byte_unit::Byte;
+use futures::channel::mpsc;
 use futures_util::stream::AbortHandle;
+use futures_util::{SinkExt as _, StreamExt as _, future, sink, stream};
 use instant::Instant;
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::{
-    ActivePrompt, OrderedTerminalEvent, OrderedTerminalEventType, ParticipantId, Selection,
-    SelectionUpdate, SessionId,
+    ActivePrompt, FeatureSupport, InputOperationId, InputOperationSeqNo, InputUpdate,
+    OrderedTerminalEvent, OrderedTerminalEventType, ParticipantId, Selection, SelectionUpdate,
+    SessionId, UserID,
 };
 use session_sharing_protocol::sharer::{
-    DownstreamMessage, FailedToInitializeSessionReason, QuotaType, ReconnectToken, UpstreamMessage,
+    DownstreamMessage, FailedToInitializeSessionReason, QuotaType, ReconnectPayload,
+    ReconnectToken, ReconnectionFailedReason, SessionEndedReason, SessionTerminatedReason,
+    UpstreamMessage,
 };
 use warp_server_client::iap::IapManager;
-use warpui::r#async::FutureExt as _;
-use warpui::{App, ModelHandle};
-use websocket::{Message, WebsocketMessage as _};
+use warpui::r#async::{FutureExt as _, Timer};
+use warpui::{App, ModelHandle, RetryOption};
+use websocket::{Error as WebsocketError, Message, Sink, Stream, WebsocketMessage as _};
 
 use super::{
-    AMBIENT_CREATE_SESSION_MAX_ATTEMPTS, Network, PTY_READS_BATCH_THRESHOLD, PtyBytesBatchStatus,
-    Stage, StartupFailure, StartupRetryState, share_with_team_uid_for_init_payload,
-    startup_max_attempts,
+    AMBIENT_CREATE_SESSION_MAX_ATTEMPTS, ConfirmedReconnection, MAX_PRE_RECONNECT_BYTES,
+    MAX_PRE_RECONNECT_MESSAGES, Network, PTY_READS_BATCH_THRESHOLD, PtyBytesBatchStatus, Stage,
+    StartupFailure, StartupRetryState, confirm_reconnection, retry_reconnection,
+    share_with_team_uid_for_init_payload, startup_max_attempts,
 };
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
@@ -43,6 +51,446 @@ fn is_upstream_message_pty_bytes_read(
         event_no,
         event_type: OrderedTerminalEventType::PtyBytesRead { bytes },
     }) if event_no == expected_event_no && bytes == compressed_bytes)
+}
+
+fn discard_sink() -> impl Sink {
+    sink::drain().sink_map_err(|error: Infallible| match error {})
+}
+
+fn reconnect_payload() -> ReconnectPayload {
+    ReconnectPayload {
+        session_secret: Default::default(),
+        reconnect_token: ReconnectToken::new(),
+        user_id: UserID {
+            anonymous_id: "anonymous".to_string(),
+            access_token: None,
+        },
+        latest_block_id: "block".to_string().into(),
+        selection: Selection::None,
+        feature_support: FeatureSupport {
+            supports_agent_view: false,
+            supports_full_role: true,
+            supports_full_role_for_real: true,
+        },
+    }
+}
+
+fn reconnected_message() -> Message {
+    Message::new(
+        DownstreamMessage::SessionReconnected {
+            last_received_event_no: None,
+            participant_list: Default::default(),
+        }
+        .to_json()
+        .unwrap(),
+    )
+}
+
+async fn mock_reconnect(
+    messages: Vec<Result<Message, WebsocketError>>,
+    keep_open: bool,
+) -> anyhow::Result<ConfirmedReconnection<impl Sink, impl Stream>> {
+    let tail = if keep_open {
+        stream::pending().boxed()
+    } else {
+        stream::empty().boxed()
+    };
+    confirm_reconnection(
+        discard_sink(),
+        stream::iter(messages).chain(tail),
+        reconnect_payload(),
+    )
+    .await
+}
+
+#[test]
+fn test_reconnect_retries_eof_and_error_before_ack() {
+    for fail_with_error in [false, true] {
+        App::test((), move |mut app| async move {
+            let (network, _) = create_network(&mut app, true);
+            let attempts = Arc::new(AtomicUsize::new(0));
+            network.update(&mut app, |network, ctx| {
+                let attempts = attempts.clone();
+                network.start_reconnect_task(
+                    move || {
+                        let first_attempt = attempts.fetch_add(1, Ordering::SeqCst) == 0;
+                        let messages = if first_attempt {
+                            if fail_with_error {
+                                vec![Err(anyhow::anyhow!("socket error").into())]
+                            } else {
+                                vec![]
+                            }
+                        } else {
+                            vec![Ok(reconnected_message())]
+                        };
+                        mock_reconnect(messages, !first_attempt)
+                    },
+                    RetryOption::linear(Duration::from_millis(1), 1),
+                    Duration::from_secs(1),
+                    Duration::from_secs(2),
+                    ctx,
+                );
+            });
+            assert_eventually!(
+                network.read(&app, |network, _| matches!(
+                    network.stage,
+                    Stage::StartedSuccessfully { .. }
+                )),
+                "EOF/error before acknowledgement should retry and reconnect"
+            );
+            assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        });
+    }
+}
+
+#[test]
+fn test_reconnect_retries_ack_timeout() {
+    App::test((), |mut app| async move {
+        let (network, _) = create_network(&mut app, true);
+        let attempts = Arc::new(AtomicUsize::new(0));
+        network.update(&mut app, |network, ctx| {
+            let attempts = attempts.clone();
+            network.start_reconnect_task(
+                move || {
+                    let messages = if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                        vec![]
+                    } else {
+                        vec![Ok(reconnected_message())]
+                    };
+                    mock_reconnect(messages, true)
+                },
+                RetryOption::linear(Duration::from_millis(1), 1),
+                Duration::from_millis(20),
+                Duration::from_secs(2),
+                ctx,
+            );
+        });
+        assert_eventually!(
+            network.read(&app, |network, _| matches!(
+                network.stage,
+                Stage::StartedSuccessfully { .. }
+            )),
+            "Missing acknowledgement should time out and retry"
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    });
+}
+
+#[test]
+fn test_reconnect_transport_timeout_retries_within_cycle() {
+    App::test((), |_| async move {
+        let mut attempts = 0;
+        let result = retry_reconnection(
+            || {
+                attempts += 1;
+                let first_attempt = attempts == 1;
+                async move {
+                    if first_attempt {
+                        future::pending::<()>().await;
+                    }
+                    anyhow::Ok(())
+                }
+            },
+            RetryOption::linear(Duration::from_millis(1), 1),
+            Duration::from_millis(20),
+            Duration::from_secs(2),
+        )
+        .await;
+        assert!(result.is_ok());
+        assert_eq!(attempts, 2);
+    });
+}
+
+#[test]
+fn test_reconnect_send_error_and_timeout_are_retryable() {
+    App::test((), |mut app| async move {
+        for stall_send in [false, true] {
+            let (network, _) = create_network(&mut app, true);
+            let attempts = Arc::new(AtomicUsize::new(0));
+            network.update(&mut app, |network, ctx| {
+                let attempts = attempts.clone();
+                network.start_reconnect_task(
+                    move || {
+                        let first_attempt = attempts.fetch_add(1, Ordering::SeqCst) == 0;
+                        async move {
+                            let sink = Box::pin(discard_sink().with(move |message| async move {
+                                if first_attempt {
+                                    if stall_send {
+                                        future::pending::<()>().await;
+                                    }
+                                    return Err(anyhow::anyhow!("send failed").into());
+                                }
+                                Ok(message)
+                            }));
+                            confirm_reconnection(
+                                sink,
+                                stream::iter(vec![Ok(reconnected_message())])
+                                    .chain(stream::pending()),
+                                reconnect_payload(),
+                            )
+                            .await
+                        }
+                    },
+                    RetryOption::linear(Duration::from_millis(1), 1),
+                    Duration::from_millis(20),
+                    Duration::from_secs(2),
+                    ctx,
+                );
+            });
+            assert_eventually!(
+                network.read(&app, |network, _| network.is_connected()),
+                "A failed or stalled reconnect send should retry"
+            );
+            assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        }
+    });
+}
+
+#[test]
+fn test_reconnect_attempt_budget_exhaustion_finishes_session() {
+    App::test((), |mut app| async move {
+        let (network, _) = create_network(&mut app, true);
+        let attempts = Arc::new(AtomicUsize::new(0));
+        network.update(&mut app, |network, ctx| {
+            let attempts = attempts.clone();
+            network.start_reconnect_task(
+                move || {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    mock_reconnect(vec![], false)
+                },
+                RetryOption::linear(Duration::from_millis(1), 2),
+                Duration::from_secs(1),
+                Duration::from_secs(2),
+                ctx,
+            );
+        });
+        assert_eventually!(
+            network.read(&app, |network, _| matches!(network.stage, Stage::Finished)),
+            "Exhausting reconnect retries should finish rather than strand the session"
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+        network.read(&app, |network, _| assert!(network.ws_proxy_tx.is_closed()));
+    });
+}
+
+#[test]
+fn test_reconnect_cycle_deadline_includes_backoff_and_transport() {
+    App::test((), |mut app| async move {
+        for stall_transport in [false, true] {
+            let (network, _) = create_network(&mut app, true);
+            let attempts = Arc::new(AtomicUsize::new(0));
+            network.update(&mut app, |network, ctx| {
+                let attempts = attempts.clone();
+                network.start_reconnect_task(
+                    move || {
+                        attempts.fetch_add(1, Ordering::SeqCst);
+                        async move {
+                            if stall_transport {
+                                future::pending::<()>().await;
+                            }
+                            mock_reconnect(vec![], false).await
+                        }
+                    },
+                    RetryOption::linear(Duration::from_secs(1), 18),
+                    Duration::from_secs(1),
+                    Duration::from_millis(20),
+                    ctx,
+                );
+            });
+            assert_eventually!(
+                network.read(&app, |network, _| matches!(network.stage, Stage::Finished)),
+                "Cycle deadline should end reconnect even during transport/backoff"
+            );
+            assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        }
+    });
+}
+
+#[test]
+fn test_end_session_cancels_reconnect_backoff() {
+    App::test((), |mut app| async move {
+        let (network, _) = create_network(&mut app, true);
+        let attempts = Arc::new(AtomicUsize::new(0));
+        network.update(&mut app, |network, ctx| {
+            let attempts = attempts.clone();
+            network.start_reconnect_task(
+                move || {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    mock_reconnect(vec![], false)
+                },
+                RetryOption::linear(Duration::from_millis(100), 18),
+                Duration::from_secs(1),
+                Duration::from_secs(2),
+                ctx,
+            );
+        });
+        assert_eventually!(
+            attempts.load(Ordering::SeqCst) == 1,
+            "First attempt should start"
+        );
+        network.update(&mut app, |network, _| {
+            network.end_session(SessionEndedReason::EndedBySharer);
+        });
+        Timer::after(Duration::from_millis(250)).await;
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        network.read(&app, |network, _| {
+            assert!(matches!(network.stage, Stage::Finished))
+        });
+    });
+}
+
+#[test]
+fn test_reconnect_buffers_pre_ack_messages_and_preserves_remaining_stream() {
+    App::test((), |_| async move {
+        let buffered = DownstreamMessage::EventsProcessedAck {
+            latest_processed_event_no: 1,
+        };
+        let connection = mock_reconnect(
+            vec![
+                Ok(Message::new_binary(vec![1])),
+                Ok(Message::new(buffered.to_json().unwrap())),
+                Ok(reconnected_message()),
+                Ok(Message::new(buffered.to_json().unwrap())),
+            ],
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(connection.buffered_messages.len(), 1);
+        assert_eq!(
+            connection.buffered_messages[0].text(),
+            Some(buffered.to_json().unwrap().as_str())
+        );
+        let mut remaining = connection.stream;
+        assert!(remaining.next().await.unwrap().is_ok());
+    });
+}
+
+#[test]
+fn test_reconnect_pre_ack_buffer_is_bounded_by_count_and_bytes() {
+    App::test((), |_| async move {
+        for messages in [
+            (0..=MAX_PRE_RECONNECT_MESSAGES)
+                .map(|_| Ok(Message::new("{}".to_string())))
+                .collect(),
+            vec![Ok(Message::new("x".repeat(MAX_PRE_RECONNECT_BYTES + 1)))],
+        ] {
+            let error = mock_reconnect(messages, false).await.err().unwrap();
+            assert!(error.to_string().contains("Too many messages"));
+        }
+        for mut messages in [
+            (0..MAX_PRE_RECONNECT_MESSAGES)
+                .map(|_| Ok(Message::new("{}".to_string())))
+                .collect::<Vec<_>>(),
+            vec![Ok(Message::new("x".repeat(MAX_PRE_RECONNECT_BYTES)))],
+        ] {
+            messages.push(Ok(reconnected_message()));
+            assert!(mock_reconnect(messages, false).await.is_ok());
+        }
+    });
+}
+
+#[test]
+fn test_explicit_rejection_and_termination_do_not_retry() {
+    App::test((), |mut app| async move {
+        for rejected in [false, true] {
+            let (network, _) = create_network(&mut app, true);
+            let attempts = Arc::new(AtomicUsize::new(0));
+            network.update(&mut app, |network, ctx| {
+                let attempts = attempts.clone();
+                network.start_reconnect_task(
+                    move || {
+                        attempts.fetch_add(1, Ordering::SeqCst);
+                        let response = if rejected {
+                            DownstreamMessage::FailedToReconnect {
+                                reason: ReconnectionFailedReason::SessionNotFound,
+                            }
+                        } else {
+                            DownstreamMessage::SessionTerminated {
+                                reason: SessionTerminatedReason::ExceededSizeLimit,
+                            }
+                        };
+                        mock_reconnect(vec![Ok(Message::new(response.to_json().unwrap()))], false)
+                    },
+                    RetryOption::linear(Duration::from_millis(1), 18),
+                    Duration::from_secs(1),
+                    Duration::from_secs(2),
+                    ctx,
+                );
+            });
+            assert_eventually!(
+                network.read(&app, |network, _| matches!(network.stage, Stage::Finished)),
+                "Explicit termination must be terminal"
+            );
+            assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        }
+    });
+}
+
+#[test]
+fn test_stale_websocket_callbacks_do_not_close_replacement() {
+    App::test((), |mut app| async move {
+        let (network, _) = create_network(&mut app, true);
+        let (old_tx, old_rx) = mpsc::unbounded();
+        network.update(&mut app, |network, ctx| {
+            let (_, old_proxy_rx) = async_channel::unbounded();
+            network.on_websocket_connected(None, old_proxy_rx, discard_sink(), old_rx, ctx);
+            let generation = network.connection_generation;
+            network.on_websocket_connected(
+                None,
+                network.ws_proxy_rx.clone(),
+                discard_sink(),
+                stream::pending(),
+                ctx,
+            );
+            assert!(network.should_ignore_websocket_callback(generation, None));
+        });
+        old_tx
+            .unbounded_send(Ok(Message::new(
+                DownstreamMessage::SessionTerminated {
+                    reason: SessionTerminatedReason::ExceededSizeLimit,
+                }
+                .to_json()
+                .unwrap(),
+            )))
+            .unwrap();
+        drop(old_tx);
+        Timer::after(Duration::from_millis(50)).await;
+        network.read(&app, |network, _| {
+            assert!(matches!(network.stage, Stage::StartedSuccessfully { .. }));
+            assert!(!network.ws_proxy_tx.is_closed());
+        });
+    });
+}
+
+#[test]
+fn test_reconnect_confirmation_flushes_pending_input_updates() {
+    App::test((), |mut app| async move {
+        let (network, _) = create_network(&mut app, true);
+        network.update(&mut app, |network, ctx| {
+            network.stage = Stage::Reconnecting {
+                abort_handle: AbortHandle::new_pair().0,
+            };
+            network.pending_input_updates.push(InputUpdate {
+                id: InputOperationId {
+                    participant_id: ParticipantId::new(),
+                    buffer_id: network.next_buffer_seq_no.0.clone().into(),
+                    op_no: InputOperationSeqNo::zero(),
+                },
+                ops: vec![],
+            });
+            network.process_websocket_message(reconnected_message(), ctx);
+            assert!(network.pending_input_updates.is_empty());
+            assert!(matches!(
+                network.ws_proxy_rx.try_recv().unwrap(),
+                UpstreamMessage::UpdateInput(_)
+            ));
+            assert!(matches!(
+                network.ws_proxy_rx.try_recv().unwrap(),
+                UpstreamMessage::UpdateActivePrompt(_)
+            ));
+        });
+    });
 }
 
 #[test]
@@ -171,7 +619,7 @@ fn test_startup_attempt_stale_filtering() {
             network.stage = Stage::StartedSuccessfully {
                 startup_attempt: None,
             };
-            assert!(!network.should_ignore_startup_attempt_websocket_callback(0));
+            assert!(network.should_ignore_startup_attempt_websocket_callback(0));
         });
     });
 }
@@ -826,14 +1274,18 @@ fn test_messages_are_buffered_while_reconnecting() {
             ));
         });
 
-        // Simulate receiving the SessionReconnected message from the server.
-        network.update(&mut app, |network, ctx| {
+        // Simulate the replacement transport receiving the SessionReconnected message.
+        let ws_proxy_rx = network.update(&mut app, |network, ctx| {
+            let (tx, rx) = async_channel::unbounded();
+            network.ws_proxy_tx = tx;
+            network.ws_proxy_rx = rx.clone();
             let downstream_message = DownstreamMessage::SessionReconnected {
                 last_received_event_no: None,
                 participant_list: Default::default(),
             };
             let serialized = downstream_message.to_json().unwrap();
             network.process_websocket_message(Message::new(serialized), ctx);
+            rx
         });
 
         // The message should be flushed to the server and the stage should be advanced.
