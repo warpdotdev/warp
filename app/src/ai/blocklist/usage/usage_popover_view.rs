@@ -55,7 +55,6 @@ const EM_DASH: &str = "\u{2014}";
 pub enum UsagePopoverAction {
     ToggleModelUsageSection,
     ToggleToolCallSummarySection,
-    ToggleResponseTimeSection,
     /// Dispatched by the [`Dismiss`] underlay when the user clicks outside
     /// the popover.
     RequestClose,
@@ -116,7 +115,6 @@ pub struct UsagePopoverView {
     conversation_id: Option<AIConversationId>,
     model_usage_section_expanded: bool,
     tool_call_summary_section_expanded: bool,
-    response_time_section_expanded: bool,
     /// Rows whose per-model breakdown subsection is currently expanded.
     /// Keyed by row identity rather than a fixed set of fields since the list
     /// of models is dynamic per-conversation.
@@ -135,7 +133,6 @@ pub struct UsagePopoverView {
     view_id: EntityId,
     model_usage_toggle_mouse_state: MouseStateHandle,
     tool_call_summary_toggle_mouse_state: MouseStateHandle,
-    response_time_toggle_mouse_state: MouseStateHandle,
     view_account_usage_mouse_state: MouseStateHandle,
     /// Number of times this view rendered. Notification has no observable
     /// state, so tests observe the render pass it should trigger instead.
@@ -181,14 +178,12 @@ impl UsagePopoverView {
             conversation_id,
             model_usage_section_expanded: true,
             tool_call_summary_section_expanded: true,
-            response_time_section_expanded: true,
             expanded_model_ids: HashSet::new(),
             hover_states: RefCell::new(HashMap::new()),
             registered_tooltips: RefCell::new(Vec::new()),
             view_id: ctx.view_id(),
             model_usage_toggle_mouse_state: MouseStateHandle::default(),
             tool_call_summary_toggle_mouse_state: MouseStateHandle::default(),
-            response_time_toggle_mouse_state: MouseStateHandle::default(),
             view_account_usage_mouse_state: MouseStateHandle::default(),
             #[cfg(test)]
             render_count_for_test: Cell::new(0),
@@ -216,7 +211,6 @@ impl UsagePopoverView {
         self.conversation_id = Some(conversation_id);
         self.model_usage_section_expanded = true;
         self.tool_call_summary_section_expanded = true;
-        self.response_time_section_expanded = true;
         self.expanded_model_ids.clear();
         self.hover_states.borrow_mut().clear();
         ctx.notify();
@@ -921,65 +915,6 @@ impl UsagePopoverView {
         column.add_child(inner.finish());
         Some(column.finish())
     }
-
-    /// Unlike every other section here, these figures cover only the exchanges
-    /// since the most recent user query, so the header says so explicitly.
-    fn render_response_time_section(
-        &self,
-        conversation: &AIConversation,
-        appearance: &Appearance,
-    ) -> Option<Box<dyn Element>> {
-        let ttft_ms = conversation.time_to_first_token_for_last_user_query_ms();
-        let response_ms = conversation.total_agent_response_time_since_last_user_query_ms();
-        let wall_ms = conversation.wall_to_wall_response_time_since_last_query();
-        if ttft_ms == 0 && response_ms == 0 && wall_ms.unwrap_or(0) == 0 {
-            return None;
-        }
-
-        // Prefer the wall-to-wall total (including tool call time) for the
-        // collapsed summary, since that's the most representative single
-        // "total time" figure; fall back to agent response time alone when
-        // the wall-clock total isn't available.
-        let total_time_ms = wall_ms.filter(|&ms| ms != 0).unwrap_or(response_ms);
-
-        let mut column = Flex::column().with_spacing(8.);
-        column.add_child(self.render_section_header(
-            "LAST RESPONSE TIME",
-            self.response_time_section_expanded,
-            CollapsedSummary::new(format!("{:.1}s", total_time_ms as f64 / 1000.)),
-            SectionToggle {
-                mouse_state: self.response_time_toggle_mouse_state.clone(),
-                action: UsagePopoverAction::ToggleResponseTimeSection,
-            },
-            appearance,
-        ));
-        if !self.response_time_section_expanded {
-            return Some(column.finish());
-        }
-
-        let mut inner = Flex::column().with_spacing(4.);
-        inner.add_child(render_label_value_row(
-            "Time to first token",
-            format!("{:.1} seconds", ttft_ms as f64 / 1000.),
-            appearance,
-        ));
-        inner.add_child(render_label_value_row(
-            "Total agent response time",
-            format!("{:.1} seconds", response_ms as f64 / 1000.),
-            appearance,
-        ));
-        if let Some(wall_ms) = wall_ms
-            && wall_ms != 0
-        {
-            inner.add_child(render_label_value_row(
-                "Total time (including tool calls)",
-                format!("{:.1} seconds", wall_ms as f64 / 1000.),
-                appearance,
-            ));
-        }
-        column.add_child(inner.finish());
-        Some(column.finish())
-    }
 }
 
 impl View for UsagePopoverView {
@@ -1026,7 +961,6 @@ impl View for UsagePopoverView {
                 appearance,
             ),
             self.render_tool_call_summary_section(conversation, appearance),
-            self.render_response_time_section(conversation, appearance),
         ];
         let mut column = Flex::column().with_spacing(12.);
         for section in sections.into_iter().flatten() {
@@ -1080,10 +1014,6 @@ impl TypedActionView for UsagePopoverView {
             }
             UsagePopoverAction::ToggleToolCallSummarySection => {
                 self.tool_call_summary_section_expanded = !self.tool_call_summary_section_expanded;
-                ctx.notify();
-            }
-            UsagePopoverAction::ToggleResponseTimeSection => {
-                self.response_time_section_expanded = !self.response_time_section_expanded;
                 ctx.notify();
             }
             UsagePopoverAction::RequestClose => {
