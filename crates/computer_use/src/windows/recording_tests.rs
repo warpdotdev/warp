@@ -360,12 +360,12 @@ fn dropping_non_cooperative_live_handle_is_non_blocking_and_cleans_after_exit() 
     std::fs::write(&log_path, b"log").unwrap();
     let process = recording_process("stalled", &path, Stdio::null());
 
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     drop(handle_for(process, path.clone()));
 
     assert!(started.elapsed() < Duration::from_millis(500));
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while (path.exists() || log_path.exists()) && std::time::Instant::now() < deadline {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while (path.exists() || log_path.exists()) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(!path.exists());
