@@ -151,6 +151,17 @@ fn idle_timeout_sender_complete_with_optional_idle_some_defers_then_delivers() {
 }
 
 #[test]
+fn idle_timeout_sender_complete_with_zero_idle_stays_open() {
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.end_run_after(Duration::from_millis(50), 1);
+    idle_timeout.complete_with_optional_idle(Some(Duration::ZERO), 7);
+    std::thread::sleep(Duration::from_millis(100));
+
+    assert_eq!(rx.try_recv().unwrap(), None);
+}
+
+#[test]
 fn idle_timeout_sender_complete_with_optional_idle_some_then_cancel_invalidates_timer() {
     // Cross-path cancellation: the Stage 2c skip-initial-turn driver path
     // schedules a deferred `Success` via `complete_with_optional_idle(Some(_), _)`

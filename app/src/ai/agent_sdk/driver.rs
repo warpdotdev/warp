@@ -362,13 +362,13 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
         }
     }
 
-    /// End the run with `value`, deferring by `idle_timeout` when set and completing immediately
-    /// when it is `None`.
+    /// End the run with `value`, deferring by a positive `idle_timeout`, staying open indefinitely
+    /// for zero, and completing immediately for `None`.
     fn complete_with_optional_idle(&self, idle_timeout: Option<Duration>, value: T) {
-        if let Some(idle_timeout) = idle_timeout {
-            self.end_run_after(idle_timeout, value);
-        } else {
-            self.end_run_now(value);
+        match idle_timeout {
+            Some(Duration::ZERO) => self.cancel_idle_timeout(),
+            Some(idle_timeout) => self.end_run_after(idle_timeout, value),
+            None => self.end_run_now(value),
         }
     }
 }
@@ -590,7 +590,7 @@ pub struct AgentDriverOptions {
     pub parent_run_id: Option<String>,
     /// Whether the agent run should share its session.
     pub should_share: bool,
-    /// How long to keep the session alive after the agent run completes, if at all.
+    /// How long to keep the session alive after the agent run completes. Zero disables shutdown.
     pub idle_on_complete: Option<Duration>,
     /// How long to keep the session alive after the agent run ends in a terminal error, if at
     /// all. Set by the cloud worker from the environment's post-failure session retention policy
@@ -669,8 +669,7 @@ pub struct AgentDriver {
     /// In the future, we _may_ use the harness abstraction for the Oz agent as well.
     harness: Option<Arc<dyn HarnessRunner>>,
 
-    // Optional idle timeout after completion. If set, the process will stay alive for follow-ups
-    // and exit after this period of inactivity.
+    // Optional idle timeout after completion. Zero keeps the process alive indefinitely.
     idle_on_complete: Option<Duration>,
 
     // Optional idle timeout after a terminal error. If set, the process (and with it the shared
@@ -3859,16 +3858,25 @@ impl AgentDriver {
                             me.idle_on_fail,
                         );
                         let outcome = terminal_status_log_outcome(&output_status);
-                        if let Some(idle_timeout) = idle_window {
-                            log::info!(
-                                "Ambient agent idle lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_id:?} timeout={idle_timeout:?} outcome={outcome}",
-                                me.task_id
-                            );
-                        } else {
-                            log::info!(
-                                "Ambient agent idle lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_id:?} outcome={outcome}",
-                                me.task_id
-                            );
+                        match idle_window {
+                            Some(Duration::ZERO) => {
+                                log::info!(
+                                    "Ambient agent idle lifecycle: event=completion_shutdown_disabled task_id={:?} terminal_view_id={terminal_id:?} outcome={outcome}",
+                                    me.task_id
+                                );
+                            }
+                            Some(idle_timeout) => {
+                                log::info!(
+                                    "Ambient agent idle lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_id:?} timeout={idle_timeout:?} outcome={outcome}",
+                                    me.task_id
+                                );
+                            }
+                            None => {
+                                log::info!(
+                                    "Ambient agent idle lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_id:?} outcome={outcome}",
+                                    me.task_id
+                                );
+                            }
                         }
                         match idle_window {
                             // A failure window is held open by the human working in the session,
@@ -4209,16 +4217,25 @@ impl AgentDriver {
                                 me.idle_on_fail,
                             );
                             let outcome = cli_session_status_log_outcome(status);
-                            if let Some(idle_timeout) = idle_window {
-                                log::info!(
-                                    "Ambient agent CLI lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_view_id:?} timeout={idle_timeout:?} outcome={outcome}",
-                                    me.task_id
-                                );
-                            } else {
-                                log::info!(
-                                    "Ambient agent CLI lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_view_id:?} outcome={outcome}",
-                                    me.task_id
-                                );
+                            match idle_window {
+                                Some(Duration::ZERO) => {
+                                    log::info!(
+                                        "Ambient agent CLI lifecycle: event=completion_shutdown_disabled task_id={:?} terminal_view_id={terminal_view_id:?} outcome={outcome}",
+                                        me.task_id
+                                    );
+                                }
+                                Some(idle_timeout) => {
+                                    log::info!(
+                                        "Ambient agent CLI lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_view_id:?} timeout={idle_timeout:?} outcome={outcome}",
+                                        me.task_id
+                                    );
+                                }
+                                None => {
+                                    log::info!(
+                                        "Ambient agent CLI lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_view_id:?} outcome={outcome}",
+                                        me.task_id
+                                    );
+                                }
                             }
                             match idle_window {
                                 // A failure window is held open by whoever is debugging in the
