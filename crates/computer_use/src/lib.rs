@@ -11,6 +11,8 @@ mod noop;
 mod overlay;
 #[cfg(any(macos, linux, windows))]
 mod recording_metadata;
+#[cfg(any(macos, linux, windows))]
+mod recording_paths;
 #[cfg(any(linux, windows))]
 mod recording_post_process;
 #[cfg(any(macos, linux, windows))]

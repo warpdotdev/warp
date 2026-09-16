@@ -109,7 +109,7 @@ async fn start_screen(config: RecordingConfig) -> Result<RecordingHandle, Record
         });
     }
 
-    let (path, log_path, log_file) = new_recording_path()?;
+    let (path, log_path, log_file) = crate::recording_paths::new_recording_path()?;
     let command = new_ffmpeg_capture_command(&config, &display, width, height, None);
     launch_recording(command, path, log_path, log_file, width, height).await
 }
@@ -124,20 +124,9 @@ async fn start_window(
 ) -> Result<RecordingHandle, RecordingError> {
     let (display, width, height) = prepare_window_capture(window).await?;
 
-    let (path, log_path, log_file) = new_recording_path()?;
+    let (path, log_path, log_file) = crate::recording_paths::new_recording_path()?;
     let command = new_ffmpeg_capture_command(&config, &display, width, height, Some(window));
     launch_recording(command, path, log_path, log_file, width, height).await
-}
-
-fn new_recording_path() -> Result<(PathBuf, PathBuf, File), RecordingError> {
-    let path = std::env::temp_dir().join(format!("warp-recording-{}.mp4", uuid::Uuid::new_v4()));
-    let log_path = path.with_extension("log");
-    // ffmpeg's progress log goes to a file so its stderr pipe can never fill
-    // and stall capture over a long recording.
-    let log_file = File::create(&log_path).map_err(|e| RecordingError::Start {
-        reason: format!("failed to create the recording log file: {e}"),
-    })?;
-    Ok((path, log_path, log_file))
 }
 
 fn new_ffmpeg_capture_command(

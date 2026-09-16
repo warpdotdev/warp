@@ -72,7 +72,7 @@ impl Recorder {
 impl crate::Recorder for Recorder {
     async fn start(&self, config: RecordingConfig) -> Result<RecordingHandle, RecordingError> {
         let geometry = query_virtual_screen_geometry()?;
-        let (path, log_path, log_file) = new_recording_path()?;
+        let (path, log_path, log_file) = crate::recording_paths::new_recording_path()?;
         let command = new_ffmpeg_capture_command(&self.ffmpeg, &config, geometry);
         launch_recording(command, path, log_path, log_file, geometry, START_TIMEOUT).await
     }
@@ -177,15 +177,6 @@ fn normalize_virtual_screen_geometry(
         width,
         height,
     })
-}
-
-fn new_recording_path() -> Result<(PathBuf, PathBuf, File), RecordingError> {
-    let path = std::env::temp_dir().join(format!("warp-recording-{}.mp4", uuid::Uuid::new_v4()));
-    let log_path = path.with_extension("log");
-    let log_file = File::create(&log_path).map_err(|error| RecordingError::Start {
-        reason: format!("failed to create the recording log file: {error}"),
-    })?;
-    Ok((path, log_path, log_file))
 }
 
 fn new_ffmpeg_capture_command(

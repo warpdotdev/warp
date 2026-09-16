@@ -77,14 +77,7 @@ impl crate::Recorder for Recorder {
         // ScreenCaptureKit per-window pipeline replacing the avfoundation sidecar.
         // Follow-on; whole-screen only for now.
 
-        let path =
-            std::env::temp_dir().join(format!("warp-recording-{}.mp4", uuid::Uuid::new_v4()));
-        // ffmpeg's progress log goes to a file so its stderr pipe can never fill
-        // and stall capture over a long recording.
-        let log_path = path.with_extension("log");
-        let log_file = std::fs::File::create(&log_path).map_err(|e| RecordingError::Start {
-            reason: format!("failed to create the recording log file: {e}"),
-        })?;
+        let (path, log_path, log_file) = crate::recording_paths::new_recording_path()?;
 
         let mut command = new_ffmpeg_capture_command(&config, width, height);
         command
