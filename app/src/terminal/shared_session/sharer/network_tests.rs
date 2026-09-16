@@ -23,6 +23,8 @@ use session_sharing_protocol::sharer::{
     UpstreamMessage,
 };
 use warp_server_client::iap::IapManager;
+#[cfg(not(target_family = "wasm"))]
+use warpui::r#async::executor::Foreground;
 use warpui::r#async::{FutureExt as _, Timer};
 use warpui::{App, ModelHandle, RetryOption};
 use websocket::{Error as WebsocketError, Message, Sink, Stream, WebsocketMessage as _};
@@ -460,24 +462,43 @@ fn test_explicit_termination_does_not_retry() {
     });
 }
 
+fn network_with_stale_websocket(
+    app: &mut App,
+) -> (
+    ModelHandle<Network>,
+    mpsc::UnboundedSender<Result<Message, WebsocketError>>,
+) {
+    let (network, ordered_events_tx) = create_network(app, true);
+    drop(ordered_events_tx);
+    let (old_tx, old_rx) = mpsc::unbounded();
+    network.update(app, |network, ctx| {
+        network.selection_throttled_tx.close();
+        let (_, old_proxy_rx) = async_channel::unbounded();
+        network.on_websocket_connected(None, old_proxy_rx, discard_sink(), old_rx, ctx);
+        network.close();
+        let (replacement_tx, replacement_rx) = async_channel::unbounded();
+        network.ws_proxy_tx = replacement_tx;
+        network.ws_proxy_rx = replacement_rx;
+    });
+    (network, old_tx)
+}
+
+#[cfg(not(target_family = "wasm"))]
+async fn finish_foreground_tasks(app: &App) {
+    let foreground = app.foreground_executor();
+    let Foreground::Test { executor } = foreground.as_ref() else {
+        panic!("Expected the test foreground executor");
+    };
+    // The foreground stream task remains registered until both on_item and on_done return.
+    // Closing the unrelated test sources lets executor emptiness prove callback completion.
+    assert_eventually!(400 => executor.is_empty(), "Old websocket callbacks should finish");
+}
+
 #[test]
-fn test_stale_websocket_callbacks_do_not_close_replacement() {
+#[cfg(not(target_family = "wasm"))]
+fn test_stale_websocket_message_does_not_terminate_replacement() {
     App::test((), |mut app| async move {
-        let (network, _) = create_network(&mut app, true);
-        let (old_tx, old_rx) = mpsc::unbounded();
-        network.update(&mut app, |network, ctx| {
-            let (_, old_proxy_rx) = async_channel::unbounded();
-            network.on_websocket_connected(None, old_proxy_rx, discard_sink(), old_rx, ctx);
-            let generation = network.connection_generation;
-            network.on_websocket_connected(
-                None,
-                network.ws_proxy_rx.clone(),
-                discard_sink(),
-                stream::pending(),
-                ctx,
-            );
-            assert!(network.should_ignore_websocket_callback(generation, None));
-        });
+        let (network, old_tx) = network_with_stale_websocket(&mut app);
         old_tx
             .unbounded_send(Ok(Message::new(
                 DownstreamMessage::SessionTerminated {
@@ -488,7 +509,21 @@ fn test_stale_websocket_callbacks_do_not_close_replacement() {
             )))
             .unwrap();
         drop(old_tx);
-        Timer::after(Duration::from_millis(50)).await;
+        finish_foreground_tasks(&app).await;
+        network.read(&app, |network, _| {
+            assert!(matches!(network.stage, Stage::StartedSuccessfully { .. }));
+            assert!(!network.ws_proxy_tx.is_closed());
+        });
+    });
+}
+
+#[test]
+#[cfg(not(target_family = "wasm"))]
+fn test_stale_websocket_eof_does_not_close_replacement() {
+    App::test((), |mut app| async move {
+        let (network, old_tx) = network_with_stale_websocket(&mut app);
+        drop(old_tx);
+        finish_foreground_tasks(&app).await;
         network.read(&app, |network, _| {
             assert!(matches!(network.stage, Stage::StartedSuccessfully { .. }));
             assert!(!network.ws_proxy_tx.is_closed());
