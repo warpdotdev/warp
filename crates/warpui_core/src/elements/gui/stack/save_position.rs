@@ -94,6 +94,11 @@ impl Element for SavePosition {
     fn debug_text_content(&self) -> Option<String> {
         self.child.debug_text_content()
     }
+
+    #[cfg(any(test, feature = "test-util"))]
+    fn debug_child_view_ids(&self) -> Vec<EntityId> {
+        self.child.debug_child_view_ids()
+    }
 }
 
 impl SelectableElement for SavePosition {
