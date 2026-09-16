@@ -4,6 +4,7 @@ use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 use uuid::Uuid;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
+use crate::ai::agent::AIAgentAttachment;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PendingAttachment};
 use crate::features::FeatureFlag;
@@ -57,6 +58,8 @@ enum QueuedQueryKind {
     SharedSessionPrompt {
         participant_id: ParticipantId,
         attachments: Vec<AgentAttachment>,
+        /// None while downloading; Some also represents a settled partial or failed download.
+        prepared_files: Option<HashMap<String, AIAgentAttachment>>,
     },
     /// A shell command run in the terminal (or via the shared session for cloud panes).
     Command,
@@ -77,6 +80,10 @@ impl QueuedQuery {
         participant_id: ParticipantId,
         attachments: Vec<AgentAttachment>,
     ) -> Self {
+        let prepared_files = (!attachments
+            .iter()
+            .any(|attachment| matches!(attachment, AgentAttachment::FileReference { .. })))
+        .then(HashMap::new);
         Self {
             id: QueuedQueryId::new(),
             text,
@@ -84,6 +91,7 @@ impl QueuedQuery {
             kind: QueuedQueryKind::SharedSessionPrompt {
                 participant_id,
                 attachments,
+                prepared_files,
             },
         }
     }
@@ -93,6 +101,7 @@ impl QueuedQuery {
             QueuedQueryKind::SharedSessionPrompt {
                 participant_id,
                 attachments,
+                ..
             } => Some((participant_id, attachments)),
             QueuedQueryKind::Prompt { .. } | QueuedQueryKind::Command => None,
         }
@@ -127,6 +136,21 @@ impl QueuedQuery {
 
     pub fn id(&self) -> QueuedQueryId {
         self.id
+    }
+
+    /// Whether all asynchronous preparation for this row has settled.
+    pub fn is_ready(&self) -> bool {
+        match &self.kind {
+            QueuedQueryKind::SharedSessionPrompt { prepared_files, .. } => prepared_files.is_some(),
+            QueuedQueryKind::Prompt { .. } | QueuedQueryKind::Command => true,
+        }
+    }
+
+    pub(crate) fn prepared_files(&self) -> Option<&HashMap<String, AIAgentAttachment>> {
+        match &self.kind {
+            QueuedQueryKind::SharedSessionPrompt { prepared_files, .. } => prepared_files.as_ref(),
+            QueuedQueryKind::Prompt { .. } | QueuedQueryKind::Command => None,
+        }
     }
 
     pub fn text(&self) -> &str {
@@ -232,10 +256,6 @@ struct ConversationQueueState {
     /// dispatched and cleared when it finishes; keeps the queue accepting new rows while the
     /// agent is idle and gates the next drain until the command completes.
     command_in_flight: bool,
-    /// True while a shared-session row's file-attachment download is in flight, after the row
-    /// has already been removed from `queue` but before the resulting request has actually been
-    /// sent. See [`QueuedQueryModel::arm_download_in_flight`].
-    download_in_flight: bool,
     /// Manual queue toggle made during an agent-requested long-running command. Cleared when
     /// the command ends; never touches `queue_next_prompt_override`.
     queue_next_lrc_prompt_override: Option<bool>,
@@ -259,6 +279,10 @@ pub struct QueuedQueryModel {
 /// to so subscribers can filter to the conversation they care about.
 #[derive(Debug, Clone)]
 pub enum QueuedQueryEvent {
+    PromptReady {
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+    },
     DispatchStateChanged {
         conversation_id: AIConversationId,
     },
@@ -384,38 +408,90 @@ impl QueuedQueryModel {
         self.delivery_mode(conversation_id) == QueuedPromptDeliveryMode::Steering
     }
 
-    /// True when `conversation_id` still has native startup work outstanding: either setup
-    /// hasn't finished yet, one or more rows are still queued waiting to be dispatched (e.g. a
-    /// dispatch was deferred because a CLI subagent was active), or a dispatched row's file
-    /// attachments are still downloading (see [`Self::arm_download_in_flight`]). Used by the
-    /// ambient driver to know whether to keep the run alive for pending injections.
+    /// Whether setup or queued injections still need to finish, including attachment preparation.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub(crate) fn has_pending_native_injections(&self, conversation_id: AIConversationId) -> bool {
-        self.queues.get(&conversation_id).is_some_and(|state| {
-            state.native_setup_pending || !state.queue.is_empty() || state.download_in_flight
-        })
-    }
-
-    /// Marks `conversation_id` as having a shared-session row's file-attachment download in
-    /// flight. Called right before the row is removed from the queue to start that download, so
-    /// [`Self::has_pending_native_injections`] stays true across the gap between removing the
-    /// row and the resulting request actually being sent -- otherwise the ambient driver could
-    /// see an empty queue and a terminal conversation status and exit before the download
-    /// completes and the prompt goes out.
-    pub(crate) fn arm_download_in_flight(&mut self, conversation_id: AIConversationId) {
         self.queues
-            .entry(conversation_id)
-            .or_default()
-            .download_in_flight = true;
+            .get(&conversation_id)
+            .is_some_and(|state| state.native_setup_pending || !state.queue.is_empty())
     }
 
-    /// Clears the marker set by [`Self::arm_download_in_flight`], once the request it was
-    /// guarding has actually been sent (successfully or not). Safe to call unconditionally, even
-    /// when nothing was armed (e.g. a row with no file attachments never needed a download).
-    pub(crate) fn clear_download_in_flight(&mut self, conversation_id: AIConversationId) {
-        if let Some(state) = self.queues.get_mut(&conversation_id) {
-            state.download_in_flight = false;
+    /// Returns a prepared, unlocked row without removing it.
+    pub(crate) fn ready_query(
+        &self,
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+    ) -> Option<&QueuedQuery> {
+        if self.is_dispatch_blocked(conversation_id) {
+            return None;
         }
+        self.queue(conversation_id)
+            .iter()
+            .find(|row| row.id == query_id && row.is_ready() && !row.is_locked())
+    }
+
+    /// Returns the ready FIFO head, without bypassing an unprepared or edited row.
+    pub(crate) fn ready_head(&self, conversation_id: AIConversationId) -> Option<&QueuedQuery> {
+        let first = self.queue(conversation_id).first()?;
+        if self.editing_row(conversation_id) == Some(first.id) {
+            return None;
+        }
+        self.ready_query(conversation_id, first.id)
+    }
+
+    /// Settles attachment preparation once; stale completions never recreate removed rows.
+    pub(crate) fn complete_preparation(
+        &mut self,
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+        files: HashMap<String, AIAgentAttachment>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(row) = self
+            .queues
+            .get_mut(&conversation_id)
+            .and_then(|state| state.queue.iter_mut().find(|row| row.id == query_id))
+        else {
+            return;
+        };
+        let QueuedQueryKind::SharedSessionPrompt {
+            attachments,
+            prepared_files,
+            ..
+        } = &mut row.kind
+        else {
+            return;
+        };
+        if prepared_files.is_some() {
+            return;
+        }
+        let missing: Vec<_> = attachments
+            .iter()
+            .filter_map(|attachment| {
+                let AgentAttachment::FileReference {
+                    attachment_id,
+                    file_name,
+                } = attachment
+                else {
+                    return None;
+                };
+                (!files.values().any(|file| matches!(file,
+                AIAgentAttachment::FilePathReference { file_id, .. } if file_id == attachment_id
+            ))).then_some(file_name.as_str())
+            })
+            .collect();
+        if !missing.is_empty() {
+            row.text
+                .push_str("\nThe following attachments could not be downloaded: ");
+            row.text.push_str(&missing.join(", "));
+            row.text
+                .push_str(". Do not assume their contents are available.\n");
+        }
+        *prepared_files = Some(files);
+        ctx.emit(QueuedQueryEvent::PromptReady {
+            conversation_id,
+            query_id,
+        });
     }
 
     /// Removes and returns every row queued for `conversation_id`, in FIFO order, emitting a
@@ -550,7 +626,7 @@ impl QueuedQueryModel {
                 .queues
                 .get(&conversation_id)
                 .and_then(|state| state.queue.first())
-                .is_some_and(|first| !first.is_locked())
+                .is_some_and(|first| !first.is_locked() && first.is_ready())
     }
 
     /// Marks that a dispatched queued command is running for `conversation_id`. While set, the
@@ -819,7 +895,7 @@ impl QueuedQueryModel {
         }
         let state = self.queues.get(&conversation_id)?;
         let first = state.queue.first()?;
-        if first.is_locked() {
+        if first.is_locked() || !first.is_ready() {
             return None;
         }
         let first_in_edit_mode = state.editing == Some(first.id);

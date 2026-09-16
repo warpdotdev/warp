@@ -3583,7 +3583,10 @@ impl AgentDriver {
             let queue_run_exit = queue_run_exit.clone();
             ctx.subscribe_to_model(&QueuedQueryModel::handle(ctx), move |me, _, event, ctx| {
                 let event_id = match event {
-                    QueuedQueryEvent::DispatchStateChanged { conversation_id }
+                    QueuedQueryEvent::Appended {
+                        conversation_id, ..
+                    }
+                    | QueuedQueryEvent::DispatchStateChanged { conversation_id }
                     | QueuedQueryEvent::Removed {
                         conversation_id, ..
                     }
@@ -3594,12 +3597,13 @@ impl AgentDriver {
                     return;
                 }
                 let queue = QueuedQueryModel::as_ref(ctx);
-                if !queue.has_pending_native_injections(conversation_id)
-                    && BlocklistAIHistoryModel::as_ref(ctx)
-                        .conversation(&conversation_id)
-                        .is_some_and(|conversation| {
-                            conversation.status() == &ConversationStatus::Success
-                        })
+                if queue.has_pending_native_injections(conversation_id) {
+                    queue_run_exit.cancel_idle_timeout();
+                } else if BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&conversation_id)
+                    .is_some_and(|conversation| {
+                        conversation.status() == &ConversationStatus::Success
+                    })
                 {
                     queue_run_exit.complete_with_optional_idle(
                         me.idle_on_complete,

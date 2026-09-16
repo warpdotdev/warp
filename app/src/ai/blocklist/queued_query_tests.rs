@@ -3,9 +3,10 @@
 //! Covers FIFO ordering, append from each origin, edit semantics, reorder semantics, the
 //! per-conversation auto-queue toggle, and history-driven cleanup.
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
-use session_sharing_protocol::common::ParticipantId;
+use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 use warpui::{App, SingletonEntity};
 
 use super::{
@@ -975,31 +976,87 @@ fn command_in_flight_flag_arms_and_clears() {
     });
 }
 
+fn preparing_query() -> QueuedQuery {
+    QueuedQuery::new_shared_session_prompt(
+        "follow up".into(),
+        ParticipantId::new(),
+        vec![AgentAttachment::FileReference {
+            attachment_id: "file-id".into(),
+            file_name: "event-payload.json".into(),
+        }],
+    )
+}
+
 #[test]
-fn download_in_flight_flag_arms_and_clears() {
-    with_model(|mut app, model, _events| {
+fn preparation_blocks_fifo_and_emits_ready_once_even_on_download_failure() {
+    with_model(|mut app, model, events| {
         let conv = AIConversationId::new();
-        model.read(&app, |m, _| assert!(!m.has_pending_native_injections(conv)));
-
-        // Arming works even with an empty queue -- the whole point is to cover the gap after a
-        // shared-session row has already been removed but before its download-gated request has
-        // actually been sent.
-        model.update(&mut app, |m, _| m.arm_download_in_flight(conv));
-        model.read(&app, |m, _| assert!(m.has_pending_native_injections(conv)));
-
-        model.update(&mut app, |m, _| m.clear_download_in_flight(conv));
-        model.read(&app, |m, _| assert!(!m.has_pending_native_injections(conv)));
+        let id = model.update(&mut app, |m, ctx| m.append(conv, preparing_query(), ctx));
+        append_user(&model, &mut app, conv, "later");
+        model.read(&app, |m, _| {
+            assert!(m.ready_head(conv).is_none());
+            assert!(m.ready_query(conv, id).is_none());
+            assert!(m.peek_autofire(conv).is_none());
+            assert!(!m.has_autofireable_prompt(conv));
+            assert!(m.has_pending_native_injections(conv));
+        });
+        events.borrow_mut().clear();
+        model.update(&mut app, |m, ctx| {
+            m.complete_preparation(conv, id, HashMap::new(), ctx);
+            m.complete_preparation(conv, id, HashMap::new(), ctx);
+        });
+        model.read(&app, |m, _| {
+            let head = m.ready_head(conv).unwrap();
+            assert_eq!(head.id(), id);
+            assert!(
+                head.text()
+                    .contains("could not be downloaded: event-payload.json")
+            );
+            assert!(m.has_autofireable_prompt(conv));
+        });
+        assert!(matches!(events.borrow().as_slice(),
+            [QueuedQueryEvent::PromptReady { conversation_id, query_id }]
+                if *conversation_id == conv && *query_id == id));
     });
 }
 
 #[test]
-fn clear_download_in_flight_is_a_no_op_when_nothing_was_armed() {
-    with_model(|mut app, model, _events| {
+fn preparation_completion_after_removal_or_clear_does_not_resurrect_rows() {
+    with_model(|mut app, model, events| {
         let conv = AIConversationId::new();
-        // Every synchronous dispatch path clears unconditionally, including the two that never
-        // needed a download in the first place; this must not panic or create a stray entry.
-        model.update(&mut app, |m, _| m.clear_download_in_flight(conv));
-        model.read(&app, |m, _| assert!(!m.has_pending_native_injections(conv)));
+        for clear_all in [false, true] {
+            let id = model.update(&mut app, |m, ctx| m.append(conv, preparing_query(), ctx));
+            model.update(&mut app, |m, ctx| {
+                if clear_all {
+                    m.clear_queue(conv, ctx);
+                } else {
+                    m.remove_by_id(conv, id, ctx);
+                }
+            });
+            events.borrow_mut().clear();
+            model.update(&mut app, |m, ctx| {
+                m.complete_preparation(conv, id, HashMap::new(), ctx)
+            });
+            assert!(events.borrow().is_empty());
+            model.read(&app, |m, _| assert!(!m.has_pending_native_injections(conv)));
+        }
+    });
+}
+
+#[test]
+fn later_download_finishing_first_does_not_overtake_fifo_head() {
+    with_model(|mut app, model, _| {
+        let conv = AIConversationId::new();
+        model.update(&mut app, |m, ctx| {
+            let first = m.append(conv, preparing_query(), ctx);
+            let second = m.append(conv, preparing_query(), ctx);
+            m.complete_preparation(conv, second, HashMap::new(), ctx);
+            assert!(m.ready_head(conv).is_none());
+            m.complete_preparation(conv, first, HashMap::new(), ctx);
+            assert_eq!(m.ready_head(conv).unwrap().id(), first);
+            m.remove_fired_row(conv, first, ctx);
+            assert_eq!(m.ready_head(conv).unwrap().id(), second);
+        });
     });
 }
 
