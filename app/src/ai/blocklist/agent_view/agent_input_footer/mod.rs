@@ -137,8 +137,7 @@ const NEW_CLOUD_VM_INDICATOR_TOOLTIP: &str = "Not connected to cloud agent. Your
 
 const CLOUD_MODE_V2_FOOTER_GAP: f32 = 4.;
 
-/// `SavePosition` id for the usage popover's trigger button, used to anchor the popover
-/// overlay to it.
+/// id for the conversation usage popover's trigger button to anchor the popover overlay
 const USAGE_BUTTON_SAVE_POSITION_ID: &str = "agent_input_footer::usage_button";
 
 /// How long to wait after session creation before showing the install chip.
