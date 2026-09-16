@@ -73,6 +73,8 @@ pub enum Experiment {
     OzMultiHarnessExperiment,
     SshRemoteServerControl,
     SshRemoteServerExperiment,
+    FactoriesLaunchModalControl,
+    FactoriesLaunchModalExperiment,
     #[cynic(fallback)]
     Other(String),
 }

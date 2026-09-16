@@ -124,6 +124,7 @@ impl TeamUpdateManager {
                     workspaces: vec![],
                     joinable_teams: vec![],
                     experiments: None,
+                    factories_launch_modal_cta_url: None,
                     ai_credit_availability: None,
                     user_purchase_policy: None,
                 },
@@ -360,10 +361,14 @@ impl TeamUpdateManager {
 
                 let workspaces = response.metadata.workspaces;
                 let joinable_teams = response.metadata.joinable_teams;
+                let factories_launch_modal_cta_url =
+                    response.metadata.factories_launch_modal_cta_url;
                 let user_purchase_policy = response.metadata.user_purchase_policy;
 
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
                     user_workspaces.set_user_purchase_policy(user_purchase_policy);
+                    user_workspaces
+                        .set_factories_launch_modal_cta_url(factories_launch_modal_cta_url);
                     user_workspaces.update_workspaces(workspaces.clone(), ctx);
                     user_workspaces.update_joinable_teams(joinable_teams, ctx);
                 });
@@ -484,6 +489,8 @@ impl TeamUpdateManager {
                 let workspaces = user_workspaces_access.workspaces;
                 let joinable_teams = user_workspaces_access.joinable_teams;
                 let experiments = user_workspaces_access.experiments;
+                let factories_launch_modal_cta_url =
+                    user_workspaces_access.factories_launch_modal_cta_url;
                 let user_purchase_policy = user_workspaces_access.user_purchase_policy;
 
                 if let Some(availability) = user_workspaces_access.ai_credit_availability {
@@ -491,9 +498,16 @@ impl TeamUpdateManager {
                         usage_model.apply_server_availability(Ok(availability), ctx);
                     });
                 }
+                if let Some(experiments) = experiments {
+                    ServerApiProvider::handle(ctx).update(ctx, |provider, ctx| {
+                        provider.handle_experiments_fetched(experiments, ctx);
+                    });
+                }
 
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
                     user_workspaces.set_user_purchase_policy(user_purchase_policy);
+                    user_workspaces
+                        .set_factories_launch_modal_cta_url(factories_launch_modal_cta_url);
                     user_workspaces.update_workspaces(workspaces.clone(), ctx);
                     user_workspaces.update_joinable_teams(joinable_teams.clone(), ctx);
                 });
@@ -508,12 +522,6 @@ impl TeamUpdateManager {
                     };
                 } else if let Some(workspace_uid) = workspaces.first().map(|w| w.uid) {
                     self.set_current_workspace_uid(workspace_uid, ctx);
-                }
-
-                if let Some(experiments) = experiments {
-                    ServerApiProvider::handle(ctx).update(ctx, |provider, ctx| {
-                        provider.handle_experiments_fetched(experiments, ctx);
-                    });
                 }
 
                 // Update sqlite
