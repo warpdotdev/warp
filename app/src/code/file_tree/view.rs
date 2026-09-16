@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -23,11 +24,11 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     AcceptedByDropTarget, Align, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container,
-    CrossAxisAlignment, Dismiss, Draggable, DraggableState, Empty, Flex, FormattedTextElement,
-    Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
-    ParentElement, ParentOffsetBounds, Percentage, Rect, SavePosition, ScrollStateHandle,
-    Scrollable, ScrollableElement, ScrollbarWidth, Shrinkable, Stack, Text, UniformList,
-    UniformListState,
+    CornerRadius, CrossAxisAlignment, Dismiss, Draggable, DraggableState, DropTarget,
+    DropTargetData, Empty, Flex, FormattedTextElement, Hoverable, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
+    Percentage, Radius, Rect, SavePosition, ScrollStateHandle, Scrollable, ScrollableElement,
+    ScrollbarWidth, Shrinkable, Stack, Text, UniformList, UniformListState,
 };
 use warpui::fonts::{Properties, Style, Weight};
 use warpui::keymap::FixedBinding;
@@ -139,6 +140,16 @@ pub enum FileTreeAction {
         id: FileTreeIdentifier,
         terminal_view: WeakViewHandle<TerminalView>,
     },
+    ItemDragStarted,
+    UpdateDropTarget {
+        path: Option<StandardizedPath>,
+    },
+    ItemDroppedInDirectory {
+        id: FileTreeIdentifier,
+        target_root: StandardizedPath,
+        target_directory: StandardizedPath,
+    },
+    CancelDrag,
 }
 
 pub fn init(app: &mut AppContext) {
@@ -166,6 +177,11 @@ pub fn init(app: &mut AppContext) {
         FixedBinding::new(
             "enter",
             FileTreeAction::ExecuteSelectedItem,
+            id!(FileTreeView::ui_name()),
+        ),
+        FixedBinding::new(
+            "escape",
+            FileTreeAction::CancelDrag,
             id!(FileTreeView::ui_name()),
         ),
     ]);
@@ -213,6 +229,18 @@ struct ContextMenuState {
 struct PendingEdit {
     kind: PendingEditKind,
     id: FileTreeIdentifier,
+}
+
+#[derive(Debug)]
+struct FileTreeDropTargetData {
+    root: StandardizedPath,
+    directory: StandardizedPath,
+}
+
+impl DropTargetData for FileTreeDropTargetData {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 /// Per-root directory state for the file tree.
@@ -290,6 +318,7 @@ pub struct FileTreeView {
     pending_focus_target: Option<PendingFocusTarget>,
     /// Whether to show hidden files (dotfiles) in the file tree.
     show_hidden_files: bool,
+    current_drop_target: Option<StandardizedPath>,
 }
 
 /// Directory the file tree wants to focus once its entry becomes available.
@@ -726,6 +755,7 @@ impl FileTreeView {
             registered_lazy_loaded_paths: HashSet::new(),
             pending_focus_target: None,
             show_hidden_files: *CodeSettings::as_ref(ctx).show_hidden_files,
+            current_drop_target: None,
         }
     }
 
@@ -1807,6 +1837,7 @@ impl FileTreeView {
         render_state: RenderState,
         appearance: &Appearance,
         item_highlight_state: ItemHighlightState,
+        is_drop_target: bool,
         editor_view: Option<&ViewHandle<EditorView>>,
     ) -> Box<dyn Element> {
         // Create the folder header row
@@ -1917,11 +1948,13 @@ impl FileTreeView {
             .with_padding_left(8.)
             .with_padding_right(8.);
 
-        if let Some(background_color) = item_highlight_state.background_color(appearance) {
+        if is_drop_target {
+            container = container
+                .with_background(appearance.theme().surface_3())
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
+        } else if let Some(background_color) = item_highlight_state.background_color(appearance) {
             container = container.with_background(background_color);
-        }
-
-        if let Some(corner_radius) = item_highlight_state.corner_radius() {
+        } else if let Some(corner_radius) = item_highlight_state.corner_radius() {
             container = container.with_corner_radius(corner_radius);
         }
 
@@ -1987,6 +2020,10 @@ impl FileTreeView {
         let is_selected = self.selected_item.as_ref() == Some(id);
         let is_expanded = self.is_item_expanded(&id.root, item);
         let render_state = item.to_render_state(is_expanded, appearance);
+        let is_directory = matches!(item, FileTreeItem::DirectoryHeader { .. });
+        let is_remote = root_dir.is_remote();
+        let item_path = item.path().clone();
+        let is_drop_target = self.current_drop_target.as_ref() == Some(&item_path);
 
         let item_display_name = render_state.display_name.clone();
         let item_position_id = format!("file_tree_item:{item_display_name}");
@@ -2005,12 +2042,16 @@ impl FileTreeView {
         let id_for_context = id.clone();
         let id_for_drop = id.clone();
         let id_for_drag = id.clone();
+        let id_for_directory_drop = id.clone();
+        let source_root = id.root.clone();
+        let source_path = item_path.clone();
         let hoverable = Hoverable::new(render_state.mouse_state.clone(), move |mouse_state| {
             let item_highlight_state = ItemHighlightState::new(is_selected, mouse_state);
             Self::render_item_with_hover(
                 render_state,
                 appearance,
                 item_highlight_state,
+                is_drop_target,
                 editor_view,
             )
         })
@@ -2047,8 +2088,24 @@ impl FileTreeView {
             })
             .use_copy_cursor_when_dragging_over_drop_target()
             .with_accepted_by_drop_target_fn(move |drop_target_data, _| {
-                // Allow drops on terminal input and terminal block list
-                if drop_target_data
+                if let Some(target) = drop_target_data
+                    .as_any()
+                    .downcast_ref::<FileTreeDropTargetData>()
+                {
+                    if id_for_directory_drop.index > 0
+                        && !is_remote
+                        && source_root == target.root
+                        && editing::move_destination(&source_path, &target.directory).is_some_and(
+                            |destination| {
+                                editing::destination_is_vacant(&destination.to_local_path_lossy())
+                            },
+                        )
+                    {
+                        AcceptedByDropTarget::Yes
+                    } else {
+                        AcceptedByDropTarget::No
+                    }
+                } else if drop_target_data
                     .as_any()
                     .downcast_ref::<InputDropTargetData>()
                     .is_some()
@@ -2062,8 +2119,26 @@ impl FileTreeView {
                     AcceptedByDropTarget::No
                 }
             })
+            .on_drag_start(|ctx, _, _| {
+                ctx.dispatch_typed_action(FileTreeAction::ItemDragStarted);
+            })
+            .on_drag(|ctx, _, _, data| {
+                let path = data
+                    .and_then(|data| data.as_any().downcast_ref::<FileTreeDropTargetData>())
+                    .map(|target| target.directory.clone());
+                ctx.dispatch_typed_action(FileTreeAction::UpdateDropTarget { path });
+            })
             .on_drop(move |ctx, _app, _drag_position, data| {
-                if let Some(terminal_input_data) = data
+                if let Some(target) = data
+                    .as_ref()
+                    .and_then(|data| data.as_any().downcast_ref::<FileTreeDropTargetData>())
+                {
+                    ctx.dispatch_typed_action(FileTreeAction::ItemDroppedInDirectory {
+                        id: id_for_drop.clone(),
+                        target_root: target.root.clone(),
+                        target_directory: target.directory.clone(),
+                    });
+                } else if let Some(terminal_input_data) = data
                     .as_ref()
                     .and_then(|data| data.as_any().downcast_ref::<InputDropTargetData>())
                 {
@@ -2080,12 +2155,37 @@ impl FileTreeView {
                         terminal_view: terminal_drop_data.terminal_view.clone(),
                     });
                 }
+                ctx.dispatch_typed_action(FileTreeAction::UpdateDropTarget { path: None });
             })
             .with_alternate_drag_element(self.render_item_while_dragging(&id_for_drag, appearance))
             .with_keep_original_visible(true)
             .finish();
 
-        SavePosition::new(draggable, item_position_id.as_str()).finish()
+        let item = if is_directory && !is_remote {
+            DropTarget::new(
+                draggable,
+                FileTreeDropTargetData {
+                    root: id.root.clone(),
+                    directory: item_path,
+                },
+            )
+            .finish()
+        } else {
+            draggable
+        };
+
+        SavePosition::new(item, item_position_id.as_str()).finish()
+    }
+
+    fn cancel_drag(&mut self, ctx: &mut ViewContext<Self>) {
+        for root_dir in self.root_directories.values() {
+            for (_, draggable_state) in root_dir.item_states.values() {
+                draggable_state.cancel_drag();
+            }
+        }
+        self.current_drop_target = None;
+        ctx.reset_cursor();
+        ctx.notify();
     }
 
     fn selected_item_std_path(&self) -> Option<StandardizedPath> {
@@ -3161,6 +3261,7 @@ impl TypedActionView for FileTreeView {
                     input_view.append_to_buffer(&file_path, ctx);
                 });
             }
+
             FileTreeAction::ItemDroppedOnTerminal { id, terminal_view } => {
                 let Some(root_dir) = self.root_directories.get(&id.root) else {
                     return;
@@ -3179,6 +3280,27 @@ impl TypedActionView for FileTreeView {
                 terminal_view.update(ctx, |view, ctx| {
                     view.handle_file_tree_drop_on_active_command(&file_path, ctx);
                 });
+            }
+            FileTreeAction::ItemDragStarted => {
+                ctx.focus_self();
+            }
+            FileTreeAction::UpdateDropTarget { path } => {
+                if self.current_drop_target != *path {
+                    self.current_drop_target = path.clone();
+                    ctx.notify();
+                }
+            }
+            FileTreeAction::ItemDroppedInDirectory {
+                id,
+                target_root,
+                target_directory,
+            } => {
+                if id.index > 0 && &id.root == target_root && !self.is_remote_item(id) {
+                    self.move_item_to_directory(id, target_directory, ctx);
+                }
+            }
+            FileTreeAction::CancelDrag => {
+                self.cancel_drag(ctx);
             }
         }
     }

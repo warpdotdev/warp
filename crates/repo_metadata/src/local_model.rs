@@ -1047,6 +1047,28 @@ impl LocalRepoMetadataModel {
         }
     }
 
+    /// Updates the path of an entry within an indexed repository.
+    pub fn rename_entry_path(
+        &mut self,
+        repo_path: &StandardizedPath,
+        old_path: &StandardizedPath,
+        new_path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        let Some(IndexedRepoState::Indexed(state)) = self.repositories.get_mut(repo_path) else {
+            return false;
+        };
+        if !state.entry.rename_path(old_path, new_path) {
+            return false;
+        }
+
+        ctx.emit(RepositoryMetadataEvent::FileTreeEntryUpdated {
+            path: repo_path.clone(),
+            update_type: MetadataUpdateType::FullReplace,
+        });
+        true
+    }
+
     pub fn standing_query_results(
         &self,
         repo_path: &StandardizedPath,

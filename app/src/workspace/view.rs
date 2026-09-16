@@ -83,6 +83,8 @@ use warp_core::user_preferences::GetUserPreferences as _;
 use warp_editor::editor::NavigationKey;
 use warp_errors::{report_error, report_if_error};
 use warp_server_client::auth::AuthEvent;
+#[cfg(feature = "local_fs")]
+use warp_util::file::FileId;
 use warp_util::path::{LineAndColumnArg, user_friendly_path};
 use warpui::accessibility::{
     AccessibilityContent, AccessibilityVerbosity, ActionAccessibilityContent, WarpA11yRole,
@@ -259,6 +261,8 @@ use crate::code::editor::{add_color, remove_color};
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeManager;
 use crate::code::editor_management::CodeSource;
+#[cfg(feature = "local_fs")]
+use crate::code::global_buffer_model::{BufferState, GlobalBufferModel};
 #[cfg(feature = "local_fs")]
 use crate::code_review::CodeReviewTelemetryEvent;
 use crate::code_review::GlobalCodeReviewModel;
@@ -12633,13 +12637,43 @@ impl Workspace {
         new_path: &Path,
         ctx: &mut ViewContext<Self>,
     ) {
+        let renamed_buffers = GlobalBufferModel::handle(ctx).update(ctx, |model, ctx| {
+            model.rename_paths(old_path, new_path, ctx)
+        });
+        self.apply_renamed_tabs_with_file_path(old_path, new_path, &renamed_buffers, ctx);
+
+        let current_window_id = ctx.window_id();
+        let other_workspaces = WorkspaceRegistry::as_ref(ctx).all_workspaces(ctx);
+        for (window_id, workspace) in other_workspaces {
+            if window_id == current_window_id {
+                continue;
+            }
+            workspace.update(ctx, |workspace, ctx| {
+                workspace.apply_renamed_tabs_with_file_path(
+                    old_path,
+                    new_path,
+                    &renamed_buffers,
+                    ctx,
+                );
+            });
+        }
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn apply_renamed_tabs_with_file_path(
+        &mut self,
+        old_path: &Path,
+        new_path: &Path,
+        renamed_buffers: &HashMap<FileId, BufferState>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         for tab_data in &self.tabs {
             tab_data.pane_group.update(ctx, |pane_group, ctx| {
                 // Collect code panes first to avoid borrowing issues
                 let code_panes: Vec<_> = pane_group.code_panes(ctx).collect();
                 for (_, code_pane) in code_panes {
                     code_pane.update(ctx, |code_view, ctx| {
-                        code_view.rename_tabs_with_path(old_path, new_path, ctx);
+                        code_view.rename_tabs_with_path(old_path, new_path, renamed_buffers, ctx);
                     });
                 }
             });

@@ -1225,6 +1225,140 @@ fn test_open_file_with_target_event_preserves_requested_line() {
     });
 }
 
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_directory_rename_retargets_shared_unsaved_descendant_editors() {
+    use crate::code::buffer_location::LocalOrRemotePath;
+    use crate::code::editor_management::CodeManager;
+    use crate::code::global_buffer_model::GlobalBufferModel;
+    use crate::code::local_code_editor::LocalCodeEditorView;
+    use crate::terminal::local_shell::LocalShellState;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_singleton_model(|_| CodeManager::default());
+        app.add_singleton_model(|_| LocalShellState::NotLoaded);
+        app.add_singleton_model(GlobalBufferModel::new);
+        let first_workspace = mock_workspace(&mut app);
+        let second_workspace = mock_workspace(&mut app);
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let source_directory = temp_dir.path().join("source");
+        let target_directory = temp_dir.path().join("target");
+        let source_file = source_directory.join("nested/file.txt");
+        let moved_directory = target_directory.join("source");
+        let moved_file = moved_directory.join("nested/file.txt");
+        std::fs::create_dir_all(source_file.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&target_directory).unwrap();
+        std::fs::write(&source_file, "saved").unwrap();
+        for workspace in [&first_workspace, &second_workspace] {
+            workspace.update(&mut app, |workspace, ctx| {
+                workspace.open_file_with_target(
+                    source_file.clone(),
+                    FileTarget::CodeEditor(EditorLayout::SplitPane),
+                    None,
+                    CodeSource::Link {
+                        path: source_file.clone(),
+                        range_start: None,
+                        range_end: None,
+                    },
+                    ctx,
+                );
+            });
+        }
+
+        let local_editors: Vec<_> = [first_workspace.clone(), second_workspace.clone()]
+            .into_iter()
+            .map(|workspace| {
+                let window_id = workspace.update(&mut app, |_, ctx| ctx.window_id());
+                app.read(|ctx| {
+                    ctx.views_of_type::<LocalCodeEditorView>(window_id)
+                        .unwrap()
+                        .into_iter()
+                        .find(|editor| {
+                            editor.as_ref(ctx).file_path() == Some(source_file.as_path())
+                        })
+                        .expect("descendant editor should be open")
+                })
+            })
+            .collect();
+        for local_editor in &local_editors {
+            let mut loaded = false;
+            for _ in 0..100 {
+                loaded = local_editor.update(&mut app, |editor, ctx| editor.file_loaded(ctx));
+                if loaded {
+                    break;
+                }
+                futures_lite::future::yield_now().await;
+            }
+            assert!(loaded, "descendant editor should finish loading");
+        }
+
+        let old_file_id = local_editors[0].read(&app, |editor, _| editor.file_id().unwrap());
+        assert_eq!(
+            local_editors[1].read(&app, |editor, _| editor.file_id()),
+            Some(old_file_id)
+        );
+
+        let buffer = app.update(|ctx| {
+            GlobalBufferModel::handle(ctx).update(ctx, |model, ctx| {
+                model
+                    .open(LocalOrRemotePath::Local(source_file.clone()), ctx)
+                    .buffer
+            })
+        });
+        buffer.update(&mut app, |buffer, ctx| {
+            buffer.replace_all("saved unsaved", ctx);
+            buffer.set_version(warp_util::content_version::ContentVersion::new());
+        });
+        for local_editor in &local_editors {
+            local_editor.read(&app, |editor, ctx| {
+                assert!(editor.has_unsaved_changes(ctx));
+            });
+        }
+
+        std::fs::rename(&source_directory, &moved_directory).unwrap();
+        first_workspace.update(&mut app, |workspace, ctx| {
+            workspace.rename_tabs_with_file_path(&source_directory, &moved_directory, ctx);
+        });
+        let new_file_ids: Vec<_> = local_editors
+            .iter()
+            .map(|local_editor| {
+                local_editor.read(&app, |editor, ctx| {
+                    assert_eq!(editor.file_path(), Some(moved_file.as_path()));
+                    assert!(editor.has_unsaved_changes(ctx));
+                    assert_eq!(
+                        editor.editor().as_ref(ctx).text(ctx).as_str(),
+                        "saved unsaved"
+                    );
+                    editor.file_id().unwrap()
+                })
+            })
+            .collect();
+        assert_ne!(new_file_ids[0], old_file_id);
+        assert_eq!(new_file_ids[0], new_file_ids[1]);
+
+        local_editors[0].update(&mut app, |editor, ctx| {
+            editor.save_local(ctx).unwrap();
+        });
+        let mut saved = false;
+        for _ in 0..100 {
+            if matches!(
+                std::fs::read_to_string(&moved_file),
+                Ok(contents) if contents == "saved unsaved"
+            ) {
+                saved = true;
+                break;
+            }
+            futures_lite::future::yield_now().await;
+        }
+        assert!(saved, "shared buffer should save at the moved path");
+        for local_editor in &local_editors {
+            local_editor.read(&app, |editor, ctx| {
+                assert!(!editor.has_unsaved_changes(ctx));
+            });
+        }
+    });
+}
 /// Regression test for the raw-code toggle: the notebook-viewer target used to
 /// drop the `CodeSource` outright, so the raw view always started at line 1.
 #[cfg(feature = "local_fs")]

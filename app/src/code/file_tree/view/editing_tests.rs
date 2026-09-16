@@ -4,7 +4,9 @@ use repo_metadata::file_tree_store::{FileTreeDirectoryEntryState, FileTreeEntryS
 use repo_metadata::{FileMetadata, FileTreeEntry};
 use warp_util::standardized_path::StandardizedPath;
 
-use super::sort_entries_for_file_tree;
+use super::{
+    destination_is_vacant, move_destination, rename_noreplace, sort_entries_for_file_tree,
+};
 
 fn std_path(s: &str) -> StandardizedPath {
     StandardizedPath::try_new(s).expect("test path should be valid")
@@ -102,5 +104,128 @@ fn sort_entries_for_file_tree_uses_natural_order_for_numbered_files() {
             "/repo/L11.tsx",
             "/repo/L12.tsx",
         ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn dangling_symlink_destination_is_occupied() {
+    use std::os::unix::fs::symlink;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let source = temp_dir.path().join("source.txt");
+    let destination = temp_dir.path().join("destination.txt");
+    std::fs::write(&source, "source").unwrap();
+    symlink(temp_dir.path().join("missing.txt"), &destination).unwrap();
+
+    assert!(!destination_is_vacant(&destination));
+    assert!(rename_noreplace(&source, &destination).is_err());
+    assert_eq!(std::fs::read_to_string(source).unwrap(), "source");
+    assert!(std::fs::symlink_metadata(destination).is_ok());
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[test]
+fn atomic_move_does_not_overwrite_racing_destination() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let source = temp_dir.path().join("source.txt");
+    let destination = temp_dir.path().join("destination.txt");
+    std::fs::write(&source, "source").unwrap();
+
+    assert!(destination_is_vacant(&destination));
+    std::fs::write(&destination, "racing destination").unwrap();
+
+    assert!(rename_noreplace(&source, &destination).is_err());
+    assert_eq!(std::fs::read_to_string(source).unwrap(), "source");
+    assert_eq!(
+        std::fs::read_to_string(destination).unwrap(),
+        "racing destination"
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[test]
+fn case_only_rename_succeeds_without_leaving_temporary_entries() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let source = temp_dir.path().join("Source.txt");
+    let destination = temp_dir.path().join("source.txt");
+    std::fs::write(&source, "source").unwrap();
+
+    rename_noreplace(&source, &destination).unwrap();
+
+    assert_eq!(std::fs::read_to_string(&destination).unwrap(), "source");
+    let names: Vec<_> = std::fs::read_dir(temp_dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(names, [destination.file_name().unwrap()]);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[test]
+fn case_only_dangling_symlink_rename_preserves_link_target() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let source = temp_dir.path().join("SourceLink");
+    let destination = temp_dir.path().join("sourcelink");
+    let link_target = std::path::Path::new("MissingTarget");
+
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(link_target, &source).unwrap();
+    #[cfg(target_os = "windows")]
+    std::os::windows::fs::symlink_file(link_target, &source).unwrap();
+
+    rename_noreplace(&source, &destination).unwrap();
+
+    assert_eq!(std::fs::read_link(&destination).unwrap(), link_target);
+    let names: Vec<_> = std::fs::read_dir(temp_dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(names, [destination.file_name().unwrap()]);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[test]
+fn case_only_rename_supports_near_name_max_source() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let source_name = format!("S{}.txt", "a".repeat(250));
+    let destination_name = format!("s{}.txt", "a".repeat(250));
+    let source = temp_dir.path().join(source_name);
+    let destination = temp_dir.path().join(destination_name);
+    std::fs::write(&source, "source").unwrap();
+
+    rename_noreplace(&source, &destination).unwrap();
+
+    assert_eq!(std::fs::read_to_string(&destination).unwrap(), "source");
+    let names: Vec<_> = std::fs::read_dir(temp_dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(names, [destination.file_name().unwrap()]);
+}
+#[test]
+fn move_destination_preserves_file_name() {
+    assert_eq!(
+        move_destination(&std_path("/repo/src/main.rs"), &std_path("/repo/tests")),
+        Some(std_path("/repo/tests/main.rs"))
+    );
+}
+
+#[test]
+fn move_destination_rejects_current_parent() {
+    assert_eq!(
+        move_destination(&std_path("/repo/src/main.rs"), &std_path("/repo/src")),
+        None
+    );
+}
+
+#[test]
+fn move_destination_rejects_item_and_descendants() {
+    let source = std_path("/repo/src");
+
+    assert_eq!(move_destination(&source, &source), None);
+    assert_eq!(
+        move_destination(&source, &std_path("/repo/src/nested")),
+        None
     );
 }

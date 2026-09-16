@@ -301,6 +301,23 @@ impl RepoMetadataModel {
         self.local.as_ref(ctx).find_repository_for_path(path)
     }
 
+    /// Updates the path of an entry within an indexed local repository.
+    #[cfg(feature = "local_fs")]
+    pub fn rename_local_entry_path(
+        &self,
+        repo_path: &StandardizedPath,
+        old_path: &StandardizedPath,
+        new_path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        let repo_path = repo_path.clone();
+        let old_path = old_path.clone();
+        let new_path = new_path.clone();
+        self.local.update(ctx, |local, ctx| {
+            local.rename_entry_path(&repo_path, &old_path, &new_path, ctx)
+        })
+    }
+
     // ── Local-specific operations ────────────────────────────────────
     // These delegate to the local sub-model. Remote equivalents will be
     // added once the remote client ↔ server sync layer is in place.

@@ -1007,6 +1007,34 @@ impl GlobalBufferModel {
             ctx,
         ))
     }
+    /// Remap all local buffers at or below `old_path` to corresponding paths below `new_path`.
+    #[cfg(feature = "local_fs")]
+    pub fn rename_paths(
+        &mut self,
+        old_path: &Path,
+        new_path: &Path,
+        ctx: &mut ModelContext<Self>,
+    ) -> HashMap<FileId, BufferState> {
+        let paths_to_rename: Vec<_> = self
+            .location_to_id
+            .iter()
+            .filter_map(|(location, file_id)| {
+                let LocalOrRemotePath::Local(path) = location else {
+                    return None;
+                };
+                let relative_path = path.strip_prefix(old_path).ok()?;
+                Some((*file_id, new_path.join(relative_path)))
+            })
+            .collect();
+
+        paths_to_rename
+            .into_iter()
+            .filter_map(|(old_file_id, new_path)| {
+                self.rename(old_file_id, new_path, ctx)
+                    .map(|buffer_state| (old_file_id, buffer_state))
+            })
+            .collect()
+    }
 
     /// Adopt an existing buffer under a new path without reading from disk.
     /// Used by `save_as` to register a newly-created file with GlobalBufferModel.

@@ -5,6 +5,8 @@
 mod tests;
 
 use std::cmp::Ordering;
+use std::io;
+use std::path::Path;
 use std::sync::Arc;
 
 use repo_metadata::file_tree_store::FileTreeEntryState;
@@ -70,6 +72,182 @@ pub(super) fn sort_entries_for_file_tree(
         (false, true) => Ordering::Greater,
         _ => alphanumeric_sort::compare_str(name_1, name_2),
     }
+}
+
+pub(super) fn move_destination(
+    source: &StandardizedPath,
+    target_directory: &StandardizedPath,
+) -> Option<StandardizedPath> {
+    if source == target_directory
+        || target_directory.starts_with(source)
+        || source.parent().as_ref() == Some(target_directory)
+    {
+        return None;
+    }
+
+    Some(target_directory.join(source.file_name()?))
+}
+pub(super) fn destination_is_vacant(path: &Path) -> bool {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => false,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => true,
+        Err(_) => false,
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn path_to_c_string(path: &Path) -> io::Result<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt;
+
+    std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
+}
+
+#[cfg(target_os = "linux")]
+fn rename_exclusive(old_path: &Path, new_path: &Path) -> io::Result<()> {
+    let old_path = path_to_c_string(old_path)?;
+    let new_path = path_to_c_string(new_path)?;
+    // SAFETY: Both pointers reference valid NUL-terminated paths for the duration of the call.
+    let result = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            old_path.as_ptr(),
+            libc::AT_FDCWD,
+            new_path.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn rename_exclusive(old_path: &Path, new_path: &Path) -> io::Result<()> {
+    let old_path = path_to_c_string(old_path)?;
+    let new_path = path_to_c_string(new_path)?;
+    // SAFETY: Both pointers reference valid NUL-terminated paths for the duration of the call.
+    let result =
+        unsafe { libc::renamex_np(old_path.as_ptr(), new_path.as_ptr(), libc::RENAME_EXCL) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn rename_exclusive(old_path: &Path, new_path: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    use windows::Win32::Storage::FileSystem::{MOVE_FILE_FLAGS, MoveFileExW};
+    use windows::core::PCWSTR;
+
+    let old_path: Vec<_> = old_path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let new_path: Vec<_> = new_path.as_os_str().encode_wide().chain(Some(0)).collect();
+
+    // SAFETY: Both pointers reference valid NUL-terminated paths for the duration of the call.
+    unsafe {
+        MoveFileExW(
+            PCWSTR(old_path.as_ptr()),
+            PCWSTR(new_path.as_ptr()),
+            MOVE_FILE_FLAGS(0),
+        )
+    }
+    .map_err(|_| io::Error::last_os_error())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn rename_exclusive(_old_path: &Path, _new_path: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "atomic no-replace rename is unsupported on this platform",
+    ))
+}
+
+#[cfg(unix)]
+fn paths_refer_to_same_entry(old_path: &Path, new_path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (
+        std::fs::symlink_metadata(old_path),
+        std::fs::symlink_metadata(new_path),
+    ) {
+        (Ok(old_metadata), Ok(new_metadata)) => {
+            old_metadata.dev() == new_metadata.dev() && old_metadata.ino() == new_metadata.ino()
+        }
+        _ => false,
+    }
+}
+#[cfg(target_os = "windows")]
+fn paths_refer_to_same_entry(old_path: &Path, new_path: &Path) -> bool {
+    windows_file_identity(old_path)
+        .zip(windows_file_identity(new_path))
+        .is_some_and(|(old_identity, new_identity)| old_identity == new_identity)
+}
+
+#[cfg(target_os = "windows")]
+fn windows_file_identity(path: &Path) -> Option<(u32, u32, u32)> {
+    use std::os::windows::ffi::OsStrExt;
+
+    use windows::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_FLAG_BACKUP_SEMANTICS,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, GetFileInformationByHandle, OPEN_EXISTING,
+    };
+    use windows::core::{Owned, PCWSTR};
+
+    let path: Vec<_> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: The path pointer remains valid for the call, and the returned handle is owned here.
+    let handle = unsafe {
+        Owned::new(
+            CreateFileW(
+                PCWSTR(path.as_ptr()),
+                FILE_READ_ATTRIBUTES.0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                None,
+                OPEN_EXISTING,
+                FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+                None,
+            )
+            .ok()?,
+        )
+    };
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: The handle is valid and the output pointer refers to initialized writable memory.
+    unsafe { GetFileInformationByHandle(*handle, &mut information) }.ok()?;
+    Some((
+        information.dwVolumeSerialNumber,
+        information.nFileIndexHigh,
+        information.nFileIndexLow,
+    ))
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+fn paths_refer_to_same_entry(_old_path: &Path, _new_path: &Path) -> bool {
+    false
+}
+
+fn rename_noreplace(old_path: &Path, new_path: &Path) -> io::Result<()> {
+    if !paths_refer_to_same_entry(old_path, new_path) {
+        return rename_exclusive(old_path, new_path);
+    }
+
+    let temporary_path = old_path.with_file_name(format!(".warp-rename-{}", uuid::Uuid::new_v4()));
+
+    rename_exclusive(old_path, &temporary_path)?;
+    if let Err(error) = rename_exclusive(&temporary_path, new_path) {
+        if let Err(rollback_error) = rename_exclusive(&temporary_path, old_path) {
+            log::error!(
+                "Failed to restore {} after case-only rename failed: {rollback_error}",
+                old_path.display()
+            );
+        }
+        return Err(error);
+    }
+
+    Ok(())
 }
 
 impl FileTreeView {
@@ -214,34 +392,79 @@ impl FileTreeView {
                 let old_std_path = item.path().clone();
                 let mut new_std_path = old_std_path.clone();
                 new_std_path.set_file_name(&buffer_content);
-
-                let old_path = old_std_path.to_local_path_lossy();
-                let new_path = new_std_path.to_local_path_lossy();
-                if let Err(e) = std::fs::rename(&old_path, &new_path) {
-                    log::warn!(
-                        "Failed to rename {} -> {}: {e}",
-                        old_path.display(),
-                        new_path.display()
-                    );
-                    return;
-                }
-
-                // Update the in-memory model immediately so the UI reflects the change without delay.
-                if let Some(root_dir) = self.root_directories.get_mut(&file_tree_id.root) {
-                    root_dir.entry.rename_path(&old_std_path, &new_std_path);
-                }
-
-                // Emit event to notify workspace that a file was renamed
-                ctx.emit(FileTreeEvent::FileRenamed {
-                    old_path: old_path.clone(),
-                    new_path: new_path.clone(),
-                });
-
-                // Rebuild and select the renamed item using its FileTreeIdentifier
-                self.rebuild_flatten_items_impl(Some(&file_tree_id), None, None);
-                ctx.notify();
+                self.move_item(&file_tree_id, old_std_path, new_std_path, ctx);
             }
         }
+    }
+
+    pub(super) fn move_item_to_directory(
+        &mut self,
+        id: &FileTreeIdentifier,
+        target_directory: &StandardizedPath,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(root_dir) = self.root_directories.get(&id.root) else {
+            return;
+        };
+        if !matches!(
+            root_dir.entry.get(target_directory),
+            Some(FileTreeEntryState::Directory(_))
+        ) {
+            return;
+        }
+        let Some(source) = root_dir.items.get(id.index).map(|item| item.path().clone()) else {
+            return;
+        };
+        let Some(destination) = move_destination(&source, target_directory) else {
+            return;
+        };
+        if !destination_is_vacant(&destination.to_local_path_lossy()) {
+            return;
+        }
+
+        self.move_item(id, source, destination, ctx);
+    }
+
+    fn move_item(
+        &mut self,
+        id: &FileTreeIdentifier,
+        old_std_path: StandardizedPath,
+        new_std_path: StandardizedPath,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(repository_root) = self
+            .root_directories
+            .get(&id.root)
+            .map(|root_dir| root_dir.entry.root_directory().as_ref().clone())
+        else {
+            return;
+        };
+        let old_path = old_std_path.to_local_path_lossy();
+        let new_path = new_std_path.to_local_path_lossy();
+        if let Err(e) = rename_noreplace(&old_path, &new_path) {
+            log::warn!(
+                "Failed to move {} -> {}: {e}",
+                old_path.display(),
+                new_path.display()
+            );
+            return;
+        }
+        #[cfg(feature = "local_fs")]
+        self.repository_metadata_model.update(ctx, |model, ctx| {
+            model.rename_local_entry_path(&repository_root, &old_std_path, &new_std_path, ctx);
+        });
+
+        if let Some(root_dir) = self.root_directories.get_mut(&id.root) {
+            root_dir.entry.rename_path(&old_std_path, &new_std_path);
+        }
+
+        ctx.emit(FileTreeEvent::FileRenamed {
+            old_path: old_path.clone(),
+            new_path: new_path.clone(),
+        });
+
+        self.rebuild_flatten_items_impl(Some(id), None, None);
+        ctx.notify();
     }
 
     /// Cancels a pending edit and discards any changes.

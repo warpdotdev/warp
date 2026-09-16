@@ -10,6 +10,7 @@ use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::ICON_DIMENSIONS;
 use warp_editor::render::element::VerticalExpansionBehavior;
+use warp_util::file::FileId;
 use warp_util::path::LineAndColumnArg;
 #[cfg(feature = "local_fs")]
 use warpui::clipboard::ClipboardContent;
@@ -39,7 +40,7 @@ use super::local_code_editor::{LocalCodeEditorEvent, LocalCodeEditorView};
 use crate::code::editor::scroll::ScrollPosition;
 use crate::code::editor::view::CodeEditorRenderOptions;
 use crate::code::editor_management::CodeEditorStatus;
-use crate::code::global_buffer_model::GlobalBufferModel;
+use crate::code::global_buffer_model::{BufferState, GlobalBufferModel};
 use crate::code::local_code_editor::ShowFindReferencesCard;
 use crate::code::{EditorTabBarDropTargetData, ImmediateSaveError, SaveOutcome, SaveStatus};
 use crate::editor::InteractionState;
@@ -1429,60 +1430,59 @@ impl CodeView {
         }
     }
 
-    /// Update any tabs opened to `old_path` so they now point to `new_path`,
-    /// preserving any unsaved edits.
+    /// Update tabs opened at or below `old_path` to the corresponding location below `new_path`.
     pub fn rename_tabs_with_path(
         &mut self,
         old_path: &Path,
         new_path: &Path,
+        renamed_buffers: &HashMap<FileId, BufferState>,
         ctx: &mut ViewContext<Self>,
     ) {
         for tab in self.tab_group.iter_mut() {
-            if tab.local_path().is_some_and(|path| path == old_path) {
-                tab.location = Some(LocalOrRemotePath::Local(new_path.to_path_buf()));
-                tab.editor_view.update(ctx, |editor, ctx| {
-                    let was_unsaved = editor.has_unsaved_changes(ctx);
+            let Some(tab_path) = tab.local_path() else {
+                continue;
+            };
+            let Ok(relative_path) = tab_path.strip_prefix(old_path) else {
+                continue;
+            };
+            let renamed_path = new_path.join(relative_path);
+            tab.location = Some(LocalOrRemotePath::Local(renamed_path.clone()));
+            tab.editor_view.update(ctx, |editor, ctx| {
+                let was_unsaved = editor.has_unsaved_changes(ctx);
 
-                    // Remap the buffer from old_path to new_path via GlobalBufferModel,
-                    // preserving buffer content and unsaved edits.
-                    if let Some(old_file_id) = editor.file_id() {
-                        let buffer_state = GlobalBufferModel::handle(ctx).update(
-                            ctx,
-                            |model, ctx| {
-                                model.rename(old_file_id, new_path.to_path_buf(), ctx)
-                            },
-                        );
-                        if let Some(buffer_state) = buffer_state {
-                            editor.apply_rename(buffer_state, new_path, ctx);
-                        }
-                    }
+                if let Some(old_file_id) = editor.file_id()
+                    && let Some(buffer_state) = renamed_buffers.get(&old_file_id)
+                {
+                    editor.apply_rename(buffer_state.clone(), &renamed_path, ctx);
+                }
 
-                    if was_unsaved {
-                        let summary = UnsavedStateSummary::for_editor_tab(
-                            Some(new_path.file_name().unwrap().to_string_lossy().to_string()),
-                            vec![CodeEditorStatus::new(true)], /* editor_status(unsaved_changes=true) */
-                            ctx,
-                        );
+                if was_unsaved {
+                    let summary = UnsavedStateSummary::for_editor_tab(
+                        renamed_path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().to_string()),
+                        vec![CodeEditorStatus::new(true)],
+                        ctx,
+                    );
 
-                        let on_save = {
-                            let handle = ctx.handle().clone();
-                            move |ctx: &mut AppContext| {
-                                if let Some(view) = handle.upgrade(ctx) {
-                                    view.update(ctx, |editor, ctx| {
-                                        let _ = editor.save_local(ctx);
-                                    });
-                                }
+                    let on_save = {
+                        let handle = ctx.handle().clone();
+                        move |ctx: &mut AppContext| {
+                            if let Some(view) = handle.upgrade(ctx) {
+                                view.update(ctx, |editor, ctx| {
+                                    let _ = editor.save_local(ctx);
+                                });
                             }
-                        };
+                        }
+                    };
 
-                        summary
-                            .dialog()
-                            .on_save_changes(on_save)
-                            .on_discard_changes(|_| {})
-                            .show(ctx);
-                    }
-                });
-            }
+                    summary
+                        .dialog()
+                        .on_save_changes(on_save)
+                        .on_discard_changes(|_| {})
+                        .show(ctx);
+                }
+            });
         }
 
         self.update_tab_bar_state(ctx);
