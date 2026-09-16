@@ -16,7 +16,7 @@ pub use capture::{
 };
 pub use claude::{CacheCreation, ClaudeUsage, extract_claude};
 pub use codex::{CodexUsage, extract_codex};
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 
 /// Version of the native payload and parser semantics.
 ///
@@ -96,13 +96,24 @@ pub enum ExtractionOutcome {
     Unavailable(ReasonCounts),
 }
 /// Provider-specific native payload under the shared snapshot envelope.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(untagged)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum NativePayload {
     /// Claude response usage, attribution, and tool calls.
     Claude(UsagePayload<ClaudeUsage>),
     /// Codex rollout usage, attribution, and tool calls.
     Codex(UsagePayload<CodexUsage>),
+}
+
+impl Serialize for NativePayload {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Claude(payload) => payload.serialize(serializer),
+            Self::Codex(payload) => payload.serialize(serializer),
+        }
+    }
 }
 /// Usage, attribution breakdowns, and tool calls for one provider.
 #[derive(Clone, Debug, PartialEq, Serialize)]
