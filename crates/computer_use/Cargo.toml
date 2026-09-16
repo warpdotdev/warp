@@ -71,7 +71,12 @@ zbus.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 image.workspace = true
-tokio = { workspace = true, features = ["io-util", "process", "time"] }
+# Windows doesn't have its own video recorder yet (`windows/mod.rs` reuses the no-op
+# `Recorder`), but it now shares `recording_metadata.rs`/`thumbnail.rs` with macOS/Linux for
+# ffmpeg-based duration probing and thumbnail generation, which need `tokio::process::Command`;
+# `uuid` is used by that shared code's test suite (`recording_metadata_tests.rs`) to name
+# ephemeral probe files.
+tokio = { workspace = true, features = ["process"] }
 uuid.workspace = true
 warpui_core.workspace = true
 windows = { workspace = true, features = [
