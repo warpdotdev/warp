@@ -71,12 +71,11 @@ zbus.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 image.workspace = true
-# Windows doesn't have its own video recorder yet (`windows/mod.rs` reuses the no-op
-# `Recorder`), but it now shares `recording_metadata.rs`/`thumbnail.rs` with macOS/Linux for
-# ffmpeg-based duration probing and thumbnail generation, which need `tokio::process::Command`;
-# `uuid` is used by that shared code's test suite (`recording_metadata_tests.rs`) to name
-# ephemeral probe files.
-tokio = { workspace = true, features = ["process"] }
+# The gdigrab video recorder (`windows/recording.rs`) shells out to a supervised ffmpeg
+# subprocess, mirroring `linux/recording.rs`/`mac/recording.rs`: tokio `process`/`time` drive
+# the spawn + finalize timeouts, `io-util` sends ffmpeg its graceful stdin quit command (there's
+# no POSIX signal to send instead), and `uuid` names the ephemeral recording file.
+tokio = { workspace = true, features = ["io-util", "process", "time"] }
 uuid.workspace = true
 warpui_core.workspace = true
 windows = { workspace = true, features = [
