@@ -764,6 +764,20 @@ fn conversation_total_text_shows_em_dash_for_token_only_metadata() {
     );
 }
 
+/// Historical conversations carry a cumulative `credits_spent` without any
+/// per-request or cumulative charged-usage breakdown; that figure is still the
+/// conversation's credits total.
+#[test]
+fn conversation_total_text_falls_back_to_credits_spent() {
+    let mut conversation = AIConversation::new(false, false);
+    conversation.set_credits_spent_for_test(12.5);
+
+    assert_eq!(
+        conversation_total_text(&conversation, UsageDisplayUnit::Credits),
+        "12.5 credits"
+    );
+}
+
 #[test]
 fn conversation_total_text_uses_the_charged_usage_totals() {
     let mut conversation = AIConversation::new(false, false);
@@ -784,6 +798,108 @@ fn conversation_total_text_uses_the_charged_usage_totals() {
         conversation_total_text(&conversation, UsageDisplayUnit::Dollars),
         "$1.00"
     );
+}
+
+/// Builds a restored conversation whose root task holds one `RequestMetadata`
+/// message per element of `charges`.
+fn conversation_with_request_charges(charges: Vec<api::RequestCharges>) -> AIConversation {
+    AIConversation::new_restored(
+        AIConversationId::new(),
+        vec![api::Task {
+            id: "root".to_string(),
+            messages: charges.into_iter().map(request_metadata_message).collect(),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap()
+}
+
+fn primary_agent_charges(charged: api::ChargedUsage) -> api::RequestCharges {
+    api::RequestCharges {
+        usage_by_category: HashMap::from([(PRIMARY_AGENT_CATEGORY.to_string(), charged)]),
+    }
+}
+
+fn inference_usage_with_credits(input_cost_in_credits: f32) -> api::InferenceUsage {
+    api::InferenceUsage {
+        token_cost: Some(api::TokenCost {
+            input_cost_in_credits,
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// The headline total is summed from the same per-request charges the model
+/// rows itemize, so a stale or empty server-side cumulative total can't make
+/// the header read "0 credits" above rows that plainly add up to more.
+#[test]
+fn conversation_total_text_sums_per_request_charges_over_server_total() {
+    let mut conversation = conversation_with_request_charges(vec![
+        primary_agent_charges(api::ChargedUsage {
+            direct_api_inference_usage: HashMap::from([(
+                "claude".to_string(),
+                inference_usage_with_credits(4.0),
+            )]),
+            ..Default::default()
+        }),
+        primary_agent_charges(api::ChargedUsage {
+            direct_api_inference_usage: HashMap::from([(
+                "glm".to_string(),
+                inference_usage_with_credits(0.3),
+            )]),
+            platform_usage_in_credits: 0.5,
+            ..Default::default()
+        }),
+    ]);
+    conversation.set_charged_usage_for_test(Some(ChargedUsageTotals::default()));
+
+    assert_eq!(
+        conversation_total_text(&conversation, UsageDisplayUnit::Credits),
+        "4.8 credits"
+    );
+}
+
+/// A conversation with no platform fee has no "PLATFORM USAGE" section; one
+/// with a fee shows it.
+#[test]
+fn platform_usage_section_is_omitted_when_the_platform_fee_is_zero() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let (_, popover) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            UsagePopoverView::new(None, ctx)
+        });
+        let render_platform_section = |app: &mut App, charged_usage: ChargedUsageTotals| {
+            popover.read(app, |popover, ctx| {
+                popover
+                    .render_platform_usage_section(
+                        Some(&charged_usage),
+                        UsageDisplayUnit::Credits,
+                        Appearance::as_ref(ctx),
+                    )
+                    .map(|section| section.debug_text_content().unwrap_or_default())
+            })
+        };
+
+        assert_eq!(
+            render_platform_section(&mut app, ChargedUsageTotals::default()),
+            None
+        );
+        let with_fee = render_platform_section(
+            &mut app,
+            ChargedUsageTotals {
+                platform_cost_in_credits: 0.5,
+                ..Default::default()
+            },
+        );
+        assert!(
+            with_fee
+                .as_deref()
+                .is_some_and(|text| text.contains("PLATFORM USAGE")),
+            "got {with_fee:?}"
+        );
+    });
 }
 
 fn server_conversation_metadata() -> ServerAIConversationMetadata {

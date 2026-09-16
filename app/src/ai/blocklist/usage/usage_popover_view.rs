@@ -14,12 +14,15 @@ use warp_multi_agent_api as api;
 use warpui::elements::{
     Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss,
     DispatchEventResult, DropShadow, Empty, EventHandler, Expanded, Flex, Hoverable,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
-    ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack, Text,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement,
+    PositionedElementAnchor, PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable,
+    Stack, Text,
 };
 use warpui::platform::Cursor;
 use warpui::text_layout::ClipConfig;
-use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+use warpui::{
+    AppContext, Element, Entity, EntityId, SingletonEntity, TypedActionView, View, ViewContext,
+};
 
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
@@ -29,7 +32,7 @@ use crate::ai::blocklist::view_util::format_credits;
 use crate::ai::llms::LLMPreferences;
 use crate::appearance::Appearance;
 use crate::persistence::model::{
-    FULL_TERMINAL_USE_CATEGORY, ModelTokenUsage, PRIMARY_AGENT_CATEGORY,
+    ChargedUsageTotals, FULL_TERMINAL_USE_CATEGORY, ModelTokenUsage, PRIMARY_AGENT_CATEGORY,
 };
 use crate::settings::UsageDisplayUnit;
 use crate::settings::ai::{AISettings, AISettingsChangedEvent};
@@ -121,6 +124,14 @@ pub struct UsagePopoverView {
     /// instance. The handles must persist across renders: the hover-in delay
     /// never fires on a handle rebuilt every frame.
     hover_states: RefCell<HashMap<String, MouseStateHandle>>,
+    /// Tooltips registered by the current render pass, as `(hover key,
+    /// text)`. The popover is itself an overlay, and a nested overlay opened
+    /// mid-content is painted beneath any sibling painted after it, so the
+    /// tooltip boxes are emitted once at the root after all content instead.
+    registered_tooltips: RefCell<Vec<(String, String)>>,
+    /// Namespaces this popover's `SavePosition` ids in the window-wide
+    /// position cache.
+    view_id: EntityId,
     model_usage_toggle_mouse_state: MouseStateHandle,
     tool_call_summary_toggle_mouse_state: MouseStateHandle,
     response_time_toggle_mouse_state: MouseStateHandle,
@@ -172,6 +183,8 @@ impl UsagePopoverView {
             response_time_section_expanded: true,
             expanded_model_ids: HashSet::new(),
             hover_states: RefCell::new(HashMap::new()),
+            registered_tooltips: RefCell::new(Vec::new()),
+            view_id: ctx.view_id(),
             model_usage_toggle_mouse_state: MouseStateHandle::default(),
             tool_call_summary_toggle_mouse_state: MouseStateHandle::default(),
             response_time_toggle_mouse_state: MouseStateHandle::default(),
@@ -294,21 +307,34 @@ impl UsagePopoverView {
         } else {
             Icon::ChevronRight
         };
-        // Fetched up front (rather than inside the closure below) so the
+        // Built up front (rather than inside the closure below) so the
         // closure never needs to capture `self`.
-        let summary_hover_state = collapsed_summary_tooltip
-            .is_some()
-            .then(|| self.hover_state_for(format!("value:header:{label}")));
+        let summary_element = if expanded {
+            None
+        } else {
+            collapsed_summary.map(|summary| {
+                let element = Text::new(
+                    summary,
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(summary_color)
+                .finish();
+                self.maybe_with_tooltip(
+                    format!("value:header:{label}"),
+                    element,
+                    collapsed_summary_tooltip,
+                )
+            })
+        };
         let label = label.to_string();
         let overline_font_family = appearance.overline_font_family();
         // A couple points larger than the raw overline size so the section
         // headers read more clearly against the row content below them.
         let overline_font_size = appearance.overline_font_size() + 2.;
-        let summary_font_family = appearance.ui_font_family();
-        let summary_font_size = appearance.ui_font_size();
 
         Hoverable::new(mouse_state, move |_state| {
-            let label_element = Text::new(label.clone(), overline_font_family, overline_font_size)
+            let label_element = Text::new(label, overline_font_family, overline_font_size)
                 .with_color(label_color)
                 .finish();
             let icon_element =
@@ -319,20 +345,7 @@ impl UsagePopoverView {
             let mut right = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(6.);
-            if !expanded && let Some(summary) = &collapsed_summary {
-                let summary_element =
-                    Text::new(summary.clone(), summary_font_family, summary_font_size)
-                        .with_color(summary_color)
-                        .finish();
-                let summary_element = match (&summary_hover_state, &collapsed_summary_tooltip) {
-                    (Some(hover_state), Some(tooltip_text)) => with_tooltip(
-                        hover_state.clone(),
-                        summary_element,
-                        tooltip_text.clone(),
-                        appearance,
-                    ),
-                    _ => summary_element,
-                };
+            if let Some(summary_element) = summary_element {
                 right.add_child(summary_element);
             }
             right.add_child(icon_element);
@@ -434,19 +447,19 @@ impl UsagePopoverView {
 
     /// Renders the non-collapsible "PLATFORM USAGE" section: Warp's platform
     /// fee, which unlike inference cost isn't attributable to any single
-    /// model.
-    ///
-    /// Omitted entirely when the server sent no charged usage at all. A charged
-    /// usage whose platform fee is zero renders as a known zero, matching how
-    /// the rest of the popover distinguishes a known zero from an unknown
-    /// figure.
+    /// model. Omitted when the conversation incurred no platform fee.
     fn render_platform_usage_section(
         &self,
-        conversation: &AIConversation,
+        charged_usage: Option<&ChargedUsageTotals>,
         usage_display_unit: UsageDisplayUnit,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
-        let charged_usage = conversation.usage_totals().charged_usage?;
+        let charged_usage = charged_usage?;
+        if charged_usage.platform_cost_in_credits == 0.0
+            && charged_usage.platform_cost_in_cents == 0.0
+        {
+            return None;
+        }
 
         let value = match usage_display_unit {
             UsageDisplayUnit::Credits => format_credits(charged_usage.platform_cost_in_credits),
@@ -480,7 +493,6 @@ impl UsagePopoverView {
             "value:all_models".to_string(),
             all_models_value,
             exact_token_count_tooltip(total_tokens),
-            appearance,
         );
         column.add_child(
             space_between_row()
@@ -586,11 +598,10 @@ impl UsagePopoverView {
             );
         }
 
-        let label_with_tooltip = with_tooltip(
-            self.hover_state_for(format!("label:model:{}", row.key.hover_key())),
+        let label_with_tooltip = self.with_tooltip(
+            format!("label:model:{}", row.key.hover_key()),
             label_row.finish(),
             full_label,
-            appearance,
         );
 
         // `Expanded` bounds the label to the space left after the swatch, so a
@@ -613,7 +624,6 @@ impl UsagePopoverView {
             format!("value:model:{}", row.key.hover_key()),
             value,
             exact_token_count_tooltip(row.tokens),
-            appearance,
         );
         let chevron =
             ConstrainedBox::new(chevron_icon.to_warpui_icon(chevron_color.into()).finish())
@@ -773,7 +783,7 @@ impl UsagePopoverView {
         let value_element = Text::new(value, appearance.ui_font_family(), font_size)
             .with_color(blended_colors::text_main(theme, background))
             .finish();
-        let value_element = self.maybe_with_tooltip(key, value_element, tooltip_text, appearance);
+        let value_element = self.maybe_with_tooltip(key, value_element, tooltip_text);
         space_between_row()
             .with_child(
                 Text::new(label.to_string(), appearance.ui_font_family(), font_size)
@@ -806,13 +816,59 @@ impl UsagePopoverView {
         key: String,
         content: Box<dyn Element>,
         tooltip_text: Option<String>,
-        appearance: &Appearance,
     ) -> Box<dyn Element> {
         match tooltip_text {
-            Some(tooltip_text) => {
-                with_tooltip(self.hover_state_for(key), content, tooltip_text, appearance)
-            }
+            Some(tooltip_text) => self.with_tooltip(key, content, tooltip_text),
             None => content,
+        }
+    }
+
+    fn tooltip_position_id(&self, key: &str) -> String {
+        format!("usage_popover:{}:{key}", self.view_id)
+    }
+
+    /// Marks `content` as the anchor of a hover tooltip showing
+    /// `tooltip_text`. The tooltip box itself is painted by
+    /// [`Self::render_registered_tooltips`] at the root of the popover.
+    fn with_tooltip(
+        &self,
+        key: String,
+        content: Box<dyn Element>,
+        tooltip_text: String,
+    ) -> Box<dyn Element> {
+        let position_id = self.tooltip_position_id(&key);
+        let hover_state = self.hover_state_for(key.clone());
+        self.registered_tooltips
+            .borrow_mut()
+            .push((key, tooltip_text));
+        SavePosition::new(
+            Hoverable::new(hover_state, |_state| content).finish(),
+            &position_id,
+        )
+        .finish()
+    }
+
+    /// Adds the tooltip box of every currently hovered registered anchor to
+    /// `stack`, positioned below the anchor's bottom-left corner.
+    fn render_registered_tooltips(&self, stack: &mut Stack, appearance: &Appearance) {
+        let hover_states = self.hover_states.borrow();
+        for (key, tooltip_text) in self.registered_tooltips.borrow_mut().drain(..) {
+            let is_hovered = hover_states
+                .get(&key)
+                .is_some_and(|state| state.lock().unwrap().is_hovered());
+            if !is_hovered {
+                continue;
+            }
+            stack.add_positioned_overlay_child(
+                render_tooltip_box(tooltip_text, appearance),
+                OffsetPositioning::offset_from_save_position_element(
+                    self.tooltip_position_id(&key),
+                    vec2f(0., 4.),
+                    PositionedElementOffsetBounds::WindowByPosition,
+                    PositionedElementAnchor::BottomLeft,
+                    ChildAnchor::TopLeft,
+                ),
+            );
         }
     }
 
@@ -949,6 +1005,8 @@ impl View for UsagePopoverView {
             |config_key: &str| llm_preferences.custom_endpoint_usage_display_label(config_key);
         let charged_usage_by_key =
             sum_charged_usage_by_key(conversation.all_tasks().flat_map(|task| task.messages()));
+        let charged_totals = conversation_charged_totals(conversation);
+        self.registered_tooltips.borrow_mut().clear();
 
         // Absent sections are skipped rather than rendered empty, so they don't
         // leave the column's inter-section spacing behind as a stray gap.
@@ -961,7 +1019,11 @@ impl View for UsagePopoverView {
                 usage_display_unit,
                 appearance,
             ),
-            self.render_platform_usage_section(conversation, usage_display_unit, appearance),
+            self.render_platform_usage_section(
+                charged_totals.as_ref(),
+                usage_display_unit,
+                appearance,
+            ),
             self.render_tool_call_summary_section(conversation, appearance),
             self.render_response_time_section(conversation, appearance),
         ];
@@ -976,8 +1038,10 @@ impl View for UsagePopoverView {
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
             .with_uniform_padding(12.)
             .finish();
+        let mut content = Stack::new().with_child(content);
+        self.render_registered_tooltips(&mut content, appearance);
 
-        let popover = ConstrainedBox::new(content)
+        let popover = ConstrainedBox::new(content.finish())
             .with_width(POPOVER_WIDTH)
             .finish();
 
@@ -1554,34 +1618,6 @@ fn exact_token_count_tooltip(tokens: u64) -> Option<String> {
     (tokens >= 1000).then(|| format!("{} tokens", tokens.separate_with_commas()))
 }
 
-/// Wraps `content` in a hover tooltip showing `tooltip_text` below its
-/// bottom-left corner, using the given (persistent, per-instance)
-/// `hover_state` so the hover-in delay can actually fire -- see
-/// `UsagePopoverView::hover_states`' docs for why persistence matters.
-fn with_tooltip(
-    hover_state: MouseStateHandle,
-    content: Box<dyn Element>,
-    tooltip_text: String,
-    appearance: &Appearance,
-) -> Box<dyn Element> {
-    Hoverable::new(hover_state, |state| {
-        let mut stack = Stack::new().with_child(content);
-        if state.is_hovered() {
-            stack.add_positioned_overlay_child(
-                render_tooltip_box(tooltip_text, appearance),
-                OffsetPositioning::offset_from_parent(
-                    vec2f(0., 4.),
-                    ParentOffsetBounds::WindowByPosition,
-                    ParentAnchor::BottomLeft,
-                    ChildAnchor::TopLeft,
-                ),
-            );
-        }
-        stack.finish()
-    })
-    .finish()
-}
-
 /// Renders a small opaque tooltip box containing `text`.
 ///
 /// The alpha is forced to 255 because theme surfaces can carry a reduced alpha
@@ -1611,22 +1647,54 @@ fn render_tooltip_box(text: String, appearance: &Appearance) -> Box<dyn Element>
     .finish()
 }
 
-/// The conversation-level total from the usage metadata: the cumulative
-/// charged usage when known, falling back to the server-seeded provider cost.
-/// A conversation with neither renders an em dash rather than a fake zero.
+/// The conversation's cumulative charged usage, summed from the persisted
+/// per-request `RequestMetadata` charges -- the same source the per-model
+/// rows itemize, so the headline total always equals what the rows add up
+/// to. Falls back to the server's cumulative `total_charges` when no request
+/// has persisted charges (e.g. a legacy conversation).
+fn conversation_charged_totals(conversation: &AIConversation) -> Option<ChargedUsageTotals> {
+    let mut per_request_charges = conversation
+        .all_tasks()
+        .flat_map(|task| task.messages())
+        .filter_map(|message| match message.message.as_ref() {
+            Some(api::message::Message::RequestMetadata(metadata)) => metadata.charges.as_ref(),
+            _ => None,
+        })
+        .map(ChargedUsageTotals::from)
+        .peekable();
+    if per_request_charges.peek().is_none() {
+        return conversation.usage_totals().charged_usage;
+    }
+    Some(
+        per_request_charges.fold(ChargedUsageTotals::default(), |mut acc, totals| {
+            acc += totals;
+            acc
+        }),
+    )
+}
+
+/// The conversation-level total: [`conversation_charged_totals`] when known,
+/// falling back to the server-seeded provider cost for dollars and to the
+/// metadata's cumulative `credits_spent` for credits. A conversation with
+/// neither renders an em dash rather than a fake zero.
 pub(crate) fn conversation_total_text(
     conversation: &AIConversation,
     usage_display_unit: UsageDisplayUnit,
 ) -> String {
+    let charged_totals = conversation_charged_totals(conversation);
     let usage_totals = conversation.usage_totals();
     match usage_display_unit {
-        UsageDisplayUnit::Dollars => usage_totals
-            .total_cost_in_cents()
+        UsageDisplayUnit::Dollars => charged_totals
+            .map(|totals| totals.total_cost_in_cents())
+            .or(usage_totals.total_cost_in_cents())
             .map(format_dollars)
             .unwrap_or_else(|| EM_DASH.to_string()),
-        UsageDisplayUnit::Credits => usage_totals
-            .charged_usage
-            .map(|charged_usage| format_credits(charged_usage.total_cost_in_credits()))
+        UsageDisplayUnit::Credits => charged_totals
+            .map(|totals| totals.total_cost_in_credits())
+            // `credits_spent` is a plain float, so zero is indistinguishable from
+            // "never reported"; only a positive figure counts as known.
+            .or_else(|| (usage_totals.credits_spent > 0.0).then_some(usage_totals.credits_spent))
+            .map(format_credits)
             .unwrap_or_else(|| EM_DASH.to_string()),
     }
 }
