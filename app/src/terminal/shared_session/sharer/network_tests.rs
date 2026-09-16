@@ -1,4 +1,5 @@
 use std::convert::Infallible;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -6,8 +7,9 @@ use std::time::Duration;
 use async_channel::Sender;
 use byte_unit::Byte;
 use futures::channel::mpsc;
+use futures_util::future::BoxFuture;
 use futures_util::stream::AbortHandle;
-use futures_util::{SinkExt as _, StreamExt as _, future, sink, stream};
+use futures_util::{FutureExt as _, SinkExt as _, StreamExt as _, future, sink, stream};
 use instant::Instant;
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::{
@@ -28,8 +30,8 @@ use websocket::{Error as WebsocketError, Message, Sink, Stream, WebsocketMessage
 use super::{
     AMBIENT_CREATE_SESSION_MAX_ATTEMPTS, ConfirmedReconnection, MAX_PRE_RECONNECT_BYTES,
     MAX_PRE_RECONNECT_MESSAGES, Network, PTY_READS_BATCH_THRESHOLD, PtyBytesBatchStatus, Stage,
-    StartupFailure, StartupRetryState, confirm_reconnection, retry_reconnection,
-    share_with_team_uid_for_init_payload, startup_max_attempts,
+    StartupFailure, StartupRetryState, confirm_reconnection, share_with_team_uid_for_init_payload,
+    startup_max_attempts,
 };
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
@@ -86,90 +88,100 @@ fn reconnected_message() -> Message {
     )
 }
 
-async fn mock_reconnect(
-    messages: Vec<Result<Message, WebsocketError>>,
-    keep_open: bool,
-) -> anyhow::Result<ConfirmedReconnection<impl Sink, impl Stream>> {
-    let tail = if keep_open {
-        stream::pending().boxed()
-    } else {
-        stream::empty().boxed()
-    };
-    confirm_reconnection(
-        discard_sink(),
-        stream::iter(messages).chain(tail),
-        reconnect_payload(),
-    )
-    .await
+type MockReconnection = ConfirmedReconnection<Pin<Box<dyn Sink>>, Pin<Box<dyn Stream>>>;
+type ReconnectAttempt = BoxFuture<'static, anyhow::Result<MockReconnection>>;
+
+fn mock_reconnect(stream: impl Stream) -> ReconnectAttempt {
+    mock_reconnect_with_sink(discard_sink(), stream)
+}
+
+fn mock_reconnect_with_sink(sink: impl Sink, stream: impl Stream) -> ReconnectAttempt {
+    let sink: Pin<Box<dyn Sink>> = Box::pin(sink);
+    let stream: Pin<Box<dyn Stream>> = Box::pin(stream);
+    confirm_reconnection(sink, stream, reconnect_payload()).boxed()
+}
+
+fn confirmed_reconnect() -> ReconnectAttempt {
+    mock_reconnect(stream::iter([Ok(reconnected_message())]).chain(stream::pending()))
+}
+
+fn start_scripted_reconnect(
+    app: &mut App,
+    script: Vec<ReconnectAttempt>,
+    retry_strategy: RetryOption,
+    attempt_timeout: Duration,
+    cycle_timeout: Duration,
+) -> (ModelHandle<Network>, Arc<AtomicUsize>) {
+    let (network, _) = create_network(app, true);
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mut script = script.into_iter();
+    network.update(app, |network, ctx| {
+        let attempts = attempts.clone();
+        network.start_reconnect_task(
+            move || {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                script.next().expect("Unexpected reconnect attempt")
+            },
+            retry_strategy,
+            attempt_timeout,
+            cycle_timeout,
+            ctx,
+        );
+    });
+    (network, attempts)
 }
 
 #[test]
-fn test_reconnect_retries_eof_and_error_before_ack() {
-    for fail_with_error in [false, true] {
-        App::test((), move |mut app| async move {
-            let (network, _) = create_network(&mut app, true);
-            let attempts = Arc::new(AtomicUsize::new(0));
-            network.update(&mut app, |network, ctx| {
-                let attempts = attempts.clone();
-                network.start_reconnect_task(
-                    move || {
-                        let first_attempt = attempts.fetch_add(1, Ordering::SeqCst) == 0;
-                        let messages = if first_attempt {
-                            if fail_with_error {
-                                vec![Err(anyhow::anyhow!("socket error").into())]
-                            } else {
-                                vec![]
-                            }
-                        } else {
-                            vec![Ok(reconnected_message())]
-                        };
-                        mock_reconnect(messages, !first_attempt)
-                    },
-                    RetryOption::linear(Duration::from_millis(1), 1),
-                    Duration::from_secs(1),
-                    Duration::from_secs(2),
-                    ctx,
-                );
-            });
-            assert_eventually!(
-                network.read(&app, |network, _| matches!(
-                    network.stage,
-                    Stage::StartedSuccessfully { .. }
-                )),
-                "EOF/error before acknowledgement should retry and reconnect"
-            );
-            assert_eq!(attempts.load(Ordering::SeqCst), 2);
-        });
-    }
+fn test_reconnect_retries_eof_before_ack() {
+    App::test((), |mut app| async move {
+        let (network, attempts) = start_scripted_reconnect(
+            &mut app,
+            vec![mock_reconnect(stream::empty()), confirmed_reconnect()],
+            RetryOption::linear(Duration::from_millis(1), 1),
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+        );
+        assert_eventually!(
+            network.read(&app, |network, _| network.is_connected()),
+            "EOF before acknowledgement should retry and reconnect"
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    });
+}
+
+#[test]
+fn test_reconnect_retries_socket_error_before_ack() {
+    App::test((), |mut app| async move {
+        let (network, attempts) = start_scripted_reconnect(
+            &mut app,
+            vec![
+                mock_reconnect(stream::iter([Err(anyhow::anyhow!("socket error").into())])),
+                confirmed_reconnect(),
+            ],
+            RetryOption::linear(Duration::from_millis(1), 1),
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+        );
+        assert_eventually!(
+            network.read(&app, |network, _| network.is_connected()),
+            "Socket error before acknowledgement should retry and reconnect"
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    });
 }
 
 #[test]
 fn test_reconnect_retries_ack_timeout() {
     App::test((), |mut app| async move {
-        let (network, _) = create_network(&mut app, true);
-        let attempts = Arc::new(AtomicUsize::new(0));
-        network.update(&mut app, |network, ctx| {
-            let attempts = attempts.clone();
-            network.start_reconnect_task(
-                move || {
-                    let messages = if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-                        vec![]
-                    } else {
-                        vec![Ok(reconnected_message())]
-                    };
-                    mock_reconnect(messages, true)
-                },
-                RetryOption::linear(Duration::from_millis(1), 1),
-                Duration::from_millis(20),
-                Duration::from_secs(2),
-                ctx,
-            );
-        });
+        let (network, attempts) = start_scripted_reconnect(
+            &mut app,
+            vec![mock_reconnect(stream::pending()), confirmed_reconnect()],
+            RetryOption::linear(Duration::from_millis(1), 1),
+            Duration::from_millis(20),
+            Duration::from_secs(2),
+        );
         assert_eventually!(
-            network.read(&app, |network, _| matches!(
-                network.stage,
-                Stage::StartedSuccessfully { .. }
-            )),
+            network.read(&app, |network, _| network.is_connected()),
             "Missing acknowledgement should time out and retry"
         );
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
@@ -178,92 +190,82 @@ fn test_reconnect_retries_ack_timeout() {
 
 #[test]
 fn test_reconnect_transport_timeout_retries_within_cycle() {
-    App::test((), |_| async move {
-        let mut attempts = 0;
-        let result = retry_reconnection(
-            || {
-                attempts += 1;
-                let first_attempt = attempts == 1;
-                async move {
-                    if first_attempt {
-                        future::pending::<()>().await;
-                    }
-                    anyhow::Ok(())
-                }
-            },
+    App::test((), |mut app| async move {
+        let (network, attempts) = start_scripted_reconnect(
+            &mut app,
+            vec![future::pending().boxed(), confirmed_reconnect()],
             RetryOption::linear(Duration::from_millis(1), 1),
             Duration::from_millis(20),
             Duration::from_secs(2),
-        )
-        .await;
-        assert!(result.is_ok());
-        assert_eq!(attempts, 2);
+        );
+        assert_eventually!(
+            network.read(&app, |network, _| network.is_connected()),
+            "A stalled transport connection should time out and retry"
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
     });
 }
 
 #[test]
-fn test_reconnect_send_error_and_timeout_are_retryable() {
+fn test_reconnect_send_error_is_retryable() {
     App::test((), |mut app| async move {
-        for stall_send in [false, true] {
-            let (network, _) = create_network(&mut app, true);
-            let attempts = Arc::new(AtomicUsize::new(0));
-            network.update(&mut app, |network, ctx| {
-                let attempts = attempts.clone();
-                network.start_reconnect_task(
-                    move || {
-                        let first_attempt = attempts.fetch_add(1, Ordering::SeqCst) == 0;
-                        async move {
-                            let sink = Box::pin(discard_sink().with(move |message| async move {
-                                if first_attempt {
-                                    if stall_send {
-                                        future::pending::<()>().await;
-                                    }
-                                    return Err(anyhow::anyhow!("send failed").into());
-                                }
-                                Ok(message)
-                            }));
-                            confirm_reconnection(
-                                sink,
-                                stream::iter(vec![Ok(reconnected_message())])
-                                    .chain(stream::pending()),
-                                reconnect_payload(),
-                            )
-                            .await
-                        }
-                    },
-                    RetryOption::linear(Duration::from_millis(1), 1),
-                    Duration::from_millis(20),
-                    Duration::from_secs(2),
-                    ctx,
-                );
-            });
-            assert_eventually!(
-                network.read(&app, |network, _| network.is_connected()),
-                "A failed or stalled reconnect send should retry"
-            );
-            assert_eq!(attempts.load(Ordering::SeqCst), 2);
-        }
+        let failed_sink =
+            discard_sink().with(|_| future::err(anyhow::anyhow!("send failed").into()));
+        let (network, attempts) = start_scripted_reconnect(
+            &mut app,
+            vec![
+                mock_reconnect_with_sink(failed_sink, stream::pending()),
+                confirmed_reconnect(),
+            ],
+            RetryOption::linear(Duration::from_millis(1), 1),
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+        );
+        assert_eventually!(
+            network.read(&app, |network, _| network.is_connected()),
+            "A failed reconnect send should retry"
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    });
+}
+
+#[test]
+fn test_reconnect_send_timeout_is_retryable() {
+    App::test((), |mut app| async move {
+        let stalled_sink =
+            discard_sink().with(|_| future::pending::<Result<Message, WebsocketError>>());
+        let (network, attempts) = start_scripted_reconnect(
+            &mut app,
+            vec![
+                mock_reconnect_with_sink(stalled_sink, stream::pending()),
+                confirmed_reconnect(),
+            ],
+            RetryOption::linear(Duration::from_millis(1), 1),
+            Duration::from_millis(20),
+            Duration::from_secs(2),
+        );
+        assert_eventually!(
+            network.read(&app, |network, _| network.is_connected()),
+            "A stalled reconnect send should time out and retry"
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
     });
 }
 
 #[test]
 fn test_reconnect_attempt_budget_exhaustion_finishes_session() {
     App::test((), |mut app| async move {
-        let (network, _) = create_network(&mut app, true);
-        let attempts = Arc::new(AtomicUsize::new(0));
-        network.update(&mut app, |network, ctx| {
-            let attempts = attempts.clone();
-            network.start_reconnect_task(
-                move || {
-                    attempts.fetch_add(1, Ordering::SeqCst);
-                    mock_reconnect(vec![], false)
-                },
-                RetryOption::linear(Duration::from_millis(1), 2),
-                Duration::from_secs(1),
-                Duration::from_secs(2),
-                ctx,
-            );
-        });
+        let (network, attempts) = start_scripted_reconnect(
+            &mut app,
+            vec![
+                mock_reconnect(stream::empty()),
+                mock_reconnect(stream::empty()),
+                mock_reconnect(stream::empty()),
+            ],
+            RetryOption::linear(Duration::from_millis(1), 2),
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+        );
         assert_eventually!(
             network.read(&app, |network, _| matches!(network.stage, Stage::Finished)),
             "Exhausting reconnect retries should finish rather than strand the session"
@@ -274,56 +276,51 @@ fn test_reconnect_attempt_budget_exhaustion_finishes_session() {
 }
 
 #[test]
-fn test_reconnect_cycle_deadline_includes_backoff_and_transport() {
+fn test_reconnect_cycle_deadline_includes_backoff() {
     App::test((), |mut app| async move {
-        for stall_transport in [false, true] {
-            let (network, _) = create_network(&mut app, true);
-            let attempts = Arc::new(AtomicUsize::new(0));
-            network.update(&mut app, |network, ctx| {
-                let attempts = attempts.clone();
-                network.start_reconnect_task(
-                    move || {
-                        attempts.fetch_add(1, Ordering::SeqCst);
-                        async move {
-                            if stall_transport {
-                                future::pending::<()>().await;
-                            }
-                            mock_reconnect(vec![], false).await
-                        }
-                    },
-                    RetryOption::linear(Duration::from_secs(1), 18),
-                    Duration::from_secs(1),
-                    Duration::from_millis(20),
-                    ctx,
-                );
-            });
-            assert_eventually!(
-                network.read(&app, |network, _| matches!(network.stage, Stage::Finished)),
-                "Cycle deadline should end reconnect even during transport/backoff"
-            );
-            assert_eq!(attempts.load(Ordering::SeqCst), 1);
-        }
+        let (network, attempts) = start_scripted_reconnect(
+            &mut app,
+            vec![mock_reconnect(stream::empty())],
+            RetryOption::linear(Duration::from_secs(1), 18),
+            Duration::from_secs(1),
+            Duration::from_millis(20),
+        );
+        assert_eventually!(
+            network.read(&app, |network, _| matches!(network.stage, Stage::Finished)),
+            "Cycle deadline should end reconnect during backoff"
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    });
+}
+
+#[test]
+fn test_reconnect_cycle_deadline_includes_transport() {
+    App::test((), |mut app| async move {
+        let (network, attempts) = start_scripted_reconnect(
+            &mut app,
+            vec![future::pending().boxed()],
+            RetryOption::linear(Duration::from_secs(1), 18),
+            Duration::from_secs(1),
+            Duration::from_millis(20),
+        );
+        assert_eventually!(
+            network.read(&app, |network, _| matches!(network.stage, Stage::Finished)),
+            "Cycle deadline should end reconnect during transport connection"
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
     });
 }
 
 #[test]
 fn test_end_session_cancels_reconnect_backoff() {
     App::test((), |mut app| async move {
-        let (network, _) = create_network(&mut app, true);
-        let attempts = Arc::new(AtomicUsize::new(0));
-        network.update(&mut app, |network, ctx| {
-            let attempts = attempts.clone();
-            network.start_reconnect_task(
-                move || {
-                    attempts.fetch_add(1, Ordering::SeqCst);
-                    mock_reconnect(vec![], false)
-                },
-                RetryOption::linear(Duration::from_millis(100), 18),
-                Duration::from_secs(1),
-                Duration::from_secs(2),
-                ctx,
-            );
-        });
+        let (network, attempts) = start_scripted_reconnect(
+            &mut app,
+            vec![mock_reconnect(stream::empty())],
+            RetryOption::linear(Duration::from_millis(100), 18),
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+        );
         assert_eventually!(
             attempts.load(Ordering::SeqCst) == 1,
             "First attempt should start"
@@ -345,15 +342,12 @@ fn test_reconnect_buffers_pre_ack_messages_and_preserves_remaining_stream() {
         let buffered = DownstreamMessage::EventsProcessedAck {
             latest_processed_event_no: 1,
         };
-        let connection = mock_reconnect(
-            vec![
-                Ok(Message::new_binary(vec![1])),
-                Ok(Message::new(buffered.to_json().unwrap())),
-                Ok(reconnected_message()),
-                Ok(Message::new(buffered.to_json().unwrap())),
-            ],
-            false,
-        )
+        let connection = mock_reconnect(stream::iter([
+            Ok(Message::new_binary(vec![1])),
+            Ok(Message::new(buffered.to_json().unwrap())),
+            Ok(reconnected_message()),
+            Ok(Message::new(buffered.to_json().unwrap())),
+        ]))
         .await
         .unwrap();
         assert_eq!(connection.buffered_messages.len(), 1);
@@ -367,63 +361,102 @@ fn test_reconnect_buffers_pre_ack_messages_and_preserves_remaining_stream() {
 }
 
 #[test]
-fn test_reconnect_pre_ack_buffer_is_bounded_by_count_and_bytes() {
+fn test_reconnect_pre_ack_buffer_rejects_message_count_over_limit() {
     App::test((), |_| async move {
-        for messages in [
-            (0..=MAX_PRE_RECONNECT_MESSAGES)
-                .map(|_| Ok(Message::new("{}".to_string())))
-                .collect(),
-            vec![Ok(Message::new("x".repeat(MAX_PRE_RECONNECT_BYTES + 1)))],
-        ] {
-            let error = mock_reconnect(messages, false).await.err().unwrap();
-            assert!(error.to_string().contains("Too many messages"));
-        }
-        for mut messages in [
-            (0..MAX_PRE_RECONNECT_MESSAGES)
-                .map(|_| Ok(Message::new("{}".to_string())))
-                .collect::<Vec<_>>(),
-            vec![Ok(Message::new("x".repeat(MAX_PRE_RECONNECT_BYTES)))],
-        ] {
-            messages.push(Ok(reconnected_message()));
-            assert!(mock_reconnect(messages, false).await.is_ok());
-        }
+        let messages = (0..=MAX_PRE_RECONNECT_MESSAGES).map(|_| Ok(Message::new("{}".to_string())));
+        let error = mock_reconnect(stream::iter(messages)).await.err().unwrap();
+        assert!(error.to_string().contains("Too many messages"));
     });
 }
 
 #[test]
-fn test_explicit_rejection_and_termination_do_not_retry() {
+fn test_reconnect_pre_ack_buffer_accepts_message_count_at_limit() {
+    App::test((), |_| async move {
+        let messages = (0..MAX_PRE_RECONNECT_MESSAGES).map(|_| Ok(Message::new("{}".to_string())));
+        let connection =
+            mock_reconnect(stream::iter(messages).chain(stream::iter([Ok(reconnected_message())])))
+                .await
+                .unwrap();
+        assert_eq!(
+            connection.buffered_messages.len(),
+            MAX_PRE_RECONNECT_MESSAGES
+        );
+    });
+}
+
+#[test]
+fn test_reconnect_pre_ack_buffer_rejects_byte_count_over_limit() {
+    App::test((), |_| async move {
+        let error = mock_reconnect(stream::iter([Ok(Message::new(
+            "x".repeat(MAX_PRE_RECONNECT_BYTES + 1),
+        ))]))
+        .await
+        .err()
+        .unwrap();
+        assert!(error.to_string().contains("Too many messages"));
+    });
+}
+
+#[test]
+fn test_reconnect_pre_ack_buffer_accepts_byte_count_at_limit() {
+    App::test((), |_| async move {
+        let connection = mock_reconnect(stream::iter([
+            Ok(Message::new("x".repeat(MAX_PRE_RECONNECT_BYTES))),
+            Ok(reconnected_message()),
+        ]))
+        .await
+        .unwrap();
+        assert_eq!(connection.buffered_messages.len(), 1);
+        assert_eq!(
+            connection.buffered_messages[0].text().unwrap().len(),
+            MAX_PRE_RECONNECT_BYTES
+        );
+    });
+}
+
+#[test]
+fn test_explicit_rejection_does_not_retry() {
     App::test((), |mut app| async move {
-        for rejected in [false, true] {
-            let (network, _) = create_network(&mut app, true);
-            let attempts = Arc::new(AtomicUsize::new(0));
-            network.update(&mut app, |network, ctx| {
-                let attempts = attempts.clone();
-                network.start_reconnect_task(
-                    move || {
-                        attempts.fetch_add(1, Ordering::SeqCst);
-                        let response = if rejected {
-                            DownstreamMessage::FailedToReconnect {
-                                reason: ReconnectionFailedReason::SessionNotFound,
-                            }
-                        } else {
-                            DownstreamMessage::SessionTerminated {
-                                reason: SessionTerminatedReason::ExceededSizeLimit,
-                            }
-                        };
-                        mock_reconnect(vec![Ok(Message::new(response.to_json().unwrap()))], false)
-                    },
-                    RetryOption::linear(Duration::from_millis(1), 18),
-                    Duration::from_secs(1),
-                    Duration::from_secs(2),
-                    ctx,
-                );
-            });
-            assert_eventually!(
-                network.read(&app, |network, _| matches!(network.stage, Stage::Finished)),
-                "Explicit termination must be terminal"
-            );
-            assert_eq!(attempts.load(Ordering::SeqCst), 1);
-        }
+        let response = DownstreamMessage::FailedToReconnect {
+            reason: ReconnectionFailedReason::SessionNotFound,
+        };
+        let (network, attempts) = start_scripted_reconnect(
+            &mut app,
+            vec![mock_reconnect(stream::iter([Ok(Message::new(
+                response.to_json().unwrap(),
+            ))]))],
+            RetryOption::linear(Duration::from_millis(1), 18),
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+        );
+        assert_eventually!(
+            network.read(&app, |network, _| matches!(network.stage, Stage::Finished)),
+            "Explicit rejection must be terminal"
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    });
+}
+
+#[test]
+fn test_explicit_termination_does_not_retry() {
+    App::test((), |mut app| async move {
+        let response = DownstreamMessage::SessionTerminated {
+            reason: SessionTerminatedReason::ExceededSizeLimit,
+        };
+        let (network, attempts) = start_scripted_reconnect(
+            &mut app,
+            vec![mock_reconnect(stream::iter([Ok(Message::new(
+                response.to_json().unwrap(),
+            ))]))],
+            RetryOption::linear(Duration::from_millis(1), 18),
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+        );
+        assert_eventually!(
+            network.read(&app, |network, _| matches!(network.stage, Stage::Finished)),
+            "Explicit termination must be terminal"
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
     });
 }
 
