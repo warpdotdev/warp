@@ -3,7 +3,7 @@
 //! Exercises the `NSString::alloc(nil).init_str(...)` → `make_nsstring(...)` conversions
 //! applied to `pasteboard_type_for_image_mime_type` and related clipboard
 //! helpers. The helper is shared by every retained-NSString site in this file
-//! (6 in `read_image_data_from_pasteboard`, 2 in `Clipboard::write`, and this
+//! (7 in `read_image_data_from_pasteboard`, 2 in `Clipboard::write`, and this
 //! one in `pasteboard_type_for_image_mime_type`), so it is representative for
 //! the whole file.
 //!
@@ -22,8 +22,11 @@
 //! and measure peak RSS with `/usr/bin/time -l`.
 use cocoa::base::nil;
 use cocoa::foundation::NSAutoreleasePool;
+use objc2_app_kit::NSPasteboard;
+use objc2_foundation::{NSArray, NSData, ns_string};
 
-use super::pasteboard_type_for_image_mime_type;
+use super::{Clipboard, pasteboard_type_for_image_mime_type};
+use crate::Clipboard as _;
 
 /// Number of outer pool cycles. Each cycle creates an `NSAutoreleasePool`,
 /// runs the inner loop, then drains. On master the retained NSStrings survive
@@ -57,5 +60,26 @@ fn pasteboard_type_for_image_mime_type_memory_behavior() {
             }
             pool.drain();
         }
+    }
+}
+
+#[test]
+fn reads_tiff_data_from_unique_pasteboard() {
+    let bytes = [0x49, 0x49, 0x2A, 0x00];
+
+    unsafe {
+        let pasteboard = NSPasteboard::pasteboardWithUniqueName();
+        let tiff_type = ns_string!("public.tiff");
+        pasteboard.declareTypes_owner(&NSArray::from_slice(&[tiff_type]), None);
+        let data = NSData::with_bytes(&bytes);
+        assert!(pasteboard.setData_forType(Some(&data), tiff_type));
+
+        let mut clipboard = Clipboard(pasteboard);
+        let content = clipboard.read();
+        let images = content.images.expect("TIFF image data should be present");
+
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].mime_type, "image/tiff");
+        assert_eq!(images[0].data.as_slice(), &bytes);
     }
 }

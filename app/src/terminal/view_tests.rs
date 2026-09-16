@@ -8685,7 +8685,7 @@ fn drag_drop_image_in_cli_agent_long_running_command_pastes_via_clipboard() {
 
 #[test]
 fn paste_raw_image_clipboard_in_cli_agent_sends_correct_bytes() {
-    fn run_for_agent(agent: CLIAgent, mime_type: &'static str, data: Vec<u8>) {
+    fn run_for_agent(agent: CLIAgent) {
         App::test((), move |mut app| async move {
             initialize_app_for_terminal_view(&mut app);
             let _agent_view = FeatureFlag::AgentView.override_enabled(true);
@@ -8732,8 +8732,8 @@ fn paste_raw_image_clipboard_in_cli_agent_sends_correct_bytes() {
                 // Write image-only data to the clipboard (no text, no paths).
                 ctx.clipboard().write(ClipboardContent {
                     images: Some(vec![warpui::clipboard::ImageData {
-                        data,
-                        mime_type: mime_type.to_string(),
+                        data: vec![0x89, 0x50, 0x4E, 0x47], // PNG magic bytes
+                        mime_type: "image/png".to_string(),
                         filename: None,
                     }]),
                     ..Default::default()
@@ -8765,20 +8765,9 @@ fn paste_raw_image_clipboard_in_cli_agent_sends_correct_bytes() {
         })
     }
 
-    run_for_agent(CLIAgent::Claude, "image/png", vec![0x89, 0x50, 0x4E, 0x47]);
-    run_for_agent(
-        CLIAgent::OpenCode,
-        "image/png",
-        vec![0x89, 0x50, 0x4E, 0x47],
-    );
-    run_for_agent(CLIAgent::Codex, "image/png", vec![0x89, 0x50, 0x4E, 0x47]);
-    run_for_agent(CLIAgent::Claude, "image/tiff", vec![0x49, 0x49, 0x2A, 0x00]);
-    run_for_agent(
-        CLIAgent::OpenCode,
-        "image/tiff",
-        vec![0x49, 0x49, 0x2A, 0x00],
-    );
-    run_for_agent(CLIAgent::Codex, "image/tiff", vec![0x49, 0x49, 0x2A, 0x00]);
+    run_for_agent(CLIAgent::Claude);
+    run_for_agent(CLIAgent::OpenCode);
+    run_for_agent(CLIAgent::Codex);
 }
 
 #[test]
