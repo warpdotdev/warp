@@ -157,41 +157,6 @@ fn builds_full_virtual_desktop_capture_command() {
 }
 
 #[tokio::test]
-async fn probe_accepts_only_successful_gdigrab_help() {
-    let usable = write_batch(
-        "probe-usable",
-        "echo Demuxer gdigrab [GDI API Windows frame grabber]\r\nexit /b 0",
-    );
-    verify_gdigrab_available(&usable).await.unwrap();
-
-    let missing = write_batch(
-        "probe-missing",
-        "echo No matching demuxer is available\r\nexit /b 0",
-    );
-    let error = verify_gdigrab_available(&missing).await.unwrap_err();
-    assert!(matches!(error, RecordingError::Environment { .. }));
-    assert!(error.to_string().contains("gdigrab"));
-
-    let failed = write_batch("probe-failed", "echo probe failed 1>&2\r\nexit /b 7");
-    let error = verify_gdigrab_available(&failed).await.unwrap_err();
-    assert!(matches!(error, RecordingError::Environment { .. }));
-    assert!(error.to_string().contains("status"));
-
-    for path in [usable, missing, failed] {
-        let _ = std::fs::remove_file(path);
-    }
-}
-
-#[tokio::test]
-async fn probe_reports_missing_ffmpeg_as_environment_error() {
-    let error = verify_gdigrab_available(&temp_path("missing", "exe"))
-        .await
-        .unwrap_err();
-    assert!(matches!(error, RecordingError::Environment { .. }));
-    assert!(error.to_string().contains("ffmpeg"));
-}
-
-#[tokio::test]
 async fn readiness_waits_for_output_growth() {
     let path = temp_path("delayed-output", "mp4");
     let mut process = recording_process("delayed-output", &path, Stdio::null());

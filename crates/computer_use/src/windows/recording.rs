@@ -51,7 +51,6 @@ impl Recorder {
 #[async_trait]
 impl crate::Recorder for Recorder {
     async fn start(&self, config: RecordingConfig) -> Result<RecordingHandle, RecordingError> {
-        verify_gdigrab_available(&self.ffmpeg).await?;
         let geometry = query_virtual_screen_geometry()?;
         let (path, log_path, log_file) = new_recording_path()?;
         let command = new_ffmpeg_capture_command(&self.ffmpeg, &config, geometry);
@@ -150,40 +149,6 @@ fn normalize_virtual_screen_geometry(
         width,
         height,
     })
-}
-
-async fn verify_gdigrab_available(ffmpeg: &Path) -> Result<(), RecordingError> {
-    let output = Command::new(ffmpeg)
-        .args(["-hide_banner", "-h", "demuxer=gdigrab"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|error| RecordingError::Environment {
-            reason: format!("failed to launch ffmpeg for gdigrab probe: {error}"),
-        })?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let identifies_gdigrab = stdout.lines().chain(stderr.lines()).any(|line| {
-        line.trim()
-            .to_ascii_lowercase()
-            .starts_with("demuxer gdigrab")
-    });
-    if output.status.success() && identifies_gdigrab {
-        return Ok(());
-    }
-
-    let diagnostic = diagnostic_tail(&format!("{stdout}\n{stderr}"));
-    let reason = if output.status.success() {
-        format!("ffmpeg does not expose the gdigrab input demuxer{diagnostic}")
-    } else {
-        format!(
-            "ffmpeg gdigrab probe exited with status {}{diagnostic}",
-            output.status
-        )
-    };
-    Err(RecordingError::Environment { reason })
 }
 
 fn new_recording_path() -> Result<(PathBuf, PathBuf, File), RecordingError> {
