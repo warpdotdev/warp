@@ -374,6 +374,52 @@ fn remove_recording_files(path: &Path) {
     let _ = std::fs::remove_file(path.with_extension("log"));
 }
 
+/// Spawns a background thread that kills, reaps, and deletes an abandoned recording process and
+/// its output files, without blocking the caller.
+///
+/// [`RecordingHandle`]'s `Drop` calls this when a recording is torn down without an explicit
+/// `stop` (e.g. a cancelled or panicked caller). `Drop` cannot `.await` a process reap, and
+/// unlike POSIX, Windows won't delete a file that ffmpeg still has open (see [`kill_and_reap`]),
+/// so doing this work synchronously in `drop` would either block the dropping thread until
+/// ffmpeg exits or silently leak the file.
+pub(crate) fn spawn_abandoned_cleanup(mut process: Child, path: PathBuf) {
+    let result = std::thread::Builder::new()
+        .name("recording-cleanup".to_string())
+        .spawn(move || {
+            match process.try_wait() {
+                Ok(Some(_)) => {
+                    remove_recording_files(&path);
+                    return;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    log::warn!("Failed to poll abandoned recording process: {error}");
+                    return;
+                }
+            }
+            if let Err(error) = process.start_kill() {
+                log::warn!("Failed to terminate abandoned recording process: {error}");
+                return;
+            }
+            loop {
+                match process.try_wait() {
+                    Ok(Some(_)) => {
+                        remove_recording_files(&path);
+                        return;
+                    }
+                    Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+                    Err(error) => {
+                        log::warn!("Failed to reap abandoned recording process: {error}");
+                        return;
+                    }
+                }
+            }
+        });
+    if let Err(error) = result {
+        log::warn!("Failed to start abandoned recording cleanup: {error}");
+    }
+}
+
 /// Enriches a capture-start failure with a diagnostic tail from ffmpeg's log, special-casing the
 /// known gdigrab access-denied signature (e.g. a locked or UAC-secured desktop) with an
 /// actionable message.

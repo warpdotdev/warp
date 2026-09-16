@@ -6,10 +6,19 @@ use tokio::process::Command;
 
 use crate::RecordingError;
 
+/// Reads `input`'s finalized duration from ffmpeg's own container inspection, resolving
+/// `ffmpeg` from `PATH`. This is the cross-platform entry point behind
+/// [`crate::finalized_video_duration`], which the app calls after any platform-specific
+/// post-processing (e.g. Linux's segment cut) to report the file's true final duration rather
+/// than the raw capture duration.
 pub(super) async fn video_duration(input: &Path) -> Result<Duration, RecordingError> {
     video_duration_with_ffmpeg(Path::new("ffmpeg"), input).await
 }
 
+/// Same as [`video_duration`], but probes with an explicit `ffmpeg` binary instead of resolving
+/// one from `PATH`. The Windows recorder uses this to validate a just-finalized capture with the
+/// same ffmpeg binary it recorded with, and tests use it to point at a fake ffmpeg script
+/// instead of a real binary.
 pub(super) async fn video_duration_with_ffmpeg(
     ffmpeg: &Path,
     input: &Path,

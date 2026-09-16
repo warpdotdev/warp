@@ -494,58 +494,19 @@ impl RecordingHandle {
 impl Drop for RecordingHandle {
     fn drop(&mut self) {
         if self.cleanup_on_drop {
+            // Windows can't delete a file ffmpeg still has open, and `Drop` can't `.await` a
+            // process reap, so cleanup runs on a background thread there instead of blocking
+            // (or leaking the file) here; see `windows::recording::spawn_abandoned_cleanup`.
+            // POSIX allows unlinking a still-open file, so mac/Linux clean up synchronously.
             #[cfg(windows)]
             if let Some(process) = self.process.take() {
-                spawn_windows_recording_cleanup(process, self.path.clone());
+                imp::spawn_abandoned_cleanup(process, self.path.clone());
                 return;
             }
             let _ = std::fs::remove_file(&self.path);
             let _ = std::fs::remove_file(self.path.with_extension("log"));
         }
     }
-}
-#[cfg(windows)]
-fn spawn_windows_recording_cleanup(mut process: tokio::process::Child, path: PathBuf) {
-    let result = std::thread::Builder::new()
-        .name("recording-cleanup".to_string())
-        .spawn(move || {
-            match process.try_wait() {
-                Ok(Some(_)) => {
-                    remove_abandoned_recording_files(&path);
-                    return;
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    log::warn!("Failed to poll abandoned recording process: {error}");
-                    return;
-                }
-            }
-            if let Err(error) = process.start_kill() {
-                log::warn!("Failed to terminate abandoned recording process: {error}");
-                return;
-            }
-            loop {
-                match process.try_wait() {
-                    Ok(Some(_)) => {
-                        remove_abandoned_recording_files(&path);
-                        return;
-                    }
-                    Ok(None) => std::thread::sleep(Duration::from_millis(10)),
-                    Err(error) => {
-                        log::warn!("Failed to reap abandoned recording process: {error}");
-                        return;
-                    }
-                }
-            }
-        });
-    if let Err(error) = result {
-        log::warn!("Failed to start abandoned recording cleanup: {error}");
-    }
-}
-#[cfg(windows)]
-fn remove_abandoned_recording_files(path: &Path) {
-    let _ = std::fs::remove_file(path);
-    let _ = std::fs::remove_file(path.with_extension("log"));
 }
 
 /// The finalized output of a stopped recording. Carries the local file path and
