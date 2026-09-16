@@ -288,10 +288,10 @@ pub trait Delegate: 'static {
     /// Returns the current microphone access state.
     fn microphone_access_state(&self) -> MicrophoneAccessState;
 
-    /// Returns whether the app is running with a headless rendering backend
-    /// (no GUI or visible output).
-    fn is_headless(&self) -> bool {
-        false
+    /// Returns whether the app is running on a GUI backend that renders to native windows,
+    /// as opposed to a windowless backend with no fonts, native windows, or GPU rendering.
+    fn is_gui(&self) -> bool {
+        true
     }
 }
 
