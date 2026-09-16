@@ -160,6 +160,8 @@ fn normalize_virtual_screen_geometry(
     width: i32,
     height: i32,
 ) -> Result<VirtualScreenGeometry, RecordingError> {
+    // Reject non-positive dimensions before the `as u32` casts below: a negative width/height
+    // would otherwise wrap around to a huge positive value instead of failing here.
     if width <= 0 || height <= 0 {
         return Err(RecordingError::Environment {
             reason: format!("invalid virtual screen dimensions {width}x{height}"),
@@ -168,6 +170,9 @@ fn normalize_virtual_screen_geometry(
     // libx264 with yuv420p requires even dimensions.
     let width = (width as u32) & !1;
     let height = (height as u32) & !1;
+    // A width/height of exactly 1 is positive but odd, so it passes the check above and only
+    // becomes 0 once its low bit is cleared; catch that case separately since it can't be
+    // rejected before rounding.
     if width == 0 || height == 0 {
         return Err(RecordingError::Environment {
             reason: format!("invalid even virtual screen dimensions {width}x{height}"),
