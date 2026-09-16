@@ -829,7 +829,7 @@ impl UsagePopoverView {
         column.add_child(self.render_section_header(
             "TOOL CALL SUMMARY",
             self.tool_call_summary_section_expanded,
-            CollapsedSummary::new(format!("{} tool calls", tool_usage.total_tool_calls())),
+            CollapsedSummary::new(format_tool_call_count(tool_usage.total_tool_calls())),
             SectionToggle {
                 mouse_state: self.tool_call_summary_toggle_mouse_state.clone(),
                 action: UsagePopoverAction::ToggleToolCallSummarySection,
@@ -1681,7 +1681,17 @@ fn format_searches_and_cost(
         UsageDisplayUnit::Credits => format_credits(cost.credits),
         UsageDisplayUnit::Dollars => format_dollars(cost.cost_in_cents),
     };
-    format!("{count} searches / {cost}")
+    match count {
+        1 => format!("1 search / {cost}"),
+        count => format!("{count} searches / {cost}"),
+    }
+}
+
+fn format_tool_call_count(count: i32) -> String {
+    match count {
+        1 => "1 tool call".to_string(),
+        count => format!("{count} tool calls"),
+    }
 }
 
 /// Renders a small rounded color swatch used to key a row to its bar

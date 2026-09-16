@@ -273,18 +273,14 @@ fn model_usage_rows_merges_same_label_custom_rows_and_charges_in_any_order() {
         shared_alias,
     );
 
-    for rows in [&charged_first, &uncharged_first] {
-        assert_eq!(rows.len(), 1);
-        assert_eq!(
-            rows[0].key,
-            ModelRowKey::CustomEndpoint("shared-alias".into())
-        );
-        assert_eq!(rows[0].label, "shared-alias");
-        // The merged row displays its charged usage when it has one, so the
-        // row total matches the breakdown shown when it's expanded.
-        assert_eq!(rows[0].tokens, 100);
-        assert_eq!(rows[0].cost, Some(CostValue::new(0.0, 10.0)));
-    }
+    assert_eq!(charged_first.len(), 1);
+    assert_eq!(
+        charged_first[0].key,
+        ModelRowKey::CustomEndpoint("shared-alias".into())
+    );
+    assert_eq!(charged_first[0].label, "shared-alias");
+    assert_eq!(charged_first[0].tokens, 100);
+    assert_eq!(charged_first[0].cost, Some(CostValue::new(0.0, 10.0)));
     assert_eq!(charged_first, uncharged_first);
 }
 /// including cache buckets and web search.
@@ -422,109 +418,118 @@ fn single_model_usage(
     )])
 }
 
-/// Per-model rows are derived at render time by folding every persisted
-/// request's nested category → model → usage values together. Warp/BYOK
-/// charges fold by server model id; custom-endpoint charges fold by their
-/// upstream `config_key`.
 #[test]
-fn sum_charged_usage_by_key_folds_the_nested_category_and_usage_type_maps() {
-    #[allow(clippy::type_complexity)]
-    let cases: [(&str, Vec<api::Message>, Vec<(ModelChargeKey, u64, f32)>); 4] = [
-        // Sum across categories for one model.
-        (
-            "sums across categories",
-            vec![request_metadata_message(api::RequestCharges {
-                usage_by_category: HashMap::from([
-                    (
-                        PRIMARY_AGENT_CATEGORY.to_string(),
-                        charged_usage(
-                            single_model_usage("gpt-5.5", 100, 10.0),
-                            HashMap::new(),
-                            HashMap::new(),
-                        ),
-                    ),
-                    (
-                        "compaction".to_string(),
-                        charged_usage(
-                            single_model_usage("gpt-5.5", 30, 5.0),
-                            HashMap::new(),
-                            HashMap::new(),
-                        ),
-                    ),
-                ]),
-            })],
-            vec![(ModelChargeKey::Standard("gpt-5.5".into()), 130, 15.0)],
-        ),
-        // Warp and BYOK charges for the same model id fold together; custom
-        // endpoints stay keyed by their config_key.
-        (
-            "sums across usage types",
-            vec![request_metadata_message(api::RequestCharges {
-                usage_by_category: HashMap::from([(
-                    PRIMARY_AGENT_CATEGORY.to_string(),
-                    charged_usage(
-                        single_model_usage("gpt-5.5", 100, 10.0),
-                        single_model_usage("gpt-5.5", 20, 2.0),
-                        single_model_usage("config-key", 7, 0.7),
-                    ),
-                )]),
-            })],
-            vec![
-                (ModelChargeKey::Standard("gpt-5.5".into()), 120, 12.0),
-                (ModelChargeKey::CustomEndpoint("config-key".into()), 7, 0.7),
-            ],
-        ),
-        // Several requests accumulate on the same per-model totals.
-        (
-            "accumulates across records",
-            vec![
-                request_metadata_message(api::RequestCharges {
-                    usage_by_category: HashMap::from([(
-                        PRIMARY_AGENT_CATEGORY.to_string(),
-                        charged_usage(
-                            single_model_usage("gpt-5.5", 100, 10.0),
-                            HashMap::new(),
-                            HashMap::new(),
-                        ),
-                    )]),
-                }),
-                request_metadata_message(api::RequestCharges {
-                    usage_by_category: HashMap::from([(
-                        "compaction".to_string(),
-                        charged_usage(
-                            single_model_usage("gpt-5.5", 50, 6.0),
-                            HashMap::new(),
-                            HashMap::new(),
-                        ),
-                    )]),
-                }),
-            ],
-            vec![(ModelChargeKey::Standard("gpt-5.5".into()), 150, 16.0)],
-        ),
-        // Messages without a RequestMetadata payload or without charges
-        // contribute nothing.
-        (
-            "ignores messages without charged usage",
-            vec![
-                api::Message::default(),
-                request_metadata_message(api::RequestCharges::default()),
-            ],
-            vec![],
-        ),
+fn sum_charged_usage_by_key_sums_across_categories() {
+    let messages = [request_metadata_message(api::RequestCharges {
+        usage_by_category: HashMap::from([
+            (
+                PRIMARY_AGENT_CATEGORY.to_string(),
+                charged_usage(
+                    single_model_usage("gpt-5.5", 100, 10.0),
+                    HashMap::new(),
+                    HashMap::new(),
+                ),
+            ),
+            (
+                "compaction".to_string(),
+                charged_usage(
+                    single_model_usage("gpt-5.5", 30, 5.0),
+                    HashMap::new(),
+                    HashMap::new(),
+                ),
+            ),
+        ]),
+    })];
+
+    let sums = sum_charged_usage_by_key(messages.iter());
+
+    assert_eq!(sums.len(), 1);
+    let usage = &sums[&ModelChargeKey::Standard("gpt-5.5".into())];
+    assert_eq!(usage.tokens(), 130);
+    assert_eq!(usage.cost(), CostValue::new(0.0, 15.0));
+}
+
+#[test]
+fn sum_charged_usage_by_key_sums_across_usage_types() {
+    let messages = [request_metadata_message(api::RequestCharges {
+        usage_by_category: HashMap::from([(
+            PRIMARY_AGENT_CATEGORY.to_string(),
+            charged_usage(
+                single_model_usage("gpt-5.5", 100, 10.0),
+                single_model_usage("gpt-5.5", 20, 2.0),
+                single_model_usage("config-key", 7, 0.7),
+            ),
+        )]),
+    })];
+
+    let sums = sum_charged_usage_by_key(messages.iter());
+
+    assert_eq!(sums.len(), 2);
+    let standard_usage = &sums[&ModelChargeKey::Standard("gpt-5.5".into())];
+    assert_eq!(standard_usage.tokens(), 120);
+    assert_eq!(standard_usage.cost(), CostValue::new(0.0, 12.0));
+    let custom_usage = &sums[&ModelChargeKey::CustomEndpoint("config-key".into())];
+    assert_eq!(custom_usage.tokens(), 7);
+    assert_eq!(custom_usage.cost(), CostValue::new(0.0, 0.7));
+}
+
+#[test]
+fn sum_charged_usage_by_key_accumulates_across_records() {
+    let messages = [
+        request_metadata_message(api::RequestCharges {
+            usage_by_category: HashMap::from([(
+                PRIMARY_AGENT_CATEGORY.to_string(),
+                charged_usage(
+                    single_model_usage("gpt-5.5", 100, 10.0),
+                    HashMap::new(),
+                    HashMap::new(),
+                ),
+            )]),
+        }),
+        request_metadata_message(api::RequestCharges {
+            usage_by_category: HashMap::from([(
+                "compaction".to_string(),
+                charged_usage(
+                    single_model_usage("gpt-5.5", 50, 6.0),
+                    HashMap::new(),
+                    HashMap::new(),
+                ),
+            )]),
+        }),
     ];
 
-    for (name, messages, expected_models) in cases {
-        let sums = sum_charged_usage_by_key(messages.iter());
-        assert_eq!(sums.len(), expected_models.len(), "{name}");
-        for (key, tokens, cost_in_cents) in expected_models {
-            let usage = sums.get(&key).unwrap_or_else(|| panic!("{name}"));
-            assert_eq!(usage.tokens(), tokens, "{name}: {key:?}");
-            assert!(
-                (usage.cost().cost_in_cents - cost_in_cents).abs() < 1e-4,
-                "{name}: {key:?}"
-            );
-        }
-    }
+    let sums = sum_charged_usage_by_key(messages.iter());
+
+    assert_eq!(sums.len(), 1);
+    let usage = &sums[&ModelChargeKey::Standard("gpt-5.5".into())];
+    assert_eq!(usage.tokens(), 150);
+    assert_eq!(usage.cost(), CostValue::new(0.0, 16.0));
+}
+
+#[test]
+fn sum_charged_usage_by_key_ignores_messages_without_request_metadata() {
+    let messages = [api::Message::default()];
+
+    assert!(sum_charged_usage_by_key(messages.iter()).is_empty());
+}
+
+#[test]
+fn sum_charged_usage_by_key_ignores_request_metadata_without_charges() {
+    let messages = [api::Message {
+        message: Some(api::message::Message::RequestMetadata(
+            api::message::RequestMetadata::default(),
+        )),
+        ..Default::default()
+    }];
+
+    assert!(sum_charged_usage_by_key(messages.iter()).is_empty());
+}
+
+#[test]
+fn sum_charged_usage_by_key_ignores_empty_charges() {
+    let messages = [request_metadata_message(api::RequestCharges::default())];
+
+    assert!(sum_charged_usage_by_key(messages.iter()).is_empty());
 }
 
 /// Web-search charges ride outside the token buckets and must survive the
@@ -599,26 +604,27 @@ fn exact_token_count_tooltip_shows_comma_separated_count_when_abbreviated() {
 }
 
 #[test]
-fn format_tokens_and_cost_joins_tokens_and_cost_with_a_slash() {
-    let cases: [(&str, UsageDisplayUnit, &str); 2] = [
-        (
-            "credits unit",
+fn format_tokens_and_cost_joins_tokens_and_credits_with_a_slash() {
+    assert_eq!(
+        format_tokens_and_cost(
+            Some(9600),
+            Some(CostValue::new(36.0, 36.0)),
             UsageDisplayUnit::Credits,
-            "9.6k tokens / 36 credits",
         ),
-        (
-            "dollars unit",
+        "9.6k tokens / 36 credits"
+    );
+}
+
+#[test]
+fn format_tokens_and_cost_joins_tokens_and_dollars_with_a_slash() {
+    assert_eq!(
+        format_tokens_and_cost(
+            Some(9600),
+            Some(CostValue::new(36.0, 36.0)),
             UsageDisplayUnit::Dollars,
-            "9.6k tokens / $0.36",
         ),
-    ];
-    for (name, unit, expected) in cases {
-        assert_eq!(
-            format_tokens_and_cost(Some(9600), Some(CostValue::new(36.0, 36.0)), unit),
-            expected,
-            "{name}"
-        );
-    }
+        "9.6k tokens / $0.36"
+    );
 }
 
 #[test]
@@ -651,38 +657,65 @@ fn format_tokens_and_cost_shows_em_dash_when_both_are_unknown() {
 
 #[test]
 fn format_dollars_renders_sub_cent_amounts_as_less_than_a_cent() {
-    let cases: [(f32, &str); 4] = [
-        (0.0, "$0.00"),
-        (0.5, "<$0.01"),
-        (1.0, "$0.01"),
-        (36.0, "$0.36"),
-    ];
-    for (cost_in_cents, expected) in cases {
-        assert_eq!(format_dollars(cost_in_cents), expected);
-    }
+    assert_eq!(format_dollars(0.0), "$0.00");
+    assert_eq!(format_dollars(0.5), "<$0.01");
+    assert_eq!(format_dollars(1.0), "$0.01");
+    assert_eq!(format_dollars(36.0), "$0.36");
 }
 
 #[test]
-fn format_searches_and_cost_appends_cost_suffix() {
-    let cases: [(&str, UsageDisplayUnit, &str); 2] = [
-        (
-            "credits unit",
-            UsageDisplayUnit::Credits,
-            "3 searches / 2 credits",
-        ),
-        (
-            "dollars unit",
-            UsageDisplayUnit::Dollars,
-            "3 searches / $0.02",
-        ),
-    ];
-    for (name, unit, expected) in cases {
-        assert_eq!(
-            format_searches_and_cost(3, CostValue::new(2.0, 2.0), unit),
-            expected,
-            "{name}"
-        );
-    }
+fn format_searches_and_cost_appends_credits_suffix() {
+    assert_eq!(
+        format_searches_and_cost(3, CostValue::new(2.0, 2.0), UsageDisplayUnit::Credits,),
+        "3 searches / 2 credits"
+    );
+}
+
+#[test]
+fn format_searches_and_cost_appends_dollars_suffix() {
+    assert_eq!(
+        format_searches_and_cost(3, CostValue::new(2.0, 2.0), UsageDisplayUnit::Dollars,),
+        "3 searches / $0.02"
+    );
+}
+
+#[test]
+fn format_searches_and_cost_uses_singular_search_with_credits() {
+    assert_eq!(
+        format_searches_and_cost(1, CostValue::new(1.0, 2.0), UsageDisplayUnit::Credits,),
+        "1 search / 1 credit"
+    );
+}
+
+#[test]
+fn format_searches_and_cost_uses_singular_search_with_dollars() {
+    assert_eq!(
+        format_searches_and_cost(1, CostValue::new(1.0, 2.0), UsageDisplayUnit::Dollars,),
+        "1 search / $0.02"
+    );
+}
+
+#[test]
+fn format_searches_and_cost_uses_plural_searches_for_zero() {
+    assert_eq!(
+        format_searches_and_cost(0, CostValue::new(0.0, 0.0), UsageDisplayUnit::Dollars,),
+        "0 searches / $0.00"
+    );
+}
+
+#[test]
+fn format_tool_call_count_uses_singular_for_one_call() {
+    assert_eq!(format_tool_call_count(1), "1 tool call");
+}
+
+#[test]
+fn format_tool_call_count_uses_plural_for_multiple_calls() {
+    assert_eq!(format_tool_call_count(2), "2 tool calls");
+}
+
+#[test]
+fn format_tool_call_count_uses_plural_for_zero_calls() {
+    assert_eq!(format_tool_call_count(0), "0 tool calls");
 }
 
 /// A conversation whose usage metadata carries no cost figures at all renders
