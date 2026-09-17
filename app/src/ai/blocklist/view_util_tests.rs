@@ -4,6 +4,15 @@ use super::*;
 use crate::settings::UsageDisplayUnit;
 
 #[test]
+fn format_credits_never_rounds_a_real_charge_to_zero() {
+    assert_eq!(format_credits(0.0), "0 credits");
+    assert_eq!(format_credits(0.03), "<0.1 credits");
+    assert_eq!(format_credits(0.1), "0.1 credits");
+    assert_eq!(format_credits(1.0), "1 credit");
+    assert_eq!(format_credits(2.5), "2.5 credits");
+}
+
+#[test]
 fn format_usage_returns_credits_only_when_flag_disabled() {
     let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
 

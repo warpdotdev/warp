@@ -284,9 +284,13 @@ pub fn get_ai_block_overflow_menu_element_position_id(view_id: EntityId) -> Stri
 }
 
 /// Formats credit count to display as whole numbers when the value is effectively a whole number,
-/// otherwise displays with one decimal place.
+/// otherwise displays with one decimal place. A non-zero amount below the displayed precision is
+/// shown as `<0.1 credits` rather than rounding to zero, which would read as no cost.
 /// Returns a formatted string with proper pluralization ("credit" vs "credits").
 pub fn format_credits(credits: f32) -> String {
+    if credits > 0.0 && credits < 0.1 {
+        return "<0.1 credits".to_string();
+    }
     // If the first part of the decimal is 0, we just display the whole number.
     if credits.fract() < 0.1 {
         let whole = credits.trunc() as i32;
