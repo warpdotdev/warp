@@ -710,11 +710,15 @@ fn test_terminal_defaults_to_false() {
     Type=Application
     Exec=/usr/bin/editor %f
     "#;
-    with_files("test_terminal_defaults_to_false", data, |desktop, _content| {
-        let metadata = EditorMetadata::try_new(desktop)?;
-        assert!(!metadata.terminal);
-        Ok(())
-    });
+    with_files(
+        "test_terminal_defaults_to_false",
+        data,
+        |desktop, _content| {
+            let metadata = EditorMetadata::try_new(desktop)?;
+            assert!(!metadata.terminal);
+            Ok(())
+        },
+    );
 }
 
 // ---------- find_desktop_file_by_app_id_in ----------
@@ -737,17 +741,15 @@ fn test_find_desktop_file_by_app_id_matches_exact_stem() {
                 Stub::EmptyFile("org.gnome.TextEditor.desktop"),
             ]);
 
-            let found = find_desktop_file_by_app_id_in(
-                "gedit",
-                std::iter::once(dirs.tests().clone()),
-            );
+            let found = find_desktop_file_by_app_id_in("gedit", vec![dirs.tests().clone()]);
             assert_eq!(found, Some(dirs.tests().join("gedit.desktop")));
 
-            let found = find_desktop_file_by_app_id_in(
-                "org.gnome.TextEditor",
-                std::iter::once(dirs.tests().clone()),
+            let found =
+                find_desktop_file_by_app_id_in("org.gnome.TextEditor", vec![dirs.tests().clone()]);
+            assert_eq!(
+                found,
+                Some(dirs.tests().join("org.gnome.TextEditor.desktop"))
             );
-            assert_eq!(found, Some(dirs.tests().join("org.gnome.TextEditor.desktop")));
         },
     );
 }
@@ -764,11 +766,11 @@ fn test_find_desktop_file_by_app_id_no_match_returns_none() {
             // Neither an unrelated id nor a mere substring/prefix of a real
             // one should match.
             assert_eq!(
-                find_desktop_file_by_app_id_in("nvim", std::iter::once(dirs.tests().clone())),
+                find_desktop_file_by_app_id_in("nvim", vec![dirs.tests().clone()]),
                 None
             );
             assert_eq!(
-                find_desktop_file_by_app_id_in("gedi", std::iter::once(dirs.tests().clone())),
+                find_desktop_file_by_app_id_in("gedi", vec![dirs.tests().clone()]),
                 None
             );
         },
@@ -788,7 +790,7 @@ fn test_find_desktop_file_by_app_id_searches_all_given_dirs() {
             sandbox.with_files(vec![Stub::EmptyFile("second/gedit.desktop")]);
 
             let search_paths = vec![dirs.tests().join("first"), dirs.tests().join("second")];
-            let found = find_desktop_file_by_app_id_in("gedit", search_paths.into_iter());
+            let found = find_desktop_file_by_app_id_in("gedit", search_paths);
 
             assert_eq!(found, Some(dirs.tests().join("second/gedit.desktop")));
         },

@@ -413,10 +413,7 @@ fn find_desktop_file_by_app_id(app_id: &str) -> Option<PathBuf> {
 /// directories instead of the standard XDG locations. Split out so tests can
 /// exercise the matching logic against a sandboxed directory instead of the
 /// real, machine-dependent XDG search paths.
-fn find_desktop_file_by_app_id_in(
-    app_id: &str,
-    search_paths: impl Iterator<Item = PathBuf>,
-) -> Option<PathBuf> {
+fn find_desktop_file_by_app_id_in(app_id: &str, search_paths: Vec<PathBuf>) -> Option<PathBuf> {
     freedesktop_desktop_entry::Iter::new(search_paths)
         .find(|path| path.file_stem().and_then(OsStr::to_str) == Some(app_id))
 }
