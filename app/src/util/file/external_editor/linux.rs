@@ -105,6 +105,10 @@ struct EditorMetadata {
 
     // Path to a desktop icon.
     icon: Option<String>,
+
+    /// Whether the entry's `Terminal` key is set, i.e. it must be run inside
+    /// a terminal emulator rather than launched directly.
+    terminal: bool,
 }
 
 impl EditorMetadata {
@@ -131,12 +135,14 @@ impl EditorMetadata {
         let exec = exec.to_string();
         let localized_name = entry.name(Some("en")).map(|x| x.to_string());
         let icon = entry.icon().map(str::to_string);
+        let terminal = entry.terminal();
 
         Ok(Self {
             desktop_file_path,
             exec,
             localized_name,
             icon,
+            terminal,
         })
     }
 
@@ -343,20 +349,27 @@ pub fn open_file_path_with_line_and_col(
             }
             return;
         }
+
+        // Neither an explicit editor nor a recognized one from the mime lookup
+        // worked. Rather than deferring straight to `xdg-open` (which, on
+        // desktop-environment setups it fails to recognize, can silently fall
+        // back to opening the file in the default *web browser*), try to
+        // launch the mime type's default application ourselves from its
+        // .desktop entry, the same way we do for our built-in editor list.
+        if open_with_default_desktop_entry(full_path) {
+            return;
+        }
     }
 
     ctx.open_file_path(full_path);
 }
 
-/// Attempt to match a file with an existing editor based on Mime type
+/// Resolves the app id (`.desktop` file stem) of the XDG mime-type default
+/// application for `path`, e.g. "code" or "org.gnome.TextEditor".
 ///
-/// Calls xdg-mime to first find the mime type of a file, and then find
-/// the xdg default app for that file. We then check against existing
-/// loaded editors to see if we have support for that file.
-///
-/// Used so that if xdg-open will work on a file we already know about,
-/// we can use line and col numbers.
-fn get_app_for_file_from_mime(path: &Path) -> Option<Editor> {
+/// Calls xdg-mime to first find the mime type of the file, then the xdg
+/// default app id for that mime type.
+fn default_app_id_for_file(path: &Path) -> Option<String> {
     let mime_type = String::from_utf8(
         Command::new("xdg-mime")
             .arg("query")
@@ -377,9 +390,85 @@ fn get_app_for_file_from_mime(path: &Path) -> Option<Editor> {
     )
     .ok()?;
 
-    let app_id = default_app.trim().replace(".desktop", "");
+    let app_id = default_app.trim().trim_end_matches(".desktop").to_string();
+    (!app_id.is_empty()).then_some(app_id)
+}
 
-    get_editor_by_app_id(compute_editors_by_id(), app_id.as_str())
+/// Attempt to match a file with an existing editor based on Mime type
+///
+/// Used so that if xdg-open will work on a file we already know about,
+/// we can use line and col numbers.
+fn get_app_for_file_from_mime(path: &Path) -> Option<Editor> {
+    let app_id = default_app_id_for_file(path)?;
+    get_editor_by_app_id(compute_editors_by_id(), &app_id)
+}
+
+/// Looks for a `.desktop` file whose app id (file stem) exactly matches
+/// `app_id`, searching the standard XDG desktop-entry locations.
+fn find_desktop_file_by_app_id(app_id: &str) -> Option<PathBuf> {
+    find_desktop_file_by_app_id_in(app_id, freedesktop_desktop_entry::default_paths())
+}
+
+/// Same as [`find_desktop_file_by_app_id`], but searching an explicit list of
+/// directories instead of the standard XDG locations. Split out so tests can
+/// exercise the matching logic against a sandboxed directory instead of the
+/// real, machine-dependent XDG search paths.
+fn find_desktop_file_by_app_id_in(
+    app_id: &str,
+    search_paths: impl Iterator<Item = PathBuf>,
+) -> Option<PathBuf> {
+    freedesktop_desktop_entry::Iter::new(search_paths)
+        .find(|path| path.file_stem().and_then(OsStr::to_str) == Some(app_id))
+}
+
+/// Falls back to launching the file's XDG mime-type default application
+/// directly from its `.desktop` entry, for apps outside Warp's built-in
+/// editor list (e.g. a plain text editor like gedit, or a terminal editor's
+/// desktop entry such as neovim's).
+///
+/// This mirrors what `xdg-open` is supposed to do, but avoids delegating to
+/// it: `xdg-open`'s desktop-environment detection can misfire on
+/// non-mainstream setups and silently fall back to opening the file in the
+/// system's default web browser instead of any editor.
+///
+/// Returns `true` if a command was found and successfully spawned.
+fn open_with_default_desktop_entry(path: &Path) -> bool {
+    let Some(app_id) = default_app_id_for_file(path) else {
+        return false;
+    };
+    let Some(desktop_file) = find_desktop_file_by_app_id(&app_id) else {
+        return false;
+    };
+    let metadata = match EditorMetadata::try_new(desktop_file) {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            log::warn!("Failed to load default app desktop entry: {err:#}");
+            return false;
+        }
+    };
+    if metadata.terminal {
+        // A `Terminal=true` entry (e.g. a TUI editor like nvim) needs a
+        // controlling terminal to run in; spawning it directly here would
+        // leave it without one. Defer to the existing `xdg-open` fallback,
+        // which at least has a chance of launching it correctly.
+        return false;
+    }
+    let mut command = match metadata.build_default_command(path) {
+        Ok(command) => command,
+        Err(err) => {
+            log::warn!("Failed to build default app open command: {err:#}");
+            return false;
+        }
+    };
+    match command.spawn() {
+        Ok(_) => true,
+        Err(err) => {
+            report_error!(
+                anyhow::Error::new(err).context("Error launching default app for file link")
+            );
+            false
+        }
+    }
 }
 
 static EDITORS_BY_ID: OnceLock<HashMap<&'static str, Editor>> = OnceLock::new();

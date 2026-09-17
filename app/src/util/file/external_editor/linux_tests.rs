@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use warp_util::path::LineAndColumnArg;
 
-use super::{DesktopExecError, EditorMetadata, tokenize_exec};
+use super::{DesktopExecError, EditorMetadata, find_desktop_file_by_app_id_in, tokenize_exec};
 
 #[cfg(test)]
 fn with_files(tag: &str, contents: &str, cb: impl FnOnce(PathBuf, PathBuf) -> anyhow::Result<()>) {
@@ -680,6 +680,117 @@ fn test_deprecated_field_codes_are_dropped() {
             // All deprecated codes are silently dropped; only %f remains.
             assert_eq!(cmd.get_args().collect::<Vec<_>>(), [file_path.as_str()]);
             Ok(())
+        },
+    );
+}
+
+// ---------- Terminal flag ----------
+
+#[test]
+fn test_terminal_true_is_parsed() {
+    let data = r#"
+    [Desktop Entry]
+    Version=1.0
+    Type=Application
+    Exec=nvim %F
+    Terminal=true
+    "#;
+    with_files("test_terminal_true_is_parsed", data, |desktop, _content| {
+        let metadata = EditorMetadata::try_new(desktop)?;
+        assert!(metadata.terminal);
+        Ok(())
+    });
+}
+
+#[test]
+fn test_terminal_defaults_to_false() {
+    let data = r#"
+    [Desktop Entry]
+    Version=1.0
+    Type=Application
+    Exec=/usr/bin/editor %f
+    "#;
+    with_files("test_terminal_defaults_to_false", data, |desktop, _content| {
+        let metadata = EditorMetadata::try_new(desktop)?;
+        assert!(!metadata.terminal);
+        Ok(())
+    });
+}
+
+// ---------- find_desktop_file_by_app_id_in ----------
+//
+// Regression coverage for the "Default App" / "$EDITOR" file-link fallback
+// silently opening the system's default web browser: when the mime-type
+// default app isn't one of Warp's hardcoded editors (e.g. gedit, or a TUI
+// editor's desktop entry), we now look up its `.desktop` file ourselves
+// instead of deferring to `xdg-open`.
+
+#[test]
+fn test_find_desktop_file_by_app_id_matches_exact_stem() {
+    use crate::test_util::{Stub, VirtualFS};
+
+    VirtualFS::test(
+        "test_find_desktop_file_by_app_id_matches_exact_stem",
+        |dirs, mut sandbox| {
+            sandbox.with_files(vec![
+                Stub::EmptyFile("gedit.desktop"),
+                Stub::EmptyFile("org.gnome.TextEditor.desktop"),
+            ]);
+
+            let found = find_desktop_file_by_app_id_in(
+                "gedit",
+                std::iter::once(dirs.tests().clone()),
+            );
+            assert_eq!(found, Some(dirs.tests().join("gedit.desktop")));
+
+            let found = find_desktop_file_by_app_id_in(
+                "org.gnome.TextEditor",
+                std::iter::once(dirs.tests().clone()),
+            );
+            assert_eq!(found, Some(dirs.tests().join("org.gnome.TextEditor.desktop")));
+        },
+    );
+}
+
+#[test]
+fn test_find_desktop_file_by_app_id_no_match_returns_none() {
+    use crate::test_util::{Stub, VirtualFS};
+
+    VirtualFS::test(
+        "test_find_desktop_file_by_app_id_no_match_returns_none",
+        |dirs, mut sandbox| {
+            sandbox.with_files(vec![Stub::EmptyFile("gedit.desktop")]);
+
+            // Neither an unrelated id nor a mere substring/prefix of a real
+            // one should match.
+            assert_eq!(
+                find_desktop_file_by_app_id_in("nvim", std::iter::once(dirs.tests().clone())),
+                None
+            );
+            assert_eq!(
+                find_desktop_file_by_app_id_in("gedi", std::iter::once(dirs.tests().clone())),
+                None
+            );
+        },
+    );
+}
+
+#[test]
+fn test_find_desktop_file_by_app_id_searches_all_given_dirs() {
+    use crate::test_util::{Stub, VirtualFS};
+
+    VirtualFS::test(
+        "test_find_desktop_file_by_app_id_searches_all_given_dirs",
+        |dirs, mut sandbox| {
+            sandbox.mkdir("first");
+            sandbox.mkdir("second");
+            sandbox.with_files(vec![Stub::EmptyFile("first/unrelated.desktop")]);
+            sandbox.with_files(vec![Stub::EmptyFile("second/gedit.desktop")]);
+
+            let search_paths = vec![dirs.tests().join("first"), dirs.tests().join("second")];
+            let found = find_desktop_file_by_app_id_in("gedit", search_paths.into_iter());
+
+            assert_eq!(found, Some(dirs.tests().join("second/gedit.desktop")));
         },
     );
 }
