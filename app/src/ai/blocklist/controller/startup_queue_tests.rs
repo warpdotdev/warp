@@ -2,6 +2,7 @@ use uuid::Uuid;
 use warpui::App;
 
 use super::*;
+use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent::{AIAgentContext, AIAgentInput};
 use crate::ai::blocklist::QueuedQueryOrigin;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
@@ -19,6 +20,197 @@ fn user_queries_in_order(history: &BlocklistAIHistoryModel, id: AIConversationId
             _ => None,
         })
         .collect()
+}
+
+fn file_prompt(participant: ParticipantId) -> QueuedQuery {
+    QueuedQuery::new_shared_session_prompt(
+        "file followup".into(),
+        participant,
+        vec![AgentAttachment::FileReference {
+            attachment_id: "attachment-id".into(),
+            file_name: "event-payload.json".into(),
+        }],
+    )
+}
+
+fn prepared_file() -> HashMap<String, AIAgentAttachment> {
+    HashMap::from([(
+        "event-payload.json".into(),
+        AIAgentAttachment::FilePathReference {
+            file_id: "attachment-id".into(),
+            file_name: "event-payload.json".into(),
+            file_path: "/workspace/.warp/attachments/attachment-id_event-payload.json".into(),
+        },
+    )])
+}
+
+#[test]
+fn prepared_file_prompt_steers_without_interrupting_or_redownloading() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        let participant = ParticipantId::new();
+        let (id, query_id, streams) = controller.update(&mut app, |controller, ctx| {
+            let id = controller.bind_native_prompt_conversation(None, ctx);
+            controller.send_user_query_in_conversation("initial".into(), id, None, ctx);
+            let query_id = QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+                queue.append(id, file_prompt(participant.clone()), ctx)
+            });
+            let task_id = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&id)
+                .unwrap()
+                .get_root_task_id()
+                .clone();
+            assert!(
+                controller
+                    .steer_head_prompt_for_request(id, &task_id, ctx)
+                    .is_none()
+            );
+            controller.dispatch_queued_warp_agent_prompt(id, Some(query_id), ctx);
+            assert_eq!(QueuedQueryModel::as_ref(ctx).queue(id).len(), 1);
+            (
+                id,
+                query_id,
+                controller
+                    .in_flight_response_streams
+                    .stream_ids_for_conversation(id, ctx),
+            )
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.complete_preparation(id, query_id, prepared_file(), ctx);
+        });
+        controller.update(&mut app, |controller, ctx| {
+            assert_eq!(controller.in_flight_response_streams.stream_ids_for_conversation(id, ctx), streams);
+            let task_id = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&id).unwrap().get_root_task_id().clone();
+            let input = controller.steer_head_prompt_for_request(id, &task_id, ctx).unwrap();
+            let AIAgentInput::UserQuery { query, referenced_attachments, .. } = &input else {
+                panic!("expected a user query");
+            };
+            assert_eq!(query, "file followup");
+            assert!(matches!(
+                referenced_attachments.get("event-payload.json"),
+                Some(AIAgentAttachment::FilePathReference { file_id, file_path, .. })
+                    if file_id == "attachment-id"
+                        && file_path == "/workspace/.warp/attachments/attachment-id_event-payload.json"
+            ));
+            assert_eq!(controller.get_current_response_initiator(), Some(participant));
+            assert!(!QueuedQueryModel::as_ref(ctx).has_queue(id));
+            assert!(controller.steer_head_prompt_for_request(id, &task_id, ctx).is_none());
+        });
+    });
+}
+
+#[test]
+fn ready_event_dispatches_only_when_the_conversation_is_idle_after_an_exchange() {
+    for status in [
+        ConversationStatus::Success,
+        ConversationStatus::InProgress,
+        ConversationStatus::Cancelled,
+    ] {
+        App::test((), move |mut app| async move {
+            initialize_app_for_terminal_view(&mut app);
+            let terminal = add_window_with_terminal(&mut app, None);
+            let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+            let id = controller.update(&mut app, |controller, ctx| {
+                let id = controller.bind_native_prompt_conversation(None, ctx);
+                controller.send_user_query_in_conversation("initial".into(), id, None, ctx);
+                for stream_id in controller
+                    .in_flight_response_streams
+                    .stream_ids_for_conversation(id, ctx)
+                {
+                    controller
+                        .in_flight_response_streams
+                        .cleanup_stream(&stream_id);
+                }
+                id
+            });
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                history.update_conversation_status(terminal.id(), id, status.clone(), ctx);
+            });
+            let query_id = QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+                queue.finish_native_setup(id, ctx);
+                queue.append(id, file_prompt(ParticipantId::new()), ctx)
+            });
+            QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+                queue.complete_preparation(id, query_id, prepared_file(), ctx);
+            });
+            BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+                let queries = user_queries_in_order(history, id);
+                if status == ConversationStatus::Success {
+                    assert_eq!(queries, vec!["initial", "file followup"]);
+                } else {
+                    assert_eq!(queries, vec!["initial"]);
+                }
+            });
+        });
+    }
+}
+
+#[test]
+fn delayed_file_prompt_dispatches_after_promptless_startup_setup_finishes() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        let (id, query_id) = controller.update(&mut app, |controller, ctx| {
+            let id = controller.bind_native_prompt_conversation(None, ctx);
+            let query_id = QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+                queue.append(id, file_prompt(ParticipantId::new()), ctx)
+            });
+
+            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+                queue.finish_native_setup(id, ctx);
+            });
+            controller.dispatch_queued_warp_agent_prompt(id, None, ctx);
+
+            let conversation = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&id)
+                .unwrap();
+            assert_eq!(conversation.status(), &ConversationStatus::InProgress);
+            assert_eq!(conversation.exchange_count(), 0);
+            assert_eq!(QueuedQueryModel::as_ref(ctx).queue(id).len(), 1);
+            (id, query_id)
+        });
+
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.complete_preparation(id, query_id, prepared_file(), ctx);
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(user_queries_in_order(history, id), vec!["file followup"]);
+        });
+        QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+            assert!(!queue.has_queue(id));
+        });
+    });
+}
+
+#[test]
+fn missing_download_configuration_settles_eagerly_without_waiting_for_dispatch() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        controller.update(&mut app, |controller, ctx| {
+            let id = controller.bind_native_prompt_conversation(None, ctx);
+            controller.execute_warp_agent_prompt_from_shared_session_injection(
+                "followup".into(),
+                None,
+                vec![AgentAttachment::FileReference {
+                    attachment_id: "attachment-id".into(),
+                    file_name: "event-payload.json".into(),
+                }],
+                ParticipantId::new(),
+                ctx,
+            );
+            let row = &QueuedQueryModel::as_ref(ctx).queue(id)[0];
+            assert!(row.is_ready());
+            assert!(row.text().contains("could not be downloaded"));
+            assert!(QueuedQueryModel::as_ref(ctx).ready_head(id).is_none());
+        });
+    });
 }
 
 #[test]
@@ -197,6 +389,9 @@ fn dispatch_queued_warp_agent_prompt_with_an_explicit_id_targets_that_row_not_th
         });
 
         controller.update(&mut app, |controller, ctx| {
+            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+                queue.finish_native_setup(id, ctx);
+            });
             controller.dispatch_queued_warp_agent_prompt(id, Some(second_row_id), ctx);
         });
 

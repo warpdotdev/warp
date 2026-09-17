@@ -41,7 +41,7 @@ use super::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
 };
 use super::orchestration_events::{OrchestrationEventService, OrchestrationEventServiceEvent};
-use super::queued_query::{AutofireAction, QueuedQueryId, QueuedQueryModel};
+use super::queued_query::{QueuedQueryEvent, QueuedQueryId, QueuedQueryModel};
 use super::{BlocklistAIInputModel, ResponseStreamId};
 use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::api::{self, ServerConversationToken};
@@ -625,6 +625,21 @@ impl BlocklistAIController {
         ctx.subscribe_to_model(&svc, move |me, _, event, ctx| {
             let OrchestrationEventServiceEvent::EventsReady { conversation_id } = event;
             me.handle_pending_events_ready(*conversation_id, ctx);
+        });
+        let queue = QueuedQueryModel::handle(ctx);
+        ctx.subscribe_to_model(&queue, |me, _, event, ctx| {
+            if let QueuedQueryEvent::PromptReady {
+                conversation_id,
+                query_id,
+            } = event
+                && me.native_prompt_conversation_id == Some(*conversation_id)
+                && QueuedQueryModel::as_ref(ctx)
+                    .ready_query(*conversation_id, *query_id)
+                    .is_some()
+                && me.can_dispatch_queued_warp_agent_prompt(*conversation_id, ctx)
+            {
+                me.dispatch_queued_warp_agent_prompt(*conversation_id, None, ctx);
+            }
         });
         let streamer = OrchestrationEventStreamer::handle(ctx);
         ctx.subscribe_to_model(&streamer, move |me, _, event, ctx| match event {
@@ -1601,20 +1616,7 @@ impl BlocklistAIController {
             .push((suggestion, trigger));
     }
 
-    /// If `conversation_id`'s queue is in `Steering` mode and has an eligible head row queued,
-    /// pops that row and returns it built as a fresh `AIAgentInput::UserQuery`, ready to append
-    /// to whichever request the caller is about to send for this conversation (a tool-result
-    /// follow-up, an orchestration-event injection, or a direct send). Also updates the current
-    /// response initiator when the row came from a shared-session participant -- callers must
-    /// invoke this *before* reading [`Self::get_current_response_initiator`] to build their own
-    /// `RequestInput`, so the exchange is attributed correctly.
-    ///
-    /// Only pops a plain, unlocked, non-edited prompt row (`AutofireAction::Submit`); a shell
-    /// command, a row being edited, or a shared-session row carrying a file attachment that
-    /// still needs downloading are left queued for `TerminalView::drain_queued_prompts` (or, for
-    /// a shared-session row, `Self::dispatch_queued_warp_agent_prompt`) to handle once the
-    /// conversation goes idle, since none of those can be folded synchronously into an
-    /// already-in-flight request.
+    /// Takes one ready steering prompt and updates its response attribution.
     fn steer_head_prompt_for_request(
         &mut self,
         conversation_id: AIConversationId,
@@ -1626,27 +1628,14 @@ impl BlocklistAIController {
         {
             return None;
         }
-        let Some(AutofireAction::Submit { query_id, .. }) =
-            QueuedQueryModel::as_ref(ctx).peek_autofire(conversation_id)
-        else {
+        let row = QueuedQueryModel::as_ref(ctx).ready_head(conversation_id)?;
+        if row.is_command() {
             return None;
-        };
-        let row = QueuedQueryModel::as_ref(ctx)
-            .queue(conversation_id)
-            .iter()
-            .find(|row| row.id() == query_id)?
-            .clone();
-
+        }
+        let row = row.clone();
+        let query_id = row.id();
         let (participant_id, prompt_attachments) =
             if let Some((participant_id, attachments)) = row.shared_session_prompt() {
-                if attachments
-                    .iter()
-                    .any(|attachment| matches!(attachment, AgentAttachment::FileReference { .. }))
-                {
-                    // Needs an async download before it can be turned into a `UserQuery`;
-                    // leave it queued for the idle-triggered dispatch instead.
-                    return None;
-                }
                 let mut block_ids = Vec::new();
                 let mut selected_text_parts = Vec::new();
                 for attachment in attachments {
@@ -1657,9 +1646,7 @@ impl BlocklistAIController {
                         AgentAttachment::PlainText { content } => {
                             selected_text_parts.push(content.clone());
                         }
-                        AgentAttachment::FileReference { .. } => {
-                            unreachable!("file attachments were already excluded above")
-                        }
+                        AgentAttachment::FileReference { .. } => {}
                     }
                 }
                 self.context_model.update(ctx, |context_model, ctx| {
@@ -1695,7 +1682,7 @@ impl BlocklistAIController {
             None,
             UserQueryMode::Normal,
             None,
-            HashMap::new(),
+            row.prepared_files().cloned().unwrap_or_default(),
             prompt_attachments,
             self.context_model.as_ref(ctx),
             self.active_session.as_ref(ctx),
@@ -2874,13 +2861,7 @@ impl BlocklistAIController {
             .has_active_stream_for_conversation(conversation_id, app)
     }
 
-    /// True when nothing prevents dispatching a fresh, automatic request for `conversation_id`
-    /// right now: native setup (if any) has finished, and no response stream is currently
-    /// active. Every automatic dispatch trigger -- the post-enqueue idle fast path and the
-    /// FIFO-head case of [`Self::dispatch_queued_warp_agent_prompt`] -- must check this before
-    /// firing, so two dispatch attempts can never race and cancel each other. Does not apply to
-    /// an explicit user override (e.g. "Send now"), which is allowed to interrupt an active
-    /// stream on purpose.
+    /// Whether a fresh automatic prompt can start without interrupting ongoing work.
     pub(crate) fn can_dispatch_queued_warp_agent_prompt(
         &self,
         conversation_id: AIConversationId,
@@ -2888,6 +2869,17 @@ impl BlocklistAIController {
     ) -> bool {
         !QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(conversation_id)
             && !self.has_active_stream_for_conversation(conversation_id, ctx)
+            && !OrchestrationEventService::as_ref(ctx).is_conversation_exiting(conversation_id)
+            && BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .is_some_and(|conversation| {
+                    !conversation.has_active_subagent()
+                        && (conversation.exchange_count() == 0
+                            || matches!(
+                                conversation.status(),
+                                ConversationStatus::Success | ConversationStatus::WaitingForEvents
+                            ))
+                })
     }
 
     #[cfg(test)]
