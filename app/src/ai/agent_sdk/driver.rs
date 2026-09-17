@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::future::Future;
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -250,22 +251,20 @@ impl IdleWait for RealIdleWait {
 ///
 /// We use a generation-based approach to cancel timers instead of storing timer handles:
 ///
-/// - `state.tx` holds the completion sender; taking it ensures we only complete once.
-/// - `state.generation` starts at 0 and is incremented each time we want to cancel existing
-///   timers and potentially start a new one. When a timer fires, it checks if its generation
-///   still matches the current generation. If not, the timer was "cancelled" by a newer timer
-///   and should not complete the conversation.
+/// - `tx_cell` holds the completion sender; taking it ensures we only complete once.
+/// - `timer_generation` starts at 0 and is incremented each time we want to cancel
+///   existing timers and potentially start a new one. When a timer fires, it checks
+///   if its generation still matches the current generation. If not, the timer was
+///   "cancelled" by a newer timer and should not complete the conversation.
 ///
-/// Keeping the sender, generation, and refreshable outcome behind one mutex makes cancellation
-/// linearizable with both refresh and timer commitment.
-struct IdleTimeoutState<T> {
-    tx: Option<oneshot::Sender<T>>,
-    generation: usize,
-    pending: Option<(T, Duration)>,
-}
-
+/// This approach avoids the complexity of storing and cancelling timer handles,
+/// while allowing multiple events to safely race without double-completion.
 struct IdleTimeoutSender<T: Send + 'static> {
-    state: Arc<Mutex<IdleTimeoutState<T>>>,
+    tx_cell: Arc<Mutex<Option<oneshot::Sender<T>>>>,
+    generation: Arc<AtomicUsize>,
+    /// Most recent [`Self::arm_refreshable`] call. Held here rather than by the caller so a
+    /// long-lived refresher cannot re-arm with a superseded outcome.
+    pending: Arc<Mutex<Option<(T, Duration)>>>,
     wait: Arc<dyn IdleWait>,
     /// Invoked synchronously, on whichever thread wins the race to complete the run,
     /// immediately before the value is sent — including on `end_run_after`'s background
@@ -274,10 +273,6 @@ struct IdleTimeoutSender<T: Send + 'static> {
     /// exact moment of commitment, rather than only after the completion reaches the model
     /// thread via the oneshot and any further async plumbing (QUALITY-1801).
     on_commit: Arc<dyn Fn() + Send + Sync>,
-    #[cfg(test)]
-    refresh_snapshot_gate: Option<Arc<dyn IdleWait>>,
-    #[cfg(test)]
-    pre_commit_gate: Option<Arc<dyn IdleWait>>,
 }
 
 // Hand-written so cloning does not require `T: Clone`. Every field is a shared handle, so
@@ -285,13 +280,11 @@ struct IdleTimeoutSender<T: Send + 'static> {
 impl<T: Send + 'static> Clone for IdleTimeoutSender<T> {
     fn clone(&self) -> Self {
         Self {
-            state: Arc::clone(&self.state),
+            tx_cell: Arc::clone(&self.tx_cell),
+            generation: Arc::clone(&self.generation),
+            pending: Arc::clone(&self.pending),
             wait: Arc::clone(&self.wait),
             on_commit: Arc::clone(&self.on_commit),
-            #[cfg(test)]
-            refresh_snapshot_gate: self.refresh_snapshot_gate.clone(),
-            #[cfg(test)]
-            pre_commit_gate: self.pre_commit_gate.clone(),
         }
     }
 }
@@ -299,17 +292,11 @@ impl<T: Send + 'static> Clone for IdleTimeoutSender<T> {
 impl<T: Send + 'static> IdleTimeoutSender<T> {
     fn new(tx: oneshot::Sender<T>) -> Self {
         Self {
-            state: Arc::new(Mutex::new(IdleTimeoutState {
-                tx: Some(tx),
-                generation: 0,
-                pending: None,
-            })),
+            tx_cell: Arc::new(Mutex::new(Some(tx))),
+            generation: Arc::new(AtomicUsize::new(0)),
+            pending: Arc::new(Mutex::new(None)),
             wait: Arc::new(RealIdleWait),
             on_commit: Arc::new(|| {}),
-            #[cfg(test)]
-            refresh_snapshot_gate: None,
-            #[cfg(test)]
-            pre_commit_gate: None,
         }
     }
 
@@ -322,8 +309,8 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
 
     /// End the run by sending `value` immediately.
     fn end_run_now(&self, value: T) {
-        if let Ok(mut state) = self.state.lock()
-            && let Some(sender) = state.tx.take()
+        if let Ok(mut guard) = self.tx_cell.lock()
+            && let Some(sender) = guard.take()
         {
             (self.on_commit)();
             let _ = sender.send(value);
@@ -332,49 +319,33 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
 
     /// End the run after `timeout` by sending `value`, unless cancelled before then.
     fn end_run_after(&self, timeout: Duration, value: T) {
-        let Some(generation) = self.advance_generation() else {
-            return;
-        };
-        self.spawn_timer(timeout, value, generation);
-    }
-
-    fn advance_generation(&self) -> Option<usize> {
-        let mut state = self.state.lock().ok()?;
-        state.generation = state.generation.wrapping_add(1);
-        Some(state.generation)
-    }
-
-    fn spawn_timer(&self, timeout: Duration, value: T, timer_generation: usize) {
-        let state = Arc::clone(&self.state);
+        // Increment the generation counter to invalidate any existing timers,
+        // then capture the new generation for our timer to check against.
+        let current_gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let tx_cell = Arc::clone(&self.tx_cell);
+        let generation = Arc::clone(&self.generation);
         let wait = Arc::clone(&self.wait);
         let on_commit = Arc::clone(&self.on_commit);
-        #[cfg(test)]
-        let pre_commit_gate = self.pre_commit_gate.clone();
 
         // Spawn a background thread that will complete the oneshot after the idle timeout,
         // unless a follow-up query resets the timer (by bumping the generation counter).
         thread::spawn(move || {
             wait.wait(timeout);
 
-            #[cfg(test)]
-            if let Some(gate) = pre_commit_gate {
-                gate.wait(Duration::ZERO);
-            }
-
-            let Ok(mut state) = state.lock() else {
-                return;
-            };
-            if state.generation != timer_generation {
+            // Check if our timer generation is still current. If not, a follow-up
+            // query or other activity has "cancelled" this timer by bumping the generation.
+            if generation.load(Ordering::SeqCst) != current_gen {
                 return;
             }
-            let Some(sender) = state.tx.take() else {
-                return;
-            };
-            // Commit before sending: this is the only signal the model layer ever gets that a
-            // deferred window has elapsed, so it must land before the completion is observable
-            // at all (QUALITY-1801).
-            on_commit();
-            let _ = sender.send(value);
+            if let Ok(mut guard) = tx_cell.lock()
+                && let Some(sender) = guard.take()
+            {
+                // Commit before sending: this is the only signal the model layer ever gets
+                // that a deferred window has elapsed, so it must land before the completion
+                // is observable at all (QUALITY-1801).
+                on_commit();
+                let _ = sender.send(value);
+            }
         });
     }
 
@@ -383,24 +354,11 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
     /// Also drops the recorded [`Self::arm_refreshable`] outcome, so a refresher that outlives the
     /// cancellation cannot reschedule the exit it was cancelling.
     fn cancel_idle_timeout(&self) {
-        if let Ok(mut state) = self.state.lock() {
-            state.pending = None;
-            if state.generation > 0 {
-                state.generation = state.generation.wrapping_add(1);
-            }
+        if let Ok(mut pending) = self.pending.lock() {
+            *pending = None;
         }
-    }
-
-    fn cancel_idle_timeout_and_end_run_now(&self, value: T) {
-        if let Ok(mut state) = self.state.lock() {
-            state.pending = None;
-            if state.generation > 0 {
-                state.generation = state.generation.wrapping_add(1);
-            }
-            if let Some(sender) = state.tx.take() {
-                (self.on_commit)();
-                let _ = sender.send(value);
-            }
+        if self.generation.load(Ordering::SeqCst) > 0 {
+            self.generation.fetch_add(1, Ordering::SeqCst);
         }
     }
 
@@ -408,7 +366,10 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
     /// for zero or `None`.
     fn complete_with_optional_idle(&self, idle_timeout: Option<Duration>, value: T) {
         match idle_timeout {
-            Some(Duration::ZERO) => self.cancel_idle_timeout_and_end_run_now(value),
+            Some(Duration::ZERO) => {
+                self.cancel_idle_timeout();
+                self.end_run_now(value);
+            }
             Some(idle_timeout) => self.end_run_after(idle_timeout, value),
             None => self.end_run_now(value),
         }
@@ -421,39 +382,20 @@ impl<T: Clone + Send + 'static> IdleTimeoutSender<T> {
     /// Re-arming replaces the recorded outcome, so a run that fails, resumes, and fails again
     /// exits reporting its most recent failure.
     fn arm_refreshable(&self, window: Duration, value: T) {
-        let Some(generation) = self.state.lock().ok().map(|mut state| {
-            state.pending = Some((value.clone(), window));
-            state.generation = state.generation.wrapping_add(1);
-            state.generation
-        }) else {
-            return;
-        };
-        self.spawn_timer(window, value, generation);
+        if let Ok(mut pending) = self.pending.lock() {
+            *pending = Some((value.clone(), window));
+        }
+        self.end_run_after(window, value);
     }
 
     /// Push an armed deadline out by its original window. Returns that window, or `None` if
     /// nothing was armed.
     fn refresh(&self) -> Option<Duration> {
-        let (value, window, observed_generation) = {
-            let state = self.state.lock().ok()?;
-            let (value, window) = state.pending.clone()?;
-            (value, window, state.generation)
+        let (value, window) = {
+            let pending = self.pending.lock().ok()?;
+            pending.clone()?
         };
-
-        #[cfg(test)]
-        if let Some(gate) = &self.refresh_snapshot_gate {
-            gate.wait(Duration::ZERO);
-        }
-
-        let timer_generation = {
-            let mut state = self.state.lock().ok()?;
-            if state.generation != observed_generation || state.pending.is_none() {
-                return None;
-            }
-            state.generation = state.generation.wrapping_add(1);
-            state.generation
-        };
-        self.spawn_timer(window, value, timer_generation);
+        self.end_run_after(window, value);
         Some(window)
     }
 }
@@ -730,8 +672,8 @@ pub struct AgentDriver {
     /// In the future, we _may_ use the harness abstraction for the Oz agent as well.
     harness: Option<Arc<dyn HarnessRunner>>,
 
-    // Optional idle timeout after completion. A positive duration keeps the process alive for
-    // follow-ups; zero exits immediately.
+    // Optional idle timeout after completion. If set, the process will stay alive for follow-ups
+    // and exit after this period of inactivity.
     idle_on_complete: Option<Duration>,
 
     // Optional idle timeout after a terminal error. If set, the process (and with it the shared
@@ -3936,25 +3878,16 @@ impl AgentDriver {
                             me.idle_on_fail,
                         );
                         let outcome = terminal_status_log_outcome(&output_status);
-                        match idle_window {
-                            Some(Duration::ZERO) => {
-                                log::info!(
-                                    "Ambient agent idle lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_id:?} outcome={outcome}",
-                                    me.task_id
-                                );
-                            }
-                            Some(idle_timeout) => {
-                                log::info!(
-                                    "Ambient agent idle lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_id:?} timeout={idle_timeout:?} outcome={outcome}",
-                                    me.task_id
-                                );
-                            }
-                            None => {
-                                log::info!(
-                                    "Ambient agent idle lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_id:?} outcome={outcome}",
-                                    me.task_id
-                                );
-                            }
+                        if let Some(idle_timeout) = idle_window {
+                            log::info!(
+                                "Ambient agent idle lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_id:?} timeout={idle_timeout:?} outcome={outcome}",
+                                me.task_id
+                            );
+                        } else {
+                            log::info!(
+                                "Ambient agent idle lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_id:?} outcome={outcome}",
+                                me.task_id
+                            );
                         }
                         match idle_window {
                             // A failure window is held open by the human working in the session,
@@ -4298,25 +4231,16 @@ impl AgentDriver {
                                 me.idle_on_fail,
                             );
                             let outcome = cli_session_status_log_outcome(status);
-                            match idle_window {
-                                Some(Duration::ZERO) => {
-                                    log::info!(
-                                        "Ambient agent CLI lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_view_id:?} outcome={outcome}",
-                                        me.task_id
-                                    );
-                                }
-                                Some(idle_timeout) => {
-                                    log::info!(
-                                        "Ambient agent CLI lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_view_id:?} timeout={idle_timeout:?} outcome={outcome}",
-                                        me.task_id
-                                    );
-                                }
-                                None => {
-                                    log::info!(
-                                        "Ambient agent CLI lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_view_id:?} outcome={outcome}",
-                                        me.task_id
-                                    );
-                                }
+                            if let Some(idle_timeout) = idle_window {
+                                log::info!(
+                                    "Ambient agent CLI lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_view_id:?} timeout={idle_timeout:?} outcome={outcome}",
+                                    me.task_id
+                                );
+                            } else {
+                                log::info!(
+                                    "Ambient agent CLI lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_view_id:?} outcome={outcome}",
+                                    me.task_id
+                                );
                             }
                             match idle_window {
                                 // A failure window is held open by whoever is debugging in the

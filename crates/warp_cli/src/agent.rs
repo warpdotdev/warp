@@ -533,7 +533,6 @@ pub struct RunAgentArgs {
     /// This is useful when you want to keep the session alive for follow-up interactions.
     ///
     /// You can optionally provide a duration (e.g. `--idle-on-complete 10m`).
-    /// A duration of `0m` exits immediately after completion.
     #[arg(
         long = "idle-on-complete",
         value_name = "DURATION",

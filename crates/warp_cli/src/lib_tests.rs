@@ -1022,32 +1022,6 @@ fn agent_run_accepts_idle_on_complete_duration() {
 }
 
 #[test]
-fn agent_run_accepts_zero_idle_on_complete_duration() {
-    let args = Args::try_parse_from([
-        "warp",
-        "agent",
-        "run",
-        "--prompt",
-        "hello",
-        "--idle-on-complete",
-        "0m",
-    ])
-    .unwrap();
-
-    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
-        panic!("Expected `warp agent run` command");
-    };
-    let CliCommand::Agent(AgentCommand::Run(run_args)) = boxed_cmd.as_ref() else {
-        panic!("Expected `warp agent run` command");
-    };
-
-    assert_eq!(
-        run_args.idle_on_complete,
-        Some(humantime::Duration::from(std::time::Duration::ZERO))
-    );
-}
-
-#[test]
 fn agent_run_accepts_idle_on_fail_flag() {
     let args = Args::try_parse_from([
         "warp",
