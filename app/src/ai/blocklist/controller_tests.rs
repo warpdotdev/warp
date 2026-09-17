@@ -507,6 +507,12 @@ fn explicit_stream_finished_failures_are_classified_without_init() {
         let reasons = [
             response_event::stream_finished::Reason::Other(Default::default()),
             response_event::stream_finished::Reason::LlmUnavailable(Default::default()),
+            response_event::stream_finished::Reason::ChatgptSubscriptionError(
+                response_event::stream_finished::ChatGptSubscriptionError {
+                    message: "subscription limit reached".to_owned(),
+                    ..Default::default()
+                },
+            ),
             response_event::stream_finished::Reason::InternalError(
                 response_event::stream_finished::InternalError {
                     message: "server stream failure".to_owned(),
