@@ -17,7 +17,9 @@
 use std::fmt;
 use std::sync::Arc;
 
+#[cfg(any(test, feature = "local_tty"))]
 use base64::Engine as _;
+#[cfg(any(test, feature = "local_tty"))]
 use prost::Message as _;
 use warp_multi_agent_api as api;
 use warp_multi_agent_api::AgentType;
@@ -33,6 +35,7 @@ impl BaseUserQuery {
     ///
     /// Returns `None` (after logging) when the payload is not valid Base64 or not a valid
     /// `Request.Input.UserQuery`; a partially decoded query is never returned.
+    #[cfg(any(test, feature = "local_tty"))]
     pub(crate) fn decode_b64(encoded: &str) -> Option<Self> {
         let bytes = match base64::engine::general_purpose::STANDARD.decode(encoded) {
             Ok(bytes) => bytes,
@@ -52,6 +55,7 @@ impl BaseUserQuery {
         }
     }
 
+    #[cfg(any(test, feature = "local_tty"))]
     pub(crate) fn from_proto(query: api::request::input::UserQuery) -> Self {
         Self(Arc::new(query))
     }
