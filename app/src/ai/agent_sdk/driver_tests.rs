@@ -160,13 +160,71 @@ fn idle_timeout_sender_complete_with_zero_idle_sends_immediately() {
 }
 
 #[test]
+fn idle_timeout_sender_cancel_after_refresh_snapshot_prevents_rearm() {
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let (timer_wait, timer_release_tx) = manual_idle_wait();
+    let (refresh_gate, refresh_reached_rx, refresh_release_tx) = manual_idle_wait_with_arrival();
+    let idle_timeout = IdleTimeoutSender::new(tx)
+        .with_wait(timer_wait)
+        .with_refresh_snapshot_gate(refresh_gate);
+    idle_timeout.arm_refreshable(Duration::from_secs(60), 1);
+
+    let refresher = idle_timeout.clone();
+    let refresh_thread = std::thread::spawn(move || refresher.refresh());
+    refresh_reached_rx
+        .recv()
+        .expect("refresh should pause after snapshotting its pending outcome");
+
+    idle_timeout.cancel_idle_timeout();
+    refresh_release_tx
+        .send(())
+        .expect("refresh should still be waiting after its snapshot");
+    assert_eq!(
+        refresh_thread.join().unwrap(),
+        None,
+        "a refresh snapshotted before cancellation must not re-arm afterward"
+    );
+
+    idle_timeout.end_run_now(2);
+    assert_eq!(rx.try_recv().unwrap(), Some(2));
+    timer_release_tx
+        .send(())
+        .expect("the original timer should still be waiting");
+}
+
+#[test]
+fn idle_timeout_sender_zero_completion_beats_timer_waiting_to_commit() {
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let (timer_wait, timer_release_tx) = manual_idle_wait();
+    let (commit_gate, commit_reached_rx, commit_release_tx) = manual_idle_wait_with_arrival();
+    let idle_timeout = IdleTimeoutSender::new(tx)
+        .with_wait(timer_wait)
+        .with_pre_commit_gate(commit_gate);
+    idle_timeout.end_run_after(Duration::from_secs(60), 1);
+
+    timer_release_tx
+        .send(())
+        .expect("the timer should still be waiting");
+    commit_reached_rx
+        .recv()
+        .expect("the timer should pause immediately before commitment");
+
+    idle_timeout.complete_with_optional_idle(Some(Duration::ZERO), 2);
+    assert_eq!(rx.try_recv().unwrap(), Some(2));
+
+    commit_release_tx
+        .send(())
+        .expect("the stale timer should still be waiting before commitment");
+}
+
+#[test]
 fn idle_timeout_sender_complete_with_optional_idle_some_then_cancel_invalidates_timer() {
     // Cross-path cancellation: the Stage 2c skip-initial-turn driver path
     // schedules a deferred `Success` via `complete_with_optional_idle(Some(_), _)`
     // *before* the history subscription is wired up; a later
     // `AppendedExchange` in that subscription closure invalidates the timer
-    // via `cancel_idle_timeout()`. The shared `Arc<AtomicUsize>` generation
-    // counter is what makes that work across the two logical code paths.
+    // via `cancel_idle_timeout()`. The shared generation counter is what makes
+    // that work across the two logical code paths.
     // This test exercises the same sequence in isolation: schedule via the
     // helper, then cancel via the unrelated `cancel_idle_timeout` entry point,
     // and verify the value is never delivered.
@@ -2036,6 +2094,16 @@ impl<T: Send + 'static> super::IdleTimeoutSender<T> {
         self.wait = wait;
         self
     }
+
+    pub(super) fn with_refresh_snapshot_gate(mut self, gate: Arc<dyn super::IdleWait>) -> Self {
+        self.refresh_snapshot_gate = Some(gate);
+        self
+    }
+
+    pub(super) fn with_pre_commit_gate(mut self, gate: Arc<dyn super::IdleWait>) -> Self {
+        self.pre_commit_gate = Some(gate);
+        self
+    }
 }
 
 /// Test-only [`super::IdleWait`] that blocks until the test releases it, so a deferred idle
@@ -2046,11 +2114,15 @@ impl<T: Send + 'static> super::IdleTimeoutSender<T> {
 /// exercises: releasing the timer while a child event's async injection eligibility check is
 /// already in flight.
 struct ManualIdleWait {
+    reached_tx: Option<std::sync::mpsc::Sender<()>>,
     release_rx: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
 }
 
 impl super::IdleWait for ManualIdleWait {
     fn wait(&self, _duration: Duration) {
+        if let Some(reached_tx) = &self.reached_tx {
+            let _ = reached_tx.send(());
+        }
         let _ = self.release_rx.lock().unwrap().recv();
     }
 }
@@ -2059,9 +2131,27 @@ fn manual_idle_wait() -> (Arc<ManualIdleWait>, std::sync::mpsc::Sender<()>) {
     let (tx, rx) = std::sync::mpsc::channel();
     (
         Arc::new(ManualIdleWait {
+            reached_tx: None,
             release_rx: std::sync::Mutex::new(rx),
         }),
         tx,
+    )
+}
+
+fn manual_idle_wait_with_arrival() -> (
+    Arc<ManualIdleWait>,
+    std::sync::mpsc::Receiver<()>,
+    std::sync::mpsc::Sender<()>,
+) {
+    let (reached_tx, reached_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    (
+        Arc::new(ManualIdleWait {
+            reached_tx: Some(reached_tx),
+            release_rx: std::sync::Mutex::new(release_rx),
+        }),
+        reached_rx,
+        release_tx,
     )
 }
 
