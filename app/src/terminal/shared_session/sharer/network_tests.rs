@@ -3,21 +3,31 @@ use std::time::Duration;
 
 use async_channel::Sender;
 use byte_unit::Byte;
+use futures::SinkExt as _;
+use futures::channel::mpsc;
+use futures_util::StreamExt as _;
 use futures_util::stream::AbortHandle;
 use instant::Instant;
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::{
-    ActivePrompt, OrderedTerminalEvent, OrderedTerminalEventType, ParticipantId, Selection,
-    SelectionUpdate, SessionId,
+    ActivePrompt, ActivePromptUpdate, OrderedTerminalEvent, OrderedTerminalEventType,
+    ParticipantId, Selection, SelectionUpdate, SessionId,
 };
 use session_sharing_protocol::sharer::{
     DownstreamMessage, FailedToInitializeSessionReason, QuotaType, ReconnectToken, UpstreamMessage,
 };
+use warp_multi_agent_api::client_action::{Action, AddMessagesToTask};
+use warp_multi_agent_api::message::{AgentOutput, Message as MessageKind};
+use warp_multi_agent_api::response_event::{ClientActions, Type};
+use warp_multi_agent_api::{ClientAction, ResponseEvent};
 use warp_server_client::iap::IapManager;
 use warpui::r#async::FutureExt as _;
 use warpui::{App, ModelHandle};
 use websocket::{Message, WebsocketMessage as _};
 
+use super::super::message_size::{
+    MAX_ORDERED_TERMINAL_EVENT_BYTES, MAX_PTY_BATCH_RAW_BYTES, SERVER_MAX_WEBSOCKET_MESSAGE_BYTES,
+};
 use super::{
     AMBIENT_CREATE_SESSION_MAX_ATTEMPTS, Network, PTY_READS_BATCH_THRESHOLD, PtyBytesBatchStatus,
     Stage, StartupFailure, StartupRetryState, share_with_team_uid_for_init_payload,
@@ -28,6 +38,9 @@ use crate::auth::auth_manager::AuthManager;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::terminal::TerminalModel;
+use crate::terminal::shared_session::ai_agent::{
+    decode_agent_response_event, encode_agent_response_event,
+};
 use crate::terminal::shared_session::{
     MAX_BYTES_SHAREABLE, SELECTION_THROTTLE_PERIOD, SharedSessionSource,
 };
@@ -204,6 +217,14 @@ fn create_network(
     app: &mut App,
     session_initialized: bool,
 ) -> (ModelHandle<Network>, Sender<OrderedTerminalEventType>) {
+    create_network_with_max_session_size(app, session_initialized, MAX_BYTES_SHAREABLE)
+}
+
+fn create_network_with_max_session_size(
+    app: &mut App,
+    session_initialized: bool,
+    max_session_size: usize,
+) -> (ModelHandle<Network>, Sender<OrderedTerminalEventType>) {
     let (ordered_events_tx, ordered_events_rx) = async_channel::unbounded();
     let active_prompt = ActivePrompt::default();
     let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
@@ -214,7 +235,7 @@ fn create_network(
             ordered_events_rx,
             active_prompt,
             Selection::None,
-            Byte::from_u64(MAX_BYTES_SHAREABLE as u64),
+            Byte::from_u64(max_session_size as u64),
             ctx,
         )
     });
@@ -228,6 +249,87 @@ fn create_network(
     }
 
     (network, ordered_events_tx)
+}
+
+/// An `AgentResponseEvent` carrying `message_count` agent output messages of `text_len` bytes each
+/// in a single `AddMessagesToTask`.
+fn agent_response_event_with_messages(
+    message_count: usize,
+    text_len: usize,
+) -> OrderedTerminalEventType {
+    let messages = (0..message_count)
+        .map(|i| warp_multi_agent_api::Message {
+            id: format!("message-{i}"),
+            message: Some(MessageKind::AgentOutput(AgentOutput {
+                text: "x".repeat(text_len),
+            })),
+            ..Default::default()
+        })
+        .collect();
+    let response = ResponseEvent {
+        r#type: Some(Type::ClientActions(ClientActions {
+            actions: vec![ClientAction {
+                action: Some(Action::AddMessagesToTask(AddMessagesToTask {
+                    task_id: "task".to_string(),
+                    messages,
+                })),
+            }],
+        })),
+    };
+    OrderedTerminalEventType::AgentResponseEvent {
+        response_initiator: Some(ParticipantId::new()),
+        response_event: encode_agent_response_event(&response),
+        forked_from_conversation_token: None,
+    }
+}
+
+fn decoded_message_ids(event_type: &OrderedTerminalEventType) -> Vec<String> {
+    let OrderedTerminalEventType::AgentResponseEvent { response_event, .. } = event_type else {
+        panic!("expected an AgentResponseEvent, got {event_type:?}");
+    };
+    let Some(Type::ClientActions(client_actions)) =
+        decode_agent_response_event(response_event).unwrap().r#type
+    else {
+        panic!("expected ClientActions");
+    };
+    client_actions
+        .actions
+        .into_iter()
+        .flat_map(|action| {
+            let Some(Action::AddMessagesToTask(add)) = action.action else {
+                return Vec::new();
+            };
+            add.messages.into_iter().map(|m| m.id).collect()
+        })
+        .collect()
+}
+
+/// Wires a mock websocket into the network's send task and returns the receiving end, so tests
+/// can observe exactly what would be written to the wire.
+fn connect_mock_websocket(
+    network: &ModelHandle<Network>,
+    app: &mut App,
+) -> mpsc::UnboundedReceiver<Message> {
+    let (wire_tx, wire_rx) = mpsc::unbounded();
+    network.update(app, |network, ctx| {
+        let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
+        network.ws_proxy_tx = ws_proxy_tx;
+        network.ws_proxy_rx = ws_proxy_rx.clone();
+        let sink = wire_tx.sink_map_err(|e| websocket::Error::from(anyhow::Error::new(e)));
+        let stream = futures::stream::pending::<Result<Message, websocket::Error>>();
+        network.on_websocket_connected(None, ws_proxy_rx, sink, stream, ctx);
+    });
+    wire_rx
+}
+
+async fn next_wire_message(wire_rx: &mut mpsc::UnboundedReceiver<Message>) -> UpstreamMessage {
+    let message = wire_rx
+        .next()
+        .with_timeout(Duration::from_secs(5))
+        .await
+        .expect("A message should reach the wire before the timeout")
+        .expect("The wire should remain open");
+    UpstreamMessage::from_json(message.text().unwrap()).unwrap()
 }
 
 #[test]
@@ -278,6 +380,243 @@ fn test_send_ordered_terminal_event_message_max_reached() {
 
         // Make sure the ws_proxy_tx is closed and nothing was sent.
         assert!(ws_proxy_tx.is_closed());
+    });
+}
+
+#[test]
+fn test_send_ordered_terminal_event_message_splits_oversized_agent_event() {
+    App::test((), |mut app| async move {
+        let network = create_network_with_max_session_size(&mut app, true, usize::MAX).0;
+        let ws_proxy_rx = network.read(&app, |network, _ctx| network.ws_proxy_rx.clone());
+
+        // Three messages that together exceed the cap but individually fit.
+        let message_count = 3;
+        let text_len = MAX_ORDERED_TERMINAL_EVENT_BYTES / 2;
+        let event = agent_response_event_with_messages(message_count, text_len);
+        network.update(&mut app, |network, _| {
+            network.send_ordered_terminal_event_message(event);
+        });
+
+        // Nothing was dropped: every message reaches the server, in order, across consecutively
+        // numbered events that each fit under the cap.
+        let sent = ws_proxy_rx.len();
+        assert!(
+            sent > 1,
+            "expected the event to be split, got {sent} event(s)"
+        );
+        network.read(&app, |network, _ctx| {
+            assert_eq!(usize::from(network.event_no), sent);
+            assert_eq!(network.unacked_terminal_events.len(), sent);
+        });
+        let mut message_ids = Vec::new();
+        for expected_event_no in 0..sent {
+            let message = ws_proxy_rx.recv().await.unwrap();
+            assert!(message.to_json().unwrap().len() <= MAX_ORDERED_TERMINAL_EVENT_BYTES);
+            let UpstreamMessage::OrderedTerminalEvent(event) = message else {
+                panic!("expected an ordered terminal event");
+            };
+            assert_eq!(event.event_no, expected_event_no);
+            message_ids.extend(decoded_message_ids(&event.event_type));
+        }
+        assert_eq!(
+            message_ids,
+            (0..message_count)
+                .map(|i| format!("message-{i}"))
+                .collect::<Vec<_>>()
+        );
+    });
+}
+
+#[test]
+fn test_send_ordered_terminal_event_message_drops_indivisible_oversized_message() {
+    App::test((), |mut app| async move {
+        let network = create_network_with_max_session_size(&mut app, true, usize::MAX).0;
+        let ws_proxy_rx = network.read(&app, |network, _ctx| network.ws_proxy_rx.clone());
+
+        // A single message that is itself larger than the cap can only be dropped; the event
+        // number must not be consumed so the sequence stays contiguous for the next event.
+        let event = agent_response_event_with_messages(1, MAX_ORDERED_TERMINAL_EVENT_BYTES);
+        network.update(&mut app, |network, _| {
+            network.send_ordered_terminal_event_message(event);
+        });
+        assert_eq!(ws_proxy_rx.len(), 0);
+        network.read(&app, |network, _ctx| {
+            assert_eq!(usize::from(network.event_no), 0);
+            assert!(network.unacked_terminal_events.is_empty());
+        });
+
+        network.update(&mut app, |network, _| {
+            network.send_ordered_terminal_event_message(
+                OrderedTerminalEventType::AgentConversationReplayEnded,
+            );
+        });
+        let message = ws_proxy_rx.recv().await.unwrap();
+        assert!(matches!(
+            message,
+            UpstreamMessage::OrderedTerminalEvent(OrderedTerminalEvent {
+                event_no: 0,
+                event_type: OrderedTerminalEventType::AgentConversationReplayEnded,
+            })
+        ));
+    });
+}
+
+#[test]
+fn test_send_pty_read_event_splits_large_batches() {
+    App::test((), |mut app| async move {
+        let network = create_network_with_max_session_size(&mut app, true, usize::MAX).0;
+        let ws_proxy_rx = network.read(&app, |network, _ctx| network.ws_proxy_rx.clone());
+
+        // Incompressible bytes, so compression cannot mask the raw size.
+        let accumulated = (0..MAX_PTY_BATCH_RAW_BYTES * 2 + 1)
+            .map(|i| (i * 7919 % 251) as u8)
+            .collect::<Vec<_>>();
+        network.update(&mut app, |network, _ctx| {
+            network.pty_bytes_batch_status = PtyBytesBatchStatus::Batching {
+                accumulated: accumulated.clone(),
+                abort_handle: AbortHandle::new_pair().0,
+            };
+        });
+        network.update(&mut app, |network, _| {
+            network.send_pty_bytes_read_message();
+        });
+
+        assert_eq!(ws_proxy_rx.len(), 3);
+        let mut reassembled = Vec::new();
+        for expected_event_no in 0..3 {
+            let message = ws_proxy_rx.recv().await.unwrap();
+            assert!(message.to_json().unwrap().len() <= MAX_ORDERED_TERMINAL_EVENT_BYTES);
+            let UpstreamMessage::OrderedTerminalEvent(OrderedTerminalEvent {
+                event_no,
+                event_type: OrderedTerminalEventType::PtyBytesRead { bytes },
+            }) = message
+            else {
+                panic!("expected a PtyBytesRead event");
+            };
+            assert_eq!(event_no, expected_event_no);
+            reassembled.extend(lz4_flex::block::decompress_size_prepended(&bytes).unwrap());
+        }
+        assert_eq!(reassembled, accumulated);
+    });
+}
+
+#[test]
+fn test_oversized_unacked_event_is_replaced_on_reconnect_replay() {
+    App::test((), |mut app| async move {
+        let network = create_network_with_max_session_size(&mut app, true, usize::MAX).0;
+
+        // An unacked event that is over the server's frame limit, as if it had been queued by a
+        // path that bypassed source-side bounding.
+        let oversized_payload = "A".repeat(SERVER_MAX_WEBSOCKET_MESSAGE_BYTES + 1);
+        let response_initiator = Some(ParticipantId::new());
+        network.update(&mut app, |network, _| {
+            network.unacked_terminal_events.insert(
+                0,
+                OrderedTerminalEvent {
+                    event_no: 0,
+                    event_type: OrderedTerminalEventType::AgentResponseEvent {
+                        response_initiator: response_initiator.clone(),
+                        response_event: oversized_payload,
+                        forked_from_conversation_token: None,
+                    },
+                },
+            );
+            network.unacked_terminal_events.insert(
+                1,
+                OrderedTerminalEvent {
+                    event_no: 1,
+                    event_type: OrderedTerminalEventType::AgentConversationReplayEnded,
+                },
+            );
+            network.stage = Stage::Reconnecting {
+                abort_handle: AbortHandle::new_pair().0,
+            };
+        });
+        let mut wire_rx = connect_mock_websocket(&network, &mut app);
+
+        // The server confirms the reconnect without having received anything, which replays
+        // the whole unacked queue.
+        network.update(&mut app, |network, ctx| {
+            let downstream_message = DownstreamMessage::SessionReconnected {
+                last_received_event_no: None,
+                participant_list: Default::default(),
+            };
+            let serialized = downstream_message.to_json().unwrap();
+            network.process_websocket_message(Message::new(serialized), ctx);
+        });
+
+        // The oversized event reaches the wire as a same-numbered placeholder rather than
+        // verbatim, and the events after it are unaffected.
+        let UpstreamMessage::OrderedTerminalEvent(first) = next_wire_message(&mut wire_rx).await
+        else {
+            panic!("expected an ordered terminal event");
+        };
+        assert_eq!(first.event_no, 0);
+        let OrderedTerminalEventType::AgentResponseEvent {
+            response_initiator: placeholder_initiator,
+            response_event,
+            ..
+        } = first.event_type
+        else {
+            panic!("expected an AgentResponseEvent placeholder");
+        };
+        assert_eq!(placeholder_initiator, response_initiator);
+        assert!(response_event.len() < SERVER_MAX_WEBSOCKET_MESSAGE_BYTES);
+        assert!(
+            decoded_message_ids(&OrderedTerminalEventType::AgentResponseEvent {
+                response_initiator: None,
+                response_event,
+                forked_from_conversation_token: None,
+            })
+            .is_empty()
+        );
+
+        assert!(matches!(
+            next_wire_message(&mut wire_rx).await,
+            UpstreamMessage::OrderedTerminalEvent(OrderedTerminalEvent {
+                event_no: 1,
+                event_type: OrderedTerminalEventType::AgentConversationReplayEnded,
+            })
+        ));
+        assert!(matches!(
+            next_wire_message(&mut wire_rx).await,
+            UpstreamMessage::UpdateActivePrompt(_)
+        ));
+    });
+}
+
+#[test]
+fn test_oversized_non_ordered_message_is_not_written_to_the_wire() {
+    App::test((), |mut app| async move {
+        let network = create_network(&mut app, true).0;
+        let mut wire_rx = connect_mock_websocket(&network, &mut app);
+
+        network.update(&mut app, |network, _| {
+            network.send_message_to_server(UpstreamMessage::UpdateActivePrompt(
+                ActivePromptUpdate {
+                    active_prompt: ActivePrompt::WarpPrompt(
+                        "p".repeat(SERVER_MAX_WEBSOCKET_MESSAGE_BYTES + 1),
+                    ),
+                    last_event_no: 0,
+                },
+            ));
+            network.send_message_to_server(UpstreamMessage::UpdateActivePrompt(
+                ActivePromptUpdate {
+                    active_prompt: ActivePrompt::WarpPrompt("small".to_string()),
+                    last_event_no: 0,
+                },
+            ));
+        });
+
+        // Only the small update makes it to the wire; the oversized one is skipped rather than
+        // sent and rejected.
+        assert!(matches!(
+            next_wire_message(&mut wire_rx).await,
+            UpstreamMessage::UpdateActivePrompt(ActivePromptUpdate {
+                active_prompt: ActivePrompt::WarpPrompt(prompt),
+                ..
+            }) if prompt == "small"
+        ));
     });
 }
 

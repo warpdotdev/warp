@@ -45,6 +45,11 @@ use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext, RequestState, RetryOption, SingletonEntity};
 use websocket::{Message, Sink, Stream, WebSocket, WebsocketMessage as _};
 
+use super::message_size::{
+    BoundedEvents, DroppedPayload, MAX_ORDERED_TERMINAL_EVENT_BYTES, MAX_PTY_BATCH_RAW_BYTES,
+    SERVER_MAX_WEBSOCKET_MESSAGE_BYTES, bound_ordered_terminal_event,
+    replacement_for_oversized_message, upstream_message_label,
+};
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::editor::{CrdtOperation, ReplicaId};
 use crate::server::server_api::ServerApiProvider;
@@ -1254,7 +1259,31 @@ impl Network {
                 let mut ws_proxy_rx = pin!(ws_proxy_rx);
                 while let Some(message) = ws_proxy_rx.next().await {
                     let is_startup_initialize = matches!(message, UpstreamMessage::Initialize(_));
-                    let serialized = message.to_json();
+                    let serialized = match message.to_json() {
+                        Ok(serialized) if serialized.len() > SERVER_MAX_WEBSOCKET_MESSAGE_BYTES => {
+                            let bytes = serialized.len();
+                            let label = upstream_message_label(&message);
+                            match replacement_for_oversized_message(&message) {
+                                Some(replacement) => {
+                                    report_error!(anyhow::anyhow!(
+                                        "Replaced oversized shared session upload with a placeholder; message={label} bytes={bytes} limit={SERVER_MAX_WEBSOCKET_MESSAGE_BYTES}"
+                                    ));
+                                    replacement.to_json()
+                                }
+                                None => {
+                                    report_error!(anyhow::anyhow!(
+                                        "Skipped oversized shared session upload; message={label} bytes={bytes} limit={SERVER_MAX_WEBSOCKET_MESSAGE_BYTES}"
+                                    ));
+                                    if is_startup_initialize {
+                                        startup_send_failed = true;
+                                        break;
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
+                        serialized => serialized,
+                    };
                     match serialized {
                         Ok(serialized) => {
                             if let Err(e) = sink.send(Message::new(serialized)).await {
@@ -1631,11 +1660,12 @@ impl Network {
             // Abort the existing timer if it's running.
             abort_handle.abort();
 
-            // Send the bytes as a single event.
             // TODO: think more deeply about the best compression algorithm for our use-case.
-            let compressed = lz4_flex::block::compress_prepend_size(&accumulated);
-            let pty_event_type = OrderedTerminalEventType::PtyBytesRead { bytes: compressed };
-            self.send_ordered_terminal_event_message(pty_event_type);
+            for chunk in accumulated.chunks(MAX_PTY_BATCH_RAW_BYTES) {
+                let compressed = lz4_flex::block::compress_prepend_size(chunk);
+                let pty_event_type = OrderedTerminalEventType::PtyBytesRead { bytes: compressed };
+                self.send_ordered_terminal_event_message(pty_event_type);
+            }
 
             // Since we swapped the status already, the current `pty_bytes_batch_status`
             // will be the [`PtyBytesReadBatch::NotBatching`] status, as expected.
@@ -1646,23 +1676,45 @@ impl Network {
     }
 
     fn send_ordered_terminal_event_message(&mut self, event_type: OrderedTerminalEventType) {
-        // If this send is going to exceed the max number of shareable bytes,
-        // let's just end the session.
-        let num_bytes = event_type.num_bytes();
-        self.num_bytes_shared = self.num_bytes_shared.add(num_bytes).unwrap_or(Byte::MAX);
-        if self.num_bytes_shared > self.max_session_size {
-            sharer_info!(self, "Stopping shared session because max bytes exceeded.");
-            self.end_session(SessionEndedReason::ExceededSizeLimit);
-            return;
+        let BoundedEvents {
+            events,
+            original_bytes,
+            dropped,
+        } = bound_ordered_terminal_event(event_type, MAX_ORDERED_TERMINAL_EVENT_BYTES);
+        if let Some(original_bytes) = original_bytes {
+            sharer_warn!(
+                self,
+                "Rewrote oversized ordered terminal event before upload; original_bytes={original_bytes} events={} dropped={} limit={MAX_ORDERED_TERMINAL_EVENT_BYTES}",
+                events.len(),
+                dropped.len()
+            );
+        }
+        for DroppedPayload { description, bytes } in dropped {
+            sharer_error!(
+                self,
+                "Dropped shared session payload that exceeds the upload size limit; payload={description} bytes={bytes} limit={MAX_ORDERED_TERMINAL_EVENT_BYTES}"
+            );
         }
 
-        let event_no = self.event_no.advance();
-        let message = UpstreamMessage::OrderedTerminalEvent(OrderedTerminalEvent {
-            event_no,
-            event_type,
-        });
+        for event_type in events {
+            // If this send is going to exceed the max number of shareable bytes,
+            // let's just end the session.
+            let num_bytes = event_type.num_bytes();
+            self.num_bytes_shared = self.num_bytes_shared.add(num_bytes).unwrap_or(Byte::MAX);
+            if self.num_bytes_shared > self.max_session_size {
+                sharer_info!(self, "Stopping shared session because max bytes exceeded.");
+                self.end_session(SessionEndedReason::ExceededSizeLimit);
+                return;
+            }
 
-        self.send_message_to_server(message);
+            let event_no = self.event_no.advance();
+            let message = UpstreamMessage::OrderedTerminalEvent(OrderedTerminalEvent {
+                event_no,
+                event_type,
+            });
+
+            self.send_message_to_server(message);
+        }
     }
 
     /// Stores the event if it's an OrderedTerminalEvent, and sends the message to the server if we're connected.
