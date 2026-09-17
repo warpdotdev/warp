@@ -151,14 +151,12 @@ fn idle_timeout_sender_complete_with_optional_idle_some_defers_then_delivers() {
 }
 
 #[test]
-fn idle_timeout_sender_complete_with_zero_idle_stays_open() {
+fn idle_timeout_sender_complete_with_zero_idle_sends_immediately() {
     let (tx, mut rx) = oneshot::channel::<i32>();
     let idle_timeout = IdleTimeoutSender::new(tx);
     idle_timeout.end_run_after(Duration::from_millis(50), 1);
     idle_timeout.complete_with_optional_idle(Some(Duration::ZERO), 7);
-    std::thread::sleep(Duration::from_millis(100));
-
-    assert_eq!(rx.try_recv().unwrap(), None);
+    assert_eq!(rx.try_recv().unwrap(), Some(7));
 }
 
 #[test]

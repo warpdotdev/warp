@@ -362,11 +362,14 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
         }
     }
 
-    /// End the run with `value`, deferring by a positive `idle_timeout`, staying open indefinitely
-    /// for zero, and completing immediately for `None`.
+    /// End the run with `value`, deferring by a positive `idle_timeout` and completing immediately
+    /// for zero or `None`.
     fn complete_with_optional_idle(&self, idle_timeout: Option<Duration>, value: T) {
         match idle_timeout {
-            Some(Duration::ZERO) => self.cancel_idle_timeout(),
+            Some(Duration::ZERO) => {
+                self.cancel_idle_timeout();
+                self.end_run_now(value);
+            }
             Some(idle_timeout) => self.end_run_after(idle_timeout, value),
             None => self.end_run_now(value),
         }
@@ -590,7 +593,7 @@ pub struct AgentDriverOptions {
     pub parent_run_id: Option<String>,
     /// Whether the agent run should share its session.
     pub should_share: bool,
-    /// How long to keep the session alive after the agent run completes. Zero disables shutdown.
+    /// How long to keep the session alive after the agent run completes, if at all.
     pub idle_on_complete: Option<Duration>,
     /// How long to keep the session alive after the agent run ends in a terminal error, if at
     /// all. Set by the cloud worker from the environment's post-failure session retention policy
@@ -669,7 +672,8 @@ pub struct AgentDriver {
     /// In the future, we _may_ use the harness abstraction for the Oz agent as well.
     harness: Option<Arc<dyn HarnessRunner>>,
 
-    // Optional idle timeout after completion. Zero keeps the process alive indefinitely.
+    // Optional idle timeout after completion. A positive duration keeps the process alive for
+    // follow-ups; zero exits immediately.
     idle_on_complete: Option<Duration>,
 
     // Optional idle timeout after a terminal error. If set, the process (and with it the shared
@@ -3865,7 +3869,7 @@ impl AgentDriver {
                         match idle_window {
                             Some(Duration::ZERO) => {
                                 log::info!(
-                                    "Ambient agent idle lifecycle: event=completion_shutdown_disabled task_id={:?} terminal_view_id={terminal_id:?} outcome={outcome}",
+                                    "Ambient agent idle lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_id:?} outcome={outcome}",
                                     me.task_id
                                 );
                             }
@@ -4224,7 +4228,7 @@ impl AgentDriver {
                             match idle_window {
                                 Some(Duration::ZERO) => {
                                     log::info!(
-                                        "Ambient agent CLI lifecycle: event=completion_shutdown_disabled task_id={:?} terminal_view_id={terminal_view_id:?} outcome={outcome}",
+                                        "Ambient agent CLI lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_view_id:?} outcome={outcome}",
                                         me.task_id
                                     );
                                 }
