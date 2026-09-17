@@ -4,13 +4,15 @@ use ai::agent::action_result::{AIAgentActionResultType, RecordingStarted, StartR
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use uuid::Uuid;
-use warp_core::features::{FeatureFlag, video_recording_enabled};
+use warp_core::features::FeatureFlag;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::AIAgentActionType;
 use crate::ai::blocklist::action_model::RecordingTelemetryEvent;
-use crate::ai::blocklist::action_model::recording_controller::RecordingController;
+use crate::ai::blocklist::action_model::recording_controller::{
+    RecordingController, video_recording_enabled,
+};
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::blocklist::action_model::recording_finalize::spawn_recording_exit_watcher;
 use crate::send_telemetry_from_ctx;

@@ -597,7 +597,6 @@ pub enum FeatureFlag {
     /// Gates the Windows `gdigrab` recorder behind its own switch, on top of
     /// [`FeatureFlag::VideoRecording`]. Windows capture is newer and less proven than the
     /// macOS/Linux ffmpeg paths, so it rolls out and can be killed independently of them.
-    /// See [`video_recording_enabled`].
     WindowsVideoRecording,
 
     /// Enables team API key creation in the API key management UI.
@@ -1103,16 +1102,6 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
 
 /// Flags that we want to allow to switch at runtime (assuming RuntimeFeatureFlags is set)
 pub const RUNTIME_FEATURE_FLAGS: &[FeatureFlag] = &[FeatureFlag::LocalClaudeCodexChildHarnesses];
-
-/// Returns whether computer-use video recording is available on the current platform.
-///
-/// Callers should prefer this over reading [`FeatureFlag::VideoRecording`] directly, so the
-/// Windows-only [`FeatureFlag::WindowsVideoRecording`] gate stays consistent across the
-/// recording tool surface.
-pub fn video_recording_enabled() -> bool {
-    FeatureFlag::VideoRecording.is_enabled()
-        && (!cfg!(windows) || FeatureFlag::WindowsVideoRecording.is_enabled())
-}
 
 impl FeatureFlag {
     pub fn is_enabled(&self) -> bool {

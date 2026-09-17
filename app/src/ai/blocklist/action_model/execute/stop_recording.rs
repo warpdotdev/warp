@@ -2,13 +2,13 @@
 use ai::agent::action_result::{RecordingStopped, StopRecordingResult};
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use warp_core::features::video_recording_enabled;
 #[cfg(not(target_family = "wasm"))]
 use warpui::SingletonEntity;
 use warpui::{Entity, ModelContext};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::AIAgentActionType;
+use crate::ai::blocklist::action_model::recording_controller::video_recording_enabled;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::{
     agent::AIAgentActionResultType,
