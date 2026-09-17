@@ -605,10 +605,7 @@ impl PlatformPageWidget {
         view: &PlatformPageView,
     ) -> Box<dyn Element> {
         let table_width_chrome = api_key_table_width_chrome();
-        let show_scope_column =
-            FeatureFlag::TeamApiKeys.is_enabled() || FeatureFlag::NamedAgents.is_enabled();
-        let min_non_resizable_columns_width =
-            api_key_table_min_non_resizable_columns_width(show_scope_column);
+        let min_non_resizable_columns_width = api_key_table_min_non_resizable_columns_width(true);
         let mut header_row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max);
@@ -625,11 +622,8 @@ impl PlatformPageWidget {
                 .with_width(API_KEY_KEY_COLUMN_WIDTH)
                 .finish(),
         );
-        if show_scope_column {
-            header_row.add_child(
-                Expanded::new(1., self.render_header_cell(appearance, "Scope")).finish(),
-            );
-        }
+        header_row
+            .add_child(Expanded::new(1., self.render_header_cell(appearance, "Scope")).finish());
         header_row
             .add_child(Expanded::new(1., self.render_header_cell(appearance, "Created")).finish());
         header_row.add_child(
@@ -776,26 +770,24 @@ impl PlatformPageWidget {
             .with_width(key_column_width)
             .finish(),
         );
-        if FeatureFlag::TeamApiKeys.is_enabled() || FeatureFlag::NamedAgents.is_enabled() {
-            let scope_display = match key.scope {
-                ApiKeyScope::Personal => "Personal",
-                ApiKeyScope::Team => "Team",
-                ApiKeyScope::Agent => "Agent",
-            };
-            row.add_child(
-                Expanded::new(
-                    1.,
-                    Container::new(
-                        Text::new_inline(scope_display, appearance.ui_font_family(), 12.)
-                            .with_color(appearance.theme().nonactive_ui_text_color().into())
-                            .finish(),
-                    )
-                    .with_padding(Padding::uniform(8.))
-                    .finish(),
+        let scope_display = match key.scope {
+            ApiKeyScope::Personal => "Personal",
+            ApiKeyScope::Team => "Team",
+            ApiKeyScope::Agent => "Agent",
+        };
+        row.add_child(
+            Expanded::new(
+                1.,
+                Container::new(
+                    Text::new_inline(scope_display, appearance.ui_font_family(), 12.)
+                        .with_color(appearance.theme().nonactive_ui_text_color().into())
+                        .finish(),
                 )
+                .with_padding(Padding::uniform(8.))
                 .finish(),
-            );
-        }
+            )
+            .finish(),
+        );
         row.add_child(
             Expanded::new(
                 1.,
