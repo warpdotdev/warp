@@ -136,6 +136,23 @@ pub fn encrypt_docker_registry_secret(
     )
 }
 
+/// Encrypt an AWS ECR credential secret backed by an IAM role.
+#[wasm_bindgen]
+pub fn encrypt_aws_ecr_credential_secret(
+    public_key_base64: &str,
+    actor_uid: &str,
+    secret_name: &str,
+    registry_host: &str,
+    role_arn: &str,
+) -> Result<String, JsValue> {
+    do_encrypt(
+        public_key_base64,
+        actor_uid,
+        secret_name,
+        &ManagedSecretValue::aws_ecr_credential(registry_host, role_arn),
+    )
+}
+
 // ── BYO (bring-your-own) credential sealing ─────────────────────────────────
 //
 // These exports seal enterprise BYOK / BYOE credentials for team upload. They

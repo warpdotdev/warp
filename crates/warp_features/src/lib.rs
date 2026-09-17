@@ -594,6 +594,11 @@ pub enum FeatureFlag {
     /// Enables video recording of computer-use sessions for cloud agents.
     VideoRecording,
 
+    /// Gates the Windows `gdigrab` recorder behind its own switch, on top of
+    /// [`FeatureFlag::VideoRecording`]. Windows capture is newer and less proven than the
+    /// macOS/Linux ffmpeg paths, so it rolls out and can be killed independently of them.
+    WindowsVideoRecording,
+
     /// Enables team API key creation in the API key management UI.
     TeamApiKeys,
 
@@ -1043,6 +1048,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::SummarizationViaMessageReplacement,
     FeatureFlag::LocalComputerUse,
     FeatureFlag::VideoRecording,
+    FeatureFlag::WindowsVideoRecording,
     FeatureFlag::OzLaunchModal,
     // These are enabled via 100% experiment on prod warp-server,
     // but we need to enable here for dogfood builds.

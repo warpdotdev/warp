@@ -1606,6 +1606,22 @@ impl AgentDriver {
                     }
                 }
 
+                if matches!(
+                    result,
+                    Err(AgentDriverError::SandboxDeadlineReached { .. })
+                        | Err(AgentDriverError::TerminatedBySignal)
+                ) && let Ok(Some(runner)) = foreground.spawn(|me, _| me.harness.clone()).await
+                {
+                    // These interrupts drop run_harness before its ordinary final-save path.
+                    Self::force_kill_harness(&foreground).await;
+                    report_if_error!(
+                        runner.finish_saves(&foreground).await.context(
+                            "Failed to save final harness conversation after interruption"
+                        )
+                    );
+                    // TODO(vkodithala): Decide how runner cleanup fits within the remaining
+                    // shutdown budget; force-killing skips bridge and resumption-state cleanup.
+                }
                 // Stop accepting CLI session status updates now that the run
                 // is done. Already accepted task updates remain queued until
                 // delivery finishes.
@@ -3273,7 +3289,8 @@ impl AgentDriver {
                 _ = warpui::r#async::Timer::after(HARNESS_SAVE_INTERVAL).fuse() => {
                     log::debug!("Triggering periodic save of harness conversation data");
                     report_if_error!(runner
-                        .save_conversation(SavePoint::Periodic, foreground)
+                        .clone()
+                        .request_save(SavePoint::Periodic, foreground)
                         .await
                         .context("Failed to save harness conversation (periodic)"));
                 }
@@ -3350,17 +3367,12 @@ impl AgentDriver {
 
         // Final save after the command finishes.
         log::debug!("Triggering final save of harness conversation data");
-        let final_save_succeeded = match runner
-            .save_conversation(SavePoint::Final, foreground)
+        let final_save_result = runner
+            .finish_saves(foreground)
             .await
-            .context("Failed to save harness conversation (final)")
-        {
-            Ok(()) => true,
-            Err(err) => {
-                report_error!(err);
-                false
-            }
-        };
+            .context("Failed to save final harness conversation");
+        let final_save_succeeded = final_save_result.is_ok();
+        report_if_error!(final_save_result);
         let cleanup_disposition = if final_save_succeeded
             && detected_runtime_failure.is_none()
             && matches!(command_result.as_ref(), Ok(exit_code) if exit_code.was_successful())
@@ -4277,6 +4289,9 @@ impl AgentDriver {
                         | CLIAgentSessionStatus::Failed { .. }
                         | CLIAgentSessionStatus::Blocked { .. }
                         | CLIAgentSessionStatus::Cancelled => {
+                            if me.harness.is_some() {
+                                me.request_harness_save(ctx);
+                            }
                             let idle_window = idle_window_for_cli_session_status(
                                 status,
                                 me.idle_on_complete,
@@ -4345,32 +4360,29 @@ impl AgentDriver {
                         return;
                     }
 
-                    let Some(runner) = me.harness.clone() else {
-                        return;
-                    };
-                    let spawner = ctx.spawner();
-                    ctx.spawn(
-                        async move {
-                            log::debug!(
-                                "Triggering post-turn harness session update from CLI agent event"
-                            );
-                            report_if_error!(runner
-                                .handle_session_update(&spawner)
-                                .await
-                                .context("Failed to update harness state from CLI session event"));
-                            log::debug!("Triggering post-turn save of harness conversation data");
-                            report_if_error!(runner
-                                .save_conversation(SavePoint::PostTurn, &spawner)
-                                .await
-                                .context("Failed to save harness conversation (post-turn)"));
-                        },
-                        |_, _, _| {},
-                    );
+                    me.request_harness_save(ctx);
                 }
                 CLIAgentSessionsModelEvent::Started { .. }
                 | CLIAgentSessionsModelEvent::InputSessionChanged { .. }
                 | CLIAgentSessionsModelEvent::Ended { .. } => {}
             });
+    }
+    fn request_harness_save(&self, ctx: &mut ModelContext<Self>) {
+        let Some(runner) = self.harness.clone() else {
+            return;
+        };
+        let foreground = ctx.spawner();
+        ctx.spawn(
+            async move {
+                report_if_error!(
+                    runner
+                        .request_save(SavePoint::PostTurn, &foreground)
+                        .await
+                        .context("Failed to request harness conversation save")
+                );
+            },
+            |_, _, _| {},
+        );
     }
 
     /// Drains and delivers, as genuine PTY follow-ups via `TerminalDriver::send_text_to_cli`,
@@ -4747,6 +4759,7 @@ fn typed_secret_entries(secret: &ManagedSecretValue) -> Vec<(&'static str, &str)
         // A registry credential authenticates an image pull, not the agent process, and
         // is never injected into the terminal session.
         ManagedSecretValue::DockerRegistry { .. } => vec![],
+        ManagedSecretValue::AwsEcrCredential { .. } => vec![],
     }
 }
 

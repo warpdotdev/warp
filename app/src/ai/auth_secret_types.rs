@@ -92,7 +92,8 @@ pub fn build_managed_secret_value(
         }
         ManagedSecretType::RawValue
         | ManagedSecretType::Dotenvx
-        | ManagedSecretType::DockerRegistry => Err(anyhow!(
+        | ManagedSecretType::DockerRegistry
+        | ManagedSecretType::AwsEcrCredential => Err(anyhow!(
             "Auth secret type {:?} is not supported via the harness FTUX flow",
             info.secret_type
         )),

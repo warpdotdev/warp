@@ -9,11 +9,11 @@ mod imp;
 mod mock;
 mod noop;
 mod overlay;
-#[cfg(any(macos, linux))]
+#[cfg(any(macos, linux, windows))]
 mod recording_metadata;
 #[cfg(any(macos, linux, windows))]
 mod screenshot_utils;
-#[cfg(any(macos, linux))]
+#[cfg(any(macos, linux, windows))]
 mod thumbnail;
 
 use std::borrow::Cow;
@@ -270,10 +270,10 @@ pub trait Actor: Send + Sync + 'static {
 
 /// Returns a recorder that can capture a video of the computer-use display.
 ///
-/// A real recorder is available on Linux (X11) and macOS (avfoundation); every
-/// other platform, and any `test-util` build, gets a no-op recorder that reports
-/// recording as unsupported. On macOS, setting `WARP_MOCK_RECORDER` opts into a
-/// mock recorder for UI testing (see `mock`).
+/// Real recorders are available on Linux (X11), macOS (avfoundation), and
+/// Windows (gdigrab). Other platforms and any `test-util` build get a no-op
+/// recorder. On macOS, setting `WARP_MOCK_RECORDER` opts into a mock recorder
+/// for UI testing (see `mock`).
 pub fn create_recorder() -> Box<dyn Recorder> {
     #[cfg(macos)]
     if std::env::var_os("WARP_MOCK_RECORDER").is_some() {
@@ -308,11 +308,11 @@ pub async fn post_process_recording(
 }
 /// Reads the duration encoded in a finalized recording's media timeline.
 pub async fn finalized_video_duration(input: &Path) -> Result<Duration, RecordingError> {
-    #[cfg(any(macos, linux))]
+    #[cfg(any(macos, linux, windows))]
     {
         recording_metadata::video_duration(input).await
     }
-    #[cfg(not(any(macos, linux)))]
+    #[cfg(not(any(macos, linux, windows)))]
     {
         let _ = input;
         Err(RecordingError::Finalize {
@@ -331,14 +331,13 @@ pub async fn finalized_video_duration(input: &Path) -> Result<Duration, Recordin
 ///
 /// Best-effort by design: the caller treats any error as "no thumbnail" and
 /// falls back to a plain link, never blocking the video upload or PR creation.
-/// Recording and ffmpeg are only available on macOS and Linux; every other
-/// platform reports thumbnail generation as unsupported (recording itself does
-/// not run there either).
+/// Recording and ffmpeg are available on macOS, Linux, and Windows; every other
+/// platform reports thumbnail generation as unsupported.
 pub async fn generate_video_thumbnail(
     video: &Path,
     artifact_uid: &str,
 ) -> Result<PathBuf, RecordingError> {
-    #[cfg(any(macos, linux))]
+    #[cfg(any(macos, linux, windows))]
     {
         thumbnail::generate_video_thumbnail(
             video,
@@ -347,7 +346,7 @@ pub async fn generate_video_thumbnail(
         )
         .await
     }
-    #[cfg(not(any(macos, linux)))]
+    #[cfg(not(any(macos, linux, windows)))]
     {
         let _ = (video, artifact_uid);
         Err(RecordingError::Finalize {
@@ -417,17 +416,17 @@ pub struct RecordingHandle {
     height: u32,
     exit_state: RecordingExitState,
     // The live capture process plus the fields used to finalize it are only
-    // populated by the real Linux and macOS recorders; the no-op recorders never
+    // populated by the real platform recorders; the no-op recorders never
     // construct a handle.
-    #[cfg(any(linux, macos))]
+    #[cfg(any(linux, macos, windows))]
     path: PathBuf,
-    #[cfg(any(linux, macos))]
+    #[cfg(any(linux, macos, windows))]
     started_at: instant::Instant,
-    #[cfg(any(linux, macos))]
+    #[cfg(any(linux, macos, windows))]
     process: Option<tokio::process::Child>,
     // The handle owns and deletes partial output until `Recorder::stop`
     // validates the file and transfers its path to `RecordingOutput`.
-    #[cfg(any(linux, macos))]
+    #[cfg(any(linux, macos, windows))]
     cleanup_on_drop: bool,
 }
 
@@ -452,7 +451,7 @@ impl RecordingHandle {
             return Some(kind);
         }
 
-        #[cfg(any(linux, macos))]
+        #[cfg(any(linux, macos, windows))]
         if let Some(process) = self.process.as_mut()
             && let Ok(Some(status)) = process.try_wait()
         {
@@ -478,27 +477,32 @@ impl RecordingHandle {
             width,
             height,
             exit_state: exit_state.clone(),
-            #[cfg(any(linux, macos))]
+            #[cfg(any(linux, macos, windows))]
             path: PathBuf::new(),
-            #[cfg(any(linux, macos))]
+            #[cfg(any(linux, macos, windows))]
             started_at: instant::Instant::now(),
-            #[cfg(any(linux, macos))]
+            #[cfg(any(linux, macos, windows))]
             process: None,
-            #[cfg(any(linux, macos))]
+            #[cfg(any(linux, macos, windows))]
             cleanup_on_drop: false,
         };
         (handle, exit_state)
     }
 }
 
-#[cfg(any(linux, macos))]
+#[cfg(any(linux, macos, windows))]
 impl Drop for RecordingHandle {
     fn drop(&mut self) {
-        // A handle can be abandoned without reaching `Recorder::stop`, notably
-        // when a start action finishes after cancellation. The child process's
-        // kill-on-drop handles ffmpeg; this removes its partial output. A
-        // successful stop disables cleanup and transfers file ownership.
         if self.cleanup_on_drop {
+            // Windows can't delete a file ffmpeg still has open, and `Drop` can't `.await` a
+            // process reap, so cleanup runs on a background thread there instead of blocking
+            // (or leaking the file) here; see `windows::recording::spawn_abandoned_cleanup`.
+            // POSIX allows unlinking a still-open file, so mac/Linux clean up synchronously.
+            #[cfg(windows)]
+            if let Some(process) = self.process.take() {
+                imp::spawn_abandoned_cleanup(process, self.path.clone());
+                return;
+            }
             let _ = std::fs::remove_file(&self.path);
             let _ = std::fs::remove_file(self.path.with_extension("log"));
         }

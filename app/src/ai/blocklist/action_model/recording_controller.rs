@@ -8,9 +8,20 @@ use ai::agent::action_result::StopRecordingResult;
 use futures::channel::oneshot;
 use instant::Instant;
 use thiserror::Error;
+use warp_core::features::FeatureFlag;
 use warpui::{Entity, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
+
+/// Returns whether computer-use video recording is available on the current platform.
+///
+/// Callers should prefer this over reading [`FeatureFlag::VideoRecording`] directly, so the
+/// Windows-only [`FeatureFlag::WindowsVideoRecording`] gate stays consistent across the
+/// recording tool surface.
+pub(crate) fn video_recording_enabled() -> bool {
+    FeatureFlag::VideoRecording.is_enabled()
+        && (!cfg!(windows) || FeatureFlag::WindowsVideoRecording.is_enabled())
+}
 
 /// Why a recording finalization ran. Distinct from the caller's claimed reason
 /// (see [`FinalizationClaim::InProgress`]): the reason lives here so the

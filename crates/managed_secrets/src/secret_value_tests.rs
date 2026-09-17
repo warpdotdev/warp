@@ -351,3 +351,45 @@ fn test_docker_registry_field_sizes_never_rejected() {
     );
     assert!(secret.validate_field_sizes("my-secret").is_ok());
 }
+
+/// Test to ensure that `aws_ecr_credential` secrets are serialized in the format that the
+/// server expects.
+#[test]
+fn test_serialize_aws_ecr_credential() {
+    let secret = ManagedSecretValue::aws_ecr_credential(
+        "123456789012.dkr.ecr.us-east-1.amazonaws.com",
+        "arn:aws:iam::123456789012:role/warp-ecr-pull-role",
+    );
+    let serialized = serde_json::to_string(&secret).expect("failed to serialize");
+    assert_eq!(
+        serialized,
+        "{\"registry_host\":\"123456789012.dkr.ecr.us-east-1.amazonaws.com\",\"role_arn\":\"arn:aws:iam::123456789012:role/warp-ecr-pull-role\"}"
+    );
+}
+
+/// Neither field of an `aws_ecr_credential` secret is itself sensitive, but the debug
+/// representation still redacts it like every other variant, for consistency and so a
+/// future field addition doesn't have to remember to add redaction.
+#[test]
+fn test_debug_representation_no_secrets_aws_ecr_credential() {
+    let secret = ManagedSecretValue::aws_ecr_credential(
+        "123456789012.dkr.ecr.us-east-1.amazonaws.com",
+        "arn:aws:iam::123456789012:role/warp-ecr-pull-role",
+    );
+    let debug_representation = format!("{:?}", secret);
+    assert!(
+        !debug_representation.contains("warp-ecr-pull-role"),
+        "debug representation contains role_arn: {debug_representation}"
+    );
+}
+
+/// An AWS ECR credential is never injected as an environment variable, so it has no
+/// field-size limit to enforce - same reasoning as `docker_registry`.
+#[test]
+fn test_aws_ecr_credential_field_sizes_never_rejected() {
+    let secret = ManagedSecretValue::aws_ecr_credential(
+        "123456789012.dkr.ecr.us-east-1.amazonaws.com",
+        format!("arn:aws:iam::123456789012:role/{}", "x".repeat(1024 * 1024)),
+    );
+    assert!(secret.validate_field_sizes("my-secret").is_ok());
+}
