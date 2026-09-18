@@ -1,4 +1,9 @@
 pub mod app;
+// Pure event-classification logic for the desktop text-input bridge (see
+// `wasm::desktop_text_input`). Kept outside the wasm-only module tree, and not gated by
+// `#[cfg(target_family = "wasm")]`, specifically so its unit tests run under native
+// `cargo nextest run -p warpui` instead of only compile-checking under the wasm target.
+pub(crate) mod desktop_text_input_reducer;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub mod linux;
 #[cfg(target_os = "macos")]
