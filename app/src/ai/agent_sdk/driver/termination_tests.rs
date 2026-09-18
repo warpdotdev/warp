@@ -1,8 +1,20 @@
+use std::collections::HashMap;
 use std::fs;
+use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::executor::block_on;
+use nix::sys::signal::Signal;
+use nix::unistd::Pid;
+use signal_hook::iterator::SignalsInfo;
+use signal_hook::iterator::exfiltrator::WithOrigin;
+use signal_hook::low_level::siginfo::{Cause, Sent};
 use tempfile::TempDir;
+use tracing::field::{Field, Visit};
+use tracing::{Event, Subscriber};
+use tracing_subscriber::layer::Context;
+use tracing_subscriber::prelude::*;
 
 use super::InterruptSignal;
 
@@ -33,7 +45,7 @@ fn signal_lifecycle_child() -> ! {
         block_on(super::watch_interrupt_signals(&background)).expect("signal watch");
     println!("{READY_MARKER}");
 
-    let signal = block_on(signal_rx).expect("interrupt signal");
+    let signal: InterruptSignal = block_on(signal_rx).expect("interrupt signal");
     assert_eq!(signal, expected);
 
     if kind == "int-hang" {
@@ -54,9 +66,9 @@ fn signal_lifecycle_child() -> ! {
 fn spawn_signal_lifecycle_child(
     kind: &str,
     test_name: &str,
-    first_sig: i32,
-    second_sig: Option<i32>,
-    expected_sig: i32,
+    first_sig: Signal,
+    second_sig: Option<Signal>,
+    expected_sig: Signal,
     expect_stuck_shutdown: bool,
 ) {
     use std::os::unix::process::ExitStatusExt as _;
@@ -110,23 +122,19 @@ fn spawn_signal_lifecycle_child(
 
     wait_for_marker(&mut child, READY_MARKER);
 
-    // SAFETY: `child.id()` is this child's pid; the signal is sent only to it.
-    unsafe {
-        libc::kill(child.id() as libc::pid_t, first_sig);
-    }
+    let child_pid = Pid::from_raw(i32::try_from(child.id()).unwrap());
+    nix::sys::signal::kill(child_pid, first_sig).unwrap();
 
     if let Some(second_sig) = second_sig {
         wait_for_marker(&mut child, SHUTDOWN_MARKER);
-        unsafe {
-            libc::kill(child.id() as libc::pid_t, second_sig);
-        }
+        nix::sys::signal::kill(child_pid, second_sig).unwrap();
     }
 
     let status = child.wait().unwrap();
     let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
     assert_eq!(
         status.signal(),
-        Some(expected_sig),
+        Some(expected_sig as i32),
         "status={status:?} stdout={stdout} stderr={}",
         fs::read_to_string(&stderr_path).unwrap_or_default()
     );
@@ -142,9 +150,9 @@ fn sigterm_subprocess_exits_signaled() {
     spawn_signal_lifecycle_child(
         "term",
         "ai::agent_sdk::driver::termination::tests::sigterm_subprocess_exits_signaled",
-        libc::SIGTERM,
+        Signal::SIGTERM,
         None,
-        libc::SIGTERM,
+        Signal::SIGTERM,
         false,
     );
 }
@@ -154,9 +162,9 @@ fn sigint_subprocess_exits_signaled() {
     spawn_signal_lifecycle_child(
         "int",
         "ai::agent_sdk::driver::termination::tests::sigint_subprocess_exits_signaled",
-        libc::SIGINT,
+        Signal::SIGINT,
         None,
-        libc::SIGINT,
+        Signal::SIGINT,
         false,
     );
 }
@@ -166,9 +174,124 @@ fn second_sigint_kills_during_stuck_shutdown() {
     spawn_signal_lifecycle_child(
         "int-hang",
         "ai::agent_sdk::driver::termination::tests::second_sigint_kills_during_stuck_shutdown",
-        libc::SIGINT,
-        Some(libc::SIGINT),
-        libc::SIGINT,
+        Signal::SIGINT,
+        Some(Signal::SIGINT),
+        Signal::SIGINT,
         true,
     );
+}
+
+#[derive(Default)]
+struct CapturedTrace {
+    field_names: Vec<String>,
+    values: HashMap<String, String>,
+}
+
+struct SignalTraceCapture(Arc<Mutex<Option<CapturedTrace>>>);
+
+impl<S> tracing_subscriber::Layer<S> for SignalTraceCapture
+where
+    S: Subscriber,
+{
+    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        let mut captured = CapturedTrace {
+            field_names: event
+                .metadata()
+                .fields()
+                .iter()
+                .map(|field| field.name().to_owned())
+                .collect(),
+            ..Default::default()
+        };
+        event.record(&mut TraceValueVisitor(&mut captured.values));
+        *self.0.lock().unwrap() = Some(captured);
+    }
+}
+
+struct TraceValueVisitor<'a>(&'a mut HashMap<String, String>);
+
+impl Visit for TraceValueVisitor<'_> {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        self.0.insert(field.name().to_owned(), format!("{value:?}"));
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.0.insert(field.name().to_owned(), value.to_owned());
+    }
+}
+
+#[test]
+fn emits_signal_trace_schema() {
+    let captured = Arc::new(Mutex::new(None));
+    let subscriber = tracing_subscriber::registry().with(SignalTraceCapture(Arc::clone(&captured)));
+
+    tracing::subscriber::with_default(subscriber, || {
+        super::emit_signal_trace(InterruptSignal::Int, None, Cause::Sent(Sent::User));
+    });
+
+    let captured = captured.lock().unwrap().take().unwrap();
+    assert_eq!(
+        captured.field_names,
+        [
+            "message",
+            "tags.cloud_agent",
+            "signal",
+            "signal.cause",
+            "signal.sender.pid",
+            "signal.sender.uid",
+            "signal.sender.username",
+            "signal.sender.command_line",
+        ]
+    );
+    assert_eq!(captured.values.get("signal").unwrap(), "SIGINT");
+    assert_eq!(captured.values.get("signal.cause").unwrap(), "Sent(User)");
+}
+#[test]
+fn redacts_secrets_from_signal_sender_command_line() {
+    const SECRET: &str = "AKIAIOSFODNN7EXAMPLE";
+
+    let mut signals = SignalsInfo::<WithOrigin>::new([libc::SIGWINCH]).unwrap();
+    let mut command = command::blocking::Command::new("sh");
+    command
+        .arg("-c")
+        .arg("kill -WINCH \"$1\"; while :; do sleep 1; done")
+        .arg(SECRET)
+        .arg(nix::unistd::getpid().as_raw().to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = command.spawn().unwrap();
+    let sender = signals.forever().next().unwrap().process.unwrap();
+    let captured = Arc::new(Mutex::new(None));
+    let subscriber = tracing_subscriber::registry().with(SignalTraceCapture(Arc::clone(&captured)));
+
+    tracing::subscriber::with_default(subscriber, || {
+        super::emit_signal_trace(InterruptSignal::Term, Some(sender), Cause::Sent(Sent::User));
+    });
+    child.kill().unwrap();
+    child.wait().unwrap();
+
+    let captured = captured.lock().unwrap().take().unwrap();
+    let command_line = captured.values.get("signal.sender.command_line").unwrap();
+    assert!(!command_line.contains(SECRET));
+    assert!(command_line.contains(&"*".repeat(SECRET.len())));
+}
+
+#[test]
+fn formats_process_arguments_as_a_shell_command_line() {
+    let arguments = ["agent", "--prompt", "hello world"].map(Into::into);
+
+    assert_eq!(
+        super::format_command_line(&arguments),
+        Some("agent --prompt 'hello world'".to_owned())
+    );
+}
+
+#[test]
+fn omits_command_line_when_process_arguments_are_empty() {
+    assert_eq!(super::format_command_line(&[]), None);
+}
+
+#[test]
+fn omits_command_line_for_invalid_sender_pid() {
+    assert_eq!(super::resolve_command_line(0), None);
 }
