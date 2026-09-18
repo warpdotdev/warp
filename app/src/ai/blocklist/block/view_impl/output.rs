@@ -3807,11 +3807,8 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
         // and we spent a non-zero amount of credits for the last block.
         // Avoid showing the credits spent for the last block if the request failed, as we refund user
         // credits in that case (so no credits were in fact spent).
-        // Compare at the displayed one-decimal precision: the total and last-block figures
-        // are accumulated separately, so raw values can differ by float noise alone.
-        let rounds_to_tenth = |credits: f32| (credits * 10.0).round();
         if credits_spent_for_last_block > 0.0
-            && rounds_to_tenth(total_credits_spent) != rounds_to_tenth(credits_spent_for_last_block)
+            && total_credits_spent != credits_spent_for_last_block
             && props.model.status(app).error().is_none()
         {
             // The last-block figure has no rollup equivalent: it stays

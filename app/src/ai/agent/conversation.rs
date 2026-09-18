@@ -829,8 +829,9 @@ impl AIConversation {
     /// Total credits spent in the conversation, including both LLM inference
     /// and platform credits.
     pub fn credits_spent(&self) -> f32 {
-        self.conversation_usage_metadata.credits_spent
-            + self.conversation_usage_metadata.platform_credits_spent
+        let total = self.conversation_usage_metadata.credits_spent
+            + self.conversation_usage_metadata.platform_credits_spent;
+        (total * 10.0).round() / 10.0
     }
 
     pub fn inference_credits_spent(&self) -> f32 {
@@ -917,6 +918,7 @@ impl AIConversation {
     pub fn credits_spent_for_last_block(&self) -> Option<f32> {
         self.conversation_usage_metadata
             .credits_spent_for_last_block
+            .map(|credits| (credits * 10.0).round() / 10.0)
     }
 
     /// Per-category charged-usage breakdown over the last block, where the
