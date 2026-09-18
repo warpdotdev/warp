@@ -13,7 +13,9 @@ use warpui::{
 
 #[cfg(test)]
 use super::team::TeamVisibility;
-use super::team::{DiscoverableTeam, MembershipRole, Team};
+use super::team::{
+    DiscoverableTeam, DiscoverableWorkspace, DiscoveryOptions, MembershipRole, Team,
+};
 #[cfg(test)]
 use super::workspace::WorkspaceMemberUsageInfo;
 use super::workspace::{
@@ -84,8 +86,10 @@ pub enum UserWorkspacesEvent {
         team_uid: ServerId,
     },
     JoinTeamInWorkspaceRejected(anyhow::Error),
-    FetchDiscoverableTeamsSuccess(Vec<DiscoverableTeam>),
-    FetchDiscoverableTeamsRejected(anyhow::Error),
+    JoinWorkspaceFromDiscoverySuccess,
+    JoinWorkspaceFromDiscoveryRejected(anyhow::Error),
+    FetchDiscoveryOptionsSuccess(DiscoveryOptions),
+    FetchDiscoveryOptionsRejected(anyhow::Error),
     TransferTeamOwnershipSuccess,
     TransferTeamOwnershipRejected(anyhow::Error),
     SetTeamMemberRoleSuccess,
@@ -128,6 +132,7 @@ pub struct UserWorkspaces {
     workspaces: Tracked<Vec<Workspace>>,
     window_team_uids: HashMap<WindowId, Option<ServerId>>,
     joinable_teams: Vec<DiscoverableTeam>,
+    discoverable_workspaces: Vec<DiscoverableWorkspace>,
     /// The user-level add-on credits purchase policy from the latest
     /// workspaces-metadata response. Teamless (fresh free) users have no
     /// team and their only workspace is the server's placeholder, which is
@@ -196,6 +201,7 @@ impl UserWorkspaces {
             workspaces: cached_workspaces.into(),
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
+            discoverable_workspaces: Default::default(),
             user_purchase_policy: None,
             workspaceless_models_by_feature: None,
             team_client,
@@ -247,6 +253,7 @@ impl UserWorkspaces {
             workspaces: cached_workspaces.into(),
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
+            discoverable_workspaces: Default::default(),
             user_purchase_policy: None,
             workspaceless_models_by_feature: None,
             team_client,
@@ -358,6 +365,17 @@ impl UserWorkspaces {
         if self.team_uid_for_window(window_id) != previous_team_uid {
             ctx.emit(UserWorkspacesEvent::WindowTeamChanged { window_id });
         }
+        ctx.notify();
+    }
+
+    fn update_discovery_options(
+        &mut self,
+        options: DiscoveryOptions,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.joinable_teams.clone_from(&options.legacy_teams);
+        self.discoverable_workspaces.clone_from(&options.workspaces);
+        ctx.emit(UserWorkspacesEvent::FetchDiscoveryOptionsSuccess(options));
         ctx.notify();
     }
     pub fn inherited_or_default_team_uid(
@@ -850,8 +868,11 @@ impl UserWorkspaces {
         ctx: &mut ModelContext<Self>,
     ) {
         self.joinable_teams.clone_from(&joinable_teams);
-        ctx.emit(UserWorkspacesEvent::FetchDiscoverableTeamsSuccess(
-            joinable_teams,
+        ctx.emit(UserWorkspacesEvent::FetchDiscoveryOptionsSuccess(
+            DiscoveryOptions {
+                workspaces: self.discoverable_workspaces.clone(),
+                legacy_teams: joinable_teams,
+            },
         ));
         ctx.notify();
     }
@@ -880,6 +901,9 @@ impl UserWorkspaces {
                 let joinable_teams = response.metadata.joinable_teams;
 
                 self.set_user_purchase_policy(response.metadata.user_purchase_policy);
+                if !workspaces.is_empty() {
+                    self.discoverable_workspaces.clear();
+                }
                 self.update_workspaces(workspaces.clone(), ctx);
                 self.update_joinable_teams(joinable_teams, ctx);
 
@@ -944,6 +968,25 @@ impl UserWorkspaces {
                     .await
             },
             Self::on_remove_user_from_team,
+        );
+    }
+
+    fn on_fetch_discovery_options(
+        &mut self,
+        options: Result<DiscoveryOptions, anyhow::Error>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match options {
+            Err(err) => ctx.emit(UserWorkspacesEvent::FetchDiscoveryOptionsRejected(err)),
+            Ok(options) => self.update_discovery_options(options, ctx),
+        }
+    }
+
+    pub fn fetch_discovery_options(&mut self, ctx: &mut ModelContext<Self>) {
+        let team_client = self.team_client.clone();
+        let _ = ctx.spawn(
+            async move { team_client.get_discovery_options().await },
+            Self::on_fetch_discovery_options,
         );
     }
 
@@ -1222,25 +1265,35 @@ impl UserWorkspaces {
         );
     }
 
-    fn on_fetch_discoverable_teams(
+    fn on_join_workspace_from_discovery(
         &mut self,
-        teams: Result<Vec<DiscoverableTeam>, anyhow::Error>,
+        result: Result<WorkspacesMetadataWithPricing>,
         ctx: &mut ModelContext<Self>,
     ) {
-        match teams {
-            Err(e) => ctx.emit(UserWorkspacesEvent::FetchDiscoverableTeamsRejected(e)),
-            Ok(teams) => {
-                self.update_joinable_teams(teams, ctx);
+        match result {
+            Err(err) => ctx.emit(UserWorkspacesEvent::JoinWorkspaceFromDiscoveryRejected(err)),
+            Ok(result) => {
+                self.on_workspaces_updated(Ok(result), ctx);
+                ctx.emit(UserWorkspacesEvent::JoinWorkspaceFromDiscoverySuccess);
             }
         }
+        ctx.notify();
     }
 
-    /// Make request to get list of discoverable teams for a user
-    pub fn fetch_discoverable_teams(&mut self, ctx: &mut ModelContext<Self>) {
+    pub fn join_workspace_from_discovery(
+        &mut self,
+        workspace_uid: WorkspaceUid,
+        team_uid: Option<ServerId>,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let team_client = self.team_client.clone();
         let _ = ctx.spawn(
-            async move { team_client.get_discoverable_teams().await },
-            Self::on_fetch_discoverable_teams,
+            async move {
+                team_client
+                    .join_workspace_from_discovery(workspace_uid, team_uid)
+                    .await
+            },
+            Self::on_join_workspace_from_discovery,
         );
     }
 

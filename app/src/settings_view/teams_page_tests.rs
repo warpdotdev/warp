@@ -8,7 +8,13 @@ use warpui::App;
 
 use super::*;
 #[cfg(not(target_family = "wasm"))]
-use crate::workspace::view::tests::{initialize_app, mock_workspace};
+use crate::server::server_api::team::MockTeamClient;
+#[cfg(not(target_family = "wasm"))]
+use crate::workspace::view::tests::{
+    initialize_app, initialize_app_with_team_client, mock_workspace,
+};
+#[cfg(not(target_family = "wasm"))]
+use crate::workspaces::team::DiscoveryOptions;
 use crate::workspaces::team::TeamMember;
 use crate::workspaces::workspace::{
     EmailInvite, MultiAdminPolicy, NativeWorkspacesPolicy, Tier, WorkspaceMember,
@@ -158,6 +164,242 @@ fn open_team(uid: &str, name: &str) -> DiscoverableTeam {
         name: name.to_string(),
         team_accepting_invites: true,
     }
+}
+fn discoverable_workspace(
+    uid: i64,
+    name: &str,
+    open_teams: Vec<DiscoverableTeam>,
+) -> DiscoverableWorkspace {
+    DiscoverableWorkspace {
+        workspace_uid: ServerId::from(uid).into(),
+        name: name.to_string(),
+        open_teams,
+        member_count: 4,
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn workspace_discovery_page_routes_each_option_through_the_expected_client_boundary() {
+    App::test((), |mut app| async move {
+        let workspace_with_teams = discoverable_workspace(
+            10,
+            "Workspace With Teams",
+            vec![open_team(&ServerId::from(11).to_string(), "Engineering")],
+        );
+        let workspace_without_teams =
+            discoverable_workspace(20, "Workspace Without Teams", Vec::new());
+        let legacy_team = open_team(&ServerId::from(30).to_string(), "Legacy Team");
+        let workspace_with_teams_uid = workspace_with_teams.workspace_uid;
+        let workspace_without_teams_uid = workspace_without_teams.workspace_uid;
+        let open_team_uid =
+            ServerId::from_string_lossy(&workspace_with_teams.open_teams[0].team_uid);
+        let legacy_team_uid = ServerId::from_string_lossy(&legacy_team.team_uid);
+
+        let mut team_client = MockTeamClient::new();
+        team_client
+            .expect_get_discovery_options()
+            .times(1)
+            .return_once(move || {
+                Ok(DiscoveryOptions {
+                    workspaces: vec![workspace_with_teams, workspace_without_teams],
+                    legacy_teams: vec![legacy_team],
+                })
+            });
+        team_client
+            .expect_join_workspace_from_discovery()
+            .withf(move |workspace_uid, team_uid| {
+                *workspace_uid == workspace_without_teams_uid && team_uid.is_none()
+            })
+            .times(1)
+            .return_once(|_, _| Err(anyhow::anyhow!("workspace-only join rejected")));
+        team_client
+            .expect_join_workspace_from_discovery()
+            .withf(move |workspace_uid, team_uid| {
+                *workspace_uid == workspace_with_teams_uid && *team_uid == Some(open_team_uid)
+            })
+            .times(1)
+            .return_once(|_, _| Err(anyhow::anyhow!("workspace team join rejected")));
+        team_client
+            .expect_join_team_with_team_discovery()
+            .withf(move |team_uid| *team_uid == legacy_team_uid)
+            .times(1)
+            .return_once(|_| Err(anyhow::anyhow!("legacy team join rejected")));
+
+        initialize_app_with_team_client(&mut app, Arc::new(team_client));
+        let workspace = mock_workspace(&mut app);
+        let teams_page = workspace.update(&mut app, |_, ctx| {
+            ctx.add_typed_action_view(TeamsPageView::new)
+        });
+
+        let (fetch_sender, fetch_receiver) = async_channel::unbounded();
+        let (join_sender, join_receiver) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(
+                &UserWorkspaces::handle(ctx),
+                move |_, event: &UserWorkspacesEvent, _| match event {
+                    UserWorkspacesEvent::FetchDiscoveryOptionsSuccess(_) => {
+                        let _ = fetch_sender.try_send(());
+                    }
+                    UserWorkspacesEvent::JoinWorkspaceFromDiscoveryRejected(err)
+                    | UserWorkspacesEvent::JoinTeamWithTeamDiscoveryRejected(err) => {
+                        let _ = join_sender.try_send(err.to_string());
+                    }
+                    _ => {}
+                },
+            );
+        });
+
+        teams_page.update(&mut app, |teams_page, ctx| {
+            teams_page.on_page_selected(false, ctx);
+        });
+        fetch_receiver
+            .recv()
+            .await
+            .expect("expected discovery fetch");
+        teams_page.read(&app, |teams_page, _| {
+            assert_eq!(teams_page.discoverable_workspaces_states.len(), 2);
+            assert_eq!(teams_page.discoverable_teams_states.len(), 1);
+            assert_eq!(
+                WorkspaceDiscoveryAction::for_workspace(
+                    &teams_page.discoverable_workspaces_states[0].workspace
+                )
+                .label(),
+                "Continue"
+            );
+            assert_eq!(
+                WorkspaceDiscoveryAction::for_workspace(
+                    &teams_page.discoverable_workspaces_states[1].workspace
+                )
+                .label(),
+                "Join"
+            );
+        });
+
+        teams_page.update(&mut app, |teams_page, ctx| {
+            teams_page.handle_action(
+                &TeamsPageAction::ShowWorkspaceTeams {
+                    workspace_uid: workspace_with_teams_uid,
+                },
+                ctx,
+            );
+        });
+        teams_page.read(&app, |teams_page, _| {
+            let selected = teams_page
+                .workspace_discovery_screen
+                .selected_workspace(&teams_page.discoverable_workspaces_states)
+                .expect("Continue should open the selected workspace");
+            assert_eq!(selected.workspace.name, "Workspace With Teams");
+            assert_eq!(selected.open_team_states.len(), 1);
+            assert_eq!(selected.open_team_states[0].team.name, "Engineering");
+        });
+        teams_page.update(&mut app, |teams_page, ctx| {
+            teams_page.handle_action(&TeamsPageAction::ShowDiscoveryOptions, ctx);
+        });
+        teams_page.read(&app, |teams_page, _| {
+            assert_eq!(
+                teams_page.workspace_discovery_screen,
+                WorkspaceDiscoveryScreen::Options
+            );
+        });
+
+        teams_page.update(&mut app, |teams_page, ctx| {
+            teams_page.handle_action(
+                &TeamsPageAction::JoinWorkspaceFromDiscovery {
+                    workspace_uid: workspace_without_teams_uid,
+                    team_uid: None,
+                },
+                ctx,
+            );
+        });
+        teams_page.read(&app, |teams_page, _| {
+            assert_eq!(
+                teams_page.discovery_join_target,
+                Some(DiscoveryJoinTarget::Workspace {
+                    workspace_uid: workspace_without_teams_uid,
+                    team_uid: None,
+                })
+            );
+        });
+        assert_eq!(
+            join_receiver
+                .recv()
+                .await
+                .expect("expected workspace-only join result"),
+            "workspace-only join rejected"
+        );
+        teams_page.read(&app, |teams_page, _| {
+            assert!(teams_page.discovery_join_target.is_none());
+        });
+
+        teams_page.update(&mut app, |teams_page, ctx| {
+            teams_page.handle_action(
+                &TeamsPageAction::ShowWorkspaceTeams {
+                    workspace_uid: workspace_with_teams_uid,
+                },
+                ctx,
+            );
+            teams_page.handle_action(
+                &TeamsPageAction::JoinWorkspaceFromDiscovery {
+                    workspace_uid: workspace_with_teams_uid,
+                    team_uid: Some(open_team_uid),
+                },
+                ctx,
+            );
+        });
+        teams_page.read(&app, |teams_page, _| {
+            assert_eq!(
+                teams_page.discovery_join_target,
+                Some(DiscoveryJoinTarget::Workspace {
+                    workspace_uid: workspace_with_teams_uid,
+                    team_uid: Some(open_team_uid),
+                })
+            );
+        });
+        assert_eq!(
+            join_receiver
+                .recv()
+                .await
+                .expect("expected workspace team join result"),
+            "workspace team join rejected"
+        );
+        teams_page.read(&app, |teams_page, _| {
+            assert!(teams_page.discovery_join_target.is_none());
+            assert_eq!(
+                teams_page.workspace_discovery_screen,
+                WorkspaceDiscoveryScreen::OpenTeams(workspace_with_teams_uid)
+            );
+        });
+        teams_page.update(&mut app, |teams_page, ctx| {
+            teams_page.handle_action(&TeamsPageAction::ShowDiscoveryOptions, ctx);
+            teams_page.handle_action(
+                &TeamsPageAction::JoinTeamWithTeamDiscovery {
+                    team_uid: legacy_team_uid,
+                },
+                ctx,
+            );
+        });
+        teams_page.read(&app, |teams_page, _| {
+            assert_eq!(
+                teams_page.discovery_join_target,
+                Some(DiscoveryJoinTarget::LegacyTeam(legacy_team_uid))
+            );
+        });
+        assert_eq!(
+            join_receiver
+                .recv()
+                .await
+                .expect("expected legacy team join result"),
+            "legacy team join rejected"
+        );
+        teams_page.read(&app, |teams_page, _| {
+            assert!(teams_page.discovery_join_target.is_none());
+            assert_eq!(
+                teams_page.workspace_discovery_screen,
+                WorkspaceDiscoveryScreen::Options
+            );
+        });
+    });
 }
 
 /// Returns the action labels rendered for the item with the given `text` (a
