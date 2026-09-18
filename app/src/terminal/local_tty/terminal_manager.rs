@@ -17,9 +17,10 @@ use parking_lot::{FairMutex, Mutex};
 use pathfinder_geometry::vector::Vector2F;
 use settings::Setting as _;
 use warp_core::SessionId;
+use warp_core::cli_agent_protocol::WARP_CLI_AGENT_CONTROL_SOCKET_ENV;
 use warp_errors::report_error;
 use warpui::r#async::executor::Background;
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, ViewHandle};
+use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, ViewHandle};
 
 use super::event_loop::EventLoop;
 use super::shell::{ShellStarter, ShellStarterSource};
@@ -40,6 +41,8 @@ use crate::send_telemetry_on_executor;
 use crate::server::telemetry::{PtySpawnMode as TelemetryPtySpawnMode, TelemetryEvent};
 use crate::settings::{DebugSettings, PrivacySettings, SshSettings};
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::cli_agent_sessions::control_endpoint::CLIAgentControlEndpoint;
 use crate::terminal::color::List as ColorList;
 use crate::terminal::event_listener::ChannelEventListener;
 #[cfg(unix)]
@@ -124,6 +127,12 @@ pub struct TerminalManager<S> {
 
     /// The manager is responsible for managing the lifetime of the remote server controller.
     remote_server_controller: ModelHandle<RemoteServerController>,
+
+    /// The manager is responsible for managing the lifetime of the pane's CLI agent control
+    /// endpoint. None until the shell starter is known, or when the endpoint is disabled,
+    /// unsupported for this shell, or failed to bind.
+    #[allow(dead_code)]
+    cli_agent_control_endpoint: Option<CLIAgentControlEndpoint>,
 
     /// The process ID of the PTY. Purely used for integration tests. None if the PTY has not yet
     /// been started.
@@ -480,6 +489,7 @@ impl<S> TerminalManager<S> {
             terminal_attributes_poller: None,
             pty_controller,
             remote_server_controller,
+            cli_agent_control_endpoint: None,
             #[cfg(feature = "integration_tests")]
             pid: None,
             inactive_pty_reads_rx,
@@ -580,7 +590,7 @@ impl<S> TerminalManager<S> {
 fn on_shell_determined<S: TerminalSurface>(
     manager: &mut TerminalManager<S>,
     startup_directory: Option<PathBuf>,
-    env_vars: HashMap<OsString, OsString>,
+    mut env_vars: HashMap<OsString, OsString>,
     user_default_shell_unsupported_banner_model_handle: ModelHandle<BannerState>,
     shell_startup_resources: ShellStartupResources,
     shell_starter_source: Option<ShellStarterSource>,
@@ -681,6 +691,13 @@ fn on_shell_determined<S: TerminalSurface>(
         .lock()
         .register_session_id(generated_session_id);
 
+    manager.cli_agent_control_endpoint = start_cli_agent_control_endpoint(
+        manager.view.id(),
+        &shell_starter,
+        &mut env_vars,
+        ctx,
+    );
+
     // Enqueue the init shell script (for shells that need it), then create
     // the PTY and start its corresponding event loop.
     let ShellStartupResources {
@@ -761,6 +778,46 @@ fn on_shell_determined<S: TerminalSurface>(
 
         manager.terminal_attributes_poller = Some(terminal_attributes_poller);
     }
+}
+
+/// Binds the pane's CLI agent control endpoint, advertises it in the shell's environment, and
+/// mirrors the pane's rich input state onto it. Returns `None`, leaving the environment untouched,
+/// when the feature is disabled, the endpoint is unsupported for this shell, or it failed to bind.
+fn start_cli_agent_control_endpoint(
+    terminal_view_id: EntityId,
+    shell_starter: &ShellStarter,
+    env_vars: &mut HashMap<OsString, OsString>,
+    ctx: &mut ModelContext<Box<dyn TerminalManagerTrait>>,
+) -> Option<CLIAgentControlEndpoint> {
+    if !(FeatureFlag::HOANotifications.is_enabled()
+        && FeatureFlag::CLIAgentRichInput.is_enabled())
+    {
+        return None;
+    }
+    match shell_starter {
+        ShellStarter::Direct(_) | ShellStarter::MSYS2(_) => {}
+        // Processes inside WSL or a sandbox cannot reach an endpoint bound on the host.
+        ShellStarter::Wsl(_) | ShellStarter::DockerSandbox(_) => return None,
+    }
+    let endpoint = match CLIAgentControlEndpoint::bind(ctx.background_executor()) {
+        Ok(endpoint) => endpoint,
+        Err(err) => {
+            log::warn!("Failed to create CLI agent control endpoint: {err}");
+            return None;
+        }
+    };
+    env_vars.insert(
+        WARP_CLI_AGENT_CONTROL_SOCKET_ENV.into(),
+        endpoint.address().to_owned(),
+    );
+
+    let publisher = endpoint.publisher();
+    ctx.subscribe_to_model(&CLIAgentSessionsModel::handle(ctx), move |_, _, event, _| {
+        if event.terminal_view_id() == terminal_view_id {
+            publisher.observe(event);
+        }
+    });
+    Some(endpoint)
 }
 
 impl<S> TerminalManager<S> {
