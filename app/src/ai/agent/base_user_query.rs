@@ -15,40 +15,49 @@
 //! not decode is ignored; both fall back to the request's `prompt` and `attachments`.
 
 use std::fmt;
-use std::sync::Arc;
 
 #[cfg(any(test, feature = "local_tty"))]
 use base64::Engine as _;
 #[cfg(any(test, feature = "local_tty"))]
 use prost::Message as _;
+#[cfg(any(test, feature = "local_tty"))]
+use warp_errors::report_error;
 use warp_multi_agent_api as api;
 use warp_multi_agent_api::AgentType;
 
 use super::api::convert_user_query_mode;
 use super::{UserQueryMode, extract_user_query_mode};
 
+/// Boxed for size only: the proto is ~1 KiB inline, which would bloat every `AIAgentInput` and
+/// `QueuedQueryKind` variant (clippy `large_enum_variant`). Nothing shares it across threads.
 #[derive(Clone, PartialEq)]
-pub struct BaseUserQuery(Arc<api::request::input::UserQuery>);
+pub struct BaseUserQuery(Box<api::request::input::UserQuery>);
 
 impl BaseUserQuery {
     /// Decodes the standard-Base64 protobuf carried on `AgentPromptRequest::user_query_b64`.
     ///
-    /// Returns `None` (after logging) when the payload is not valid Base64 or not a valid
-    /// `Request.Input.UserQuery`; a partially decoded query is never returned.
+    /// Returns `None` (after reporting the failure) when the payload is not valid Base64 or not
+    /// a valid `Request.Input.UserQuery`; a partially decoded query is never returned. A payload
+    /// that does not decode means warp-server and this client disagree on the encoding, which
+    /// is a bug on one side, so it is reported rather than only logged.
     #[cfg(any(test, feature = "local_tty"))]
     pub(crate) fn decode_b64(encoded: &str) -> Option<Self> {
         let bytes = match base64::engine::general_purpose::STANDARD.decode(encoded) {
             Ok(bytes) => bytes,
             Err(err) => {
-                log::warn!("Ignoring shared-session user query: payload is not base64 ({err})");
+                report_error!(
+                    anyhow::Error::new(err)
+                        .context("Ignoring shared-session user query: payload is not base64")
+                );
                 return None;
             }
         };
         match api::request::input::UserQuery::decode(bytes.as_slice()) {
             Ok(query) => Some(Self::from_proto(query)),
             Err(err) => {
-                log::warn!(
-                    "Ignoring shared-session user query: payload is not a UserQuery ({err})"
+                report_error!(
+                    anyhow::Error::new(err)
+                        .context("Ignoring shared-session user query: payload is not a UserQuery")
                 );
                 None
             }
@@ -57,7 +66,7 @@ impl BaseUserQuery {
 
     #[cfg(any(test, feature = "local_tty"))]
     pub(crate) fn from_proto(query: api::request::input::UserQuery) -> Self {
-        Self(Arc::new(query))
+        Self(Box::new(query))
     }
 
     /// The query text, or `None` when the server left it empty and only duplicated it into

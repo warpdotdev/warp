@@ -186,6 +186,8 @@ impl RequestMetadataRecord {
                             usage_type,
                             model_id: model_id.clone(),
                             // Wire counts are u64 (proto TokenCount); the record keeps u32 and saturates.
+                            // TODO(Xavientois): widen these fields to u64 to match the proto
+                            // TokenCount and drop the saturating narrowing.
                             input_tokens: u32::try_from(tokens.input).unwrap_or(u32::MAX),
                             output_tokens: u32::try_from(tokens.output).unwrap_or(u32::MAX),
                             cache_read_tokens: u32::try_from(tokens.input_cache_read)

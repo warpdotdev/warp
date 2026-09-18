@@ -1203,6 +1203,8 @@ impl ModelChargedUsage {
     fn add(&mut self, usage: &api::InferenceUsage) {
         if let Some(token_count) = usage.token_count.as_ref() {
             // Wire counts are u64 (proto TokenCount); displayed totals stay u32 and saturate.
+            // TODO(Xavientois): widen these fields to u64 to match the proto TokenCount and drop
+            // the saturating narrowing.
             self.input_tokens = self
                 .input_tokens
                 .saturating_add(u32::try_from(token_count.input).unwrap_or(u32::MAX));
