@@ -368,7 +368,7 @@ web-sys.workspace = true
 warp_web_event_bus.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-signal-hook = "0.3.17"
+signal-hook = { version = "0.3.17", features = ["extended-siginfo"] }
 signal-hook-tokio = { version = "0.3.1", features = ["futures-v0_3"] }
 nix = { workspace = true, features = [
     "fs",

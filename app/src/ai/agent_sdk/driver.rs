@@ -1497,18 +1497,21 @@ impl AgentDriver {
                              run_internal to allow recording finalization"
                         );
                     }
-                    RunEndCause::Signal(InterruptSignal::Term) => {
-                        log::warn!(
-                            "SIGTERM received; aborting run_internal to save a handoff snapshot \
-                             before remaining teardown (limited grace period before SIGKILL)"
-                        );
-                    }
-                    RunEndCause::Signal(InterruptSignal::Int) => {
-                        log::warn!(
-                            "SIGINT received; aborting run_internal to save a handoff snapshot \
-                             before restoring default terminate"
-                        );
-                    }
+                    RunEndCause::Signal(signal) => match signal {
+                        InterruptSignal::Term => {
+                            log::warn!(
+                                "SIGTERM received; aborting run_internal to save a handoff \
+                                 snapshot before remaining teardown (limited grace period before \
+                                 SIGKILL)"
+                            );
+                        }
+                        InterruptSignal::Int => {
+                            log::warn!(
+                                "SIGINT received; aborting run_internal to save a handoff snapshot \
+                                 before restoring default terminate"
+                            );
+                        }
+                    },
                     RunEndCause::Completed => {}
                 }
 
@@ -1521,11 +1524,7 @@ impl AgentDriver {
 
                 match cause {
                     RunEndCause::Signal(signal) => {
-                        let signal_name = match signal {
-                            InterruptSignal::Term => "SIGTERM",
-                            InterruptSignal::Int => "SIGINT",
-                        };
-                        eprintln!("Received {signal_name}; shutting down...");
+                        eprintln!("Received {signal}; shutting down...");
                         // Keep handlers registered so a second SIGINT/SIGTERM can still
                         // emulate default terminate if snapshot/recording gets stuck.
                         Self::save_run_artifacts(&foreground, snapshot_allowed).await;
