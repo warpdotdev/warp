@@ -55,14 +55,15 @@ use crate::ui_components::render_file_search_row::{FileSearchRowOptions, render_
 use crate::util::path::{display_name_with_host, display_path_with_host};
 use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
 use crate::workspace::view::global_search::model::GlobalSearch;
-use crate::workspace::view::global_search::{GlobalSearchMatch, SearchConfig};
+use crate::workspace::view::global_search::{
+    GlobalSearchMatch, MAX_MATCH_COUNT, SearchConfig, SharedMatchText,
+};
 
 const BORDER_RADIUS: f32 = 6.;
 const BORDER_WIDTH: f32 = 1.;
 const DO_NOT_TRUNCATE_CHAR_COUNT: usize = 40;
 const DO_TRUNCATE_END_CHAR_COUNT: usize = 200;
 const PRE_MATCH_CHARS: usize = 15;
-const MAX_MATCH_COUNT: usize = 20000;
 
 const QUERY_EDITOR_MAX_LINES: usize = 6;
 
@@ -291,7 +292,7 @@ impl MatchedPath {
 
 /// A single match within a file.
 struct Match {
-    line_text: String,
+    line_text: SharedMatchText,
     line_number: u32,
     column_num: Option<usize>,
     submatches: Vec<Submatch>,
@@ -300,7 +301,7 @@ struct Match {
 
 impl Match {
     fn new(
-        line_text: String,
+        line_text: SharedMatchText,
         line_number: u32,
         column_num: Option<usize>,
         submatches: Vec<Submatch>,

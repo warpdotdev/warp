@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Result;
 use futures::StreamExt as _;
@@ -21,12 +23,17 @@ use warpui::r#async::SpawnedFutureHandle;
 use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
 
 use crate::workspace::view::global_search::view::GlobalSearchEvent;
-use crate::workspace::view::global_search::{GlobalSearchMatch, SearchConfig};
+use crate::workspace::view::global_search::{
+    GlobalSearchMatch, MAX_MATCH_COUNT, SearchConfig, SharedMatchText,
+};
 
 const START_BATCH_AFTER_COUNT: usize = 50;
 const MAX_BATCH_SIZE: usize = 512;
 const MAX_BATCH_AGE_MS: u64 = 4000;
 pub(super) const MAX_STORED_LINE_TEXT_BYTES: usize = 4096;
+/// Each expanded row carries unique path and submatch metadata. This retains ample navigation
+/// targets while bounding the synchronous work and metadata allocated for any one matched line.
+const MAX_SUBMATCHES_PER_LINE: usize = 100;
 
 /// Client-requested cap on remote matches per host. The daemon clamps this
 /// to its own server-side cap; both bound the single-frame response size.
@@ -56,6 +63,50 @@ enum SearchSource {
 struct SourceResult {
     match_count: usize,
     capped: bool,
+}
+
+struct LocalSearchParams {
+    pattern: String,
+    roots: Vec<PathBuf>,
+    ignore_case: bool,
+    multiline: bool,
+}
+struct MatchBudget {
+    remaining: AtomicUsize,
+}
+
+impl MatchBudget {
+    fn new(limit: usize) -> Self {
+        Self {
+            remaining: AtomicUsize::new(limit),
+        }
+    }
+
+    fn reserve(&self, requested: usize) -> usize {
+        let previous = self
+            .remaining
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
+                Some(remaining.saturating_sub(requested))
+            })
+            .expect("match budget update always succeeds");
+        previous.min(requested)
+    }
+
+    fn is_exhausted(&self) -> bool {
+        self.remaining.load(Ordering::Relaxed) == 0
+    }
+}
+
+struct ExpandedSubmatches {
+    matches: Vec<GlobalSearchMatch>,
+    capped: bool,
+}
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+struct StoredLineWindow {
+    start: usize,
+    end: usize,
+    prefix_ellipsis: bool,
+    suffix_ellipsis: bool,
 }
 
 pub struct GlobalSearch {
@@ -187,14 +238,18 @@ impl GlobalSearch {
             total_match_count: 0,
             capped: false,
         });
+        let match_budget = Arc::new(MatchBudget::new(MAX_MATCH_COUNT));
 
         if !local_roots.is_empty() {
             self.spawn_local_search(
                 search_id,
-                effective_pattern.clone(),
-                local_roots,
-                ignore_case,
-                multiline,
+                LocalSearchParams {
+                    pattern: effective_pattern.clone(),
+                    roots: local_roots,
+                    ignore_case,
+                    multiline,
+                },
+                Arc::clone(&match_budget),
                 ctx,
             );
         }
@@ -207,17 +262,15 @@ impl GlobalSearch {
                 multiline,
                 max_matches: REMOTE_MAX_MATCH_COUNT,
             };
-            self.spawn_remote_search(search_id, host_id, params, ctx);
+            self.spawn_remote_search(search_id, host_id, params, Arc::clone(&match_budget), ctx);
         }
     }
 
     fn spawn_local_search(
         &mut self,
         search_id: u32,
-        pattern: String,
-        roots: Vec<PathBuf>,
-        ignore_case: bool,
-        multiline: bool,
+        params: LocalSearchParams,
+        match_budget: Arc<MatchBudget>,
         ctx: &mut ModelContext<Self>,
     ) {
         let spawner = ctx.spawner();
@@ -225,15 +278,8 @@ impl GlobalSearch {
             search_id,
             SearchSource::Local,
             async move {
-                let result = Self::run_warp_ripgrep_cli(
-                    search_id,
-                    pattern,
-                    roots,
-                    ignore_case,
-                    multiline,
-                    spawner,
-                )
-                .await;
+                let result =
+                    Self::run_warp_ripgrep_cli(search_id, params, spawner, match_budget).await;
                 match result {
                     Ok(result) => Some(result),
                     Err(err) => {
@@ -253,6 +299,7 @@ impl GlobalSearch {
         search_id: u32,
         host_id: HostId,
         params: RipgrepSearchParams,
+        match_budget: Arc<MatchBudget>,
         ctx: &mut ModelContext<Self>,
     ) {
         let pending = RemoteServerManager::handle(ctx).update(ctx, |manager, _| {
@@ -266,16 +313,16 @@ impl GlobalSearch {
             SearchSource::Remote,
             async move {
                 match pending.result().await {
-                    Ok(success) => {
-                        let capped = success.capped;
-                        let mut items = Self::remote_matches_to_global(&host_id, success);
-                        let match_count = items.len();
-                        flush_batch(&spawner, search_id, &mut items).await;
-                        Some(SourceResult {
-                            match_count,
-                            capped,
-                        })
-                    }
+                    Ok(success) => Some(
+                        Self::emit_remote_matches(
+                            search_id,
+                            &host_id,
+                            success,
+                            &spawner,
+                            &match_budget,
+                        )
+                        .await,
+                    ),
                     // An abort is initiated by a newer search (or a reset),
                     // which already replaced the aggregate state; the stale
                     // search-id guard drops this outcome regardless.
@@ -307,41 +354,68 @@ impl GlobalSearch {
         self.search_handles.push(task);
     }
 
-    /// Converts a remote search response into per-submatch result rows,
-    /// attaching the originating host to each match location.
-    fn remote_matches_to_global(
+    async fn emit_remote_matches(
+        search_id: u32,
         host_id: &HostId,
         success: RipgrepSearchSuccess,
-    ) -> Vec<GlobalSearchMatch> {
-        success
-            .matches
+        spawner: &ModelSpawner<GlobalSearch>,
+        match_budget: &MatchBudget,
+    ) -> SourceResult {
+        let mut capped = success.capped;
+        let mut match_count = 0;
+        let mut batch = Vec::new();
+
+        for remote_match in success.matches {
+            if match_budget.is_exhausted() {
+                capped = true;
+                break;
+            }
+            let Some(global_match) = Self::remote_match_to_global(host_id, remote_match) else {
+                continue;
+            };
+            let expanded = Self::expand_submatches(global_match, match_budget);
+            capped |= expanded.capped;
+            match_count += expanded.matches.len();
+            batch.extend(expanded.matches);
+
+            if batch.len() >= MAX_BATCH_SIZE {
+                flush_batch(spawner, search_id, &mut batch).await;
+            }
+        }
+
+        flush_batch(spawner, search_id, &mut batch).await;
+        SourceResult {
+            match_count,
+            capped,
+        }
+    }
+
+    fn remote_match_to_global(
+        host_id: &HostId,
+        m: remote_server::proto::RipgrepSearchMatch,
+    ) -> Option<GlobalSearchMatch> {
+        let path = match StandardizedPath::try_new(&m.file_path) {
+            Ok(path) => path,
+            Err(err) => {
+                log::warn!("GlobalSearch: dropping remote match with invalid path: {err}");
+                return None;
+            }
+        };
+        let submatches = m
+            .submatches
             .into_iter()
-            .filter_map(|m| {
-                let path = match StandardizedPath::try_new(&m.file_path) {
-                    Ok(path) => path,
-                    Err(err) => {
-                        log::warn!("GlobalSearch: dropping remote match with invalid path: {err}");
-                        return None;
-                    }
-                };
-                let submatches = m
-                    .submatches
-                    .into_iter()
-                    .map(|s| Submatch {
-                        byte_start: ByteOffset::from(s.byte_start as usize),
-                        byte_end: ByteOffset::from(s.byte_end as usize),
-                    })
-                    .collect();
-                Some(GlobalSearchMatch {
-                    location: LocalOrRemotePath::Remote(RemotePath::new(host_id.clone(), path)),
-                    line_number: m.line_number,
-                    column_num: None,
-                    line_text: m.line_text,
-                    submatches,
-                })
+            .map(|s| Submatch {
+                byte_start: ByteOffset::from(s.byte_start as usize),
+                byte_end: ByteOffset::from(s.byte_end as usize),
             })
-            .flat_map(Self::expand_submatches)
-            .collect()
+            .collect();
+        Some(GlobalSearchMatch {
+            location: LocalOrRemotePath::Remote(RemotePath::new(host_id.clone(), path)),
+            line_number: m.line_number,
+            column_num: None,
+            line_text: m.line_text.into(),
+            submatches,
+        })
     }
 
     /// Records the completion of one search source (`None` when the source
@@ -403,12 +477,16 @@ impl GlobalSearch {
 
     async fn run_warp_ripgrep_cli(
         search_id: u32,
-        pattern: String,
-        roots: Vec<PathBuf>,
-        ignore_case: bool,
-        multiline: bool,
+        params: LocalSearchParams,
         spawner: ModelSpawner<GlobalSearch>,
+        match_budget: Arc<MatchBudget>,
     ) -> Result<SourceResult> {
+        let LocalSearchParams {
+            pattern,
+            roots,
+            ignore_case,
+            multiline,
+        } = params;
         let roots_display: Vec<_> = roots.iter().map(|r| r.display().to_string()).collect();
         log::info!(
             "GlobalSearch: starting warp_ripgrep CLI search with pattern={pattern}, roots={:?}",
@@ -427,6 +505,10 @@ impl GlobalSearch {
         let mut last_batch_flush_at = Instant::now();
 
         while let Some(event) = stream.next().await {
+            if match_budget.is_exhausted() {
+                capped = true;
+                break;
+            }
             let raw_match = match event {
                 SearchEvent::Match(raw_match) => raw_match,
                 SearchEvent::LimitReached => {
@@ -437,7 +519,10 @@ impl GlobalSearch {
             // Expand each submatch into its own result row (matching
             // the old per-submatch behavior). Each row gets the line
             // text trimmed up to that particular submatch.
-            for per_submatch in Self::expand_submatches(Self::local_match_to_global(raw_match)) {
+            let expanded =
+                Self::expand_submatches(Self::local_match_to_global(raw_match), &match_budget);
+            capped |= expanded.capped;
+            for per_submatch in expanded.matches {
                 total_match_count += 1;
 
                 if num_unbatched_emitted < START_BATCH_AFTER_COUNT {
@@ -481,7 +566,7 @@ impl GlobalSearch {
             location: LocalOrRemotePath::Local(m.file_path),
             line_number: m.line_number,
             column_num: None,
-            line_text: m.line_text,
+            line_text: m.line_text.into(),
             submatches: m.submatches,
         }
     }
@@ -489,32 +574,53 @@ impl GlobalSearch {
     /// Expand a single match (which may contain multiple submatches
     /// on the same line) into one result per submatch. Each result gets the
     /// line text trimmed of leading whitespace up to that submatch.
-    fn expand_submatches(m: GlobalSearchMatch) -> Vec<GlobalSearchMatch> {
-        if m.submatches.len() <= 1 {
-            let submatch = m.submatches.into_iter().next();
-            let column_num = Self::column_from_submatch(&m.line_text, submatch.as_ref());
-            return vec![Self::trim_leading_whitespace_for_submatch(
-                &m.line_text,
-                m.location,
-                m.line_number,
-                column_num,
-                submatch,
-            )];
+    fn expand_submatches(m: GlobalSearchMatch, match_budget: &MatchBudget) -> ExpandedSubmatches {
+        let GlobalSearchMatch {
+            location,
+            line_number,
+            column_num: _,
+            line_text,
+            submatches,
+        } = m;
+        let source_match_count = submatches.len().max(1);
+        let requested_match_count = source_match_count.min(MAX_SUBMATCHES_PER_LINE);
+        let retained_match_count = match_budget.reserve(requested_match_count);
+        let capped = retained_match_count < source_match_count;
+        if retained_match_count == 0 {
+            return ExpandedSubmatches {
+                matches: Vec::new(),
+                capped,
+            };
         }
+        let mut stored_lines = HashMap::new();
+        let matches = if submatches.is_empty() {
+            vec![Self::trim_leading_whitespace_for_submatch(
+                &line_text,
+                &mut stored_lines,
+                location,
+                line_number,
+                None,
+                None,
+            )]
+        } else {
+            submatches
+                .into_iter()
+                .take(retained_match_count)
+                .map(|submatch| {
+                    let column_num = Self::column_from_submatch(&line_text, Some(&submatch));
+                    Self::trim_leading_whitespace_for_submatch(
+                        &line_text,
+                        &mut stored_lines,
+                        location.clone(),
+                        line_number,
+                        column_num,
+                        Some(submatch),
+                    )
+                })
+                .collect()
+        };
 
-        m.submatches
-            .into_iter()
-            .map(|sub| {
-                let column_num = Self::column_from_submatch(&m.line_text, Some(&sub));
-                Self::trim_leading_whitespace_for_submatch(
-                    &m.line_text,
-                    m.location.clone(),
-                    m.line_number,
-                    column_num,
-                    Some(sub),
-                )
-            })
-            .collect()
+        ExpandedSubmatches { matches, capped }
     }
 
     /// Returns the original 1-based character column for a submatch.
@@ -530,6 +636,7 @@ impl GlobalSearch {
     /// adjusting the submatch offset accordingly.
     fn trim_leading_whitespace_for_submatch(
         original_line: &str,
+        stored_lines: &mut HashMap<(usize, StoredLineWindow), SharedMatchText>,
         location: LocalOrRemotePath,
         line_number: u32,
         column_num: Option<usize>,
@@ -551,7 +658,8 @@ impl GlobalSearch {
             leading_trimmed_bytes += ch.len_utf8();
         }
 
-        let trimmed_line = &original_line[leading_trimmed_bytes.as_usize()..];
+        let leading_trimmed_index = leading_trimmed_bytes.as_usize();
+        let trimmed_line = &original_line[leading_trimmed_index..];
 
         let submatches = if let Some(sub) = submatch {
             vec![Submatch {
@@ -561,8 +669,12 @@ impl GlobalSearch {
         } else {
             Vec::new()
         };
-        let (line_text, submatches) =
-            Self::truncate_line_text_for_storage(trimmed_line, &submatches);
+        let window = Self::stored_line_window(trimmed_line, &submatches);
+        let line_text = stored_lines
+            .entry((leading_trimmed_index, window))
+            .or_insert_with(|| Self::store_line_text(trimmed_line, window).into())
+            .clone();
+        let submatches = Self::remap_submatches_for_storage(&submatches, window);
 
         GlobalSearchMatch {
             location,
@@ -573,12 +685,26 @@ impl GlobalSearch {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn truncate_line_text_for_storage(
         line_text: &str,
         submatches: &[Submatch],
     ) -> (String, Vec<Submatch>) {
+        let window = Self::stored_line_window(line_text, submatches);
+        (
+            Self::store_line_text(line_text, window),
+            Self::remap_submatches_for_storage(submatches, window),
+        )
+    }
+
+    fn stored_line_window(line_text: &str, submatches: &[Submatch]) -> StoredLineWindow {
         if line_text.len() <= MAX_STORED_LINE_TEXT_BYTES {
-            return (line_text.to_owned(), submatches.to_vec());
+            return StoredLineWindow {
+                start: 0,
+                end: line_text.len(),
+                prefix_ellipsis: false,
+                suffix_ellipsis: false,
+            };
         }
 
         let anchor = submatches
@@ -598,35 +724,50 @@ impl GlobalSearch {
             .rev()
             .find(|&index| line_text.is_char_boundary(index))
             .unwrap_or(0);
+        StoredLineWindow {
+            start: window_start,
+            end: window_end,
+            prefix_ellipsis: window_start > 0,
+            suffix_ellipsis: window_end < line_text.len(),
+        }
+    }
 
-        let prefix_ellipsis = window_start > 0;
-        let suffix_ellipsis = window_end < line_text.len();
-        let capacity = window_end - window_start
-            + usize::from(prefix_ellipsis) * ellipsis_bytes
-            + usize::from(suffix_ellipsis) * ellipsis_bytes;
+    fn store_line_text(line_text: &str, window: StoredLineWindow) -> String {
+        let ellipsis_bytes = '…'.len_utf8();
+        let capacity = window.end - window.start
+            + usize::from(window.prefix_ellipsis) * ellipsis_bytes
+            + usize::from(window.suffix_ellipsis) * ellipsis_bytes;
         let mut truncated = String::with_capacity(capacity);
-        if prefix_ellipsis {
+        if window.prefix_ellipsis {
             truncated.push('…');
         }
-        truncated.push_str(&line_text[window_start..window_end]);
-        if suffix_ellipsis {
+        truncated.push_str(&line_text[window.start..window.end]);
+        if window.suffix_ellipsis {
             truncated.push('…');
         }
+        truncated
+    }
 
-        let prefix_offset_bytes = if prefix_ellipsis { ellipsis_bytes } else { 0 };
-        let truncated_submatches = submatches
+    fn remap_submatches_for_storage(
+        submatches: &[Submatch],
+        window: StoredLineWindow,
+    ) -> Vec<Submatch> {
+        let prefix_offset_bytes = if window.prefix_ellipsis {
+            '…'.len_utf8()
+        } else {
+            0
+        };
+        submatches
             .iter()
             .filter_map(|submatch| {
-                let start = submatch.byte_start.as_usize().max(window_start);
-                let end = submatch.byte_end.as_usize().min(window_end);
+                let start = submatch.byte_start.as_usize().max(window.start);
+                let end = submatch.byte_end.as_usize().min(window.end);
                 (start < end).then(|| Submatch {
-                    byte_start: ByteOffset::from(start - window_start + prefix_offset_bytes),
-                    byte_end: ByteOffset::from(end - window_start + prefix_offset_bytes),
+                    byte_start: ByteOffset::from(start - window.start + prefix_offset_bytes),
+                    byte_end: ByteOffset::from(end - window.start + prefix_offset_bytes),
                 })
             })
-            .collect();
-
-        (truncated, truncated_submatches)
+            .collect()
     }
 }
 

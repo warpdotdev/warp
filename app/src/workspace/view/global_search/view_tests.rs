@@ -197,7 +197,7 @@ fn nested_root_fan_out_stops_at_the_stored_match_ceiling() {
                 location: location.clone(),
                 line_number: 1,
                 column_num: Some(1),
-                line_text: "match".to_string(),
+                line_text: "match".to_string().into(),
                 submatches: vec![submatch(0, 5)],
             },
         );
