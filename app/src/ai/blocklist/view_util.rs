@@ -304,6 +304,22 @@ pub fn format_credits(credits: f32) -> String {
     }
 }
 
+/// Formats a US-cent amount as dollars without rounding a positive charge down to zero.
+pub fn format_dollars(cost_in_cents: f32) -> String {
+    // Accumulated costs can produce negative zero, which would otherwise render as `$-0.00`.
+    let cost_in_cents = if cost_in_cents == 0.0 {
+        0.0
+    } else {
+        cost_in_cents
+    };
+    let dollars = cost_in_cents / 100.0;
+    if cost_in_cents > 0.0 && dollars < 0.01 {
+        "<$0.01".to_string()
+    } else {
+        format!("${dollars:.2}")
+    }
+}
+
 fn effective_usage_unit(unit: UsageDisplayUnit, cost_in_cents: Option<f32>) -> UsageDisplayUnit {
     if !FeatureFlag::PricingTransparency.is_enabled() {
         return UsageDisplayUnit::Credits;
@@ -323,7 +339,7 @@ fn format_usage_unit_value(
     match unit {
         UsageDisplayUnit::Credits => format_credits(credits),
         UsageDisplayUnit::Dollars => cost_in_cents
-            .map(|cost_in_cents| format!("${:.2}", cost_in_cents / 100.0))
+            .map(format_dollars)
             .unwrap_or_else(|| format_credits(credits)),
     }
 }

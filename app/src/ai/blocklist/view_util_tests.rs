@@ -13,6 +13,21 @@ fn format_credits_never_rounds_a_real_charge_to_zero() {
 }
 
 #[test]
+fn format_dollars_formats_zero_exactly() {
+    assert_eq!(format_dollars(0.0), "$0.00");
+}
+
+#[test]
+fn format_dollars_floors_positive_sub_cent_amounts() {
+    assert_eq!(format_dollars(0.3), "<$0.01");
+}
+
+#[test]
+fn format_dollars_formats_one_cent_exactly() {
+    assert_eq!(format_dollars(1.0), "$0.01");
+}
+
+#[test]
 fn format_usage_returns_credits_only_when_flag_disabled() {
     let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
 
