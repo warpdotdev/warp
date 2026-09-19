@@ -4,13 +4,16 @@ use std::sync::Arc;
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::{Vector2F, vec2f};
+use serde::{Deserialize, Serialize};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
 use warp_core::ui::theme::color::internal_colors;
+use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
-    Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    DEFAULT_UI_LINE_HEIGHT_RATIO, Empty, Flex, Hoverable, MouseStateHandle, OffsetPositioning,
-    ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Stack, Text,
+    Border, CacheOption, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, DEFAULT_UI_LINE_HEIGHT_RATIO, Empty, Flex, Hoverable, Image,
+    MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
+    Stack, Text,
 };
 use warpui::fonts::{Cache, FamilyId, Properties, Weight};
 use warpui::keymap::Keystroke;
@@ -256,6 +259,7 @@ fn udi_tooltip_positioning() -> OffsetPositioning {
 pub(crate) struct UdiChipConfig {
     /// The icon to display
     icon: Option<Icon>,
+    image_path: Option<&'static str>,
     keystroke: Option<Keystroke>,
     /// The color for both icon and text
     color: ColorU,
@@ -276,6 +280,7 @@ impl UdiChipConfig {
     pub(crate) fn new(color: ColorU, text: String) -> Self {
         Self {
             icon: None,
+            image_path: None,
             keystroke: None,
             color,
             text,
@@ -289,6 +294,21 @@ impl UdiChipConfig {
     pub(crate) fn new_with_icon(icon: Icon, color: ColorU, text: String) -> Self {
         Self {
             icon: Some(icon),
+            image_path: None,
+            keystroke: None,
+            color,
+            text,
+            truncate_text: true,
+            border_override: None,
+            is_in_agent_view: false,
+            hovered: false,
+        }
+    }
+
+    pub(crate) fn new_with_image(image_path: &'static str, color: ColorU, text: String) -> Self {
+        Self {
+            icon: None,
+            image_path: Some(image_path),
             keystroke: None,
             color,
             text,
@@ -302,6 +322,7 @@ impl UdiChipConfig {
     fn new_with_keystroke(color: ColorU, text: String, keystroke: Keystroke) -> Self {
         Self {
             icon: None,
+            image_path: None,
             keystroke: Some(keystroke),
             color,
             text,
@@ -363,6 +384,72 @@ pub struct DisplayChip {
     code_review_keybinding: Option<String>,
     /// The terminal view this chip belongs to, used to check CLI agent session state.
     terminal_view_id: EntityId,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperatingSystemInfo {
+    name: String,
+    logo: OperatingSystemLogo,
+}
+
+impl OperatingSystemInfo {
+    pub fn new(name: impl Into<String>, logo: OperatingSystemLogo) -> Self {
+        Self {
+            name: name.into(),
+            logo,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) fn logo(&self) -> OperatingSystemLogo {
+        self.logo
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperatingSystemLogo {
+    Ubuntu,
+    Debian,
+    Kali,
+    Arch,
+    Fedora,
+    Linux,
+    MacOS,
+    Windows,
+    Unknown,
+}
+
+impl OperatingSystemLogo {
+    pub(crate) fn image_path(self) -> Option<&'static str> {
+        match self {
+            Self::Ubuntu => Some("bundled/svg/ubuntu.svg"),
+            Self::Debian => Some("bundled/svg/debian.svg"),
+            Self::Arch => Some("bundled/svg/arch.svg"),
+            Self::Fedora => Some("bundled/svg/fedora.svg"),
+            Self::Kali => Some("bundled/svg/kali.svg"),
+            Self::Linux => Some("bundled/svg/linux.svg"),
+            Self::MacOS => Some("bundled/svg/apple.svg"),
+            Self::Windows => Some("bundled/svg/windows.svg"),
+            Self::Unknown => Some("bundled/svg/help-circle.svg"),
+        }
+    }
+
+    pub(crate) fn icon(self) -> Icon {
+        match self {
+            Self::Ubuntu => Icon::Ubuntu,
+            Self::Debian => Icon::Debian,
+            Self::Kali => Icon::Kali,
+            Self::Arch => Icon::Arch,
+            Self::Fedora => Icon::Fedora,
+            Self::Linux => Icon::Linux,
+            Self::MacOS => Icon::Apple,
+            Self::Windows => Icon::Windows,
+            Self::Unknown => Icon::UnknownOs,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -622,6 +709,10 @@ pub enum DisplayChipKind {
         directory_fetcher: ModelHandle<DirectoryFetcher>,
     },
     Ssh,
+    OperatingSystem {
+        info: Option<OperatingSystemInfo>,
+        show_label: bool,
+    },
     Subshell,
     VirtualEnvironment,
     CondaEnvironment,
@@ -658,6 +749,7 @@ impl DisplayChipKind {
             | DisplayChipKind::GitDiffStats { .. }
             | DisplayChipKind::Text
             | DisplayChipKind::Ssh
+            | DisplayChipKind::OperatingSystem { .. }
             | DisplayChipKind::Subshell
             | DisplayChipKind::VirtualEnvironment
             | DisplayChipKind::CondaEnvironment
@@ -892,7 +984,7 @@ impl DisplayChip {
             ctx.notify();
         });
 
-        let display_chip_kind = match chip_result.kind {
+        let display_chip_kind = match &chip_result.kind {
             ContextChipKind::AgentPlanAndTodoList => {
                 let context_model = config.ai_context_model.clone();
                 let view_id = config.terminal_view_id;
@@ -1052,6 +1144,16 @@ impl DisplayChip {
                 }
             }
             ContextChipKind::Ssh => DisplayChipKind::Ssh,
+            kind @ (ContextChipKind::OperatingSystem | ContextChipKind::OperatingSystemLogo) => {
+                DisplayChipKind::OperatingSystem {
+                    info: chip_result
+                        .value
+                        .as_ref()
+                        .and_then(ChipValue::as_operating_system_info)
+                        .cloned(),
+                    show_label: kind == &ContextChipKind::OperatingSystem,
+                }
+            }
             ContextChipKind::Subshell => DisplayChipKind::Subshell,
             ContextChipKind::VirtualEnvironment => DisplayChipKind::VirtualEnvironment,
             ContextChipKind::CondaEnvironment => DisplayChipKind::CondaEnvironment,
@@ -1262,6 +1364,7 @@ impl DisplayChip {
             DisplayChipKind::GitDiffStats { .. }
             | DisplayChipKind::Text
             | DisplayChipKind::Ssh
+            | DisplayChipKind::OperatingSystem { .. }
             | DisplayChipKind::Subshell
             | DisplayChipKind::VirtualEnvironment
             | DisplayChipKind::CondaEnvironment
@@ -1910,6 +2013,40 @@ impl DisplayChip {
         render_udi_chip(config, appearance)
     }
 
+    fn operating_system_chip(
+        &self,
+        info: &Option<OperatingSystemInfo>,
+        show_label: bool,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let color = if self.is_in_agent_view {
+            agent_view_chip_color(appearance)
+        } else {
+            appearance.theme().ansi_fg_blue()
+        };
+        let logo = info
+            .as_ref()
+            .map(OperatingSystemInfo::logo)
+            .unwrap_or(OperatingSystemLogo::Unknown);
+        let text = if show_label {
+            info.as_ref()
+                .map(|info| info.name().to_string())
+                .unwrap_or_else(|| self.text.clone())
+        } else {
+            String::new()
+        };
+        let mut config = if let Some(image_path) = logo.image_path() {
+            UdiChipConfig::new_with_image(image_path, color, text)
+        } else {
+            UdiChipConfig::new_with_icon(logo.icon(), color, text)
+        };
+        if self.is_in_agent_view {
+            config = config.for_agent_view();
+        }
+
+        render_udi_chip(config, appearance)
+    }
     fn subshell_chip(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let color = if self.is_in_agent_view {
@@ -2023,6 +2160,9 @@ impl DisplayChip {
                 ..
             } => Some(self.working_directory_chip(*show_menu, menu, *menu_open, app)),
             DisplayChipKind::Ssh => Some(self.ssh_chip(app)),
+            DisplayChipKind::OperatingSystem { info, show_label } => {
+                Some(self.operating_system_chip(info, *show_label, app))
+            }
             DisplayChipKind::Subshell => Some(self.subshell_chip(app)),
             DisplayChipKind::VirtualEnvironment => Some(self.virtual_environment_chip(app)),
             DisplayChipKind::NodeVersion { popup, popup_open } => {
@@ -2156,6 +2296,7 @@ impl TypedActionView for DisplayChip {
                     ctx.notify();
                 }
                 DisplayChipKind::Ssh
+                | DisplayChipKind::OperatingSystem { .. }
                 | DisplayChipKind::Subshell
                 | DisplayChipKind::VirtualEnvironment
                 | DisplayChipKind::CondaEnvironment
@@ -2228,7 +2369,15 @@ impl TypedActionView for DisplayChip {
                         ctx.emit(PromptDisplayChipEvent::ToggleMenu { open: is_open });
                         ctx.notify();
                     }
-                    _ => {}
+                    DisplayChipKind::Ssh
+                    | DisplayChipKind::OperatingSystem { .. }
+                    | DisplayChipKind::Subshell
+                    | DisplayChipKind::VirtualEnvironment
+                    | DisplayChipKind::CondaEnvironment
+                    | DisplayChipKind::AgentPlanAndTodoList { .. }
+                    | DisplayChipKind::Text
+                    | DisplayChipKind::GithubPullRequest
+                    | DisplayChipKind::GitDiffStats { .. } => {}
                 }
             }
             DisplayChipAction::ToggleCodeReview => {
@@ -2357,25 +2506,47 @@ pub(crate) fn render_udi_chip(config: UdiChipConfig, appearance: &Appearance) ->
     let icon_size = font_size;
 
     let mut content = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-
-    if let Some(icon) = config.icon {
-        content.add_child(
-            Container::new(
-                ConstrainedBox::new(icon.to_warpui_icon(Fill::Solid(config.color)).finish())
-                    .with_height(icon_size)
-                    .with_width(icon_size)
-                    .finish(),
-            )
-            .with_margin_right(spacing::UDI_CHIP_ICON_GAP)
-            .finish(),
-        );
-    }
-
     let display_text = if config.truncate_text {
         truncate_from_beginning(&config.text, UDI_CHIP_MAX_NUM_CHARACTERS)
     } else {
         config.text.clone()
     };
+
+    if let Some(icon) = config.icon {
+        let icon = Container::new(
+            ConstrainedBox::new(icon.to_warpui_icon(Fill::Solid(config.color)).finish())
+                .with_height(icon_size)
+                .with_width(icon_size)
+                .finish(),
+        );
+        let icon = if display_text.is_empty() && config.keystroke.is_none() {
+            icon
+        } else {
+            icon.with_margin_right(spacing::UDI_CHIP_ICON_GAP)
+        };
+        content.add_child(icon.finish());
+    }
+
+    if let Some(image_path) = config.image_path {
+        let image = Container::new(
+            ConstrainedBox::new(
+                Image::new(
+                    AssetSource::Bundled { path: image_path },
+                    CacheOption::BySize,
+                )
+                .finish(),
+            )
+            .with_height(icon_size)
+            .with_width(icon_size)
+            .finish(),
+        );
+        let image = if display_text.is_empty() && config.keystroke.is_none() {
+            image
+        } else {
+            image.with_margin_right(spacing::UDI_CHIP_ICON_GAP)
+        };
+        content.add_child(image.finish());
+    }
 
     let font_family = if config.is_in_agent_view || !FeatureFlag::AgentView.is_enabled() {
         appearance.ui_font_family()
@@ -2383,7 +2554,7 @@ pub(crate) fn render_udi_chip(config: UdiChipConfig, appearance: &Appearance) ->
         appearance.monospace_font_family()
     };
 
-    let mut rendered_text = Text::new_inline(display_text, font_family, font_size)
+    let mut rendered_text = Text::new_inline(display_text.clone(), font_family, font_size)
         .with_color(Fill::Solid(config.color).into())
         .with_line_height_ratio(appearance.line_height_ratio());
 
@@ -2391,7 +2562,9 @@ pub(crate) fn render_udi_chip(config: UdiChipConfig, appearance: &Appearance) ->
         rendered_text = rendered_text.with_style(Properties::default().weight(Weight::Semibold))
     }
 
-    content.add_child(rendered_text.finish());
+    if !display_text.is_empty() {
+        content.add_child(rendered_text.finish());
+    }
 
     if let Some(keystroke) = config.keystroke {
         content.add_child(
