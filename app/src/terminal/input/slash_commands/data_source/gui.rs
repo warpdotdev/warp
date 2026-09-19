@@ -267,11 +267,10 @@ impl GuiSlashCommandDataSource {
 
     fn is_cloud_mode(&self, ctx: &AppContext) -> bool {
         self.is_cloud_mode_v2
-            || (FeatureFlag::CloudMode.is_enabled()
-                && self
-                    .ambient_agent_view_model
-                    .as_ref()
-                    .is_some_and(|model| model.as_ref(ctx).is_ambient_agent()))
+            || self
+                .ambient_agent_view_model
+                .as_ref()
+                .is_some_and(|model| model.as_ref(ctx).is_ambient_agent())
     }
 
     #[cfg(not(target_family = "wasm"))]
