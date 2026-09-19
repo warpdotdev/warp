@@ -436,10 +436,8 @@ impl BlocklistAIStatusBar {
             return;
         };
 
-        // Show confirmation dialog if summarization is active and feature flag enabled
-        if FeatureFlag::SummarizationCancellationConfirmation.is_enabled()
-            && model.is_conversation_summarization_active(ctx)
-        {
+        // Show confirmation dialog if summarization is active
+        if model.is_conversation_summarization_active(ctx) {
             // If the dialog is already open, treat Ctrl-C as confirm-cancel
             if self.is_summarization_cancel_dialog_open {
                 // Confirm cancel the running/pending action/request, then close the dialog overlay.
