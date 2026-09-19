@@ -27,6 +27,9 @@ use warpui::windowing::state::ApplicationStage;
 use warpui::{App, ModelHandle};
 use watcher::HomeDirectoryWatcher;
 
+use super::child_agent::hydration::{
+    RemoteChildHydrationAction, decide_remote_child_hydration_action,
+};
 use super::child_agent::restoration::is_stale_ancestor_list_completion;
 use super::child_agent::{
     HiddenChildAgentConversationRequest, HiddenChildAgentTaskContext,
@@ -45,7 +48,8 @@ use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::ai::ambient_agents::task::TaskPrincipalInfo;
 use crate::ai::ambient_agents::{
-    AgentSource, AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState,
+    AgentSource, AmbientAgentLiveSessionState, AmbientAgentTask, AmbientAgentTaskId,
+    AmbientAgentTaskState,
 };
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::CloudConversationData;
@@ -4149,6 +4153,225 @@ fn test_focused_pane_is_synchronized_with_application_focus() {
     });
 }
 
+/// Builds an [`AmbientAgentTask`] tailored for unit-testing
+/// [`decide_remote_child_hydration_action`].
+///
+/// `state`, `is_sandbox_running`, and `session_id` combine to determine the
+/// task's [`AmbientAgentLiveSessionState`]:
+/// - `state == InProgress`, `is_sandbox_running == true`, and a parseable
+///   UUID-shaped `session_id` resolve to
+///   [`AmbientAgentLiveSessionState::Attachable`].
+/// - `state == InProgress`, `is_sandbox_running == true`, and an
+///   unparseable `session_id` resolve to
+///   [`AmbientAgentLiveSessionState::ActiveUnattachable`].
+/// - Any other shape resolves to [`AmbientAgentLiveSessionState::Inactive`].
+///
+/// `conversation_id` populates the server conversation token used by the
+/// `LoadTranscript` branch; pass `None` to exercise `Fallback`.
+///
+/// Note: `session_link` is unconditionally set to `None` in this helper.
+/// `AmbientAgentTask::active_live_session_state` falls back to parsing the
+/// session id out of `session_link` when `session_id` is absent, so a test
+/// that exercises that branch would need a different helper.
+fn hydration_decision_task(
+    state: AmbientAgentTaskState,
+    is_sandbox_running: bool,
+    session_id: Option<&str>,
+    conversation_id: Option<&str>,
+) -> AmbientAgentTask {
+    let mut task = ambient_agent_task_for_current_user(new_ambient_agent_task_id());
+    task.state = state;
+    task.is_sandbox_running = is_sandbox_running;
+    task.session_id = session_id.map(str::to_string);
+    task.session_link = None;
+    task.conversation_id = conversation_id.map(str::to_string);
+    task
+}
+
+#[test]
+fn decide_remote_child_hydration_attachable_live_session_chooses_live_attach() {
+    // InProgress + sandbox running + parseable session id -> Attachable.
+    let task = hydration_decision_task(
+        AmbientAgentTaskState::InProgress,
+        true,
+        Some("11111111-1111-1111-1111-111111111111"),
+        Some("server-token-irrelevant-for-attach"),
+    );
+    assert_eq!(
+        task.active_live_session_state(),
+        AmbientAgentLiveSessionState::Attachable {
+            session_id: "11111111-1111-1111-1111-111111111111".parse().unwrap(),
+        },
+    );
+
+    assert_eq!(
+        decide_remote_child_hydration_action(&task),
+        RemoteChildHydrationAction::LiveAttach,
+    );
+}
+
+#[test]
+fn decide_remote_child_hydration_inactive_with_token_loads_transcript() {
+    // Terminal state -> Inactive, server token present -> LoadTranscript.
+    let task = hydration_decision_task(
+        AmbientAgentTaskState::Succeeded,
+        false,
+        None,
+        Some("my-server-token"),
+    );
+    assert_eq!(
+        task.active_live_session_state(),
+        AmbientAgentLiveSessionState::Inactive,
+    );
+
+    assert_eq!(
+        decide_remote_child_hydration_action(&task),
+        RemoteChildHydrationAction::LoadTranscript {
+            server_token: ServerConversationToken::new("my-server-token".to_string()),
+            task_is_terminal: true,
+        },
+    );
+}
+
+#[test]
+fn decide_remote_child_hydration_active_unattachable_with_token_loads_transcript() {
+    // InProgress + sandbox running + unparseable session id ->
+    // ActiveUnattachable. With a server token we still prefer LoadTranscript
+    // over Fallback so the user sees the merged transcript instead of a bare
+    // tombstone.
+    let task = hydration_decision_task(
+        AmbientAgentTaskState::InProgress,
+        true,
+        Some("not-a-valid-uuid"),
+        Some("unattachable-server-token"),
+    );
+    assert_eq!(
+        task.active_live_session_state(),
+        AmbientAgentLiveSessionState::ActiveUnattachable,
+    );
+
+    assert_eq!(
+        decide_remote_child_hydration_action(&task),
+        RemoteChildHydrationAction::LoadTranscript {
+            server_token: ServerConversationToken::new("unattachable-server-token".to_string()),
+            task_is_terminal: false,
+        },
+    );
+}
+
+#[test]
+fn decide_remote_child_hydration_inactive_without_token_falls_back() {
+    // Terminal state, no server token -> nothing to attach to and nothing to
+    // load. Terminal => tombstone is appropriate.
+    let task = hydration_decision_task(AmbientAgentTaskState::Succeeded, false, None, None);
+    assert_eq!(
+        task.active_live_session_state(),
+        AmbientAgentLiveSessionState::Inactive,
+    );
+
+    assert_eq!(
+        decide_remote_child_hydration_action(&task),
+        RemoteChildHydrationAction::Fallback {
+            task_is_terminal: true,
+        },
+    );
+}
+
+/// `ActiveUnattachable` + no server token: the run is still in progress but
+/// the client can't attach and has nothing to load. Fallback must carry
+/// `task_is_terminal: false` so the dispatch arm skips the
+/// conversation-ended tombstone.
+#[test]
+fn decide_remote_child_hydration_active_unattachable_without_token_falls_back_non_terminal() {
+    let task = hydration_decision_task(
+        AmbientAgentTaskState::InProgress,
+        true,
+        Some("not-a-valid-uuid"),
+        None,
+    );
+    assert_eq!(
+        task.active_live_session_state(),
+        AmbientAgentLiveSessionState::ActiveUnattachable,
+    );
+
+    assert_eq!(
+        decide_remote_child_hydration_action(&task),
+        RemoteChildHydrationAction::Fallback {
+            task_is_terminal: false,
+        },
+    );
+}
+
+/// An `AmbientAgentTask` whose `conversation_id` is `Some("")` (or
+/// whitespace-only) is treated the same as `None`: the dispatch must not
+/// route to a no-op cloud fetch wrapped in a misleading tombstone. The
+/// `Fallback` arm handles "nothing to attach to, nothing to load"
+/// correctly. Terminal here => tombstone is appropriate.
+#[test]
+fn decide_remote_child_hydration_empty_token_falls_back() {
+    for empty_token in [Some(""), Some("   "), Some("\t\n")] {
+        let task =
+            hydration_decision_task(AmbientAgentTaskState::Succeeded, false, None, empty_token);
+        assert_eq!(
+            task.active_live_session_state(),
+            AmbientAgentLiveSessionState::Inactive,
+            "empty/whitespace token={empty_token:?} should still resolve to Inactive",
+        );
+        assert_eq!(
+            decide_remote_child_hydration_action(&task),
+            RemoteChildHydrationAction::Fallback {
+                task_is_terminal: true,
+            },
+            "empty/whitespace token={empty_token:?} must fall through to Fallback",
+        );
+    }
+}
+
+/// A restored tab's terminal pane retains its startup directory even when
+/// the tab has never been focused (as happens for most of a many-tab
+/// restore under `FeatureFlag::LazyShellStartup`), so
+/// `restored_terminal_startup_directory` must find it without going through
+/// focus state.
+#[test]
+fn restored_terminal_startup_directory_resolves_for_never_focused_tab() {
+    let _lazy_shell = FeatureFlag::LazyShellStartup.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let layout = PanesLayout::Snapshot(Box::new(PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: false,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: Uuid::new_v4().as_bytes().to_vec(),
+                cwd: Some("/tmp".to_owned()),
+                shell_launch_data: None,
+                is_active: false,
+                is_read_only: false,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: Vec::new(),
+                active_conversation_id: None,
+            }),
+        })));
+
+        let pane_group = mock_pane_group(
+            &mut app,
+            MockOptions {
+                layout,
+                ..Default::default()
+            },
+        );
+
+        pane_group.read(&app, |panes, _ctx| {
+            assert_eq!(
+                panes.restored_terminal_startup_directory(),
+                Some(PathBuf::from("/tmp")),
+            );
+        });
+    });
+}
+
 /// APP-5243: closing a file pane only hides it while undo-close is available, and the same view is
 /// reattached without reopening its file. Releasing the file on close would therefore leave a
 /// restored pane rendering content that can never update again. The file is released only once the
@@ -4232,6 +4455,65 @@ fn test_undo_close_keeps_a_file_pane_watching_its_file() {
                 file_view.as_ref(ctx).file_id_for_test().is_none(),
                 "a permanently discarded pane should release its file"
             );
+        });
+    });
+}
+
+/// The same never-focused restored tab, through the accessor every
+/// "does this tab still host that stored agent session" check uses.
+///
+/// Three call sites ask that question — the rail's resumable-row lookup, the
+/// dormant-row suppression, and the resume path's owning-pane search — and each
+/// compares the answer against an `AgentSessionHandle`'s `cwd`. They must
+/// resolve the directory identically or they contradict each other about one
+/// tab: the rail offers a row as resumable in place, the resume path then finds
+/// no owning pane and opens a *second* tab for a session already on screen, and
+/// the suppression lets that same session also show a dormant row.
+#[test]
+fn held_session_directory_resolves_for_never_focused_tab() {
+    let _lazy_shell = FeatureFlag::LazyShellStartup.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let layout = PanesLayout::Snapshot(Box::new(PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: false,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: Uuid::new_v4().as_bytes().to_vec(),
+                cwd: Some("/tmp".to_owned()),
+                shell_launch_data: None,
+                is_active: false,
+                is_read_only: false,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: Vec::new(),
+                active_conversation_id: None,
+            }),
+        })));
+
+        let pane_group = mock_pane_group(
+            &mut app,
+            MockOptions {
+                layout,
+                ..Default::default()
+            },
+        );
+
+        pane_group.read(&app, |panes, ctx| {
+            assert_eq!(
+                panes.held_session_directory(ctx),
+                Some("/tmp".to_owned()),
+                "the tab still holds its session's directory"
+            );
+            // Whenever focus state does resolve a path, the accessor must be
+            // exactly it: the fallback may only add answers, never change one.
+            if let Some(active) = panes.active_session_path(ctx) {
+                assert_eq!(
+                    panes.held_session_directory(ctx).as_deref(),
+                    active.to_str(),
+                );
+            }
         });
     });
 }

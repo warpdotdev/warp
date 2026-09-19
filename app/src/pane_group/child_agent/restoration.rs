@@ -665,6 +665,8 @@ impl PaneGroup {
 
         let pane_data = TerminalPane::new(
             Uuid::new_v4().as_bytes().to_vec(),
+            None,
+            None,
             terminal_manager,
             new_terminal_view.clone(),
             self.model_event_sender.clone(),
