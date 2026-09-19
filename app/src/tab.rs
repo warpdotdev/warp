@@ -370,8 +370,11 @@ pub struct TabData {
     pub in_multi_selection: bool,
     /// True when this tab is pinned to the front of the tab list.
     pub pinned: bool,
+    /// True when this tab is excluded from next/previous tab navigation.
+    pub parked: bool,
 }
 
+const PARKED_TAB_OPACITY: Opacity = 45;
 const TAB_COLOR_ICON_PATH: &str = "bundled/svg/ellipse.svg";
 const TAB_NO_COLOR_ICON_PATH: &str = "bundled/svg/no_color_ellipse.svg";
 
@@ -390,6 +393,7 @@ impl TabData {
             group_id: None,
             in_multi_selection: false,
             pinned: false,
+            parked: false,
         }
     }
 
@@ -705,6 +709,17 @@ impl TabData {
         }
         if let Some(pane_name_target) = pane_name_target {
             menu_items.extend(self.pane_name_menu_items(pane_name_target, ctx));
+        }
+        if FeatureFlag::ParkedTabs.is_enabled() {
+            menu_items.push(
+                MenuItemFields::new(if self.parked {
+                    "Unpark tab"
+                } else {
+                    "Park tab"
+                })
+                .with_on_select_action(WorkspaceAction::ToggleTabParked(index))
+                .into_item(),
+            );
         }
         // `can_move_left` / `can_move_right` come from `Workspace::can_move_tab`
         // and gate the "Move Tab Up/Down" entries so they disappear when the
@@ -1474,6 +1489,11 @@ impl<'a> TabComponent<'a> {
         };
         let font_style = styles.font_properties();
         let font_color = styles.font_color.expect("Font color is set");
+        let font_color = if FeatureFlag::ParkedTabs.is_enabled() && self.tab.parked {
+            coloru_with_opacity(font_color, PARKED_TAB_OPACITY)
+        } else {
+            font_color
+        };
 
         if self.is_tab_being_renamed() {
             Align::new(
