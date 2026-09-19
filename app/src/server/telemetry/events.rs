@@ -609,6 +609,7 @@ pub enum LaunchConfigUiLocation {
     AppMenu,
     TabMenu,
     Uri,
+    Keybinding,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
