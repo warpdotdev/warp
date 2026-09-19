@@ -50,6 +50,7 @@ struct MouseStateHandles {
     revert_mouse_state: MouseStateHandle,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum NavBarBehavior {
     Closable,
     NotClosable,
