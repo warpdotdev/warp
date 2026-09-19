@@ -95,6 +95,38 @@ fn app_keeps_default_secure_storage_service_name() {
 }
 
 #[test]
+fn launch_intent_url_classification() {
+    let scheme = ChannelState::url_scheme();
+    let parse = |s: &str| Url::parse(s).expect("valid test URL");
+
+    let intents = [
+        format!("{scheme}://tab_config/my_tab"),
+        format!("{scheme}://tab_config/my_tab.toml"),
+        format!("{scheme}://action/new_window?path=~"),
+        format!("{scheme}://action/new_cloud_agent_conversation?source=web_home"),
+    ];
+    for s in intents {
+        assert!(
+            is_launch_intent_url(&parse(&s)),
+            "expected launch intent: {s}"
+        );
+    }
+
+    let not_intents = [
+        format!("{scheme}://action/new_cloud_agent_conversation"),
+        format!("{scheme}://action/new_cloud_agent_conversation?source=other"),
+        format!("{scheme}://action/something_else"),
+        "https://example.com/action/new_window".to_string(),
+    ];
+    for s in not_intents {
+        assert!(
+            !is_launch_intent_url(&parse(&s)),
+            "expected no launch intent: {s}"
+        );
+    }
+}
+
+#[test]
 fn startup_auth_is_non_blocking_only_for_tui() {
     // Only the TUI front-end skips the startup IAP wait; every other launch mode
     // keeps the blocking behavior so this scope can't widen beyond the TUI.
