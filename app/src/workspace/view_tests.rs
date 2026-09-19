@@ -4631,6 +4631,55 @@ fn test_toggle_tab_group_collapsed_flips_state() {
 }
 
 #[test]
+fn test_tab_group_unread_activity_survives_expansion() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _notifications_guard = FeatureFlag::HOANotifications.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let (group_id, terminal_view_id) = workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+
+            let group = TabGroup::new();
+            let group_id = group.id;
+            workspace.tab_groups.insert(group_id, group);
+            workspace.tabs[0].group_id = Some(group_id);
+            workspace.tabs[1].group_id = Some(group_id);
+
+            let terminal_view_id = workspace.tabs[0]
+                .pane_group
+                .as_ref(ctx)
+                .terminal_view_at_pane_index(0, ctx)
+                .expect("group member should have a terminal view")
+                .id();
+
+            assert!(!workspace.tab_group_has_unread_activity(group_id, ctx));
+            (group_id, terminal_view_id)
+        });
+
+        app.update(|ctx| {
+            AgentNotificationsModel::handle(ctx).update(ctx, |notifications, _| {
+                notifications.add_unread_for_terminal_view(terminal_view_id);
+            });
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(workspace.tab_group_has_unread_activity(group_id, ctx));
+
+            workspace.handle_action(&WorkspaceAction::ToggleTabGroupCollapsed(group_id), ctx);
+            assert!(workspace.tab_groups[&group_id].collapsed);
+            assert!(workspace.tab_group_has_unread_activity(group_id, ctx));
+
+            workspace.handle_action(&WorkspaceAction::ToggleTabGroupCollapsed(group_id), ctx);
+            assert!(!workspace.tab_groups[&group_id].collapsed);
+            assert!(workspace.tab_group_has_unread_activity(group_id, ctx));
+        });
+    });
+}
+#[test]
 fn test_close_tab_group_removes_group_and_members() {
     let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
 
