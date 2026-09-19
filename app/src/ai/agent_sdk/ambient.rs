@@ -955,15 +955,24 @@ impl AmbientAgentRunner {
 
     /// Print runs in a beautifully formatted ASCII table with card-style layout.
     fn print_tasks_table(tasks: &[AmbientAgentTask]) {
+        if let Err(err) = Self::write_tasks_table(tasks, std::io::stdout()) {
+            log::warn!("Unable to write to stdout: {err}");
+        }
+    }
+
+    fn write_tasks_table<W>(tasks: &[AmbientAgentTask], mut writer: W) -> std::io::Result<()>
+    where
+        W: std::io::Write,
+    {
         if tasks.is_empty() {
-            println!("No runs found.");
-            return;
+            writeln!(writer, "No runs found.")?;
+            return Ok(());
         }
 
         if tasks.len() == 1 {
-            println!("\nAgent Run:");
+            writeln!(writer, "\nAgent Run:")?;
         } else {
-            println!("\nAgent Runs ({}):", tasks.len());
+            writeln!(writer, "\nAgent Runs ({}):", tasks.len())?;
         }
 
         let oz_root_url = ChannelState::oz_root_url();
@@ -1026,8 +1035,10 @@ impl AmbientAgentRunner {
                 table.add_row(vec![format!("Session: {}", session_join_info.session_link)]);
             }
 
-            println!("{table}");
+            writeln!(writer, "{table}")?;
         }
+
+        Ok(())
     }
 
     /// Format artifacts for display.
