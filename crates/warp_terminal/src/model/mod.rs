@@ -14,6 +14,7 @@ pub mod completions;
 pub mod escape_sequences;
 pub mod find;
 pub mod grid;
+mod grid_type;
 pub mod image_map;
 mod indexing;
 pub mod index {
@@ -30,6 +31,7 @@ pub mod session;
 pub use block_id::BlockId;
 pub use block_index::BlockIndex;
 pub use grid::GridStorage;
+pub use grid_type::GridType;
 pub use indexing::*;
 pub use mode::{KeyboardModes, KeyboardModesApplyBehavior, TermMode};
 pub use secrets::{ObfuscateSecrets, Secret, SecretHandle};
