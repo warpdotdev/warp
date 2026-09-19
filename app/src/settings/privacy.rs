@@ -374,6 +374,9 @@ impl PrivacySettings {
 
     /// Fetch the user's privacy settings from the server if any or update the server settings.
     pub fn fetch_or_update_settings(&self, ctx: &mut ModelContext<Self>) {
+        if self.auth_state.is_service_account() {
+            return;
+        }
         let auth_client_clone = self.auth_client.clone();
         let _ = ctx.spawn(
             async move { auth_client_clone.get_user_settings().await },
@@ -712,6 +715,9 @@ impl PrivacySettings {
     /// 2) update the warp drive prefs to match the values from the legacy user_settings endpoint so
     ///    that we can use warp drive prefs going forward.
     pub fn maybe_sync_with_warp_drive_prefs(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.auth_state.is_service_account() {
+            return;
+        }
         // Wait for cloud objects to load, and, if telemetry & crash reporting are synced to warp drive
         // initialize from the warp drive values.
         let update_manager = UpdateManager::as_ref(ctx);
@@ -722,6 +728,9 @@ impl PrivacySettings {
     }
 
     fn handle_warp_drive_objects_loaded(&mut self, _: (), ctx: &mut ModelContext<Self>) {
+        if self.auth_state.is_service_account() {
+            return;
+        }
         self.initialize_default_regexes_once(ctx);
         // Check if the warp drive preferences are set. If they are, and telemetry and crash reporting
         // are set as warp drive prefs, then use those.  Otherwise, update the warp drive prefs to match
