@@ -709,15 +709,31 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
     BUFFER=""
   }
   zle -N warp_report_input
+  function warp_select_fzf_history_entry () {
+    emulate -L zsh
+    setopt extendedglob pipefail
+
+    local selected=""
+    selected="$(fc -rl 1 \
+      | command -p awk '{ cmd=$0; sub(/^[ \t]*[0-9]+\**[ \t]+/, "", cmd); if (!seen[cmd]++) print $0 }' \
+      | fzf --nth=2.. --with-nth=2.. --scheme=history --tiebreak=index +m)"
+    local ret=$?
+    local -a mbegin mend match
+    REPLY=""
+    if [[ "$selected" == [[:blank:]]#(#b)(<->)(#B)(  |\* )* ]] \
+      && (( ${+history[${match[1]}]} )); then
+      REPLY="${history[${match[1]}]}"
+    fi
+    return $ret
+  }
 
   # Runs the shell's own ctrl-r history widget as a foreground command.
   function warp_run_external_ctrl_r_widget () {
     local result=""
     case "$_WARP_EXTERNAL_CTRL_R_WIDGET" in
       fzf-history-widget)
-        result="$(fc -rl 1 \
-          | command -p awk '{ cmd=$0; sub(/^[ \t]*[0-9]+\**[ \t]+/, "", cmd); if (!seen[cmd]++) print cmd }' \
-          | fzf --scheme=history --tiebreak=index +m)"
+        warp_select_fzf_history_entry
+        result="$REPLY"
         ;;
       atuin-search|atuin-search-viins|atuin-search-vicmd|_atuin_search_widget)
         # atuin writes its TUI to stdout; under plain command substitution that's a pipe, and
