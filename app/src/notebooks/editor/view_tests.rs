@@ -48,7 +48,7 @@ use crate::workspace::ActiveSession;
 use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider, UserWorkspaces};
 
 /// Container for a [`RichTextEditorView`] in unit tests.
-struct TestView {
+pub(super) struct TestView {
     editor: ViewHandle<RichTextEditorView>,
 }
 
@@ -69,7 +69,7 @@ impl TypedActionView for TestView {
     type Action = ();
 }
 
-fn initialize_editor(
+pub(super) fn initialize_editor(
     app: &mut App,
 ) -> (
     WindowId,
@@ -127,7 +127,7 @@ fn initialize_editor(
     (window, editor_view, test_view)
 }
 
-async fn reset_editor_with_markdown(
+pub(super) async fn reset_editor_with_markdown(
     app: &mut App,
     editor_view: &ViewHandle<RichTextEditorView>,
     markdown: &str,

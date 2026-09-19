@@ -533,6 +533,7 @@ impl From<VimMode> for ModeTransition {
 pub struct VimEvent {
     event_type: VimEventType,
     count: u32,
+    keep_selection: bool,
 }
 
 impl VimEvent {
@@ -546,11 +547,23 @@ impl VimEvent {
         self.count
     }
 
+    /// Whether navigation should keep the selection origin. Stamped from the FSA
+    /// mode at emit time so queued events still extend a visual selection after a
+    /// later keystroke has already left Visual.
+    pub fn keep_selection(&self) -> bool {
+        self.keep_selection
+    }
+
     /// Consume the event, returning its type and count as separate values.
     /// Prefer this over field access when the event type needs to be matched
     /// by value (avoiding a clone of the event type).
     pub fn into_parts(self) -> (VimEventType, u32) {
         (self.event_type, self.count)
+    }
+
+    fn with_keep_selection(mut self, keep_selection: bool) -> Self {
+        self.keep_selection = keep_selection;
+        self
     }
 }
 
@@ -559,6 +572,7 @@ impl From<VimEventType> for VimEvent {
         VimEvent {
             event_type,
             count: 1,
+            keep_selection: false,
         }
     }
 }
@@ -794,6 +808,7 @@ impl VimFSA {
     /// For processing Vim keypresses that are represented by a single char.
     fn typed_character(&mut self, c: char) -> Option<VimEvent> {
         self.showcmd.push(c);
+        let keep_selection = matches!(self.mode, VimMode::Visual(_));
         let event_type = match self.mode {
             VimMode::Insert => self.handle_insert_char(c),
             VimMode::Normal => match self.pending_action.clone() {
@@ -839,6 +854,7 @@ impl VimFSA {
                     }
                 },
                 count,
+                keep_selection: false,
             });
         }
 
@@ -846,13 +862,22 @@ impl VimFSA {
 
         self.dot_repeat_event = event_type
             .for_dot_repeat()
-            .map(|event_type| VimEvent { event_type, count })
+            .map(|event_type| VimEvent {
+                event_type,
+                count,
+                keep_selection,
+            })
             .or(self.dot_repeat_event.take());
-        Some(VimEvent { event_type, count })
+        Some(VimEvent {
+            event_type,
+            count,
+            keep_selection,
+        })
     }
 
     /// Like Self::typed_character, but for keypresses that aren't representable by a single char.
     fn keypress(&mut self, keystroke: &str) -> Option<VimEvent> {
+        let keep_selection = matches!(self.mode, VimMode::Visual(_));
         let event = match keystroke {
             "escape" => match self.mode {
                 VimMode::Normal => {
@@ -896,6 +921,7 @@ impl VimFSA {
                     VimEvent {
                         event_type: VimEventType::ScrollHalfPageDown,
                         count,
+                        keep_selection,
                     }
                 }
                 _ => return None,
@@ -907,13 +933,14 @@ impl VimFSA {
                     VimEvent {
                         event_type: VimEventType::ScrollHalfPageUp,
                         count,
+                        keep_selection,
                     }
                 }
                 _ => return None,
             },
             _ => return None,
         };
-        Some(event)
+        Some(event.with_keep_selection(keep_selection))
     }
 
     /// We need to consider counts in two positions, e.g. `2d3w`. The `2` and `3` are called
@@ -966,6 +993,7 @@ impl VimFSA {
                 VimEvent {
                     event_type: VimEventType::InsertText { text, position },
                     count,
+                    keep_selection: false,
                 }
             }
             None => self.change_mode(VimMode::Normal.into()).into(),
@@ -990,6 +1018,7 @@ impl VimFSA {
                 already_applied: true,
             },
             count,
+            keep_selection: false,
         }
     }
 
@@ -1863,6 +1892,7 @@ impl VimFSA {
             self.dot_repeat_event = Some(VimEvent {
                 event_type: VimEventType::DeleteForward,
                 count: 1,
+                keep_selection: false,
             });
         }
         VimEventType::DeleteForward
@@ -2004,22 +2034,37 @@ where
         match &event.event_type {
             VimEventType::InsertChar(c) => self.insert_char(*c, ctx),
             VimEventType::Navigate(motion) => match motion {
-                VimMotion::Character(motion) => self.navigate_char(event.count, motion, ctx),
-                VimMotion::Word(motion) => self.navigate_word(event.count, motion, ctx),
-                VimMotion::Line(motion) => self.navigate_line(event.count, motion, ctx),
-                VimMotion::FirstNonWhitespace(motion) => {
-                    self.first_nonwhitespace_motion(event.count, motion, ctx)
+                VimMotion::Character(motion) => {
+                    self.navigate_char(event.count, motion, event.keep_selection(), ctx)
                 }
-                VimMotion::FindChar(motion) => self.find_char(event.count, motion, ctx),
+                VimMotion::Word(motion) => {
+                    self.navigate_word(event.count, motion, event.keep_selection(), ctx)
+                }
+                VimMotion::Line(motion) => {
+                    self.navigate_line(event.count, motion, event.keep_selection(), ctx)
+                }
+                VimMotion::FirstNonWhitespace(motion) => self.first_nonwhitespace_motion(
+                    event.count,
+                    motion,
+                    event.keep_selection(),
+                    ctx,
+                ),
+                VimMotion::FindChar(motion) => {
+                    self.find_char(event.count, motion, event.keep_selection(), ctx)
+                }
                 VimMotion::Paragraph(direction) => {
-                    self.navigate_paragraph(event.count, direction, ctx)
+                    self.navigate_paragraph(event.count, direction, event.keep_selection(), ctx)
                 }
-                VimMotion::JumpToFirstLine => self.jump_to_first_line(ctx),
-                VimMotion::JumpToLastLine => self.jump_to_last_line(ctx),
-                VimMotion::JumpToLine(line_number) => self.jump_to_line(*line_number, ctx),
-                VimMotion::JumpToMatchingBracket => self.jump_to_matching_bracket(ctx),
+                VimMotion::JumpToFirstLine => self.jump_to_first_line(event.keep_selection(), ctx),
+                VimMotion::JumpToLastLine => self.jump_to_last_line(event.keep_selection(), ctx),
+                VimMotion::JumpToLine(line_number) => {
+                    self.jump_to_line(*line_number, event.keep_selection(), ctx)
+                }
+                VimMotion::JumpToMatchingBracket => {
+                    self.jump_to_matching_bracket(event.keep_selection(), ctx)
+                }
                 VimMotion::JumpToUnmatchedBracket(bracket) => {
-                    self.jump_to_unmatched_bracket(bracket, ctx)
+                    self.jump_to_unmatched_bracket(bracket, event.keep_selection(), ctx)
                 }
             },
             VimEventType::Operation {
@@ -2098,6 +2143,48 @@ where
 
 /// To be implemented by Views that support Vim keybindings.
 pub trait VimHandler {
+    fn map_vim_snapshot(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+        f: impl FnOnce(&mut crate::handler::VimSnapshot),
+    );
+
+    fn intercept_char_motion(
+        &mut self,
+        _count: u32,
+        _character_motion: &CharacterMotion,
+        _keep_selection: bool,
+        _ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        false
+    }
+
+    fn intercept_word_motion(
+        &mut self,
+        _count: u32,
+        _word_motion: &WordMotion,
+        _keep_selection: bool,
+        _ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        false
+    }
+
+    fn intercept_line_motion(
+        &mut self,
+        _count: u32,
+        _line_motion: &LineMotion,
+        _keep_selection: bool,
+        _ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        false
+    }
+
+    fn after_vim_motion(&mut self, _ctx: &mut ViewContext<Self>) {}
+
+    fn last_line_lands_on_first_nonwhitespace(&self) -> bool {
+        true
+    }
+
     /// A character to be inserted to the buffer.
     fn insert_char(&mut self, c: char, ctx: &mut ViewContext<Self>);
     /// A one-character motion of the cursor.
@@ -2105,32 +2192,92 @@ pub trait VimHandler {
         &mut self,
         count: u32,
         character_motion: &CharacterMotion,
+        keep_selection: bool,
         ctx: &mut ViewContext<Self>,
-    );
+    ) {
+        if self.intercept_char_motion(count, character_motion, keep_selection, ctx) {
+            return;
+        }
+        self.map_vim_snapshot(ctx, |snap| {
+            crate::handler::move_char_snapshot(snap, count, character_motion, keep_selection);
+        });
+        self.after_vim_motion(ctx);
+    }
     /// Word-related motion of the cursor.
-    fn navigate_word(&mut self, count: u32, word_motion: &WordMotion, ctx: &mut ViewContext<Self>);
+    fn navigate_word(
+        &mut self,
+        count: u32,
+        word_motion: &WordMotion,
+        keep_selection: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.intercept_word_motion(count, word_motion, keep_selection, ctx) {
+            return;
+        }
+        self.map_vim_snapshot(ctx, |snap| {
+            crate::handler::move_word_snapshot(snap, count, word_motion, keep_selection);
+        });
+        self.after_vim_motion(ctx);
+    }
     /// Motions within the current line: 0, ^, $
-    fn navigate_line(&mut self, count: u32, line_motion: &LineMotion, ctx: &mut ViewContext<Self>);
+    fn navigate_line(
+        &mut self,
+        count: u32,
+        line_motion: &LineMotion,
+        keep_selection: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.intercept_line_motion(count, line_motion, keep_selection, ctx) {
+            return;
+        }
+        self.map_vim_snapshot(ctx, |snap| {
+            crate::handler::move_line_snapshot(snap, count, line_motion, keep_selection);
+        });
+        self.after_vim_motion(ctx);
+    }
     fn first_nonwhitespace_motion(
         &mut self,
         count: u32,
         motion: &FirstNonWhitespaceMotion,
+        keep_selection: bool,
         ctx: &mut ViewContext<Self>,
-    );
+    ) {
+        self.map_vim_snapshot(ctx, |snap| {
+            crate::handler::move_first_nonwhitespace_snapshot(snap, count, motion, keep_selection);
+        });
+        self.after_vim_motion(ctx);
+    }
     /// Motions to a particular character on the current line.
     fn find_char(
         &mut self,
         occurrence_count: u32,
         find_char_motion: &FindCharMotion,
+        keep_selection: bool,
         ctx: &mut ViewContext<Self>,
-    );
+    ) {
+        self.map_vim_snapshot(ctx, |snap| {
+            crate::handler::find_char_snapshot(
+                snap,
+                occurrence_count,
+                find_char_motion,
+                keep_selection,
+            );
+        });
+        self.after_vim_motion(ctx);
+    }
     /// Navigate by paragraph: { and }.
     fn navigate_paragraph(
         &mut self,
         count: u32,
         direction: &Direction,
+        keep_selection: bool,
         ctx: &mut ViewContext<Self>,
-    );
+    ) {
+        self.map_vim_snapshot(ctx, |snap| {
+            crate::handler::move_paragraph_snapshot(snap, count, direction, keep_selection);
+        });
+        self.after_vim_motion(ctx);
+    }
     /// For all "operator commands", e.g. d, c, y. See ":help operator" in Vim, or click here:
     /// https://vimdoc.sourceforge.net/htmldoc/motion.html#operator
     fn operation(
@@ -2191,12 +2338,53 @@ pub trait VimHandler {
         write_register_name: char,
         ctx: &mut ViewContext<Self>,
     );
-    fn visual_text_object(&mut self, text_object: &VimTextObject, ctx: &mut ViewContext<Self>);
-    fn jump_to_first_line(&mut self, ctx: &mut ViewContext<Self>);
-    fn jump_to_last_line(&mut self, ctx: &mut ViewContext<Self>);
-    fn jump_to_line(&mut self, line_number: u32, ctx: &mut ViewContext<Self>);
-    fn jump_to_matching_bracket(&mut self, ctx: &mut ViewContext<Self>);
-    fn jump_to_unmatched_bracket(&mut self, bracket: &BracketChar, ctx: &mut ViewContext<Self>);
+    fn visual_text_object(&mut self, text_object: &VimTextObject, ctx: &mut ViewContext<Self>) {
+        self.map_vim_snapshot(ctx, |snap| {
+            crate::handler::select_text_object_snapshot(snap, text_object, None);
+        });
+        self.after_vim_motion(ctx);
+    }
+    fn jump_to_first_line(&mut self, keep_selection: bool, ctx: &mut ViewContext<Self>) {
+        self.map_vim_snapshot(ctx, |snap| {
+            crate::handler::jump_first_snapshot(snap, keep_selection);
+        });
+        self.after_vim_motion(ctx);
+    }
+    fn jump_to_last_line(&mut self, keep_selection: bool, ctx: &mut ViewContext<Self>) {
+        let first_nonwhitespace = self.last_line_lands_on_first_nonwhitespace();
+        self.map_vim_snapshot(ctx, |snap| {
+            crate::handler::jump_last_snapshot(snap, keep_selection, first_nonwhitespace);
+        });
+        self.after_vim_motion(ctx);
+    }
+    fn jump_to_line(
+        &mut self,
+        line_number: u32,
+        keep_selection: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.map_vim_snapshot(ctx, |snap| {
+            crate::handler::jump_to_line_snapshot(snap, line_number, keep_selection);
+        });
+        self.after_vim_motion(ctx);
+    }
+    fn jump_to_matching_bracket(&mut self, keep_selection: bool, ctx: &mut ViewContext<Self>) {
+        self.map_vim_snapshot(ctx, |snap| {
+            crate::handler::jump_matching_bracket_snapshot(snap, keep_selection, false);
+        });
+        self.after_vim_motion(ctx);
+    }
+    fn jump_to_unmatched_bracket(
+        &mut self,
+        bracket: &BracketChar,
+        keep_selection: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.map_vim_snapshot(ctx, |snap| {
+            crate::handler::jump_unmatched_bracket_snapshot(snap, bracket, keep_selection);
+        });
+        self.after_vim_motion(ctx);
+    }
     fn paste(
         &mut self,
         count: u32,

@@ -1,11 +1,12 @@
+use vim::handler::{
+    self, VimBufferOps, YankedText, apply_mode_change, apply_operator, apply_visual_operator,
+    apply_visual_paste,
+};
 use vim::vim::{
-    BracketChar, CharacterMotion, Direction, FindCharMotion, FirstNonWhitespaceMotion,
-    InsertPosition, LineMotion, ModeTransition, MotionType, TextObjectType, VimHandler, VimMode,
-    VimMotion, VimOperand, VimOperator, VimTextObject, WordMotion,
+    CharacterMotion, Direction, InsertPosition, ModeTransition, MotionType, VimHandler, VimMode,
+    VimOperand, VimOperator,
 };
-use warp_editor::content::buffer::{
-    AutoScrollBehavior, BufferEditAction, EditOrigin, SelectionOffsets, VimInsertPoint,
-};
+use warp_editor::content::buffer::{BufferEditAction, EditOrigin, VimInsertPoint};
 use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
 use warp_editor::render::model::AutoScrollMode;
 use warp_editor::selection::{TextDirection, TextUnit};
@@ -14,129 +15,28 @@ use warpui::{SingletonEntity, ViewContext};
 
 use super::{CodeEditorEvent, CodeEditorView};
 use crate::code::editor::find::view::Event as FindViewEvent;
-use crate::code::editor::model::{CaseTransform, CodeEditorModel, LineBound};
 use crate::view_components::find::FindDirection;
 use crate::vim_registers::{RegisterContent, VimRegisters};
 
 impl VimHandler for CodeEditorView {
+    fn map_vim_snapshot(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+        f: impl FnOnce(&mut vim::handler::VimSnapshot),
+    ) {
+        self.model.update(ctx, |model, ctx| {
+            let mut snap = model.snapshot(ctx);
+            f(&mut snap);
+            model.set_selections(&snap.carets, ctx);
+        });
+    }
+
     fn insert_char(&mut self, c: char, ctx: &mut ViewContext<Self>) {
         self.user_insert(&c.to_string(), ctx);
     }
 
     fn keyword_prg(&mut self, _ctx: &mut ViewContext<Self>) {
         // no-op
-    }
-
-    fn navigate_char(
-        &mut self,
-        count: u32,
-        character_motion: &CharacterMotion,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.model.update(ctx, |model, ctx| match character_motion {
-            CharacterMotion::Right => {
-                model.vim_move_horizontal_by_offset(count, &Direction::Forward, false, true, ctx);
-            }
-            CharacterMotion::Up => {
-                model.vim_move_vertical_by_offset(count, TextDirection::Backwards, false, ctx);
-            }
-            CharacterMotion::Down => {
-                model.vim_move_vertical_by_offset(count, TextDirection::Forwards, false, ctx);
-            }
-            CharacterMotion::Left => {
-                model.vim_move_horizontal_by_offset(count, &Direction::Backward, false, true, ctx);
-            }
-            CharacterMotion::WrappingLeft => {
-                model.vim_move_horizontal_by_offset(count, &Direction::Backward, false, false, ctx);
-            }
-            CharacterMotion::WrappingRight => {
-                model.vim_move_horizontal_by_offset(count, &Direction::Forward, false, false, ctx);
-            }
-        });
-    }
-
-    fn navigate_word(&mut self, count: u32, word_motion: &WordMotion, ctx: &mut ViewContext<Self>) {
-        let WordMotion {
-            direction,
-            bound,
-            word_type,
-        } = word_motion;
-
-        self.model.update(ctx, |model, ctx| {
-            model.vim_navigate_word(*direction, *bound, *word_type, count, ctx);
-        });
-    }
-
-    fn navigate_line(&mut self, line_count: u32, motion: &LineMotion, ctx: &mut ViewContext<Self>) {
-        self.model.update(ctx, |model, ctx| {
-            match motion {
-                LineMotion::Start => model.vim_move_to_line_bound(LineBound::Start, false, ctx),
-                LineMotion::FirstNonWhitespace => model.vim_move_to_first_nonwhitespace(false, ctx),
-                LineMotion::End => {
-                    // Only moving to the end of the line ($) uses number-repeat (the line-count var)
-                    model.vim_move_vertical_by_offset(
-                        line_count.saturating_sub(1),
-                        TextDirection::Forwards,
-                        false,
-                        ctx,
-                    );
-                    model.vim_move_to_line_bound(LineBound::End, false, ctx);
-                }
-            }
-        })
-    }
-
-    fn first_nonwhitespace_motion(
-        &mut self,
-        count: u32,
-        motion: &FirstNonWhitespaceMotion,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.model.update(ctx, |model, ctx| {
-            match motion {
-                FirstNonWhitespaceMotion::Up => {
-                    model.vim_move_vertical_by_offset(count, TextDirection::Backwards, false, ctx);
-                }
-                FirstNonWhitespaceMotion::Down => {
-                    model.vim_move_vertical_by_offset(count, TextDirection::Forwards, false, ctx)
-                }
-                FirstNonWhitespaceMotion::DownMinusOne => model.vim_move_vertical_by_offset(
-                    count - 1,
-                    TextDirection::Forwards,
-                    false,
-                    ctx,
-                ),
-            }
-
-            model.vim_move_to_first_nonwhitespace(false, ctx);
-        })
-    }
-
-    fn find_char(
-        &mut self,
-        occurrence_count: u32,
-        find_char_motion: &FindCharMotion,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.model.update(ctx, |model, ctx| {
-            model.vim_find_char(
-                false, /* keep_selection */
-                occurrence_count,
-                find_char_motion,
-                ctx,
-            );
-        });
-    }
-
-    fn navigate_paragraph(
-        &mut self,
-        count: u32,
-        direction: &Direction,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.model.update(ctx, |model, ctx| {
-            model.vim_move_by_paragraph(count, direction, false, ctx);
-        });
     }
 
     fn operation(
@@ -148,292 +48,17 @@ impl VimHandler for CodeEditorView {
         replacement_text: &str,
         ctx: &mut ViewContext<Self>,
     ) {
-        // Selection logic is almost the same for all operators, so capture that in a closure first.
-        let selection_change =
-            |model: &mut CodeEditorModel, ctx: &mut warpui::ModelContext<CodeEditorModel>| {
-                match operand {
-                    VimOperand::Motion {
-                        motion,
-                        motion_type,
-                    } => {
-                        match motion {
-                            VimMotion::Character(char_motion) => {
-                                model.vim_select_for_char_motion(
-                                    char_motion,
-                                    motion_type,
-                                    operator,
-                                    operand_count,
-                                    ctx,
-                                );
-                            }
-                            VimMotion::Word(word_motion) => {
-                                model.vim_select_for_word_motion(
-                                    word_motion,
-                                    operand_count,
-                                    motion_type,
-                                    operator,
-                                    ctx,
-                                );
-                            }
-                            VimMotion::Line(line_motion) => {
-                                model.vim_select_for_line_motion(
-                                    line_motion,
-                                    operand_count,
-                                    motion_type,
-                                    operator,
-                                    ctx,
-                                );
-                            }
-                            VimMotion::FirstNonWhitespace(nonws_motion) => {
-                                model.vim_select_for_first_nonwhitespace_motion(
-                                    nonws_motion,
-                                    motion_type,
-                                    operator,
-                                    operand_count,
-                                    ctx,
-                                );
-                            }
-                            VimMotion::Paragraph(direction) => {
-                                model.vim_move_by_paragraph(operand_count, direction, true, ctx);
-                                if *motion_type == MotionType::Linewise {
-                                    model.vim_extend_selection_linewise(
-                                        operator.includes_trailing_newline(),
-                                        *operator == VimOperator::Delete,
-                                        ctx,
-                                    );
-                                }
-                            }
-                            VimMotion::JumpToLastLine => {
-                                model.vim_select_to_buffer_end(ctx);
-                                if *motion_type == MotionType::Linewise {
-                                    model.vim_extend_selection_linewise(
-                                        operator.includes_trailing_newline(),
-                                        *operator == VimOperator::Delete,
-                                        ctx,
-                                    );
-                                }
-                            }
-                            VimMotion::JumpToFirstLine => {
-                                model.vim_select_to_buffer_start(ctx);
-                                if *motion_type == MotionType::Linewise {
-                                    model.vim_extend_selection_linewise(
-                                        operator.includes_trailing_newline(),
-                                        *operator == VimOperator::Delete,
-                                        ctx,
-                                    );
-                                }
-                            }
-                            VimMotion::FindChar(m) => {
-                                // Extend selection to the found character according to the motion
-                                model.vim_find_char(
-                                    true, /* keep_selection */
-                                    operand_count,
-                                    m,
-                                    ctx,
-                                );
-                            }
-                            VimMotion::JumpToLine(line_number) => {
-                                model.vim_select_to_line(*line_number, motion_type, operator, ctx);
-                            }
-                            VimMotion::JumpToMatchingBracket => {
-                                model.vim_select_for_matching_bracket(ctx);
-                            }
-                            VimMotion::JumpToUnmatchedBracket(bracket) => {
-                                model.vim_jump_to_unmatched_bracket(bracket, true, ctx);
-                            }
-                        }
-                    }
-                    VimOperand::Line => {
-                        // Extend selection down by count-1 lines
-                        if operand_count > 1 {
-                            model.vim_move_vertical_by_offset(
-                                operand_count - 1,
-                                TextDirection::Forwards,
-                                true,
-                                ctx,
-                            );
-                        }
-
-                        let include_newline = operator.includes_trailing_newline()
-                            && *operator != VimOperator::ToggleComment;
-                        model.vim_extend_selection_linewise(
-                            include_newline,
-                            *operator == VimOperator::Delete,
-                            ctx,
-                        );
-                    }
-                    VimOperand::TextObject(text_object) => {
-                        model.vim_select_text_object(text_object, Some(operator), ctx);
-                    }
-                }
-            };
-
-        let motion_type = match operand {
-            VimOperand::Motion { motion_type, .. } => *motion_type,
-            VimOperand::TextObject(text_object) => match text_object {
-                VimTextObject {
-                    object_type: TextObjectType::Paragraph,
-                    ..
-                } => MotionType::Linewise,
-                _ => MotionType::Charwise,
-            },
-            VimOperand::Line => MotionType::Linewise,
-        };
-
-        match operator {
-            VimOperator::Delete | VimOperator::Change => {
-                self.model.update(ctx, |model, ctx| {
-                    selection_change(model, ctx);
-
-                    // Copy selection to vim register before modifying
-                    let buffer = model.content().as_ref(ctx);
-                    let selection_model = model.buffer_selection_model().clone();
-                    let selected_text = buffer
-                        .selected_text_as_plain_text(selection_model, ctx)
-                        .into_string();
-                    let register_text =
-                        if selected_text.is_empty() && motion_type == MotionType::Linewise {
-                            Some("\n".to_owned())
-                        } else {
-                            (!selected_text.is_empty()).then(|| selected_text.clone())
-                        };
-                    if let Some(register_text) = register_text {
-                        VimRegisters::handle(ctx).update(ctx, |registers, ctx| {
-                            registers.write_to_register(
-                                register_name,
-                                register_text,
-                                motion_type,
-                                ctx,
-                            );
-                        });
-                    }
-
-                    if !selected_text.is_empty() {
-                        if *operator == VimOperator::Change && motion_type == MotionType::Linewise {
-                            // Use smart indent to position the cursor when changing the entire
-                            // line.
-                            model.vim_change_line_with_smart_indent(ctx);
-                        } else {
-                            model.delete(TextDirection::Forwards, TextUnit::Character, false, ctx);
-                            // Insert replacement text if provided
-                            if *operator == VimOperator::Change && !replacement_text.is_empty() {
-                                model.insert(replacement_text, EditOrigin::UserInitiated, ctx);
-                            }
-                            if motion_type == MotionType::Linewise {
-                                model.vim_move_to_line_bound(LineBound::Start, false, ctx);
-                            }
-                        }
-                    }
-                });
-            }
-            VimOperator::Yank => {
-                self.model.update(ctx, |model, ctx| {
-                    // Store existing selections to restore after yank
-                    let existing_selections = model.selections(ctx).clone();
-                    selection_change(model, ctx);
-
-                    // Copy selection to vim register
-                    let buffer = model.content().as_ref(ctx);
-                    let selection_model = model.buffer_selection_model().clone();
-                    let selected_text = buffer
-                        .selected_text_as_plain_text(selection_model, ctx)
-                        .into_string();
-                    let register_text =
-                        if selected_text.is_empty() && motion_type == MotionType::Linewise {
-                            Some("\n".to_owned())
-                        } else {
-                            (!selected_text.is_empty()).then_some(selected_text)
-                        };
-                    if let Some(register_text) = register_text {
-                        VimRegisters::handle(ctx).update(ctx, |registers, ctx| {
-                            registers.write_to_register(
-                                register_name,
-                                register_text,
-                                motion_type,
-                                ctx,
-                            );
-                        });
-                    }
-
-                    match operand {
-                        VimOperand::TextObject(_) => {
-                            // For text objects, move to the start (min) of the selected range
-                            let starts = model
-                                .buffer_selection_model()
-                                .as_ref(ctx)
-                                .selection_offsets()
-                                .mapped(|selection| {
-                                    let start = selection.head.min(selection.tail);
-                                    SelectionOffsets {
-                                        head: start,
-                                        tail: start,
-                                    }
-                                });
-                            model.vim_set_selections(starts, AutoScrollBehavior::None, ctx);
-                        }
-                        _ => {
-                            model.vim_set_selections(
-                                existing_selections,
-                                AutoScrollBehavior::None,
-                                ctx,
-                            );
-                        }
-                    }
-                });
-            }
-            VimOperator::ToggleCase => {
-                self.model.update(ctx, |model, ctx| {
-                    model.apply_case_transformation_with_selection_change(
-                        selection_change,
-                        CaseTransform::Toggle,
-                        ctx,
-                    );
-                });
-            }
-            VimOperator::Uppercase => {
-                self.model.update(ctx, |model, ctx| {
-                    model.apply_case_transformation_with_selection_change(
-                        selection_change,
-                        CaseTransform::Uppercase,
-                        ctx,
-                    );
-                });
-            }
-            VimOperator::Lowercase => {
-                self.model.update(ctx, |model, ctx| {
-                    model.apply_case_transformation_with_selection_change(
-                        selection_change,
-                        CaseTransform::Lowercase,
-                        ctx,
-                    );
-                });
-            }
-            VimOperator::ToggleComment => {
-                self.model.update(ctx, |model, ctx| {
-                    let existing_selections = model.selections(ctx).clone();
-                    selection_change(model, ctx);
-                    model.toggle_comments(ctx);
-
-                    if motion_type == MotionType::Linewise {
-                        model.vim_move_to_first_nonwhitespace(false, ctx);
-                    } else {
-                        model.vim_set_selections(
-                            existing_selections,
-                            AutoScrollBehavior::None,
-                            ctx,
-                        );
-                    }
-                });
-            }
-            VimOperator::Indent | VimOperator::Dedent => {
-                self.model.update(ctx, |model, ctx| {
-                    selection_change(model, ctx);
-                    let shift = *operator == VimOperator::Dedent;
-                    model.indent(shift, ctx);
-                    model.vim_move_to_first_nonwhitespace(false, ctx);
-                });
-            }
-        }
+        let yanked = self.model.update(ctx, |model, ctx| {
+            apply_operator(
+                model,
+                operator,
+                operand_count,
+                operand,
+                replacement_text,
+                ctx,
+            )
+        });
+        Self::write_yanked_register(register_name, yanked, ctx);
     }
 
     fn replace_char(
@@ -468,7 +93,7 @@ impl VimHandler for CodeEditorView {
                 model.vim_replace_text(&text.repeat(repeat_count as usize), ctx);
             }
             if !text.is_empty() {
-                model.vim_move_horizontal_by_offset(1, &Direction::Backward, false, true, ctx);
+                handler::move_char(model, 1, &CharacterMotion::Left, false, ctx);
             }
         });
         ctx.notify();
@@ -548,74 +173,10 @@ impl VimHandler for CodeEditorView {
         register_name: char,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.model.update(ctx, |model, ctx| {
-            let include_newline = operator.includes_trailing_newline();
-            model.vim_visual_selection_range(motion_type, include_newline, ctx);
-
-            if matches!(
-                operator,
-                VimOperator::Delete | VimOperator::Change | VimOperator::Yank
-            ) {
-                let buffer = model.content().as_ref(ctx);
-                let selection_model = model.buffer_selection_model().clone();
-                let selected_text = buffer
-                    .selected_text_as_plain_text(selection_model, ctx)
-                    .into_string();
-                if !selected_text.is_empty() {
-                    VimRegisters::handle(ctx).update(ctx, |registers, ctx| {
-                        registers.write_to_register(register_name, selected_text, motion_type, ctx);
-                    });
-                }
-            }
-
-            match operator {
-                VimOperator::Delete | VimOperator::Change => {
-                    let selection_model = model.buffer_selection_model().clone();
-                    model.update_content(
-                        |mut content, ctx| {
-                            content.apply_edit(
-                                BufferEditAction::Backspace,
-                                EditOrigin::UserInitiated,
-                                selection_model,
-                                ctx,
-                            );
-                        },
-                        ctx,
-                    );
-                    if *operator == VimOperator::Change && motion_type == MotionType::Linewise {
-                        model.vim_change_line_with_smart_indent(ctx);
-                    }
-                }
-                VimOperator::ToggleCase | VimOperator::Lowercase | VimOperator::Uppercase => {
-                    let transform = match operator {
-                        VimOperator::ToggleCase => CaseTransform::Toggle,
-                        VimOperator::Uppercase => CaseTransform::Uppercase,
-                        VimOperator::Lowercase => CaseTransform::Lowercase,
-                        _ => CaseTransform::Toggle,
-                    };
-                    model.transform_current_selections_case(transform, ctx);
-                }
-                VimOperator::Yank => {
-                    model.vim_clear_selections(ctx);
-                }
-                VimOperator::ToggleComment => {
-                    model.toggle_comments(ctx);
-
-                    if motion_type == MotionType::Linewise {
-                        model.vim_move_to_first_nonwhitespace(false, ctx);
-                    } else {
-                        model.vim_clear_selections(ctx);
-                    }
-                }
-                VimOperator::Indent | VimOperator::Dedent => {
-                    let shift = *operator == VimOperator::Dedent;
-                    model.indent(shift, ctx);
-                    model.vim_move_to_first_nonwhitespace(false, ctx);
-                }
-            }
+        let yanked = self.model.update(ctx, |model, ctx| {
+            apply_visual_operator(model, operator, motion_type, ctx)
         });
-
-        // Force a re-render so that residual Visual mode highlight is cleared.
+        Self::write_yanked_register(register_name, yanked, ctx);
         ctx.notify();
     }
 
@@ -626,7 +187,6 @@ impl VimHandler for CodeEditorView {
         write_register_name: char,
         ctx: &mut ViewContext<Self>,
     ) {
-        // Read content from the specified vim register
         let Some(RegisterContent {
             text,
             motion_type: yanked_motion_type,
@@ -637,89 +197,10 @@ impl VimHandler for CodeEditorView {
             return;
         };
 
-        self.model.update(ctx, |model, ctx| {
-            // Compute the visual selection
-            let include_newline =
-                motion_type == MotionType::Linewise && yanked_motion_type == MotionType::Linewise;
-            model.vim_visual_selection_range(motion_type, include_newline, ctx);
-
-            // Copy current selection to the write register before replacing it
-            let buffer = model.content().as_ref(ctx);
-            let selection_model = model.buffer_selection_model().clone();
-            let selected_text = buffer
-                .selected_text_as_plain_text(selection_model.clone(), ctx)
-                .into_string();
-            if !selected_text.is_empty() {
-                VimRegisters::handle(ctx).update(ctx, |registers, ctx| {
-                    registers.write_to_register(
-                        write_register_name,
-                        selected_text,
-                        motion_type,
-                        ctx,
-                    );
-                });
-            }
-
-            // Replace selection with yanked text
-            model.update_content(
-                |mut content, ctx| {
-                    content.apply_edit(
-                        BufferEditAction::Insert {
-                            text: &text,
-                            style: model.active_text_style(),
-                            override_text_style: None,
-                        },
-                        EditOrigin::UserInitiated,
-                        selection_model,
-                        ctx,
-                    );
-                },
-                ctx,
-            );
-
-            if motion_type == MotionType::Linewise {
-                model.vim_move_to_line_bound(LineBound::Start, false, ctx);
-            }
+        let yanked = self.model.update(ctx, |model, ctx| {
+            apply_visual_paste(model, motion_type, &text, yanked_motion_type, ctx)
         });
-    }
-
-    fn visual_text_object(&mut self, text_object: &VimTextObject, ctx: &mut ViewContext<Self>) {
-        self.model.update(ctx, |model, ctx| {
-            model.vim_select_text_object(text_object, None, ctx);
-        });
-    }
-
-    fn jump_to_first_line(&mut self, ctx: &mut ViewContext<Self>) {
-        self.model.update(ctx, |model, ctx| {
-            model.jump_to_line_column(0, None, ctx);
-        });
-    }
-
-    fn jump_to_last_line(&mut self, ctx: &mut ViewContext<Self>) {
-        self.model.update(ctx, |model, ctx| {
-            model.vim_move_to_last_line(ctx);
-        });
-    }
-
-    fn jump_to_line(&mut self, line_number: u32, ctx: &mut ViewContext<Self>) {
-        self.model.update(ctx, |model, ctx| {
-            let buffer = model.content().as_ref(ctx);
-            let max_row = buffer.max_point().row;
-            let row = line_number.max(1).min(max_row);
-            model.jump_to_line_column(row as usize, None, ctx);
-        });
-    }
-
-    fn jump_to_matching_bracket(&mut self, ctx: &mut ViewContext<Self>) {
-        self.model.update(ctx, |model, ctx| {
-            model.vim_jump_to_matching_bracket(false, ctx);
-        })
-    }
-
-    fn jump_to_unmatched_bracket(&mut self, bracket: &BracketChar, ctx: &mut ViewContext<Self>) {
-        self.model.update(ctx, |model, ctx| {
-            model.vim_jump_to_unmatched_bracket(bracket, false, ctx);
-        })
+        Self::write_yanked_register(write_register_name, yanked, ctx);
     }
 
     fn paste(
@@ -894,40 +375,9 @@ impl VimHandler for CodeEditorView {
     }
 
     fn change_mode(&mut self, old: &VimMode, new: &ModeTransition, ctx: &mut ViewContext<Self>) {
-        match new.mode {
-            VimMode::Normal => {
-                if *old == VimMode::Insert {
-                    // When exiting insert mode, move cursor back to cover
-                    // the character that was last inserted. In vim, the cursor should
-                    // be ON the last inserted character, not after it.
-                    self.model.update(ctx, |model, ctx| {
-                        model.vim_move_horizontal_by_offset(
-                            1,
-                            &Direction::Backward,
-                            false,
-                            true,
-                            ctx,
-                        );
-                    });
-                }
-                // Implement line capping for normal mode
-                self.vim_maybe_enforce_cursor_line_cap(ctx);
-            }
-            VimMode::Insert => {
-                // Apply insert position for different insert commands (i, a, o, etc.)
-                self.vim_apply_insert_position(&new.position, ctx);
-            }
-            VimMode::Visual(_) => {
-                self.model.update(ctx, |model, ctx| {
-                    model.vim_set_visual_tail_to_selection_heads(ctx);
-                });
-            }
-            VimMode::Replace => {
-                self.model.update(ctx, |model, ctx| {
-                    model.vim_enforce_cursor_line_cap(ctx);
-                });
-            }
-        }
+        self.model.update(ctx, |model, ctx| {
+            apply_mode_change(model, old, new, ctx);
+        });
         ctx.notify();
     }
 
@@ -994,6 +444,19 @@ impl VimHandler for CodeEditorView {
 }
 
 impl CodeEditorView {
+    fn write_yanked_register(
+        register_name: char,
+        yanked: Option<YankedText>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(yanked) = yanked else {
+            return;
+        };
+        VimRegisters::handle(ctx).update(ctx, |registers, ctx| {
+            registers.write_to_register(register_name, yanked.text, yanked.motion_type, ctx);
+        });
+    }
+
     /// Implements `<C-d>` and `<C-u>`. Without a count, scrolls by half the
     /// viewport; with a count > 1, scrolls by that many lines (matching vim's
     /// `n<C-d>` / `n<C-u>` behavior).

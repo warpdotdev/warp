@@ -402,6 +402,9 @@ pub enum FeatureFlag {
     /// Enables vim keybindings in the code editor.
     VimCodeEditor,
 
+    /// Enables vim keybindings in notebooks.
+    VimNotebook,
+
     /// Allows opening file links using the $EDITOR environment variable.
     AllowOpeningFileLinksUsingEditorEnv,
 
