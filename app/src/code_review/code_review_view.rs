@@ -5800,6 +5800,7 @@ impl CodeReviewView {
             });
 
             self.dismiss_revert_toast(ctx);
+            self.refresh_git_repo_status(ctx);
         }
     }
 
@@ -6441,6 +6442,20 @@ impl CodeReviewView {
     fn unsubscribe_from_git_repo_status_model(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(handle) = self.git_repo_status.take() {
             ctx.unsubscribe_to_model(&handle);
+        }
+    }
+
+    /// Forces the per-repo `GitRepoStatusModel` to refresh (branch names,
+    /// diff stats), if this view currently holds a subscription to it.
+    ///
+    /// The terminal's top-panel git chip reads from this same shared model,
+    /// so calling this after a Code Review panel operation that mutates the
+    /// working tree (discard, undo-revert, manual refresh) keeps that chip
+    /// in sync immediately rather than relying on the filesystem watcher or
+    /// an unrelated terminal event to catch up.
+    fn refresh_git_repo_status(&self, ctx: &mut ViewContext<Self>) {
+        if let Some(handle) = &self.git_repo_status {
+            handle.update(ctx, |model, ctx| model.refresh_metadata(ctx));
         }
     }
 
@@ -7335,6 +7350,7 @@ impl TypedActionView for CodeReviewView {
                     model.refresh_metadata_after_git_operation(ctx);
                 });
                 self.refresh_pr_info(ctx);
+                self.refresh_git_repo_status(ctx);
             }
             CodeReviewAction::UndoRevert => {
                 self.maybe_undo_revert(ctx);
