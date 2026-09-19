@@ -316,7 +316,7 @@ impl FindReferencesView {
                 CodeEditorRenderOptions::new(VerticalExpansionBehavior::InfiniteHeight),
                 ctx,
             )
-            .with_can_show_diff_ui(false)
+            .with_can_show_diff_ui(false, ctx)
             .with_show_line_numbers(false)
             .with_horizontal_scrollbar_appearance(
                 warpui::elements::new_scrollable::ScrollableAppearance::new(
