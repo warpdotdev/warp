@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use crate::{AttributedUsage, Attribution, Findings, MAX_ATTRIBUTIONS, ReasonCode};
+use crate::api::{AttributedUsage, Attribution};
+use crate::{Findings, MAX_ATTRIBUTIONS, ReasonCode};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Counters<const N: usize> {

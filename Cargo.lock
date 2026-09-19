@@ -15440,6 +15440,7 @@ dependencies = [
  "warp_errors",
  "warp_files",
  "warp_graphql",
+ "warp_harness_usage",
  "warp_isolation_platform",
  "warp_logging",
  "warp_managed_secrets",
@@ -15790,6 +15791,7 @@ dependencies = [
 name = "warp_harness_usage"
 version = "0.0.0"
 dependencies = [
+ "chrono",
  "serde",
  "serde_json",
 ]

@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
-use crate::{Findings, MAX_IDENTITIES, MAX_TOOL_NAMES, ReasonCode, ToolCalls, identifier};
+use crate::api::ToolCalls;
+use crate::{Findings, MAX_IDENTITIES, MAX_TOOL_NAMES, ReasonCode, identifier};
 
 #[derive(Default)]
 pub(crate) struct Tools {

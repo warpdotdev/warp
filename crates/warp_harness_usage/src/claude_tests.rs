@@ -1,8 +1,11 @@
+use std::ops::Deref;
+
 use serde_json::{Value, json};
 
+use crate::api::{ClaudeUsage, CoverageStatus, HarnessUsageSnapshot, UsageSnapshot};
 use crate::{
-    CaptureDiagnostics, CoverageStatus, ExtractionOutcome, JsonlDiagnostics, JsonlLimits,
-    JsonlReadStatus, ReasonCode, UsageSnapshot, extract_claude, parse_jsonl,
+    CaptureDiagnostics, ExtractionDiagnostics, ExtractionOutcome, JsonlDiagnostics, JsonlLimits,
+    JsonlReadStatus, ReasonCode, extract_claude, parse_jsonl,
 };
 
 const JSONL_LIMITS: JsonlLimits = JsonlLimits {
@@ -11,7 +14,20 @@ const JSONL_LIMITS: JsonlLimits = JsonlLimits {
     max_records: 16,
 };
 
-fn capture(entries: &[Value]) -> UsageSnapshot {
+struct TestCapture {
+    snapshot: UsageSnapshot<ClaudeUsage>,
+    diagnostics: ExtractionDiagnostics,
+}
+
+impl Deref for TestCapture {
+    type Target = UsageSnapshot<ClaudeUsage>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.snapshot
+    }
+}
+
+fn capture(entries: &[Value]) -> TestCapture {
     let diagnostics = CaptureDiagnostics {
         root: JsonlDiagnostics {
             status: JsonlReadStatus::Readable,
@@ -20,11 +36,21 @@ fn capture(entries: &[Value]) -> UsageSnapshot {
         },
         ..Default::default()
     };
-    let ExtractionOutcome::Usable(snapshot) = extract_claude("root", entries, [], &diagnostics)
-    else {
+    usable(extract_claude("root", entries, [], &diagnostics))
+}
+
+fn usable(outcome: ExtractionOutcome) -> TestCapture {
+    let ExtractionOutcome::Usable(extracted) = outcome else {
         panic!("expected usable capture");
     };
-    *snapshot
+    let extracted = *extracted;
+    let HarnessUsageSnapshot::ClaudeCode(snapshot) = extracted.snapshot else {
+        unreachable!()
+    };
+    TestCapture {
+        snapshot,
+        diagnostics: extracted.diagnostics,
+    }
 }
 
 #[test]
@@ -134,7 +160,7 @@ fn conflicting_response_does_not_discard_independent_tool_data() {
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
     assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Known);
     assert_eq!(
-        snapshot.coverage.reason_codes[&ReasonCode::AmbiguousAccounting],
+        snapshot.diagnostics.reasons[&ReasonCode::AmbiguousAccounting],
         1
     );
 }
@@ -176,14 +202,14 @@ fn overflow_omits_the_counter_without_rounding_large_integers() {
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
     assert!(
         snapshot
-            .coverage
-            .reason_codes
+            .diagnostics
+            .reasons
             .contains_key(&ReasonCode::ResourceLimit)
     );
     assert!(
         snapshot
-            .coverage
-            .reason_codes
+            .diagnostics
+            .reasons
             .contains_key(&ReasonCode::InvalidData)
     );
 }
@@ -210,22 +236,22 @@ fn subagent_counts_are_included_without_claiming_unreadable_scope() {
         .into(),
         subagent_discovery_incomplete: true,
     };
-    let ExtractionOutcome::Usable(snapshot) =
-        extract_claude("root", &root, [("agent-a", child.as_slice())], &diagnostics)
-    else {
-        panic!("expected observed tokens");
-    };
+    let snapshot = usable(extract_claude(
+        "root",
+        &root,
+        [("agent-a", child.as_slice())],
+        &diagnostics,
+    ));
     assert_eq!(
         serde_json::to_value(&snapshot.payload).unwrap()["usage"],
         json!({"input_tokens":30})
     );
-    assert_eq!(snapshot.subagent_scope, ["agent-a"]);
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
     assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Unavailable);
     assert!(
         snapshot
-            .coverage
-            .reason_codes
+            .diagnostics
+            .reasons
             .contains_key(&ReasonCode::IncompleteInput)
     );
 }

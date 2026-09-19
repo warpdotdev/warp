@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result, anyhow};
@@ -19,7 +19,8 @@ const FINAL_SAVE_TIMEOUT: Duration = Duration::from_secs(30);
 /// An active runner worker's operation, which may service initial and coalesced save points.
 ///
 /// It must reread runner state rather than capture state from an individual request.
-type SaveOperation = Arc<dyn Fn(SavePoint) -> BoxFuture<'static, Result<()>> + Send + Sync>;
+pub(super) type SaveOperation =
+    Arc<dyn Fn(SavePoint) -> BoxFuture<'static, Result<()>> + Send + Sync>;
 
 #[derive(Default)]
 struct SaveState {
@@ -45,21 +46,30 @@ impl Drop for ActiveSave {
 /// Runs one save at a time, retaining at most one pending request with `PostTurn` precedence.
 ///
 /// Closing rejects new requests and retains the final deadline and outcome across calls.
-#[derive(Default)]
 pub(crate) struct SaveCoordinator {
     state: Arc<Mutex<SaveState>>,
+    worker_operation: OnceLock<SaveOperation>,
+}
+
+impl Default for SaveCoordinator {
+    fn default() -> Self {
+        Self {
+            state: Arc::default(),
+            worker_operation: OnceLock::new(),
+        }
+    }
 }
 
 impl SaveCoordinator {
+    pub(super) fn set_worker_operation(&self, worker_operation: SaveOperation) {
+        let _ = self.worker_operation.set(worker_operation);
+    }
     /// Starts a runner-scoped worker or coalesces this save point into its pending work.
-    // TODO(vkodithala): Separate request coalescing from worker startup so this only accepts a
-    // SavePoint.
-    pub(super) fn request(
-        &self,
-        save_point: SavePoint,
-        worker_operation: SaveOperation,
-        background: &Background,
-    ) {
+    pub(super) fn enqueue(&self, save_point: SavePoint, background: &Background) {
+        let Some(worker_operation) = self.worker_operation.get().cloned() else {
+            log::error!("Harness save coordinator was not initialized");
+            return;
+        };
         let mut state = self.state.lock();
         if state.closing {
             return;
@@ -108,9 +118,10 @@ impl SaveCoordinator {
     }
 
     /// Stops ordinary requests, then drains or cancels current work before a bounded final save.
-    pub(super) async fn finish(
+    pub(super) async fn finalize(
         &self,
         final_save: impl Future<Output = Result<()>>,
+        report_usage: impl Future<Output = ()>,
         budget: Duration,
     ) -> Result<()> {
         let (active, deadline) = {
@@ -152,6 +163,10 @@ impl SaveCoordinator {
             .context("Harness final save timed out")
             .and_then(|result| result);
         self.state.lock().final_succeeded = Some(result.is_ok());
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if !remaining.is_zero() {
+            let _ = report_usage.with_timeout(remaining).await;
+        }
         result
     }
 }
@@ -172,15 +187,6 @@ fn remaining_final_save_budget(now: SystemTime, deadline: Option<SystemTime>) ->
             .unwrap_or_default()
             .min(FINAL_SAVE_TIMEOUT)
     })
-}
-
-/// Waits for both saves so either can complete independently if the other fails.
-pub(super) async fn save_transcript_and_block(
-    transcript: impl Future<Output = Result<()>>,
-    block: impl Future<Output = Result<()>>,
-) -> Result<()> {
-    let (transcript, block) = futures::join!(transcript, block);
-    transcript.and(block)
 }
 
 #[cfg(test)]

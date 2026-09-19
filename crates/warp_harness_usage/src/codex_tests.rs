@@ -1,8 +1,11 @@
+use std::ops::Deref;
+
 use serde_json::{Value, json};
 
+use crate::api::{CodexUsage, CoverageStatus, HarnessUsageSnapshot, UsageSnapshot};
 use crate::{
-    CaptureDiagnostics, CoverageStatus, ExtractionOutcome, JsonlDiagnostics, JsonlLimits,
-    JsonlReadStatus, ReasonCode, UsageSnapshot, extract_codex, parse_jsonl,
+    CaptureDiagnostics, ExtractionDiagnostics, ExtractionOutcome, JsonlDiagnostics, JsonlLimits,
+    JsonlReadStatus, ReasonCode, extract_codex, parse_jsonl,
 };
 
 const JSONL_LIMITS: JsonlLimits = JsonlLimits {
@@ -11,7 +14,20 @@ const JSONL_LIMITS: JsonlLimits = JsonlLimits {
     max_records: 16,
 };
 
-fn capture(entries: &[Value]) -> UsageSnapshot {
+struct TestCapture {
+    snapshot: UsageSnapshot<CodexUsage>,
+    diagnostics: ExtractionDiagnostics,
+}
+
+impl Deref for TestCapture {
+    type Target = UsageSnapshot<CodexUsage>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.snapshot
+    }
+}
+
+fn capture(entries: &[Value]) -> TestCapture {
     let diagnostics = CaptureDiagnostics {
         root: JsonlDiagnostics {
             status: JsonlReadStatus::Readable,
@@ -20,10 +36,17 @@ fn capture(entries: &[Value]) -> UsageSnapshot {
         },
         ..Default::default()
     };
-    let ExtractionOutcome::Usable(snapshot) = extract_codex("root", entries, &diagnostics) else {
+    let ExtractionOutcome::Usable(extracted) = extract_codex("root", entries, &diagnostics) else {
         panic!("expected usable capture");
     };
-    *snapshot
+    let extracted = *extracted;
+    let HarnessUsageSnapshot::Codex(snapshot) = extracted.snapshot else {
+        unreachable!()
+    };
+    TestCapture {
+        snapshot,
+        diagnostics: extracted.diagnostics,
+    }
 }
 
 #[test]
@@ -55,7 +78,7 @@ fn optional_category_drift_preserves_latest_totals_without_inventing_a_baseline(
     );
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
     assert_eq!(
-        snapshot.coverage.reason_codes[&ReasonCode::AmbiguousAccounting],
+        snapshot.diagnostics.reasons[&ReasonCode::AmbiguousAccounting],
         3
     );
 }
@@ -76,7 +99,6 @@ fn cumulative_checkpoints_preserve_distinct_equal_sized_requests() {
     let snapshot = capture(&entries.entries);
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Known);
     assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Known);
-    assert_eq!(snapshot.coverage.captured_scope, "root_rollout_only");
     assert_eq!(
         serde_json::to_value(&snapshot.payload).unwrap(),
         serde_json::from_str::<Value>(include_str!("fixtures/codex_payload.json")).unwrap()
@@ -96,7 +118,7 @@ fn unexplained_decrease_retains_only_the_unambiguous_prefix() {
     );
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
     assert_eq!(
-        snapshot.coverage.reason_codes[&ReasonCode::AmbiguousAccounting],
+        snapshot.diagnostics.reasons[&ReasonCode::AmbiguousAccounting],
         1
     );
 }
@@ -172,8 +194,8 @@ fn counter_bounds_and_absence_survive_serialization() {
     assert_eq!(overflow.coverage.token_status, CoverageStatus::Unavailable);
     assert!(
         overflow
-            .coverage
-            .reason_codes
+            .diagnostics
+            .reasons
             .contains_key(&ReasonCode::ResourceLimit)
     );
     assert!(

@@ -8,6 +8,14 @@ use async_trait::async_trait;
 #[cfg(test)]
 use mockall::automock;
 
+#[path = "harness_usage/publication.rs"]
+mod publication;
+pub use publication::HarnessUsageCapability;
+#[cfg(test)]
+use publication::parse_harness_usage_retry_after;
+#[cfg(not(target_family = "wasm"))]
+pub use publication::{HarnessUsageError, HarnessUsageErrorKind, HarnessUsagePublicationStatus};
+
 use super::ServerApi;
 #[cfg(feature = "local_fs")]
 pub use super::presigned_upload::FileUploadBody;
@@ -248,6 +256,11 @@ pub struct ResolvedHarnessPrompt {
     /// after any resumption preamble.
     #[serde(default)]
     pub context: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "publication::deserialize_harness_usage_capability"
+    )]
+    pub harness_usage: Option<HarnessUsageCapability>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -643,3 +656,7 @@ pub async fn upload_to_target(
 #[cfg(test)]
 #[path = "harness_support_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "harness_usage_tests.rs"]
+mod harness_usage_tests;
