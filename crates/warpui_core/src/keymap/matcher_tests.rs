@@ -176,6 +176,67 @@ fn test_editable_binding_matching() {
     );
 }
 
+/// Regression test for https://github.com/warpdotdev/warp/issues/9128.
+///
+/// When the user explicitly rebinds an editable action to a keystroke that another editable
+/// action already uses by default, the user's binding must win precedence regardless of
+/// registration order. Previously, the iteration order followed only registration order
+/// (most-recently-registered wins), so default bindings registered *after* the user's
+/// rebound action would silently shadow the user override.
+#[test]
+fn test_user_override_wins_over_default_with_same_keystroke() {
+    #[derive(Debug, PartialEq)]
+    enum Action {
+        Copy,
+        SplitPaneDown,
+    }
+
+    let mut keymap = Keymap::default();
+    use crate::keymap::macros::*;
+
+    // Simulate the real-world ordering from #9128: an action that the user wants to bind
+    // (`split_pane_down`) is registered BEFORE the action whose default keystroke conflicts
+    // with the user override (`copy`). In the buggy precedence model, `copy` is iterated
+    // first because it was registered later, so the user's override never fires.
+    keymap.register_editable_bindings([EditableBinding::new(
+        "split_pane_down",
+        "Split pane down",
+        Action::SplitPaneDown,
+    )
+    .with_key_binding("ctrl-shift-E")
+    .with_context_predicate(id!("PaneGroup"))]);
+    keymap.register_editable_bindings([EditableBinding::new("copy", "Copy", Action::Copy)
+        .with_key_binding("ctrl-shift-C")
+        .with_context_predicate(id!("Terminal"))]);
+
+    // The user rebinds Split Pane Down to ctrl-shift-C, which collides with the default
+    // Copy binding above.
+    keymap.update_custom_trigger(
+        "split_pane_down",
+        Some(Trigger::Keystrokes(vec![
+            Keystroke::parse("ctrl-shift-C").unwrap()
+        ])),
+    );
+
+    // Build a context that satisfies BOTH bindings' predicates — this is the real-world
+    // case: the terminal lives inside the pane group, so the active context contains
+    // both `Terminal` and `PaneGroup` tags.
+    let mut ctx = Context::default();
+    ctx.set.insert("Terminal");
+    ctx.set.insert("PaneGroup");
+
+    let mut matcher = Matcher::new(keymap);
+    let view_id = EntityId::new();
+    let action = matcher
+        .test_keystroke("ctrl-shift-C", view_id, &ctx)
+        .expect("user-overridden binding should fire");
+    assert_eq!(
+        action.as_action::<Action>(),
+        &Action::SplitPaneDown,
+        "user-customized binding should take precedence over a default that uses the same keystroke"
+    );
+}
+
 #[test]
 fn test_bindings_for_context() {
     #[derive(Debug)]
