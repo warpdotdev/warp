@@ -200,7 +200,7 @@ impl View for RewindConfirmationDialog {
             Dialog::new(
                 "Rewind".into(),
                 Some(
-                    "Are you sure you want to rewind? This will restore your code and conversation to before this point, and cancel any commands the agent is currently running. A copy of the original conversation will be saved in your conversation history."
+                    "Are you sure you want to rewind? This will restore your code and conversation to before this point, and cancel any commands the agent is currently running."
                         .into(),
                 ),
                 UiComponentStyles {
