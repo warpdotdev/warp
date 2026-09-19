@@ -127,14 +127,14 @@ impl<'a, T: Entity> ViewContext<'a, T> {
 
     pub fn focus<S: Entity>(&mut self, handle: &ViewHandle<S>) {
         let handle: AnyViewHandle = handle.into();
-        self.app.pending_effects.push_back(Effect::Focus {
+        self.app.enqueue_effect(Effect::Focus {
             window_id: handle.window_id(self.app),
             view_id: handle.id(),
         });
     }
 
     pub fn focus_self(&mut self) {
-        self.app.pending_effects.push_back(Effect::Focus {
+        self.app.enqueue_effect(Effect::Focus {
             window_id: self.window_id,
             view_id: self.view_id,
         });
@@ -373,7 +373,7 @@ impl<'a, T: Entity> ViewContext<'a, T> {
     /// [^note]: This subscription is on a per-instance basis, not on a per-type
     ///     basis.
     pub fn emit(&mut self, payload: T::Event) {
-        self.app.pending_effects.push_back(Effect::Event {
+        self.app.enqueue_effect(Effect::Event {
             entity_id: self.view_id,
             payload: Box::new(payload),
         });
@@ -405,7 +405,7 @@ impl<'a, T: Entity> ViewContext<'a, T> {
     #[track_caller]
     pub fn dispatch_global_action<A: Any>(&mut self, name: &'static str, arg: A) {
         let location = std::panic::Location::caller();
-        self.app.pending_effects.push_back(Effect::GlobalAction {
+        self.app.enqueue_effect(Effect::GlobalAction {
             name,
             location,
             arg: Box::new(arg),
@@ -423,7 +423,7 @@ impl<'a, T: Entity> ViewContext<'a, T> {
     /// This is useful to avoid re-entrant view updates (e.g. triggering UI updates
     /// while a view in the responder chain is still mid-update).
     pub fn dispatch_typed_action_deferred<A: Action + 'static>(&mut self, action: A) {
-        self.app.pending_effects.push_back(Effect::TypedAction {
+        self.app.enqueue_effect(Effect::TypedAction {
             window_id: self.window_id,
             view_id: self.view_id,
             action: Box::new(action),
@@ -459,12 +459,18 @@ impl<'a, T: Entity> ViewContext<'a, T> {
     /// have `ctx.notify()` called on the child's `ViewContext` in order for the
     /// child to be re-rendered.
     pub fn notify(&mut self) {
-        self.app
-            .pending_effects
-            .push_back(Effect::ViewNotification {
-                window_id: self.window_id,
-                view_id: self.view_id,
-            });
+        if let Some(Effect::ViewNotification { window_id, view_id }) =
+            self.app.pending_effects.back()
+            && *window_id == self.window_id
+            && *view_id == self.view_id
+        {
+            return;
+        }
+
+        self.app.enqueue_effect(Effect::ViewNotification {
+            window_id: self.window_id,
+            view_id: self.view_id,
+        });
     }
 
     /// Requests permissions to send desktop notifications. The `on_completion callback` can be invoked to
