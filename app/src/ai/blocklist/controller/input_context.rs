@@ -59,10 +59,6 @@ pub(super) fn input_context_for_request(
         current_working_directory_location.as_ref(),
     );
 
-    context.push(AIAgentContext::CurrentTime {
-        current_time: Local::now(),
-    });
-
     if let Some(env) = active_session.ai_execution_environment(app) {
         context.push(AIAgentContext::ExecutionEnvironment(env));
     }
@@ -91,6 +87,10 @@ pub(super) fn input_context_for_request(
             context.push(AIAgentContext::Skills { skills });
         }
     }
+
+    context.push(AIAgentContext::CurrentTime {
+        current_time: Local::now(),
+    });
 
     context.extend(additional_context);
 
