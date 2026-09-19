@@ -337,13 +337,19 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::ResourceNotFound,
             ),
         ),
-        AgentDriverError::HarnessCommandFailed { exit_code } => (
-            AgentTaskState::Failed,
-            TaskStatusUpdate::with_error_code(
-                format!("Harness command exited with code {exit_code}"),
-                PlatformErrorCode::InternalError,
-            ),
-        ),
+        AgentDriverError::HarnessCommandFailed { exit_code, output } => {
+            let mut platform_error =
+                PlatformErrorInfo::new(PlatformErrorCode::InternalError, false);
+            platform_error.detail.clone_from(output);
+            (
+                AgentTaskState::Failed,
+                TaskStatusUpdate {
+                    message: format!("Harness command exited with code {exit_code}"),
+                    error_code: Some(PlatformErrorCode::InternalError),
+                    platform_error: Some(Box::new(platform_error)),
+                },
+            )
+        }
         AgentDriverError::HarnessSetupFailed { harness, reason } => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(

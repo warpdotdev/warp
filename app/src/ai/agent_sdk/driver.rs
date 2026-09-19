@@ -94,6 +94,7 @@ use crate::server::server_api::ai::{AIClient, TaskGitCredentialsError, TaskStatu
 use crate::server::server_api::harness_support::{
     HarnessSupportClient, ResolvePromptAttachedSkill, ResolvePromptRequest,
 };
+use crate::server::telemetry::secret_redaction::redact_secrets_in_string;
 use crate::terminal::cli_agent_sessions::plugin_manager::{
     CliAgentPluginManager, plugin_manager_for,
 };
@@ -197,7 +198,44 @@ const PREFLIGHT_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 /// still has a chance to recover queued prompts before the server considers the run stalled.
 const PENDING_CLI_HARNESS_PROMPT_QUEUE_FALLBACK_DRAIN_TIMEOUT: Duration =
     Duration::from_secs(8 * 60);
+const HARNESS_FAILURE_OUTPUT_MAX_BYTES: usize = 4 * 1024;
+const HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER: &str = "\n… harness output truncated …\n";
 pub(crate) const WARP_DRIVE_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
+
+fn truncate_harness_failure_output(output: &str) -> String {
+    if output.len() <= HARNESS_FAILURE_OUTPUT_MAX_BYTES {
+        return output.to_owned();
+    }
+
+    let retained_bytes =
+        HARNESS_FAILURE_OUTPUT_MAX_BYTES - HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER.len();
+    let prefix_budget = retained_bytes / 2;
+    let suffix_budget = retained_bytes - prefix_budget;
+
+    let mut prefix_end = prefix_budget;
+    while !output.is_char_boundary(prefix_end) {
+        prefix_end -= 1;
+    }
+
+    let mut suffix_start = output.len() - suffix_budget;
+    while !output.is_char_boundary(suffix_start) {
+        suffix_start += 1;
+    }
+
+    format!(
+        "{}{}{}",
+        &output[..prefix_end],
+        HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER,
+        &output[suffix_start..]
+    )
+}
+
+fn prepare_harness_failure_output(output: &str) -> String {
+    let mut output = output.trim().to_owned();
+    // Redact before truncation so splitting a credential cannot hide it from detection.
+    redact_secrets_in_string(&mut output);
+    truncate_harness_failure_output(&output)
+}
 /// Maximum time to wait for an automatic error resume before propagating the error.
 /// If no follow-up status arrives within this window, the driver terminates with the
 /// original error so the CLI does not hang indefinitely.
@@ -926,7 +964,10 @@ pub enum AgentDriverError {
         conversation_id: String,
     },
     #[error("Harness command exited with code {exit_code}")]
-    HarnessCommandFailed { exit_code: i32 },
+    HarnessCommandFailed {
+        exit_code: i32,
+        output: Option<String>,
+    },
     #[error("Harness '{harness}' setup failed: {reason}")]
     HarnessSetupFailed { harness: String, reason: String },
     #[error("Harness '{harness}' config setup failed")]
@@ -3211,7 +3252,7 @@ impl AgentDriver {
         let mut harness_exit_rx = harness_exit_rx.fuse();
 
         let scanner_fut = harness_output_monitor::watch_block_for_errors(
-            block_id,
+            block_id.clone(),
             runtime_error_patterns,
             foreground,
         )
@@ -3307,6 +3348,12 @@ impl AgentDriver {
             }
         };
 
+        let failure_output = match command_result.as_ref() {
+            Ok(exit_code) if !exit_code.was_successful() => {
+                Self::fetch_harness_failure_output(&block_id, foreground).await
+            }
+            Ok(_) | Err(_) => None,
+        };
         // Final save after the command finishes.
         log::debug!("Triggering final save of harness conversation data");
         let final_save_result = runner
@@ -3349,8 +3396,27 @@ impl AgentDriver {
         } else {
             Err(AgentDriverError::HarnessCommandFailed {
                 exit_code: exit_code.value(),
+                output: failure_output,
             })
         }
+    }
+
+    async fn fetch_harness_failure_output(
+        block_id: &BlockId,
+        foreground: &ModelSpawner<Self>,
+    ) -> Option<String> {
+        let block_id = block_id.clone();
+        foreground
+            .spawn(move |me, ctx| {
+                me.terminal_driver
+                    .as_ref(ctx)
+                    .block_output_plaintext(&block_id, ctx)
+            })
+            .await
+            .ok()
+            .flatten()
+            .map(|output| prepare_harness_failure_output(&output))
+            .filter(|output| !output.is_empty())
     }
 
     /// `/exit`, then a follow-up Enter after [`HARNESS_EXIT_FOLLOWUP_DELAY`],
