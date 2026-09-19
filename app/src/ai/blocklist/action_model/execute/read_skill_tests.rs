@@ -140,7 +140,6 @@ fn test_read_skill_executor_success() {
 fn disconnected_remote_session_does_not_fall_back_to_client_global_bundled_skill() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
         SkillManager::handle(&app).update(&mut app, |manager, _ctx| {
             manager.add_bundled_skill_for_testing(
                 "remote-only",
@@ -198,7 +197,6 @@ fn disconnected_remote_session_does_not_fall_back_to_client_global_bundled_skill
 fn remote_session_reads_remote_bundled_skill_catalog() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
         let host_id = HostId::new("remote-host".to_string());
         let remote_skill = ParsedSkill {
             name: "host-specific".to_string(),
@@ -292,7 +290,6 @@ fn remote_session_reads_remote_bundled_skill_catalog() {
 fn test_read_skill_executor_reads_enabled_bundled_skill() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
         SkillManager::handle(&app).update(&mut app, |manager, _ctx| {
             manager.add_bundled_skill_for_testing(
                 "pr-comments",
@@ -335,7 +332,6 @@ fn test_read_skill_executor_reads_enabled_bundled_skill() {
 fn test_read_skill_executor_rejects_warp_control_bundled_skills_when_disabled() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
         let _warp_control_cli = FeatureFlag::WarpControlCli.override_enabled(false);
         let skill_id = "warpctrl";
         SkillManager::handle(&app).update(&mut app, |manager, _ctx| {
@@ -376,7 +372,6 @@ fn test_read_skill_executor_rejects_warp_control_bundled_skills_when_disabled() 
 fn test_read_skill_executor_rejects_tui_only_skill_in_gui() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
         let skill_id = "tui-migrate-setup";
         SkillManager::handle(&app).update(&mut app, |manager, _ctx| {
             manager.add_bundled_skill_for_testing(
