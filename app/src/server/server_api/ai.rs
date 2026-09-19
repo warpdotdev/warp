@@ -7,7 +7,7 @@ use ai::index::full_source_code_embedding::store_client::{IntermediateNode, Stor
 use ai::index::full_source_code_embedding::{
     self, CodebaseContextConfig, ContentHash, EmbeddingConfig, NodeHash, RepoMetadata,
 };
-use anyhow::anyhow;
+use anyhow::{Context as _, anyhow};
 use async_trait::async_trait;
 use base64::Engine;
 use bytes::Bytes;
@@ -177,6 +177,20 @@ pub struct TaskStatusUpdate {
     pub message: String,
     pub error_code: Option<PlatformErrorCode>,
     pub platform_error: Option<Box<PlatformErrorInfo>>,
+}
+/// The task-scoped model catalog returned by `GET /api/v1/agent/models`.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct AgentModelsResponse {
+    pub default_model_id: String,
+    #[serde(default)]
+    pub models: Vec<AgentModelInfo>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct AgentModelInfo {
+    pub id: String,
+    #[serde(default)]
+    pub disable_reason: Option<String>,
 }
 
 /// Error fetching git credentials for a task, either a structured platform error
@@ -1388,6 +1402,11 @@ pub trait AIClient: 'static + Send + Sync {
         &self,
         task_id: &AmbientAgentTaskId,
     ) -> anyhow::Result<serde_json::Value, anyhow::Error>;
+    /// Fetches the task-scoped model catalog using ambient task authentication.
+    async fn get_task_agent_models(
+        &self,
+        task_id: &AmbientAgentTaskId,
+    ) -> anyhow::Result<AgentModelsResponse, anyhow::Error>;
 
     #[cfg(not(target_family = "wasm"))]
     async fn download_run_transcript(
@@ -2552,6 +2571,21 @@ impl AIClient for ServerApi {
             .get_public_api(&format!("agent/runs/{task_id}"))
             .await?;
         Ok(response)
+    }
+
+    async fn get_task_agent_models(
+        &self,
+        task_id: &AmbientAgentTaskId,
+    ) -> anyhow::Result<AgentModelsResponse, anyhow::Error> {
+        let response = self
+            .get_public_api_response_for_task(task_id, "agent/models")
+            .await?;
+        let url = response.url().clone();
+        response
+            .json::<AgentModelsResponse>()
+            .await
+            .map_err(anyhow::Error::from)
+            .with_context(|| format!("Failed to deserialize response from {url}"))
     }
 
     async fn submit_run_followup(
