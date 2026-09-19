@@ -1,5 +1,8 @@
 //! End-to-end editor tests.
 
+use std::sync::Arc;
+
+use rangemap::RangeSet;
 use string_offset::CharOffset;
 use warp_core::features::FeatureFlag;
 use warpui_core::{App, ModelHandle, ReadModel};
@@ -8,10 +11,14 @@ use super::model::test_utils::{TEST_STYLES, init_logging};
 use super::model::{BlockItem, RenderEvent, RenderState};
 use crate::content::buffer::{
     AutoScrollBehavior, Buffer, BufferEditAction, BufferEvent, BufferSelectAction, EditOrigin,
-    InitialBufferState, ShouldAutoscroll,
+    InitialBufferState, ShouldAutoscroll, StyledBufferBlock, StyledBufferRun, StyledTextBlock,
 };
+use crate::content::edit::EditDelta;
 use crate::content::selection_model::BufferSelectionModel;
-use crate::content::text::{BlockType, BufferBlockItem, IndentBehavior, TextStyles};
+use crate::content::text::{
+    BlockType, BufferBlockItem, BufferBlockStyle, IndentBehavior, TextStyles,
+    TextStylesWithMetadata,
+};
 use crate::content::version::BufferVersion;
 
 #[test]
@@ -398,6 +405,122 @@ Trailing Newline (1 characters, 1 lines, 24.00px tall)
     });
 }
 
+#[test]
+fn laying_out_many_lines_packs_the_content_tree() {
+    init_logging();
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        let state = TestState::new(app);
+        let many_lines = (0..200)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        state.markdown(&many_lines, app).await;
+
+        // Laying the replacement blocks out one `SumTree::push` at a time leaves roughly one item
+        // per leaf, and a leaf allocation is the full size of a `Node` whatever it holds.
+        let stats = state.content_node_stats(app);
+        assert!(
+            stats.leaf_occupancy() > 0.9,
+            "the content tree should pack its leaves, got {stats:?}"
+        );
+    });
+}
+
+/// A full-buffer replace hands `layout_pending_edit` a delta spanning the whole document, so it
+/// lays out every block in the file rather than an edited region. That is the worst case for this
+/// path, and `Buffer::replace_all` is the entry point behind file reload and conflict resolution.
+#[test]
+fn replacing_the_whole_buffer_packs_the_content_tree() {
+    init_logging();
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        let state = TestState::new(app);
+        state.markdown("replaced\n", app).await;
+
+        let many_lines = (0..200)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        state.replace_all(&many_lines, app).await;
+
+        let stats = state.content_node_stats(app);
+        assert!(
+            stats.items > stats.slots_per_leaf,
+            "the tree must outgrow one leaf for this to test packing at all, got {stats:?}"
+        );
+        assert!(
+            stats.leaf_occupancy() > 0.9,
+            "a replaced buffer's content tree should pack its leaves, got {stats:?}"
+        );
+    });
+}
+
+/// A delta whose replacement blocks are `lines`, each a plain-text block ending in a newline.
+fn replacement_delta(lines: &[&str]) -> EditDelta {
+    EditDelta {
+        precise_deltas: Vec::new(),
+        old_offset: CharOffset::zero()..CharOffset::zero(),
+        new_lines: Arc::new(
+            lines
+                .iter()
+                .map(|line| {
+                    StyledBufferBlock::Text(StyledTextBlock {
+                        block: vec![StyledBufferRun {
+                            run: line.to_string(),
+                            text_styles: TextStylesWithMetadata::default(),
+                            block_style: BufferBlockStyle::PlainText,
+                        }],
+                        style: BufferBlockStyle::PlainText,
+                        // The block's newline counts as a character.
+                        content_length: CharOffset::from(line.chars().count() + 1),
+                    })
+                })
+                .collect(),
+        ),
+    }
+}
+
+#[test]
+fn laying_out_a_delta_applies_hidden_ranges_at_the_offsets_the_items_land_on() {
+    init_logging();
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        let state = TestState::new(app);
+        // Three blocks of five characters each, laid out from offset 1, land on offsets 1, 6 and
+        // 11, and the hidden range covers the second one's offset.
+        //
+        // This covers the batched path with hidden ranges in play end to end. It does not pin the
+        // start offset itself: `EditDelta::layout_delta` has already turned every block the range
+        // covers into a `BlockItem::Hidden`, and `retained_replacement_items` keeps those, so its
+        // filter drops nothing here. The offset sequence is pinned by the unit tests on that
+        // helper instead.
+        let mut hidden_ranges = RangeSet::new();
+        hidden_ranges.insert(CharOffset::from(6)..CharOffset::from(7));
+
+        state.layout_delta(
+            replacement_delta(&["aaaa", "bbbb", "cccc"]),
+            Some(hidden_ranges),
+            app,
+        );
+
+        // The middle block is the one that lands on the hidden offset, so it is the one laid out
+        // as a hidden section; the blocks on either side are untouched.
+        state.assert_rendered(
+            app,
+            r#"
+-------- 0.00px / 0 characters --------
+Paragraph (5 characters, 1 lines, 24.00px tall)
+-------- 24.00px / 5 characters --------
+Hidden (5 characters, 1 lines, 20.00px tall)
+-------- 44.00px / 10 characters --------
+Paragraph (5 characters, 1 lines, 24.00px tall)
+"#,
+        );
+    });
+}
+
 /// Helper for testing edits end-to-end. This is essentially a stripped-down editor model.
 struct TestState {
     content: ModelHandle<Buffer>,
@@ -495,6 +618,34 @@ impl TestState {
             app,
         )
         .await
+    }
+
+    /// Replace the buffer's entire contents and wait for the result to be laid out.
+    async fn replace_all(&self, text: &str, app: &mut App) {
+        self.content
+            .update(app, |buffer, ctx| buffer.replace_all(text, ctx));
+        self.layout_updates
+            .recv()
+            .await
+            .expect("Layout channel should not be closed");
+    }
+
+    /// Lay a delta out directly, so a test can supply hidden ranges of its own.
+    fn layout_delta(
+        &self,
+        delta: EditDelta,
+        hidden_ranges: Option<RangeSet<CharOffset>>,
+        ctx: &impl ReadModel,
+    ) {
+        self.render.read(ctx, |render_state, app| {
+            render_state.layout_edit_delta(delta, hidden_ranges, app)
+        });
+    }
+
+    /// How densely the render model's content tree packs its items into leaves.
+    fn content_node_stats(&self, ctx: &impl ReadModel) -> sum_tree::NodeStats {
+        self.render
+            .read(ctx, |render_state, _| render_state.content_node_stats())
     }
 
     /// Assert that the render state has the expected contents, as produced by describing its
