@@ -123,6 +123,7 @@ use warp_graphql::queries::task_git_credentials::{
     TaskGitCredentialsLegacyVariables, TaskGitCredentialsResult, TaskGitCredentialsVariables,
 };
 use warp_multi_agent_api::ConversationData;
+use warp_server_client::base_client::TEAM_UID_HEADER;
 
 use super::ServerApi;
 #[cfg(not(target_family = "wasm"))]
@@ -1677,9 +1678,15 @@ pub trait AIClient: 'static + Send + Sync {
     /// Generates AI copy for code-review flows: commit messages at dialog-open
     /// time and PR titles / bodies at confirm time. `output_type` in the
     /// request picks which of the three the server returns.
+    ///
+    /// `team_scope` names the team the caller resolved this request against (or
+    /// [`RequestTeamScope::none_for_headless_context`] when no window was available to resolve
+    /// one), so billing metadata on the server attributes to that team rather than whichever
+    /// team the server's own fallback would otherwise pick.
     async fn generate_code_review_content(
         &self,
         request: GenerateCodeReviewContentRequest,
+        team_scope: RequestTeamScope,
     ) -> Result<GenerateCodeReviewContentResponse, anyhow::Error>;
 }
 
@@ -3379,12 +3386,16 @@ impl AIClient for ServerApi {
     async fn generate_code_review_content(
         &self,
         request: GenerateCodeReviewContentRequest,
+        team_scope: RequestTeamScope,
     ) -> Result<GenerateCodeReviewContentResponse, anyhow::Error> {
         let auth_token = self.get_or_refresh_access_token().await?;
-        let request_builder = self.base_client.http_client().post(format!(
+        let mut request_builder = self.base_client.http_client().post(format!(
             "{}/ai/generate_code_review_content",
             ChannelState::server_root_url()
         ));
+        if let Some(team_uid) = team_scope.team_uid() {
+            request_builder = request_builder.header(TEAM_UID_HEADER, team_uid.to_string());
+        }
         let response = if let Some(token) = auth_token.as_bearer_token() {
             request_builder.bearer_auth(token)
         } else {
