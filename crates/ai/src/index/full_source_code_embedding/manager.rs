@@ -605,25 +605,27 @@ impl CodebaseIndexManager {
         &self,
         event: &BulkFilesystemWatcherEvent,
     ) -> HashMap<PathBuf, ChangedFiles> {
-        let mut added_or_updated = event.added_or_updated_set();
-        let mut deleted = event.deleted.clone();
-
-        // For now, treat a move as a deletion followed by an addition.
-        // This means deletions must be processed before additions/updates.
-        for (old_path, new_path) in event.moved.iter() {
-            deleted.insert(old_path.to_path_buf());
-            added_or_updated.insert(new_path.to_path_buf());
-        }
-
+        // Route filesystem changes into per-codebase-root buckets. A move is
+        // treated as a deletion of the source followed by an addition of the
+        // target, so deletions must be grouped before additions/updates.
+        //
+        // We iterate the event's path sets by reference and clone only the
+        // paths we actually route into a bucket. Previously this eagerly built
+        // an owned `added_or_updated_set()` plus a full `event.deleted.clone()`,
+        // duplicating every changed path in the event up front; under a large
+        // watcher burst that intermediate copy was the single largest
+        // allocation site in the heap profile (see APP-4829).
         let mut updates_by_root: HashMap<PathBuf, ChangedFiles> = HashMap::new();
 
-        for path in deleted {
-            if let Some(root_path) = self.root_path_for_codebase(&path) {
+        // Preserve the previous move handling: each `event.moved` key is routed
+        // as a deletion and each value as an addition/update.
+        for path in event.deleted.iter().chain(event.moved.keys()) {
+            if let Some(root_path) = self.root_path_for_codebase(path) {
                 updates_by_root
                     .entry(root_path)
                     .or_default()
                     .deletions
-                    .insert(path);
+                    .insert(path.to_path_buf());
             } else {
                 log::warn!(
                     "Could not find index root for deleted file: {}",
@@ -632,13 +634,13 @@ impl CodebaseIndexManager {
             }
         }
 
-        for path in added_or_updated {
-            if let Some(root_path) = self.root_path_for_codebase(&path) {
+        for path in event.added_or_updated_iter().chain(event.moved.values()) {
+            if let Some(root_path) = self.root_path_for_codebase(path) {
                 updates_by_root
                     .entry(root_path)
                     .or_default()
                     .upsertions
-                    .insert(path);
+                    .insert(path.to_path_buf());
             } else {
                 log::warn!(
                     "Could not find index root for updated file: {}",
