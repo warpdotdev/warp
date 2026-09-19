@@ -357,6 +357,14 @@ pub struct DiffMetadataAgainstBase {
     /// is what lets the box populate for remote repos, where the list rides
     /// along in synced metadata.
     pub files: Vec<FileChangeEntry>,
+    /// `true` when the underlying `git status`/`git diff --numstat` read was
+    /// cut off by `METADATA_STATUS_BYTE_BUDGET` before finishing (see
+    /// APP-5462 and APP-4827) — an extreme case (e.g. a huge non-gitignored
+    /// directory tree) in which `aggregate_stats.files_changed` and the
+    /// totals are a lower bound rather than the true count. Independently,
+    /// `files.len() < aggregate_stats.files_changed` signals that `files`
+    /// itself was capped at `MAX_STATUS_ENTRIES` even when this is `false`.
+    pub files_truncated: bool,
 }
 
 impl DiffMetadataAgainstBase {
