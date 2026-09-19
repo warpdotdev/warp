@@ -653,6 +653,15 @@ fn on_shell_determined<S: TerminalSurface>(
             executable_path: docker_starter.logical_shell_path().to_owned(),
             shell_type: docker_starter.shell_type(),
         },
+        ShellStarter::DevContainer(dev_container_starter) => ShellLaunchData::DevContainer {
+            workspace_folder: dev_container_starter.workspace_folder.clone(),
+            docker_path: dev_container_starter.logical_shell_path().to_owned(),
+            container_id: dev_container_starter.container_id.clone(),
+            remote_user: dev_container_starter.remote_user.clone(),
+            remote_workspace_folder: dev_container_starter.remote_workspace_folder.clone(),
+            sandbox_id: dev_container_starter.sandbox_id.clone(),
+            session_id: dev_container_starter.session_id(),
+        },
         ShellStarter::Wsl(shell_starter) => ShellLaunchData::WSL {
             distro: shell_starter.distribution().to_owned(),
         },
@@ -674,6 +683,7 @@ fn on_shell_determined<S: TerminalSurface>(
     let generated_session_id = match &shell_starter {
         ShellStarter::Direct(starter) | ShellStarter::MSYS2(starter) => starter.session_id(),
         ShellStarter::DockerSandbox(starter) => starter.session_id(),
+        ShellStarter::DevContainer(starter) => starter.session_id(),
         ShellStarter::Wsl(starter) => starter.session_id(),
     };
     manager
