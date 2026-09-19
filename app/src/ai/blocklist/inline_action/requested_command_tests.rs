@@ -1,6 +1,28 @@
-//! Unit tests for format_command_text in requested_command.rs
+//! Unit tests for format_command_text and the streamed-update helpers in requested_command.rs
 
-use super::{format_command_text, mcp_blocked_title_text, mcp_viewing_detail_title_text};
+use std::sync::Arc;
+
+use warp_core::ui::appearance::Appearance;
+use warp_editor::render::element::VerticalExpansionBehavior;
+use warpui::platform::WindowStyle;
+use warpui::{App, ViewHandle};
+
+use super::{
+    CodeEditorRenderOptions, CodeEditorView, StreamedCodeUpdate,
+    apply_streamed_command_editor_update, format_command_text, mcp_blocked_title_text,
+    mcp_viewing_detail_title_text, streamed_code_update,
+};
+use crate::AuthStateProvider;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::notebooks::editor::keys::NotebookKeybindings;
+use crate::server::server_api::team::MockTeamClient;
+use crate::server::server_api::workspace::MockWorkspaceClient;
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::vim_registers::VimRegisters;
+use crate::workspace::ActiveSession;
+use crate::workspace::sync_inputs::SyncedInputState;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 #[test]
 fn single_line_without_newline_is_unchanged_ascii() {
@@ -69,6 +91,129 @@ fn newline_then_multibyte_results_in_ellipsis_only() {
     // Sanity: output remains valid UTF-8
     let reconstructed: String = output.chars().collect();
     assert_eq!(reconstructed, output);
+}
+
+/// Constructs a bare `CodeEditorView`, mirroring
+/// `ai::blocklist::block_tests::test_code_editor`. Used to exercise
+/// `apply_streamed_command_editor_update` -- the exact function
+/// `RequestedCommandView::apply_streamed_update` uses to keep its editor in
+/// sync with `command_text` -- against a real buffer.
+fn test_code_editor(app: &mut App) -> ViewHandle<CodeEditorView> {
+    initialize_settings_for_tests(app);
+    app.add_singleton_model(|_| Appearance::mock());
+    app.add_singleton_model(|_| SyncedInputState::mock());
+    app.add_singleton_model(|_| VimRegisters::new());
+    app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
+    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    app.add_singleton_model(CloudModel::mock);
+    app.add_singleton_model(|_| ActiveSession::default());
+    app.add_singleton_model(NotebookKeybindings::new);
+
+    let team_client_mock = Arc::new(MockTeamClient::new());
+    let workspace_client_mock = Arc::new(MockWorkspaceClient::new());
+    app.add_singleton_model(|ctx| {
+        UserWorkspaces::mock(
+            team_client_mock.clone(),
+            workspace_client_mock.clone(),
+            vec![],
+            ctx,
+        )
+    });
+
+    let (_window, editor_view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+        CodeEditorView::new(
+            None,
+            None,
+            CodeEditorRenderOptions::new(VerticalExpansionBehavior::GrowToMaxHeight),
+            ctx,
+        )
+    });
+    editor_view
+}
+
+#[test]
+fn apply_streamed_command_editor_update_appends_suffix() {
+    App::test((), |mut app| async move {
+        let editor = test_code_editor(&mut app);
+        let update = streamed_code_update("echo hi", "");
+        editor.update(&mut app, |editor, ctx| {
+            apply_streamed_command_editor_update(editor, update, "echo hi", ctx);
+        });
+        let text = editor.update(&mut app, |editor, ctx| {
+            editor.text(ctx).as_str().to_string()
+        });
+        assert_eq!(text, "echo hi");
+    });
+}
+
+#[test]
+fn apply_streamed_command_editor_update_resets_existing_editor_on_non_prefix_rewrite() {
+    App::test((), |mut app| async move {
+        let editor = test_code_editor(&mut app);
+        let first_update = streamed_code_update("abc", "");
+        editor.update(&mut app, |editor, ctx| {
+            apply_streamed_command_editor_update(editor, first_update, "abc", ctx);
+        });
+        let text = editor.update(&mut app, |editor, ctx| {
+            editor.text(ctx).as_str().to_string()
+        });
+        assert_eq!(text, "abc");
+
+        // Regression test for a follow-up finding on APP-5288: a boundary-aligned,
+        // non-prefix rewrite on an *already-populated* editor must reset it to
+        // "XYZq", not corrupt it into "abcq" the way a length-only sync would.
+        let second_update = streamed_code_update("XYZq", "abc");
+        assert_eq!(second_update, StreamedCodeUpdate::Reset);
+        editor.update(&mut app, |editor, ctx| {
+            apply_streamed_command_editor_update(editor, second_update, "XYZq", ctx);
+        });
+        let text = editor.update(&mut app, |editor, ctx| {
+            editor.text(ctx).as_str().to_string()
+        });
+        assert_eq!(text, "XYZq");
+    });
+}
+
+#[test]
+fn apply_streamed_command_editor_update_truncates_on_valid_shrink() {
+    App::test((), |mut app| async move {
+        let editor = test_code_editor(&mut app);
+        let first_update = streamed_code_update("cargo build\n``", "");
+        editor.update(&mut app, |editor, ctx| {
+            apply_streamed_command_editor_update(editor, first_update, "cargo build\n``", ctx);
+        });
+
+        let second_update = streamed_code_update("cargo build", "cargo build\n``");
+        assert_eq!(second_update, StreamedCodeUpdate::Truncate);
+        editor.update(&mut app, |editor, ctx| {
+            apply_streamed_command_editor_update(editor, second_update, "cargo build", ctx);
+        });
+        let text = editor.update(&mut app, |editor, ctx| {
+            editor.text(ctx).as_str().to_string()
+        });
+        assert_eq!(text, "cargo build");
+    });
+}
+
+#[test]
+fn apply_streamed_command_editor_update_is_noop_when_unchanged() {
+    App::test((), |mut app| async move {
+        let editor = test_code_editor(&mut app);
+        let first_update = streamed_code_update("echo hi", "");
+        editor.update(&mut app, |editor, ctx| {
+            apply_streamed_command_editor_update(editor, first_update, "echo hi", ctx);
+        });
+
+        let second_update = streamed_code_update("echo hi", "echo hi");
+        assert_eq!(second_update, StreamedCodeUpdate::NoOp);
+        editor.update(&mut app, |editor, ctx| {
+            apply_streamed_command_editor_update(editor, second_update, "echo hi", ctx);
+        });
+        let text = editor.update(&mut app, |editor, ctx| {
+            editor.text(ctx).as_str().to_string()
+        });
+        assert_eq!(text, "echo hi");
+    });
 }
 
 #[test]
