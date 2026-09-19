@@ -279,6 +279,58 @@ fn workspace_admin_without_team_role_can_promote_demote_and_remove() {
 }
 
 #[test]
+fn native_workspace_remove_action_targets_member_and_workspace() {
+    let member_uid = UserUid::new(MEMBER_EMAIL);
+    let team = team_with_members(
+        vec![
+            member(ADMIN_EMAIL, MembershipRole::User),
+            member(MEMBER_EMAIL, MembershipRole::User),
+        ],
+        true,
+    );
+    let mut workspace = admin_workspace(ADMIN_EMAIL);
+    let workspace_uid = workspace.uid;
+    workspace.members.push(WorkspaceMember {
+        uid: member_uid,
+        email: MEMBER_EMAIL.to_string(),
+        role: MembershipRole::User,
+        is_disabled: false,
+        usage_info: WorkspaceMemberUsageInfo {
+            is_unlimited: true,
+            request_limit: 0,
+            requests_used_since_last_refresh: 0,
+            is_request_limit_prorated: false,
+        },
+    });
+
+    let items = TeamsPageView::team_to_item_list(&team, ADMIN_EMAIL, &workspace);
+    let remove_action = items
+        .iter()
+        .find(|item| item.text == MEMBER_EMAIL)
+        .and_then(|item| {
+            item.actions
+                .iter()
+                .find(|action| action.label == "Remove from workspace")
+        })
+        .expect("native workspace member should have a workspace removal action");
+
+    match &remove_action.action {
+        TeamsPageAction::RemoveUserFromWorkspace {
+            user_uid,
+            workspace_uid: action_workspace_uid,
+            member_email,
+            workspace_name,
+        } => {
+            assert_eq!(*user_uid, member_uid);
+            assert_eq!(*action_workspace_uid, workspace_uid);
+            assert_eq!(member_email, MEMBER_EMAIL);
+            assert_eq!(workspace_name, "Test Workspace");
+        }
+        action => panic!("expected workspace removal action, got {action:?}"),
+    }
+}
+
+#[test]
 fn workspace_admin_gets_team_management_permissions() {
     let team = team_with_members(vec![member(MEMBER_EMAIL, MembershipRole::User)], true);
     let workspace = admin_workspace(MEMBER_EMAIL);
