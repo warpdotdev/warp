@@ -128,6 +128,10 @@ pub fn init(
 
     register_all_settings(ctx);
 
+    // Keeps the shared-session inactivity durations in a valid revoke <= warn <= end order
+    // on every path other than the settings UI, which clamps its own edits separately.
+    SharedSessionSettings::enforce_inactivity_ordering(ctx);
+
     // One-time migration: copy public settings from the platform-native store
     // into the TOML file so existing users don't lose their customizations
     // when the settings file feature is first enabled.
