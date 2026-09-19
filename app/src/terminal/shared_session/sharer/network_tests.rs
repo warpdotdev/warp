@@ -13,14 +13,14 @@ use futures_util::{FutureExt as _, SinkExt as _, StreamExt as _, future, sink, s
 use instant::Instant;
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::{
-    ActivePrompt, FeatureSupport, InputOperationId, InputOperationSeqNo, InputUpdate,
-    OrderedTerminalEvent, OrderedTerminalEventType, ParticipantId, Selection, SelectionUpdate,
-    SessionId, UserID,
+    ActivePrompt, ActivePromptUpdate, FeatureSupport, InputOperationId, InputOperationSeqNo,
+    InputReplicaId, InputUpdate, OrderedTerminalEvent, OrderedTerminalEventType, ParticipantId,
+    Scrollback, Selection, SelectionUpdate, SessionId, UserID, WindowSize,
 };
 use session_sharing_protocol::sharer::{
-    DownstreamMessage, FailedToInitializeSessionReason, QuotaType, ReconnectPayload,
-    ReconnectToken, ReconnectionFailedReason, SessionEndedReason, SessionTerminatedReason,
-    UpstreamMessage,
+    DownstreamMessage, FailedToInitializeSessionReason, InitPayload, Lifetime, QuotaType,
+    ReconnectPayload, ReconnectToken, ReconnectionFailedReason, SessionEndedReason,
+    SessionSourceType, SessionTerminatedReason, UpstreamMessage,
 };
 use warp_server_client::iap::IapManager;
 #[cfg(not(target_family = "wasm"))]
@@ -31,9 +31,9 @@ use websocket::{Error as WebsocketError, Message, Sink, Stream, WebsocketMessage
 
 use super::{
     AMBIENT_CREATE_SESSION_MAX_ATTEMPTS, ConfirmedReconnection, MAX_PRE_RECONNECT_BYTES,
-    MAX_PRE_RECONNECT_MESSAGES, Network, PTY_READS_BATCH_THRESHOLD, PtyBytesBatchStatus, Stage,
-    StartupFailure, StartupRetryState, confirm_reconnection, share_with_team_uid_for_init_payload,
-    startup_max_attempts,
+    MAX_PRE_RECONNECT_MESSAGES, Network, PTY_READS_BATCH_THRESHOLD, PtyBytesBatchStatus,
+    SERVER_MAX_WEBSOCKET_MESSAGE_BYTES, Stage, StartupFailure, StartupRetryState,
+    confirm_reconnection, share_with_team_uid_for_init_payload, startup_max_attempts,
 };
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
@@ -59,6 +59,52 @@ fn is_upstream_message_pty_bytes_read(
 
 fn discard_sink() -> impl Sink {
     sink::drain().sink_map_err(|error: Infallible| match error {})
+}
+fn connect_mock_websocket(
+    network: &ModelHandle<Network>,
+    app: &mut App,
+    startup_attempt: Option<usize>,
+) -> mpsc::UnboundedReceiver<Message> {
+    let (wire_tx, wire_rx) = mpsc::unbounded();
+    let wire_tx = wire_tx.sink_map_err(|error| anyhow::Error::new(error).into());
+    network.update(app, |network, ctx| {
+        network.on_websocket_connected(
+            startup_attempt,
+            network.ws_proxy_rx.clone(),
+            wire_tx,
+            stream::pending(),
+            ctx,
+        );
+    });
+    wire_rx
+}
+
+async fn next_wire_message(wire_rx: &mut mpsc::UnboundedReceiver<Message>) -> UpstreamMessage {
+    let message = wire_rx.next().await.expect("Expected websocket message");
+    UpstreamMessage::from_json(message.text().expect("Expected text websocket message"))
+        .expect("Expected valid upstream message")
+}
+
+fn initialize_message() -> UpstreamMessage {
+    UpstreamMessage::Initialize(InitPayload {
+        scrollback: Scrollback {
+            blocks: vec![],
+            is_alt_screen_active: false,
+        },
+        active_prompt: ActivePrompt::default(),
+        window_size: WindowSize::default(),
+        user_id: UserID::default(),
+        selection: Selection::default(),
+        init_block_id: String::new().into(),
+        input_replica_id: InputReplicaId::default(),
+        telemetry_context: None,
+        lifetime: Lifetime::default(),
+        universal_developer_input_context: None,
+        source_type: SessionSourceType::default(),
+        source_task_id: None,
+        feature_support: FeatureSupport::default(),
+        share_with_team_uid: None,
+    })
 }
 
 fn reconnect_payload() -> ReconnectPayload {
@@ -561,6 +607,109 @@ fn test_reconnect_confirmation_flushes_pending_input_updates() {
     });
 }
 
+#[test]
+fn test_oversized_in_session_message_is_skipped_without_reconnecting() {
+    App::test((), |mut app| async move {
+        let network = create_network(&mut app, true).0;
+        let mut wire_rx = connect_mock_websocket(&network, &mut app, None);
+
+        network.update(&mut app, |network, _| {
+            network.send_message_to_server(UpstreamMessage::UpdateActivePrompt(
+                ActivePromptUpdate {
+                    active_prompt: ActivePrompt::WarpPrompt(
+                        "x".repeat(SERVER_MAX_WEBSOCKET_MESSAGE_BYTES),
+                    ),
+                    last_event_no: 0,
+                },
+            ));
+            network.send_message_to_server(UpstreamMessage::UpdateSelection(SelectionUpdate {
+                selection: Selection::None,
+                event_no: 0.into(),
+            }));
+        });
+
+        assert!(matches!(
+            next_wire_message(&mut wire_rx).await,
+            UpstreamMessage::UpdateSelection(_)
+        ));
+        network.read(&app, |network, _| {
+            assert!(matches!(network.stage, Stage::StartedSuccessfully { .. }));
+            assert!(!network.ws_proxy_tx.is_closed());
+        });
+    });
+}
+
+#[test]
+fn test_reconnect_flush_skips_oversized_unacked_event() {
+    App::test((), |mut app| async move {
+        let network = create_network(&mut app, true).0;
+        let mut wire_rx = connect_mock_websocket(&network, &mut app, None);
+
+        network.update(&mut app, |network, ctx| {
+            network.unacked_terminal_events.insert(
+                0,
+                OrderedTerminalEvent {
+                    event_no: 0,
+                    event_type: OrderedTerminalEventType::PtyBytesRead {
+                        bytes: vec![0; SERVER_MAX_WEBSOCKET_MESSAGE_BYTES],
+                    },
+                },
+            );
+            network.unacked_terminal_events.insert(
+                1,
+                OrderedTerminalEvent {
+                    event_no: 1,
+                    event_type: OrderedTerminalEventType::AgentConversationReplayEnded,
+                },
+            );
+            network.stage = Stage::Reconnecting {
+                abort_handle: AbortHandle::new_pair().0,
+            };
+            network.process_websocket_message(reconnected_message(), ctx);
+        });
+
+        assert!(matches!(
+            next_wire_message(&mut wire_rx).await,
+            UpstreamMessage::OrderedTerminalEvent(OrderedTerminalEvent { event_no: 1, .. })
+        ));
+        network.read(&app, |network, _| {
+            assert!(matches!(network.stage, Stage::StartedSuccessfully { .. }));
+            assert!(!network.ws_proxy_tx.is_closed());
+            assert!(network.unacked_terminal_events.contains_key(&0));
+        });
+    });
+}
+
+#[test]
+fn test_oversized_initialize_fails_startup_without_retry() {
+    App::test((), |mut app| async move {
+        let network = create_network(&mut app, false).0;
+        network.update(&mut app, |network, _| {
+            network.stage = Stage::BeforeStarted {
+                startup_retry: StartupRetryState {
+                    current_attempt: 1,
+                    max_attempts: AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+                    timeout_abort_handle: None,
+                    transport_abort_handle: None,
+                },
+            };
+        });
+        let mut wire_rx = connect_mock_websocket(&network, &mut app, Some(1));
+
+        network.update(&mut app, |network, _| {
+            network
+                .ws_proxy_tx
+                .try_send(initialize_message())
+                .expect("Expected initialization to reach websocket send task");
+        });
+
+        assert_eventually!(
+            network.read(&app, |network, _| matches!(network.stage, Stage::Finished)),
+            "Oversized initialization should fail without another attempt"
+        );
+        assert!(wire_rx.next().await.is_none());
+    });
+}
 #[test]
 fn test_share_with_team_uid_for_init_payload_includes_team_scoped_view() {
     let team_uid = crate::server::ids::ServerId::from(123);

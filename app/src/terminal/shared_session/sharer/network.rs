@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::Context as _;
@@ -78,6 +79,10 @@ const RECONNECT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
 const RECONNECT_CYCLE_TIMEOUT: Duration = Duration::from_secs(128);
 const MAX_PRE_RECONNECT_MESSAGES: usize = 256;
 const MAX_PRE_RECONNECT_BYTES: usize = 1024 * 1024;
+#[cfg(not(test))]
+const SERVER_MAX_WEBSOCKET_MESSAGE_BYTES: usize = 200 * 1024 * 1024;
+#[cfg(test)]
+const SERVER_MAX_WEBSOCKET_MESSAGE_BYTES: usize = 128;
 /// Exponential backoff, bounded by the reconnect cycle timeout including connection and handshake time.
 /// We should be somewhat generous with the amount of retries allowed when a sharer wants to recover their session,
 /// since they have the choice of giving up early by closing the window/stopping sharing.
@@ -279,6 +284,7 @@ impl StartupRetryState {
 enum StartupFailure {
     Transport,
     InitializeSend,
+    InitializeTooLarge,
     WebsocketClosedBeforeStarted,
     WebsocketError,
     Timeout,
@@ -293,6 +299,7 @@ impl StartupFailure {
             | Self::WebsocketClosedBeforeStarted
             | Self::WebsocketError
             | Self::Timeout => true,
+            Self::InitializeTooLarge => false,
             Self::ServerRejected(reason) => matches!(
                 reason,
                 FailedToInitializeSessionReason::InternalServerError { .. }
@@ -311,7 +318,10 @@ impl StartupFailure {
             Self::Timeout => FailedToInitializeSessionReason::InternalServerError {
                 details: "Timed out creating shared session".to_string(),
             },
-            Self::Transport | Self::InitializeSend | Self::WebsocketError => {
+            Self::Transport
+            | Self::InitializeSend
+            | Self::InitializeTooLarge
+            | Self::WebsocketError => {
                 FailedToInitializeSessionReason::internal_server_error_without_details()
             }
         }
@@ -321,6 +331,7 @@ impl StartupFailure {
         match self {
             Self::Transport => "transport_error",
             Self::InitializeSend => "initialize_send_error",
+            Self::InitializeTooLarge => "initialize_too_large",
             Self::WebsocketClosedBeforeStarted => "websocket_closed_before_started",
             Self::WebsocketError => "websocket_error",
             Self::Timeout => "timeout",
@@ -1329,17 +1340,26 @@ impl Network {
     ) {
         self.connection_generation += 1;
         let generation = self.connection_generation;
+        let startup_send_failure_pending = Arc::new(AtomicBool::new(false));
+        let receive_startup_send_failure_pending = startup_send_failure_pending.clone();
+        let close_startup_send_failure_pending = startup_send_failure_pending.clone();
         // Handle any messages we receive over the websocket.
         ctx.spawn_stream_local(
             stream,
             move |network, message, ctx| match message {
                 Ok(message) => {
+                    if receive_startup_send_failure_pending.load(Ordering::Acquire) {
+                        return;
+                    }
                     if network.should_ignore_websocket_callback(generation, startup_attempt) {
                         return;
                     }
                     network.process_websocket_message(message, ctx);
                 }
                 Err(e) => {
+                    if receive_startup_send_failure_pending.load(Ordering::Acquire) {
+                        return;
+                    }
                     if network.should_ignore_websocket_callback(generation, startup_attempt) {
                         return;
                     }
@@ -1357,9 +1377,12 @@ impl Network {
                 }
             },
             move |network, ctx| {
-                if network.should_ignore_websocket_callback(generation, startup_attempt) {
+                if close_startup_send_failure_pending.load(Ordering::Acquire) {
                     return;
                 }
+                if network.should_ignore_websocket_callback(generation, startup_attempt) {
+                    return;
+                };
                 let stage = network.stage_label();
                 sharer_info!(
                     network,
@@ -1386,26 +1409,49 @@ impl Network {
         // Spawn a task to send messages back up the websocket to the server.
         ctx.spawn(
             async move {
-                let mut startup_send_failed = false;
+                let mut startup_failure = None;
                 let mut ws_proxy_rx = pin!(ws_proxy_rx);
                 while let Some(message) = ws_proxy_rx.next().await {
                     let is_startup_initialize = matches!(message, UpstreamMessage::Initialize(_));
                     let serialized = message.to_json();
                     match serialized {
                         Ok(serialized) => {
+                            if serialized.len() > SERVER_MAX_WEBSOCKET_MESSAGE_BYTES {
+                                if is_startup_initialize {
+                                    log::warn!(
+                                        "Shared session initialization exceeds websocket message limit; bytes={} limit={}",
+                                        serialized.len(),
+                                        SERVER_MAX_WEBSOCKET_MESSAGE_BYTES,
+                                    );
+                                    startup_send_failure_pending.store(true, Ordering::Release);
+                                    startup_failure = Some(StartupFailure::InitializeTooLarge);
+                                    break;
+                                }
+                                log::warn!(
+                                    "Skipping oversized message to shared session server; bytes={} limit={}",
+                                    serialized.len(),
+                                    SERVER_MAX_WEBSOCKET_MESSAGE_BYTES,
+                                );
+                                continue;
+                            }
                             if let Err(e) = sink.send(Message::new(serialized)).await {
                                 // Errors are not typically retryable after startup. For a case like no
                                 // network connection, sink.send will succeed and the message will
                                 // actually be sent when connection is restored.
                                 log::warn!("Failed to send message over shared session websocket as sharer: {e}. Terminating connection.");
-                                startup_send_failed = is_startup_initialize;
+                                startup_failure = is_startup_initialize
+                                    .then_some(StartupFailure::InitializeSend);
+                                if startup_failure.is_some() {
+                                    startup_send_failure_pending.store(true, Ordering::Release);
+                                }
                                 break;
                             }
                         }
                         Err(e) => {
                             log::warn!("Failed to serialize message to send over shared session websocket as sharer: {e}");
                             if is_startup_initialize {
-                                startup_send_failed = true;
+                                startup_send_failure_pending.store(true, Ordering::Release);
+                                startup_failure = Some(StartupFailure::InitializeSend);
                                 break;
                             }
                         }
@@ -1416,18 +1462,18 @@ impl Network {
                     report_error!(anyhow::Error::new(e)
                         .context("Failed to close session sharing websocket as sharer"));
                 }
-                startup_send_failed
+                startup_failure
             },
-            move |network, startup_send_failed, ctx| {
-                if !startup_send_failed {
+            move |network, startup_failure, ctx| {
+                let Some(startup_failure) = startup_failure else {
                     return;
-                }
+                };
                 if network.should_ignore_websocket_callback(generation, startup_attempt) {
                     return;
                 }
                 if startup_attempt.is_some() && matches!(network.stage, Stage::BeforeStarted { .. })
                 {
-                    network.handle_startup_failure(StartupFailure::InitializeSend, ctx);
+                    network.handle_startup_failure(startup_failure, ctx);
                 }
             },
         );
