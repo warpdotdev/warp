@@ -56,6 +56,7 @@ fn bundled_skill(name: &str) -> ParsedSkill {
         name: name.to_string(),
         description: format!("{name} bundled skill"),
         path: LocalOrRemotePath::Local(PathBuf::from(format!("/bundled/skills/{name}/SKILL.md"))),
+        content_hash: None,
         content: format!("# {name}"),
         line_range: None,
         provider: SkillProvider::Warp,
@@ -137,6 +138,169 @@ fn test_read_skill_executor_success() {
 }
 
 #[test]
+fn test_read_skill_executor_reloads_dropped_listing_body() {
+    let temp_dir = TempDir::new().unwrap();
+    let skill_path = create_test_skill_file(&temp_dir, "test-skill", "A test skill");
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let mut parsed_skill = parse_skill(&skill_path).expect("Failed to parse test skill");
+        parsed_skill.drop_listing_body();
+        assert!(parsed_skill.content.is_empty());
+        SkillManager::handle(&app).update(&mut app, |manager, _ctx| {
+            manager.add_skill_for_testing(parsed_skill);
+        });
+
+        let executor_handle = add_test_read_skill_executor(&mut app);
+        let action = AIAgentAction {
+            id: AIAgentActionId::from("test-action-id".to_string()),
+            action: AIAgentActionType::ReadSkill(ReadSkillRequest {
+                skill: SkillReference::Path(LocalOrRemotePath::Local(skill_path.clone())),
+            }),
+            task_id: TaskId::new("test-task-id".to_string()),
+            requires_result: false,
+        };
+        let input = ExecuteActionInput {
+            action: &action,
+            conversation_id: AIConversationId::new(),
+        };
+
+        executor_handle.update(&mut app, |executor, ctx| {
+            let result: AnyActionExecution = executor.execute(input, ctx).into();
+            match result {
+                AnyActionExecution::Sync(AIAgentActionResultType::ReadSkill(
+                    ReadSkillResult::Success { content },
+                )) => {
+                    let AnyFileContent::StringContent(body) = content.content else {
+                        panic!("expected string skill content");
+                    };
+                    assert!(body.contains("Test instructions for this skill."));
+                }
+                _ => panic!("Dropped listing body should be re-read from disk"),
+            }
+        });
+    });
+}
+
+#[test]
+fn test_read_skill_executor_uses_updated_line_range_after_front_matter_grows() {
+    let temp_dir = TempDir::new().unwrap();
+    let skill_path = create_test_skill_file(&temp_dir, "test-skill", "short");
+    let listed = parse_skill(&skill_path).expect("Failed to parse test skill");
+    let listed_range = listed.line_range.clone();
+    let mut listed_for_cache = listed.clone();
+    listed_for_cache.drop_listing_body();
+
+    let grown = r#"---
+name: test-skill
+description: short
+padding1: "one"
+padding2: "two"
+padding3: "three"
+padding4: "four"
+---
+
+# test-skill
+
+## Instructions
+Test instructions for this skill.
+"#;
+    fs::write(&skill_path, grown).unwrap();
+    let expected = parse_skill(&skill_path).expect("Failed to parse grown skill");
+    assert_ne!(listed_range, expected.line_range);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        SkillManager::handle(&app).update(&mut app, |manager, _ctx| {
+            manager.add_skill_for_testing(listed_for_cache);
+        });
+
+        let executor_handle = add_test_read_skill_executor(&mut app);
+        let action = AIAgentAction {
+            id: AIAgentActionId::from("test-action-id".to_string()),
+            action: AIAgentActionType::ReadSkill(ReadSkillRequest {
+                skill: SkillReference::Path(LocalOrRemotePath::Local(skill_path.clone())),
+            }),
+            task_id: TaskId::new("test-task-id".to_string()),
+            requires_result: false,
+        };
+        let input = ExecuteActionInput {
+            action: &action,
+            conversation_id: AIConversationId::new(),
+        };
+
+        executor_handle.update(&mut app, |executor, ctx| {
+            let result: AnyActionExecution = executor.execute(input, ctx).into();
+            match result {
+                AnyActionExecution::Sync(AIAgentActionResultType::ReadSkill(
+                    ReadSkillResult::Success { content },
+                )) => {
+                    assert_eq!(content.line_range, expected.line_range);
+                    let AnyFileContent::StringContent(body) = content.content else {
+                        panic!("expected string skill content");
+                    };
+                    assert!(body.contains("padding4: \"four\""));
+                }
+                _ => panic!("Read skill should reparse after front matter grew"),
+            }
+        });
+    });
+}
+
+#[test]
+fn test_invoke_skill_refresh_uses_updated_line_range_after_front_matter_grows() {
+    let temp_dir = TempDir::new().unwrap();
+    let skill_path = create_test_skill_file(&temp_dir, "test-skill", "short");
+    let mut listed = parse_skill(&skill_path).expect("Failed to parse test skill");
+    let listed_range = listed.line_range.clone();
+    listed.drop_listing_body();
+
+    let grown = r#"---
+name: test-skill
+description: short
+padding1: "one"
+padding2: "two"
+padding3: "three"
+padding4: "four"
+---
+
+# test-skill
+
+## Instructions
+Updated instructions.
+"#;
+    fs::write(&skill_path, grown).unwrap();
+    let expected = parse_skill(&skill_path).expect("Failed to parse grown skill");
+    assert_ne!(listed_range, expected.line_range);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        SkillManager::handle(&app).update(&mut app, |manager, _ctx| {
+            manager.add_skill_for_testing(listed);
+        });
+
+        let reference = SkillReference::Path(LocalOrRemotePath::Local(skill_path.clone()));
+        let mut skill = SkillManager::handle(&app)
+            .read(&app, |manager, ctx| {
+                manager
+                    .active_skill_by_reference_with_origin(
+                        &reference,
+                        &ai::skills::SkillPathOrigin::Local,
+                        ctx,
+                    )
+                    .cloned()
+            })
+            .expect("listed skill should still be in the catalog");
+        skill
+            .refresh_local_file_for_invocation()
+            .expect("invoke refresh should reparse the local file");
+        assert_eq!(skill.line_range, expected.line_range);
+        assert!(skill.content.contains("Updated instructions."));
+    });
+}
+
+#[test]
 fn disconnected_remote_session_does_not_fall_back_to_client_global_bundled_skill() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -210,6 +374,7 @@ fn remote_session_reads_remote_bundled_skill_catalog() {
                 )
                 .unwrap(),
             )),
+            content_hash: None,
             content: "remote rendered content".to_string(),
             line_range: None,
             provider: SkillProvider::Warp,

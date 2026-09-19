@@ -205,7 +205,7 @@ fn test_parse_truncates_fallback_description_with_hard_cut() {
 }
 
 #[test]
-fn test_parse_does_not_truncate_user_provided_description() {
+fn test_parse_truncates_user_provided_description() {
     let description = format!("{} {}", "a".repeat(450), "b".repeat(200));
     let content = format!(
         r#"---
@@ -221,7 +221,65 @@ description: "{}"
     let (_temp_dir, skill_file) = create_temp_skill_file(&content);
     let result = parse_skill(&skill_file).unwrap();
 
-    assert_eq!(result.description, description);
+    assert!(result.description.chars().count() <= MAX_SKILL_DESCRIPTION_CHARS);
+    assert_eq!(result.description, "a".repeat(450));
+}
+
+#[test]
+fn test_drop_listing_body_clears_content_and_keeps_hash() {
+    let content = r#"---
+name: some-skill
+description: Some description
+---
+
+# Body
+"#;
+    let (_temp_dir, skill_file) = create_temp_skill_file(content);
+    let mut skill = parse_skill(&skill_file).unwrap();
+    let hash = skill.listing_content_hash();
+    assert!(!skill.content.is_empty());
+
+    skill.drop_listing_body();
+
+    assert!(skill.content.is_empty());
+    assert_eq!(skill.listing_content_hash(), hash);
+    skill.refresh_local_file_for_invocation().unwrap();
+    assert_eq!(skill.content, content);
+}
+
+#[test]
+fn test_refresh_local_file_for_invocation_updates_line_range_after_front_matter_grows() {
+    let short = r#"---
+name: some-skill
+description: short
+---
+
+# Body
+"#;
+    let long = r#"---
+name: some-skill
+description: short
+padding1: "one"
+padding2: "two"
+padding3: "three"
+padding4: "four"
+---
+
+# Body
+"#;
+    let (_temp_dir, skill_file) = create_temp_skill_file(short);
+    let mut listed = parse_skill(&skill_file).unwrap();
+    listed.drop_listing_body();
+    let listed_range = listed.line_range.clone();
+
+    std::fs::write(&skill_file, long).unwrap();
+    listed.refresh_local_file_for_invocation().unwrap();
+
+    let expected = parse_skill(&skill_file).unwrap();
+    assert_ne!(listed_range, expected.line_range);
+    assert_eq!(listed.line_range, expected.line_range);
+    assert_eq!(listed.content, expected.content);
+    assert!(listed.content.contains("# Body"));
 }
 
 #[test]

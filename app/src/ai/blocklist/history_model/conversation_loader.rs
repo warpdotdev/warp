@@ -250,12 +250,19 @@ impl BlocklistAIHistoryModel {
             ))));
         }
 
-        // Check metadata to determine the source
+        // Check metadata to determine the source. Orchestration children are
+        // indexed at startup without a history-list metadata row; load them
+        // from the local DB when the pane materializes.
         let Some(metadata) = self
             .all_conversations_metadata
             .get(&conversation_id)
             .cloned()
         else {
+            if let Some(conversation) = self.load_conversation_from_db(&conversation_id) {
+                return box_future(futures::future::ready(Some(CloudConversationData::Oz(
+                    Box::new(conversation),
+                ))));
+            }
             log::warn!("No metadata found for conversation {conversation_id}");
             return box_future(futures::future::ready(None));
         };
@@ -326,11 +333,10 @@ impl BlocklistAIHistoryModel {
     }
 
     /// Loads a conversation from local DB and returns it.
-    /// This is a private helper method. Use `get_load_conversation_data_future` instead.
     ///
     /// Note: This does NOT insert the conversation into memory. Callers are responsible
     /// for inserting the loaded conversation if needed.
-    pub(super) fn load_conversation_from_db(
+    pub(crate) fn load_conversation_from_db(
         &self,
         conversation_id: &AIConversationId,
     ) -> Option<AIConversation> {
@@ -573,38 +579,13 @@ impl BlocklistAIHistoryModel {
                     .and_then(|data| self.resolved_parent_conversation_id_from_persisted_data(data))
                 {
                     self.index_child_conversation(conversation_id, parent_id);
-                    // Eagerly hydrate the child conversation into
-                    // `conversations_by_id` so the pill bar and orchestration
-                    // transcript name resolution can find it before the
-                    // parent's hidden child pane materializes lazily. This is
-                    // restricted to orchestration children only — non-child
-                    // historical conversations continue to load lazily via
-                    // `restore_conversations`. We do NOT emit
-                    // `RestoredConversations`, touch
-                    // `live_conversation_ids_for_terminal_view`, or update
-                    // `terminal_view_created_at` here; those still happen
-                    // later when the hidden pane is materialized via
-                    // `restore_conversations`. A subsequent `restore_conversations`
-                    // call replaces this entry idempotently.
-                    //
-                    // Startup rows carry no tasks, so the child's task
-                    // payload is loaded from the local DB; fully-hydrated
-                    // inputs convert directly.
-                    let child_conversation = if agent_conversation.tasks.is_empty() {
-                        self.load_conversation_from_db(&conversation_id)
-                    } else {
-                        convert_persisted_conversation_to_ai_conversation_with_metadata(
-                            agent_conversation.clone(),
-                        )
-                    };
-                    if let Some(child_conversation) = child_conversation {
-                        self.conversations_by_id
-                            .insert(conversation_id, child_conversation);
-                    } else {
-                        log::warn!(
-                            "Failed to eagerly hydrate orchestration child {conversation_id}; \
-                             pill bar / name resolution will fall back to lazy materialization",
-                        );
+                    // Index overlay metadata only. Decoding `agent_tasks` here
+                    // would retain every child's full payload at startup so the
+                    // pill bar can resolve names; those names already live on
+                    // `AgentConversationData`. Full bodies load when the hidden
+                    // child pane materializes.
+                    if let Some(data) = conversation_data.as_ref() {
+                        self.index_orchestration_child_identity(conversation_id, data);
                     }
                     return None;
                 }
