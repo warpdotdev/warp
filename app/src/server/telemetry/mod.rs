@@ -27,7 +27,6 @@ use warp_errors::report_error;
 use warpui::telemetry::Event;
 
 use crate::ChannelState;
-use crate::auth::UserUid;
 use crate::features::FeatureFlag;
 use crate::server::telemetry::context::AttachContext;
 use crate::server::telemetry_ext::TelemetryExt;
@@ -214,13 +213,13 @@ impl TelemetryApi {
     /// Sends a `TelemetryEvent` to the Rudderstack API.
     pub async fn send_telemetry_event(
         &self,
-        user_id: Option<UserUid>,
+        user_id: Option<String>,
         anonymous_id: String,
         event: impl warp_core::telemetry::TelemetryEvent,
         settings_snapshot: PrivacySettingsSnapshot,
     ) -> Result<()> {
         let event = warpui::telemetry::create_event(
-            user_id.map(|uid| uid.as_string()),
+            user_id,
             anonymous_id,
             event.name().into(),
             event.payload(),
