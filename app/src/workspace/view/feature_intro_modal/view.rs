@@ -22,9 +22,11 @@ use crate::view_components::action_button::{
 const MODAL_WIDTH: f32 = 340.;
 const HERO_HEIGHT: f32 = 110.;
 
-/// Identifies a single feature announced through the reusable feature-intro
-/// popover. The string form ([`FeatureIntroId::as_key`]) is the persisted
-/// "seen" key, so it must remain stable across releases.
+const COMPACT_SPACING: f32 = 8.;
+const BODY_PADDING: f32 = 16.;
+const FOOTER_PADDING: f32 = 12.;
+
+/// Identifies a feature announced through the reusable feature-intro popover.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FeatureIntroId {
     CustomModelRouter,
@@ -46,6 +48,7 @@ pub enum FeatureIntroCtaTarget {
         widget_id: fn() -> &'static str,
     },
 }
+
 /// A data-driven description of a single feature-intro popover. New feature
 /// announcements are added by appending an entry to [`FEATURE_INTROS`]; no new
 /// view, model, settings, or workspace wiring is required.
@@ -65,10 +68,11 @@ pub struct FeatureIntro {
     /// Destination opened when the user clicks the call-to-action. `None`
     /// simply dismisses the popover.
     pub cta_target: Option<FeatureIntroCtaTarget>,
+    pub eligible: fn(&AppContext) -> bool,
 }
 
 /// The registry of feature-intro popovers, in priority order. On startup the
-/// first entry whose id has not yet been seen is shown.
+/// first eligible entry whose id has not yet been seen is shown.
 pub const FEATURE_INTROS: &[FeatureIntro] = &[FeatureIntro {
     id: FeatureIntroId::CustomModelRouter,
     hero_image_path: "async/png/onboarding/custom_model_router_intro_banner.png",
@@ -81,6 +85,7 @@ pub const FEATURE_INTROS: &[FeatureIntro] = &[FeatureIntro {
         page: SettingsSection::WarpAgent,
         widget_id: custom_model_routers_widget_id,
     }),
+    eligible: |app| crate::settings::AISettings::as_ref(app).is_any_ai_enabled(app),
 }];
 
 /// Looks up a feature-intro descriptor by its id.
@@ -245,9 +250,15 @@ impl FeatureIntroModal {
     }
 
     fn render_description(intro: &FeatureIntro, appearance: &Appearance) -> Box<dyn Element> {
-        let description = Text::new(intro.description, appearance.ui_font_family(), 14.)
-            .with_color(modal_text_sub(appearance))
-            .finish();
+        let mut lines = Flex::column().with_spacing(4.);
+        for line in intro.description.split('\n') {
+            lines.add_child(
+                Text::new(line, appearance.ui_font_family(), 14.)
+                    .with_color(modal_text_sub(appearance))
+                    .finish(),
+            );
+        }
+        let description = lines.finish();
 
         if let Some(icon) = intro.description_icon {
             Flex::row()
@@ -273,21 +284,31 @@ impl FeatureIntroModal {
         }
     }
 
-    fn render_body(&self, intro: &FeatureIntro, appearance: &Appearance) -> Box<dyn Element> {
-        let mut header = Flex::column()
+    fn render_header(intro: &FeatureIntro, appearance: &Appearance) -> Box<dyn Element> {
+        let mut heading = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_spacing(8.);
+            .with_spacing(COMPACT_SPACING);
         if let Some(badge) = intro.badge {
-            header.add_child(Self::render_badge(badge, appearance));
+            heading.add_child(Self::render_badge(badge, appearance));
         }
-        header.add_child(Self::render_title(intro.title, appearance));
-        header.add_child(Self::render_description(intro, appearance));
+        heading.add_child(Self::render_title(intro.title, appearance));
 
-        let body = Container::new(header.finish())
+        Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_spacing(COMPACT_SPACING)
+            .with_child(heading.finish())
+            .with_child(Self::render_description(intro, appearance))
+            .finish()
+    }
+
+    fn render_body(&self, intro: &FeatureIntro, appearance: &Appearance) -> Box<dyn Element> {
+        let body = Container::new(Self::render_header(intro, appearance))
             .with_horizontal_padding(16.)
-            .with_vertical_padding(16.)
+            .with_padding_top(BODY_PADDING)
+            .with_padding_bottom(BODY_PADDING)
             .with_background(modal_background(appearance))
             .finish();
+
         let footer = Container::new(
             Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
@@ -297,7 +318,7 @@ impl FeatureIntroModal {
                 .finish(),
         )
         .with_horizontal_padding(16.)
-        .with_vertical_padding(12.)
+        .with_vertical_padding(FOOTER_PADDING)
         .with_background(modal_background(appearance))
         .with_border(Border::top(1.).with_border_fill(appearance.theme().outline()))
         .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(8.)))

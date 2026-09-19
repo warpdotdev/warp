@@ -1,13 +1,18 @@
+use std::sync::Arc;
+use std::time::Duration;
+
 use futures::FutureExt;
 use warp_core::features::FeatureFlag;
 use warpui::{App, SingletonEntity};
 
 use super::{
     AISettings, AuthManager, AuthManagerEvent, AuthStateProvider, CloudPreferencesSyncer,
-    FEATURE_INTROS, FeatureIntroId, FreeAiRemovalModalDecision, OneTimeModalModel,
-    free_ai_removal_modal_decision, hoa_onboarding,
+    FACTORIES_LAUNCH_SEEN_KEY, FEATURE_INTROS, FeatureIntroId, FreeAiRemovalModalDecision,
+    OneTimeModalModel, free_ai_removal_modal_decision, hoa_onboarding,
 };
+use crate::server::server_api::auth::MockAuthClient;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::CustomerType;
 
 #[test]
@@ -42,6 +47,87 @@ fn wait_until_auto_handoff_sleep_modal_closed_tracks_modal_state() {
 
                 // An existing waiter resolves once the modal closes.
                 assert!(resolving_waiter.now_or_never().is_some());
+            });
+        });
+    });
+}
+
+#[test]
+fn factories_intro_renders_only_for_the_winning_claimant() {
+    for claimed in [true, false] {
+        App::test((), move |mut app| async move {
+            let _flag = FeatureFlag::FactoriesLaunchModal.override_enabled(true);
+            initialize_app_for_terminal_view(&mut app);
+            let terminal = add_window_with_terminal(&mut app, None);
+
+            let mut auth_client = MockAuthClient::new();
+            auth_client
+                .expect_claim_factories_launch_intro()
+                .times(1)
+                .return_once(move || Ok(claimed));
+
+            terminal.update(&mut app, |_, ctx| {
+                UserWorkspaces::handle(ctx).update(ctx, |workspaces, _| {
+                    workspaces.set_factories_launch_modal_cta_url(Some(
+                        "https://example.com/factories".to_owned(),
+                    ));
+                });
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    settings
+                        .mark_feature_intro_seen(FeatureIntroId::CustomModelRouter.as_key(), ctx);
+                });
+                OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.auth_client = Arc::new(auth_client);
+                    assert!(model.check_and_trigger_factories_launch_modal(ctx));
+                    assert!(model.factories_launch_intro_claim_in_flight);
+                    assert!(!model.is_factories_launch_modal_open);
+                });
+            });
+
+            for _ in 0..20 {
+                if !OneTimeModalModel::handle(&app).read(&app, |model, _| {
+                    model.factories_launch_intro_claim_in_flight
+                }) {
+                    break;
+                }
+                warpui::r#async::Timer::after(Duration::from_millis(1)).await;
+            }
+
+            OneTimeModalModel::handle(&app).read(&app, |model, ctx| {
+                assert!(!model.factories_launch_intro_claim_in_flight);
+                assert_eq!(model.is_factories_launch_modal_open, claimed);
+                assert!(AISettings::as_ref(ctx).is_feature_intro_seen(FACTORIES_LAUNCH_SEEN_KEY));
+            });
+        });
+    }
+}
+
+#[test]
+fn factories_intro_requires_a_non_empty_cta_url() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::FactoriesLaunchModal.override_enabled(true);
+        initialize_app_for_terminal_view(&mut app);
+        app.update(|ctx| {
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, _| {
+                workspaces.set_factories_launch_modal_cta_url(Some(" \t\n".to_owned()));
+            });
+            OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                assert!(!model.check_and_trigger_factories_launch_modal(ctx));
+            });
+
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, _| {
+                workspaces.set_factories_launch_modal_cta_url(Some(
+                    "https://example.com/factories".to_owned(),
+                ));
+            });
+            let mut auth_client = MockAuthClient::new();
+            auth_client
+                .expect_claim_factories_launch_intro()
+                .times(1)
+                .return_once(|| Ok(false));
+            OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                model.auth_client = Arc::new(auth_client);
+                assert!(model.check_and_trigger_factories_launch_modal(ctx));
             });
         });
     });

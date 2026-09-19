@@ -1363,6 +1363,8 @@ enum Experiment {
   CODEBASE_CONTEXT_EXPERIMENT
   DISABLE_AGENT_MODE_EXPERIMENT
   ENV_VARS_EARLY_ACCESS_EXPERIMENT
+  FACTORIES_LAUNCH_MODAL_CONTROL
+  FACTORIES_LAUNCH_MODAL_EXPERIMENT
   FREE_TIER_TO_BUILD_CONVERSION_CONTROL
   FREE_TIER_TO_BUILD_CONVERSION_DRIP_COUPON
   FREE_TIER_TO_BUILD_CONVERSION_IMMEDIATE_COUPON
@@ -3168,6 +3170,7 @@ type RootMutation {
   addInviteLinkDomainRestriction(input: AddInviteLinkDomainRestrictionInput!, requestContext: RequestContext!): AddInviteLinkDomainRestrictionResult!
   addObjectGuests(input: AddObjectGuestsInput!, requestContext: RequestContext!): AddObjectGuestsResult!
   bulkCreateObjects(input: BulkCreateObjectsInput!, requestContext: RequestContext!): BulkCreateObjectsResult!
+  claimFactoriesLaunchIntro(requestContext: RequestContext!): ClaimFactoriesLaunchIntroResult!
   confirmFileArtifactUpload(input: ConfirmFileArtifactUploadInput!, requestContext: RequestContext!): ConfirmFileArtifactUploadResult!
 
   """
@@ -3570,6 +3573,13 @@ type SetUserIsOnboardedOutput implements Response {
 }
 
 union SetUserIsOnboardedResult = SetUserIsOnboardedOutput | UserFacingError
+
+type ClaimFactoriesLaunchIntroOutput implements Response {
+  claimed: Boolean!
+  responseContext: ResponseContext!
+}
+
+union ClaimFactoriesLaunchIntroResult = ClaimFactoriesLaunchIntroOutput | UserFacingError
 
 input ShareBlockInput {
   block: BlockInput!
@@ -4669,6 +4679,8 @@ type User {
   - `[]` means that the user is not part of any server-side enabled experiments.
   """
   experiments: [Experiment!]
+
+  factoriesLaunchModalCtaUrl: String
   githubInstallations: UserGithubInstallationsOutput!
 
   """
