@@ -787,7 +787,6 @@ type CodebaseContextConfigOutput implements Response {
 union CodebaseContextConfigResult = CodebaseContextConfigOutput | UserFacingError
 
 type CodebaseContextPolicy {
-  defaultEnabledValue: Boolean!
   embeddingGenerationBatchSize: Int!
   isUnlimitedIndices: Boolean!
   maxFilesPerRepo: Int!
