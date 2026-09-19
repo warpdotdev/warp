@@ -91,13 +91,21 @@ pub async fn dump_heap_profile_to_disk() -> anyhow::Result<std::path::PathBuf> {
 /// the bundled `pprof` binary to fetch and symbolicate the heap profile from
 /// the local HTTP server.  Either way, the resulting profile is attached to a
 /// Sentry event.
+///
+/// If no usable profile could be produced, nothing is reported to Sentry: an
+/// alert carrying an empty `heap-profile.pb` has no allocation samples to
+/// analyze, so it cannot be triaged and only masks the underlying capture
+/// failure.  The failure is logged instead.
 #[cfg(feature = "heap_usage_tracking")]
 pub async fn dump_jemalloc_heap_profile(memory_breakdown: serde_json::Value) {
     use sentry::protocol::{Attachment, AttachmentType};
 
     let result = dump_jemalloc_heap_profile_inner().await;
     match result {
-        Ok(profile_data) => {
+        // `dump_jemalloc_heap_profile_inner` already rejects empty dumps; the
+        // guard keeps that invariant local so a future change there can never
+        // silently start attaching a zero-byte profile again.
+        Ok(profile_data) if !profile_data.is_empty() => {
             let attachment = Attachment {
                 buffer: profile_data,
                 filename: "heap-profile.pb".to_string(),
@@ -130,6 +138,9 @@ pub async fn dump_jemalloc_heap_profile(memory_breakdown: serde_json::Value) {
             );
             log::info!("Sent heap profile to Sentry");
         }
+        Ok(_) => {
+            log::warn!("Not reporting memory spike to Sentry: heap profile was empty");
+        }
         Err(err) => {
             log::warn!("Failed to dump heap profile: {err:#}");
         }
@@ -148,7 +159,13 @@ async fn dump_jemalloc_heap_profile_inner() -> anyhow::Result<Vec<u8>> {
             // round-trip, or port dependency required (the latter matter for
             // the headless remote server daemon, which has no bundled helpers
             // next to it).
-            dump_jemalloc_pprof_bytes().await
+            let profile_data = dump_jemalloc_pprof_bytes().await?;
+
+            if profile_data.is_empty() {
+                anyhow::bail!("jemalloc produced an empty heap profile");
+            }
+
+            Ok(profile_data)
         } else {
             use anyhow::Context as _;
 
@@ -174,6 +191,17 @@ async fn dump_jemalloc_heap_profile_inner() -> anyhow::Result<Vec<u8>> {
             // Read the profile data from the temporary file.
             let profile_data =
                 std::fs::read(&profile_path).context("Failed to read heap profile from disk")?;
+
+            // `pprof` can exit successfully while writing nothing usable -- for
+            // example when the local profiling HTTP server is unreachable or
+            // answers with an error body.  Returning those zero bytes would
+            // attach an empty `heap-profile.pb` to the Sentry alert, which
+            // carries no allocation samples and cannot be triaged, so treat it
+            // as a failure and surface pprof's own output to explain why.
+            if profile_data.is_empty() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                anyhow::bail!("pprof wrote an empty heap profile: {stderr}");
+            }
 
             Ok(profile_data)
         }
