@@ -16,6 +16,7 @@ impl TaskExt for api::Task {
 }
 
 pub trait MessageExt {
+    fn type_name(&self) -> &'static str;
     fn todos_op(&self) -> Option<&api::message::update_todos::Operation>;
     fn tool_call(&self) -> Option<&api::message::ToolCall>;
     fn tool_call_mut(&mut self) -> Option<&mut api::message::ToolCall>;
@@ -42,6 +43,36 @@ pub trait SubagentExt {
 }
 
 impl MessageExt for api::Message {
+    fn type_name(&self) -> &'static str {
+        match &self.message {
+            Some(api::message::Message::AgentOutput(_)) => "agent_output",
+            Some(api::message::Message::AgentReasoning(_)) => "agent_reasoning",
+            Some(api::message::Message::ToolCall(_)) => "tool_call",
+            Some(api::message::Message::WebSearch(_)) => "web_search",
+            Some(api::message::Message::WebFetch(_)) => "web_fetch",
+            Some(api::message::Message::ModelUsed(_)) => "model_used",
+            Some(api::message::Message::UpdateTodos(_)) => "update_todos",
+            Some(api::message::Message::Summarization(_)) => "summarization",
+            Some(api::message::Message::UpdateReviewComments(_)) => "update_review_comments",
+            Some(api::message::Message::DebugOutput(_)) => "debug_output",
+            Some(api::message::Message::ArtifactEvent(_)) => "artifact_event",
+            Some(api::message::Message::MessagesReceivedFromAgents(_)) => {
+                "messages_received_from_agents"
+            }
+            Some(api::message::Message::EventsFromAgents(_)) => "events_from_agents",
+            Some(api::message::Message::UserQuery(_)) => "user_query",
+            Some(api::message::Message::SystemQuery(_)) => "system_query",
+            Some(api::message::Message::ToolCallResult(_)) => "tool_call_result",
+            Some(api::message::Message::CodeReview(_)) => "code_review",
+            Some(api::message::Message::ServerEvent(_)) => "server_event",
+            Some(api::message::Message::InvokeSkill(_)) => "invoke_skill",
+            Some(api::message::Message::PassiveSuggestionResult(_)) => "passive_suggestion_result",
+            Some(api::message::Message::OrchestrationConfigSnapshot(_)) => {
+                "orchestration_config_snapshot"
+            }
+            None => "missing",
+        }
+    }
     fn todos_op(&self) -> Option<&api::message::update_todos::Operation> {
         self.message.as_ref().and_then(|message| {
             if let api::message::Message::UpdateTodos(update) = message {
@@ -214,3 +245,7 @@ impl SubagentExt for api::message::tool_call::Subagent {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "helper_tests.rs"]
+mod tests;
