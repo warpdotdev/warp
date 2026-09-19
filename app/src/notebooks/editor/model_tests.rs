@@ -40,7 +40,7 @@ use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::editor::model::DEBOUNCED_RESIZE_PERIOD;
 use crate::notebooks::editor::notebook_command::NotebookCommand;
 use crate::notebooks::editor::view::{RichTextEditorConfig, RichTextEditorView};
-use crate::notebooks::file::MarkdownDisplayMode;
+use crate::notebooks::file::{MarkdownDisplayMode, SourceScrollTarget};
 use crate::notebooks::link::{NotebookLinks, SessionSource};
 use crate::search::files::model::FileSearchModel;
 use crate::server::ids::{ServerId, SyncId};
@@ -3141,5 +3141,138 @@ fn test_multiselect_delete() {
             assert_eq!(&clipboard.plain_text, "Second\nFirst");
             assert_eq!(clipboard.html.as_deref(), Some("<p>Second</p><p>First</p>"));
         });
+    });
+}
+
+#[test]
+fn test_source_line_resolves_through_markdown_source_map() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let model = model_from_markdown("First paragraph\n\nSecond paragraph", &mut app, true);
+        layout_model(&mut app, &model).await;
+
+        // Asserted on the text the offset lands on rather than a literal offset.
+        let second_paragraph = app.read(|ctx| {
+            let buffer = model.as_ref(ctx).content();
+            let buffer = buffer.as_ref(ctx);
+            let offset = buffer.markdown_offset_for_source_line(3)?;
+            let end = buffer
+                .max_charoffset()
+                .min(offset + "Second paragraph".chars().count());
+            Some(buffer.text_in_range(offset..end).into_string())
+        });
+        assert_eq!(second_paragraph.as_deref(), Some("Second paragraph"));
+
+        let out_of_bounds = app.read(|ctx| {
+            model
+                .as_ref(ctx)
+                .content()
+                .as_ref(ctx)
+                .markdown_offset_for_source_line(42)
+        });
+        assert_eq!(out_of_bounds, None);
+    });
+}
+
+/// A scroll requested before the pane has been measured is held rather than resolved against a
+/// zero-height viewport, which would clamp it to the top.
+///
+/// Only the holding half is asserted: the headless test app has neither fonts nor a presenter, so
+/// a viewport never becomes measured. Confirming the view actually moves requires a real display.
+#[test]
+fn test_scroll_to_source_target_is_held_until_measured() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let model = model_from_markdown(
+            "# Heading\n\nBody paragraph\n\nThe needle we want",
+            &mut app,
+            true,
+        );
+        layout_model(&mut app, &model).await;
+
+        let located = model.update(&mut app, |model, ctx| {
+            model.scroll_to_source_target(&SourceScrollTarget { source_line: 5 }, ctx)
+        });
+
+        assert!(located, "target should resolve to an offset");
+        assert!(
+            app.read(|ctx| model.as_ref(ctx).has_pending_scroll_for_test()),
+            "scroll should be held while the pane is unmeasured"
+        );
+    });
+}
+
+#[test]
+fn test_first_source_target_scroll_survives_initial_layout() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let source = "```text\nline one\nline two\nline three\nline four\nline five\nline six\nline seven\nline eight\nline nine\nline ten\nneedle\n```";
+        let model = model_from_markdown(source, &mut app, true);
+        layout_model(&mut app, &model).await;
+
+        let target = SourceScrollTarget { source_line: 12 };
+        let located = model.update(&mut app, |model, ctx| {
+            model.scroll_to_source_target(&target, ctx)
+        });
+        assert!(located);
+
+        let render_state = app.read(|ctx| model.as_ref(ctx).render_state().clone());
+        render_state.update(&mut app, |render_state, ctx| {
+            render_state.set_viewport_size(
+                SizeInfo {
+                    viewport_size: Vector2F::new(160., 60.),
+                    needs_layout: false,
+                },
+                ctx,
+            );
+        });
+        model.update(&mut app, |model, ctx| model.rebuild_layout(ctx));
+        layout_model(&mut app, &model).await;
+
+        let offset = app.read(|ctx| {
+            model
+                .as_ref(ctx)
+                .content()
+                .as_ref(ctx)
+                .markdown_offset_for_source_line(target.source_line)
+                .expect("target should remain locatable")
+        });
+        let (scroll_top, content_height, bounds) = app.read(|ctx| {
+            let render_state = render_state.as_ref(ctx);
+            (
+                render_state.viewport().scroll_top().as_f32(),
+                render_state.height().as_f32(),
+                render_state.character_vertical_bounds(offset),
+            )
+        });
+        assert!(
+            scroll_top > 0.,
+            "the first request should scroll after the pane receives its initial layout; content height: {content_height}, target bounds: {bounds:?}"
+        );
+    });
+}
+
+#[test]
+fn test_failed_source_target_cancels_pending_scroll() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let model = model_from_markdown("First paragraph\n\nSecond paragraph", &mut app, true);
+        layout_model(&mut app, &model).await;
+
+        let located = model.update(&mut app, |model, ctx| {
+            model.scroll_to_source_target(&SourceScrollTarget { source_line: 3 }, ctx)
+        });
+        assert!(located);
+        assert!(app.read(|ctx| model.as_ref(ctx).has_pending_scroll_for_test()));
+
+        let located = model.update(&mut app, |model, ctx| {
+            model.scroll_to_source_target(&SourceScrollTarget { source_line: 42 }, ctx)
+        });
+        assert!(!located);
+        assert!(!app.read(|ctx| model.as_ref(ctx).has_pending_scroll_for_test()));
     });
 }
