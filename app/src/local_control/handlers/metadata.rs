@@ -335,7 +335,6 @@ pub(crate) fn surface_unavailable_reason(
         SurfaceDestination::ProjectExplorer => None,
         SurfaceDestination::GlobalSearch
             if !cfg!(feature = "local_fs")
-                || !FeatureFlag::GlobalSearch.is_enabled()
                 || !*CodeSettings::as_ref(ctx).show_global_search.value() =>
         {
             Some("global search is unavailable or disabled")
