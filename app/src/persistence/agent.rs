@@ -239,10 +239,11 @@ pub(super) fn select_conversations_to_evict(
 /// summary on each record plus lazy per-conversation loading
 /// ([`read_agent_conversation_by_id`]) for full task data.
 ///
-/// Rows written before the `summary` column existed get their summary derived
-/// here from their own task snapshot (the one-time slow path); those
-/// derivations are returned as backfills so the writer thread can persist
-/// them and keep subsequent startups metadata-only.
+/// Rows whose stored summary is missing, unparseable, or written by a client
+/// that predates a derived field ([`AgentConversationSummary::version`]) get
+/// their summary derived here from their own task snapshot (the one-time slow
+/// path); those derivations are returned as backfills so the writer thread can
+/// persist them and keep subsequent startups metadata-only.
 pub(super) fn read_agent_conversation_metadata(
     conn: &mut SqliteConnection,
 ) -> Result<(Vec<AgentConversation>, Vec<ConversationSummaryBackfill>), diesel::result::Error> {
@@ -255,11 +256,11 @@ pub(super) fn read_agent_conversation_metadata(
     let mut conversations = Vec::with_capacity(records.len());
     let mut backfills = Vec::new();
     for mut record in records {
-        let has_valid_summary = record
-            .summary
-            .as_deref()
-            .is_some_and(|json| serde_json::from_str::<AgentConversationSummary>(json).is_ok());
-        if !has_valid_summary {
+        let has_current_summary = record.summary.as_deref().is_some_and(|json| {
+            serde_json::from_str::<AgentConversationSummary>(json)
+                .is_ok_and(|parsed| parsed.is_current_version())
+        });
+        if !has_current_summary {
             let task_records: Vec<AgentTaskRecord> = agent_tasks::table
                 .filter(schema::agent_tasks::dsl::conversation_id.eq(&record.conversation_id))
                 .select(AgentTaskRecord::as_select())
@@ -349,6 +350,50 @@ pub(super) fn backfill_conversation_summaries(
         }
         Ok(())
     })
+}
+
+/// Test seam: writes one conversation (row plus task blobs) through the normal
+/// upsert path, so consumers reading through their own connection can be
+/// tested against a realistic database.
+#[cfg(test)]
+pub(crate) fn upsert_agent_conversation_for_test<'a>(
+    conn: &mut SqliteConnection,
+    conversation_id: &str,
+    tasks: impl IntoIterator<Item = &'a api::Task>,
+) {
+    upsert_agent_conversation(
+        conn,
+        conversation_id,
+        tasks,
+        serde_json::from_str(r#"{"server_conversation_token":null}"#)
+            .expect("minimal conversation data should deserialize"),
+    )
+    .expect("test conversation upsert should succeed");
+}
+
+/// Reads just the write-time `summary` column for one conversation, without
+/// reading or protobuf-decoding any of its `agent_tasks` rows.
+///
+/// Returns `None` when the row is absent, carries no summary, or carries one
+/// that is unparseable or predates a derived field the current client expects.
+/// Callers must treat that as "unknown" and fall back to a full load rather
+/// than assuming a default.
+pub(crate) fn read_agent_conversation_summary_by_id(
+    conn: &mut SqliteConnection,
+    conversation_id_str: &str,
+) -> Result<Option<AgentConversationSummary>, diesel::result::Error> {
+    use schema::agent_conversations::dsl::*;
+
+    let stored: Option<Option<String>> = agent_conversations
+        .filter(conversation_id.eq(conversation_id_str.to_owned()))
+        .select(summary)
+        .first(conn)
+        .optional()?;
+
+    Ok(stored
+        .flatten()
+        .and_then(|json| serde_json::from_str::<AgentConversationSummary>(&json).ok())
+        .filter(AgentConversationSummary::is_current_version))
 }
 
 /// Read a single agent conversation by its ID, including decoded tasks.
