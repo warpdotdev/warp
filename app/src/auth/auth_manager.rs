@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 use futures::future::Either;
 use settings::Setting as _;
-#[cfg(target_family = "wasm")]
+#[cfg(any(target_family = "wasm", test))]
 use url::Url;
 use uuid::Uuid;
 use warp_core::channel::ChannelState;
@@ -85,6 +85,27 @@ pub enum AuthManagerEvent {
         #[cfg_attr(target_family = "wasm", allow(unused))]
         user_code: String,
     },
+}
+
+#[cfg(any(target_family = "wasm", test))]
+pub(crate) fn login_url_with_return_location(
+    login_options_url: &str,
+    current_url: &Url,
+) -> Option<Url> {
+    let mut login_url = Url::parse(login_options_url).ok()?;
+    let mut return_location = current_url.path().to_string();
+    if let Some(query) = current_url.query() {
+        return_location.push('?');
+        return_location.push_str(query);
+    }
+    if let Some(fragment) = current_url.fragment() {
+        return_location.push('#');
+        return_location.push_str(fragment);
+    }
+    login_url
+        .query_pairs_mut()
+        .append_pair("redirect_to", &return_location);
+    Some(login_url)
 }
 
 pub type LoginGatedFeature = &'static str;
@@ -763,15 +784,11 @@ impl AuthManager {
                         if cfg!(target_family = "wasm") {
                             #[cfg(target_family = "wasm")]
                             if let Some(current_url) = parse_current_url() {
-                                update_browser_url(
-                                    Url::parse(&format!(
-                                        "{}?redirect_to={}",
-                                        login_options_url,
-                                        current_url.path()
-                                    ))
-                                    .ok(),
-                                    true,
+                                let redirect_url = login_url_with_return_location(
+                                    &login_options_url,
+                                    &current_url,
                                 );
+                                update_browser_url(redirect_url, true);
                             } else {
                                 update_browser_url(Url::parse(&login_options_url).ok(), true);
                             }

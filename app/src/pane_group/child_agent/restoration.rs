@@ -6,6 +6,8 @@ use instant::Instant;
 use session_sharing_protocol::common::SessionId;
 use uuid::Uuid;
 use warp_errors::report_error;
+#[cfg(any(target_family = "wasm", test))]
+use warpui::ModelHandle;
 use warpui::r#async::Timer;
 use warpui::{SingletonEntity, ViewContext};
 
@@ -27,6 +29,10 @@ use crate::server::retry_strategies::is_transient_http_error;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::TaskListFilter;
 use crate::terminal::shared_session::IsSharedSessionCreator;
+#[cfg(any(target_family = "wasm", test))]
+use crate::terminal::shared_session::viewer::browser_initial_child_anchor_router::{
+    BrowserInitialChildAnchorRouter, BrowserInitialChildAnchorRouterEvent,
+};
 use crate::terminal::view::load_ai_conversation::{
     RestoreConversationEntryBehavior, RestoredAIConversation,
 };
@@ -255,6 +261,13 @@ impl PaneGroup {
                     // Permanent failure (401/403/404/...): retrying blindly
                     // can't succeed until something external changes, so
                     // give up instead of leaving this pending forever.
+                    #[cfg(target_family = "wasm")]
+                    self.feed_initial_child_anchor_router(
+                        parent_conversation_id,
+                        parent_task_id,
+                        &[],
+                        ctx,
+                    );
                     self.remove_pending_parent_child_seed(parent_task_id);
                 }
                 return;
@@ -308,6 +321,13 @@ impl PaneGroup {
         }
 
         if all_children_resolved {
+            #[cfg(target_family = "wasm")]
+            self.feed_initial_child_anchor_router(
+                parent_conversation_id,
+                parent_task_id,
+                &children,
+                ctx,
+            );
             self.remove_pending_parent_child_seed(parent_task_id);
         }
         // Otherwise the parent stays pending so a later re-list can retry.
@@ -329,6 +349,111 @@ impl PaneGroup {
             );
         }
         ctx.notify();
+    }
+
+    #[cfg(target_family = "wasm")]
+    fn feed_initial_child_anchor_router(
+        &mut self,
+        parent_conversation_id: AIConversationId,
+        parent_task_id: AmbientAgentTaskId,
+        children: &[AmbientAgentTask],
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(parent_pane_id) = self.pane_id_for_owned_conversation(parent_conversation_id, ctx)
+        else {
+            return;
+        };
+        let Some(terminal_view) = self.terminal_view_from_pane_id(parent_pane_id, ctx) else {
+            return;
+        };
+        let terminal_surface_id = terminal_view.id();
+        let router = if let Some(entry) = self
+            .initial_child_anchor_routers
+            .get(&terminal_surface_id)
+            .filter(|entry| entry.parent_task_id == parent_task_id)
+        {
+            entry.router.clone()
+        } else {
+            let router = ctx.add_model(|_| {
+                BrowserInitialChildAnchorRouter::new(parent_task_id, terminal_view.downgrade())
+            });
+            self.install_initial_child_anchor_router(
+                terminal_surface_id,
+                parent_conversation_id,
+                parent_task_id,
+                router.clone(),
+                ctx,
+            );
+            router
+        };
+        let seeded_child_ids = children
+            .iter()
+            .filter(|task| task.task_id != parent_task_id)
+            .map(|task| task.task_id)
+            .collect::<Vec<_>>();
+        let registered_children = seeded_child_ids
+            .iter()
+            .filter_map(|task_id| {
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation_id_for_agent_id(&task_id.to_string())
+                    .map(|conversation_id| (*task_id, conversation_id))
+            })
+            .collect::<Vec<_>>();
+        router.update(ctx, |router, ctx| {
+            for (task_id, conversation_id) in registered_children {
+                router.child_registered(task_id, conversation_id, ctx);
+            }
+            router.viewer_mode_seeded(parent_task_id, &seeded_child_ids, ctx);
+        });
+    }
+
+    #[cfg(any(target_family = "wasm", test))]
+    pub(in crate::pane_group) fn install_initial_child_anchor_router(
+        &mut self,
+        terminal_surface_id: warpui::EntityId,
+        parent_conversation_id: AIConversationId,
+        parent_task_id: AmbientAgentTaskId,
+        router: ModelHandle<BrowserInitialChildAnchorRouter>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        ctx.subscribe_to_model(&router, move |pane_group, router, event, ctx| {
+            let is_current_router = pane_group
+                .initial_child_anchor_routers
+                .get(&terminal_surface_id)
+                .is_some_and(|entry| {
+                    entry.parent_task_id == parent_task_id && entry.router.id() == router.id()
+                });
+            if !is_current_router {
+                return;
+            }
+            let BrowserInitialChildAnchorRouterEvent::VerifiedChildFetched { task } = event;
+            let name = task.display_name().to_string();
+            let fallback_title = task.title.trim().to_string();
+            let harness = agent_task_harness(task);
+            let conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.ensure_remote_child_conversation(
+                        terminal_surface_id,
+                        parent_conversation_id,
+                        task.task_id.to_string(),
+                        task.task_id,
+                        name,
+                        fallback_title,
+                        harness,
+                        ctx,
+                    )
+                });
+            router.update(ctx, |router, ctx| {
+                router.child_registered(task.task_id, conversation_id, ctx);
+            });
+        });
+        self.initial_child_anchor_routers.insert(
+            terminal_surface_id,
+            crate::pane_group::InitialChildAnchorRouter {
+                parent_task_id,
+                router,
+            },
+        );
     }
 
     /// Re-drives every pending parent seed using the shared `TasksUpdated`

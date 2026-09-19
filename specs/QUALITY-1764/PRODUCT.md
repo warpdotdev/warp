@@ -1,30 +1,27 @@
 # Child-run deep links in the web session viewer
 
 ## Summary
-The web session viewer uses the top-level orchestrator as the stable route and encodes the selected child as `#child=<run-id>`. Existing direct child links canonicalize to that root when the viewer can resolve the complete ancestor chain.
+Phase 0 now keeps the web session viewer’s entry URL when a child opens. The remaining work ships as one deliverable: use the top-level orchestrator as the stable route, encode the selected child as `#child=<run-id>`, and make direct child links restore that anchored selection.
 
 ## Problem
-Today a child-pill click can replace the root URL with the child’s `/conversation/<id>` or `/session/<id>` URL. Refreshing or copying that URL then opens the child without its orchestration context.
+Phase 0 preserves the root URL but loses the selected child on refresh or copy. Canonicalizing a child URL without also restoring its anchor would regress direct links: the viewer would open the root instead of the requested child.
 
 ## Figma
 Figma: none provided. This work does not redesign the existing pill bar.
 
-## Delivery phases
+## Delivery
 
-### Phase 0 — Preserve the entry URL
-Phase 0 ships in this PR:
+### Shipped Phase 0
+[PR #15317](https://github.com/warpdotdev/warp/pull/15317) shipped the following behavior:
 
 1. Non-forced pane focus and pane-link updates keep the current `/conversation/<id>` or `/session/<id>` URL.
 2. Child-pill navigation no longer replaces the orchestrator URL with the child URL.
 3. Refresh and copy reopen the orchestrator without preserving the selected child.
 
-Phase 0 is temporary. Its blanket URL guard suppresses the fragment write required by the final design. Phase 2 must remove or invert that guard before adding anchor navigation, or pill clicks will silently fail to add `#child=<run-id>`.
+Its blanket URL guard is temporary. The remaining implementation must remove or invert that guard before any canonical redirect or anchor write. Otherwise the guard will silently discard `#child=<run-id>`.
 
-### Phase 1 — Canonicalize direct child links
-The signed-in viewer resolves a direct child’s top-level root by walking `parent_run_id` through the existing run endpoint. It replaces the child URL with the root URL plus the child anchor. `?view=standalone` skips this canonicalization.
-
-### Phase 2 — Restore anchored selections
-The root viewer restores `#child=<run-id>`, writes anchors for pill navigation, and applies browser Back and Forward.
+### Remaining implementation — canonical child deep links
+Canonicalization, anchor restoration, and selection history ship together. The viewer must be able to parse and restore the anchor before direct child links start redirecting to it. `?view=standalone` remains the escape hatch.
 
 ## Behavior
 
@@ -63,6 +60,7 @@ The root viewer restores `#child=<run-id>`, writes anchors for pill navigation, 
 24. Focus changes, session events, transcript loading, initial anchor restoration, and other non-navigation updates do not write history.
 
 ## Decisions
+- Ship canonicalization and anchor restoration as one deliverable. Neither behavior ships alone.
 - Canonicalize to the top-level root, not the immediate parent.
 - Use `#child=<run-id>` because the run ID survives session-to-conversation route changes.
 - Ship `?view=standalone` in v1.
@@ -74,4 +72,5 @@ The root viewer restores `#child=<run-id>`, writes anchors for pill navigation, 
 - Native desktop URL behavior.
 - Nearest-ancestor fallback.
 - Anonymous access to run topology.
+- A dedicated copy-link action that emits a canonical root link independently of the address bar. Standard address-bar copy continues to include the selected child anchor.
 - New orchestration, messaging, execution, or pane-management controls.

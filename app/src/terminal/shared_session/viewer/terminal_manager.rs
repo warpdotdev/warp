@@ -19,6 +19,8 @@ use warpui::{
     WeakViewHandle, WindowId,
 };
 
+#[cfg(target_family = "wasm")]
+use super::browser_initial_child_anchor_router::BrowserInitialChildAnchorRouter;
 use super::event_loop::SharedSessionInitialLoadMode;
 use super::network::{
     FailedToJoinReason, Network, NetworkEvent, agent_prompt_failure_reason_string,
@@ -83,6 +85,11 @@ struct NetworkResources {
     prompt_type: ModelHandle<PromptType>,
     channel_event_proxy: ChannelEventListener,
 }
+struct OrchestrationViewerResources {
+    model: ModelHandle<OrchestrationViewerModel>,
+    #[cfg(target_family = "wasm")]
+    _initial_child_anchor_router: ModelHandle<BrowserInitialChildAnchorRouter>,
+}
 
 pub struct TerminalManager {
     model: Arc<FairMutex<TerminalModel>>,
@@ -106,7 +113,7 @@ pub struct TerminalManager {
     /// ambient session join. `Arc<FairMutex<Option<...>>>` matches
     /// `current_network` so the network-event closure can write into it
     /// without `&mut self`.
-    orchestration_viewer_model: Arc<FairMutex<Option<ModelHandle<OrchestrationViewerModel>>>>,
+    orchestration_viewer_model: Arc<FairMutex<Option<OrchestrationViewerResources>>>,
     /// `true` for the root viewer pane of an orchestrator, `false` for
     /// per-child viewer panes. Skipping polling on children avoids
     /// duplicated REST traffic and grandchild double-registration via the
@@ -822,7 +829,7 @@ impl TerminalManager {
         current_network: Arc<FairMutex<Option<ModelHandle<Network>>>>,
         prompt_type: ModelHandle<PromptType>,
         viewer_remote_update_guard: RemoteUpdateGuard,
-        orchestration_viewer_model: Arc<FairMutex<Option<ModelHandle<OrchestrationViewerModel>>>>,
+        orchestration_viewer_model: Arc<FairMutex<Option<OrchestrationViewerResources>>>,
         enable_orchestration_polling: bool,
         orchestration_child_conversation_id: Option<AIConversationId>,
         ctx: &mut AppContext,
@@ -924,7 +931,28 @@ impl TerminalManager {
                                 model_ctx,
                             )
                         });
-                        *orchestration_viewer_model_slot.lock() = Some(model);
+                        #[cfg(target_family = "wasm")]
+                        let initial_child_anchor_router = ctx.add_model(|model_ctx| {
+                            BrowserInitialChildAnchorRouter::new_for_viewer(
+                                task_id,
+                                weak_view_handle.clone(),
+                                model.clone(),
+                                model_ctx,
+                            )
+                        });
+                        #[cfg(target_family = "wasm")]
+                        // A previously seeded streamer replays hydration synchronously during
+                        // registration, so re-register after the router subscribes. The
+                        // registration itself is idempotent.
+                        model.update(ctx, |model, ctx| {
+                            model.register_viewer_mode_consumer_if_possible(ctx);
+                        });
+                        *orchestration_viewer_model_slot.lock() =
+                            Some(OrchestrationViewerResources {
+                                model,
+                                #[cfg(target_family = "wasm")]
+                                _initial_child_anchor_router: initial_child_anchor_router,
+                            });
                     }
 
                 let session_id = network.as_ref(ctx).session_id();
@@ -1795,12 +1823,13 @@ impl TerminalManager {
     /// the streamer can refcount-tear-down the ancestor SSE on the last
     /// pane close. The unregister API is idempotent.
     fn stop_orchestration_polling(
-        orchestration_viewer_model: &Arc<FairMutex<Option<ModelHandle<OrchestrationViewerModel>>>>,
+        orchestration_viewer_model: &Arc<FairMutex<Option<OrchestrationViewerResources>>>,
         ctx: &mut AppContext,
     ) {
-        let Some(handle) = orchestration_viewer_model.lock().take() else {
+        let Some(resources) = orchestration_viewer_model.lock().take() else {
             return;
         };
+        let handle = resources.model;
         let parent_task_id = handle.as_ref(ctx).parent_task_id();
         let consumer_id = handle.id();
         log::debug!(
@@ -1834,7 +1863,7 @@ impl TerminalManager {
         model: Arc<FairMutex<TerminalModel>>,
         current_network: &Arc<FairMutex<Option<ModelHandle<Network>>>>,
         ended_network: &ModelHandle<Network>,
-        orchestration_viewer_model: &Arc<FairMutex<Option<ModelHandle<OrchestrationViewerModel>>>>,
+        orchestration_viewer_model: &Arc<FairMutex<Option<OrchestrationViewerResources>>>,
         is_ambient_agent: bool,
         ctx: &mut AppContext,
     ) -> bool {

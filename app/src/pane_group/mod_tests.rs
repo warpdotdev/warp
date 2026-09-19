@@ -7,6 +7,7 @@ use ai::project_context::model::ProjectContextModel;
 use chrono::Utc;
 use instant::Instant;
 use mockito::Matcher;
+use parking_lot::Mutex;
 use pathfinder_geometry::rect::RectF;
 use persistence::model::{
     AgentConversation, AgentConversationData, AgentConversationRecord, ConversationUsageMetadata,
@@ -101,6 +102,7 @@ use crate::terminal::local_tty::TerminalManager;
 use crate::terminal::local_tty::spawner::PtySpawner;
 use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
 use crate::terminal::resizable_data::ResizableData;
+use crate::terminal::shared_session::viewer::browser_initial_child_anchor_router::BrowserInitialChildAnchorRouter;
 use crate::terminal::shared_session::{
     IsSharedSessionCreator, SharedSessionActionSource, SharedSessionScrollbackType,
     SharedSessionSource, SharedSessionStatus,
@@ -109,6 +111,7 @@ use crate::terminal::view::Event as TerminalViewEvent;
 use crate::test_util::assert_eventually;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::undo_close::UndoCloseStack;
+use crate::uri::viewer_location::ChildAnchor;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
 use crate::workflows::local_workflows::LocalWorkflows;
 use crate::workspace::sync_inputs::SyncedInputState;
@@ -923,6 +926,58 @@ fn test_pane_focus_on_close() {
             panes.close_pane(third_pane_id, ctx);
             assert_eq!(second_pane_id, panes.focused_pane_id(ctx));
         })
+    });
+}
+
+#[test]
+fn route_sync_preserves_viewer_url_for_linkless_non_child_pane() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let focused_pane_id = panes.focused_pane_id(ctx);
+            let current_url = Url::parse(&format!(
+                "{}/conversation/root",
+                crate::ChannelState::server_root_url()
+            ))
+            .unwrap();
+            let requested_url = panes.browser_route_sync_url(focused_pane_id, None);
+            let navigation = crate::uri::browser_url_resolution::resolve_browser_url(
+                Some(current_url.clone()),
+                requested_url,
+                crate::uri::browser_url_resolution::BrowserNavigationOrigin::RouteSync,
+            );
+
+            assert_eq!(navigation.url, Some(current_url));
+            assert_eq!(
+                navigation.write,
+                crate::uri::browser_url_resolution::BrowserHistoryWrite::None
+            );
+        });
+    });
+}
+
+#[test]
+fn route_sync_suppresses_child_pane_shareable_link() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, _| {
+            let child_pane_id = PaneId::dummy_pane_id();
+            panes
+                .child_agent_panes
+                .insert(AIConversationId::new(), child_pane_id);
+            let child_url =
+                Url::parse("https://app.warp.dev/session/33333333-3333-3333-3333-333333333333")
+                    .unwrap();
+
+            assert_eq!(
+                panes.browser_route_sync_url(child_pane_id, Some(child_url)),
+                None
+            );
+        });
     });
 }
 
@@ -2701,6 +2756,113 @@ fn test_replace_pane_restores_hidden_child_when_replacement_is_already_fullscree
             assert_eq!(
                 panes.pane_id_for_owned_conversation(child_conversation_id, ctx),
                 Some(child_pane_id)
+            );
+        });
+    });
+}
+
+#[test]
+fn test_recreated_parent_ignores_stale_initial_child_anchor_fetch() {
+    let _undo_closed_panes = FeatureFlag::UndoClosedPanes.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+        let parent_task_id = new_ambient_agent_task_id();
+        let child_task_id = new_ambient_agent_task_id();
+        let (old_router, new_router, old_restorations, new_restorations, old_parent, new_parent) =
+            pane_group.update(&mut app, |panes, ctx| {
+                let old_pane_id = get_newly_created_pane_id(panes, &[]);
+                let old_terminal_view = panes
+                    .terminal_view_from_pane_id(old_pane_id, ctx)
+                    .expect("old parent pane should have a terminal view");
+                let old_parent = start_parent_conversation(panes, old_pane_id, ctx);
+                panes.add_terminal_pane(Direction::Right, None, ctx);
+                let new_pane_id = get_newly_created_pane_id(panes, &[old_pane_id]);
+                let new_terminal_view = panes
+                    .terminal_view_from_pane_id(new_pane_id, ctx)
+                    .expect("new parent pane should have a terminal view");
+                let new_parent = start_parent_conversation(panes, new_pane_id, ctx);
+
+                let old_restorations = Arc::new(Mutex::new(Vec::new()));
+                let old_events = old_restorations.clone();
+                ctx.subscribe_to_view(&old_terminal_view, move |_, _, event, _| {
+                    if let TerminalViewEvent::RestoreInitialChildAnchor { conversation_id } = event
+                    {
+                        old_events.lock().push(*conversation_id);
+                    }
+                });
+                let new_restorations = Arc::new(Mutex::new(Vec::new()));
+                let new_events = new_restorations.clone();
+                ctx.subscribe_to_view(&new_terminal_view, move |_, _, event, _| {
+                    if let TerminalViewEvent::RestoreInitialChildAnchor { conversation_id } = event
+                    {
+                        new_events.lock().push(*conversation_id);
+                    }
+                });
+
+                let old_router = ctx.add_model(|_| {
+                    BrowserInitialChildAnchorRouter::new_for_test(
+                        parent_task_id,
+                        old_terminal_view.downgrade(),
+                        ChildAnchor::Selected(child_task_id),
+                    )
+                });
+                panes.install_initial_child_anchor_router(
+                    old_terminal_view.id(),
+                    old_parent,
+                    parent_task_id,
+                    old_router.clone(),
+                    ctx,
+                );
+
+                panes.close_pane(old_pane_id, ctx);
+
+                let new_router = ctx.add_model(|_| {
+                    BrowserInitialChildAnchorRouter::new_for_test(
+                        parent_task_id,
+                        new_terminal_view.downgrade(),
+                        ChildAnchor::Selected(child_task_id),
+                    )
+                });
+                panes.install_initial_child_anchor_router(
+                    new_terminal_view.id(),
+                    new_parent,
+                    parent_task_id,
+                    new_router.clone(),
+                    ctx,
+                );
+
+                (
+                    old_router,
+                    new_router,
+                    old_restorations,
+                    new_restorations,
+                    old_parent,
+                    new_parent,
+                )
+            });
+
+        let mut child_task = ambient_agent_task_for_current_user(child_task_id);
+        child_task.parent_run_id = Some(parent_task_id.to_string());
+        old_router.update(&mut app, |router, ctx| {
+            router.complete_initial_anchor_fetch_for_test(child_task.clone(), ctx);
+        });
+        new_router.update(&mut app, |router, ctx| {
+            router.complete_initial_anchor_fetch_for_test(child_task, ctx);
+        });
+
+        assert!(old_restorations.lock().is_empty());
+        let new_restorations = new_restorations.lock();
+        let [Some(child_conversation_id)] = new_restorations.as_slice() else {
+            panic!("only the recreated parent should restore the verified child");
+        };
+        pane_group.read(&app, |_, ctx| {
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            assert!(history.child_conversation_ids_of(&old_parent).is_empty());
+            assert_eq!(
+                history.child_conversation_ids_of(&new_parent),
+                [*child_conversation_id]
             );
         });
     });

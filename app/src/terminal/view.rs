@@ -2066,6 +2066,9 @@ pub enum Event {
         conversation_id: AIConversationId,
         task: Box<AmbientAgentTask>,
     },
+    RestoreInitialChildAnchor {
+        conversation_id: Option<AIConversationId>,
+    },
     /// A unified-stack child viewer could not join its dedicated live
     /// execution session. The pane group keeps the child passive and
     /// re-drives it from current task metadata.
