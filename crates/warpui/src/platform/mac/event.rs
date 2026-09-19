@@ -67,11 +67,16 @@ pub unsafe fn from_native(
                 // For example, Shift+1 on a US keyboard gives '!' as the key, but
                 // key_without_modifiers will be '1'.
                 let key_without_modifiers = Keycode(native_event.keyCode()).try_to_key_name(false);
+                let base_layout_key = match scancode_to_physicalkey(native_event.keyCode() as u32) {
+                    PhysicalKey::Code(code) => code.base_layout_key(),
+                    PhysicalKey::Unidentified(_) => None,
+                };
 
                 let details = KeyEventDetails {
                     left_alt: (native_modifiers.bits() & LEFT_ALT_MASK) != 0,
                     right_alt: (native_modifiers.bits() & RIGHT_ALT_MASK) != 0,
                     key_without_modifiers,
+                    base_layout_key,
                 };
                 let unmodified_chars = native_event.charactersIgnoringModifiers()?;
                 let unmodified_chars = CStr::from_ptr(unmodified_chars.UTF8String())
