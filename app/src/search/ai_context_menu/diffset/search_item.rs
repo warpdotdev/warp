@@ -24,6 +24,7 @@ impl DiffSetSearchItem {
             DiffMode::Head => "Uncommitted changes".to_string(),
             DiffMode::MainBranch => "Changes vs. main branch".to_string(),
             DiffMode::OtherBranch(branch) => format!("Changes vs. {branch}"),
+            DiffMode::PullRequestLayer { pr_number, .. } => format!("Changes in PR #{pr_number}"),
         }
     }
 
@@ -32,6 +33,9 @@ impl DiffSetSearchItem {
             DiffMode::Head => "All uncommitted changes in the working directory".to_string(),
             DiffMode::MainBranch => "All changes compared to the main branch".to_string(),
             DiffMode::OtherBranch(branch) => format!("All changes compared to {branch}"),
+            DiffMode::PullRequestLayer { pr_number, .. } => {
+                format!("All changes in pull request #{pr_number}")
+            }
         }
     }
 }
