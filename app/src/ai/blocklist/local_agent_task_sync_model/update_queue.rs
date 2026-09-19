@@ -212,6 +212,7 @@ impl LocalTaskUpdate {
                 &newer.server_conversation_token,
             )
             || !status_messages_compatible(&self.status_message, &newer.status_message)
+            || !options_compatible(&self.session_debug_until, &newer.session_debug_until)
         {
             return Err(newer);
         }
@@ -221,6 +222,7 @@ impl LocalTaskUpdate {
             session_id,
             server_conversation_token,
             status_message,
+            session_debug_until,
         } = newer;
         if task_state.is_some() {
             self.task_state = task_state;
@@ -233,6 +235,9 @@ impl LocalTaskUpdate {
         }
         if status_message.is_some() {
             self.status_message = status_message;
+        }
+        if session_debug_until.is_some() {
+            self.session_debug_until = session_debug_until;
         }
         Ok(())
     }
