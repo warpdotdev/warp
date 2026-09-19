@@ -238,7 +238,7 @@ jobs:
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8b02fc05b1941433b53af7bf4f93628b69559721 # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -364,7 +364,7 @@ jobs:
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8b02fc05b1941433b53af7bf4f93628b69559721 # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -612,7 +612,7 @@ jobs:
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8b02fc05b1941433b53af7bf4f93628b69559721 # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -771,7 +771,7 @@ jobs:
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8b02fc05b1941433b53af7bf4f93628b69559721 # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -1164,7 +1164,7 @@ jobs:
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8b02fc05b1941433b53af7bf4f93628b69559721 # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -1418,7 +1418,7 @@ jobs:
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8b02fc05b1941433b53af7bf4f93628b69559721 # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -1692,7 +1692,7 @@ jobs:
       
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8b02fc05b1941433b53af7bf4f93628b69559721 # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -1974,7 +1974,7 @@ jobs:
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8b02fc05b1941433b53af7bf4f93628b69559721 # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -2521,7 +2521,7 @@ jobs:
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8b02fc05b1941433b53af7bf4f93628b69559721 # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -2714,7 +2714,7 @@ jobs:
       # release).
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8b02fc05b1941433b53af7bf4f93628b69559721 # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
