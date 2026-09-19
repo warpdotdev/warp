@@ -920,6 +920,20 @@ fn handle_terminal_view_event(
                 ctx.emit(pane_group::Event::ExecuteCommand(event.clone()));
             }
             Event::Exited => {
+                // Windows kills every console process as it tears the desktop
+                // session down, so on an OS shutdown / restart / logout the
+                // shells all exit at once and look exactly like the user
+                // finishing with each pane. Closing them would close their tabs,
+                // and each tab close rewrites the session snapshot without that
+                // tab - leaving nothing to restore afterwards
+                // (warpdotdev/warp#15269). Leave the panes as they are: the
+                // process is about to be killed anyway, and the snapshot on disk
+                // keeps describing the tabs that were open.
+                if crate::system::shutdown::is_session_ending() {
+                    log::info!("Shell exited during OS session teardown; keeping the pane open");
+                    return;
+                }
+
                 // If the shell process exited before it successfully bootstrapped,
                 // keep the pane open.  There might be useful information visible
                 // in the output, and if this was the first shell spawned when the
