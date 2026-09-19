@@ -1,4 +1,5 @@
 //! General-purpose administrative commands in the Warp CLI.
+use std::io::Write as _;
 
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -34,7 +35,10 @@ pub fn login(ctx: &mut AppContext) -> Result<()> {
                     let auth_state = AuthStateProvider::as_ref(ctx).get();
                     match (auth_state.username_for_display(), auth_state.user_email()) {
                         (Some(username), Some(email)) if username != email => {
-                            println!("You are already logged in as {username} ({email}).")
+                            let _ = writeln!(
+                                std::io::stdout(),
+                                "You are already logged in as {username} ({email})."
+                            );
                         }
                         (Some(name), _) | (None, Some(name)) => {
                             println!("You are already logged in as {name}.")
