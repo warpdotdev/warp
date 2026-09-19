@@ -201,7 +201,24 @@ fn test_enforce_lifecycle_queue_cap_keeps_critical_events_even_when_over_limit()
 }
 
 #[test]
-fn test_increment_attempt_and_partition_by_retry_limit() {
+fn test_requeue_events_after_failed_send_increments_attempts_when_under_limit() {
+    let attempted = vec![
+        lifecycle_pending_event("first", "child-a", api::LifecycleEventType::Started, 0),
+        lifecycle_pending_event("second", "child-b", api::LifecycleEventType::Idle, 1),
+    ];
+
+    let (requeued, any_exhausted) = requeue_events_after_failed_send(attempted, 3);
+
+    assert!(!any_exhausted);
+    assert_eq!(requeued.len(), 2);
+    assert_eq!(requeued[0].event_id, "first");
+    assert_eq!(requeued[0].attempt_count, 1);
+    assert_eq!(requeued[1].event_id, "second");
+    assert_eq!(requeued[1].attempt_count, 2);
+}
+
+#[test]
+fn test_requeue_events_after_failed_send_parks_exhausted_events_with_fresh_budget() {
     let attempted = vec![
         lifecycle_pending_event("retryable", "child-a", api::LifecycleEventType::Started, 0),
         lifecycle_pending_event(
@@ -218,17 +235,18 @@ fn test_increment_attempt_and_partition_by_retry_limit() {
         ),
     ];
 
-    let (retryable, exhausted) = increment_attempt_and_partition_by_retry_limit(attempted, 3);
+    let (requeued, any_exhausted) = requeue_events_after_failed_send(attempted, 3);
 
-    assert_eq!(retryable.len(), 1);
-    assert_eq!(retryable[0].event_id, "retryable");
-    assert_eq!(retryable[0].attempt_count, 1);
-
-    assert_eq!(exhausted.len(), 2);
-    assert_eq!(exhausted[0].event_id, "exhausted-at-limit");
-    assert_eq!(exhausted[0].attempt_count, 3);
-    assert_eq!(exhausted[1].event_id, "already-exhausted");
-    assert_eq!(exhausted[1].attempt_count, 4);
+    // Nothing is dropped: exhausted events are parked in place with a fresh
+    // retry budget so a later drain (after user intervention) retries them.
+    assert!(any_exhausted);
+    assert_eq!(requeued.len(), 3);
+    assert_eq!(requeued[0].event_id, "retryable");
+    assert_eq!(requeued[0].attempt_count, 1);
+    assert_eq!(requeued[1].event_id, "exhausted-at-limit");
+    assert_eq!(requeued[1].attempt_count, 0);
+    assert_eq!(requeued[2].event_id, "already-exhausted");
+    assert_eq!(requeued[2].attempt_count, 0);
 }
 
 #[test]
