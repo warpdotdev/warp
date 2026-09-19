@@ -3678,10 +3678,8 @@ impl ansi::Handler for TerminalModel {
     }
 
     fn pluggable_notification(&mut self, title: Option<String>, body: String) {
-        if FeatureFlag::PluggableNotifications.is_enabled() {
-            self.event_proxy
-                .send_app_event(Event::PluggableNotification { title, body });
-        }
+        self.event_proxy
+            .send_app_event(Event::PluggableNotification { title, body });
     }
 
     fn set_keyboard_enhancement_flags(
