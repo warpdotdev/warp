@@ -8,7 +8,10 @@ use inquire::{Confirm, Select};
 use serde::Serialize;
 use warp_cli::GlobalOptions;
 use warp_cli::agent::OutputFormat;
-use warp_cli::environment::{EnvironmentCommand, ImageCommand};
+use warp_cli::environment::{
+    EnvironmentCommand, ImageCommand, apply_setup_command_operations,
+    format_setup_commands_listing, parse_indexed_setup_commands,
+};
 use warp_cli::scope::ObjectScope;
 use warp_graphql::queries::get_oauth_connect_tx_status::OauthConnectTxStatus;
 use warp_graphql::queries::list_warp_dev_images::{
@@ -105,6 +108,9 @@ pub fn run(
             setup_command,
             remove_repo,
             remove_setup_command,
+            insert_setup_command,
+            edit_setup_command,
+            clear_setup_commands,
             force,
         } => {
             let repos = parse_repos(repo)?;
@@ -121,6 +127,9 @@ pub fn run(
                     setup_command,
                     remove_repos,
                     remove_setup_command,
+                    insert_setup_command,
+                    edit_setup_command,
+                    clear_setup_commands,
                     force,
                     ctx,
                 )
@@ -335,14 +344,11 @@ impl EnvironmentCommandRunner {
                 println!("  - {}/{}", repo.owner, repo.repo);
             }
         }
-        if env.setup_commands.is_empty() {
-            println!("Setup commands: None");
-        } else {
-            println!("Setup commands:");
-            for (i, cmd) in env.setup_commands.iter().enumerate() {
-                println!("  {}. {}", i + 1, cmd);
-            }
-        }
+        // Setup commands are numbered zero-based so the displayed index matches
+        // the index a user types for --insert-setup-command / --edit-setup-command
+        // (REMOTE-1063). The rendering lives in the shared `warp_cli` helper so it
+        // is unit-tested there (see `format_setup_commands_listing`).
+        print!("{}", format_setup_commands_listing(&env.setup_commands));
     }
 
     /// Handle inquire errors, returning true if the error was handled (and caller should return early).
@@ -865,6 +871,9 @@ impl EnvironmentCommandRunner {
         add_setup_commands: Vec<String>,
         remove_repos: Vec<GithubRepo>,
         remove_setup_commands: Vec<String>,
+        insert_setup_commands: Vec<String>,
+        edit_setup_commands: Vec<String>,
+        clear_setup_commands: bool,
         force: bool,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -920,6 +929,9 @@ impl EnvironmentCommandRunner {
                     add_setup_commands,
                     remove_repos,
                     remove_setup_commands,
+                    insert_setup_commands,
+                    edit_setup_commands,
+                    clear_setup_commands,
                     ctx,
                 );
             };
@@ -957,6 +969,9 @@ impl EnvironmentCommandRunner {
         add_setup_commands: Vec<String>,
         remove_repos: Vec<GithubRepo>,
         remove_setup_commands: Vec<String>,
+        insert_setup_commands: Vec<String>,
+        edit_setup_commands: Vec<String>,
+        clear_setup_commands: bool,
         ctx: &mut ModelContext<Self>,
     ) {
         let mut updated_env = environment.model().string_model.clone();
@@ -993,18 +1008,35 @@ impl EnvironmentCommandRunner {
             }
         }
 
-        for cmd in add_setup_commands {
-            updated_env.setup_commands.push(cmd);
-        }
-
-        for cmd in &remove_setup_commands {
-            if let Some(pos) = updated_env.setup_commands.iter().position(|c| c == cmd) {
-                updated_env.setup_commands.remove(pos);
-            } else {
-                eprintln!(
-                    "Warning: setup command '{cmd}' not found in environment, skipping removal"
-                );
+        // Apply setup-command operations (clear/append/insert/edit/remove) via the
+        // shared pure helper. Indexes are zero-based; insert accepts 0..=len (len
+        // appends), edit accepts 0..=len-1. Any parse, range, or content
+        // validation failure is a fatal user-facing error raised before the
+        // upsert is sent, mirroring the server-side contract (REMOTE-1063).
+        let inserts = match parse_indexed_setup_commands(&insert_setup_commands) {
+            Ok(v) => v,
+            Err(msg) => {
+                super::report_fatal_error(anyhow::anyhow!("{msg}"), ctx);
+                return;
             }
+        };
+        let edits = match parse_indexed_setup_commands(&edit_setup_commands) {
+            Ok(v) => v,
+            Err(msg) => {
+                super::report_fatal_error(anyhow::anyhow!("{msg}"), ctx);
+                return;
+            }
+        };
+        if let Err(msg) = apply_setup_command_operations(
+            &mut updated_env.setup_commands,
+            clear_setup_commands,
+            &add_setup_commands,
+            &inserts,
+            &edits,
+            &remove_setup_commands,
+        ) {
+            super::report_fatal_error(anyhow::anyhow!("{msg}"), ctx);
+            return;
         }
 
         // Update the environment via UpdateManager
