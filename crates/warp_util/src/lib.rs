@@ -5,6 +5,7 @@
 //! but isn't large/complex enough to warrant its own crate, it belongs here.
 use std::fmt;
 pub mod assets;
+pub mod command_search_path;
 pub mod content_version;
 pub mod file;
 pub mod file_type;
