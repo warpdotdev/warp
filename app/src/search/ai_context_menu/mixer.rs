@@ -1,8 +1,179 @@
+use std::collections::HashSet;
+#[cfg(not(target_family = "wasm"))]
+use std::time::Duration;
+
+use warpui::{ModelContext, ModelHandle};
+
+use super::code::data_source::CodeSymbolCache;
+use super::core::AIContextMenuCategory;
 use crate::cloud_object::ObjectType;
 use crate::code_review::diff_state::DiffMode;
+use crate::search::data_source::{Query, QueryFilter};
+#[cfg(not(target_family = "wasm"))]
+use crate::search::mixer::AddAsyncSourceOptions;
 use crate::search::mixer::SearchMixer;
 
+/// Debounce applied to the file and code sources, whose work scales with repo size.
+#[cfg(not(target_family = "wasm"))]
+const LOCAL_SEARCH_DEBOUNCE: Duration = Duration::from_millis(50);
+
 pub type AIContextMenuMixer = SearchMixer<AIContextMenuSearchableAction>;
+
+/// Long-lived handles the `@` menu's data sources need but the surface-neutral
+/// menu state cannot own.
+pub struct AtContextMenuSourceContext {
+    /// Cache backing the Code category's symbol search. `None` on surfaces that
+    /// do not offer code symbols, and in WASM builds where the cache has no
+    /// outline to read.
+    pub code_symbol_cache: Option<ModelHandle<CodeSymbolCache>>,
+}
+
+/// The query shape the `@` menu runs. Sources are selected by installation
+/// rather than by filter, so every query is unfiltered.
+pub fn at_context_menu_query(text: &str) -> Query {
+    Query {
+        text: text.to_owned(),
+        filters: HashSet::new(),
+    }
+}
+
+/// Installs the data sources backing a single category.
+///
+/// Callers reset the mixer first and run the query afterwards, so this is safe
+/// to call once per category or in a loop across several.
+#[cfg_attr(target_family = "wasm", allow(unused_variables))]
+pub fn install_sources_for_category(
+    mixer: &mut AIContextMenuMixer,
+    category: AIContextMenuCategory,
+    source_context: &AtContextMenuSourceContext,
+    ctx: &mut ModelContext<AIContextMenuMixer>,
+) {
+    match category {
+        #[cfg(not(target_family = "wasm"))]
+        AIContextMenuCategory::CurrentFolderFiles => {
+            mixer.add_async_source(
+                super::files::data_source::file_data_source_for_pwd(ctx),
+                [QueryFilter::Files],
+                local_search_options(),
+                ctx,
+            );
+        }
+        #[cfg(not(target_family = "wasm"))]
+        AIContextMenuCategory::RepoFiles => {
+            mixer.add_async_source(
+                super::files::data_source::file_data_source_for_current_repo(),
+                [QueryFilter::Files],
+                local_search_options(),
+                ctx,
+            );
+        }
+        #[cfg(not(target_family = "wasm"))]
+        AIContextMenuCategory::Code => {
+            let Some(cache) = &source_context.code_symbol_cache else {
+                return;
+            };
+            mixer.add_async_source(
+                super::code::data_source::code_data_source(cache.as_ref(ctx)),
+                [QueryFilter::Code],
+                local_search_options(),
+                ctx,
+            );
+        }
+        #[cfg(not(target_family = "wasm"))]
+        AIContextMenuCategory::Commands => {
+            let source = ctx.add_model(|_| super::commands::data_source::CommandDataSource::new());
+            mixer.add_sync_source(source, [QueryFilter::Commands]);
+        }
+        #[cfg(not(target_family = "wasm"))]
+        AIContextMenuCategory::Blocks => {
+            let source = ctx.add_model(|_| super::blocks::data_source::BlockDataSource::new());
+            mixer.add_sync_source(source, [QueryFilter::Blocks]);
+        }
+        #[cfg(not(target_family = "wasm"))]
+        AIContextMenuCategory::Workflows => {
+            let source =
+                ctx.add_model(|_| super::workflows::data_source::WorkflowDataSource::new());
+            mixer.add_sync_source(source, [QueryFilter::Workflows]);
+        }
+        #[cfg(not(target_family = "wasm"))]
+        AIContextMenuCategory::Notebooks => {
+            let source =
+                ctx.add_model(|_| super::notebooks::data_source::NotebookDataSource::new(false));
+            mixer.add_sync_source(source, [QueryFilter::Notebooks]);
+        }
+        #[cfg(not(target_family = "wasm"))]
+        AIContextMenuCategory::Plans => {
+            let source =
+                ctx.add_model(|_| super::notebooks::data_source::NotebookDataSource::new(true));
+            mixer.add_sync_source(source, [QueryFilter::Notebooks]);
+        }
+        #[cfg(not(target_family = "wasm"))]
+        AIContextMenuCategory::Rules => {
+            let source = ctx.add_model(|_| super::rules::data_source::RulesDataSource::new());
+            mixer.add_sync_source(source, [QueryFilter::Rules]);
+        }
+        #[cfg(not(target_family = "wasm"))]
+        AIContextMenuCategory::DiffSet => {
+            let source = ctx.add_model(|_| super::diffset::data_source::DiffSetDataSource);
+            mixer.add_sync_source(source, [QueryFilter::DiffSets]);
+        }
+        #[cfg(not(target_family = "wasm"))]
+        AIContextMenuCategory::Skills => {
+            let source = ctx.add_model(|_| super::skills::data_source::SkillsDataSource::new());
+            mixer.add_sync_source(source, [QueryFilter::Skills]);
+        }
+        AIContextMenuCategory::Conversations => {
+            let source =
+                ctx.add_model(|_| super::conversations::data_source::ConversationDataSource);
+            mixer.add_sync_source(source, [QueryFilter::Conversations]);
+        }
+        // Categories in the enum that no data source backs yet. In WASM builds
+        // this also absorbs every category above except Conversations, since
+        // their sources are unavailable there.
+        AIContextMenuCategory::Diffs
+        | AIContextMenuCategory::Docs
+        | AIContextMenuCategory::Tasks
+        | AIContextMenuCategory::Servers
+        | AIContextMenuCategory::Terminal
+        | AIContextMenuCategory::Web
+        | AIContextMenuCategory::RecentDiff
+        | AIContextMenuCategory::RecentBlock => {}
+        #[cfg(target_family = "wasm")]
+        AIContextMenuCategory::CurrentFolderFiles
+        | AIContextMenuCategory::RepoFiles
+        | AIContextMenuCategory::Code
+        | AIContextMenuCategory::Commands
+        | AIContextMenuCategory::Blocks
+        | AIContextMenuCategory::Workflows
+        | AIContextMenuCategory::Notebooks
+        | AIContextMenuCategory::Plans
+        | AIContextMenuCategory::Rules
+        | AIContextMenuCategory::DiffSet
+        | AIContextMenuCategory::Skills => {}
+    }
+}
+
+/// Installs the data sources for every category the menu currently offers, for
+/// the all-categories search that spans all of them.
+pub fn install_sources_for_all_categories(
+    mixer: &mut AIContextMenuMixer,
+    categories: &[AIContextMenuCategory],
+    source_context: &AtContextMenuSourceContext,
+    ctx: &mut ModelContext<AIContextMenuMixer>,
+) {
+    for category in categories {
+        install_sources_for_category(mixer, *category, source_context, ctx);
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn local_search_options() -> AddAsyncSourceOptions {
+    AddAsyncSourceOptions {
+        debounce_interval: Some(LOCAL_SEARCH_DEBOUNCE),
+        run_in_zero_state: true,
+        run_when_unfiltered: true,
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AIContextMenuSearchableAction {
