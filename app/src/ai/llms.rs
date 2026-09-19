@@ -824,7 +824,7 @@ impl LLMPreferences {
             let raw_override = self.base_llm_for_terminal_view.get(&terminal_view_id);
             if let Some(llm_id) = raw_override
                 && let Some(llm_info) =
-                    self.model_info_for_id(&models_by_feature.agent_mode, llm_id, app)
+                    self.usable_model_info_for_id(&models_by_feature.agent_mode, llm_id, app)
             {
                 return llm_info;
             }
@@ -834,7 +834,7 @@ impl LLMPreferences {
             .data()
             .base_model
             .clone()
-            .and_then(|id| self.model_info_for_id(&models_by_feature.agent_mode, &id, app))
+            .and_then(|id| self.usable_model_info_for_id(&models_by_feature.agent_mode, &id, app))
             .unwrap_or_else(|| self.fallback_llm_info(&models_by_feature.agent_mode, app))
     }
 
@@ -850,7 +850,7 @@ impl LLMPreferences {
             let raw_override = self.base_llm_for_terminal_view.get(&terminal_view_id);
             if let Some(llm_id) = raw_override
                 && let Some(llm_info) =
-                    self.model_info_for_id(&models_by_feature.agent_mode, llm_id, app)
+                    self.usable_model_info_for_id(&models_by_feature.agent_mode, llm_id, app)
             {
                 return llm_info;
             }
@@ -884,7 +884,7 @@ impl LLMPreferences {
             .data()
             .base_model
             .clone()
-            .and_then(|id| self.model_info_for_id(&models_by_feature.agent_mode, &id, app))
+            .and_then(|id| self.usable_model_info_for_id(&models_by_feature.agent_mode, &id, app))
             .unwrap_or_else(|| self.fallback_llm_info(&models_by_feature.agent_mode, app))
     }
 
@@ -917,6 +917,18 @@ impl LLMPreferences {
         app: &'a AppContext,
     ) -> Option<&'a LLMInfo> {
         Self::server_info_for_id_router_gated(available, id)
+            .or_else(|| self.custom_llm_info_for_id_if_enabled(id, app))
+            .or_else(|| self.custom_router_llm_info_for_id_if_enabled(id))
+    }
+
+    fn usable_model_info_for_id<'a>(
+        &'a self,
+        available: &'a AvailableLLMs,
+        id: &LLMId,
+        app: &'a AppContext,
+    ) -> Option<&'a LLMInfo> {
+        Self::server_info_for_id_router_gated(available, id)
+            .filter(|info| is_usable_llm(info, app))
             .or_else(|| self.custom_llm_info_for_id_if_enabled(id, app))
             .or_else(|| self.custom_router_llm_info_for_id_if_enabled(id))
     }
@@ -980,14 +992,12 @@ impl LLMPreferences {
         team_uid: Option<ServerId>,
         app: &'a AppContext,
     ) -> impl Iterator<Item = &'a LLMInfo> + use<'a> {
-        // Don't show admin-disabled models in the dropdown
         let routers_enabled = FeatureFlag::CustomModelRouters.is_enabled();
         UserWorkspaces::as_ref(app)
             .feature_model_choice_for_team_uid(team_uid)
             .agent_mode
             .choices
             .iter()
-            .filter(|llm| !matches!(llm.disable_reason, Some(DisableReason::AdminDisabled)))
             // Gate cloud/team routers behind the same flag as local routers so
             // the entire custom-router feature is controlled by one flag.
             .filter(move |llm| {
@@ -1977,9 +1987,11 @@ impl LLMPreferences {
         ctx.emit(LLMPreferencesEvent::UpdatedAvailableLLMs);
     }
 
-    /// Clear any model selections where the model is no longer supported
-    /// or effectively disabled, and clear orphaned context window limits
-    /// for non-configurable or unusable models.
+    /// Reconcile stored model selections with the current model catalog and credentials.
+    ///
+    /// An `AdminDisabled` base-model selection and its context limit are preserved because
+    /// profiles are shared across teams. Other unusable base, coding, CLI agent, and computer use
+    /// selections are cleared.
     ///
     /// Called both when the model list is refreshed from the server and when
     /// BYOK API keys change (since `RequiresUpgrade` usability is BYOK-aware).
@@ -2007,21 +2019,18 @@ impl LLMPreferences {
                     let effective_base_model_id = preferred_base_model
                         .as_ref()
                         .unwrap_or(&models_by_feature.agent_mode.default_id);
-
-                    // Only reconcile a preferred model when this device recognizes its ID.
-                    // If neither the server catalog nor local custom endpoints know it, the ID
-                    // likely belongs to a custom endpoint configured on another device. Clearing
-                    // it here would sync the removal back to cloud and erase the user's setting
-                    // on every other device.
+                    let preferred_base_model_info = models_by_feature
+                        .agent_mode
+                        .info_for_id(effective_base_model_id);
                     let preferred_base_model_is_recognized = preferred_base_model.is_none()
-                        || models_by_feature
-                            .agent_mode
-                            .info_for_id(effective_base_model_id)
-                            .is_some()
+                        || preferred_base_model_info.is_some()
                         || self
                             .custom_llm_info_for_id(effective_base_model_id)
                             .is_some();
-
+                    let preferred_base_model_is_admin_disabled = preferred_base_model_info
+                        .is_some_and(|info| {
+                            info.disable_reason == Some(DisableReason::AdminDisabled)
+                        });
                     let effective_base_model_usable = models_by_feature
                         .agent_mode
                         .usable_info_for_id(effective_base_model_id, ctx)
@@ -2035,18 +2044,19 @@ impl LLMPreferences {
 
                     if preferred_base_model.is_some()
                         && preferred_base_model_is_recognized
+                        && !preferred_base_model_is_admin_disabled
                         && effective_base_model_unusable
                     {
                         profiles.set_base_model(&profile_id, None, ctx);
                     }
                     if has_context_window_limit
                         && preferred_base_model_is_recognized
+                        && !preferred_base_model_is_admin_disabled
                         && (effective_base_model_unusable || !effective_base_model_is_configurable)
                     {
                         profiles.set_context_window_limit(&profile_id, None, ctx);
                     }
                     if let Some(preferred_llm_id) = &profile.data().coding_model {
-                        // Same guard: only clear recognized IDs.
                         let is_recognized = models_by_feature
                             .coding
                             .info_for_id(preferred_llm_id)
@@ -2065,7 +2075,6 @@ impl LLMPreferences {
                         }
                     }
                     if let Some(preferred_llm_id) = &profile.data().cli_agent_model {
-                        // Same guard: only clear recognized IDs.
                         let is_recognized = self
                             .get_cli_agent_available(team_uid, ctx)
                             .info_for_id(preferred_llm_id)
