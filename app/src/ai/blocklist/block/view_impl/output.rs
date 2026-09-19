@@ -913,10 +913,6 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                             }
                         }
                         AIAgentOutputMessageType::WebSearch(web_search_status) => {
-                            if !FeatureFlag::WebSearchUI.is_enabled() {
-                                continue;
-                            }
-
                             // Render the WebSearch inline at its first position in the message stream
                             if let Some(web_search_view) =
                                 props.web_search_views.get(&output_message.id)
