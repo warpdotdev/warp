@@ -1,6 +1,6 @@
 use std::ops::Range;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
 
 use line_ending::LineEnding;
 use markdown_parser::{
@@ -14250,6 +14250,101 @@ fn test_insert_at_char_offset_ranges_noop_skips_set_version() {
                 push_version,
             );
         });
+    });
+}
+
+#[test]
+fn test_insert_at_char_offset_ranges_scopes_render_deltas_to_changed_lines() {
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let content_changes = Arc::new(Mutex::new(Vec::new()));
+        app.update(|ctx| {
+            let content_changes = content_changes.clone();
+            ctx.subscribe_to_model(&buffer, move |_, event, _| {
+                if let BufferEvent::ContentChanged { delta, .. } = event {
+                    content_changes
+                        .lock()
+                        .expect("content changes mutex should not be poisoned")
+                        .push(delta.clone());
+                }
+            });
+        });
+
+        buffer.update(&mut app, |buffer, ctx| {
+            let content: String = (0..1_000).map(|line| format!("{line:04}\n")).collect();
+            buffer.replace_all(content, ctx);
+        });
+        content_changes
+            .lock()
+            .expect("content changes mutex should not be poisoned")
+            .clear();
+        let offset_for_line = |line: usize| CharOffset::from(line * 5 + 1);
+        let first_offset = offset_for_line(1);
+        let last_offset = offset_for_line(998);
+
+        buffer.update(&mut app, |buffer, ctx| {
+            buffer.insert_at_char_offset_ranges(
+                vec![
+                    (first_offset..first_offset + 1, "A".to_string()),
+                    (last_offset..last_offset + 1, "B".to_string()),
+                ],
+                ContentVersion::new(),
+                ctx,
+            );
+        });
+
+        let captured_changes = content_changes
+            .lock()
+            .expect("content changes mutex should not be poisoned");
+        let delta = captured_changes
+            .first()
+            .expect("incremental update should emit one logical content change");
+        assert_eq!(captured_changes.len(), 1);
+        assert_eq!(delta.precise_deltas.len(), 2);
+        assert_eq!(delta.additional_render_deltas.len(), 1);
+        let render_deltas = delta.clone().into_render_deltas();
+        assert_eq!(render_deltas.len(), 2);
+        assert!(
+            render_deltas
+                .iter()
+                .map(|delta| delta.new_lines.len())
+                .sum::<usize>()
+                <= 4,
+            "distant edits should only rebuild their changed lines"
+        );
+        drop(captured_changes);
+
+        content_changes
+            .lock()
+            .expect("content changes mutex should not be poisoned")
+            .clear();
+        let shared_line_offset = offset_for_line(10);
+        buffer.update(&mut app, |buffer, ctx| {
+            buffer.insert_at_char_offset_ranges(
+                vec![
+                    (shared_line_offset..shared_line_offset + 1, "C".to_string()),
+                    (
+                        shared_line_offset + 2..shared_line_offset + 3,
+                        "D".to_string(),
+                    ),
+                ],
+                ContentVersion::new(),
+                ctx,
+            );
+        });
+
+        let content_changes = content_changes
+            .lock()
+            .expect("content changes mutex should not be poisoned");
+        let delta = content_changes
+            .first()
+            .expect("incremental update should emit one logical content change");
+        assert_eq!(content_changes.len(), 1);
+        assert_eq!(delta.precise_deltas.len(), 2);
+        assert!(
+            delta.additional_render_deltas.is_empty(),
+            "edits sharing a rendered line should use the combined fallback"
+        );
     });
 }
 
