@@ -1001,6 +1001,9 @@ pub enum FeatureFlag {
     /// replace inline computer-use screenshot bytes with references to
     /// Warp-managed object storage.
     StoredScreenshots,
+
+    /// Renders eligible implicit PowerShell output as native rich tables.
+    PowerShellRichTables,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1078,6 +1081,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::WarpingModelName,
     FeatureFlag::LrcActivitySignal,
     FeatureFlag::StoredScreenshots,
+    FeatureFlag::PowerShellRichTables,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

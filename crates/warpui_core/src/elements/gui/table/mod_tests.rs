@@ -204,6 +204,14 @@ fn test_table_column_width_default() {
     assert!(matches!(width, TableColumnWidth::Flex(1.0)));
 }
 
+#[test]
+fn with_corner_radius_sets_table_rounding() {
+    let radius = CornerRadius::with_all(crate::scene::Radius::Pixels(8.0));
+    let table = Table::new(create_test_state(), 800.0, 500.0).with_corner_radius(radius);
+
+    assert_eq!(table.corner_radius, radius);
+}
+
 // ============================================================================
 // Virtualization Tests
 // ============================================================================

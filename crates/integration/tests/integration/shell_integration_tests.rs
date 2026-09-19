@@ -88,6 +88,9 @@ integration_tests! {
     test_zsh_cursor_mode_vi_bindings_do_not_corrupt_commands,
     // Tests PowerShell-specific behavior with PSReadLine's vi edit mode.
     test_pwsh_vi_edit_mode_does_not_corrupt_commands,
+    // Tests PowerShell rich-table prototype (PowerShell session only).
+    test_powershell_rich_tables_implicit_format_and_order,
+    test_powershell_rich_tables_skips_custom_out_default,
 
     // Tests of ssh wrapper logic from bootstrap script.
     test_ssh_wrapper_into_bash,
