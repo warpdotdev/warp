@@ -613,9 +613,6 @@ pub enum FeatureFlag {
     /// Enables editing the agent input footer layout from the prompt context menu.
     AgentToolbarEditor,
 
-    /// Enables configuring header toolbar item order, side placement, and visibility.
-    ConfigurableToolbar,
-
     /// Enables real-time communication updates for ambient agent tasks.
     AmbientAgentsRTC,
 

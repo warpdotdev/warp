@@ -367,8 +367,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CloudConversations,
         #[cfg(feature = "agent_toolbar_editor")]
         FeatureFlag::AgentToolbarEditor,
-        #[cfg(feature = "configurable_toolbar")]
-        FeatureFlag::ConfigurableToolbar,
         #[cfg(feature = "agent_view_prompt_chip")]
         FeatureFlag::AgentViewPromptChip,
         #[cfg(feature = "ambient_agents_rtc")]
