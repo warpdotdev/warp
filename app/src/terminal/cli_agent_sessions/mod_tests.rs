@@ -7,8 +7,9 @@ use super::event::{
     CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventSource, CLIAgentEventType, parse_event,
 };
 use super::{
-    CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext,
-    CLIAgentSessionStatus, CLIAgentSessionsModel,
+    CLIAgentDisplayState, CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentSession,
+    CLIAgentSessionContext, CLIAgentSessionStatus, CLIAgentSessionsModel,
+    should_acknowledge_success,
 };
 use crate::ai::blocklist::{InputConfig, InputType};
 use crate::terminal::CLIAgent;
@@ -746,6 +747,100 @@ fn plugin_event(source: CLIAgentEventSource, event: CLIAgentEventType) -> CLIAge
 
 fn rich_event(event: CLIAgentEventType) -> CLIAgentEvent {
     plugin_event(CLIAgentEventSource::RichPlugin, event)
+}
+
+#[test]
+fn cli_agent_display_state_transitions() {
+    App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let view_id = EntityId::new();
+        model.update(&mut app, |model, ctx| {
+            model.set_session(
+                view_id,
+                cli_agent_session(CLIAgentSessionStatus::InProgress, true),
+                ctx,
+            );
+        });
+        assert_eq!(
+            model.read(&app, |model, _| model.display_state(view_id)),
+            Some(CLIAgentDisplayState::Idle)
+        );
+
+        for (event, expected) in [
+            (
+                CLIAgentEventType::PromptSubmit,
+                CLIAgentDisplayState::Processing,
+            ),
+            (CLIAgentEventType::Stop, CLIAgentDisplayState::Success),
+            (
+                CLIAgentEventType::PermissionRequest,
+                CLIAgentDisplayState::NeedsAttention,
+            ),
+            (
+                CLIAgentEventType::StopFailure,
+                CLIAgentDisplayState::NeedsAttention,
+            ),
+            (
+                CLIAgentEventType::PromptSubmit,
+                CLIAgentDisplayState::Processing,
+            ),
+        ] {
+            model.update(&mut app, |model, ctx| {
+                model.update_from_event(view_id, &rich_event(event), ctx);
+            });
+            assert_eq!(
+                model.read(&app, |model, _| model.display_state(view_id)),
+                Some(expected)
+            );
+        }
+
+        model.update(&mut app, |model, ctx| model.force_cancel(view_id, ctx));
+        assert_eq!(
+            model.read(&app, |model, _| model.display_state(view_id)),
+            Some(CLIAgentDisplayState::Idle)
+        );
+    });
+}
+
+#[test]
+fn cli_agent_success_acknowledgement() {
+    App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let view_id = EntityId::new();
+        model.update(&mut app, |model, ctx| {
+            model.set_session(
+                view_id,
+                cli_agent_session(CLIAgentSessionStatus::Success, true),
+                ctx,
+            );
+        });
+
+        assert_eq!(
+            model.read(&app, |model, _| model.display_state(view_id)),
+            Some(CLIAgentDisplayState::Success)
+        );
+        let other_view_id = EntityId::new();
+        assert!(!should_acknowledge_success(false, Some(view_id), view_id));
+        assert!(!should_acknowledge_success(
+            true,
+            Some(other_view_id),
+            view_id
+        ));
+        assert!(should_acknowledge_success(true, Some(view_id), view_id));
+        model.update(&mut app, |model, ctx| {
+            model.acknowledge_success(view_id, ctx)
+        });
+        assert_eq!(
+            model.read(&app, |model, _| model.display_state(view_id)),
+            Some(CLIAgentDisplayState::Idle)
+        );
+        assert!(!model.read(&app, |model, _| model.has_seen_prompt_submit(view_id)));
+        assert_eq!(
+            model.read(&app, |model, _| model.display_state(view_id)),
+            Some(CLIAgentDisplayState::Idle),
+            "acknowledged success must not reappear after focus moves away"
+        );
+    });
 }
 
 #[test]

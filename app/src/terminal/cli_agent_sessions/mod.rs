@@ -38,6 +38,22 @@ pub enum CLIAgentSessionStatus {
     Cancelled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CLIAgentDisplayState {
+    Idle,
+    Processing,
+    Success,
+    NeedsAttention,
+}
+
+pub(crate) fn should_acknowledge_success(
+    is_active_window: bool,
+    focused_terminal_view_id: Option<EntityId>,
+    successful_terminal_view_id: EntityId,
+) -> bool {
+    is_active_window && focused_terminal_view_id == Some(successful_terminal_view_id)
+}
+
 impl CLIAgentSessionStatus {
     pub fn to_conversation_status(&self) -> crate::ai::agent::conversation::ConversationStatus {
         use crate::ai::agent::conversation::ConversationStatus;
@@ -339,6 +355,7 @@ struct CtrlCCancelState {
     /// against arming on the optimistic `InProgress` status set when a
     /// session is first registered, before any turn has actually started.
     has_seen_prompt_submit: bool,
+    successful_result_acknowledged: bool,
     /// Abort handle for the in-flight grace-window timer, if armed.
     pending_cancel: Option<SpawnedFutureHandle>,
     /// Identifies the window `pending_cancel` belongs to. `SpawnedFutureHandle::abort`
@@ -381,6 +398,62 @@ impl CLIAgentSessionsModel {
 
     pub fn session(&self, terminal_view_id: EntityId) -> Option<&CLIAgentSession> {
         self.sessions.get(&terminal_view_id)
+    }
+
+    pub fn has_seen_prompt_submit(&self, terminal_view_id: EntityId) -> bool {
+        self.ctrl_c_cancel_state
+            .get(&terminal_view_id)
+            .is_some_and(|state| state.has_seen_prompt_submit)
+    }
+
+    pub fn display_state(&self, terminal_view_id: EntityId) -> Option<CLIAgentDisplayState> {
+        let session = self.sessions.get(&terminal_view_id)?;
+        let presentation = self.ctrl_c_cancel_state.get(&terminal_view_id);
+        Some(match session.status {
+            CLIAgentSessionStatus::InProgress => {
+                if self.has_seen_prompt_submit(terminal_view_id) {
+                    CLIAgentDisplayState::Processing
+                } else {
+                    CLIAgentDisplayState::Idle
+                }
+            }
+            CLIAgentSessionStatus::Success => {
+                if presentation.is_some_and(|state| state.successful_result_acknowledged) {
+                    CLIAgentDisplayState::Idle
+                } else {
+                    CLIAgentDisplayState::Success
+                }
+            }
+            CLIAgentSessionStatus::Failed { .. } | CLIAgentSessionStatus::Blocked { .. } => {
+                CLIAgentDisplayState::NeedsAttention
+            }
+            CLIAgentSessionStatus::Cancelled => CLIAgentDisplayState::Idle,
+        })
+    }
+
+    pub fn acknowledge_success(
+        &mut self,
+        terminal_view_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(session) = self.sessions.get(&terminal_view_id) else {
+            return;
+        };
+        if !matches!(session.status, CLIAgentSessionStatus::Success) {
+            return;
+        }
+        let state = self
+            .ctrl_c_cancel_state
+            .entry(terminal_view_id)
+            .or_default();
+        if state.successful_result_acknowledged {
+            return;
+        }
+        state.successful_result_acknowledged = true;
+        ctx.emit(CLIAgentSessionsModelEvent::SessionUpdated {
+            terminal_view_id,
+            agent: session.agent,
+        });
     }
 
     /// Returns `true` if the rich input editor is currently open for this terminal.
@@ -495,10 +568,17 @@ impl CLIAgentSessionsModel {
             self.abort_pending_cancel(terminal_view_id);
         }
         if matches!(event.event, CLIAgentEventType::PromptSubmit) {
+            let state = self
+                .ctrl_c_cancel_state
+                .entry(terminal_view_id)
+                .or_default();
+            state.has_seen_prompt_submit = true;
+            state.successful_result_acknowledged = false;
+        } else if matches!(event.event, CLIAgentEventType::Stop) {
             self.ctrl_c_cancel_state
                 .entry(terminal_view_id)
                 .or_default()
-                .has_seen_prompt_submit = true;
+                .successful_result_acknowledged = false;
         }
 
         let session = self

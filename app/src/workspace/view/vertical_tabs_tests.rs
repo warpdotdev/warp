@@ -1,25 +1,35 @@
 use std::iter::once;
 use std::path::PathBuf;
 
+use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::Vector2F;
-use warpui::EntityId;
-use warpui::elements::PositionedElementOffsetBounds;
+use pathfinder_geometry::vector::{Vector2F, vec2f};
+use warp_core::ui::Icon as WarpIcon;
+use warp_core::ui::theme::AnsiColorIdentifier;
+use warpui::elements::{
+    ConstrainedBox, Empty, ParentElement, PositionedElementOffsetBounds, SavePosition, Stack,
+};
+use warpui::platform::WindowStyle;
+use warpui::{
+    App, Element, Entity, EntityId, EntityIdSet, Presenter, TypedActionView, View,
+    WindowInvalidation,
+};
 
 use super::{
     AgentTabTextPreference, SummaryPaneKind, SummaryPaneKindIcons, TerminalAgentText,
     TerminalPrimaryLineData, TerminalPrimaryLineFont, VerticalTabsDetailTarget,
-    VerticalTabsDetailTargetKind, VerticalTabsSummaryBranchEntry, VerticalTabsSummaryData,
-    VerticalTabsSummaryPrimaryLabel, branch_label_display, coalesce_summary_branch_entries,
+    VerticalTabsDetailTargetKind, VerticalTabsResolvedMode, VerticalTabsSummaryBranchEntry,
+    VerticalTabsSummaryData, VerticalTabsSummaryPrimaryLabel, aggregate_cli_styles,
+    branch_label_display, cli_style_for_vertical_mode, coalesce_summary_branch_entries,
     code_detail_kind_label, compact_branch_subtitle_display, detail_sidecar_width_and_bounds,
     detail_target_for_hovered_row, non_terminal_search_text_fragments,
     pane_ids_for_display_granularity, pane_search_text_fragments, preferred_agent_tab_titles,
     push_normalized_unique_summary_label, search_fragments_contain_query,
     select_summary_pane_kind_icons, should_keep_detail_sidecar_visible_for_mouse_position,
     should_show_tab_group_header, shows_synced_inputs_indicator,
-    sort_summary_primary_labels_status_first, summary_overflow_count,
-    summary_search_text_fragments, terminal_kind_badge_label, terminal_primary_line_data,
-    terminal_pull_request_badge_label, terminal_search_text_fragments,
+    sort_summary_primary_labels_status_first, style_for_display_state, summary_overflow_count,
+    summary_search_text_fragments, supports_cli_agent_sidebar_style, terminal_kind_badge_label,
+    terminal_primary_line_data, terminal_pull_request_badge_label, terminal_search_text_fragments,
     terminal_title_fallback_font, uses_outer_group_container, visible_pane_ids_for_detail_target,
     vtab_diff_stats_text,
 };
@@ -30,18 +40,240 @@ use crate::pane_group::{PaneId, TerminalPaneId};
 use crate::safe_triangle::SafeTriangle;
 use crate::tab::{ShortcutModifierKind, reveals_shortcut_hints};
 use crate::terminal::CLIAgent;
+use crate::terminal::cli_agent_sessions::CLIAgentDisplayState;
+use crate::themes::default_themes::dark_theme;
+use crate::ui_components::icon_with_status::{
+    StatusBadgeMode, StatusBadgeStyle, TEST_BADGE_ICON_POSITION_ID, TEST_BADGE_RING_POSITION_ID,
+    render_element_with_status_badge_override,
+};
+use crate::user_config::agent_tab_styles::{
+    AgentTabBadgeSize, AgentTabColor, AgentTabStateStyle, AgentTabStyleLayer,
+};
 use crate::workspace::tab_settings::VerticalTabsDisplayGranularity;
 
 fn label(text: &str) -> VerticalTabsSummaryPrimaryLabel {
     VerticalTabsSummaryPrimaryLabel {
         text: text.to_string(),
         status: None,
+        cli_style: None,
     }
 }
 
 fn pane_id() -> PaneId {
     TerminalPaneId::dummy_terminal_pane_id().into()
 }
+
+fn agent_style_config(
+    badge_size: AgentTabBadgeSize,
+    layers: Vec<AgentTabStyleLayer>,
+) -> AgentTabStateStyle {
+    AgentTabStateStyle {
+        color: AgentTabColor::Magenta,
+        badge_size,
+        layers,
+    }
+}
+
+const TEST_BADGE_ROOT_POSITION_ID: &str = "cli_agent_badge_root";
+
+struct BadgeGeometryView(StatusBadgeStyle);
+
+impl Entity for BadgeGeometryView {
+    type Event = ();
+}
+
+impl View for BadgeGeometryView {
+    fn ui_name() -> &'static str {
+        "AgentStateBadgeGeometryTestView"
+    }
+
+    fn render(&self, _app: &warpui::AppContext) -> Box<dyn warpui::Element> {
+        let theme = dark_theme();
+        let base = ConstrainedBox::new(Empty::new().finish())
+            .with_width(40.)
+            .with_height(40.)
+            .finish();
+        Stack::new()
+            .with_child(
+                SavePosition::new(
+                    render_element_with_status_badge_override(
+                        base,
+                        40.,
+                        self.0,
+                        StatusBadgeMode::Override {
+                            icon: WarpIcon::Check,
+                            color: ColorU::new(0, 200, 120, 255),
+                        },
+                        &theme,
+                        theme.background(),
+                    ),
+                    TEST_BADGE_ROOT_POSITION_ID,
+                )
+                .finish(),
+            )
+            .finish()
+    }
+}
+
+impl TypedActionView for BadgeGeometryView {
+    type Action = ();
+}
+
+#[test]
+fn cli_agent_visual_layers_and_badge_sizes() {
+    for (layer, expected) in [
+        (AgentTabStyleLayer::TabBg, (true, false, false)),
+        (AgentTabStyleLayer::TabText, (false, true, false)),
+        (AgentTabStyleLayer::BadgeIcon, (false, false, true)),
+    ] {
+        let style = style_for_display_state(
+            CLIAgentDisplayState::Processing,
+            WarpIcon::Circle,
+            &agent_style_config(AgentTabBadgeSize::Regular, vec![layer]),
+        );
+        assert_eq!((style.tab_bg, style.tab_text, style.badge), expected);
+        assert_eq!(style.color, AnsiColorIdentifier::Magenta);
+    }
+
+    App::test((), |mut app| async move {
+        for (size, scale) in [
+            (AgentTabBadgeSize::Regular, 1.),
+            (AgentTabBadgeSize::Big, 1.25),
+            (AgentTabBadgeSize::Bigger, 1.5),
+        ] {
+            let style = style_for_display_state(
+                CLIAgentDisplayState::Success,
+                WarpIcon::Check,
+                &agent_style_config(size, vec![AgentTabStyleLayer::BadgeIcon]),
+            );
+            let (window_id, _view) = app.add_window(WindowStyle::NotStealFocus, move |_| {
+                BadgeGeometryView(style.badge_style())
+            });
+            let root_id = app.root_view_id(window_id).expect("root view should exist");
+            let mut presenter = Presenter::new(window_id);
+            app.update(|ctx| {
+                presenter.invalidate(
+                    WindowInvalidation {
+                        updated: EntityIdSet::from_iter([root_id]),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+                presenter.build_scene(vec2f(80., 80.), 1., None, ctx);
+                let cache = presenter.position_cache();
+                let root = cache
+                    .get_position(TEST_BADGE_ROOT_POSITION_ID)
+                    .expect("rendered badge root should be positioned");
+                let ring = cache
+                    .get_position(TEST_BADGE_RING_POSITION_ID)
+                    .expect("rendered badge ring should be positioned");
+                let icon = cache
+                    .get_position(TEST_BADGE_ICON_POSITION_ID)
+                    .expect("rendered badge icon should be positioned");
+                assert_eq!((root.width(), root.height()), (40., 40.));
+                assert!((ring.width() - 40. * 0.57 * scale).abs() < 0.01);
+                assert!((ring.height() - 40. * 0.57 * scale).abs() < 0.01);
+                assert!((icon.width() - 40. * 0.34 * scale).abs() < 0.01);
+                assert!((icon.height() - 40. * 0.34 * scale).abs() < 0.01);
+            });
+        }
+    })
+}
+
+#[test]
+fn cli_agent_style_precedence() {
+    let manual_or_directory = Some(AnsiColorIdentifier::Yellow);
+    let enabled = style_for_display_state(
+        CLIAgentDisplayState::Processing,
+        WarpIcon::Circle,
+        &agent_style_config(AgentTabBadgeSize::Regular, vec![AgentTabStyleLayer::TabBg]),
+    );
+    let disabled = style_for_display_state(
+        CLIAgentDisplayState::Processing,
+        WarpIcon::Circle,
+        &agent_style_config(AgentTabBadgeSize::Regular, vec![]),
+    );
+    assert_eq!(
+        Some(enabled.color)
+            .filter(|_| enabled.tab_bg)
+            .or(manual_or_directory),
+        Some(AnsiColorIdentifier::Magenta)
+    );
+    assert_eq!(
+        Some(disabled.color)
+            .filter(|_| disabled.tab_bg)
+            .or(manual_or_directory),
+        manual_or_directory
+    );
+}
+
+#[test]
+fn cli_agent_style_all_vertical_modes() {
+    let config = agent_style_config(
+        AgentTabBadgeSize::Regular,
+        vec![AgentTabStyleLayer::BadgeIcon],
+    );
+    let pane_style =
+        style_for_display_state(CLIAgentDisplayState::Processing, WarpIcon::Circle, &config);
+    let summary_style = aggregate_cli_styles([
+        pane_style,
+        style_for_display_state(CLIAgentDisplayState::Idle, WarpIcon::Circle, &config),
+        style_for_display_state(CLIAgentDisplayState::Success, WarpIcon::Check, &config),
+        style_for_display_state(
+            CLIAgentDisplayState::NeedsAttention,
+            WarpIcon::Circle,
+            &config,
+        ),
+    ]);
+    assert_eq!(
+        summary_style.map(|style| style.state),
+        Some(CLIAgentDisplayState::NeedsAttention)
+    );
+
+    for _is_grouped in [false, true] {
+        assert_eq!(
+            cli_style_for_vertical_mode(VerticalTabsResolvedMode::Panes, Some(pane_style), None),
+            Some(pane_style)
+        );
+        assert_eq!(
+            cli_style_for_vertical_mode(
+                VerticalTabsResolvedMode::FocusedSession,
+                Some(pane_style),
+                None,
+            ),
+            Some(pane_style)
+        );
+        assert_eq!(
+            cli_style_for_vertical_mode(
+                VerticalTabsResolvedMode::Summary,
+                Some(pane_style),
+                summary_style,
+            ),
+            summary_style
+        );
+    }
+}
+
+#[test]
+fn cli_agent_style_surface_isolation() {
+    assert!(supports_cli_agent_sidebar_style(
+        CLIAgent::Claude,
+        true,
+        false,
+        false,
+        true,
+    ));
+    for excluded in [
+        supports_cli_agent_sidebar_style(CLIAgent::Claude, false, false, false, true),
+        supports_cli_agent_sidebar_style(CLIAgent::Claude, true, true, false, true),
+        supports_cli_agent_sidebar_style(CLIAgent::Claude, true, false, true, true),
+        supports_cli_agent_sidebar_style(CLIAgent::Claude, true, false, false, false),
+        supports_cli_agent_sidebar_style(CLIAgent::Unknown, true, false, false, true),
+    ] {
+        assert!(!excluded);
+    }
+}
+
 fn code_summary_kind(title: &str) -> SummaryPaneKind {
     SummaryPaneKind::Code {
         title: title.to_string(),
@@ -1041,12 +1273,13 @@ fn summary_overflow_count_caps_visible_region() {
 fn primary_labels_dedupe_preserves_first_seen_status() {
     let mut values = Vec::new();
     let mut seen = std::collections::HashMap::new();
-    push_normalized_unique_summary_label(&mut values, &mut seen, "  cargo   test  ", None);
+    push_normalized_unique_summary_label(&mut values, &mut seen, "  cargo   test  ", None, None);
     push_normalized_unique_summary_label(
         &mut values,
         &mut seen,
         "cargo test",
         Some(ConversationStatus::InProgress),
+        None,
     );
 
     assert_eq!(
@@ -1054,6 +1287,7 @@ fn primary_labels_dedupe_preserves_first_seen_status() {
         vec![VerticalTabsSummaryPrimaryLabel {
             text: "cargo test".to_string(),
             status: None,
+            cli_style: None,
         }]
     );
 }
@@ -1067,14 +1301,16 @@ fn primary_labels_preserve_status_through_aggregation() {
         &mut seen,
         "Plan a refactor",
         Some(ConversationStatus::InProgress),
+        None,
     );
     push_normalized_unique_summary_label(
         &mut values,
         &mut seen,
         "Investigate failure",
         Some(ConversationStatus::Success),
+        None,
     );
-    push_normalized_unique_summary_label(&mut values, &mut seen, "cargo build", None);
+    push_normalized_unique_summary_label(&mut values, &mut seen, "cargo build", None, None);
 
     assert_eq!(
         values,
@@ -1082,14 +1318,17 @@ fn primary_labels_preserve_status_through_aggregation() {
             VerticalTabsSummaryPrimaryLabel {
                 text: "Plan a refactor".to_string(),
                 status: Some(ConversationStatus::InProgress),
+                cli_style: None,
             },
             VerticalTabsSummaryPrimaryLabel {
                 text: "Investigate failure".to_string(),
                 status: Some(ConversationStatus::Success),
+                cli_style: None,
             },
             VerticalTabsSummaryPrimaryLabel {
                 text: "cargo build".to_string(),
                 status: None,
+                cli_style: None,
             },
         ]
     );
@@ -1101,22 +1340,27 @@ fn sort_summary_primary_labels_moves_status_first_and_preserves_order() {
         VerticalTabsSummaryPrimaryLabel {
             text: "plain terminal".to_string(),
             status: None,
+            cli_style: None,
         },
         VerticalTabsSummaryPrimaryLabel {
             text: "first conversation".to_string(),
             status: Some(ConversationStatus::InProgress),
+            cli_style: None,
         },
         VerticalTabsSummaryPrimaryLabel {
             text: "code pane".to_string(),
             status: None,
+            cli_style: None,
         },
         VerticalTabsSummaryPrimaryLabel {
             text: "second conversation".to_string(),
             status: Some(ConversationStatus::Success),
+            cli_style: None,
         },
         VerticalTabsSummaryPrimaryLabel {
             text: "last terminal".to_string(),
             status: None,
+            cli_style: None,
         },
     ];
 
@@ -1128,22 +1372,27 @@ fn sort_summary_primary_labels_moves_status_first_and_preserves_order() {
             VerticalTabsSummaryPrimaryLabel {
                 text: "first conversation".to_string(),
                 status: Some(ConversationStatus::InProgress),
+                cli_style: None,
             },
             VerticalTabsSummaryPrimaryLabel {
                 text: "second conversation".to_string(),
                 status: Some(ConversationStatus::Success),
+                cli_style: None,
             },
             VerticalTabsSummaryPrimaryLabel {
                 text: "plain terminal".to_string(),
                 status: None,
+                cli_style: None,
             },
             VerticalTabsSummaryPrimaryLabel {
                 text: "code pane".to_string(),
                 status: None,
+                cli_style: None,
             },
             VerticalTabsSummaryPrimaryLabel {
                 text: "last terminal".to_string(),
                 status: None,
+                cli_style: None,
             },
         ]
     );
@@ -1188,6 +1437,7 @@ fn summary_search_fragments_include_hidden_overflow_values() {
             VerticalTabsSummaryPrimaryLabel {
                 text: "Claude".to_string(),
                 status: Some(ConversationStatus::InProgress),
+                cli_style: None,
             },
             label("Warp Agent"),
             label("cargo"),
@@ -1230,6 +1480,7 @@ fn summary_search_fragments_include_hidden_overflow_values() {
             },
         ],
         has_unread_activity: false,
+        cli_style: None,
     };
 
     let fragments = summary_search_text_fragments(&summary, Some("Custom tab"));
