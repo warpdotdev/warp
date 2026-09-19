@@ -115,6 +115,12 @@
       "skillPath": ".agents/skills/skill-doctor/SKILL.md",
       "computedHash": "fe604ed149880afd660599983aaf0ce8e2d8e705f1b411af532eb8d1fdeeef21"
     },
+    "saga": {
+      "source": "warpdotdev/common-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/saga/SKILL.md",
+      "computedHash": "52d94bc2b29ba1e8738267c031a1ab4ea8a83d197baae32608014653758b5a7e"
+    },
     "spec-driven-implementation": {
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
