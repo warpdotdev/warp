@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::future::Future;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use ai::diff_validation::{
     AIRequestedCodeDiff, DiffDelta, DiffMatchFailure, DiffMatchFailures, DiffType, ParsedDiff,
@@ -15,6 +16,7 @@ use itertools::Itertools;
 use vec1::Vec1;
 use warpui::r#async::executor::Background;
 
+use super::super::file_revisions::FileRevision;
 use super::telemetry::{
     DiffInvalidFileEvent, DiffMatchFailedEvent, MissingLineNumbersEvent,
     RequestFileEditsTelemetryEvent,
@@ -32,19 +34,49 @@ use crate::{safe_debug, safe_warn, send_telemetry_on_executor};
 /// logic can be shared.
 pub(crate) enum FileReadResult {
     /// The file was found and its full content is available.
-    Found(String),
+    Found {
+        content: String,
+        last_modified: Option<SystemTime>,
+    },
     /// The file does not exist.
     NotFound,
     /// The file could not be read for a reason other than "not found".
     ReadError(String),
+    /// The file no longer matches the expected revision.
+    Changed,
 }
 
 impl From<std::io::Result<String>> for FileReadResult {
     fn from(result: std::io::Result<String>) -> Self {
         match result {
-            Ok(content) => FileReadResult::Found(content),
+            Ok(content) => FileReadResult::Found {
+                content,
+                last_modified: None,
+            },
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => FileReadResult::NotFound,
             Err(err) => FileReadResult::ReadError(format!("{err:#}")),
+        }
+    }
+}
+
+impl FileReadResult {
+    pub(super) fn with_expected_revision(self, expected_revision: Option<FileRevision>) -> Self {
+        let Some(expected_revision) = expected_revision else {
+            return self;
+        };
+        let current_revision = match &self {
+            FileReadResult::Found {
+                content,
+                last_modified,
+                ..
+            } => FileRevision::present(content, *last_modified),
+            FileReadResult::NotFound => FileRevision::Missing,
+            FileReadResult::ReadError(_) | FileReadResult::Changed => return self,
+        };
+        if expected_revision.matches(current_revision) {
+            self
+        } else {
+            FileReadResult::Changed
         }
     }
 }
@@ -67,6 +99,10 @@ pub(crate) enum DiffApplicationError {
         // TODO(CODE-353): Display I/O errors to the user, since they may be able to fix them.
         #[expect(dead_code)]
         message: String,
+    },
+    /// The file no longer matches the revision last read in this conversation.
+    FileChanged {
+        file: String,
     },
     /// A file that was supposed to be new already exists.
     AlreadyExists {
@@ -125,6 +161,11 @@ impl DiffApplicationError {
             }
             DiffApplicationError::ReadFailed { file, .. } => {
                 format!("Could not read {file}")
+            }
+            DiffApplicationError::FileChanged { file } => {
+                format!(
+                    "{file} changed since it was last read. Call read_files on {file} before retrying the edit."
+                )
             }
             DiffApplicationError::MultipleFileCreation { file } => {
                 format!("There can only be one attempt to create {file}.")
@@ -215,6 +256,7 @@ where
             }
             DiffApplicationError::MissingFile { .. }
             | DiffApplicationError::ReadFailed { .. }
+            | DiffApplicationError::FileChanged { .. }
             | DiffApplicationError::AlreadyExists { .. }
             | DiffApplicationError::MultipleFileCreation { .. }
             | DiffApplicationError::MutatedDeletedFile { .. }
@@ -512,9 +554,13 @@ async fn apply_replace_file<F, Fut>(
         session_context.shell(),
         session_context.current_working_directory(),
     );
+    let file_result = read_file(absolute_path.clone()).await;
 
-    match read_file(absolute_path.clone()).await {
-        FileReadResult::Found(file_content) => {
+    match file_result {
+        FileReadResult::Found {
+            content: file_content,
+            ..
+        } => {
             push_full_replace_diff(result, file_path, file_content, content);
         }
         FileReadResult::NotFound => {
@@ -531,6 +577,11 @@ async fn apply_replace_file<F, Fut>(
                 file: file_path,
                 message: err,
             });
+        }
+        FileReadResult::Changed => {
+            result
+                .errors
+                .push(DiffApplicationError::FileChanged { file: file_path });
         }
     }
 }
@@ -554,8 +605,13 @@ async fn apply_create_file<F, Fut>(
         session_context.current_working_directory(),
     );
 
-    match read_file(absolute_path.clone()).await {
-        FileReadResult::Found(existing_content) => {
+    let file_result = read_file(absolute_path.clone()).await;
+
+    match file_result {
+        FileReadResult::Found {
+            content: existing_content,
+            ..
+        } => {
             if allow_overwrite {
                 push_full_replace_diff(result, file_path, existing_content, content);
             } else {
@@ -586,6 +642,11 @@ async fn apply_create_file<F, Fut>(
                 message: err,
             });
         }
+        FileReadResult::Changed => {
+            result
+                .errors
+                .push(DiffApplicationError::FileChanged { file: file_path });
+        }
     }
 }
 
@@ -604,8 +665,13 @@ async fn apply_delete_file<F, Fut>(
         session_context.current_working_directory(),
     );
 
-    match read_file(absolute_path.clone()).await {
-        FileReadResult::Found(file_content) => {
+    let file_result = read_file(absolute_path.clone()).await;
+
+    match file_result {
+        FileReadResult::Found {
+            content: file_content,
+            ..
+        } => {
             let num_lines = file_content.lines().count();
             result.diffs.push(AIRequestedCodeDiff {
                 file_name: file_path,
@@ -629,6 +695,11 @@ async fn apply_delete_file<F, Fut>(
                 message: err,
             });
         }
+        FileReadResult::Changed => {
+            result
+                .errors
+                .push(DiffApplicationError::FileChanged { file: file_path });
+        }
     }
 }
 
@@ -648,8 +719,9 @@ async fn apply_search_replace<F, Fut>(
         session_context.shell(),
         session_context.current_working_directory(),
     );
+    let file_result = read_file(absolute_path.clone()).await;
 
-    match read_file(absolute_path.clone()).await {
+    match file_result {
         FileReadResult::NotFound => {
             match deltas.into_iter().exactly_one() {
                 Ok(SearchAndReplace { search, replace }) => {
@@ -695,7 +767,10 @@ async fn apply_search_replace<F, Fut>(
                 message: err,
             });
         }
-        FileReadResult::Found(file_content) => {
+        FileReadResult::Found {
+            content: file_content,
+            ..
+        } => {
             safe_debug!(
                 safe: ("Matching diffs"),
                 full: ("Matching diffs for: {file_path:?}")
@@ -731,6 +806,11 @@ async fn apply_search_replace<F, Fut>(
             }
             result.diffs.push(fuzzy_match_diffs);
         }
+        FileReadResult::Changed => {
+            result
+                .errors
+                .push(DiffApplicationError::FileChanged { file: file_path });
+        }
     }
 }
 
@@ -751,7 +831,9 @@ async fn apply_v4a_update<F, Fut>(
         session_context.current_working_directory(),
     );
 
-    let file_content = match read_file(absolute_path.clone()).await {
+    let file_result = read_file(absolute_path.clone()).await;
+
+    let file_content = match file_result {
         FileReadResult::NotFound => {
             safe_warn!(
                 safe: ("V4A edits requested on non-existent file"),
@@ -773,7 +855,13 @@ async fn apply_v4a_update<F, Fut>(
             });
             return;
         }
-        FileReadResult::Found(content) => content,
+        FileReadResult::Found { content, .. } => content,
+        FileReadResult::Changed => {
+            result.errors.push(DiffApplicationError::FileChanged {
+                file: file_path.clone(),
+            });
+            return;
+        }
     };
 
     safe_debug!(
@@ -788,8 +876,10 @@ async fn apply_v4a_update<F, Fut>(
             session_context.shell(),
             session_context.current_working_directory(),
         );
-        match read_file(target_absolute.clone()).await {
-            FileReadResult::Found(content) => Some(content),
+        let target_result = read_file(target_absolute.clone()).await;
+
+        match target_result {
+            FileReadResult::Found { content, .. } => Some(content),
             FileReadResult::NotFound => None,
             FileReadResult::ReadError(err) => {
                 safe_warn!(
@@ -799,6 +889,12 @@ async fn apply_v4a_update<F, Fut>(
                 result.errors.push(DiffApplicationError::ReadFailed {
                     file: target.clone(),
                     message: err,
+                });
+                return;
+            }
+            FileReadResult::Changed => {
+                result.errors.push(DiffApplicationError::FileChanged {
+                    file: target.clone(),
                 });
                 return;
             }

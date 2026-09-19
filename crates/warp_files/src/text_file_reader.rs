@@ -18,6 +18,7 @@ pub enum TextFileReadResult {
     Segments {
         segments: Vec<TextFileSegment>,
         bytes_read: usize,
+        content_digest: Option<[u8; 32]>,
     },
     /// Not valid UTF-8 — caller should try the binary path.
     NotText,
