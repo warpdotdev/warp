@@ -48,6 +48,63 @@ fn ssh_digital_ocean_droplet_parsing() {
     assert!(parse_interactive_ssh_command("doctl compute ssh --region nyc1 my-droplet").is_some());
 }
 
+#[test]
+fn ssh_namespace_devbox_parsing() {
+    assert!(parse_interactive_ssh_command("devbox").is_none());
+    assert!(parse_interactive_ssh_command("devbox ssh").is_none());
+    assert!(parse_interactive_ssh_command("devbox list").is_none());
+
+    assert!(parse_interactive_ssh_command("devbox ssh my-devbox").is_some());
+    assert!(parse_interactive_ssh_command("command devbox ssh my-devbox").is_some());
+}
+
+#[test]
+fn ssh_namespace_cloud_parsing() {
+    assert!(parse_interactive_ssh_command("nsc").is_none());
+    assert!(parse_interactive_ssh_command("nsc ss").is_none());
+    assert!(parse_interactive_ssh_command("nsc sshfoo").is_none());
+    assert!(parse_interactive_ssh_command("nscssh").is_none());
+    assert!(parse_interactive_ssh_command("nsc list").is_none());
+    assert!(parse_interactive_ssh_command("nsc ssh \"unterminated").is_none());
+
+    let bare_command = parse_interactive_ssh_command("nsc ssh").unwrap();
+    assert!(bare_command.host.is_none());
+    assert!(bare_command.port.is_none());
+    assert!(parse_interactive_ssh_command("nsc ssh 85a32emcg99ii").is_some());
+    assert!(parse_interactive_ssh_command("command nsc ssh").is_some());
+    assert!(parse_interactive_ssh_command("nsc ssh --oneshot").is_some());
+    assert!(parse_interactive_ssh_command("nsc ssh -A").is_some());
+    assert!(parse_interactive_ssh_command("nsc ssh --ssh_agent 85a32emcg99ii").is_some());
+    assert!(parse_interactive_ssh_command("nsc ssh -t 85a32emcg99ii").is_some());
+    assert!(parse_interactive_ssh_command("nsc ssh --force-pty 85a32emcg99ii").is_some());
+    assert!(
+        parse_interactive_ssh_command("nsc ssh --container_name github-runner 85a32emcg99ii")
+            .is_some()
+    );
+    assert!(
+        parse_interactive_ssh_command(
+            "nsc ssh --container_name=github-runner --unique_tag=ci 85a32emcg99ii"
+        )
+        .is_some()
+    );
+    assert!(parse_interactive_ssh_command("nsc ssh --unique_tag ci 85a32emcg99ii").is_some());
+    assert!(parse_interactive_ssh_command("nsc ssh --ssh_agent=true 85a32emcg99ii").is_some());
+
+    assert!(parse_interactive_ssh_command("nsc ssh -T 85a32emcg99ii").is_none());
+    assert!(parse_interactive_ssh_command("nsc ssh --disable-pty 85a32emcg99ii").is_none());
+    assert!(parse_interactive_ssh_command("nsc ssh --disable-pty=true 85a32emcg99ii").is_none());
+    assert!(parse_interactive_ssh_command("nsc ssh --disable-pty=1 85a32emcg99ii").is_none());
+    assert!(parse_interactive_ssh_command("nsc ssh --disable-pty=false 85a32emcg99ii").is_some());
+    assert!(parse_interactive_ssh_command("nsc ssh -T=true 85a32emcg99ii").is_none());
+    assert!(parse_interactive_ssh_command("nsc ssh -T=false 85a32emcg99ii").is_some());
+    assert!(parse_interactive_ssh_command("nsc ssh -T=invalid 85a32emcg99ii").is_none());
+    assert!(parse_interactive_ssh_command("nsc ssh 85a32emcg99ii ls /").is_none());
+    assert!(parse_interactive_ssh_command("nsc ssh --container_name").is_none());
+    assert!(parse_interactive_ssh_command("nsc ssh --container_name --oneshot").is_none());
+    assert!(parse_interactive_ssh_command("nsc ssh --unique_tag").is_none());
+    assert!(parse_interactive_ssh_command("nsc ssh --unique_tag=").is_none());
+}
+
 /// Verifies that commands resulting from shell alias expansion are correctly
 /// detected as interactive SSH commands. When a user types an alias (e.g.
 /// `myssh`), the terminal view expands it to the alias value before passing
