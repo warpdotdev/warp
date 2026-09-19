@@ -293,18 +293,36 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                 let requires_special_footer =
                     request_type.is_passive_code_diff() && props.has_accepted_edits;
 
-                let mut should_render_footer =
+                let (is_latest_turn, is_turn_closer) = props
+                    .model
+                    .conversation(app)
+                    .zip(props.model.exchange_id(app))
+                    .map(|(conversation, id)| {
+                        (
+                            conversation.is_exchange_in_latest_turn(id),
+                            conversation.is_last_visible_exchange_in_turn(id),
+                        )
+                    })
+                    .unwrap_or_default();
+                let closes_earlier_turn = !is_latest_turn && is_turn_closer;
+                let footer_scope = if closes_earlier_turn {
+                    FooterScope::EarlierTurn
+                } else {
+                    FooterScope::LatestTurn
+                };
+                let is_settled_latest_footer =
                     (props.model.is_latest_visible_exchange_in_root_task(app)
                         || requires_special_footer)
-                        && !has_expanded_last_requested_command
-                        && !is_output_for_static_prompt_suggestions
-                        && !is_conversation_in_progress
-                        && request_type.is_active()
-                        && !props.is_cloud_agent_pre_first_exchange
-                        && !status
-                            .error()
-                            .map(|e| e.is_invalid_api_key())
-                            .unwrap_or_default();
+                        && !is_conversation_in_progress;
+                let mut should_render_footer = (is_settled_latest_footer || closes_earlier_turn)
+                    && !has_expanded_last_requested_command
+                    && !is_output_for_static_prompt_suggestions
+                    && request_type.is_active()
+                    && !props.is_cloud_agent_pre_first_exchange
+                    && !status
+                        .error()
+                        .map(|e| e.is_invalid_api_key())
+                        .unwrap_or_default();
 
                 let mut has_rendered_first_text_section = false;
 
@@ -1168,7 +1186,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                 }
 
                 if let Some(footer) = should_render_footer
-                    .then(|| render_response_footer(props, app))
+                    .then(|| render_response_footer(props, footer_scope, app))
                     .flatten()
                 {
                     output_items.add_child(footer);
@@ -3486,10 +3504,21 @@ fn turn_panel_data_for_block(props: Props, app: &AppContext) -> Option<TurnPanel
     conversation.turn_panel_data(exchange_id)
 }
 
-fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Element>> {
+#[derive(PartialEq, Eq)]
+enum FooterScope {
+    LatestTurn,
+    EarlierTurn,
+}
+
+fn render_response_footer(
+    props: Props,
+    scope: FooterScope,
+    app: &AppContext,
+) -> Option<Box<dyn Element>> {
     if props.model.status(app).is_streaming() {
         return None;
     }
+    let is_latest_turn = scope == FooterScope::LatestTurn;
 
     let appearance = Appearance::as_ref(app);
     let mut flex = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
@@ -3597,7 +3626,10 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         );
     }
 
-    if !props.shared_session_status.is_finished_viewer() && !FeatureFlag::AgentView.is_enabled() {
+    if is_latest_turn
+        && !props.shared_session_status.is_finished_viewer()
+        && !FeatureFlag::AgentView.is_enabled()
+    {
         let ui_builder = appearance.ui_builder().clone();
         let continue_button = icon_button(
             appearance,
@@ -3623,12 +3655,23 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
 
     #[cfg(not(target_family = "wasm"))]
     if !props.is_conversation_transcript_viewer {
-        let fork_button_tooltip = fork_button_action(
-            props.model.conversation_id(app),
-            props.is_cloud_agent_context,
-            app,
-        )
-        .tooltip;
+        // Server-side forks cannot truncate history.
+        let (fork_button_tooltip, fork_action) = if is_latest_turn {
+            (
+                fork_button_action(
+                    props.model.conversation_id(app),
+                    props.is_cloud_agent_context,
+                    app,
+                )
+                .tooltip,
+                AIBlockAction::ForkConversation,
+            )
+        } else {
+            (
+                "Fork conversation from this turn",
+                AIBlockAction::ForkConversationFromTurn,
+            )
+        };
 
         let ui_builder = appearance.ui_builder().clone();
         let fork_button = icon_button(
@@ -3647,8 +3690,8 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         .with_hovered_styles(style_override_with_background)
         .with_active_styles(style_override_with_background)
         .build()
-        .on_click(|ctx, _, _| {
-            ctx.dispatch_typed_action(AIBlockAction::ForkConversation);
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(fork_action.clone());
         })
         .finish();
 
@@ -3671,12 +3714,12 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
             .with_margin_left(4.)
             .finish(),
         );
-    } else {
+    } else if is_latest_turn {
         flex.add_child(render_usage_button(props, app));
     }
 
     // Review changes button.
-    if props.has_accepted_edits && !props.shared_session_status.is_viewer() {
+    if is_latest_turn && props.has_accepted_edits && !props.shared_session_status.is_viewer() {
         // Only show Review Changes button if we're in a git repository
         let is_in_git_repo = props
             .current_working_directory

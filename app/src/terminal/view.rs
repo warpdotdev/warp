@@ -6457,19 +6457,27 @@ impl TerminalView {
                         }
                     }
                 }
-                // Likewise for any open per-turn "Turn" panel(s).
                 if !self.turn_panel_view_ids.is_empty() {
-                    let owner_block_ids: Vec<EntityId> =
-                        self.turn_panel_view_ids.keys().copied().collect();
-                    for owner_id in &owner_block_ids {
-                        if let Some(ai_block_handle) = self.ai_block_handle_by_view_id(*owner_id) {
-                            ai_block_handle.update(ctx, |block, ctx| {
-                                block.handle_action(
-                                    &AIBlockAction::SetIsTurnPanelExpanded(false),
-                                    ctx,
-                                );
-                            });
-                        }
+                    let owners_to_close: Vec<_> = self
+                        .rich_content_views
+                        .iter()
+                        .filter(|rich| self.turn_panel_view_ids.contains_key(&rich.view_id()))
+                        .filter_map(|rich| rich.ai_block_metadata())
+                        .filter(|metadata| metadata.conversation_id == *conversation_id)
+                        .filter(|metadata| {
+                            history_model
+                                .as_ref(ctx)
+                                .conversation(conversation_id)
+                                .is_none_or(|conversation| {
+                                    conversation.turn_panel_data(metadata.exchange_id).is_none()
+                                })
+                        })
+                        .map(|metadata| metadata.ai_block_handle.clone())
+                        .collect();
+                    for ai_block_handle in owners_to_close {
+                        ai_block_handle.update(ctx, |block, ctx| {
+                            block.handle_action(&AIBlockAction::SetIsTurnPanelExpanded(false), ctx);
+                        });
                     }
                 }
 
