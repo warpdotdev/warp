@@ -63,6 +63,10 @@ use crate::terminal::{BlockPadding, ShellHost, SizeInfo, SizeUpdate};
 #[cfg(feature = "local_fs")]
 const RESTORED_BLOCK_SEPARATOR_HEIGHT: f64 = 1.5;
 pub(in crate::terminal) const INLINE_BANNER_HEIGHT: f64 = 2.5;
+
+/// Retains substantial command history while bounding the full pane-sized grids owned per block.
+pub(super) const MAX_RETAINED_COMPLETED_LIVE_BLOCKS: usize = 500;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ActiveBlockCompletion {
     AlreadyFinished,
@@ -1608,6 +1612,40 @@ impl BlockList {
         self.event_proxy.send_wakeup_event();
     }
 
+    fn evict_completed_live_blocks(&mut self) {
+        let active_block_index = self.active_block_index();
+        let is_candidate = |index: usize, block: &Block| {
+            BlockIndex(index) != active_block_index
+                && block.bootstrap_stage().is_done()
+                && block.finished()
+                && !block.is_static()
+                && !block.is_restored()
+        };
+        let completed_live_block_count = self
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(index, block)| is_candidate(*index, block))
+            .count();
+        let excess = completed_live_block_count.saturating_sub(MAX_RETAINED_COMPLETED_LIVE_BLOCKS);
+        if excess == 0 {
+            return;
+        }
+
+        let indices_to_remove = self
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(index, block)| is_candidate(*index, block))
+            .take(excess)
+            .map(|(index, _)| BlockIndex(index))
+            .collect::<Vec<_>>();
+        for index in &indices_to_remove {
+            self.blocks[index.0].resolve_user_block_completion_fields(self);
+        }
+        self.remove_command_blocks_at_indices(indices_to_remove);
+    }
+
     pub fn remove_command_blocks_for_conversation(&mut self, conversation_id: AIConversationId) {
         let active_block_index = self.active_block_index();
 
@@ -2880,6 +2918,9 @@ impl BlockList {
             self.is_ai_ugc_telemetry_enabled,
             self.active_conversation_id(),
         );
+        if restored_block_was_local.is_some() {
+            block.mark_restored();
+        }
         if let Some(is_local) = restored_block_was_local {
             block.set_restored_block_was_local(is_local);
         }
@@ -3184,6 +3225,7 @@ impl BlockList {
             Some(prompt_metadata),
             block.is_local,
         );
+        self.active_block_mut().mark_restored();
         if let Some(shell_host) = &block.shell_host {
             self.active_block_mut().set_shell_host(shell_host.clone());
         }
@@ -3324,6 +3366,7 @@ impl BlockList {
             None, /* prompt_metadata */
             None, /* restored_block_was_local */
         );
+        self.evict_completed_live_blocks();
         if next_bootstrap_stage == BootstrapStage::ScriptExecution {
             self.start_active_block();
             self.update_active_block_height();

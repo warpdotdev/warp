@@ -7347,17 +7347,17 @@ impl Input {
         };
         let context = execution_context_for_session(&session);
         let completer_data = self.completer_data();
-        let block_context = Some(BlockContext::from_completed_block(
-            &block_completed,
-            &self.model,
-        ));
+        let Some(block_context) = BlockContext::from_completed_block(&block_completed, &self.model)
+        else {
+            return;
+        };
         let previous_result = self.last_intelligent_autosuggestion_result.take();
         self.next_command_model.update(ctx, |model, ctx| {
             model.generate_next_command_suggestion(
                 block_completed,
                 context,
                 completer_data,
-                block_context,
+                Some(block_context),
                 previous_result,
                 ctx,
             );

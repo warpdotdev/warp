@@ -18,6 +18,7 @@ use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ObfuscateSecrets;
 use crate::terminal::model::ansi::{CompletionMetadata, Handler, Processor};
 use crate::terminal::model::block::BlockId;
+use crate::terminal::model::blocks::MAX_RETAINED_COMPLETED_LIVE_BLOCKS;
 use crate::terminal::model::bootstrap::BootstrapStage;
 use crate::terminal::model::grid::Dimensions as _;
 use crate::terminal::model::image_map::StoredImageMetadata;
@@ -249,6 +250,90 @@ fn hex_encoded_json_dcs(payload: &str) -> Vec<u8> {
     bytes.extend(hex::encode(payload).bytes());
     bytes.push(0x9c);
     bytes
+}
+#[test]
+fn encoded_shell_hooks_bound_completed_live_blocks() {
+    let mut terminal = TerminalModel::mock(None, None);
+    let first_live_block_id = terminal.active_block_id().clone();
+    let mut processor = Processor::new();
+
+    for index in 0..=MAX_RETAINED_COMPLETED_LIVE_BLOCKS {
+        assert_eq!(
+            terminal.start_command_execution(),
+            StartCommandOutcome::Accepted
+        );
+        let next_block_id = BlockId::new();
+        let command = format!("encoded command {index}");
+        let mut bytes = command.as_bytes().to_vec();
+        bytes.extend(hex_encoded_json_dcs(
+            &serde_json::json!({
+                "hook": "Preexec",
+                "value": {
+                    "command": command,
+                    "session_id": 123
+                }
+            })
+            .to_string(),
+        ));
+        bytes.extend(format!("encoded output {index}").bytes());
+        bytes.extend(hex_encoded_json_dcs(
+            &serde_json::json!({
+                "hook": "CommandFinished",
+                "value": {
+                    "exit_code": 0,
+                    "next_block_id": next_block_id.to_string(),
+                    "session_id": 123
+                }
+            })
+            .to_string(),
+        ));
+        bytes.extend(hex_encoded_json_dcs(
+            &serde_json::json!({
+                "hook": "Precmd",
+                "value": {
+                    "exit_code": 0,
+                    "next_block_id": next_block_id.to_string(),
+                    "pwd": "/encoded-hooks",
+                    "session_id": 123
+                }
+            })
+            .to_string(),
+        ));
+        processor.parse_bytes(&mut terminal, &bytes, &mut std::io::sink());
+    }
+
+    assert!(
+        terminal
+            .block_list()
+            .block_with_id(&first_live_block_id)
+            .is_none()
+    );
+    assert_eq!(
+        terminal
+            .block_list()
+            .blocks()
+            .iter()
+            .filter(|block| {
+                block.bootstrap_stage().is_done()
+                    && block.finished()
+                    && !block.is_static()
+                    && !block.is_restored()
+            })
+            .count(),
+        MAX_RETAINED_COMPLETED_LIVE_BLOCKS
+    );
+    assert_eq!(
+        terminal
+            .block_list()
+            .blocks()
+            .iter()
+            .filter(|block| {
+                block.command_to_string()
+                    == format!("encoded command {MAX_RETAINED_COMPLETED_LIVE_BLOCKS}")
+            })
+            .count(),
+        1
+    );
 }
 
 fn command_finished_and_precmd(terminal: &mut TerminalModel) {

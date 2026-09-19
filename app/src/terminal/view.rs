@@ -12389,11 +12389,15 @@ impl TerminalView {
                     input.handle_block_completed_event(block_completed_event_clone, ctx);
                 });
 
-                // Notify find model that this block completed so it gets scanned with final output.
-                let completed_block_index = block_completed_event.block_index;
-                self.find_model.update(ctx, |find_model, ctx| {
-                    find_model.notify_block_completed(completed_block_index, ctx);
-                });
+                let completed_block_index = {
+                    let model = self.model.lock();
+                    block_completed_event.current_index(model.block_list())
+                };
+                if let Some(completed_block_index) = completed_block_index {
+                    self.find_model.update(ctx, |find_model, ctx| {
+                        find_model.notify_block_completed(completed_block_index, ctx);
+                    });
+                }
 
                 if !matches!(block_completed_event.block_type, BlockType::BootstrapHidden)
                     && let Some(env_var_block) = self.active_env_var_collection_block(ctx)
@@ -12467,13 +12471,14 @@ impl TerminalView {
                     });
                 }
 
-                let next_block_index = block_completed_event.block_index + BlockIndex::from(1);
-
                 // Don't populate mouse states for In-Band blocks. In-band blocks are hidden to the
                 // user and there can be an arbitrarily large number of blocks as the user types
                 // and interacts with the session. This in turn can cause performance and memory
                 // issues since we clone the mouse states on every render.
-                if !matches!(block_completed_event.block_type, BlockType::InBandCommand) {
+                if !matches!(block_completed_event.block_type, BlockType::InBandCommand)
+                    && let Some(completed_block_index) = completed_block_index
+                {
+                    let next_block_index = completed_block_index + BlockIndex::from(1);
                     self.block_list_mouse_states
                         .label_mouse_states
                         .entry(next_block_index)
