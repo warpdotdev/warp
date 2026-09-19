@@ -5,12 +5,62 @@ use warpui::App;
 
 use super::*;
 use crate::ai::credit_availability::AICreditSource;
+use crate::auth::UserUid;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
+use crate::workspaces::team::{MembershipRole, Team, TeamMember};
 use crate::workspaces::user_workspaces::TeamlessScopeForTest;
-use crate::workspaces::workspace::{ByoApiKeyPolicy, Workspace, WorkspaceUid};
+use crate::workspaces::workspace::{
+    ByoApiKeyPolicy, MultiAdminPolicy, NativeWorkspacesPolicy, Workspace, WorkspaceMember,
+    WorkspaceMemberUsageInfo, WorkspaceUid,
+};
+
+const TEST_EMAIL: &str = "member@example.com";
+const TEST_TEAM_UID: i64 = 42;
+
+fn team_with_role(role: MembershipRole) -> Team {
+    let mut team = Team::from_local_cache(
+        ServerId::from(TEST_TEAM_UID),
+        "Test Team".to_string(),
+        None,
+        None,
+        Some(vec![TeamMember {
+            uid: UserUid::new("team-member"),
+            email: TEST_EMAIL.to_string(),
+            role,
+            is_disabled: false,
+        }]),
+        None,
+    );
+    team.billing_metadata.tier.multi_admin_policy = Some(MultiAdminPolicy { enabled: true });
+    team
+}
+
+fn workspace_with_role(role: MembershipRole) -> Workspace {
+    let mut workspace = Workspace::from_local_cache(
+        WorkspaceUid::from(ServerId::from(7_i64)),
+        "Test Workspace".to_string(),
+        None,
+        None,
+    );
+    workspace.billing_metadata.tier.native_workspaces_policy =
+        Some(NativeWorkspacesPolicy { enabled: true });
+    workspace.members = vec![WorkspaceMember {
+        uid: UserUid::new("workspace-member"),
+        email: TEST_EMAIL.to_string(),
+        role,
+        is_disabled: false,
+        usage_info: WorkspaceMemberUsageInfo {
+            is_unlimited: false,
+            request_limit: 0,
+            requests_used_since_last_refresh: 0,
+            is_request_limit_prorated: false,
+        },
+    }];
+    workspace
+}
 
 fn initialize_app(app: &mut App) {
     initialize_app_with_workspaces(app, vec![]);
@@ -83,24 +133,178 @@ fn test_server_delinquent_maps_to_delinquency_alert() {
 }
 
 #[test]
-fn test_server_spend_limit_reasons_map_to_spend_limit_alert() {
+fn test_server_spend_limit_reasons_preserve_scope() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
-        for reason in [
-            AICreditDenialReason::EnterpriseTeamSpendLimitHit,
-            AICreditDenialReason::EnterprisePerUserSpendLimitHit,
-            AICreditDenialReason::EnterpriseWorkspaceSpendLimitHit,
-        ] {
-            apply_server_availability(&mut app, AICreditAvailability::unavailable(reason));
-            assert_eq!(
-                determine_state(&mut app),
-                PromptAlertState::MonthlyOveragesSpendLimitReached,
-                "unexpected alert state for {reason:?}",
-            );
-        }
+
+        apply_server_availability(
+            &mut app,
+            AICreditAvailability::unavailable(AICreditDenialReason::EnterpriseTeamSpendLimitHit),
+        );
+        assert_eq!(
+            determine_state(&mut app),
+            PromptAlertState::EnterpriseTeamSpendLimitReached
+        );
+
+        apply_server_availability(
+            &mut app,
+            AICreditAvailability::unavailable(AICreditDenialReason::EnterprisePerUserSpendLimitHit),
+        );
+        assert_eq!(
+            determine_state(&mut app),
+            PromptAlertState::EnterpriseIndividualSpendLimitReached
+        );
+
+        apply_server_availability(
+            &mut app,
+            AICreditAvailability::unavailable(
+                AICreditDenialReason::EnterpriseWorkspaceSpendLimitHit,
+            ),
+        );
+        assert_eq!(
+            determine_state(&mut app),
+            PromptAlertState::EnterpriseWorkspaceSpendLimitReached
+        );
     });
 }
 
+#[test]
+fn test_spend_limit_presentation_identifies_scope() {
+    assert_eq!(
+        PromptAlertState::MonthlyOveragesSpendLimitReached.primary_text(),
+        "You've reached your monthly spend limit"
+    );
+    assert_eq!(
+        PromptAlertState::EnterpriseTeamSpendLimitReached.primary_text(),
+        "You've reached your team's spend limit"
+    );
+    assert_eq!(
+        PromptAlertState::EnterpriseIndividualSpendLimitReached.primary_text(),
+        "You've reached your individual spend limit"
+    );
+    assert_eq!(
+        PromptAlertState::EnterpriseWorkspaceSpendLimitReached.primary_text(),
+        "You've reached this workspace's spend limit"
+    );
+}
+
+#[test]
+fn test_spend_limit_tooltips_identify_scope() {
+    assert_eq!(
+        PromptAlertState::EnterpriseTeamSpendLimitReached.tooltip_text(),
+        Some("You've reached your team's spend limit")
+    );
+    assert_eq!(
+        PromptAlertState::EnterpriseIndividualSpendLimitReached.tooltip_text(),
+        Some("You've reached your individual spend limit")
+    );
+    assert_eq!(
+        PromptAlertState::EnterpriseWorkspaceSpendLimitReached.tooltip_text(),
+        Some("You've reached this workspace's spend limit")
+    );
+}
+
+#[test]
+fn test_team_spend_limit_cta_uses_selected_team_authority() {
+    let workspace_admin = workspace_with_role(MembershipRole::Admin);
+    let team_member = team_with_role(MembershipRole::User);
+    assert_eq!(
+        enterprise_limit_cta(
+            &PromptAlertState::EnterpriseTeamSpendLimitReached,
+            Some(&workspace_admin),
+            Some(&team_member),
+            Some(TEST_EMAIL),
+        ),
+        Some(vec![FormattedTextFragment::plain_text(
+            ", contact a team admin"
+        )])
+    );
+
+    let team_admin = team_with_role(MembershipRole::Admin);
+    assert_eq!(
+        enterprise_limit_cta(
+            &PromptAlertState::EnterpriseTeamSpendLimitReached,
+            Some(&workspace_admin),
+            Some(&team_admin),
+            Some(TEST_EMAIL),
+        ),
+        Some(vec![
+            FormattedTextFragment::plain_text("  "),
+            FormattedTextFragment::hyperlink(
+                "Manage limit",
+                AdminActions::admin_panel_link_for_team(ServerId::from(TEST_TEAM_UID)),
+            ),
+        ])
+    );
+}
+
+#[test]
+fn test_individual_spend_limit_cta_uses_selected_team_authority() {
+    let workspace_admin = workspace_with_role(MembershipRole::Admin);
+    let team_member = team_with_role(MembershipRole::User);
+    assert_eq!(
+        enterprise_limit_cta(
+            &PromptAlertState::EnterpriseIndividualSpendLimitReached,
+            Some(&workspace_admin),
+            Some(&team_member),
+            Some(TEST_EMAIL),
+        ),
+        Some(vec![FormattedTextFragment::plain_text(
+            ", contact a team admin"
+        )])
+    );
+
+    let team_admin = team_with_role(MembershipRole::Admin);
+    assert_eq!(
+        enterprise_limit_cta(
+            &PromptAlertState::EnterpriseIndividualSpendLimitReached,
+            Some(&workspace_admin),
+            Some(&team_admin),
+            Some(TEST_EMAIL),
+        ),
+        Some(vec![
+            FormattedTextFragment::plain_text("  "),
+            FormattedTextFragment::hyperlink(
+                "Manage limit",
+                AdminActions::admin_panel_link_for_team(ServerId::from(TEST_TEAM_UID)),
+            ),
+        ])
+    );
+}
+
+#[test]
+fn test_workspace_spend_limit_cta_uses_workspace_authority() {
+    let workspace_member = workspace_with_role(MembershipRole::User);
+    let team_admin = team_with_role(MembershipRole::Admin);
+    assert_eq!(
+        enterprise_limit_cta(
+            &PromptAlertState::EnterpriseWorkspaceSpendLimitReached,
+            Some(&workspace_member),
+            Some(&team_admin),
+            Some(TEST_EMAIL),
+        ),
+        Some(vec![FormattedTextFragment::plain_text(
+            ", contact a workspace admin"
+        )])
+    );
+
+    let workspace_admin = workspace_with_role(MembershipRole::Admin);
+    assert_eq!(
+        enterprise_limit_cta(
+            &PromptAlertState::EnterpriseWorkspaceSpendLimitReached,
+            Some(&workspace_admin),
+            Some(&team_admin),
+            Some(TEST_EMAIL),
+        ),
+        Some(vec![
+            FormattedTextFragment::plain_text("  "),
+            FormattedTextFragment::hyperlink(
+                "Manage limit",
+                AdminActions::admin_panel_link_for_workspace(),
+            ),
+        ])
+    );
+}
 #[test]
 fn test_server_out_of_credits_maps_to_request_limit_reached() {
     App::test((), |mut app| async move {
