@@ -33,7 +33,7 @@ impl CliAgentPluginManager for OpenCodePluginManager {
 
 static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
     title: "Install Warp Plugin for OpenCode",
-    subtitle: "Add the Warp plugin to your OpenCode configuration, then restart OpenCode.",
+    subtitle: "Add the Warp plugin to your OpenCode configuration, then restart OpenCode. Works for both `opencode` and `opencode2` (v2).",
     steps: &[
         PluginInstructionStep {
             description: "Open or create your opencode.json. This can be in your project root, or the global config path:",
@@ -48,12 +48,12 @@ static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| Plu
             link: None,
         },
     ],
-    post_install_notes: &["Restart OpenCode to activate the plugin."],
+    post_install_notes: &["Restart OpenCode (or opencode2) to activate the plugin."],
 });
 
 static UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
     title: "Update Warp Plugin for OpenCode",
-    subtitle: "Pin the plugin to the latest version in your opencode.json. OpenCode caches plugins per version spec, so changing the pin forces it to re-fetch on restart.",
+    subtitle: "Pin the plugin to the latest version in your opencode.json. OpenCode caches plugins per version spec, so changing the pin forces it to re-fetch on restart. Same config applies to `opencode2`.",
     steps: &[
         PluginInstructionStep {
             description: "Open or create your opencode.json. This can be in your project root, or the global config path:",
@@ -68,7 +68,7 @@ static UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| Plug
             link: None,
         },
     ],
-    post_install_notes: &["Restart OpenCode to load the updated plugin."],
+    post_install_notes: &["Restart OpenCode (or opencode2) to load the updated plugin."],
 });
 
 #[cfg(test)]
