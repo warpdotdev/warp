@@ -206,11 +206,10 @@ impl RepositorySubscriber for LspRepoSubscriber {
     fn on_files_updated(
         &mut self,
         _repository: &Repository,
-        update: &RepositoryUpdate,
+        update: RepositoryUpdate,
         _ctx: &mut ModelContext<Repository>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         let tx = self.tx.clone();
-        let update = update.clone();
         Box::pin(async move {
             let _ = tx.send(update).await;
         })
