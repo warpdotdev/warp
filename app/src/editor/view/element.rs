@@ -1467,9 +1467,7 @@ impl EditorElement {
                 self.autosuggestion_shortcut_icon =
                     Some(ChildView::new(accept_autosuggestion_keybinding).finish());
             }
-            if show_autosuggestion_ignore_button
-                && FeatureFlag::AllowIgnoringInputSuggestions.is_enabled()
-            {
+            if show_autosuggestion_ignore_button {
                 self.autosuggestion_ignore_icon =
                     Some(ChildView::new(autosuggestion_ignore).finish());
             }
