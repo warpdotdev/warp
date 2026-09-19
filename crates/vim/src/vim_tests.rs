@@ -629,3 +629,23 @@ fn test_normal_mode_double_less_is_dot_repeatable() {
     assert_operation_line(&repeat_events[0], VimOperator::Dedent);
     assert_eq!(fsa.mode, VimMode::Normal);
 }
+
+#[test]
+fn test_space_and_backspace_route_to_wrapping_character_motions() {
+    let mut fsa = enter_normal_mode();
+    let space = fsa
+        .typed_character(' ')
+        .expect("space should emit a navigation event");
+    match space.event_type {
+        VimEventType::Navigate(VimMotion::Character(CharacterMotion::WrappingRight)) => {}
+        other => panic!("expected Navigate(WrappingRight), got {other:?}"),
+    }
+
+    let backspace = fsa
+        .keypress("backspace")
+        .expect("backspace should emit a navigation event");
+    match backspace.event_type {
+        VimEventType::Navigate(VimMotion::Character(CharacterMotion::WrappingLeft)) => {}
+        other => panic!("expected Navigate(WrappingLeft), got {other:?}"),
+    }
+}
