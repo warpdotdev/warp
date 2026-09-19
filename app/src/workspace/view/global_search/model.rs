@@ -31,6 +31,18 @@ const MAX_BATCH_AGE_MS: u64 = 4000;
 /// to its own server-side cap; both bound the single-frame response size.
 const REMOTE_MAX_MATCH_COUNT: u32 = 5_000;
 
+/// Safety cap on matches read from the local ripgrep stream. Unlike remote
+/// searches (bounded up front by `REMOTE_MAX_MATCH_COUNT`), the local search
+/// otherwise has no self-imposed limit: it keeps reading and batching every
+/// match from a filesystem walk that may cover an entire home directory,
+/// relying solely on the view noticing (after an async batch round-trip)
+/// that it has rendered enough matches and aborting the search from the
+/// outside. This cap lets the local search stop pulling from the ripgrep
+/// subprocess (and drop it) as soon as it is clearly over budget, instead of
+/// continuing to read, allocate, and batch matches that will only ever be
+/// discarded once the view's own cap catches up.
+const LOCAL_MAX_MATCH_COUNT: usize = 20_000;
+
 /// Aggregate state for one logical search across all of its sources
 /// (one local ripgrep run plus one remote request per searched host).
 struct ActiveSearch {
@@ -234,9 +246,9 @@ impl GlobalSearch {
                 )
                 .await;
                 match result {
-                    Ok(match_count) => Some(SourceResult {
+                    Ok((match_count, capped)) => Some(SourceResult {
                         match_count,
-                        capped: false,
+                        capped,
                     }),
                     Err(err) => {
                         report_error!(
@@ -410,7 +422,7 @@ impl GlobalSearch {
         ignore_case: bool,
         multiline: bool,
         spawner: ModelSpawner<GlobalSearch>,
-    ) -> Result<usize> {
+    ) -> Result<(usize, bool)> {
         let roots_display: Vec<_> = roots.iter().map(|r| r.display().to_string()).collect();
         log::info!(
             "GlobalSearch: starting warp_ripgrep CLI search with pattern={pattern}, roots={:?}",
@@ -426,8 +438,9 @@ impl GlobalSearch {
         let mut num_unbatched_emitted: usize = 0;
         let mut batch: Vec<GlobalSearchMatch> = Vec::new();
         let mut last_batch_flush_at = Instant::now();
+        let mut capped = false;
 
-        while let Some(raw_match) = stream.next().await {
+        'outer: while let Some(raw_match) = stream.next().await {
             // Expand each submatch into its own result row (matching
             // the old per-submatch behavior). Each row gets the line
             // text trimmed up to that particular submatch.
@@ -457,6 +470,16 @@ impl GlobalSearch {
                         last_batch_flush_at = Instant::now();
                     }
                 }
+
+                // Stop pulling from the ripgrep subprocess as soon as we're
+                // clearly over budget, rather than continuing to read and
+                // batch matches purely on the hope that the view will
+                // eventually notice and abort us from the outside. Dropping
+                // `stream` here also drops (and kills) the child process.
+                if total_match_count >= LOCAL_MAX_MATCH_COUNT {
+                    capped = true;
+                    break 'outer;
+                }
             }
         }
 
@@ -464,7 +487,7 @@ impl GlobalSearch {
             flush_batch(&spawner, search_id, &mut batch).await;
         }
 
-        Ok(total_match_count)
+        Ok((total_match_count, capped))
     }
 
     fn local_match_to_global(m: RipgrepMatch) -> GlobalSearchMatch {
