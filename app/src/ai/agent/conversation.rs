@@ -47,8 +47,7 @@ use crate::ai::agent::icons::{
 };
 use crate::ai::agent::linearization::compute_task_depths;
 use crate::ai::agent::request_metadata::{
-    InferenceUsageType, LegacyCharges, RequestMetadataRecord, RequestModelCharge,
-    RequestPlatformCharge, TurnPanelData,
+    LegacyCharges, RequestMetadataRecord, RequestPlatformCharge, TurnPanelData,
 };
 use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
@@ -3640,16 +3639,17 @@ impl AIConversation {
                     .filter(|usage| *usage > 0.0)
             });
 
+        let credits_spent_for_last_block = self
+            .conversation_usage_metadata
+            .credits_spent_for_last_block;
         let legacy_charges = if !is_latest_turn {
             LegacyCharges::Unknown
         } else {
-            // The unrounded credits figure: the footer's one-decimal rounding would turn a real
-            // sub-0.1 charge into zero before the panel could label it "<0.1 credits".
-            let credits_spent_for_last_block = self
-                .conversation_usage_metadata
-                .credits_spent_for_last_block;
             match self.charged_usage_for_last_block() {
-                Some(totals) => LegacyCharges::Breakdown(Box::new(totals)),
+                Some(totals) => LegacyCharges::Breakdown {
+                    totals: Box::new(totals),
+                    credits: credits_spent_for_last_block,
+                },
                 None => match credits_spent_for_last_block {
                     Some(credits) => LegacyCharges::CreditsOnly(credits),
                     None => LegacyCharges::Unknown,
@@ -3657,54 +3657,26 @@ impl AIConversation {
             }
         };
 
-        let (model_charges, platform_charges) = match &legacy_charges {
-            LegacyCharges::Breakdown(totals) => {
-                let inference_credits = (
-                    totals.input_cost_in_credits,
-                    totals.output_cost_in_credits,
-                    totals.input_cache_read_cost_in_credits,
-                    totals.input_cache_write_cost_in_credits,
-                );
-                let model_charge = RequestModelCharge {
+        // The inference charge is rendered from `legacy_charges` directly; only the platform
+        // charge rides on a record, where the panel's platform section reads it.
+        let platform_charges = match &legacy_charges {
+            LegacyCharges::Breakdown { totals, .. }
+                if totals.platform_cost_in_cents != 0.0
+                    || totals.platform_cost_in_credits != 0.0 =>
+            {
+                vec![RequestPlatformCharge {
                     category: PRIMARY_AGENT_CATEGORY.to_string(),
-                    usage_type: InferenceUsageType::DirectApi,
-                    model_id: "Models".to_string(),
-                    input_tokens: totals.input_tokens,
-                    output_tokens: totals.output_tokens,
-                    cache_read_tokens: totals.input_cache_read_tokens,
-                    cache_write_tokens: totals.input_cache_write_tokens,
-                    input_cost_in_cents: totals.input_cost_in_cents,
-                    output_cost_in_cents: totals.output_cost_in_cents,
-                    cache_read_cost_in_cents: totals.input_cache_read_cost_in_cents,
-                    cache_write_cost_in_cents: totals.input_cache_write_cost_in_cents,
-                    input_cost_in_credits: inference_credits.0,
-                    output_cost_in_credits: inference_credits.1,
-                    cache_read_cost_in_credits: inference_credits.2,
-                    cache_write_cost_in_credits: inference_credits.3,
-                    web_search_count: totals.web_search_count,
-                    web_search_cost_in_cents: totals.web_search_cost_in_cents,
-                    web_search_cost_in_credits: totals.web_search_cost_in_credits,
-                };
-                let platform_charges = [(
-                    totals.platform_cost_in_cents,
-                    totals.platform_cost_in_credits,
-                )]
-                .iter()
-                .filter(|(cents, credits)| *cents != 0.0 || *credits != 0.0)
-                .map(|&(cents, credits)| RequestPlatformCharge {
-                    category: PRIMARY_AGENT_CATEGORY.to_string(),
-                    cost_in_cents: cents,
-                    cost_in_credits: credits,
+                    cost_in_cents: totals.platform_cost_in_cents,
+                    cost_in_credits: totals.platform_cost_in_credits,
                     duration_seconds: 0.0,
-                })
-                .collect::<Vec<_>>();
-                (vec![model_charge], platform_charges)
+                }]
             }
-            LegacyCharges::CreditsOnly(_) | LegacyCharges::Unknown => (Vec::new(), Vec::new()),
+            LegacyCharges::Breakdown { .. }
+            | LegacyCharges::CreditsOnly(_)
+            | LegacyCharges::Unknown => Vec::new(),
         };
 
         if let Some(last) = records.last_mut() {
-            last.model_charges = model_charges;
             last.platform_charges = platform_charges;
             last.context_window_usage = context_window_usage;
         }

@@ -328,16 +328,23 @@ pub enum TurnPanelData {
     },
 }
 
-/// The charge data a legacy turn can show. The flat last-block totals deliberately discard
-/// model attribution, so a breakdown renders as one aggregated row.
+/// The charge data a legacy turn can show. The flat last-block totals carry no model
+/// attribution, so the panel never renders per-model rows for a legacy turn.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LegacyCharges {
-    /// No charge data for this turn; the panel hides its charge sections.
+    /// No charge data for this turn; the panel hides its inference section.
     Unknown,
-    /// Only a credits total is known; the inference section's value is that total.
+    /// Only the block's credits total is known: shown as the inference section's value in
+    /// Credits mode, and the section is hidden in Dollars mode since no dollar figure exists.
     CreditsOnly(f32),
-    /// The last-block charged-usage breakdown.
-    Breakdown(Box<ChargedUsageTotals>),
+    /// The block's token and dollar totals, plus its credits total when known. The inference
+    /// section shows tokens and the cost in the display unit as a single header row.
+    Breakdown {
+        totals: Box<ChargedUsageTotals>,
+        /// The block's credits, reported separately from `totals` because
+        /// `StreamFinished.request_charges` carries dollar costs only.
+        credits: Option<f32>,
+    },
 }
 
 impl TurnPanelData {

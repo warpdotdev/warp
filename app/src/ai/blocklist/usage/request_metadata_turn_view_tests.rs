@@ -234,25 +234,71 @@ fn view_orders_model_rows_by_descending_tokens() {
     assert_eq!(view.summary.model_charges[1].model_id, "cheap-model");
 }
 
-/// Breakdown charges aggregate into one "Models" row so the flat totals never imply
-/// model attribution.
+/// A legacy breakdown renders as one header value: tokens with dollars, or tokens with the
+/// block's separately reported credits. Without a credits figure the section is hidden in
+/// Credits mode rather than showing "0 credits"; the tooltip follows the same figures.
 #[test]
-fn view_from_legacy_breakdown_has_one_models_row() {
-    let mut breakdown = record(120.0, 30.0);
-    breakdown.model_charges[0].model_id = "Models".to_string();
-    let data = TurnPanelData::Legacy {
-        records: vec![breakdown],
-        charges: LegacyCharges::Breakdown(Box::new(
-            crate::persistence::model::ChargedUsageTotals {
-                input_tokens: 10,
-                input_cost_in_cents: 120.0,
-                ..Default::default()
-            },
-        )),
+fn legacy_breakdown_header_uses_the_block_credits() {
+    let totals = Box::new(crate::persistence::model::ChargedUsageTotals {
+        input_tokens: 38_738,
+        output_tokens: 33,
+        input_cost_in_cents: 5.42,
+        output_cost_in_cents: 0.01,
+        ..Default::default()
+    });
+    let charges = LegacyCharges::Breakdown {
+        totals: totals.clone(),
+        credits: Some(3.02),
     };
-    let view = RequestMetadataTurnView::new_for_test(data);
-    assert_eq!(view.model_rows.len(), 1);
-    assert_eq!(view.summary.model_charges[0].model_id, "Models");
+    assert_eq!(
+        RequestMetadataTurnView::legacy_inference_header_text(&charges, UsageDisplayUnit::Dollars)
+            .as_deref(),
+        Some("38,771 tokens  /  $0.05")
+    );
+    assert_eq!(
+        RequestMetadataTurnView::legacy_inference_header_text(&charges, UsageDisplayUnit::Credits)
+            .as_deref(),
+        Some("38,771 tokens  /  3 credits")
+    );
+    let data = TurnPanelData::Legacy {
+        records: vec![record(0.0, 0.0)],
+        charges,
+    };
+    assert_eq!(
+        turn_panel_tooltip_text_for_data(&data, UsageDisplayUnit::Credits),
+        "Turn: 3 credits"
+    );
+    assert_eq!(
+        turn_panel_tooltip_text_for_data(&data, UsageDisplayUnit::Dollars),
+        "Turn: $0.05"
+    );
+
+    let without_credits = LegacyCharges::Breakdown {
+        totals,
+        credits: None,
+    };
+    assert_eq!(
+        RequestMetadataTurnView::legacy_inference_header_text(
+            &without_credits,
+            UsageDisplayUnit::Credits
+        ),
+        None
+    );
+}
+
+/// A credits-only legacy turn shows its total in Credits mode only.
+#[test]
+fn legacy_credits_only_header_is_hidden_in_dollars_mode() {
+    let charges = LegacyCharges::CreditsOnly(2.5);
+    assert_eq!(
+        RequestMetadataTurnView::legacy_inference_header_text(&charges, UsageDisplayUnit::Credits)
+            .as_deref(),
+        Some("2.5 credits")
+    );
+    assert_eq!(
+        RequestMetadataTurnView::legacy_inference_header_text(&charges, UsageDisplayUnit::Dollars),
+        None
+    );
 }
 
 #[test]
