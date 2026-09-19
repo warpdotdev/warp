@@ -1669,9 +1669,11 @@ impl WarpAgentPageView {
         if !Self::can_use_custom_inference_controls(ctx) {
             return;
         }
+        // File-backed definitions (APP-5380), not the legacy `keys().custom_endpoints` blob.
+        // After migration that blob is empty, so looking it up here closed the editor
+        // and skipped the confirm dialog — Remove appeared to do nothing.
         let endpoint = ApiKeyManager::as_ref(ctx)
-            .keys()
-            .custom_endpoints
+            .custom_endpoints()
             .get(index)
             .cloned();
         let Some(endpoint) = endpoint else {
@@ -1690,6 +1692,7 @@ impl WarpAgentPageView {
             .update(ctx, |dialog, ctx| {
                 dialog.show(index, endpoint.name.clone(), model_labels, ctx);
             });
+        ctx.emit(WarpAgentPageEvent::ShowModal);
         ctx.notify();
     }
 
