@@ -111,6 +111,9 @@ async fn protected_resource_metadata(
     State(state): State<FakeOAuthState>,
 ) -> Json<serde_json::Value> {
     Json(serde_json::json!({
+        // RFC 9728 requires `resource`, and rmcp rejects metadata whose identifier does not
+        // match the URL being authenticated.
+        "resource": format!("{}/mcp", state.origin),
         "authorization_servers": [state.origin],
         "scopes_supported": ["mcp"]
     }))
