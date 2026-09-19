@@ -9629,17 +9629,15 @@ impl Workspace {
             return;
         }
         self.current_workspace_state.is_agent_management_view_open = is_open;
-        let window_id = self.window_id;
-        let view_id = self.agent_management_view.id();
-        let team_context_resolver =
-            UserWorkspaces::team_context_resolver(self.agent_management_view.downgrade());
-        AgentConversationsModel::handle(ctx).update(ctx, move |model, ctx| {
-            if is_open {
-                model.register_view_open(window_id, view_id, team_context_resolver, ctx);
-            } else {
+        if is_open {
+            self.register_agent_management_view_consumer(ctx);
+        } else {
+            let window_id = self.window_id;
+            let view_id = self.agent_management_view.id();
+            AgentConversationsModel::handle(ctx).update(ctx, move |model, ctx| {
                 model.register_view_closed(window_id, view_id, ctx);
-            }
-        });
+            });
+        }
 
         // Notify panels about the agent management view state change so they can
         // update their top border visibility accordingly.
@@ -9648,6 +9646,16 @@ impl Workspace {
         });
         self.right_panel_view.update(ctx, |panel, ctx| {
             panel.set_agent_management_view_open(is_open, ctx);
+        });
+    }
+
+    fn register_agent_management_view_consumer(&self, ctx: &mut ViewContext<Self>) {
+        let window_id = self.window_id;
+        let view_id = self.agent_management_view.id();
+        let team_context_resolver =
+            UserWorkspaces::team_context_resolver(self.agent_management_view.downgrade());
+        AgentConversationsModel::handle(ctx).update(ctx, move |model, ctx| {
+            model.register_view_open(window_id, view_id, team_context_resolver, ctx);
         });
     }
 
@@ -12664,6 +12672,17 @@ impl Workspace {
         let weak_handle = ctx.handle();
         WorkspaceRegistry::handle(ctx).update(ctx, |registry, _| {
             registry.register(window_id, weak_handle);
+        });
+        self.register_visible_agent_conversation_consumers(ctx);
+    }
+
+    fn register_visible_agent_conversation_consumers(&self, ctx: &mut ViewContext<Self>) {
+        if self.current_workspace_state.is_agent_management_view_open {
+            self.register_agent_management_view_consumer(ctx);
+        }
+        let is_left_panel_open = self.active_tab_pane_group().as_ref(ctx).left_panel_open;
+        self.left_panel_view.update(ctx, |left_panel, ctx| {
+            left_panel.sync_conversation_list_view_registration(is_left_panel_open, ctx);
         });
     }
 
@@ -28129,6 +28148,9 @@ impl View for Workspace {
 
         WorkspaceRegistry::handle(ctx).update(ctx, |registry, _| {
             registry.unregister(window_id);
+        });
+        AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
+            model.unregister_window(window_id, ctx);
         });
 
         // If this workspace's close was registered as part of a tab-drag

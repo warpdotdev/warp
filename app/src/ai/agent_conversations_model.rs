@@ -722,7 +722,9 @@ impl AgentConversationsModel {
         // Subscribe to UpdateManager for RTC task updates
         if FeatureFlag::AmbientAgentsRTC.is_enabled() {
             let update_manager = UpdateManager::handle(ctx);
-            ctx.subscribe_to_model(&update_manager, Self::handle_update_manager_event);
+            ctx.subscribe_to_model(&update_manager, |model, _, event, ctx| {
+                model.handle_update_manager_event(event, ctx);
+            });
         }
 
         let mut model = Self {
@@ -811,7 +813,6 @@ impl AgentConversationsModel {
 
     fn handle_update_manager_event(
         &mut self,
-        _: ModelHandle<UpdateManager>,
         event: &UpdateManagerEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -819,10 +820,12 @@ impl AgentConversationsModel {
             return;
         };
 
-        let has_list_consumers = self
-            .active_data_consumers_per_window
-            .values()
-            .any(|views| !views.is_empty());
+        let has_list_consumers = AppExecutionMode::as_ref(ctx)
+            .can_fetch_agent_runs_for_management()
+            && self
+                .active_data_consumers_per_window
+                .values()
+                .any(|views| !views.is_empty());
         if has_list_consumers {
             // (a) If management view or conversation list is open, throttled list-fetch.
             self.handle_rtc_for_list_views(*timestamp, ctx);
@@ -1162,6 +1165,19 @@ impl AgentConversationsModel {
         }
         self.abort_existing_poll();
         self.update_polling_state(ctx);
+    }
+
+    pub(crate) fn unregister_window(&mut self, window_id: WindowId, ctx: &mut ModelContext<Self>) {
+        self.active_data_consumers_per_window.remove(&window_id);
+        self.abort_existing_poll();
+        self.update_polling_state(ctx);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_data_consumers_for_window(&self, window_id: WindowId) -> bool {
+        self.active_data_consumers_per_window
+            .get(&window_id)
+            .is_some_and(|views| !views.is_empty())
     }
 
     /// Updates the polling state based on whether the active window has the view open.
