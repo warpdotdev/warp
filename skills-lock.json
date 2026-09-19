@@ -29,7 +29,7 @@
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/create-pr/SKILL.md",
-      "computedHash": "4d7994aab3778d6659d853e4e3f7cd1c4fdb4b99c4305cd349d8ccc50592ac73"
+      "computedHash": "80f41adec7483917d10ca00777059b8a25b975faa3cfa8b3d93de9106b657783"
     },
     "cross-critique": {
       "source": "warpdotdev/common-skills",
@@ -47,13 +47,19 @@
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/fix-errors/SKILL.md",
-      "computedHash": "f5099304ec8e6bc8be578ebc973de31e46ff1e8f0fe671d1641a395a9470ff7a"
+      "computedHash": "801c1675feb62b81a99dc40cd7c4ea46756da7e80a0315b92cae2c62a8328913"
     },
     "implement-specs": {
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/implement-specs/SKILL.md",
       "computedHash": "bd2787a63cfdc917275769ef2d9c7adc701cfaf1a74344b3a6248d4116a8923e"
+    },
+    "migrate-to-factory": {
+      "source": "warpdotdev/common-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/migrate-to-factory/SKILL.md",
+      "computedHash": "c2964552ab14e764a0e45a0edb9c32570cd73ab49ab737969a682a242c17acc9"
     },
     "pr-walkthrough": {
       "source": "warpdotdev/common-skills",
