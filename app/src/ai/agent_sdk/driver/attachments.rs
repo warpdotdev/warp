@@ -39,10 +39,6 @@ pub(crate) async fn fetch_and_download_attachments(
     task_id: String,
     attachments_dir: PathBuf,
 ) -> anyhow::Result<Option<String>> {
-    if !FeatureFlag::AmbientAgentsImageUpload.is_enabled() {
-        return Ok(None);
-    }
-
     let attachments = ai_client
         .get_task_attachments(task_id.clone())
         .await
