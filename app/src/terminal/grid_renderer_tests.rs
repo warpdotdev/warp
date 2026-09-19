@@ -1,9 +1,11 @@
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{Vector2F, vec2f};
+use warpui::Scene;
+use warpui::elements::Point as ScenePoint;
 use warpui::fonts::Cache as FontCache;
 use warpui::units::{IntoLines, Lines, Pixels};
 
-use super::{CachedBackgroundColor, active_or_next_match};
+use super::{CachedBackgroundColor, active_or_next_match, start_foreground_image_layer};
 use crate::terminal::grid_size_util::calculate_grid_baseline_position;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::selection::SelectionPoint;
@@ -261,4 +263,25 @@ fn test_calculate_selection_bounds() {
     assert_selection_bounds(5.into_lines()); // Without scroll clipping
     assert_selection_bounds(10.into_lines()); // Without scroll clipping (but on the cusp of clipping)
     assert_selection_bounds(80.into_lines()); // With scroll clipping
+}
+
+/// Regression test for a kitty graphics placement swallowing every pointer event that landed
+/// on the cells it covered. Foreground placements are painted into a layer above the grid, so
+/// that layer has to be click-through for the grid underneath to keep receiving mouse events
+/// (wheel included), which is what alt-screen apps rely on to get mouse reports.
+#[test]
+fn test_foreground_image_layer_does_not_cover_the_grid() {
+    let mut scene = Scene::new(1., Default::default());
+
+    // Stand in for the grid painting its cells.
+    scene.draw_rect_with_hit_recording(RectF::new(vec2f(0., 0.), vec2f(200., 200.)));
+    let grid_z_index = scene.z_index();
+
+    start_foreground_image_layer(&mut scene);
+    scene.draw_rect_with_hit_recording(RectF::new(vec2f(30., 30.), vec2f(100., 100.)));
+    scene.stop_layer();
+
+    // A wheel event landing inside the placement is not considered covered, so it is still
+    // dispatched to the grid rather than dropped at the z-index check.
+    assert!(!scene.is_covered(ScenePoint::new(80., 80., grid_z_index)));
 }
