@@ -223,8 +223,21 @@ enum DelayRenderingTrigger {
     DiffUpdate(BufferVersion),
 }
 
+/// `DelayRendering::edits` is flushed early once it holds more than this many deferred edits,
+/// mirroring the `MAX_DEFERRED_LAYOUTS` bound `RenderState::pending_edits` uses downstream for
+/// the same class of unbounded-backlog problem (APP-5439).
+const MAX_DELAYED_RENDERING_EDITS: usize = 128;
+
+/// `DelayRendering::edits` is flushed early once it retains more than this many characters of
+/// buffer content. A count bound alone is not enough, since a single whole-file edit can carry
+/// megabytes of text in one entry.
+const MAX_DELAYED_RENDERING_CHARS: usize = 1 << 20;
+
 struct DelayRendering {
     edits: Vec<(EditDelta, BufferVersion)>,
+    /// Characters of buffer content retained by `edits`, tracked incrementally so
+    /// `over_budget` doesn't have to re-walk the backlog on every push.
+    chars: usize,
     should_autoscroll: ShouldAutoscroll,
     block_until: DelayRenderingTrigger,
 }
@@ -233,9 +246,26 @@ impl DelayRendering {
     fn new(trigger: DelayRenderingTrigger) -> Self {
         Self {
             edits: Vec::new(),
+            chars: 0,
             should_autoscroll: ShouldAutoscroll::No,
             block_until: trigger,
         }
+    }
+
+    fn push_edit(&mut self, delta: EditDelta, buffer_version: BufferVersion) {
+        self.chars += delta
+            .new_lines
+            .iter()
+            .map(|block| block.content_length().as_usize())
+            .sum::<usize>();
+        self.edits.push((delta, buffer_version));
+    }
+
+    /// Whether the backlog retains more than `flush_render` should be left to hold: without a
+    /// bound, an editor whose highlighting/diff trigger never fires (e.g. a large file, or an
+    /// editor scrolled offscreen) would retain every delta for its lifetime.
+    fn over_budget(&self) -> bool {
+        self.edits.len() > MAX_DELAYED_RENDERING_EDITS || self.chars > MAX_DELAYED_RENDERING_CHARS
     }
 
     fn should_render_for_syntax_highlight(&self, buffer_version: BufferVersion) -> bool {
@@ -1377,7 +1407,15 @@ impl CodeEditorModel {
         }
 
         if let Some(delay_rendering) = &mut self.delay_rendering {
-            delay_rendering.edits.push((delta.clone(), buffer_version));
+            delay_rendering.push_edit(delta.clone(), buffer_version);
+            let over_budget = delay_rendering.over_budget();
+            if over_budget {
+                // The trigger this delay is waiting on may never fire (or fire too late); flush
+                // now so the backlog can't grow without bound, rather than dropping edits and
+                // leaving stale content on screen.
+                let delay_rendering = self.delay_rendering.take().expect("Checked above");
+                delay_rendering.flush_render(self, ctx);
+            }
         } else {
             // Update render state to rebuild the layout
             self.render_state.update(ctx, move |render_state, _| {
@@ -1641,8 +1679,15 @@ impl CodeEditorModel {
 
                 // If we are delaying rendering, push these updates to the delay rendering state. Otherwise, flush them to diff and rendering model.
                 if let Some(delay_rendering) = &mut self.delay_rendering {
-                    delay_rendering.edits.push((delta.clone(), *buffer_version));
+                    delay_rendering.push_edit(delta.clone(), *buffer_version);
                     delay_rendering.should_autoscroll = *should_autoscroll;
+                    let over_budget = delay_rendering.over_budget();
+                    if over_budget {
+                        // See the comment in `rebuild_layout_with_syntax_highlighting`: flush
+                        // early rather than retaining an unbounded backlog.
+                        let delay_rendering = self.delay_rendering.take().expect("Checked above");
+                        delay_rendering.flush_render(self, ctx);
+                    }
                 } else {
                     self.render_state.update(ctx, move |render_state, _| {
                         render_state.add_pending_edit(delta.clone(), *buffer_version);
