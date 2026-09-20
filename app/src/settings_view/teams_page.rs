@@ -70,6 +70,7 @@ use crate::server::ids::ServerId;
 use crate::server::telemetry::TelemetryEvent;
 use crate::themes::theme::Blend;
 use crate::themes::{self};
+use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
 use crate::view_components::{
     ClickableTextInput, ClickableTextInputAction, ClickableTextInputEvent, ToastFlavor,
@@ -142,6 +143,7 @@ const OFFLINE_TEXT: &str = "You are offline.";
 const DISABLED_MEMBER_TOOLTIP_TEXT: &str = "This user's account is disabled";
 
 const MAX_CHIP_WIDTH: f32 = 280.;
+const DISCOVERY_BACK_BUTTON_SPACING: f32 = 8.;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TeamFooterAction {
     Leave,
@@ -4643,29 +4645,37 @@ impl TeamsWidget {
         appearance: &Appearance,
         text: String,
     ) -> Box<dyn Element> {
-        Container::new(
-            Align::new(
-                appearance
-                    .ui_builder()
-                    .span(text)
-                    .with_style(UiComponentStyles {
-                        font_family_id: Some(appearance.ui_font_family()),
-                        font_color: Some(
-                            appearance
-                                .theme()
-                                .sub_text_color(appearance.theme().background())
-                                .into_solid(),
-                        ),
-                        font_size: Some(14.),
-                        ..Default::default()
-                    })
-                    .build()
-                    .finish(),
-            )
-            .left()
-            .finish(),
+        Container::new(self.render_sub_header_text_with_subtext_color(appearance, text))
+            .with_padding_bottom(4.)
+            .finish()
+    }
+
+    /// Unpadded variant of [`Self::render_sub_header_with_subtext_color`], for callers that lay the
+    /// header out next to other content.
+    fn render_sub_header_text_with_subtext_color(
+        &self,
+        appearance: &Appearance,
+        text: String,
+    ) -> Box<dyn Element> {
+        Align::new(
+            appearance
+                .ui_builder()
+                .span(text)
+                .with_style(UiComponentStyles {
+                    font_family_id: Some(appearance.ui_font_family()),
+                    font_color: Some(
+                        appearance
+                            .theme()
+                            .sub_text_color(appearance.theme().background())
+                            .into_solid(),
+                    ),
+                    font_size: Some(14.),
+                    ..Default::default()
+                })
+                .build()
+                .finish(),
         )
-        .with_padding_bottom(4.)
+        .left()
         .finish()
     }
 
@@ -4984,31 +4994,8 @@ impl TeamsWidget {
         workspace_state: &DiscoverableWorkspaceState,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let back_action = view
-            .discovery_join_target
-            .is_none()
-            .then_some(TeamsPageAction::ShowDiscoveryOptions);
         Flex::column()
-            .with_child(self.render_button(
-                "Back",
-                ButtonVariant::Text,
-                self.mouse_state_handles.discovery_back_button.clone(),
-                back_action,
-                UiComponentStyles {
-                    width: Some(72.),
-                    height: Some(32.),
-                    ..Default::default()
-                },
-                appearance,
-            ))
-            .with_child(
-                Container::new(self.render_sub_header_with_subtext_color(
-                    appearance,
-                    format!("Join teams in {}", workspace_state.workspace.name),
-                ))
-                .with_padding_top(12.)
-                .finish(),
-            )
+            .with_child(self.render_workspace_open_teams_header(view, workspace_state, appearance))
             .with_child(
                 Container::new(self.render_description(
                     "Teams are groups in your workspace that share context around specific projects and workflows."
@@ -5024,6 +5011,48 @@ impl TeamsWidget {
                 appearance,
             ))
             .finish()
+    }
+
+    /// Back arrow paired with the subpage title, matching the header treatment used by other
+    /// settings subpages.
+    fn render_workspace_open_teams_header(
+        &self,
+        view: &TeamsPageView,
+        workspace_state: &DiscoverableWorkspaceState,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let ui_builder = appearance.ui_builder().clone();
+        let mut back_button = icon_button(
+            appearance,
+            Icon::ArrowLeft,
+            false,
+            self.mouse_state_handles.discovery_back_button.clone(),
+        )
+        .with_tooltip(move || ui_builder.tool_tip("Back".to_string()).build().finish());
+        if view.discovery_join_target.is_some() {
+            back_button = back_button.disabled();
+        }
+
+        Container::new(
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(DISCOVERY_BACK_BUTTON_SPACING)
+                .with_child(
+                    back_button
+                        .build()
+                        .on_click(|ctx, _, _| {
+                            ctx.dispatch_typed_action(TeamsPageAction::ShowDiscoveryOptions);
+                        })
+                        .finish(),
+                )
+                .with_child(self.render_sub_header_text_with_subtext_color(
+                    appearance,
+                    format!("Join teams in {}", workspace_state.workspace.name),
+                ))
+                .finish(),
+        )
+        .with_padding_bottom(4.)
+        .finish()
     }
 
     fn render_workspace_team_discovery_section(
