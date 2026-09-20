@@ -60,12 +60,12 @@ struct PendingDiffParse {
 /// `BufferEdit` to the remote server. Long enough to coalesce rapid
 /// keystrokes, short enough for the remote view to feel responsive.
 const REMOTE_EDIT_DEBOUNCE: Duration = Duration::from_millis(200);
-const MAX_EDITOR_BUFFER_CONTENT_BYTES: usize = 100 * 1024 * 1024;
+pub(crate) const MAX_EDITOR_BUFFER_CONTENT_BYTES: usize = 100 * 1024 * 1024;
 // Byte length alone does not bound `BufferText` storage because every newline occupies a fixed-size
 // fragment even when the line itself is empty.
-const MAX_EDITOR_BUFFER_NEWLINE_COUNT: usize = 1_000_000;
+pub(crate) const MAX_EDITOR_BUFFER_NEWLINE_COUNT: usize = 1_000_000;
 
-fn editor_buffer_load_error(content: &str) -> Option<FileLoadError> {
+pub(crate) fn editor_buffer_load_error(content: &str) -> Option<FileLoadError> {
     if let Some(error) = editor_buffer_load_error_for_metrics(content.len(), 0) {
         return Some(error);
     }
