@@ -7,7 +7,7 @@ use warpui_core::clipboard::{ClipboardContent, ImageData};
 
 use super::{
     ClipboardPasteContent, MAX_IMAGE_SIZE_BYTES, classify_clipboard_content, parse_image_paths,
-    process_clipboard_content, process_paths,
+    process_clipboard_content, process_clipboard_contents, process_paths,
 };
 
 const ONE_PIXEL_PNG: &str =
@@ -184,4 +184,54 @@ fn reports_unavailable_clipboard_image_data() {
         process_clipboard_content(ClipboardContent::plain_text("text".to_owned())).unwrap_err(),
         "Clipboard image data is unavailable."
     );
+}
+
+#[test]
+fn processes_multiple_clipboard_images_in_order() {
+    let png = general_purpose::STANDARD.decode(ONE_PIXEL_PNG).unwrap();
+    let content = ClipboardContent {
+        images: Some(vec![
+            ImageData {
+                data: png.clone(),
+                mime_type: "image/png".to_owned(),
+                filename: Some("first.png".to_owned()),
+            },
+            ImageData {
+                data: png,
+                mime_type: "image/png".to_owned(),
+                filename: Some("second.png".to_owned()),
+            },
+        ]),
+        ..Default::default()
+    };
+
+    let contexts = process_clipboard_contents(content).unwrap();
+    assert_eq!(contexts.len(), 2);
+    assert_eq!(contexts[0].file_name, "first.png");
+    assert_eq!(contexts[1].file_name, "second.png");
+    assert!(contexts.iter().all(|c| !c.data.is_empty()));
+}
+
+#[test]
+fn filters_unsupported_clipboard_images() {
+    let png = general_purpose::STANDARD.decode(ONE_PIXEL_PNG).unwrap();
+    let content = ClipboardContent {
+        images: Some(vec![
+            ImageData {
+                data: png.clone(),
+                mime_type: "image/png".to_owned(),
+                filename: Some("ok.png".to_owned()),
+            },
+            ImageData {
+                data: vec![0x49, 0x49, 0x2A, 0x00],
+                mime_type: "image/tiff".to_owned(),
+                filename: Some("bad.tiff".to_owned()),
+            },
+        ]),
+        ..Default::default()
+    };
+
+    let contexts = process_clipboard_contents(content).unwrap();
+    assert_eq!(contexts.len(), 1);
+    assert_eq!(contexts[0].file_name, "ok.png");
 }
