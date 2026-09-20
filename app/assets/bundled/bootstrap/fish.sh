@@ -634,7 +634,6 @@ function warp_run_external_alt_c_widget
 end
 
 # Exclude the external handoff helpers from the user's history.
-# warp_run_external_ctrl_t_widget above) from the user's history.
 #
 # fish only supports a single fish_should_add_to_history function (unlike zsh's array of
 # zshaddhistory hooks or bash's PROMPT_COMMAND-style stacking), so compose with any

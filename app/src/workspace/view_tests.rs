@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use ai::project_context::model::ProjectContextModel;
@@ -268,6 +270,45 @@ pub(crate) fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
         )
     });
     workspace
+}
+
+#[test]
+fn external_alt_c_decline_passes_keypress_to_alt_screen() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let terminal = workspace.read(&app, |workspace, ctx| {
+            workspace
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .focused_session_view(ctx)
+                .expect("workspace should start with a terminal view")
+        });
+        let pty_writes = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let crate::terminal::view::Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        terminal.update(&mut app, |terminal, _| {
+            crate::terminal::model::ansi::Handler::set_mode(
+                &mut *terminal.model.lock(),
+                crate::terminal::model::ansi::Mode::SwapScreen {
+                    save_cursor_and_clear_screen: true,
+                },
+            );
+        });
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::TriggerExternalAltCDirectorySearch, ctx);
+        });
+
+        assert_eq!(*pty_writes.borrow(), vec![vec![C0::ESC, b'c']]);
+    });
 }
 
 #[test]

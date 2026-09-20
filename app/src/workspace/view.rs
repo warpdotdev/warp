@@ -17612,7 +17612,9 @@ impl Workspace {
         }
         if let Some(terminal_view_handle) = self.active_session_view(ctx) {
             terminal_view_handle.update(ctx, |terminal_view, ctx| {
-                terminal_view.maybe_trigger_external_alt_c_directory_search(ctx);
+                if !terminal_view.maybe_trigger_external_alt_c_directory_search(ctx) {
+                    terminal_view.write_user_bytes_to_pty(vec![C0::ESC, b'c'], ctx);
+                }
             });
         }
     }
