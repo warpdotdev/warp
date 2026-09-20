@@ -9,7 +9,7 @@ use warp_server_auth::auth_state::AuthState;
 use warp_server_auth::credentials::{AuthToken, Credentials, LoginToken};
 use warp_server_auth::user::FirebaseAuthTokens;
 
-use super::{AuthEvent, AuthSession};
+use super::{AuthEvent, AuthSession, parse_retry_after};
 
 fn session_with_state(
     auth_state: Arc<AuthState>,
@@ -43,6 +43,16 @@ fn session_with_refresh_urls(
 
 fn successful_refresh_response(id_token: &str, refresh_token: &str) -> String {
     format!(r#"{{"id_token":"{id_token}","refresh_token":"{refresh_token}","expires_in":"3600"}}"#)
+}
+#[test]
+fn retry_after_http_date_uses_remaining_delay() {
+    let now = chrono::DateTime::parse_from_rfc3339("2026-09-20T17:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+
+    let delay = parse_retry_after("Sun, 20 Sep 2026 17:02:00 GMT", now);
+
+    assert_eq!(delay, Some(instant::Duration::from_secs(120)));
 }
 
 #[test]

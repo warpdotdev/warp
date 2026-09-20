@@ -25,6 +25,16 @@ const FETCH_ACCESS_TOKEN_TIMEOUT: Duration = Duration::from_secs(5);
 const INITIAL_PROXY_RETRY_DELAY: Duration = Duration::from_secs(30);
 const MAX_PROXY_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
 
+fn parse_retry_after(value: &str, now: chrono::DateTime<chrono::Utc>) -> Option<Duration> {
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    let retry_at = chrono::DateTime::parse_from_rfc2822(value)
+        .ok()?
+        .with_timezone(&chrono::Utc);
+    retry_at.signed_duration_since(now).to_std().ok()
+}
+
 #[derive(Debug)]
 enum TokenRefreshError {
     Firebase(FirebaseError),
@@ -419,8 +429,7 @@ impl AuthSession {
                     .headers()
                     .get(RETRY_AFTER)
                     .and_then(|value| value.to_str().ok())
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .map(Duration::from_secs);
+                    .and_then(|value| parse_retry_after(value, chrono::Utc::now()));
                 return Err(TokenRefreshError::ProxyTransient { retry_after });
             }
             Ok(response)
