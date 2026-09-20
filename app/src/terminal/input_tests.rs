@@ -453,11 +453,15 @@ fn atuin_session_does_not_enable_alt_c_context() {
         let input = terminal.read(&app, |view, _| view.input().clone());
 
         input.read(&app, |input, ctx| {
-            assert!(!input.keymap_context(ctx).set.contains(FZF_SHELL_PLUGIN_CONTEXT));
+            assert!(
+                !input
+                    .keymap_context(ctx)
+                    .set
+                    .contains(FZF_SHELL_PLUGIN_CONTEXT)
+            );
         });
     });
 }
-
 
 fn enable_vim_mode(app: &mut App) {
     AppEditorSettings::handle(app).update(app, |editor_settings, ctx| {
@@ -2453,7 +2457,12 @@ fn fzf_session_enables_alt_c_context() {
         let input = terminal.read(&app, |view, _| view.input().clone());
 
         input.read(&app, |input, ctx| {
-            assert!(input.keymap_context(ctx).set.contains(FZF_SHELL_PLUGIN_CONTEXT));
+            assert!(
+                input
+                    .keymap_context(ctx)
+                    .set
+                    .contains(FZF_SHELL_PLUGIN_CONTEXT)
+            );
         });
     });
 }

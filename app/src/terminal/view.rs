@@ -748,17 +748,12 @@ enum ExternalShellWidget {
     AltC,
 }
 
-fn shell_plugins_support_widget(
-    plugins: &HashSet<String>,
-    widget: ExternalShellWidget,
-) -> bool {
+fn shell_plugins_support_widget(plugins: &HashSet<String>, widget: ExternalShellWidget) -> bool {
     match widget {
         ExternalShellWidget::CtrlR => {
             plugins.contains(FZF_PLUGIN_TAG) || plugins.contains(ATUIN_PLUGIN_TAG)
         }
-        ExternalShellWidget::CtrlT | ExternalShellWidget::AltC => {
-            plugins.contains(FZF_PLUGIN_TAG)
-        }
+        ExternalShellWidget::CtrlT | ExternalShellWidget::AltC => plugins.contains(FZF_PLUGIN_TAG),
     }
 }
 
@@ -9643,16 +9638,16 @@ impl TerminalView {
         let Some(session_id) = self.active_block_session_id() else {
             return false;
         };
-        let has_external_ctrl_r_widget = self
-            .sessions
-            .as_ref(ctx)
-            .get(session_id)
-            .is_some_and(|session| {
-                shell_plugins_support_widget(
-                    session.shell().plugins(),
-                    ExternalShellWidget::CtrlR,
-                )
-            });
+        let has_external_ctrl_r_widget =
+            self.sessions
+                .as_ref(ctx)
+                .get(session_id)
+                .is_some_and(|session| {
+                    shell_plugins_support_widget(
+                        session.shell().plugins(),
+                        ExternalShellWidget::CtrlR,
+                    )
+                });
         if !has_external_ctrl_r_widget || self.model.lock().is_alt_screen_active() {
             return false;
         }
@@ -9689,10 +9684,7 @@ impl TerminalView {
         let Some(session) = self.sessions.as_ref(ctx).get(session_id) else {
             return false;
         };
-        if !shell_plugins_support_widget(
-            session.shell().plugins(),
-            ExternalShellWidget::CtrlT,
-        )
+        if !shell_plugins_support_widget(session.shell().plugins(), ExternalShellWidget::CtrlT)
             || self.model.lock().is_alt_screen_active()
         {
             return false;
@@ -9730,10 +9722,7 @@ impl TerminalView {
             .as_ref(ctx)
             .get(session_id)
             .is_some_and(|session| {
-                shell_plugins_support_widget(
-                    session.shell().plugins(),
-                    ExternalShellWidget::AltC,
-                )
+                shell_plugins_support_widget(session.shell().plugins(), ExternalShellWidget::AltC)
             });
         if !has_fzf || self.model.lock().is_alt_screen_active() {
             return false;

@@ -4495,7 +4495,6 @@ impl Workspace {
         }
     }
 
-
     /// Joins a shared session as a viewer in a new tab. `is_ambient_agent` should be `true`
     /// only when the caller already knows the session is an ambient (cloud) run (the
     /// attach-to-running path). Generic link joins pass `false`; if such a session turns out
@@ -24670,9 +24669,7 @@ impl TypedActionView for Workspace {
                 init_content,
             }) => self.show_command_search(*filter, init_content, ctx),
             TriggerExternalCtrlTFileSearch => self.trigger_external_ctrl_t_file_search(ctx),
-            TriggerExternalAltCDirectorySearch => {
-                self.trigger_external_alt_c_directory_search(ctx)
-            }
+            TriggerExternalAltCDirectorySearch => self.trigger_external_alt_c_directory_search(ctx),
             ImportToPersonalDrive => {
                 if let Some(personal_drive) = UserWorkspaces::as_ref(ctx).personal_drive(ctx) {
                     self.open_import_modal(personal_drive, &None, ctx);
