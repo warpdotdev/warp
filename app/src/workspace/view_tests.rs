@@ -77,7 +77,7 @@ use crate::terminal::history::History;
 use crate::terminal::input::EXTERNAL_ALT_C_BINDING_CONTEXT;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::local_tty::spawner::PtySpawner;
-use crate::terminal::model::ansi::{Handler as _, PromptMetadata};
+use crate::terminal::model::ansi::Handler as _;
 use crate::terminal::model::block::BlockMetadata;
 use crate::terminal::model::session::{SessionId as TerminalSessionId, SessionInfo};
 use crate::terminal::shared_session::{
@@ -291,14 +291,11 @@ async fn initialize_active_shell_plugin_session(
         {
             let mut model = terminal.model.lock();
             model.block_list_mut().set_bootstrapped();
+            model.simulate_block("", "");
             model
                 .block_list_mut()
                 .active_block_for_test()
                 .set_session_id(session_id);
-            model.block_list_mut().prompt_only_precmd(PromptMetadata {
-                session_id: Some(0_u64),
-                ..Default::default()
-            });
         }
         terminal.sessions_model().update(ctx, |sessions, ctx| {
             sessions.initialize_bootstrapped_session(
