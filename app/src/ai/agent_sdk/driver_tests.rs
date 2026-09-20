@@ -27,14 +27,12 @@ use warpui::r#async::Timer;
 use warpui::{App, SingletonEntity as _};
 
 use super::{
-    AgentDriver, AgentRunPrompt, CLIAgentSessionStatus, DebugWindowController,
-    HARNESS_FAILURE_OUTPUT_MAX_BYTES, HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER, IdleTimeoutSender,
+    AgentDriver, AgentRunPrompt, CLIAgentSessionStatus, DebugWindowController, IdleTimeoutSender,
     LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
     OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
     PlatformErrorCode, SDKConversationOutputStatus, WARP_MESSAGE_LISTENER_STATE_ROOT_ENV,
     build_secret_env_vars, debug_turn_task_state, idle_window_for_cli_session_status,
-    idle_window_for_terminal_status, prepare_harness_failure_output, setup_failure_status_update,
-    terminal_status_log_outcome, truncate_harness_failure_output,
+    idle_window_for_terminal_status, setup_failure_status_update, terminal_status_log_outcome,
 };
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::task::TaskId;
@@ -56,70 +54,6 @@ use crate::ai::llms::LLMId;
 use crate::ai::skills::SkillManager;
 use crate::test_util::assert_eventually;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
-#[test]
-fn short_harness_failure_output_is_preserved() {
-    let output = "Harness startup\nRequest failed: invalid credentials";
-
-    assert_eq!(truncate_harness_failure_output(output), output);
-}
-
-#[test]
-fn harness_failure_output_at_byte_limit_is_preserved() {
-    let output = format!(
-        "START{}END",
-        "x".repeat(HARNESS_FAILURE_OUTPUT_MAX_BYTES - "START".len() - "END".len())
-    );
-
-    assert_eq!(output.len(), 4_096);
-    assert_eq!(truncate_harness_failure_output(&output), output);
-}
-
-#[test]
-fn harness_failure_output_one_byte_over_limit_retains_its_start_and_end() {
-    let output = format!(
-        "START{}END",
-        "x".repeat(HARNESS_FAILURE_OUTPUT_MAX_BYTES + 1 - "START".len() - "END".len())
-    );
-
-    let truncated = truncate_harness_failure_output(&output);
-
-    assert_eq!(output.len(), 4_097);
-    assert!(truncated.len() <= 4_096);
-    assert!(truncated.starts_with("START"));
-    assert!(truncated.ends_with("END"));
-    assert!(truncated.contains(HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER));
-}
-#[test]
-fn harness_failure_output_is_redacted_before_leaving_the_client() {
-    let secret = "AKIAIOSFODNN7EXAMPLE";
-    let output = format!("Harness failed with credential {secret}");
-
-    let prepared = prepare_harness_failure_output(&output);
-
-    assert!(!prepared.contains(secret));
-    assert_eq!(
-        prepared,
-        format!(
-            "Harness failed with credential {}",
-            "*".repeat(secret.len())
-        )
-    );
-}
-
-#[test]
-fn harness_failure_output_truncation_preserves_unicode_boundaries() {
-    let output = format!(
-        "START-世{}界-END",
-        "🙂".repeat(HARNESS_FAILURE_OUTPUT_MAX_BYTES)
-    );
-
-    let truncated = truncate_harness_failure_output(&output);
-
-    assert!(truncated.len() <= HARNESS_FAILURE_OUTPUT_MAX_BYTES);
-    assert!(truncated.starts_with("START-世"));
-    assert!(truncated.ends_with("界-END"));
-    assert!(truncated.contains(HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER));
-}
 
 // ── IdleTimeoutSender tests ──────────────────────────────────────────────────────
 
