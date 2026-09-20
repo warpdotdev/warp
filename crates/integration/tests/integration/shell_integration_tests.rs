@@ -25,6 +25,7 @@ integration_tests! {
     test_open_context_menu_and_execute_command,
     // Test we get the right metadata from a bootstrapped shell.
     test_block_metadata_received,
+    test_fzf_ctrl_r_binding_reports_plugin,
     // Test typeahead behavior.
     test_typeahead,
     // Test input reporting behavior.

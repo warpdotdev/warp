@@ -561,8 +561,8 @@ function warp_external_ctrl_r_widget
     if string match --quiet -- 'bind --preset *' "$binding"
       continue
     end
-    # Strip the leading `bind [-M <mode>] <key>`, leaving just the widget/command.
-    set widget (string replace --regex -- '^bind (-M \S+ +)?\S+ +' '' "$binding")
+    # Strip `bind`'s options and key, leaving just the widget/command.
+    set widget (string replace --regex -- '^bind ((-M|--mode) \S+ +|--user +|--preset +)*\S+ +' '' "$binding")
   end
   test -n "$widget"; or return 1
   echo "$widget"

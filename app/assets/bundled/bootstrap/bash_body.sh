@@ -1564,6 +1564,14 @@ esac
     _WARP_EXTERNAL_CTRL_R_WIDGET=""
     if [ "$WARP_IN_MSYS2" = false ]; then
       warp_ctrl_r_binding="$(bind -X 2>/dev/null | command -p sed -n 's/^"\\C-r"[ :] *"\(.*\)"$/\1/p')"
+      if [ -z "$warp_ctrl_r_binding" ] && declare -F __fzf_history__ >/dev/null; then
+        warp_ctrl_r_macro="$(bind -s 2>/dev/null | command -p sed -n 's/^"\\C-r"[ :] *"\(.*\)"$/\1/p')"
+        case "$warp_ctrl_r_macro" in
+          *'`__fzf_history__`'*)
+            warp_ctrl_r_binding="__fzf_history__"
+            ;;
+        esac
+      fi
       case "$warp_ctrl_r_binding" in
         __fzf_history__)
           _WARP_EXTERNAL_CTRL_R_WIDGET="$warp_ctrl_r_binding"
