@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
@@ -74,6 +74,9 @@ use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::history::History;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::local_tty::spawner::PtySpawner;
+use crate::terminal::model::ansi::{Handler as _, PromptMetadata};
+use crate::terminal::model::block::BlockMetadata;
+use crate::terminal::model::session::SessionInfo;
 use crate::terminal::shared_session::{
     SharedSessionScrollbackType, SharedSessionSource, SharedSessionStatus,
 };
@@ -276,6 +279,7 @@ pub(crate) fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
 fn external_alt_c_decline_passes_keypress_to_alt_screen() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
+        let _handoff = FeatureFlag::ShellWidgetHandoff.override_enabled(true);
 
         let workspace = mock_workspace(&mut app);
         let terminal = workspace.read(&app, |workspace, ctx| {
@@ -284,6 +288,50 @@ fn external_alt_c_decline_passes_keypress_to_alt_screen() {
                 .as_ref(ctx)
                 .focused_session_view(ctx)
                 .expect("workspace should start with a terminal view")
+        });
+        let session_info =
+            SessionInfo::new_for_test().with_shell_plugins(HashSet::from(["fzf".to_owned()]));
+        let session_id = session_info.session_id;
+        terminal.update(&mut app, |terminal, ctx| {
+            {
+                let mut model = terminal.model.lock();
+                model.block_list_mut().set_bootstrapped();
+                model
+                    .block_list_mut()
+                    .active_block_for_test()
+                    .set_session_id(session_id);
+                model.block_list_mut().prompt_only_precmd(PromptMetadata {
+                    session_id: Some(0_u64),
+                    ..Default::default()
+                });
+            }
+            terminal
+                .model_event_dispatcher()
+                .update(ctx, |dispatcher, _| {
+                    dispatcher.set_active_session_id(session_id);
+                });
+            terminal.sessions_model().update(ctx, |sessions, ctx| {
+                sessions.initialize_bootstrapped_session(
+                    session_info,
+                    "test command".to_owned(),
+                    Vec::new(),
+                    None,
+                    ctx,
+                );
+            });
+        });
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.set_active_block_metadata(BlockMetadata::new(Some(session_id), None), false, ctx);
+        });
+        input.read(&app, |input, ctx| {
+            assert!(input.keymap_context(ctx).set.contains("FzfShellPlugin"));
+        });
+        terminal.read(&app, |terminal, _| {
+            let model = terminal.model.lock();
+            assert!(model.block_list().is_bootstrapped());
+            assert!(model.block_list().active_block().has_received_precmd());
+            assert!(!model.is_alt_screen_active());
         });
         let pty_writes = Rc::new(RefCell::new(Vec::new()));
         let writes = pty_writes.clone();
@@ -296,12 +344,12 @@ fn external_alt_c_decline_passes_keypress_to_alt_screen() {
         });
 
         terminal.update(&mut app, |terminal, _| {
-            crate::terminal::model::ansi::Handler::set_mode(
-                &mut *terminal.model.lock(),
-                crate::terminal::model::ansi::Mode::SwapScreen {
+            terminal
+                .model
+                .lock()
+                .set_mode(crate::terminal::model::ansi::Mode::SwapScreen {
                     save_cursor_and_clear_screen: true,
-                },
-            );
+                });
         });
         workspace.update(&mut app, |workspace, ctx| {
             workspace.handle_action(&WorkspaceAction::TriggerExternalAltCDirectorySearch, ctx);
