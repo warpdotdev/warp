@@ -408,6 +408,54 @@ async fn deleted_file_content_over_newline_limit_is_withheld() {
 }
 
 #[tokio::test]
+async fn base_content_read_uses_blob_resolved_before_head_changes() {
+    let repo_dir = tempfile::tempdir().expect("create temp repo dir");
+    let repo_path = repo_dir.path();
+
+    run_git_command(repo_path, &["init", "-b", "main"])
+        .await
+        .expect("git init");
+    run_git_command(repo_path, &["config", "user.email", "test@test.com"])
+        .await
+        .expect("git config email");
+    run_git_command(repo_path, &["config", "user.name", "Test"])
+        .await
+        .expect("git config name");
+    std::fs::write(repo_path.join("file.txt"), "preflighted\n").expect("write initial file");
+    run_git_command(repo_path, &["add", "file.txt"])
+        .await
+        .expect("git add");
+    run_git_command(repo_path, &["commit", "-m", "initial"])
+        .await
+        .expect("git commit");
+
+    let blob_oid = run_git_command(repo_path, &["rev-parse", "--verify", "HEAD:file.txt"])
+        .await
+        .expect("resolve initial blob");
+    let blob_oid = blob_oid.trim();
+
+    std::fs::write(
+        repo_path.join("file.txt"),
+        "\n".repeat(MAX_EDITOR_BUFFER_NEWLINE_COUNT + 1),
+    )
+    .expect("replace file");
+    run_git_command(repo_path, &["add", "file.txt"])
+        .await
+        .expect("git add replacement");
+    run_git_command(repo_path, &["commit", "-m", "replace"])
+        .await
+        .expect("git commit replacement");
+
+    let content = LocalDiffStateModel::get_file_content_at_blob(repo_path, blob_oid).await;
+
+    assert_eq!(content, BaseContent::Loaded("preflighted\n".to_string()));
+    assert_eq!(
+        LocalDiffStateModel::get_file_content_at_commit(repo_path, "file.txt", "HEAD").await,
+        BaseContent::ExceedsEditorLimit
+    );
+}
+
+#[tokio::test]
 async fn staged_rename_and_modify_produces_non_empty_diff() {
     let repo_dir = tempfile::tempdir().expect("create temp repo dir");
     let repo_path = repo_dir.path();

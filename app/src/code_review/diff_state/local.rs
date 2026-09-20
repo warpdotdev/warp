@@ -2888,9 +2888,23 @@ impl LocalDiffStateModel {
     ) -> BaseContent {
         let object = format!("{commit}:{file_path}");
         log::debug!(
-            "[GIT OPERATION] local.rs get_file_content_at_commit git cat-file -s {commit}:{file_path}"
+            "[GIT OPERATION] local.rs get_file_content_at_commit git rev-parse --verify {commit}:{file_path}"
         );
-        let object_size = run_git_command(repo_path, &["cat-file", "-s", &object])
+        let blob_oid = run_git_command(repo_path, &["rev-parse", "--verify", &object])
+            .await
+            .ok()
+            .map(|oid| oid.trim().to_string())
+            .filter(|oid| !oid.is_empty());
+        let Some(blob_oid) = blob_oid else {
+            return BaseContent::Unavailable;
+        };
+
+        Self::get_file_content_at_blob(repo_path, &blob_oid).await
+    }
+
+    async fn get_file_content_at_blob(repo_path: &Path, blob_oid: &str) -> BaseContent {
+        log::debug!("[GIT OPERATION] local.rs get_file_content_at_blob git cat-file -s {blob_oid}");
+        let object_size = run_git_command(repo_path, &["cat-file", "-s", blob_oid])
             .await
             .ok()
             .and_then(|size| size.trim().parse::<u64>().ok());
@@ -2901,10 +2915,10 @@ impl LocalDiffStateModel {
             return BaseContent::ExceedsEditorLimit;
         }
         log::debug!(
-            "[GIT OPERATION] local.rs get_file_content_at_commit git show {commit}:{file_path}"
+            "[GIT OPERATION] local.rs get_file_content_at_blob git cat-file blob {blob_oid}"
         );
 
-        match run_git_command(repo_path, &["show", &object]).await {
+        match run_git_command(repo_path, &["cat-file", "blob", blob_oid]).await {
             Ok(content) if editor_buffer_load_error(&content).is_none() => {
                 BaseContent::Loaded(content)
             }
