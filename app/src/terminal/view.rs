@@ -23903,6 +23903,7 @@ impl TerminalView {
             user_query_mode: UserQueryMode::default(),
             running_command: None,
             intended_agent: None,
+            base: None,
         }];
 
         // Create a real conversation in the history model for this dummy block so it renders.

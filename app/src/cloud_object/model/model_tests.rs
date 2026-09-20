@@ -960,12 +960,16 @@ fn test_force_refresh_correctly_resets_timestamp() {
             });
 
         // Initialize app with pending refresh = true!
+        let start = Utc::now();
         initialize_app(&mut app, Vec::new(), Arc::new(cloud_object_server_api_mock));
 
         // Spend time waiting for the initial load to finish etc.
         warpui::r#async::Timer::after(Duration::from_secs(1)).await;
 
-        // Check that pending refresh is within the acceptable hour range.
+        // Check that pending refresh is within the acceptable hour range. The lower bound is
+        // measured from `start`: the refresh is scheduled relative to the clock at the moment it
+        // completes, which is before this check runs, so comparing against `Utc::now()` here
+        // fails whenever the random offset lands on the minimum.
         CloudModel::handle(&app).read(&app, |model, _ctx| {
             let time_option = model.time_of_next_force_refresh;
             assert!(time_option.is_some());
@@ -975,8 +979,7 @@ fn test_force_refresh_correctly_resets_timestamp() {
                     + chrono::Duration::minutes(MAX_MINUTES_UNTIL_NEXT_FORCE_REFRESH))
             );
             assert!(
-                time >= (Utc::now()
-                    + chrono::Duration::minutes(MIN_MINUTES_UNTIL_NEXT_FORCE_REFRESH))
+                time >= (start + chrono::Duration::minutes(MIN_MINUTES_UNTIL_NEXT_FORCE_REFRESH))
             );
         });
     })

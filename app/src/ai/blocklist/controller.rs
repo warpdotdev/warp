@@ -49,9 +49,9 @@ use crate::ai::agent::conversation::{AIConversation, AIConversationId, Conversat
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment, AIAgentContext,
-    AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, AIIdentifiers, CancellationOutcome,
-    CancellationReason, DocumentContentAttachmentSource, EntrypointType, FileContext,
-    FinishedAIAgentOutput, PassiveSuggestionResultType, PassiveSuggestionTrigger,
+    AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, AIIdentifiers, BaseUserQuery,
+    CancellationOutcome, CancellationReason, DocumentContentAttachmentSource, EntrypointType,
+    FileContext, FinishedAIAgentOutput, PassiveSuggestionResultType, PassiveSuggestionTrigger,
     PassiveSuggestionTriggerType, RenderableAIError, RequestCost, RequestMetadata, RunningCommand,
     StaticQueryType, TransientNetworkErrorKind, UserQueryMode, extract_user_query_mode,
 };
@@ -378,6 +378,10 @@ enum InputQueryType {
         query: String,
         static_query_type: Option<StaticQueryType>,
         running_command: Option<RunningCommand>,
+        /// The `Request.Input.UserQuery` warp-server injected with a shared-session prompt, when
+        /// this query came from one. `input_for_query` seeds the input's text, mode, and
+        /// intended agent from it and keeps it as the base the outgoing request is written over.
+        base: Option<BaseUserQuery>,
     },
     /// A custom [`AIInputType`].
     AIInputType { ai_input: AIAgentInput },
@@ -826,6 +830,7 @@ impl BlocklistAIController {
             InputQueryType::UserSubmittedQueryFromInput {
                 static_query_type,
                 running_command,
+                base,
                 ..
             } => {
                 // Resolve the attachment set for this submission. The direct-send branch
@@ -849,6 +854,7 @@ impl BlocklistAIController {
                     static_query_type,
                     user_query_mode,
                     running_command,
+                    base,
                     additional_attachments,
                     prompt_attachments,
                     self.context_model.as_ref(ctx),
@@ -996,6 +1002,8 @@ impl BlocklistAIController {
             participant_id,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            None,
+            HashMap::new(),
             ctx,
         );
     }
@@ -1020,6 +1028,8 @@ impl BlocklistAIController {
             participant_id,
             /*is_queued_prompt*/ true,
             Some(queued_query_id),
+            None,
+            HashMap::new(),
             ctx,
         );
     }
@@ -1033,6 +1043,8 @@ impl BlocklistAIController {
         participant_id: Option<ParticipantId>,
         is_queued_prompt: bool,
         queued_query_id: Option<QueuedQueryId>,
+        base: Option<BaseUserQuery>,
+        additional_attachments: HashMap<String, AIAgentAttachment>,
         ctx: &mut ModelContext<Self>,
     ) {
         let participant_id = participant_id.or_else(|| self.get_sharer_participant_id());
@@ -1070,8 +1082,9 @@ impl BlocklistAIController {
                         query,
                         static_query_type,
                         running_command: Some(running_command),
+                        base,
                     },
-                    additional_attachments: HashMap::new(),
+                    additional_attachments,
                     queued_query_id,
                 },
                 entrypoint_type,
@@ -1087,8 +1100,9 @@ impl BlocklistAIController {
                         query,
                         static_query_type,
                         running_command: None,
+                        base,
                     },
-                    additional_attachments: HashMap::new(),
+                    additional_attachments,
                     queued_query_id,
                 },
                 entrypoint_type,
@@ -1116,6 +1130,7 @@ impl BlocklistAIController {
             EntrypointType::AgentInitiated,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            None,
             ctx,
         );
     }
@@ -1138,6 +1153,7 @@ impl BlocklistAIController {
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            None,
             ctx,
         )
     }
@@ -1163,6 +1179,7 @@ impl BlocklistAIController {
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ true,
             Some(queued_query_id),
+            None,
             ctx,
         );
     }
@@ -1174,6 +1191,7 @@ impl BlocklistAIController {
         conversation_id: AIConversationId,
         participant_id: Option<ParticipantId>,
         additional_attachments: HashMap<String, AIAgentAttachment>,
+        base: Option<BaseUserQuery>,
         ctx: &mut ModelContext<Self>,
     ) {
         self.send_user_query_in_conversation_internal(
@@ -1185,6 +1203,7 @@ impl BlocklistAIController {
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            base,
             ctx,
         );
     }
@@ -1209,6 +1228,7 @@ impl BlocklistAIController {
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            None,
             ctx,
         );
     }
@@ -1224,6 +1244,7 @@ impl BlocklistAIController {
         entrypoint_type: EntrypointType,
         is_queued_prompt: bool,
         queued_query_id: Option<QueuedQueryId>,
+        base: Option<BaseUserQuery>,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
         let is_viewer = self
@@ -1335,6 +1356,7 @@ impl BlocklistAIController {
                     query,
                     static_query_type: None,
                     running_command,
+                    base,
                 },
                 additional_attachments,
                 queued_query_id,
@@ -1361,6 +1383,7 @@ impl BlocklistAIController {
                     query: query_type.query().to_string(),
                     static_query_type: query_type.static_query_type(),
                     running_command: None,
+                    base: None,
                 },
                 additional_attachments: HashMap::new(),
                 queued_query_id: None,
@@ -1682,6 +1705,7 @@ impl BlocklistAIController {
             None,
             UserQueryMode::Normal,
             None,
+            row.base_user_query().cloned(),
             row.prepared_files().cloned().unwrap_or_default(),
             prompt_attachments,
             self.context_model.as_ref(ctx),
@@ -3650,6 +3674,20 @@ impl BlocklistAIController {
                     );
                 });
             }
+            Some(warp_multi_agent_api::response_event::stream_finished::Reason::ChatgptSubscriptionError(details)) => {
+                history_model.update(ctx, |history_model, ctx| {
+                    history_model.mark_response_stream_completed_with_error(
+                        RenderableAIError::AgentStreamFailure {
+                            error_message: details.message,
+                        },
+                        /*recovery_pending*/ false,
+                        stream_id,
+                        conversation_id,
+                        self.terminal_surface_id,
+                        ctx,
+                    );
+                });
+            }
             Some(warp_multi_agent_api::response_event::stream_finished::Reason::MaxTokenLimit(_)) => {
                 let error_message = "Input exceeded context window limit.";
                 history_model.update(ctx, |history_model, ctx| {
@@ -3687,12 +3725,13 @@ pub struct ClientIdentifiers {
 
 #[allow(clippy::too_many_arguments)]
 fn input_for_query(
-    query: String,
+    client_query: String,
     task_id: &TaskId,
     conversation_id: AIConversationId,
     static_query_type: Option<StaticQueryType>,
-    user_query_mode: UserQueryMode,
+    client_mode: UserQueryMode,
     running_command: Option<RunningCommand>,
+    base: Option<BaseUserQuery>,
     additional_attachments: HashMap<String, AIAgentAttachment>,
     prompt_attachments: Vec<PendingAttachment>,
     context_model: &BlocklistAIContextModel,
@@ -3717,7 +3756,7 @@ fn input_for_query(
         image_context,
         app,
     );
-    let intended_agent = BlocklistAIHistoryModel::as_ref(app)
+    let task_intended_agent = BlocklistAIHistoryModel::as_ref(app)
         .conversation(&conversation_id)
         .and_then(|c| c.get_task(task_id))
         .and_then(|task| {
@@ -3729,6 +3768,12 @@ fn input_for_query(
                 None
             }
         });
+    // A base (the query warp-server injected with a shared-session prompt) is authoritative for
+    // the fields it set; the client's text, mode, and task-derived agent fill in the rest.
+    let (query, user_query_mode, intended_agent) = match base.as_ref() {
+        Some(base) => base.seed_input_fields(client_query, client_mode, task_intended_agent),
+        None => (client_query, client_mode, task_intended_agent),
+    };
     let mut referenced_attachments = parse_context_attachments(&query, context_model, app);
     referenced_attachments.extend(additional_attachments);
     add_pending_file_attachments(&mut referenced_attachments, file_attachments);
@@ -3741,6 +3786,7 @@ fn input_for_query(
         user_query_mode,
         running_command,
         intended_agent,
+        base,
     }
 }
 

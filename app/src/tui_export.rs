@@ -105,7 +105,8 @@ pub use crate::ai::blocklist::telemetry::{
 };
 pub use crate::ai::blocklist::view_util::{
     FAILED_OUTPUT_USAGE_NOTICE_TEXT, FailedOutputPresentation, OUT_OF_CREDITS_SUBSCRIBE_LABEL,
-    failed_output_presentation, format_credits, should_show_failed_output_usage_notice,
+    failed_output_presentation, format_credits, format_dollars,
+    should_show_failed_output_usage_notice,
 };
 pub use crate::ai::blocklist::{
     AIActionStatus, AskUserQuestionExecutor, AttachmentType, BlocklistAIActionEvent,

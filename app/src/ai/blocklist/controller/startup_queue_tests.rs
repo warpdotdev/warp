@@ -22,7 +22,7 @@ fn user_queries_in_order(history: &BlocklistAIHistoryModel, id: AIConversationId
         .collect()
 }
 
-fn file_prompt(participant: ParticipantId) -> QueuedQuery {
+fn file_prompt(participant: ParticipantId, base: Option<BaseUserQuery>) -> QueuedQuery {
     QueuedQuery::new_shared_session_prompt(
         "file followup".into(),
         participant,
@@ -30,6 +30,7 @@ fn file_prompt(participant: ParticipantId) -> QueuedQuery {
             attachment_id: "attachment-id".into(),
             file_name: "event-payload.json".into(),
         }],
+        base,
     )
 }
 
@@ -51,11 +52,20 @@ fn prepared_file_prompt_steers_without_interrupting_or_redownloading() {
         let terminal = add_window_with_terminal(&mut app, None);
         let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
         let participant = ParticipantId::new();
+        let base = BaseUserQuery::from_proto(warp_multi_agent_api::request::input::UserQuery {
+            query: "server followup".into(),
+            origin: Some(warp_multi_agent_api::UserQueryOrigin::default()),
+            ..Default::default()
+        });
         let (id, query_id, streams) = controller.update(&mut app, |controller, ctx| {
             let id = controller.bind_native_prompt_conversation(None, ctx);
             controller.send_user_query_in_conversation("initial".into(), id, None, ctx);
             let query_id = QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
-                queue.append(id, file_prompt(participant.clone()), ctx)
+                queue.append(
+                    id,
+                    file_prompt(participant.clone(), Some(base.clone())),
+                    ctx,
+                )
             });
             let task_id = BlocklistAIHistoryModel::as_ref(ctx)
                 .conversation(&id)
@@ -85,10 +95,11 @@ fn prepared_file_prompt_steers_without_interrupting_or_redownloading() {
             let task_id = BlocklistAIHistoryModel::as_ref(ctx)
                 .conversation(&id).unwrap().get_root_task_id().clone();
             let input = controller.steer_head_prompt_for_request(id, &task_id, ctx).unwrap();
-            let AIAgentInput::UserQuery { query, referenced_attachments, .. } = &input else {
+            let AIAgentInput::UserQuery { query, referenced_attachments, base: input_base, .. } = &input else {
                 panic!("expected a user query");
             };
-            assert_eq!(query, "file followup");
+            assert_eq!(query, "server followup");
+            assert_eq!(input_base.as_ref(), Some(&base));
             assert!(matches!(
                 referenced_attachments.get("event-payload.json"),
                 Some(AIAgentAttachment::FilePathReference { file_id, file_path, .. })
@@ -131,7 +142,7 @@ fn ready_event_dispatches_only_when_the_conversation_is_idle_after_an_exchange()
             });
             let query_id = QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
                 queue.finish_native_setup(id, ctx);
-                queue.append(id, file_prompt(ParticipantId::new()), ctx)
+                queue.append(id, file_prompt(ParticipantId::new(), None), ctx)
             });
             QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
                 queue.complete_preparation(id, query_id, prepared_file(), ctx);
@@ -157,7 +168,7 @@ fn delayed_file_prompt_dispatches_after_promptless_startup_setup_finishes() {
         let (id, query_id) = controller.update(&mut app, |controller, ctx| {
             let id = controller.bind_native_prompt_conversation(None, ctx);
             let query_id = QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
-                queue.append(id, file_prompt(ParticipantId::new()), ctx)
+                queue.append(id, file_prompt(ParticipantId::new(), None), ctx)
             });
 
             QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
@@ -203,6 +214,7 @@ fn missing_download_configuration_settles_eagerly_without_waiting_for_dispatch()
                     file_name: "event-payload.json".into(),
                 }],
                 ParticipantId::new(),
+                None,
                 ctx,
             );
             let row = &QueuedQueryModel::as_ref(ctx).queue(id)[0];
@@ -228,6 +240,7 @@ fn startup_injections_queued_before_the_initial_prompt_are_dispatched_one_at_a_t
                 None,
                 vec![],
                 participant.clone(),
+                None,
                 ctx,
             );
             controller.execute_warp_agent_prompt_from_shared_session_injection(
@@ -235,6 +248,7 @@ fn startup_injections_queued_before_the_initial_prompt_are_dispatched_one_at_a_t
                 None,
                 vec![],
                 participant.clone(),
+                None,
                 ctx,
             );
             assert_eq!(
@@ -324,6 +338,7 @@ fn live_injection_while_a_turn_is_active_is_queued_instead_of_interrupting_it() 
                 None,
                 vec![],
                 ParticipantId::new(),
+                None,
                 ctx,
             );
         });
@@ -372,6 +387,7 @@ fn dispatch_queued_warp_agent_prompt_with_an_explicit_id_targets_that_row_not_th
                 None,
                 vec![],
                 participant.clone(),
+                None,
                 ctx,
             );
             controller.execute_warp_agent_prompt_from_shared_session_injection(
@@ -379,6 +395,7 @@ fn dispatch_queued_warp_agent_prompt_with_an_explicit_id_targets_that_row_not_th
                 None,
                 vec![],
                 participant.clone(),
+                None,
                 ctx,
             );
             let second_row_id = QueuedQueryModel::as_ref(ctx).queue(id)[1].id();
@@ -441,6 +458,7 @@ fn dispatch_queued_warp_agent_prompt_respects_fifo_order_across_mixed_row_kinds(
                 None,
                 vec![],
                 ParticipantId::new(),
+                None,
                 ctx,
             );
             id
@@ -503,6 +521,7 @@ fn route_native_startup_injection_rejects_a_prompt_targeting_a_different_convers
                     Some(other_token),
                     vec![],
                     ParticipantId::new(),
+                    None,
                     ctx,
                 );
                 assert!(!QueuedQueryModel::as_ref(ctx).has_queue(id));
@@ -546,6 +565,7 @@ fn unmapped_token_never_bootstraps_a_new_conversation_when_not_bound() {
                     Some(unmapped_token),
                     vec![],
                     ParticipantId::new(),
+                    None,
                     ctx,
                 );
             });
@@ -580,6 +600,7 @@ fn drained_injection_stages_attachments_and_attributes_the_exchange_to_its_parti
                     content: "remote context".into(),
                 }],
                 participant.clone(),
+                None,
                 ctx,
             );
             id
@@ -646,6 +667,7 @@ fn startup_injections_reuse_the_restored_conversation() {
                     None,
                     vec![],
                     ParticipantId::new(),
+                    None,
                     ctx,
                 );
                 let row = &QueuedQueryModel::as_ref(ctx).queue(restored)[0];
@@ -677,6 +699,7 @@ fn native_initial_prompt_uses_its_bound_conversation_without_agent_view() {
                     None,
                     vec![],
                     ParticipantId::new(),
+                    None,
                     ctx,
                 );
                 controller.send_ai_input_with_context(
@@ -743,6 +766,7 @@ fn unbind_native_prompt_conversation_drops_any_prompts_still_queued() {
                     None,
                     vec![],
                     ParticipantId::new(),
+                    None,
                     ctx,
                 );
                 QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
