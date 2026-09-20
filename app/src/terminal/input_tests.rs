@@ -441,28 +441,6 @@ fn bootstrap_terminal(
     });
 }
 
-#[test]
-fn atuin_session_does_not_enable_alt_c_context() {
-    App::test((), |mut app| async move {
-        initialize_app(&mut app);
-        let _flag = FeatureFlag::ShellWidgetHandoff.override_enabled(true);
-        let session_info =
-            SessionInfo::new_for_test().with_shell_plugins(HashSet::from(["atuin".to_string()]));
-        let terminal =
-            add_window_with_bootstrapped_terminal(&mut app, None, Some(session_info)).await;
-        let input = terminal.read(&app, |view, _| view.input().clone());
-
-        input.read(&app, |input, ctx| {
-            assert!(
-                !input
-                    .keymap_context(ctx)
-                    .set
-                    .contains(FZF_SHELL_PLUGIN_CONTEXT)
-            );
-        });
-    });
-}
-
 fn enable_vim_mode(app: &mut App) {
     AppEditorSettings::handle(app).update(app, |editor_settings, ctx| {
         editor_settings
@@ -2440,28 +2418,6 @@ fn ctrl_t_binding_is_ineligible_when_shell_widget_handoff_flag_is_disabled() {
                 ctx.get_binding_by_name("workspace:trigger_external_alt_c_directory_search")
                     .is_none(),
                 "the alt-c binding must be ineligible while ShellWidgetHandoff is disabled"
-            );
-        });
-    });
-}
-
-#[test]
-fn fzf_session_enables_alt_c_context() {
-    App::test((), |mut app| async move {
-        initialize_app(&mut app);
-        let _flag = FeatureFlag::ShellWidgetHandoff.override_enabled(true);
-        let session_info = SessionInfo::new_for_test()
-            .with_shell_plugins(HashSet::from([FZF_PLUGIN_TAG.to_string()]));
-        let terminal =
-            add_window_with_bootstrapped_terminal(&mut app, None, Some(session_info)).await;
-        let input = terminal.read(&app, |view, _| view.input().clone());
-
-        input.read(&app, |input, ctx| {
-            assert!(
-                input
-                    .keymap_context(ctx)
-                    .set
-                    .contains(FZF_SHELL_PLUGIN_CONTEXT)
             );
         });
     });

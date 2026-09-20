@@ -422,8 +422,8 @@ use crate::terminal::input::inline_menu::InlineMenuPositioner;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::input::slash_commands::fork_button_action;
 use crate::terminal::input::{
-    CommandExecutionSource, FZF_SHELL_PLUGIN_CONTEXT, InputAction, InputEmptyStateChangeReason,
-    InputState, MenuPositioning, MenuPositioningProvider, ShellWidgetApplyMode,
+    CommandExecutionSource, InputAction, InputEmptyStateChangeReason, InputState, MenuPositioning,
+    MenuPositioningProvider, ShellWidgetApplyMode,
 };
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::ligature_settings::{LigatureSettings, should_use_ligature_rendering};
@@ -9711,20 +9711,7 @@ impl TerminalView {
         &mut self,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
-        if !FeatureFlag::ShellWidgetHandoff.is_enabled() || self.is_long_running() {
-            return false;
-        }
-        let Some(session_id) = self.active_block_session_id() else {
-            return false;
-        };
-        let has_fzf = self
-            .sessions
-            .as_ref(ctx)
-            .get(session_id)
-            .is_some_and(|session| {
-                shell_plugins_support_widget(session.shell().plugins(), ExternalShellWidget::AltC)
-            });
-        if !has_fzf || self.model.lock().is_alt_screen_active() {
+        if !self.external_alt_c_binding_eligible(ctx) {
             return false;
         }
 
@@ -9736,6 +9723,21 @@ impl TerminalView {
                 ctx,
             )
         })
+    }
+
+    pub(crate) fn external_alt_c_binding_eligible(&self, app: &AppContext) -> bool {
+        if !FeatureFlag::ShellWidgetHandoff.is_enabled()
+            || self.is_long_running()
+            || self.input.as_ref(app).is_voltron_open()
+            || self.model.lock().is_alt_screen_active()
+        {
+            return false;
+        }
+        self.active_block_session_id()
+            .and_then(|session_id| self.sessions.as_ref(app).get(session_id))
+            .is_some_and(|session| {
+                shell_plugins_support_widget(session.shell().plugins(), ExternalShellWidget::AltC)
+            })
     }
 
     /// Returns `true` when an interactive SSH command has been detected at
@@ -29336,13 +29338,6 @@ impl View for TerminalView {
         }
         if input.is_voltron_open() {
             context.set.insert("VoltronActive");
-        }
-        if self
-            .active_block_session_id()
-            .and_then(|session_id| self.sessions.as_ref(app).get(session_id))
-            .is_some_and(|session| session.shell().plugins().contains(FZF_PLUGIN_TAG))
-        {
-            context.set.insert(FZF_SHELL_PLUGIN_CONTEXT);
         }
 
         if model_lock.block_list().selection().is_some() {

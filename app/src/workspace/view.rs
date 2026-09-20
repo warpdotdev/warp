@@ -397,7 +397,7 @@ use crate::terminal::enable_auto_reload_modal::{
 use crate::terminal::general_settings::GeneralSettings;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::input::slash_commands::fork_button_action;
-use crate::terminal::input::{Input, MenuPositioning};
+use crate::terminal::input::{EXTERNAL_ALT_C_BINDING_CONTEXT, Input, MenuPositioning};
 use crate::terminal::keys_settings::KeysSettings;
 use crate::terminal::ligature_settings::should_use_ligature_rendering;
 #[cfg(feature = "local_tty")]
@@ -26786,6 +26786,9 @@ impl View for Workspace {
             .focused_session_view(app)
         {
             let terminal_view = terminal_view.as_ref(app);
+            if terminal_view.external_alt_c_binding_eligible(app) {
+                context.set.insert(EXTERNAL_ALT_C_BINDING_CONTEXT);
+            }
             if terminal_view.is_long_running() {
                 context.set.insert("LongRunningCommand");
             }

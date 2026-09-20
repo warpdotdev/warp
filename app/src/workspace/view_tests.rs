@@ -74,7 +74,7 @@ use crate::system::SystemStats;
 use crate::tab_configs::tab_config::{TabConfigPaneNode, TabConfigPaneType};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::history::History;
-use crate::terminal::input::FZF_SHELL_PLUGIN_CONTEXT;
+use crate::terminal::input::EXTERNAL_ALT_C_BINDING_CONTEXT;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::local_tty::spawner::PtySpawner;
 use crate::terminal::model::ansi::{Handler as _, PromptMetadata};
@@ -279,12 +279,13 @@ pub(crate) fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
     workspace
 }
 
-async fn initialize_active_fzf_session(
+async fn initialize_active_shell_plugin_session(
     terminal: &ViewHandle<TerminalView>,
+    plugin: &str,
     app: &mut App,
 ) -> TerminalSessionId {
     let session_info =
-        SessionInfo::new_for_test().with_shell_plugins(HashSet::from(["fzf".to_owned()]));
+        SessionInfo::new_for_test().with_shell_plugins(HashSet::from([plugin.to_owned()]));
     let session_id = session_info.session_id;
     terminal.update(app, |terminal, ctx| {
         {
@@ -320,7 +321,7 @@ async fn initialize_active_fzf_session(
             terminal
                 .sessions(ctx)
                 .get(session_id)
-                .is_some_and(|session| session.shell().plugins().contains("fzf"))
+                .is_some_and(|session| session.shell().plugins().contains(plugin))
         );
     });
     session_id
@@ -344,23 +345,22 @@ fn external_alt_c_binding_uses_terminal_fzf_context_when_input_context_is_stale(
                 .focused_session_view(ctx)
                 .expect("workspace should start with a terminal view")
         });
-        initialize_active_fzf_session(&terminal, &mut app).await;
+        initialize_active_shell_plugin_session(&terminal, "fzf", &mut app).await;
 
         let input = terminal.read(&app, |terminal, _| terminal.input().clone());
         input.update(&mut app, |input, ctx| {
             input.set_active_block_metadata(BlockMetadata::new(None, None), false, ctx);
         });
         input.read(&app, |input, ctx| {
+            assert!(input.active_session(ctx).is_none());
+        });
+        workspace.read(&app, |workspace, ctx| {
             assert!(
-                !input
+                workspace
                     .keymap_context(ctx)
                     .set
-                    .contains(FZF_SHELL_PLUGIN_CONTEXT)
+                    .contains(EXTERNAL_ALT_C_BINDING_CONTEXT)
             );
-        });
-        terminal.read(&app, |terminal, ctx| {
-            let context = terminal.keymap_context(ctx);
-            assert!(context.set.contains(FZF_SHELL_PLUGIN_CONTEXT));
         });
         let pty_writes = Rc::new(RefCell::new(Vec::new()));
         let writes = pty_writes.clone();
@@ -398,6 +398,34 @@ fn external_alt_c_binding_uses_terminal_fzf_context_when_input_context_is_stale(
         assert_eq!(*pty_writes.borrow(), vec![vec![C0::ESC, b'c']]);
     });
 }
+
+#[test]
+fn atuin_session_does_not_enable_external_alt_c_binding() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let _handoff = FeatureFlag::ShellWidgetHandoff.override_enabled(true);
+
+        let workspace = mock_workspace(&mut app);
+        let terminal = workspace.read(&app, |workspace, ctx| {
+            workspace
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .focused_session_view(ctx)
+                .expect("workspace should start with a terminal view")
+        });
+        initialize_active_shell_plugin_session(&terminal, "atuin", &mut app).await;
+
+        workspace.read(&app, |workspace, ctx| {
+            assert!(
+                !workspace
+                    .keymap_context(ctx)
+                    .set
+                    .contains(EXTERNAL_ALT_C_BINDING_CONTEXT)
+            );
+        });
+    });
+}
+
 #[test]
 fn external_alt_c_decline_passes_keypress_to_alt_screen() {
     App::test((), |mut app| async move {
@@ -412,7 +440,7 @@ fn external_alt_c_decline_passes_keypress_to_alt_screen() {
                 .focused_session_view(ctx)
                 .expect("workspace should start with a terminal view")
         });
-        let session_id = initialize_active_fzf_session(&terminal, &mut app).await;
+        let session_id = initialize_active_shell_plugin_session(&terminal, "fzf", &mut app).await;
         terminal.read(&app, |terminal, _| {
             assert_eq!(terminal.active_block_session_id(), Some(session_id));
             let model = terminal.model.lock();
@@ -437,6 +465,14 @@ fn external_alt_c_decline_passes_keypress_to_alt_screen() {
                 .set_mode(crate::terminal::model::ansi::Mode::SwapScreen {
                     save_cursor_and_clear_screen: true,
                 });
+        });
+        workspace.read(&app, |workspace, ctx| {
+            assert!(
+                !workspace
+                    .keymap_context(ctx)
+                    .set
+                    .contains(EXTERNAL_ALT_C_BINDING_CONTEXT)
+            );
         });
         workspace.update(&mut app, |workspace, ctx| {
             workspace.handle_action(&WorkspaceAction::TriggerExternalAltCDirectorySearch, ctx);

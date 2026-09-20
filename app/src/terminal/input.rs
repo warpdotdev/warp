@@ -330,7 +330,7 @@ use crate::terminal::view::ambient_agent::{
 use crate::terminal::view::init::{CAN_ATTACH_FILE_KEY, CLI_AGENT_SESSION_ACTIVE_KEY};
 use crate::terminal::view::inline_banner::{PromptSuggestionsEvent, PromptSuggestionsView};
 use crate::terminal::view::{
-    AIQueryRouting, CodeDiffAction, FZF_PLUGIN_TAG, file_attach_allowed_for_shared_session,
+    AIQueryRouting, CodeDiffAction, file_attach_allowed_for_shared_session,
     resolve_ai_query_routing, resolve_ambient_agent_task_id,
 };
 use crate::ui_components::blended_colors;
@@ -442,7 +442,7 @@ fn effective_default_host(
 
 pub const COMPLETIONS_MENU_WIDTH: f32 = 330.;
 pub const OPEN_COMPLETIONS_KEYBINDING_NAME: &str = "input:open_completion_suggestions";
-pub(crate) const FZF_SHELL_PLUGIN_CONTEXT: &str = "FzfShellPlugin";
+pub(crate) const EXTERNAL_ALT_C_BINDING_CONTEXT: &str = "ExternalAltCDirectorySearch";
 pub const INPUT_A11Y_LABEL: &str = "Command Input.";
 pub const INPUT_A11Y_HELPER: &str = "Input your shell command, press enter to execute. Press cmd-up to navigate to output of previously executed commands. Press cmd-l to re-focus command input.";
 pub const AI_COMMAND_SEARCH_HINT_TEXT: &str = "Type '#' for AI command suggestions";
@@ -2162,11 +2162,7 @@ pub fn init(app: &mut AppContext) {
     .with_context_predicate(id!("Input"))
     .with_key_binding("ctrl-l")]);
 
-    let external_alt_c_context = (id!("Input") | id!("Terminal"))
-        & id!(FZF_SHELL_PLUGIN_CONTEXT)
-        & !id!("VoltronActive")
-        & !id!("LongRunningCommand")
-        & !id!("AltScreen");
+    let external_alt_c_context = id!(EXTERNAL_ALT_C_BINDING_CONTEXT);
     app.register_editable_bindings([
         EditableBinding::new(
             "terminal:scroll_up_one_page",
@@ -16930,14 +16926,6 @@ impl View for Input {
 
         if self.buffer_text(app).is_empty() {
             ctx.set.insert(flags::EMPTY_INPUT_BUFFER);
-        }
-
-        if self
-            .active_block_session_id()
-            .and_then(|session_id| self.sessions.as_ref(app).get(session_id))
-            .is_some_and(|session| session.shell().plugins().contains(FZF_PLUGIN_TAG))
-        {
-            ctx.set.insert(FZF_SHELL_PLUGIN_CONTEXT);
         }
 
         if ai_settings.is_any_ai_enabled(app) {
