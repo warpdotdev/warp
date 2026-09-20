@@ -1202,6 +1202,7 @@ impl TeamsPageView {
                 self.update_team_members_state(ctx);
                 self.update_approved_domains_state(ctx);
                 self.update_open_team_states(ctx);
+                self.sync_discovery_options_with_team_membership(ctx);
 
                 AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
                     usage_model.refresh_request_usage_async(ctx);
@@ -1333,12 +1334,12 @@ impl TeamsPageView {
                 self.discovery_join_target = None;
                 self.show_error("Failed to join workspace", Some(err), ctx);
             }
+            UserWorkspacesEvent::FetchDiscoverableTeamsSuccess(teams) => {
+                self.set_discoverable_team_states(teams);
+                ctx.notify();
+            }
             UserWorkspacesEvent::FetchDiscoveryOptionsSuccess(options) => {
-                self.discoverable_teams_states = options
-                    .legacy_teams
-                    .iter()
-                    .map(|team| DiscoverableTeamState::new(team.clone()))
-                    .collect();
+                self.set_discoverable_team_states(&options.legacy_teams);
                 self.discoverable_workspaces_states = options
                     .workspaces
                     .iter()
@@ -2164,6 +2165,30 @@ impl TeamsPageView {
             });
     }
 
+    fn set_discoverable_team_states(&mut self, teams: &[DiscoverableTeam]) {
+        self.discoverable_teams_states = teams
+            .iter()
+            .cloned()
+            .map(DiscoverableTeamState::new)
+            .collect();
+    }
+
+    fn sync_discovery_options_with_team_membership(&mut self, ctx: &mut ViewContext<Self>) {
+        let is_teamless = self
+            .user_workspaces
+            .as_ref(ctx)
+            .team_for_view(ctx)
+            .is_none();
+        if !is_teamless {
+            self.discoverable_workspaces_states.clear();
+            self.workspace_discovery_screen = WorkspaceDiscoveryScreen::Options;
+        } else if NetworkStatus::as_ref(ctx).is_online() {
+            self.user_workspaces.update(ctx, |user_workspaces, ctx| {
+                user_workspaces.fetch_discovery_options(ctx);
+            });
+        }
+    }
+
     #[cfg(target_family = "wasm")]
     fn open_team_states_for_workspace(
         _workspace: Option<&Workspace>,
@@ -2457,17 +2482,6 @@ impl SettingsPageMeta for TeamsPageView {
         );
         self.update_team_members_state(ctx);
         self.update_approved_domains_state(ctx);
-        let is_teamless = self
-            .user_workspaces
-            .as_ref(ctx)
-            .team_for_view(ctx)
-            .is_none();
-        if NetworkStatus::as_ref(ctx).is_online() && is_teamless {
-            self.user_workspaces
-                .update(ctx, move |user_workspaces, ctx| {
-                    user_workspaces.fetch_discovery_options(ctx);
-                });
-        }
     }
 
     fn should_render(&self, _ctx: &AppContext) -> bool {

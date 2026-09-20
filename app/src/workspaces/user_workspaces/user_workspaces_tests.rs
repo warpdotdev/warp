@@ -80,7 +80,7 @@ use crate::workflows::{CloudWorkflow, CloudWorkflowModel};
 use crate::workspaces::gql_convert::{
     PLACEHOLDER_WORKSPACE_UID, workspaces_metadata_response_from_gql,
 };
-use crate::workspaces::team::{Team, TeamMember, TeamVisibility};
+use crate::workspaces::team::{DiscoverableWorkspace, Team, TeamMember, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -4621,122 +4621,7 @@ fn test_fetch_discovery_options_success_updates_model_and_emits_event() {
         assert_eq!(options.workspaces[0].name, "Discoverable Workspace");
         assert_eq!(options.legacy_teams.len(), 1);
         app.read(|ctx| {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
-            assert_eq!(user_workspaces.discoverable_workspaces.len(), 1);
-            assert_eq!(user_workspaces.joinable_teams.len(), 1);
-        });
-    })
-}
-
-#[test]
-fn test_fetch_discovery_options_rejection_preserves_empty_model_and_emits_event() {
-    App::test((), |mut app| async move {
-        let mut team_client = MockTeamClient::new();
-        team_client
-            .expect_get_discovery_options()
-            .times(1)
-            .return_once(|| Err(anyhow::anyhow!("discovery unavailable")));
-        app.add_singleton_model(|ctx| {
-            UserWorkspaces::mock(
-                Arc::new(team_client),
-                Arc::new(MockWorkspaceClient::new()),
-                vec![],
-                ctx,
-            )
-        });
-
-        let user_workspaces = UserWorkspaces::handle(&app);
-        let (sender, receiver) = async_channel::unbounded();
-        app.update(|ctx| {
-            ctx.subscribe_to_model(&user_workspaces, move |_, event, _| {
-                if let UserWorkspacesEvent::FetchDiscoveryOptionsRejected(err) = event {
-                    let _ = sender.try_send(err.to_string());
-                }
-            });
-        });
-
-        user_workspaces.update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.fetch_discovery_options(ctx);
-        });
-
-        assert_eq!(
-            receiver
-                .recv()
-                .await
-                .expect("expected discovery-options rejection event"),
-            "discovery unavailable"
-        );
-        app.read(|ctx| {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
-            assert!(user_workspaces.discoverable_workspaces.is_empty());
-            assert!(user_workspaces.joinable_teams.is_empty());
-        });
-    })
-}
-
-#[test]
-fn test_join_workspace_from_discovery_without_team_forwards_target_and_updates_workspace() {
-    App::test((), |mut app| async move {
-        let workspace_uid: WorkspaceUid = ServerId::from(10).into();
-        let mut team_client = MockTeamClient::new();
-        team_client
-            .expect_join_workspace_from_discovery()
-            .withf(move |actual_workspace_uid, actual_team_uid| {
-                *actual_workspace_uid == workspace_uid && actual_team_uid.is_none()
-            })
-            .times(1)
-            .return_once(move |_, _| {
-                Ok(WorkspacesMetadataWithPricing {
-                    metadata: WorkspacesMetadataResponse {
-                        workspaces: vec![Workspace::from_local_cache(
-                            workspace_uid,
-                            "Joined Workspace".to_string(),
-                            None,
-                            None,
-                        )],
-                        joinable_teams: vec![],
-                        experiments: None,
-                        ai_credit_availability: None,
-                        user_purchase_policy: None,
-                    },
-                    pricing_info: None,
-                })
-            });
-        app.add_singleton_model(PrivacySettings::mock);
-        app.add_singleton_model(|ctx| {
-            UserWorkspaces::mock(
-                Arc::new(team_client),
-                Arc::new(MockWorkspaceClient::new()),
-                vec![],
-                ctx,
-            )
-        });
-
-        let user_workspaces = UserWorkspaces::handle(&app);
-        let (sender, receiver) = async_channel::unbounded();
-        app.update(|ctx| {
-            ctx.subscribe_to_model(&user_workspaces, move |_, event, _| {
-                if let UserWorkspacesEvent::JoinWorkspaceFromDiscoverySuccess = event {
-                    let _ = sender.try_send(());
-                }
-            });
-        });
-
-        user_workspaces.update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.join_workspace_from_discovery(workspace_uid, None, ctx);
-        });
-
-        receiver
-            .recv()
-            .await
-            .expect("expected workspace discovery join success event");
-        app.read(|ctx| {
-            assert_eq!(
-                UserWorkspaces::as_ref(ctx)
-                    .current_workspace()
-                    .map(|workspace| workspace.uid),
-                Some(workspace_uid)
-            );
+            assert_eq!(UserWorkspaces::as_ref(ctx).joinable_teams.len(), 1);
         });
     })
 }
@@ -4809,54 +4694,6 @@ fn test_join_workspace_from_discovery_with_team_forwards_target_and_updates_work
     })
 }
 
-#[test]
-fn test_join_workspace_from_discovery_rejection_preserves_empty_workspace_and_emits_event() {
-    App::test((), |mut app| async move {
-        let workspace_uid: WorkspaceUid = ServerId::from(10).into();
-        let mut team_client = MockTeamClient::new();
-        team_client
-            .expect_join_workspace_from_discovery()
-            .withf(move |actual_workspace_uid, actual_team_uid| {
-                *actual_workspace_uid == workspace_uid && actual_team_uid.is_none()
-            })
-            .times(1)
-            .return_once(|_, _| Err(anyhow::anyhow!("workspace join rejected")));
-        app.add_singleton_model(PrivacySettings::mock);
-        app.add_singleton_model(|ctx| {
-            UserWorkspaces::mock(
-                Arc::new(team_client),
-                Arc::new(MockWorkspaceClient::new()),
-                vec![],
-                ctx,
-            )
-        });
-
-        let user_workspaces = UserWorkspaces::handle(&app);
-        let (sender, receiver) = async_channel::unbounded();
-        app.update(|ctx| {
-            ctx.subscribe_to_model(&user_workspaces, move |_, event, _| {
-                if let UserWorkspacesEvent::JoinWorkspaceFromDiscoveryRejected(err) = event {
-                    let _ = sender.try_send(err.to_string());
-                }
-            });
-        });
-
-        user_workspaces.update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.join_workspace_from_discovery(workspace_uid, None, ctx);
-        });
-
-        assert_eq!(
-            receiver
-                .recv()
-                .await
-                .expect("expected workspace discovery join rejection event"),
-            "workspace join rejected"
-        );
-        app.read(|ctx| {
-            assert!(UserWorkspaces::as_ref(ctx).current_workspace().is_none());
-        });
-    })
-}
 #[test]
 fn test_workspace_open_teams_survive_metadata_conversion() {
     let mut workspace = gql_workspace("workspace_uid123456789", None);

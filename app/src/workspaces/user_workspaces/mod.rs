@@ -13,9 +13,7 @@ use warpui::{
 
 #[cfg(test)]
 use super::team::TeamVisibility;
-use super::team::{
-    DiscoverableTeam, DiscoverableWorkspace, DiscoveryOptions, MembershipRole, Team,
-};
+use super::team::{DiscoverableTeam, DiscoveryOptions, MembershipRole, Team};
 #[cfg(test)]
 use super::workspace::WorkspaceMemberUsageInfo;
 use super::workspace::{
@@ -88,6 +86,7 @@ pub enum UserWorkspacesEvent {
     JoinTeamInWorkspaceRejected(anyhow::Error),
     JoinWorkspaceFromDiscoverySuccess,
     JoinWorkspaceFromDiscoveryRejected(anyhow::Error),
+    FetchDiscoverableTeamsSuccess(Vec<DiscoverableTeam>),
     FetchDiscoveryOptionsSuccess(DiscoveryOptions),
     FetchDiscoveryOptionsRejected(anyhow::Error),
     TransferTeamOwnershipSuccess,
@@ -132,7 +131,6 @@ pub struct UserWorkspaces {
     workspaces: Tracked<Vec<Workspace>>,
     window_team_uids: HashMap<WindowId, Option<ServerId>>,
     joinable_teams: Vec<DiscoverableTeam>,
-    discoverable_workspaces: Vec<DiscoverableWorkspace>,
     /// The user-level add-on credits purchase policy from the latest
     /// workspaces-metadata response. Teamless (fresh free) users have no
     /// team and their only workspace is the server's placeholder, which is
@@ -201,7 +199,6 @@ impl UserWorkspaces {
             workspaces: cached_workspaces.into(),
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
-            discoverable_workspaces: Default::default(),
             user_purchase_policy: None,
             workspaceless_models_by_feature: None,
             team_client,
@@ -253,7 +250,6 @@ impl UserWorkspaces {
             workspaces: cached_workspaces.into(),
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
-            discoverable_workspaces: Default::default(),
             user_purchase_policy: None,
             workspaceless_models_by_feature: None,
             team_client,
@@ -374,7 +370,6 @@ impl UserWorkspaces {
         ctx: &mut ModelContext<Self>,
     ) {
         self.joinable_teams.clone_from(&options.legacy_teams);
-        self.discoverable_workspaces.clone_from(&options.workspaces);
         ctx.emit(UserWorkspacesEvent::FetchDiscoveryOptionsSuccess(options));
         ctx.notify();
     }
@@ -868,11 +863,8 @@ impl UserWorkspaces {
         ctx: &mut ModelContext<Self>,
     ) {
         self.joinable_teams.clone_from(&joinable_teams);
-        ctx.emit(UserWorkspacesEvent::FetchDiscoveryOptionsSuccess(
-            DiscoveryOptions {
-                workspaces: self.discoverable_workspaces.clone(),
-                legacy_teams: joinable_teams,
-            },
+        ctx.emit(UserWorkspacesEvent::FetchDiscoverableTeamsSuccess(
+            joinable_teams,
         ));
         ctx.notify();
     }
@@ -901,9 +893,6 @@ impl UserWorkspaces {
                 let joinable_teams = response.metadata.joinable_teams;
 
                 self.set_user_purchase_policy(response.metadata.user_purchase_policy);
-                if !workspaces.is_empty() {
-                    self.discoverable_workspaces.clear();
-                }
                 self.update_workspaces(workspaces.clone(), ctx);
                 self.update_joinable_teams(joinable_teams, ctx);
 

@@ -2,6 +2,8 @@
 use std::cell::RefCell;
 #[cfg(not(target_family = "wasm"))]
 use std::rc::Rc;
+#[cfg(not(target_family = "wasm"))]
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
 #[cfg(not(target_family = "wasm"))]
 use warpui::App;
@@ -16,6 +18,8 @@ use crate::workspace::view::tests::{
 #[cfg(not(target_family = "wasm"))]
 use crate::workspaces::team::DiscoveryOptions;
 use crate::workspaces::team::TeamMember;
+#[cfg(not(target_family = "wasm"))]
+use crate::workspaces::user_workspaces::CreateTeamResponse;
 use crate::workspaces::workspace::{
     EmailInvite, MultiAdminPolicy, NativeWorkspacesPolicy, Tier, WorkspaceMember,
     WorkspaceMemberUsageInfo,
@@ -199,11 +203,13 @@ fn workspace_discovery_page_routes_each_option_through_the_expected_client_bound
         let mut team_client = MockTeamClient::new();
         team_client
             .expect_get_discovery_options()
-            .times(1)
-            .return_once(move || {
+            .returning(move || {
                 Ok(DiscoveryOptions {
-                    workspaces: vec![workspace_with_teams, workspace_without_teams],
-                    legacy_teams: vec![legacy_team],
+                    workspaces: vec![
+                        workspace_with_teams.clone(),
+                        workspace_without_teams.clone(),
+                    ],
+                    legacy_teams: vec![legacy_team.clone()],
                 })
             });
         team_client
@@ -399,6 +405,93 @@ fn workspace_discovery_page_routes_each_option_through_the_expected_client_bound
                 WorkspaceDiscoveryScreen::Options
             );
         });
+    });
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn discovery_options_are_cleared_on_joining_and_refetched_on_losing_a_team() {
+    App::test((), |mut app| async move {
+        let team_left = Arc::new(AtomicBool::new(false));
+        let team_left_for_client = team_left.clone();
+        let mut team_client = MockTeamClient::new();
+        team_client
+            .expect_get_discovery_options()
+            .returning(move || {
+                let name = if team_left_for_client.load(AtomicOrdering::SeqCst) {
+                    "After Leave"
+                } else {
+                    "Before Leave"
+                };
+                Ok(DiscoveryOptions {
+                    workspaces: vec![discoverable_workspace(10, name, Vec::new())],
+                    legacy_teams: Vec::new(),
+                })
+            });
+
+        initialize_app_with_team_client(&mut app, Arc::new(team_client));
+        let workspace = mock_workspace(&mut app);
+        let window_id = workspace.update(&mut app, |_, ctx| ctx.window_id());
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+        let teams_page = workspace.update(&mut app, |_, ctx| {
+            ctx.add_typed_action_view(TeamsPageView::new)
+        });
+        let (fetch_sender, fetch_receiver) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(
+                &UserWorkspaces::handle(ctx),
+                move |_, event: &UserWorkspacesEvent, _| {
+                    if let UserWorkspacesEvent::FetchDiscoveryOptionsSuccess(_) = event {
+                        let _ = fetch_sender.try_send(());
+                    }
+                },
+            );
+        });
+        let workspace_names = |app: &App| {
+            teams_page.read(app, |teams_page, _| {
+                teams_page
+                    .discoverable_workspaces_states
+                    .iter()
+                    .map(|state| state.workspace.name.clone())
+                    .collect::<Vec<_>>()
+            })
+        };
+
+        teams_page.update(&mut app, |teams_page, ctx| {
+            teams_page.on_page_selected(false, ctx);
+        });
+        fetch_receiver
+            .recv()
+            .await
+            .expect("expected discovery fetch on page selection");
+        assert_eq!(workspace_names(&app), ["Before Leave"]);
+
+        let team = team_with_members(vec![member(MEMBER_EMAIL, MembershipRole::User)], false);
+        let mut created_workspace = workspace_with_member(MEMBER_EMAIL, MembershipRole::User, true);
+        created_workspace.teams.push(team.clone());
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.team_created(
+                &CreateTeamResponse {
+                    workspace: created_workspace,
+                    team,
+                },
+                ctx,
+            );
+        });
+        assert!(workspace_names(&app).is_empty());
+
+        team_left.store(true, AtomicOrdering::SeqCst);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_workspaces(Vec::new(), ctx);
+        });
+        while workspace_names(&app) != ["After Leave"] {
+            fetch_receiver
+                .recv()
+                .await
+                .expect("expected discovery refetch after losing the last team");
+        }
     });
 }
 
