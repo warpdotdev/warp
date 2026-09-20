@@ -422,8 +422,8 @@ use crate::terminal::input::inline_menu::InlineMenuPositioner;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::input::slash_commands::fork_button_action;
 use crate::terminal::input::{
-    CommandExecutionSource, InputAction, InputEmptyStateChangeReason, InputState, MenuPositioning,
-    MenuPositioningProvider, ShellWidgetApplyMode,
+    CommandExecutionSource, FZF_SHELL_PLUGIN_CONTEXT, InputAction, InputEmptyStateChangeReason,
+    InputState, MenuPositioning, MenuPositioningProvider, ShellWidgetApplyMode,
 };
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::ligature_settings::{LigatureSettings, should_use_ligature_rendering};
@@ -29330,9 +29330,19 @@ impl View for TerminalView {
         if self.is_input_box_visible(&model_lock, app) {
             context.set.insert(INPUT_BOX_VISIBLE_KEY);
         }
-
-        if self.input.as_ref(app).editor().as_ref(app).is_focused() {
+        let input = self.input.as_ref(app);
+        if input.editor().as_ref(app).is_focused() {
             context.set.insert("EditorFocused");
+        }
+        if input.is_voltron_open() {
+            context.set.insert("VoltronActive");
+        }
+        if self
+            .active_block_session_id()
+            .and_then(|session_id| self.sessions.as_ref(app).get(session_id))
+            .is_some_and(|session| session.shell().plugins().contains(FZF_PLUGIN_TAG))
+        {
+            context.set.insert(FZF_SHELL_PLUGIN_CONTEXT);
         }
 
         if model_lock.block_list().selection().is_some() {

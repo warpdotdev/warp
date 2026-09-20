@@ -65,6 +65,8 @@ use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings::PrivacySettings;
 use crate::settings::cloud_preferences_syncer::CloudPreferencesSyncer;
+#[cfg(feature = "local_fs")]
+use crate::settings::import::model::ImportedConfigModel;
 use crate::settings_view::DisplayCount;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
@@ -72,13 +74,16 @@ use crate::system::SystemStats;
 use crate::tab_configs::tab_config::{TabConfigPaneNode, TabConfigPaneType};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::history::History;
+use crate::terminal::input::FZF_SHELL_PLUGIN_CONTEXT;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::local_tty::spawner::PtySpawner;
 use crate::terminal::model::ansi::{Handler as _, PromptMetadata};
-use crate::terminal::model::session::SessionInfo;
+use crate::terminal::model::block::BlockMetadata;
+use crate::terminal::model::session::{SessionId as TerminalSessionId, SessionInfo};
 use crate::terminal::shared_session::{
     SharedSessionScrollbackType, SharedSessionSource, SharedSessionStatus,
 };
+use crate::terminal::view::init::INPUT_BOX_VISIBLE_KEY;
 use crate::test_util::assert_eventually;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::undo_close::UndoCloseSettings;
@@ -275,6 +280,113 @@ pub(crate) fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
     workspace
 }
 
+async fn initialize_active_fzf_session(
+    terminal: &ViewHandle<TerminalView>,
+    app: &mut App,
+) -> TerminalSessionId {
+    let session_info =
+        SessionInfo::new_for_test().with_shell_plugins(HashSet::from(["fzf".to_owned()]));
+    let session_id = session_info.session_id;
+    terminal.update(app, |terminal, ctx| {
+        {
+            let mut model = terminal.model.lock();
+            model.block_list_mut().set_bootstrapped();
+            model
+                .block_list_mut()
+                .active_block_for_test()
+                .set_session_id(session_id);
+            model.block_list_mut().prompt_only_precmd(PromptMetadata {
+                session_id: Some(0_u64),
+                ..Default::default()
+            });
+        }
+        terminal.sessions_model().update(ctx, |sessions, ctx| {
+            sessions.initialize_bootstrapped_session(
+                session_info,
+                "test command".to_owned(),
+                Vec::new(),
+                None,
+                ctx,
+            );
+        });
+    });
+    assert_eventually!(
+        200 => terminal.read(app, |terminal, _| {
+            terminal.active_block_session_id() == Some(session_id)
+        }),
+        "terminal view should receive the active session through its model-event pipeline"
+    );
+    terminal.read(app, |terminal, ctx| {
+        assert!(
+            terminal
+                .sessions(ctx)
+                .get(session_id)
+                .is_some_and(|session| session.shell().plugins().contains("fzf"))
+        );
+    });
+    session_id
+}
+
+#[test]
+fn external_alt_c_binding_uses_terminal_fzf_context_when_input_context_is_stale() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        #[cfg(feature = "local_fs")]
+        app.add_singleton_model(ImportedConfigModel::new);
+        let _handoff = FeatureFlag::ShellWidgetHandoff.override_enabled(true);
+        app.update(crate::terminal::input::init);
+
+        let workspace = mock_workspace(&mut app);
+        let window_id = workspace.update(&mut app, |_, ctx| ctx.window_id());
+        let terminal = workspace.read(&app, |workspace, ctx| {
+            workspace
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .focused_session_view(ctx)
+                .expect("workspace should start with a terminal view")
+        });
+        initialize_active_fzf_session(&terminal, &mut app).await;
+
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.set_active_block_metadata(BlockMetadata::new(None, None), false, ctx);
+        });
+        input.read(&app, |input, ctx| {
+            assert!(
+                !input
+                    .keymap_context(ctx)
+                    .set
+                    .contains(FZF_SHELL_PLUGIN_CONTEXT)
+            );
+        });
+        terminal.read(&app, |terminal, ctx| {
+            let context = terminal.keymap_context(ctx);
+            assert!(context.set.contains(FZF_SHELL_PLUGIN_CONTEXT));
+            assert!(context.set.contains(INPUT_BOX_VISIBLE_KEY));
+        });
+        let pty_writes = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let crate::terminal::view::Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        let handled = app
+            .dispatch_keystroke(
+                window_id,
+                &[workspace.id(), terminal.id()],
+                &warpui::keymap::Keystroke::parse("alt-c").expect("valid keystroke"),
+                false,
+            )
+            .expect("dispatch should succeed");
+
+        assert!(handled);
+        assert_eq!(*pty_writes.borrow(), vec![vec![C0::ESC, b'c']]);
+    });
+}
 #[test]
 fn external_alt_c_decline_passes_keypress_to_alt_screen() {
     App::test((), |mut app| async move {
@@ -289,46 +401,9 @@ fn external_alt_c_decline_passes_keypress_to_alt_screen() {
                 .focused_session_view(ctx)
                 .expect("workspace should start with a terminal view")
         });
-        let session_info =
-            SessionInfo::new_for_test().with_shell_plugins(HashSet::from(["fzf".to_owned()]));
-        let session_id = session_info.session_id;
-        terminal.update(&mut app, |terminal, ctx| {
-            {
-                let mut model = terminal.model.lock();
-                model.block_list_mut().set_bootstrapped();
-                model
-                    .block_list_mut()
-                    .active_block_for_test()
-                    .set_session_id(session_id);
-                model.block_list_mut().prompt_only_precmd(PromptMetadata {
-                    session_id: Some(0_u64),
-                    ..Default::default()
-                });
-            }
-            terminal.sessions_model().update(ctx, |sessions, ctx| {
-                sessions.initialize_bootstrapped_session(
-                    session_info,
-                    "test command".to_owned(),
-                    Vec::new(),
-                    None,
-                    ctx,
-                );
-            });
-        });
-        assert_eventually!(
-            200 => terminal.read(&app, |terminal, _| {
-                terminal.active_block_session_id() == Some(session_id)
-            }),
-            "terminal view should receive the active session through its model-event pipeline"
-        );
-        terminal.read(&app, |terminal, ctx| {
+        let session_id = initialize_active_fzf_session(&terminal, &mut app).await;
+        terminal.read(&app, |terminal, _| {
             assert_eq!(terminal.active_block_session_id(), Some(session_id));
-            assert!(
-                terminal
-                    .sessions(ctx)
-                    .get(session_id)
-                    .is_some_and(|session| session.shell().plugins().contains("fzf"))
-            );
             let model = terminal.model.lock();
             assert!(model.block_list().is_bootstrapped());
             assert!(model.block_list().active_block().has_received_precmd());

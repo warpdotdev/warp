@@ -327,7 +327,9 @@ use crate::terminal::view::ambient_agent::{
     HarnessSelector, HarnessSelectorEvent, HostSelector, HostSelectorEvent, NakedHeaderButtonTheme,
     cloud_agent_team_required_toast_message,
 };
-use crate::terminal::view::init::{CAN_ATTACH_FILE_KEY, CLI_AGENT_SESSION_ACTIVE_KEY};
+use crate::terminal::view::init::{
+    CAN_ATTACH_FILE_KEY, CLI_AGENT_SESSION_ACTIVE_KEY, INPUT_BOX_VISIBLE_KEY,
+};
 use crate::terminal::view::inline_banner::{PromptSuggestionsEvent, PromptSuggestionsView};
 use crate::terminal::view::{
     AIQueryRouting, CodeDiffAction, FZF_PLUGIN_TAG, file_attach_allowed_for_shared_session,
@@ -442,7 +444,7 @@ fn effective_default_host(
 
 pub const COMPLETIONS_MENU_WIDTH: f32 = 330.;
 pub const OPEN_COMPLETIONS_KEYBINDING_NAME: &str = "input:open_completion_suggestions";
-const FZF_SHELL_PLUGIN_CONTEXT: &str = "FzfShellPlugin";
+pub(crate) const FZF_SHELL_PLUGIN_CONTEXT: &str = "FzfShellPlugin";
 pub const INPUT_A11Y_LABEL: &str = "Command Input.";
 pub const INPUT_A11Y_HELPER: &str = "Input your shell command, press enter to execute. Press cmd-up to navigate to output of previously executed commands. Press cmd-l to re-focus command input.";
 pub const AI_COMMAND_SEARCH_HINT_TEXT: &str = "Type '#' for AI command suggestions";
@@ -2162,6 +2164,10 @@ pub fn init(app: &mut AppContext) {
     .with_context_predicate(id!("Input"))
     .with_key_binding("ctrl-l")]);
 
+    let external_alt_c_context = (id!("Input") | (id!("Terminal") & id!(INPUT_BOX_VISIBLE_KEY)))
+        & id!(FZF_SHELL_PLUGIN_CONTEXT)
+        & !id!("VoltronActive")
+        & !id!("LongRunningCommand");
     app.register_editable_bindings([
         EditableBinding::new(
             "terminal:scroll_up_one_page",
@@ -2255,14 +2261,17 @@ pub fn init(app: &mut AppContext) {
             WorkspaceAction::TriggerExternalAltCDirectorySearch,
         )
         .with_enabled(|| FeatureFlag::ShellWidgetHandoff.is_enabled())
-        .with_context_predicate(
-            id!("Input")
-                & id!(FZF_SHELL_PLUGIN_CONTEXT)
-                & !id!("VoltronActive")
-                & !id!("LongRunningCommand"),
-        )
+        .with_context_predicate(external_alt_c_context.clone())
         .with_key_binding("alt-c"),
     ]);
+    if cfg!(target_os = "macos") {
+        app.register_fixed_bindings([FixedBinding::new(
+            "meta-c",
+            WorkspaceAction::TriggerExternalAltCDirectorySearch,
+            external_alt_c_context,
+        )
+        .with_enabled(|| FeatureFlag::ShellWidgetHandoff.is_enabled())]);
+    }
 
     if let Some(custom_action) = workflows::CategoriesView::custom_action() {
         app.register_editable_bindings([EditableBinding::new(
@@ -16580,6 +16589,10 @@ impl Input {
 
     pub fn should_show_universal_developer_input(&self, app: &AppContext) -> bool {
         InputSettings::as_ref(app).is_universal_developer_input_enabled(app)
+    }
+
+    pub(crate) fn is_voltron_open(&self) -> bool {
+        self.is_voltron_open
     }
 
     fn handle_prompt_suggestions_event(
