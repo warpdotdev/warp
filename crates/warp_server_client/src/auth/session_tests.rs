@@ -5,6 +5,7 @@ use futures::executor::block_on;
 use futures::future::join_all;
 use mockito::Matcher;
 use warp_core::channel::ChannelState;
+use warp_errors::AnyhowErrorExt as _;
 use warp_server_auth::auth_state::AuthState;
 use warp_server_auth::credentials::{AuthToken, Credentials, LoginToken};
 use warp_server_auth::user::FirebaseAuthTokens;
@@ -207,11 +208,44 @@ fn direct_firebase_5xx_does_not_use_proxy_or_trigger_reauth() {
     let (session, event_receiver) = session_with_refresh_urls(auth_state, direct_url, proxy_url);
 
     let error = block_on(session.get_or_refresh_access_token()).unwrap_err();
+    assert!(!error.is_actionable());
+    assert!(error.to_string().contains("503 Service Unavailable"));
+    assert!(event_receiver.try_recv().is_err());
+    direct_request.assert();
+    proxy_request.assert();
+}
 
-    assert_eq!(
-        error.to_string(),
-        "unexpected error occurred when fetching an ID token: Firebase token request failed with status 503 Service Unavailable"
-    );
+#[test]
+fn direct_firebase_decode_failure_is_not_actionable() {
+    let (direct_url, proxy_url, direct_request, proxy_request) = {
+        let mut server = ChannelState::mock_server();
+        let direct_path = "/firebase/direct-invalid-json";
+        let proxy_path = "/firebase/direct-invalid-json-proxy";
+        let direct_request = server
+            .mock("POST", direct_path)
+            .with_status(200)
+            .with_body("not-json")
+            .expect(1)
+            .create();
+        let proxy_request = server
+            .mock("POST", proxy_path)
+            .with_status(200)
+            .expect(0)
+            .create();
+        (
+            format!("{}{direct_path}", server.url()),
+            format!("{}{proxy_path}", server.url()),
+            direct_request,
+            proxy_request,
+        )
+    };
+    let auth_state = Arc::new(AuthState::new_logged_out_for_test());
+    auth_state.set_credentials(Some(expired_firebase_credentials("refresh-token")));
+    let (session, event_receiver) = session_with_refresh_urls(auth_state, direct_url, proxy_url);
+
+    let error = block_on(session.get_or_refresh_access_token()).unwrap_err();
+
+    assert!(!error.is_actionable());
     assert!(event_receiver.try_recv().is_err());
     direct_request.assert();
     proxy_request.assert();
@@ -243,7 +277,7 @@ fn proxy_429_starts_shared_cooldown() {
 }
 
 #[test]
-fn concurrent_proxy_failure_shares_one_result() {
+fn late_proxy_failure_caller_joins_completed_in_flight_result() {
     let (proxy_url, proxy_request) = {
         let mut server = ChannelState::mock_server();
         let proxy_path = "/firebase/concurrent-proxy-429";
@@ -257,38 +291,25 @@ fn concurrent_proxy_failure_shares_one_result() {
     let auth_state = Arc::new(AuthState::new_logged_out_for_test());
     auth_state.set_credentials(Some(expired_firebase_credentials("refresh-token")));
     let (mut session, _) = session_with_refresh_urls(auth_state, "http://".to_string(), proxy_url);
-    session.refresh_snapshot_barrier = Some(Arc::new(Barrier::new(4)));
+    let result_ready = Arc::new(Barrier::new(2));
+    let allow_finalization = Arc::new(Barrier::new(2));
+    session.refresh_result_barriers = Some((result_ready.clone(), allow_finalization.clone()));
     let session = Arc::new(session);
-    let first = {
+    let leader = {
         let session = session.clone();
         std::thread::spawn(move || block_on(session.get_or_refresh_access_token()))
     };
-    let second = {
+    result_ready.wait();
+    let late_caller = {
         let session = session.clone();
         std::thread::spawn(move || block_on(session.get_or_refresh_access_token()))
     };
-    let third = {
-        let session = session.clone();
-        std::thread::spawn(move || block_on(session.get_or_refresh_access_token()))
-    };
-    let fourth = {
-        let session = session.clone();
-        std::thread::spawn(move || block_on(session.get_or_refresh_access_token()))
-    };
-    let errors = vec![
-        first.join().unwrap().unwrap_err().to_string(),
-        second.join().unwrap().unwrap_err().to_string(),
-        third.join().unwrap().unwrap_err().to_string(),
-        fourth.join().unwrap().unwrap_err().to_string(),
-    ];
+    let late_error = late_caller.join().unwrap().unwrap_err();
+    allow_finalization.wait();
+    let leader_error = leader.join().unwrap().unwrap_err();
 
-    assert_eq!(
-        errors,
-        vec![
-            "unexpected error occurred when fetching an ID token: Firebase token proxy is temporarily unavailable";
-            4
-        ]
-    );
+    assert_eq!(late_error.to_string(), leader_error.to_string());
+    assert!(!late_error.is_actionable());
     proxy_request.assert();
 }
 
@@ -416,15 +437,15 @@ fn successful_refresh_clears_transient_backoff() {
 }
 
 #[test]
-fn full_event_channel_does_not_block_refresh_completion() {
+fn full_event_channel_eventually_delivers_needs_reauth() {
     let (direct_url, proxy_url, direct_request) = {
         let mut server = ChannelState::mock_server();
         let direct_path = "/firebase/full-event-channel";
         let proxy_path = "/firebase/full-event-channel-proxy";
         let direct_request = server
             .mock("POST", direct_path)
-            .with_status(200)
-            .with_body(successful_refresh_response("fresh-id", "fresh-refresh"))
+            .with_status(400)
+            .with_body(r#"{"error":{"code":400,"message":"INVALID_REFRESH_TOKEN"}}"#)
             .expect(1)
             .create();
         (
@@ -445,15 +466,23 @@ fn full_event_channel_does_not_block_refresh_completion() {
         event_sender,
     );
     session.refresh_urls = Some((direct_url, proxy_url));
-
-    let token = block_on(session.get_or_refresh_access_token()).unwrap();
-
-    assert!(matches!(token, AuthToken::Firebase(token) if token == "fresh-id"));
+    let event_ready = Arc::new(Barrier::new(2));
+    session.refresh_event_barrier = Some(event_ready.clone());
+    let session = Arc::new(session);
+    let refresh = {
+        let session = session.clone();
+        std::thread::spawn(move || block_on(session.get_or_refresh_access_token()))
+    };
+    event_ready.wait();
     assert!(matches!(
         event_receiver.try_recv().unwrap(),
         AuthEvent::IapChallengeReceived
     ));
-    assert!(event_receiver.try_recv().is_err());
+    assert!(refresh.join().unwrap().is_err());
+    assert!(matches!(
+        event_receiver.try_recv().unwrap(),
+        AuthEvent::NeedsReauth
+    ));
     direct_request.assert();
 }
 
