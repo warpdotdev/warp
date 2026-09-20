@@ -1660,7 +1660,6 @@ fn native_shell_suggestion_results(
     }
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DenyExecutionReason {
     /// Can't execute command because shell bootstrapping is still underway; shell isn't ready to

@@ -3699,7 +3699,8 @@ fn native_only_empty_response_shows_file_path_suggestions() {
         let working_directory = tempfile::TempDir::new().expect("completion working directory");
         let source_directory = working_directory.path().join("src");
         std::fs::create_dir(&source_directory).expect("source directory must be created");
-        std::fs::write(source_directory.join("alpha.rs"), "").expect("alpha fixture must be created");
+        std::fs::write(source_directory.join("alpha.rs"), "")
+            .expect("alpha fixture must be created");
         std::fs::write(source_directory.join("beta.rs"), "").expect("beta fixture must be created");
 
         let session_info = SessionInfo::new_for_test();
@@ -10706,10 +10707,7 @@ fn hotkey_opens_ai_command_search_even_when_hash_trigger_disabled() {
 #[cfg(test)]
 mod completion_sources_resolution_tests {
 
-    use super::super::{
-        CompletionSources, CompletionsTrigger, resolve_completion_sources,
-    };
-
+    use super::super::{CompletionSources, CompletionsTrigger, resolve_completion_sources};
 
     #[test]
     fn feature_flag_off_is_warp_only_regardless_of_toggles() {
@@ -10801,5 +10799,4 @@ mod completion_sources_resolution_tests {
             CompletionSources::WarpOnly
         );
     }
-
 }
