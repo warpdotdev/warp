@@ -472,6 +472,7 @@ pub async fn add_window_with_bootstrapped_terminal_and_window_id(
             .expect("Could not create a shell starter source or wsl name")
             .to_shell_starter_source()
             .await
+            .expect("Could not determine a shell starter source")
             .expect("Could not create a shell starter source");
     let shell_type = shell_starter_source.shell_type();
 

@@ -6,7 +6,10 @@ use std::fs;
 #[cfg(unix)]
 use std::path::PathBuf;
 
-use super::{known_bare_name, resolve_binary_in_wsl_safe_path};
+use super::{
+    BackgroundCommandLease, BackgroundWslCommandError, known_bare_name,
+    resolve_binary_in_wsl_safe_path,
+};
 
 #[cfg(unix)]
 fn make_executable(path: &std::path::Path) {
@@ -170,4 +173,32 @@ fn known_bare_name_skips_unknowns() {
     assert_eq!(known_bare_name(OsStr::new("ls")), None);
     assert_eq!(known_bare_name(OsStr::new("python")), None);
     assert_eq!(known_bare_name(OsStr::new("")), None);
+}
+
+#[test]
+fn suppresses_overlapping_background_commands() {
+    let distribution = format!("overlap-{}", std::process::id());
+    let first = BackgroundCommandLease::acquire(&distribution).expect("acquire first command");
+
+    assert!(matches!(
+        BackgroundCommandLease::acquire(&distribution),
+        Err(BackgroundWslCommandError::AlreadyRunning)
+    ));
+
+    let mut first = first;
+    first.complete();
+    drop(first);
+    BackgroundCommandLease::acquire(&distribution).expect("acquire after first command finishes");
+}
+
+#[test]
+fn backs_off_after_background_command_is_canceled() {
+    let distribution = format!("canceled-{}", std::process::id());
+    let command = BackgroundCommandLease::acquire(&distribution).expect("acquire command");
+    drop(command);
+
+    assert!(matches!(
+        BackgroundCommandLease::acquire(&distribution),
+        Err(BackgroundWslCommandError::BackingOff)
+    ));
 }

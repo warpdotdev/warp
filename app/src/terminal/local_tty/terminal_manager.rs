@@ -22,7 +22,7 @@ use warpui::r#async::executor::Background;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, ViewHandle};
 
 use super::event_loop::EventLoop;
-use super::shell::{ShellStarter, ShellStarterSource};
+use super::shell::{ShellStarter, ShellStarterSource, WSL_SHELL_STARTUP_TIMEOUT};
 use super::spawner::{PtySpawnHooks, PtySpawnMode};
 #[cfg(unix)]
 use super::terminal_attributes::TerminalAttributesPoller;
@@ -504,7 +504,7 @@ impl<S> TerminalManager<S> {
                 async move {
                     match wsl_name_or_shell_starter {
                         Some(starter_source) => starter_source.to_shell_starter_source().await,
-                        None => None,
+                        None => Ok(None),
                     }
                 },
                 move |terminal_manager: &mut Box<dyn TerminalManagerTrait>,
@@ -583,7 +583,7 @@ fn on_shell_determined<S: TerminalSurface>(
     env_vars: HashMap<OsString, OsString>,
     user_default_shell_unsupported_banner_model_handle: ModelHandle<BannerState>,
     shell_startup_resources: ShellStartupResources,
-    shell_starter_source: Option<ShellStarterSource>,
+    shell_starter_source: anyhow::Result<Option<ShellStarterSource>>,
     ctx: &mut ModelContext<Box<dyn TerminalManagerTrait>>,
 ) where
     <S as Entity>::Event: PtyIntentEvent,
@@ -597,6 +597,17 @@ fn on_shell_determined<S: TerminalSurface>(
     log::debug!("Using shell starter source {shell_starter_source:?}");
     let bg_executor = ctx.background_executor();
     let auth_state = AuthStateProvider::as_ref(ctx).get();
+    let shell_starter_source = match shell_starter_source {
+        Ok(shell_starter_source) => shell_starter_source,
+        Err(err) => {
+            report_error!(&err);
+            manager.view.update(ctx, |surface, ctx| {
+                surface.on_pty_spawn_failed(err, ctx);
+            });
+            manager.model().lock().exit(ExitReason::PtySpawnFailed);
+            return;
+        }
+    };
 
     let is_fallback_shell = matches!(
         shell_starter_source,
@@ -741,10 +752,43 @@ fn on_shell_determined<S: TerminalSurface>(
         manager.pid = Some(pid);
     }
 
+    let wsl_distribution = match &shell_launch_data {
+        ShellLaunchData::WSL { distro } => Some(distro.clone()),
+        ShellLaunchData::Executable { .. }
+        | ShellLaunchData::MSYS2 { .. }
+        | ShellLaunchData::DockerSandbox { .. } => None,
+    };
     manager.view.update(ctx, |surface, ctx| {
         surface.on_shell_determined(ctx);
         surface.on_active_shell_launch_data_updated(Some(shell_launch_data), ctx);
     });
+    if let Some(distribution) = wsl_distribution {
+        let model = model.clone();
+        let pty_controller = manager.pty_controller.clone();
+        let surface = manager.view.clone();
+        ctx.spawn(
+            warpui::r#async::Timer::after(WSL_SHELL_STARTUP_TIMEOUT),
+            move |_manager, _, ctx| {
+                if model.lock().is_active_block_bootstrapped() {
+                    return;
+                }
+
+                command::wsl::record_distribution_timeout(&distribution);
+                model.lock().exit(ExitReason::PtySpawnFailed);
+                surface.update(ctx, |surface, ctx| {
+                    surface.on_pty_spawn_failed(
+                        anyhow::anyhow!(
+                            "WSL did not respond within 60 seconds while starting the shell"
+                        ),
+                        ctx,
+                    );
+                });
+                pty_controller.update(ctx, |controller, ctx| {
+                    controller.shutdown_pty(ctx);
+                });
+            },
+        );
+    }
 
     // Initialize the terminal attributes poller.
     // TODO(CORE-2297): Implement TerminalPoller on Windows.
@@ -1021,6 +1065,8 @@ pub fn get_shell_starter(
     shell_starter_or_wsl_name
         .and_then(|starter| {
             warpui::r#async::block_on(async { starter.to_shell_starter_source().await })
+                .ok()
+                .flatten()
         })
         .map(|starter_source| {
             get_shell_starter_internal(

@@ -18,10 +18,131 @@
 //!
 //! The same `/mnt/*` filtering precedent is used for `compgen` in
 //! `app/src/terminal/model/session/command_executor/wsl_command_executor.rs`.
-
+#[cfg(not(target_family = "wasm"))]
+use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+#[cfg(not(target_family = "wasm"))]
+use std::sync::{LazyLock, Mutex, MutexGuard};
+#[cfg(not(target_family = "wasm"))]
+use std::time::Duration;
+
+#[cfg(not(target_family = "wasm"))]
+use instant::Instant;
+
+#[cfg(not(target_family = "wasm"))]
+use crate::r#async::{Command, OutputError};
+
+#[cfg(not(target_family = "wasm"))]
+const BACKGROUND_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(not(target_family = "wasm"))]
+const BACKGROUND_COMMAND_BACKOFF: Duration = Duration::from_secs(30);
+
+#[cfg(not(target_family = "wasm"))]
+static BACKGROUND_COMMANDS: LazyLock<Mutex<HashMap<String, BackgroundCommandState>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[cfg(not(target_family = "wasm"))]
+#[derive(Debug, Default)]
+struct BackgroundCommandState {
+    in_flight: bool,
+    retry_after: Option<Instant>,
+}
+
+#[cfg(not(target_family = "wasm"))]
+struct BackgroundCommandLease {
+    distribution: String,
+    completed: bool,
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl BackgroundCommandLease {
+    fn acquire(distribution: &str) -> Result<Self, BackgroundWslCommandError> {
+        let now = Instant::now();
+        let mut commands = background_commands();
+        let state = commands.entry(distribution.to_owned()).or_default();
+        if state.in_flight {
+            return Err(BackgroundWslCommandError::AlreadyRunning);
+        }
+        if state
+            .retry_after
+            .is_some_and(|retry_after| retry_after > now)
+        {
+            return Err(BackgroundWslCommandError::BackingOff);
+        }
+        state.in_flight = true;
+        state.retry_after = None;
+        Ok(Self {
+            distribution: distribution.to_owned(),
+            completed: false,
+        })
+    }
+
+    fn complete(&mut self) {
+        self.completed = true;
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl Drop for BackgroundCommandLease {
+    fn drop(&mut self) {
+        let mut commands = background_commands();
+        let state = commands.entry(self.distribution.clone()).or_default();
+        state.in_flight = false;
+        if !self.completed {
+            state.retry_after = Some(Instant::now() + BACKGROUND_COMMAND_BACKOFF);
+        }
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn background_commands() -> MutexGuard<'static, HashMap<String, BackgroundCommandState>> {
+    BACKGROUND_COMMANDS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+#[cfg(not(target_family = "wasm"))]
+pub fn record_distribution_timeout(distribution: &str) {
+    let mut commands = background_commands();
+    let state = commands.entry(distribution.to_owned()).or_default();
+    state.retry_after = Some(Instant::now() + BACKGROUND_COMMAND_BACKOFF);
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[derive(Debug, thiserror::Error)]
+pub enum BackgroundWslCommandError {
+    #[error("another background WSL command is already running for this distribution")]
+    AlreadyRunning,
+    #[error("background WSL commands are temporarily paused after an unresponsive command")]
+    BackingOff,
+    #[error(transparent)]
+    Output(#[from] OutputError),
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub async fn output_background_command(
+    command: &mut Command,
+    distribution: &str,
+) -> Result<std::process::Output, BackgroundWslCommandError> {
+    output_background_command_with_timeout(command, distribution, BACKGROUND_COMMAND_TIMEOUT).await
+}
+
+#[cfg(not(target_family = "wasm"))]
+async fn output_background_command_with_timeout(
+    command: &mut Command,
+    distribution: &str,
+    timeout: Duration,
+) -> Result<std::process::Output, BackgroundWslCommandError> {
+    let mut lease = BackgroundCommandLease::acquire(distribution)?;
+    match command.output_with_timeout(timeout).await {
+        Ok(output) => {
+            lease.complete();
+            Ok(output)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
 
 #[cfg(test)]
 #[path = "wsl_tests.rs"]
