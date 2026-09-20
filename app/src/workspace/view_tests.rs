@@ -20,7 +20,7 @@ use warp_editor::editor::NavigationKey;
 #[cfg(feature = "local_fs")]
 use warp_files::FileModel;
 use warpui::platform::WindowStyle;
-use warpui::{AddSingletonModel, App, ViewHandle};
+use warpui::{AddSingletonModel, App, Presenter, ViewHandle};
 use watcher::HomeDirectoryWatcher;
 
 use super::*;
@@ -83,7 +83,6 @@ use crate::terminal::model::session::{SessionId as TerminalSessionId, SessionInf
 use crate::terminal::shared_session::{
     SharedSessionScrollbackType, SharedSessionSource, SharedSessionStatus,
 };
-use crate::terminal::view::init::INPUT_BOX_VISIBLE_KEY;
 use crate::test_util::assert_eventually;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::undo_close::UndoCloseSettings;
@@ -362,7 +361,6 @@ fn external_alt_c_binding_uses_terminal_fzf_context_when_input_context_is_stale(
         terminal.read(&app, |terminal, ctx| {
             let context = terminal.keymap_context(ctx);
             assert!(context.set.contains(FZF_SHELL_PLUGIN_CONTEXT));
-            assert!(context.set.contains(INPUT_BOX_VISIBLE_KEY));
         });
         let pty_writes = Rc::new(RefCell::new(Vec::new()));
         let writes = pty_writes.clone();
@@ -374,14 +372,27 @@ fn external_alt_c_binding_uses_terminal_fzf_context_when_input_context_is_stale(
             });
         });
 
-        let handled = app
-            .dispatch_keystroke(
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+        let handled = app.update(|ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::KeyDown {
+                    keystroke: warpui::keymap::Keystroke {
+                        alt: true,
+                        key: "ç".to_owned(),
+                        ..Default::default()
+                    },
+                    chars: "ç".to_owned(),
+                    details: warpui::event::KeyEventDetails {
+                        left_alt: true,
+                        key_without_modifiers: Some("c".to_owned()),
+                        ..Default::default()
+                    },
+                    is_composing: false,
+                },
                 window_id,
-                &[workspace.id(), terminal.id()],
-                &warpui::keymap::Keystroke::parse("alt-c").expect("valid keystroke"),
-                false,
+                presenter,
             )
-            .expect("dispatch should succeed");
+        });
 
         assert!(handled);
         assert_eq!(*pty_writes.borrow(), vec![vec![C0::ESC, b'c']]);

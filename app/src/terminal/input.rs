@@ -327,9 +327,7 @@ use crate::terminal::view::ambient_agent::{
     HarnessSelector, HarnessSelectorEvent, HostSelector, HostSelectorEvent, NakedHeaderButtonTheme,
     cloud_agent_team_required_toast_message,
 };
-use crate::terminal::view::init::{
-    CAN_ATTACH_FILE_KEY, CLI_AGENT_SESSION_ACTIVE_KEY, INPUT_BOX_VISIBLE_KEY,
-};
+use crate::terminal::view::init::{CAN_ATTACH_FILE_KEY, CLI_AGENT_SESSION_ACTIVE_KEY};
 use crate::terminal::view::inline_banner::{PromptSuggestionsEvent, PromptSuggestionsView};
 use crate::terminal::view::{
     AIQueryRouting, CodeDiffAction, FZF_PLUGIN_TAG, file_attach_allowed_for_shared_session,
@@ -2164,10 +2162,11 @@ pub fn init(app: &mut AppContext) {
     .with_context_predicate(id!("Input"))
     .with_key_binding("ctrl-l")]);
 
-    let external_alt_c_context = (id!("Input") | (id!("Terminal") & id!(INPUT_BOX_VISIBLE_KEY)))
+    let external_alt_c_context = (id!("Input") | id!("Terminal"))
         & id!(FZF_SHELL_PLUGIN_CONTEXT)
         & !id!("VoltronActive")
-        & !id!("LongRunningCommand");
+        & !id!("LongRunningCommand")
+        & !id!("AltScreen");
     app.register_editable_bindings([
         EditableBinding::new(
             "terminal:scroll_up_one_page",

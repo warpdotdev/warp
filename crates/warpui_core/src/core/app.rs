@@ -34,7 +34,7 @@ use crate::assets::asset_cache::{AssetCache, AssetHandle, AssetSource, AssetStat
 use crate::r#async::executor::{self, Background, Foreground, ForegroundTask};
 use crate::r#async::{FutureId, SpawnableOutput, Timer, block_on};
 use crate::core::{ActionType, StoredView, Window};
-use crate::event::KeyState;
+use crate::event::{KeyEventDetails, KeyState};
 use crate::fonts::{self, ExternalFontFamily, FallbackFontModel, RequestedFallbackFontSource};
 use crate::image_cache::{self, ImageCache};
 use crate::keymap::{
@@ -70,6 +70,29 @@ mod tui;
 
 lazy_static! {
     static ref LAST_USER_ACTION_UNIX_TIMESTAMP: AtomicI64 = AtomicI64::new(0);
+}
+pub(super) fn alternate_modifier_keybinding_keystroke(
+    keystroke: &Keystroke,
+    details: &KeyEventDetails,
+) -> Option<Keystroke> {
+    if !keystroke.alt && !keystroke.meta {
+        return None;
+    }
+    let base_key = details.key_without_modifiers.as_deref()?;
+    let [base_byte] = base_key.as_bytes() else {
+        return None;
+    };
+    if base_key == keystroke.key || !base_byte.is_ascii_alphabetic() {
+        return None;
+    }
+
+    let mut alternate = keystroke.clone();
+    alternate.key = if keystroke.shift {
+        base_key.to_ascii_uppercase()
+    } else {
+        base_key.to_ascii_lowercase()
+    };
+    Some(alternate)
 }
 
 #[derive(Clone)]
@@ -3560,6 +3583,7 @@ impl AppContext {
             // Checks (and possibly dispatches) for actions with a matching keybinding
             if let Event::KeyDown {
                 keystroke,
+                details,
                 is_composing,
                 ..
             } = &event
@@ -3573,6 +3597,24 @@ impl AppContext {
                     }
                     Err(error) => {
                         report_error!(error.context("error dispatching keystroke"));
+                    }
+                }
+                if !keystroke_handled
+                    && let Some(alternate) =
+                        alternate_modifier_keybinding_keystroke(keystroke, details)
+                {
+                    match self.dispatch_keystroke(
+                        window_id,
+                        &responder_chain,
+                        &alternate,
+                        *is_composing,
+                    ) {
+                        Ok(handled) => {
+                            keystroke_handled = handled;
+                        }
+                        Err(error) => {
+                            report_error!(error.context("error dispatching keystroke"));
+                        }
                     }
                 }
             }
