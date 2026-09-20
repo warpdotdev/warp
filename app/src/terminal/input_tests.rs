@@ -10554,7 +10554,38 @@ fn hotkey_opens_ai_command_search_even_when_hash_trigger_disabled() {
 
 #[cfg(test)]
 mod completion_sources_resolution_tests {
-    use super::super::{CompletionSources, CompletionsTrigger, resolve_completion_sources};
+    use super::super::{
+        CompletionSources, CompletionsTrigger, native_only_suggestions_or_file_paths,
+        resolve_completion_sources,
+    };
+    use warp_completer::completer::{
+        Match, MatchStrategy, MatchedSuggestion, Priority, Suggestion, SuggestionResults,
+        SuggestionType,
+    };
+    use warp_completer::meta::Span;
+
+    fn suggestion_results(suggestions: &[&str]) -> SuggestionResults {
+        SuggestionResults {
+            replacement_span: Span::new(5, 8),
+            suggestions: suggestions
+                .iter()
+                .map(|suggestion| {
+                    MatchedSuggestion::new(
+                        Suggestion::with_same_display_and_replacement(
+                            *suggestion,
+                            None,
+                            SuggestionType::Argument,
+                            Priority::default(),
+                        ),
+                        Match::Prefix {
+                            is_case_sensitive: false,
+                        },
+                    )
+                })
+                .collect(),
+            match_strategy: MatchStrategy::Fuzzy,
+        }
+    }
 
     #[test]
     fn feature_flag_off_is_warp_only_regardless_of_toggles() {
@@ -10645,5 +10676,29 @@ mod completion_sources_resolution_tests {
             ),
             CompletionSources::WarpOnly
         );
+    }
+
+    #[test]
+    fn native_only_preserves_non_empty_native_suggestions() {
+        let native_suggestions = suggestion_results(&["native-match"]);
+
+        let actual = futures::executor::block_on(native_only_suggestions_or_file_paths(
+            Some(native_suggestions.clone()),
+            || async { panic!("file-path fallback must not run") },
+        ));
+
+        assert_eq!(actual, Some(native_suggestions));
+    }
+
+    #[test]
+    fn native_only_falls_back_to_file_paths_when_native_suggestions_are_empty() {
+        let file_path_suggestions = suggestion_results(&["src/"]);
+
+        let actual = futures::executor::block_on(native_only_suggestions_or_file_paths(
+            Some(suggestion_results(&[])),
+            || async { Some(file_path_suggestions.clone()) },
+        ));
+
+        assert_eq!(actual, Some(file_path_suggestions));
     }
 }
