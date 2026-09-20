@@ -1126,6 +1126,24 @@ struct EmbeddedCodeEditorView {
     language: Option<ProgrammingLanguage>,
     length: usize,
 }
+
+#[derive(Debug, Eq, PartialEq)]
+enum CodeSectionUpdate<'a> {
+    Append(&'a str),
+    Truncate(usize),
+    Reset(&'a str),
+    Unchanged,
+}
+
+fn code_section_update(code: &str, previous_length: usize) -> CodeSectionUpdate<'_> {
+    match code.len().cmp(&previous_length) {
+        Ordering::Greater => code
+            .get(previous_length..)
+            .map_or(CodeSectionUpdate::Reset(code), CodeSectionUpdate::Append),
+        Ordering::Less => CodeSectionUpdate::Truncate(code.len()),
+        Ordering::Equal => CodeSectionUpdate::Unchanged,
+    }
+}
 /// Builds the authenticated Oz run-page URL for a recording artifact.
 ///
 /// The task ID is assigned to the conversation by the server when the run
@@ -3068,16 +3086,20 @@ impl AIBlock {
                     // received the ``` end marker.
                     // Ex: Iteration 57: "a += 12\n``"
                     // Ex: Iteration 58: "a += 12"
-                    match code.len().cmp(&embedded_view.length) {
-                        Ordering::Greater => {
-                            view.append_at_end(&code[embedded_view.length..], ctx);
+                    match code_section_update(code, embedded_view.length) {
+                        CodeSectionUpdate::Append(suffix) => {
+                            view.append_at_end(suffix, ctx);
                             ctx.notify();
                         }
-                        Ordering::Less => {
-                            view.truncate(code.len(), ctx);
+                        CodeSectionUpdate::Truncate(length) => {
+                            view.truncate(length, ctx);
                             ctx.notify();
                         }
-                        Ordering::Equal => {}
+                        CodeSectionUpdate::Reset(code) => {
+                            view.reset(InitialBufferState::plain_text(code), ctx);
+                            ctx.notify();
+                        }
+                        CodeSectionUpdate::Unchanged => {}
                     }
                     embedded_view.length = code.len();
                 });
