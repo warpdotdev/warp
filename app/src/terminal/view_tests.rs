@@ -172,6 +172,47 @@ fn has_pending_user_query_block(view: &TerminalView) -> bool {
 }
 
 #[test]
+fn fzf_plugin_enables_all_shell_widgets_while_atuin_only_enables_ctrl_r() {
+    let fzf = HashSet::from([FZF_PLUGIN_TAG.to_string()]);
+    let atuin = HashSet::from([ATUIN_PLUGIN_TAG.to_string()]);
+
+    for widget in [
+        ExternalShellWidget::CtrlR,
+        ExternalShellWidget::CtrlT,
+        ExternalShellWidget::AltC,
+    ] {
+        assert!(shell_plugins_support_widget(&fzf, widget));
+    }
+    assert!(shell_plugins_support_widget(
+        &atuin,
+        ExternalShellWidget::CtrlR
+    ));
+    assert!(!shell_plugins_support_widget(
+        &atuin,
+        ExternalShellWidget::CtrlT
+    ));
+    assert!(!shell_plugins_support_widget(
+        &atuin,
+        ExternalShellWidget::AltC
+    ));
+}
+
+#[test]
+fn ctrl_t_apply_mode_matches_each_supported_shell_integration() {
+    assert_eq!(
+        ctrl_t_apply_mode(ShellType::Bash),
+        ShellWidgetApplyMode::Splice
+    );
+    assert_eq!(
+        ctrl_t_apply_mode(ShellType::Zsh),
+        ShellWidgetApplyMode::Splice
+    );
+    assert_eq!(
+        ctrl_t_apply_mode(ShellType::Fish),
+        ShellWidgetApplyMode::Replace
+    );
+}
+#[test]
 fn agent_view_lifecycle_updates_input_mode() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
