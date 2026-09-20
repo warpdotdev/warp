@@ -75,11 +75,11 @@ use crate::terminal::history::History;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::local_tty::spawner::PtySpawner;
 use crate::terminal::model::ansi::{Handler as _, PromptMetadata};
-use crate::terminal::model::block::BlockMetadata;
 use crate::terminal::model::session::SessionInfo;
 use crate::terminal::shared_session::{
     SharedSessionScrollbackType, SharedSessionSource, SharedSessionStatus,
 };
+use crate::test_util::assert_eventually;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::undo_close::UndoCloseSettings;
 #[cfg(feature = "local_fs")]
@@ -305,11 +305,6 @@ fn external_alt_c_decline_passes_keypress_to_alt_screen() {
                     ..Default::default()
                 });
             }
-            terminal
-                .model_event_dispatcher()
-                .update(ctx, |dispatcher, _| {
-                    dispatcher.set_active_session_id(session_id);
-                });
             terminal.sessions_model().update(ctx, |sessions, ctx| {
                 sessions.initialize_bootstrapped_session(
                     session_info,
@@ -320,14 +315,20 @@ fn external_alt_c_decline_passes_keypress_to_alt_screen() {
                 );
             });
         });
-        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
-        input.update(&mut app, |input, ctx| {
-            input.set_active_block_metadata(BlockMetadata::new(Some(session_id), None), false, ctx);
-        });
-        input.read(&app, |input, ctx| {
-            assert!(input.keymap_context(ctx).set.contains("FzfShellPlugin"));
-        });
-        terminal.read(&app, |terminal, _| {
+        assert_eventually!(
+            200 => terminal.read(&app, |terminal, _| {
+                terminal.active_block_session_id() == Some(session_id)
+            }),
+            "terminal view should receive the active session through its model-event pipeline"
+        );
+        terminal.read(&app, |terminal, ctx| {
+            assert_eq!(terminal.active_block_session_id(), Some(session_id));
+            assert!(
+                terminal
+                    .sessions(ctx)
+                    .get(session_id)
+                    .is_some_and(|session| session.shell().plugins().contains("fzf"))
+            );
             let model = terminal.model.lock();
             assert!(model.block_list().is_bootstrapped());
             assert!(model.block_list().active_block().has_received_precmd());
