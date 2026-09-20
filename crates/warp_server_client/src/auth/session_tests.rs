@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Barrier};
 
 use chrono::Utc;
 use futures::executor::block_on;
@@ -110,14 +110,36 @@ fn api_key_exchange_defers_owner_type_until_user_properties_are_fetched() {
 
 #[test]
 fn logged_out_session_does_not_request_refresh() {
+    let (direct_url, proxy_url, direct_request, proxy_request) = {
+        let mut server = ChannelState::mock_server();
+        let direct_path = "/firebase/logged-out";
+        let proxy_path = "/firebase/logged-out-proxy";
+        let direct_request = server
+            .mock("POST", direct_path)
+            .with_status(200)
+            .expect(0)
+            .create();
+        let proxy_request = server
+            .mock("POST", proxy_path)
+            .with_status(200)
+            .expect(0)
+            .create();
+        (
+            format!("{}{direct_path}", server.url()),
+            format!("{}{proxy_path}", server.url()),
+            direct_request,
+            proxy_request,
+        )
+    };
     let auth_state = Arc::new(AuthState::new_logged_out_for_test());
-    let (session, event_receiver) =
-        session_with_refresh_urls(auth_state, "http://".to_string(), "http://".to_string());
+    let (session, event_receiver) = session_with_refresh_urls(auth_state, direct_url, proxy_url);
 
-    let result = block_on(session.get_or_refresh_access_token());
+    let error = block_on(session.get_or_refresh_access_token()).unwrap_err();
 
-    assert!(result.is_err());
+    assert_eq!(error.to_string(), "missing authentication credentials");
     assert!(event_receiver.try_recv().is_err());
+    direct_request.assert();
+    proxy_request.assert();
 }
 
 #[test]
@@ -157,6 +179,45 @@ fn direct_firebase_400_does_not_use_proxy() {
 }
 
 #[test]
+fn direct_firebase_5xx_does_not_use_proxy_or_trigger_reauth() {
+    let (direct_url, proxy_url, direct_request, proxy_request) = {
+        let mut server = ChannelState::mock_server();
+        let direct_path = "/firebase/direct-500";
+        let proxy_path = "/firebase/direct-500-proxy";
+        let direct_request = server
+            .mock("POST", direct_path)
+            .with_status(503)
+            .with_body(r#"{"error":{"code":400,"message":"INVALID_REFRESH_TOKEN"}}"#)
+            .expect(1)
+            .create();
+        let proxy_request = server
+            .mock("POST", proxy_path)
+            .with_status(200)
+            .expect(0)
+            .create();
+        (
+            format!("{}{direct_path}", server.url()),
+            format!("{}{proxy_path}", server.url()),
+            direct_request,
+            proxy_request,
+        )
+    };
+    let auth_state = Arc::new(AuthState::new_logged_out_for_test());
+    auth_state.set_credentials(Some(expired_firebase_credentials("refresh-token")));
+    let (session, event_receiver) = session_with_refresh_urls(auth_state, direct_url, proxy_url);
+
+    let error = block_on(session.get_or_refresh_access_token()).unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "unexpected error occurred when fetching an ID token: Firebase token request failed with status 503 Service Unavailable"
+    );
+    assert!(event_receiver.try_recv().is_err());
+    direct_request.assert();
+    proxy_request.assert();
+}
+
+#[test]
 fn proxy_429_starts_shared_cooldown() {
     let (proxy_url, proxy_request) = {
         let mut server = ChannelState::mock_server();
@@ -178,6 +239,56 @@ fn proxy_429_starts_shared_cooldown() {
 
     assert!(first.is_err());
     assert!(second.is_err());
+    proxy_request.assert();
+}
+
+#[test]
+fn concurrent_proxy_failure_shares_one_result() {
+    let (proxy_url, proxy_request) = {
+        let mut server = ChannelState::mock_server();
+        let proxy_path = "/firebase/concurrent-proxy-429";
+        let request = server
+            .mock("POST", proxy_path)
+            .with_status(429)
+            .expect(1)
+            .create();
+        (format!("{}{proxy_path}", server.url()), request)
+    };
+    let auth_state = Arc::new(AuthState::new_logged_out_for_test());
+    auth_state.set_credentials(Some(expired_firebase_credentials("refresh-token")));
+    let (mut session, _) = session_with_refresh_urls(auth_state, "http://".to_string(), proxy_url);
+    session.refresh_snapshot_barrier = Some(Arc::new(Barrier::new(4)));
+    let session = Arc::new(session);
+    let first = {
+        let session = session.clone();
+        std::thread::spawn(move || block_on(session.get_or_refresh_access_token()))
+    };
+    let second = {
+        let session = session.clone();
+        std::thread::spawn(move || block_on(session.get_or_refresh_access_token()))
+    };
+    let third = {
+        let session = session.clone();
+        std::thread::spawn(move || block_on(session.get_or_refresh_access_token()))
+    };
+    let fourth = {
+        let session = session.clone();
+        std::thread::spawn(move || block_on(session.get_or_refresh_access_token()))
+    };
+    let errors = vec![
+        first.join().unwrap().unwrap_err().to_string(),
+        second.join().unwrap().unwrap_err().to_string(),
+        third.join().unwrap().unwrap_err().to_string(),
+        fourth.join().unwrap().unwrap_err().to_string(),
+    ];
+
+    assert_eq!(
+        errors,
+        vec![
+            "unexpected error occurred when fetching an ID token: Firebase token proxy is temporarily unavailable";
+            4
+        ]
+    );
     proxy_request.assert();
 }
 
@@ -301,6 +412,48 @@ fn successful_refresh_clears_transient_backoff() {
     let state = session.refresh_state.lock();
     assert!(state.retry_at.is_none());
     assert_eq!(state.consecutive_transient_failures, 0);
+    direct_request.assert();
+}
+
+#[test]
+fn full_event_channel_does_not_block_refresh_completion() {
+    let (direct_url, proxy_url, direct_request) = {
+        let mut server = ChannelState::mock_server();
+        let direct_path = "/firebase/full-event-channel";
+        let proxy_path = "/firebase/full-event-channel-proxy";
+        let direct_request = server
+            .mock("POST", direct_path)
+            .with_status(200)
+            .with_body(successful_refresh_response("fresh-id", "fresh-refresh"))
+            .expect(1)
+            .create();
+        (
+            format!("{}{direct_path}", server.url()),
+            format!("{}{proxy_path}", server.url()),
+            direct_request,
+        )
+    };
+    let auth_state = Arc::new(AuthState::new_logged_out_for_test());
+    auth_state.set_credentials(Some(expired_firebase_credentials("refresh-token")));
+    let (event_sender, event_receiver) = async_channel::bounded(1);
+    event_sender
+        .try_send(AuthEvent::IapChallengeReceived)
+        .unwrap();
+    let mut session = AuthSession::new(
+        Arc::new(http_client::Client::new()),
+        auth_state,
+        event_sender,
+    );
+    session.refresh_urls = Some((direct_url, proxy_url));
+
+    let token = block_on(session.get_or_refresh_access_token()).unwrap();
+
+    assert!(matches!(token, AuthToken::Firebase(token) if token == "fresh-id"));
+    assert!(matches!(
+        event_receiver.try_recv().unwrap(),
+        AuthEvent::IapChallengeReceived
+    ));
+    assert!(event_receiver.try_recv().is_err());
     direct_request.assert();
 }
 
