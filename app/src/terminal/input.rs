@@ -30,7 +30,6 @@ use std::any::Any;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write;
-use std::future::Future;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -1661,19 +1660,6 @@ fn native_shell_suggestion_results(
     }
 }
 
-async fn native_only_suggestions_or_file_paths<F, Fut>(
-    native_suggestions: Option<SuggestionResults>,
-    file_path_fallback: F,
-) -> Option<SuggestionResults>
-where
-    F: FnOnce() -> Fut,
-    Fut: Future<Output = Option<SuggestionResults>>,
-{
-    match native_suggestions {
-        Some(suggestions) if suggestions.suggestions.is_empty() => file_path_fallback().await,
-        suggestions => suggestions,
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DenyExecutionReason {
@@ -12831,25 +12817,24 @@ impl Input {
                                         cursor_position,
                                     )
                                 });
-                        let suggestions = native_only_suggestions_or_file_paths(
-                            native_suggestions,
-                            || {
+                        let suggestions = match native_suggestions {
+                            Some(suggestions) if suggestions.suggestions.is_empty() => {
                                 completer::suggestions(
                                     before_cursor_text.as_str(),
                                     cursor_position,
                                     session_env_vars.as_ref(),
                                     CompleterOptions {
                                         match_strategy: matcher,
-                                        fallback_strategy:
-                                            CompletionsFallbackStrategy::FilePaths,
+                                        fallback_strategy: CompletionsFallbackStrategy::FilePaths,
                                         suggest_file_path_completions_only: false,
                                         parse_quotes_as_literals: false,
                                     },
                                     &completion_context,
                                 )
-                            },
-                        )
-                        .await;
+                                .await
+                            }
+                            suggestions => suggestions,
+                        };
                         return (suggestions, completions_trigger, editor_snapshot);
                     }
                     let suggestions = completer::suggestions(
