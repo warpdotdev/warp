@@ -140,7 +140,7 @@ impl Command {
 
     #[allow(unused_mut)]
     fn new_internal(mut inner: async_process::Command) -> Command {
-        #[cfg(all(windows, not(feature = "test-util")))]
+        #[cfg(all(windows, not(any(feature = "test-util", test))))]
         {
             use async_process::windows::CommandExt;
             // We need to set the `CREATE_BREAKAWAY_FROM_JOB` flag to avoid assigning

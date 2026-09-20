@@ -35,9 +35,17 @@ use instant::Instant;
 use crate::r#async::{Command, OutputError};
 
 #[cfg(not(target_family = "wasm"))]
+#[cfg(not(test))]
 const BACKGROUND_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(not(target_family = "wasm"))]
+#[cfg(test)]
+const BACKGROUND_COMMAND_TIMEOUT: Duration = Duration::from_secs(1);
+#[cfg(not(target_family = "wasm"))]
+#[cfg(not(test))]
 const BACKGROUND_COMMAND_BACKOFF: Duration = Duration::from_secs(30);
+#[cfg(not(target_family = "wasm"))]
+#[cfg(test)]
+const BACKGROUND_COMMAND_BACKOFF: Duration = Duration::from_millis(200);
 
 #[cfg(not(target_family = "wasm"))]
 static BACKGROUND_COMMANDS: LazyLock<Mutex<HashMap<String, BackgroundCommandState>>> =

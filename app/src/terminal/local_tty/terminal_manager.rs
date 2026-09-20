@@ -99,6 +99,10 @@ impl PtySpawnHooks for AppPtySpawnHooks {
     }
 }
 
+#[cfg(test)]
+#[path = "terminal_manager_tests.rs"]
+mod tests;
+
 /// Owns a local terminal session: the terminal model, PTY event loop, PTY
 /// controller, and a terminal surface.
 ///
@@ -769,12 +773,20 @@ fn on_shell_determined<S: TerminalSurface>(
         ctx.spawn(
             warpui::r#async::Timer::after(WSL_SHELL_STARTUP_TIMEOUT),
             move |_manager, _, ctx| {
-                if model.lock().is_active_block_bootstrapped() {
+                let timed_out = {
+                    let mut model = model.lock();
+                    if !is_shell_startup_pending(&model) {
+                        false
+                    } else {
+                        model.exit(ExitReason::PtySpawnFailed);
+                        true
+                    }
+                };
+                if !timed_out {
                     return;
                 }
 
                 command::wsl::record_distribution_timeout(&distribution);
-                model.lock().exit(ExitReason::PtySpawnFailed);
                 surface.update(ctx, |surface, ctx| {
                     surface.on_pty_spawn_failed(
                         anyhow::anyhow!(
@@ -805,6 +817,9 @@ fn on_shell_determined<S: TerminalSurface>(
 
         manager.terminal_attributes_poller = Some(terminal_attributes_poller);
     }
+}
+fn is_shell_startup_pending(model: &TerminalModel) -> bool {
+    !model.is_read_only() && !model.is_active_block_bootstrapped()
 }
 
 impl<S> TerminalManager<S> {
