@@ -107,6 +107,8 @@ struct RefreshState {
     retry_at: Option<Instant>,
     consecutive_transient_failures: u32,
     in_flight: Option<Arc<RefreshFlight>>,
+    needs_reauth_pending: bool,
+    reauth_delivery_in_flight: bool,
 }
 
 impl RefreshState {
@@ -121,11 +123,14 @@ impl RefreshState {
         self.terminal_error = None;
         self.retry_at = None;
         self.consecutive_transient_failures = 0;
+        self.needs_reauth_pending = false;
+        self.reauth_delivery_in_flight = false;
     }
 
     fn record_terminal_failure(&mut self, error: FirebaseError) {
         self.terminal_error = Some(error);
         self.retry_at = None;
+        self.needs_reauth_pending = true;
     }
 
     fn record_transient_failure(&mut self, now: Instant, retry_after: Option<Duration>) {
@@ -138,6 +143,37 @@ impl RefreshState {
         });
         let delay = delay.clamp(Duration::from_secs(1), MAX_PROXY_RETRY_DELAY);
         self.retry_at = now.checked_add(delay);
+    }
+
+    fn claim_reauth_delivery(&mut self) -> bool {
+        if self.needs_reauth_pending && !self.reauth_delivery_in_flight {
+            self.reauth_delivery_in_flight = true;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+struct ReauthDelivery<'a> {
+    refresh_state: &'a Mutex<RefreshState>,
+    completed: bool,
+}
+
+impl ReauthDelivery<'_> {
+    fn complete(mut self) {
+        let mut state = self.refresh_state.lock();
+        state.needs_reauth_pending = false;
+        state.reauth_delivery_in_flight = false;
+        self.completed = true;
+    }
+}
+
+impl Drop for ReauthDelivery<'_> {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.refresh_state.lock().reauth_delivery_in_flight = false;
+        }
     }
 }
 
@@ -271,17 +307,16 @@ impl AuthSession {
         }
 
         let refresh_token = auth_tokens.refresh_token;
-        let (flight, is_leader) = {
+        let acquisition = {
             let mut state = self.refresh_state.lock();
             state.update_credentials(&refresh_token);
             if let Some(flight) = &state.in_flight
                 && flight.refresh_token == refresh_token
             {
-                (flight.clone(), false)
+                Ok((flight.clone(), false))
+            } else if let Some(error) = state.terminal_error.clone() {
+                Err(error)
             } else {
-                if let Some(error) = state.terminal_error.clone() {
-                    return Err(UserAuthenticationError::from(error).into());
-                }
                 if state
                     .retry_at
                     .is_some_and(|retry_at| Instant::now() < retry_at)
@@ -296,7 +331,14 @@ impl AuthSession {
                     result: self.fetch_auth_tokens(firebase_token).shared(),
                 });
                 state.in_flight = Some(flight.clone());
-                (flight, true)
+                Ok((flight, true))
+            }
+        };
+        let (flight, is_leader) = match acquisition {
+            Ok(acquisition) => acquisition,
+            Err(error) => {
+                self.deliver_pending_needs_reauth().await;
+                return Err(UserAuthenticationError::from(error).into());
             }
         };
 
@@ -351,7 +393,7 @@ impl AuthSession {
                         ) =>
                     {
                         state.record_terminal_failure(firebase_error.clone());
-                        Some(AuthEvent::NeedsReauth)
+                        None
                     }
                     Err(TokenRefreshError::ProxyTransient { retry_after }) => {
                         state.record_transient_failure(Instant::now(), *retry_after);
@@ -366,13 +408,26 @@ impl AuthSession {
             bail!("Firebase credentials changed while refreshing the access token");
         }
         if let Some(event) = event {
-            #[cfg(test)]
-            if let Some(barrier) = &self.refresh_event_barrier {
-                barrier.wait();
-            }
             let _ = self.event_sender.send(event).await;
         }
+        self.deliver_pending_needs_reauth().await;
         Self::auth_token_from_refresh_result(result)
+    }
+
+    async fn deliver_pending_needs_reauth(&self) {
+        if !self.refresh_state.lock().claim_reauth_delivery() {
+            return;
+        }
+        let delivery = ReauthDelivery {
+            refresh_state: &self.refresh_state,
+            completed: false,
+        };
+        #[cfg(test)]
+        if let Some(barrier) = &self.refresh_event_barrier {
+            barrier.wait();
+        }
+        let _ = self.event_sender.send(AuthEvent::NeedsReauth).await;
+        delivery.complete();
     }
 
     fn auth_token_from_refresh_result(result: TokenRefreshResult) -> Result<AuthToken> {

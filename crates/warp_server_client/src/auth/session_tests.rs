@@ -2,7 +2,7 @@ use std::sync::{Arc, Barrier};
 
 use chrono::Utc;
 use futures::executor::block_on;
-use futures::future::join_all;
+use futures::future::{AbortHandle, Abortable, join_all};
 use mockito::Matcher;
 use warp_core::channel::ChannelState;
 use warp_errors::AnyhowErrorExt as _;
@@ -479,6 +479,70 @@ fn full_event_channel_eventually_delivers_needs_reauth() {
         AuthEvent::IapChallengeReceived
     ));
     assert!(refresh.join().unwrap().is_err());
+    assert!(matches!(
+        event_receiver.try_recv().unwrap(),
+        AuthEvent::NeedsReauth
+    ));
+    direct_request.assert();
+}
+
+#[test]
+fn cancelled_reauth_delivery_is_retried_by_later_caller() {
+    let (direct_url, proxy_url, direct_request) = {
+        let mut server = ChannelState::mock_server();
+        let direct_path = "/firebase/cancelled-reauth-delivery";
+        let proxy_path = "/firebase/cancelled-reauth-delivery-proxy";
+        let direct_request = server
+            .mock("POST", direct_path)
+            .with_status(400)
+            .with_body(r#"{"error":{"code":400,"message":"INVALID_REFRESH_TOKEN"}}"#)
+            .expect(1)
+            .create();
+        (
+            format!("{}{direct_path}", server.url()),
+            format!("{}{proxy_path}", server.url()),
+            direct_request,
+        )
+    };
+    let auth_state = Arc::new(AuthState::new_logged_out_for_test());
+    auth_state.set_credentials(Some(expired_firebase_credentials("refresh-token")));
+    let (event_sender, event_receiver) = async_channel::bounded(1);
+    event_sender
+        .try_send(AuthEvent::IapChallengeReceived)
+        .unwrap();
+    let mut session = AuthSession::new(
+        Arc::new(http_client::Client::new()),
+        auth_state,
+        event_sender,
+    );
+    session.refresh_urls = Some((direct_url, proxy_url));
+    let event_ready = Arc::new(Barrier::new(2));
+    session.refresh_event_barrier = Some(event_ready.clone());
+    let session = Arc::new(session);
+    let (abort_handle, abort_registration) = AbortHandle::new_pair();
+    let cancelled_refresh = {
+        let session = session.clone();
+        std::thread::spawn(move || {
+            block_on(Abortable::new(
+                session.get_or_refresh_access_token(),
+                abort_registration,
+            ))
+        })
+    };
+    event_ready.wait();
+    abort_handle.abort();
+    assert!(cancelled_refresh.join().unwrap().is_err());
+    assert!(matches!(
+        event_receiver.try_recv().unwrap(),
+        AuthEvent::IapChallengeReceived
+    ));
+
+    let later_refresh = {
+        let session = session.clone();
+        std::thread::spawn(move || block_on(session.get_or_refresh_access_token()))
+    };
+    event_ready.wait();
+    assert!(later_refresh.join().unwrap().is_err());
     assert!(matches!(
         event_receiver.try_recv().unwrap(),
         AuthEvent::NeedsReauth
