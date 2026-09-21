@@ -28,7 +28,7 @@ use remote_server::manager::RemoteServerManager;
 use repo_metadata::repositories::DetectedRepositories;
 use string_offset::CharOffset;
 use vec1::Vec1;
-use vim::vim::{MotionType, VimMode};
+use vim::vim::VimMode;
 use warp_core::r#async::debounce;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
@@ -2067,21 +2067,13 @@ impl LocalCodeEditorView {
         let mut line_range: Option<Range<LineCount>> = None;
         let mut selected_text: Option<String> = None;
         self.editor.update(ctx, |editor, ctx| {
-            // If we have a vim visual selection, update the editor model to use that as a selection range
             let has_vim_visual = matches!(editor.vim_mode(ctx), Some(VimMode::Visual(_)));
-            if has_vim_visual {
-                editor.model.update(ctx, |model, ctx| {
-                    model.vim_visual_selection_range(MotionType::Linewise, false, ctx);
-                });
-            }
-
             if let Some((start, end)) = editor.selected_lines(ctx) {
                 // selected_lines() returns 1-indexed row numbers.
                 line_range = Some(LineCount::from(start as usize)..LineCount::from(end as usize));
                 selected_text = Some(editor.selected_text(ctx).unwrap_or_default());
             }
 
-            // Enter normal mode
             if has_vim_visual {
                 editor.enter_vim_normal_mode(ctx);
             }

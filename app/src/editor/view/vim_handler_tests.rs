@@ -4021,7 +4021,7 @@ fn test_vim_line_navigation() {
         let editor_view = add_editor_vim_normal_mode("   echo hello", &mut app);
 
         editor_view.update(&mut app, |editor, ctx| {
-            editor.navigate_line(1, &LineMotion::End, ctx);
+            editor.navigate_line(1, &LineMotion::End, false, ctx);
         });
 
         editor_view.read(&app, |editor, app| {
@@ -4032,7 +4032,7 @@ fn test_vim_line_navigation() {
         });
 
         editor_view.update(&mut app, |editor, ctx| {
-            editor.navigate_line(1, &LineMotion::FirstNonWhitespace, ctx);
+            editor.navigate_line(1, &LineMotion::FirstNonWhitespace, false, ctx);
         });
 
         editor_view.read(&app, |editor, app| {
@@ -4043,7 +4043,7 @@ fn test_vim_line_navigation() {
         });
 
         editor_view.update(&mut app, |editor, ctx| {
-            editor.navigate_line(1, &LineMotion::Start, ctx);
+            editor.navigate_line(1, &LineMotion::Start, false, ctx);
         });
 
         editor_view.read(&app, |editor, app| {
