@@ -2833,7 +2833,29 @@ impl VimHandler for EditorView {
         );
     }
 
-    fn visual_text_object(&mut self, text_object: &VimTextObject, ctx: &mut ViewContext<Self>) {
+    fn visual_text_object(
+        &mut self,
+        text_object: &VimTextObject,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if matches!(
+            (&text_object.object_type, text_object.inclusion),
+            (TextObjectType::Line, TextObjectInclusion::Inner)
+        ) {
+            let editor_model = self.editor_model.as_ref(ctx);
+            let buffer = editor_model.buffer(ctx);
+            let has_missing_range = editor_model.selections(ctx).iter().any(|selection| {
+                selection
+                    .head()
+                    .to_char_offset(buffer)
+                    .ok()
+                    .and_then(|offset| vim_inner_line(buffer, offset))
+                    .is_none()
+            });
+            if has_missing_range {
+                return false;
+            }
+        }
         self.change_selections(ctx, |editor_model, ctx| {
             let buffer = editor_model.buffer(ctx);
             // Text objects in visual mode actually change the selection tail from what we had set when we first entered visual mode.
@@ -2912,6 +2934,7 @@ impl VimHandler for EditorView {
             editor_model.change_selections(new_selections, ctx);
             editor_model.vim_set_visual_tails(visual_tails);
         });
+        true
     }
 
     fn backspace(&mut self, ctx: &mut ViewContext<Self>) {

@@ -1465,6 +1465,70 @@ fn test_vim_line_text_objects() {
 }
 
 #[test]
+fn test_vim_visual_inner_line_is_cancelled_on_empty_lines() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("", &mut app);
+
+        for (line, visual_command, expected_mode) in [
+            ("", "v", VimMode::Visual(MotionType::Charwise)),
+            (" \t ", "v", VimMode::Visual(MotionType::Charwise)),
+            ("", "V", VimMode::Visual(MotionType::Linewise)),
+            (" \t ", "V", VimMode::Visual(MotionType::Linewise)),
+        ] {
+            let content = format!("seed\n{line}\nend");
+            editor.update(&mut app, |view, ctx| {
+                view.reset(InitialBufferState::plain_text(&content), ctx);
+                view.handle_action(&CodeEditorViewAction::CursorAtBufferStart, ctx);
+                view.vim_keystroke(&Keystroke::parse("escape").unwrap(), ctx);
+            });
+            VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
+                registers.write_to_register('"', "seed\n".to_owned(), MotionType::Linewise, ctx);
+            });
+            set_cursor_position(&editor, 2, usize::from(!line.is_empty()), &mut app);
+            vim_user_insert(&editor, visual_command, &mut app);
+
+            let selection_before = editor.read(&app, |view, ctx| {
+                let model = view.model.as_ref(ctx);
+                (
+                    model
+                        .buffer_selection_model()
+                        .as_ref(ctx)
+                        .selection_offsets(),
+                    model.vim_visual_tails().clone(),
+                )
+            });
+
+            for key in ["i", "l", "y"] {
+                vim_user_insert(&editor, key, &mut app);
+            }
+
+            assert_eq!(buffer_text(&editor, &app), content);
+            assert_eq!(vim_mode(&editor, &app), Some(expected_mode));
+            editor.read(&app, |view, ctx| {
+                let model = view.model.as_ref(ctx);
+                assert_eq!(
+                    (
+                        model
+                            .buffer_selection_model()
+                            .as_ref(ctx)
+                            .selection_offsets(),
+                        model.vim_visual_tails().clone(),
+                    ),
+                    selection_before
+                );
+            });
+            VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
+                let register = registers.read_from_register('"', ctx).unwrap();
+                assert_eq!(register.text, "seed\n");
+                assert_eq!(register.motion_type, MotionType::Linewise);
+            });
+        }
+    });
+}
+#[test]
 fn test_vim_begin_line_below() {
     let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
 

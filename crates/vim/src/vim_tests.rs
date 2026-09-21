@@ -32,20 +32,26 @@ fn line_text_objects_set_the_visual_motion_type() {
 
     assert!(matches!(
         event.event_type,
-        VimEventType::VisualTextObject(VimTextObject {
-            inclusion: TextObjectInclusion::Inner,
-            object_type: TextObjectType::Line,
-        })
+        VimEventType::VisualTextObject {
+            text_object: VimTextObject {
+                inclusion: TextObjectInclusion::Inner,
+                object_type: TextObjectType::Line,
+            },
+            previous_motion_type: MotionType::Linewise,
+        }
     ));
     assert_eq!(fsa.mode, VimMode::Visual(MotionType::Charwise));
 
     let event = type_chars(&mut fsa, "al").pop().unwrap();
     assert!(matches!(
         event.event_type,
-        VimEventType::VisualTextObject(VimTextObject {
-            inclusion: TextObjectInclusion::Around,
-            object_type: TextObjectType::Line,
-        })
+        VimEventType::VisualTextObject {
+            text_object: VimTextObject {
+                inclusion: TextObjectInclusion::Around,
+                object_type: TextObjectType::Line,
+            },
+            previous_motion_type: MotionType::Charwise,
+        }
     ));
     assert_eq!(fsa.mode, VimMode::Visual(MotionType::Linewise));
 }

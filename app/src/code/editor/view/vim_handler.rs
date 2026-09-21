@@ -288,7 +288,7 @@ impl VimHandler for CodeEditorView {
                         );
                     }
                     VimOperand::TextObject(text_object) => {
-                        model.vim_select_text_object(text_object, Some(operator), ctx);
+                        let _ = model.vim_select_text_object(text_object, Some(operator), ctx);
                     }
                 }
             };
@@ -697,10 +697,14 @@ impl VimHandler for CodeEditorView {
         });
     }
 
-    fn visual_text_object(&mut self, text_object: &VimTextObject, ctx: &mut ViewContext<Self>) {
+    fn visual_text_object(
+        &mut self,
+        text_object: &VimTextObject,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
         self.model.update(ctx, |model, ctx| {
-            model.vim_select_text_object(text_object, None, ctx);
-        });
+            model.vim_select_text_object(text_object, None, ctx)
+        })
     }
 
     fn jump_to_first_line(&mut self, ctx: &mut ViewContext<Self>) {
