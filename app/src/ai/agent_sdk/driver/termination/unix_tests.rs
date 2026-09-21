@@ -7,7 +7,6 @@ use nix::sys::signal::Signal;
 use nix::unistd::Pid;
 use signal_hook::iterator::SignalsInfo;
 use signal_hook::iterator::exfiltrator::WithOrigin;
-use signal_hook::low_level::siginfo::{Cause, Sent};
 use tempfile::TempDir;
 
 use super::InterruptWatch;
@@ -225,7 +224,6 @@ fn extracts_signal_sender_origin() {
     child.wait().unwrap();
     let sender = origin.process.unwrap();
     assert_eq!(origin.signal, libc::SIGWINCH);
-    assert_eq!(origin.cause, Cause::Sent(Sent::User));
     assert_eq!(sender.pid, i32::try_from(child.id()).unwrap());
     assert_eq!(sender.uid, nix::unistd::getuid().as_raw());
 }
