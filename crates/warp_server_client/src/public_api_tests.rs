@@ -42,7 +42,7 @@ fn base_client_with_auth(
             Arc::new(EmptyIapTokenProvider) as Arc<dyn http_client::iap::IapTokenProvider>
         }),
     );
-    client.set_ambient_workload_token_for_test("test-workload-token".to_string());
+    client.set_ambient_workload_token_for_test("test-workload-token".to_string(), None);
     (client, event_receiver)
 }
 

@@ -14,10 +14,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
+use warp_multi_agent_api::RequestCharges;
 use warp_multi_agent_api::client_action::{Action, StartNewConversation};
 use warp_multi_agent_api::message::tool_call::Tool;
 use warp_multi_agent_api::response_event::stream_finished::{
-    ConversationUsageMetadata, RequestCharges, TokenUsage,
+    ConversationUsageMetadata, TokenUsage,
 };
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
@@ -2258,6 +2259,26 @@ impl BlocklistAIHistoryModel {
                 cleared_conversation_ids,
             },
         );
+    }
+
+    /// Clears a closed surface without notifying a controller whose conversations moved elsewhere.
+    pub(crate) fn clear_conversations_for_closed_terminal_surface(
+        &mut self,
+        terminal_surface_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self
+            .live_conversation_ids_for_terminal_surface
+            .get(&terminal_surface_id)
+            .is_none_or(Vec::is_empty)
+        {
+            self.active_conversation_for_terminal_surface
+                .remove(&terminal_surface_id);
+            self.live_conversation_ids_for_terminal_surface
+                .remove(&terminal_surface_id);
+            return;
+        }
+        self.clear_conversations_for_terminal_surface(terminal_surface_id, ctx);
     }
 
     /// Handle removing a conversation from the history model, blocklist and in-memory.

@@ -27,14 +27,27 @@ Environment variables:
 ### Testing
 - `cargo nextest run --no-fail-fast --workspace` - Run tests with nextest
 - `cargo test --doc` - Run doc tests
-- `cargo test` - Run standard tests for individual packages
+- `cargo nextest run -p <package>` - Run tests for an individual package
 
 ### Linting and Formatting
-- `./script/presubmit` - Run all presubmit checks (fmt, clippy, tests)
+- `./script/presubmit` - Run the full local presubmit only when explicitly requested
 - `./script/format` - Format code
-- `cargo clippy --workspace --all-targets --all-features --tests -- -D warnings` - Run clippy
-- `./script/run-clang-format.py -r --extensions 'c,h,cpp,m' ./crates/warpui/src/ ./app/src/` - Format C/C++/Obj-C code
+- `cargo clippy -p <package> --all-targets --tests -- -D warnings` - Run targeted Clippy
+- `./script/run-clang-format.py -r --extensions 'c,h,cpp,m' ./crates/warpui/src/ ./app/src/` - Check C/C++/Obj-C formatting
+- `./script/run-clang-format.py -i -r --extensions 'c,h,cpp,m' ./crates/warpui/src/ ./app/src/` - Format C/C++/Obj-C code in place
 - `find . -name "*.wgsl" -exec wgslfmt --check {} +` - Check WGSL shader formatting
+- `find . -name "*.wgsl" -exec wgslfmt {} +` - Format WGSL shaders in place
+
+### Implementation Validation Order
+Optimize for fast delivery and let CI catch uncommon failures outside targeted local coverage.
+
+1. While editing, run only the smallest targeted `cargo check` or `cargo nextest` command that gives useful feedback; defer checks and tests until after implementation where possible.
+2. Once the code and self-review are complete, run the relevant tests and fix the code until they pass.
+3. Run the relevant Clippy and other lint, typecheck, or build checks and fix their findings. Return to affected tests only when a fix materially changes behavior.
+4. Run every applicable mutating formatter once, after all other code changes are complete.
+5. Open or update the PR without rerunning tests or lint after formatting and without adding a full `./script/presubmit` run.
+
+Run the full presubmit only when the user, task, or approved spec explicitly requires it. For agent-driven implementation, this section replaces the broader pre-push presubmit guidance in `CONTRIBUTING.md`; that document still describes the human contributor workflow. A later source, test, manifest, generated-code, or configuration change creates a new candidate: rerun the affected portion of the sequence and finish with the applicable formatter. Local commits are checkpoints rather than validation boundaries and do not each need to pass independently. PR text, comments, labels, and other metadata do not invalidate code validation.
 
 ### Platform Setup
 - `./script/bootstrap` - Platform-specific setup plus common agent skill installation from `skills-lock.json`; prompts for project/global when an install or update is needed unless a target flag or environment override is provided.
@@ -169,7 +182,7 @@ for itself.
 **Testing**:
 - Use `cargo nextest` for parallel test execution
 - Integration tests use the custom framework in `crates/integration/` — this is **GUI-only**. TUI elements/screens are covered by render-to-lines unit tests instead (see the `tui-testing` skill).
-- Tests should be run via presubmit script before submitting
+- Follow the Implementation Validation Order above; do not add a full presubmit run after targeted tests unless it was explicitly required.
 - Unit tests should be placed in separate files using the naming convention `${filename}_tests.rs` or `mod_test.rs`
 - Test files should be included at the end of their corresponding module with:
   ```rust
@@ -179,15 +192,9 @@ for itself.
   ```
 
 **Pull Request Workflow**:
-- **ALWAYS** run `./script/format` and `cargo clippy` (the versions specified in ./script/presubmit) before opening a PR or pushing updates to an existing PR branch
-- Those commands must pass completely before creating or updating a pull request
-- Specifically, ensure `./script/format` and `cargo clippy` checks pass
-- If they fail, fix all issues before proceeding with the PR
+- Follow the Implementation Validation Order before opening a PR or pushing a code update. Do not repeat validation when the candidate has not changed.
+- CI is the broad cross-platform and workspace gate. Push once the targeted tests and lint checks pass and the formatter has run; address a later CI failure as a new revision.
 - Do not create public pull requests or public issues that disclose a non-public security vulnerability. Refer users to `SECURITY.md` for the proper disclosure methods instead.
-- This applies to:
-  - Opening new pull requests
-  - Pushing new commits to existing PR branches
-  - Any branch updates that will be reviewed
  - When opening PRs, use the PR template at `.github/pull_request_template.md`
  - Add changelog entries when appropriate using the format at the bottom of the PR template. Use the following prefixes (without the `{{}}` brackets):
    - `CHANGELOG-NEW-FEATURE:` for new, relatively sizable features (use sparingly - these may get marketing/docs)

@@ -270,6 +270,8 @@ struct FinishTaskRequest {
 struct ShutdownError {
     category: String,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exit_code: Option<u8>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -285,9 +287,13 @@ impl ReportShutdownRequest {
     }
 
     /// An abnormal shutdown carrying an error category and message.
-    pub fn abnormal(category: String, message: String) -> Self {
+    pub fn abnormal(category: String, message: String, exit_code: Option<u8>) -> Self {
         Self {
-            error: Some(ShutdownError { category, message }),
+            error: Some(ShutdownError {
+                category,
+                message,
+                exit_code,
+            }),
         }
     }
 }
@@ -335,6 +341,7 @@ pub trait HarnessSupportClient: 'static + Send + Sync {
         &self,
         error_category: String,
         error_message: String,
+        exit_code: Option<u8>,
     ) -> Result<()>;
 
     /// Get presigned upload targets for a workspace state snapshot.
@@ -570,10 +577,11 @@ impl HarnessSupportClient for ServerApi {
         &self,
         error_category: String,
         error_message: String,
+        exit_code: Option<u8>,
     ) -> Result<()> {
         self.post_public_api_unit(
             "harness-support/report-shutdown",
-            &ReportShutdownRequest::abnormal(error_category, error_message),
+            &ReportShutdownRequest::abnormal(error_category, error_message, exit_code),
         )
         .await
     }

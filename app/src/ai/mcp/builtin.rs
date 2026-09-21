@@ -62,20 +62,39 @@ pub fn builtin_bearer_token(credentials: &Credentials) -> Option<String> {
 /// Builds the ephemeral installation for the built-in Factory MCP server: a
 /// streamable-HTTP MCP server hosted by warp-server at `/api/v1/mcp/factory`,
 /// pre-authenticated via the `Authorization` header.
-pub fn factory_mcp_installation(bearer_token: &str) -> TemplatableMCPServerInstallation {
-    factory_mcp_installation_for_server_root(&ChannelState::server_root_url(), bearer_token)
+///
+/// `ambient_headers` (workload token, cloud-agent ID) are attached alongside it
+/// when this run has an active ambient task, so warp-server can verify the
+/// caller is that task's own worker rather than soft-failing the check on a
+/// missing token.
+pub fn factory_mcp_installation(
+    bearer_token: &str,
+    ambient_headers: &[(String, String)],
+) -> TemplatableMCPServerInstallation {
+    factory_mcp_installation_for_server_root(
+        &ChannelState::server_root_url(),
+        bearer_token,
+        ambient_headers,
+    )
 }
 
 /// Like [`factory_mcp_installation`], with an explicit server root for tests.
 fn factory_mcp_installation_for_server_root(
     server_root: &str,
     bearer_token: &str,
+    ambient_headers: &[(String, String)],
 ) -> TemplatableMCPServerInstallation {
+    let mut headers = serde_json::Map::new();
+    headers.insert(
+        "Authorization".to_string(),
+        serde_json::Value::String(format!("Bearer {bearer_token}")),
+    );
+    for (name, value) in ambient_headers {
+        headers.insert(name.clone(), serde_json::Value::String(value.clone()));
+    }
     let server_config = serde_json::json!({
         "url": factory_mcp_url(server_root),
-        "headers": {
-            "Authorization": format!("Bearer {bearer_token}"),
-        },
+        "headers": headers,
     });
     let mut root = serde_json::Map::new();
     root.insert(FACTORY_MCP_SERVER_NAME.to_string(), server_config);

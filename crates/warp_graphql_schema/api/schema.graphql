@@ -1226,6 +1226,13 @@ type DiscoverableTeamData {
   teamUid: ID!
 }
 
+type DiscoverableWorkspaceData {
+  memberCount: Int!
+  name: String!
+  openTeams: [DiscoverableTeamData!]!
+  workspaceUid: ID!
+}
+
 enum DisplaySetting {
   COMMAND
   COMMAND_AND_OUTPUT
@@ -2010,6 +2017,18 @@ type JoinTeamWithTeamDiscoveryOutput implements Response {
 
 union JoinTeamWithTeamDiscoveryResult = JoinTeamWithTeamDiscoveryOutput | UserFacingError
 
+input JoinWorkspaceFromDiscoveryInput {
+  teamUid: ID
+  workspaceUid: ID!
+}
+
+type JoinWorkspaceFromDiscoveryOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union JoinWorkspaceFromDiscoveryResult = JoinWorkspaceFromDiscoveryOutput | UserFacingError
+
 input LeaveObjectInput {
   objectUid: ID!
 }
@@ -2360,6 +2379,16 @@ type ManagedSecretDockerRegistryValue {
   username: String!
 }
 
+"""
+A managed secret value representing an AWS ECR credential backed by an IAM role. Neither
+field is secret - Warp assumes the role fresh at dispatch time rather than storing a
+password - so both are readable back in full.
+"""
+type ManagedSecretAwsEcrCredentialValue {
+  registryHost: String!
+  roleArn: String!
+}
+
 """A managed secret value representing an OpenAI API key."""
 type ManagedSecretOpenAiApiKeyValue {
   apiKey: String!
@@ -2386,13 +2415,14 @@ enum ManagedSecretType {
   ANTHROPIC_API_KEY
   ANTHROPIC_BEDROCK_ACCESS_KEY
   ANTHROPIC_BEDROCK_API_KEY
+  AWS_ECR_CREDENTIAL
   DOCKER_REGISTRY
   DOTENVX
   OPENAI_API_KEY
   RAW_VALUE
 }
 
-union ManagedSecretValue = ManagedSecretAnthropicApiKeyValue | ManagedSecretAnthropicBedrockAccessKeyValue | ManagedSecretAnthropicBedrockApiKeyValue | ManagedSecretDockerRegistryValue | ManagedSecretOpenAiApiKeyValue | ManagedSecretRawValue
+union ManagedSecretValue = ManagedSecretAnthropicApiKeyValue | ManagedSecretAnthropicBedrockAccessKeyValue | ManagedSecretAnthropicBedrockApiKeyValue | ManagedSecretAwsEcrCredentialValue | ManagedSecretDockerRegistryValue | ManagedSecretOpenAiApiKeyValue | ManagedSecretRawValue
 
 input ManagedSecretsInput {
   """Pagination cursor, currently unused."""
@@ -2657,6 +2687,13 @@ Used in task status messages to identify the class of error.
 See platformerrors package for the canonical definitions.
 """
 enum PlatformErrorCode {
+  """MAA server explicitly reported a terminal response stream failure."""
+  AGENT_STREAM_FAILURE
+
+  """
+  MAA response stream terminally failed because of a transport or EOF error.
+  """
+  AGENT_STREAM_NETWORK_ERROR
   """Request lacks valid authentication credentials (e.g. invalid API key)."""
   AUTHENTICATION_REQUIRED
 
@@ -3188,6 +3225,7 @@ type RootMutation {
   issueTaskIdentityToken(input: IssueTaskIdentityTokenInput!, requestContext: RequestContext!): IssueTaskIdentityTokenResult!
   joinTeamInWorkspace(input: JoinTeamInWorkspaceInput!, requestContext: RequestContext!): JoinTeamInWorkspaceResult!
   joinTeamWithTeamDiscovery(input: JoinTeamWithTeamDiscoveryInput!, requestContext: RequestContext!): JoinTeamWithTeamDiscoveryResult!
+  joinWorkspaceFromDiscovery(input: JoinWorkspaceFromDiscoveryInput!, requestContext: RequestContext!): JoinWorkspaceFromDiscoveryResult!
 
   """The API for leaving an object as a direct guest or link-shared."""
   leaveObject(input: LeaveObjectInput!, requestContext: RequestContext!): LeaveObjectResult!
@@ -4643,6 +4681,7 @@ type User {
   """
   conversationUsage(days: Int, lastUpdatedEndTimestamp: Time, limit: Int): [ConversationUsage!]!
   discoverableTeams: [DiscoverableTeamData!]!
+  discoverableWorkspaces: [DiscoverableWorkspaceData!]!
 
   """
   We differentiate between `null` and `[]` here:

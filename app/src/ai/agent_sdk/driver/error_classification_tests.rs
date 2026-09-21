@@ -4,6 +4,7 @@ use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_graphql::platform_error::{PlatformErrorInfo, PlatformErrorMessageFormat};
 
 use super::classify_driver_error;
+use crate::ai::agent::{RenderableAIError, TransientNetworkErrorKind};
 use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::agent_sdk::driver::terminal::{BootstrapError, ShareSessionError};
 use crate::server::server_api::ai::TaskGitCredentialsError;
@@ -385,6 +386,42 @@ fn share_session_failed_includes_reason() {
 // --- Conversation-level outcomes ---
 
 #[test]
+fn conversation_error_classifies_network_failure() {
+    let error = AgentDriverError::ConversationError {
+        error: RenderableAIError::transient_network_error(
+            false,
+            false,
+            TransientNetworkErrorKind::UnfinishedExchange,
+        ),
+    };
+
+    let (state, update) = classify_driver_error(&error);
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::AgentStreamNetworkError)
+    );
+    assert!(!update.platform_error.unwrap().retryable);
+}
+
+#[test]
+fn conversation_error_classifies_server_stream_failure() {
+    let error = AgentDriverError::ConversationError {
+        error: RenderableAIError::AgentStreamFailure {
+            error_message: "Response stream finished with an internal error.".into(),
+        },
+    };
+
+    let (state, update) = classify_driver_error(&error);
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::AgentStreamFailure)
+    );
+    assert!(!update.platform_error.unwrap().retryable);
+}
+
+#[test]
 fn conversation_cancelled_is_cancelled() {
     let (state, update) = classify_driver_error(&AgentDriverError::ConversationCancelled {
         reason: crate::ai::agent::CancellationReason::ManuallyCancelled,
@@ -476,19 +513,5 @@ fn sandbox_deadline_reached_on_free_plan_suggests_upgrading() {
     assert_eq!(
         update.message,
         "Sandbox maximum runtime reached. Upgrade to a paid plan to remove this limit."
-    );
-}
-
-// --- SIGTERM abort ---
-
-#[test]
-fn terminated_by_signal_is_failed_with_no_error_code() {
-    let (state, update) = classify_driver_error(&AgentDriverError::TerminatedBySignal);
-    assert_eq!(state, AgentTaskState::Failed);
-    assert!(update.error_code.is_none());
-    assert_eq!(
-        update.message,
-        "The agent process was terminated (SIGTERM) before the run completed, most likely \
-         because the instance or worker hosting the run was shut down."
     );
 }

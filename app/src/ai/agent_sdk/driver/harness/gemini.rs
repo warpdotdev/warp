@@ -17,6 +17,7 @@ use warpui::{ModelHandle, ModelSpawner};
 use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
 use super::json_utils::{read_json_file_or_default, write_json_file};
+use super::save_coordinator::SaveCoordinator;
 use super::{
     HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint,
     ThirdPartyHarness, write_temp_file,
@@ -123,6 +124,7 @@ struct GeminiHarnessRunner {
     client: Arc<dyn HarnessSupportClient>,
     terminal_driver: ModelHandle<TerminalDriver>,
     state: Mutex<GeminiRunnerState>,
+    saves: SaveCoordinator,
 }
 
 impl GeminiHarnessRunner {
@@ -143,6 +145,7 @@ impl GeminiHarnessRunner {
             client,
             terminal_driver,
             state: Mutex::new(GeminiRunnerState::Preexec),
+            saves: SaveCoordinator::default(),
         })
     }
 }
@@ -152,6 +155,9 @@ impl GeminiHarnessRunner {
 impl HarnessRunner for GeminiHarnessRunner {
     fn harness_name(&self) -> &str {
         &self.cli_name
+    }
+    fn save_coordinator(&self) -> &SaveCoordinator {
+        &self.saves
     }
 
     async fn start(

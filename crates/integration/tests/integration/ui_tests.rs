@@ -8,6 +8,7 @@ use super::integration_tests;
 
 integration_tests! {
     test_add_many_sessions,
+    test_child_pill_after_reopening_closed_parent_tab,
     test_ctrl_tab_session_switching,
     test_hover_over_menu,
     test_shell_reinitializing,

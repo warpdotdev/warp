@@ -757,9 +757,12 @@ fn api_key_credentials() -> Credentials {
 fn builtin_factory_mcp_for_oz_uses_stable_installation() {
     let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
 
-    let installation =
-        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &HashSet::new())
-            .expect("built-in Factory MCP should attach when eligible");
+    let installation = AgentDriver::builtin_factory_mcp_for_run(
+        Some(&api_key_credentials()),
+        &HashSet::new(),
+        &[],
+    )
+    .expect("built-in Factory MCP should attach when eligible");
 
     assert_eq!(installation.uuid(), FACTORY_MCP_INSTALLATION_UUID);
     assert_eq!(
@@ -773,13 +776,17 @@ fn builtin_factory_mcp_for_oz_uses_stable_installation() {
 fn builtin_factory_mcp_for_oz_skips_without_flag_or_credentials() {
     let flag = FeatureFlag::FactoryMcp.override_enabled(false);
     assert!(
-        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &HashSet::new())
-            .is_none()
+        AgentDriver::builtin_factory_mcp_for_run(
+            Some(&api_key_credentials()),
+            &HashSet::new(),
+            &[]
+        )
+        .is_none()
     );
     drop(flag);
 
     let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
-    assert!(AgentDriver::builtin_factory_mcp_for_run(None, &HashSet::new()).is_none());
+    assert!(AgentDriver::builtin_factory_mcp_for_run(None, &HashSet::new(), &[]).is_none());
 }
 
 #[test]
@@ -789,8 +796,12 @@ fn builtin_factory_mcp_for_oz_preserves_exact_name_collision() {
     let taken_server_names = HashSet::from([FACTORY_MCP_SERVER_NAME.to_string()]);
 
     assert!(
-        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &taken_server_names)
-            .is_none()
+        AgentDriver::builtin_factory_mcp_for_run(
+            Some(&api_key_credentials()),
+            &taken_server_names,
+            &[]
+        )
+        .is_none()
     );
 }
 

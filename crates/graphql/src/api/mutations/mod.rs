@@ -31,6 +31,7 @@ pub mod grab_notebook_edit_access;
 pub mod issue_task_identity_token;
 pub mod join_team_in_workspace;
 pub mod join_team_with_team_discovery;
+pub mod join_workspace_from_discovery;
 pub mod leave_object;
 pub mod mint_custom_token;
 pub mod move_object;

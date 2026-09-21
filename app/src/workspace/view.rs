@@ -8402,6 +8402,7 @@ impl Workspace {
         AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
             auth_manager.set_user_onboarded(ctx);
         });
+        mark_hoa_onboarding_completed(ctx);
     }
 
     /// If the user is new and therefore has not seen the in app onboarding,
@@ -8434,6 +8435,7 @@ impl Workspace {
             AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
                 auth_manager.set_user_onboarded(ctx);
             });
+            mark_hoa_onboarding_completed(ctx);
 
             return true;
         }
@@ -21512,10 +21514,6 @@ impl Workspace {
         appearance: &Appearance,
         ctx: &AppContext,
     ) {
-        if let Some(pill) = self.render_team_switcher_pill(appearance, ctx) {
-            target.add_child(pill);
-        }
-
         if let Some(update_pill) = self.render_tab_overflow_menu(ctx, appearance) {
             target.add_child(
                 Container::new(update_pill)
@@ -21557,6 +21555,10 @@ impl Workspace {
                 .with_margin_left(TAB_BAR_PADDING_LEFT)
                 .finish(),
             );
+        }
+
+        if let Some(pill) = self.render_team_switcher_pill(appearance, ctx) {
+            target.add_child(pill);
         }
 
         if FeatureFlag::AvatarInTabBar.is_enabled() {

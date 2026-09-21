@@ -4318,6 +4318,22 @@ impl Input {
         ctx: &mut ViewContext<Self>,
     ) {
         // Read the origin before dispatch; the row is removed once it fires.
+        if QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(conversation_id) {
+            return;
+        }
+        if QueuedQueryModel::as_ref(ctx)
+            .queue(conversation_id)
+            .iter()
+            .any(|row| row.id() == query_id && row.shared_session_prompt().is_some())
+        {
+            // "Send now" targets the clicked row specifically, which may not be the queue head
+            // (e.g. after reordering) -- passing `query_id` through dispatches that exact row
+            // instead of whatever currently happens to be at the head.
+            self.ai_controller.update(ctx, |controller, ctx| {
+                controller.dispatch_queued_warp_agent_prompt(conversation_id, Some(query_id), ctx);
+            });
+            return;
+        }
         let origin = QueuedQueryModel::as_ref(ctx)
             .queue(conversation_id)
             .iter()
@@ -12788,6 +12804,38 @@ impl Input {
         let abort_handle = ctx
             .spawn_abortable(
                 async move {
+                    if comp_sources == CompletionSources::NativeOnly {
+                        let native_suggestions =
+                            native_results_fut
+                                .await
+                                .map(|(results, shell_replacement_span)| {
+                                    native_shell_suggestion_results(
+                                        results,
+                                        shell_replacement_span,
+                                        &buffer_text,
+                                        cursor_position,
+                                    )
+                                });
+                        let suggestions = match native_suggestions {
+                            Some(suggestions) if suggestions.suggestions.is_empty() => {
+                                completer::suggestions(
+                                    before_cursor_text.as_str(),
+                                    cursor_position,
+                                    session_env_vars.as_ref(),
+                                    CompleterOptions {
+                                        match_strategy: matcher,
+                                        fallback_strategy: CompletionsFallbackStrategy::FilePaths,
+                                        suggest_file_path_completions_only: true,
+                                        parse_quotes_as_literals: false,
+                                    },
+                                    &completion_context,
+                                )
+                                .await
+                            }
+                            suggestions => suggestions,
+                        };
+                        return (suggestions, completions_trigger, editor_snapshot);
+                    }
                     let suggestions = completer::suggestions(
                         before_cursor_text.as_str(),
                         cursor_position,
@@ -12803,12 +12851,7 @@ impl Input {
                     .await;
 
                     let suggestions = match suggestions {
-                        Some(s)
-                            if !s.suggestions.is_empty()
-                                && comp_sources != CompletionSources::NativeOnly =>
-                        {
-                            Some(s)
-                        }
+                        Some(s) if !s.suggestions.is_empty() => Some(s),
                         _ => native_results_fut
                             .await
                             .map(|(results, shell_replacement_span)| {

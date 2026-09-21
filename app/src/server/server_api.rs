@@ -27,7 +27,7 @@ use anyhow::{Context, Result, anyhow};
 use auth::AuthClient;
 use block::BlockClient;
 use channel_versions::ChannelVersions;
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, FixedOffset, Utc};
 use factory::FactoryClient;
 use instant::Instant;
 use managed_mcp::ManagedMcpClient;
@@ -48,7 +48,7 @@ use warp_server_client::HttpStatusError;
 use warp_server_client::auth::{AuthClientImpl, AuthEvent, EXPERIMENT_ID_HEADER};
 use warp_server_client::base_client::{
     AmbientHeaderPolicy, AuthenticatedGraphqlConfig, BaseClient, GraphqlRoutingConfig,
-    TEAM_UID_HEADER,
+    HeaderOverride, TEAM_UID_HEADER,
 };
 use warp_server_client::iap::{IapManager, IapState};
 use warp_server_client::network_logging::NetworkLogModel;
@@ -544,12 +544,42 @@ impl ServerApi {
             .await
     }
 
+    /// Returns ambient agent headers (workload token, cloud-agent ID) scoped to one task,
+    /// without disturbing the client's own inherited ambient-agent-task-ID state.
     async fn ambient_agent_headers_for_task(
         &self,
         task_id: &AmbientAgentTaskId,
     ) -> Result<Vec<(String, String)>> {
         self.ambient_headers(AmbientHeaderPolicy::for_task(task_id.to_string()))
             .await
+    }
+
+    /// Returns task-scoped ambient agent headers for a caller that pins them into a long-lived
+    /// transport instead of resolving them per request.
+    ///
+    /// `must_outlive` is the instant through which the pinned headers have to keep working,
+    /// typically the end of the run. The workload token is attached only when it stays valid
+    /// that long, since warp-server rejects an expired one but tolerates its absence. Pass
+    /// `None` when no such instant is known, which resolves the token the same way an ordinary
+    /// per-request caller would.
+    pub async fn pinned_ambient_agent_headers_for_task(
+        &self,
+        task_id: &AmbientAgentTaskId,
+        must_outlive: Option<DateTime<Utc>>,
+    ) -> Result<Vec<(String, String)>> {
+        let workload_token = match must_outlive {
+            Some(must_outlive) => self
+                .base_client
+                .get_ambient_workload_token_valid_until(must_outlive)
+                .await?
+                .map_or(HeaderOverride::Omit, HeaderOverride::Set),
+            None => HeaderOverride::Inherit,
+        };
+        self.ambient_headers(AmbientHeaderPolicy {
+            workload_token,
+            ..AmbientHeaderPolicy::for_task(task_id.to_string())
+        })
+        .await
     }
 
     pub fn send_graphql_request<'a, QF, O: warp_graphql::client::Operation<QF> + Send + 'a>(

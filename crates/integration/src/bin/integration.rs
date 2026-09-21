@@ -128,6 +128,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     // Add new tests here
     register_test!(test_single_command);
     register_test!(test_add_and_close_session);
+    register_test!(test_child_pill_after_reopening_closed_parent_tab);
     register_test!(test_add_many_sessions);
     register_test!(test_ctrl_tab_session_switching);
     register_test!(test_ctrl_d_eot);
