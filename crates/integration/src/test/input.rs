@@ -3,9 +3,10 @@ use std::time::Duration;
 use warp::features::FeatureFlag;
 use warp::integration_testing::clipboard::write_to_clipboard;
 use warp::integration_testing::input::{
-    AutosuggestionState, assert_autosuggestion_state, input_contains_string, input_is_empty,
-    latest_buffer_operations_are_empty, open_inline_model_selector_from_chip,
-    tab_completions_menu_is_open, toggle_inline_model_selector_from_chip,
+    AutosuggestionState, assert_autosuggestion_state, input_contains_string, input_cursor_is_at,
+    input_is_empty, latest_buffer_operations_are_empty, open_inline_model_selector_from_chip,
+    select_active_profile_from_chip, tab_completions_menu_is_open,
+    toggle_inline_model_selector_from_chip, toggle_profile_selector_from_chip,
 };
 use warp::integration_testing::step::new_step_with_default_assertions;
 use warp::integration_testing::terminal::util::{
@@ -83,6 +84,64 @@ pub fn test_autosuggestions_are_hidden_when_opening_tab_completions() -> Builder
                         0,
                         AutosuggestionState::ActiveWithText(String::from(".")),
                     ),
+                ),
+        )
+}
+
+pub fn test_profile_selector_preserves_prompt_on_dismissal() -> Builder {
+    let original_prompt = "keep this draft while checking profiles";
+    new_builder()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            new_step_with_default_assertions("Type prompt before opening profile selector")
+                .with_typed_characters(&[original_prompt]),
+        )
+        .with_step(toggle_profile_selector_from_chip().add_named_assertion(
+            "Prompt remains while profile selector is open",
+            input_contains_string(0, original_prompt.to_owned()),
+        ))
+        .with_step(toggle_profile_selector_from_chip().add_named_assertion(
+            "Prompt remains after profile selector dismissal",
+            input_contains_string(0, original_prompt.to_owned()),
+        ))
+}
+
+pub fn test_profile_selector_preserves_prompt_on_selection() -> Builder {
+    let original_prompt = "keep this draft after selecting a profile";
+    new_builder()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            new_step_with_default_assertions("Type prompt before opening profile selector")
+                .with_typed_characters(&[original_prompt]),
+        )
+        .with_step(toggle_profile_selector_from_chip())
+        .with_step(select_active_profile_from_chip().add_named_assertion(
+            "Prompt remains after profile selection",
+            input_contains_string(0, original_prompt.to_owned()),
+        ))
+}
+
+pub fn test_profile_selector_restores_prompt_when_interrupting_model_selector() -> Builder {
+    FeatureFlag::RestorePromptOnInlineModelSelectorSearch.set_enabled(true);
+
+    let original_prompt = "keep this draft when switching selectors";
+    new_builder()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            new_step_with_default_assertions("Type prompt before opening model selector")
+                .with_typed_characters(&[original_prompt])
+                .with_keystrokes(&["left", "left", "left", "left", "left"]),
+        )
+        .with_step(open_inline_model_selector_from_chip())
+        .with_step(
+            toggle_profile_selector_from_chip()
+                .add_named_assertion(
+                    "Prompt is restored when profile selector interrupts model selector",
+                    input_contains_string(0, original_prompt.to_owned()),
+                )
+                .add_named_assertion(
+                    "Cursor is restored when profile selector interrupts model selector",
+                    input_cursor_is_at(0, original_prompt.len() - 5),
                 ),
         )
 }

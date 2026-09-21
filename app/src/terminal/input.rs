@@ -9399,8 +9399,8 @@ impl Input {
                 .as_ref(ctx)
                 .is_inline_menu_open();
 
-            self.suggestions_mode_model.update(ctx, |m, ctx| {
-                m.set_mode(InputSuggestionsMode::Closed, ctx);
+            self.suggestions_mode_model.update(ctx, |model, ctx| {
+                model.close_and_restore_buffer(ctx);
             });
 
             // If we're closing an inline menu, trigger autodetection on the buffer contents

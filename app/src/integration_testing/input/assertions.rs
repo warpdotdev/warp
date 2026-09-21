@@ -59,6 +59,21 @@ pub fn input_is_empty(tab_idx: usize) -> AssertionCallback {
     })
 }
 
+pub fn input_cursor_is_at(tab_idx: usize, byte_offset: usize) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let input = single_input_view_for_tab(app, window_id, tab_idx);
+        input.read(app, |view, ctx| {
+            async_assert_eq!(
+                view.editor()
+                    .as_ref(ctx)
+                    .start_byte_index_of_last_selection(ctx)
+                    .as_usize(),
+                byte_offset,
+                "Input cursor should be at byte offset {byte_offset}"
+            )
+        })
+    })
+}
 pub fn inline_model_selector_is_open(tab_idx: usize) -> AssertionCallback {
     Box::new(move |app, window_id| {
         let input = single_input_view_for_tab(app, window_id, tab_idx);
