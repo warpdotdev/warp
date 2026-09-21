@@ -12825,7 +12825,7 @@ impl Input {
                                     CompleterOptions {
                                         match_strategy: matcher,
                                         fallback_strategy: CompletionsFallbackStrategy::FilePaths,
-                                        suggest_file_path_completions_only: false,
+                                        suggest_file_path_completions_only: true,
                                         parse_quotes_as_literals: false,
                                     },
                                     &completion_context,
