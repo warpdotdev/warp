@@ -251,8 +251,51 @@ fn hex_encoded_json_dcs(payload: &str) -> Vec<u8> {
     bytes.push(0x9c);
     bytes
 }
+
+fn encoded_in_band_command_lifecycle(
+    command: &str,
+    output: &str,
+    next_block_id: &BlockId,
+) -> Vec<u8> {
+    let mut bytes = command.as_bytes().to_vec();
+    bytes.extend(hex_encoded_json_dcs(
+        &serde_json::json!({
+            "hook": "Preexec",
+            "value": {
+                "command": command,
+                "session_id": 123
+            }
+        })
+        .to_string(),
+    ));
+    bytes.extend(output.bytes());
+    bytes.extend(hex_encoded_json_dcs(
+        &serde_json::json!({
+            "hook": "CommandFinished",
+            "value": {
+                "exit_code": 0,
+                "next_block_id": next_block_id.to_string(),
+                "session_id": 123
+            }
+        })
+        .to_string(),
+    ));
+    bytes.extend(hex_encoded_json_dcs(
+        &serde_json::json!({
+            "hook": "Precmd",
+            "value": {
+                "exit_code": 0,
+                "is_after_in_band_command": true,
+                "next_block_id": next_block_id.to_string(),
+                "session_id": 123
+            }
+        })
+        .to_string(),
+    ));
+    bytes
+}
 #[test]
-fn encoded_shell_hooks_bound_completed_live_blocks() {
+fn encoded_shell_hooks_bound_completed_live_blocks_and_discard_hidden_in_band_blocks() {
     let mut terminal = TerminalModel::mock(None, None);
     let first_live_block_id = terminal.active_block_id().clone();
     let mut processor = Processor::new();
@@ -301,6 +344,7 @@ fn encoded_shell_hooks_bound_completed_live_blocks() {
         ));
         processor.parse_bytes(&mut terminal, &bytes, &mut std::io::sink());
     }
+    let oldest_retained_live_block_id = terminal.block_list().blocks()[2].id().clone();
 
     assert!(
         terminal
@@ -333,6 +377,66 @@ fn encoded_shell_hooks_bound_completed_live_blocks() {
             })
             .count(),
         1
+    );
+
+    for index in 0..3 {
+        assert_eq!(
+            terminal.start_in_band_command_execution(),
+            StartCommandOutcome::Accepted
+        );
+        let completed_in_band_block_id = terminal.active_block_id().clone();
+        let next_block_id = BlockId::new();
+        let command = format!("warp_run_generator_command encoded-{index}");
+        let bytes = encoded_in_band_command_lifecycle(
+            &command,
+            &format!("encoded in-band output {index}"),
+            &next_block_id,
+        );
+        processor.parse_bytes(&mut terminal, &bytes, &mut std::io::sink());
+
+        assert!(
+            terminal
+                .block_list()
+                .block_with_id(&completed_in_band_block_id)
+                .is_none()
+        );
+        assert_eq!(terminal.active_block_id(), &next_block_id);
+        assert_eq!(
+            terminal
+                .block_list()
+                .active_block()
+                .pwd()
+                .map(String::as_str),
+            Some("/encoded-hooks")
+        );
+    }
+
+    assert!(
+        terminal
+            .block_list()
+            .block_with_id(&oldest_retained_live_block_id)
+            .is_some()
+    );
+    assert_eq!(
+        terminal
+            .block_list()
+            .blocks()
+            .iter()
+            .filter(|block| {
+                block.bootstrap_stage().is_done()
+                    && block.finished()
+                    && !block.is_static()
+                    && !block.is_restored()
+            })
+            .count(),
+        MAX_RETAINED_COMPLETED_LIVE_BLOCKS
+    );
+    assert!(
+        terminal
+            .block_list()
+            .blocks()
+            .iter()
+            .all(|block| !block.is_in_band_command_block())
     );
 }
 
@@ -1630,12 +1734,12 @@ fn precmd_with_completion_metadata_recovers_in_band_completion_and_reuses_cached
         },
     });
 
-    let completed_block = terminal
-        .block_list()
-        .block_with_id(&completed_block_id)
-        .expect("The recovered in-band block should remain in the block list.");
-    assert!(completed_block.is_in_band_command_block());
-    assert_eq!(completed_block.state(), BlockState::DoneWithExecution);
+    assert!(
+        terminal
+            .block_list()
+            .block_with_id(&completed_block_id)
+            .is_none()
+    );
     assert_eq!(terminal.active_block_id(), &next_block_id);
     assert!(
         !terminal

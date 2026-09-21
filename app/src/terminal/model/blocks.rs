@@ -1592,6 +1592,16 @@ impl BlockList {
 
         self.remove_command_blocks_at_indices(indices_to_remove);
     }
+    fn remove_completed_hidden_in_band_block(&mut self, block_id: &BlockId) {
+        let Some(block_index) = self.block_index_for_id(block_id) else {
+            return;
+        };
+        debug_assert!(block_index != self.active_block_index());
+        debug_assert!(self.blocks[block_index.0].finished());
+        debug_assert!(self.blocks[block_index.0].is_for_in_band_command);
+        self.remove_block_at_index(block_index);
+        self.event_proxy.send_wakeup_event();
+    }
 
     /// Removes command blocks at stable pre-removal indices.
     fn remove_command_blocks_at_indices(&mut self, indices_to_remove: Vec<BlockIndex>) {
@@ -1620,6 +1630,7 @@ impl BlockList {
                 && block.finished()
                 && !block.is_static()
                 && !block.is_restored()
+                && (self.show_in_band_command_blocks || !block.is_for_in_band_command)
         };
         let completed_live_block_count = self
             .blocks
@@ -3428,13 +3439,22 @@ impl BlockList {
             .flat_map(|offset| self.blocks.len().checked_sub(offset))
             .map(|idx| &self.blocks[idx])
             .find(|block| !block.is_background());
-        if self.skip_next_after_block_completed_event {
+        let completed_hidden_in_band_block_id = if self.skip_next_after_block_completed_event {
             self.skip_next_after_block_completed_event = false;
+            None
         } else if let Some(previous_block) = previous_block {
+            let completed_hidden_in_band_block_id = (!self.show_in_band_command_blocks
+                && previous_block.is_for_in_band_command)
+                .then(|| previous_block.id().clone());
             self.send_after_block_completed_event(previous_block, block_finished_to_precmd_delay);
+            completed_hidden_in_band_block_id
         } else {
             self.event_proxy
                 .send_app_event(TerminalEvent::BootstrapPrecmdDone);
+            None
+        };
+        if let Some(block_id) = completed_hidden_in_band_block_id {
+            self.remove_completed_hidden_in_band_block(&block_id);
         }
     }
 

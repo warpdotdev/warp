@@ -2431,11 +2431,13 @@ pub fn test_emits_after_block_completed_event() {
             .build(),
     );
     block_list.start_active_block_for_in_band_command();
+    let in_band_block_id = block_list.active_block_id().clone();
     block_list.preexec(PreexecValue {
         command: "warp_run_generator_command 1234 foo".to_owned(),
         session_id: None,
     });
     command_finished_and_precmd(&mut block_list);
+    assert!(block_list.block_index_for_id(&in_band_block_id).is_none());
 
     block_list.start_active_block();
     block_list.preexec(PreexecValue {
@@ -2462,6 +2464,21 @@ pub fn test_emits_after_block_completed_event() {
         after_block_completed_events[1].block_type,
         BlockType::User(..)
     ));
+}
+#[test]
+fn retains_visible_in_band_command_blocks() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    block_list.set_show_in_band_command_blocks(true);
+    block_list.start_active_block_for_in_band_command();
+    let in_band_block_id = block_list.active_block_id().clone();
+    block_list.preexec(PreexecValue {
+        command: "warp_run_generator_command 1234 foo".to_owned(),
+        session_id: None,
+    });
+    command_finished_and_precmd(&mut block_list);
+
+    assert!(block_list.block_index_for_id(&in_band_block_id).is_some());
 }
 
 #[test]
@@ -2532,9 +2549,9 @@ fn test_background_blocks_finished() {
     // There's now a completion event for the first user block, one for the
     // background block, and one for the second user block. Likewise, the block
     // list now contains the bootstrap blocks, the first user block, the background
-    // block, the in-band generator block, the second user block, and the active block.
+    // block, the second user block, and the active block.
     assert_eq!(block_completed_events.len(), 3);
-    assert_eq!(block_list.blocks().len(), 8);
+    assert_eq!(block_list.blocks().len(), 7);
 
     match &block_completed_events[1].block_type {
         BlockType::Background(block) => {
