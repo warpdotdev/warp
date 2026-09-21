@@ -283,13 +283,8 @@ fn report_shutdown(
     mut args: ReportShutdownArgs,
     output_format: OutputFormat,
 ) -> Result<()> {
-    let error_pair_is_valid = matches!(
-        (&args.error_category, &args.error_message),
-        (Some(_), Some(_)) | (None, None)
-    );
-    if error_pair_is_valid && let Some(message) = detect_oom_shutdown(args.exit_code, args.pid) {
-        args.error_category = Some("oom".to_string());
-        args.error_message = Some(message);
+    if let Some(evidence) = detect_oom_shutdown(args.exit_code, args.pid) {
+        apply_oom_classification(&mut args, evidence);
     }
     runner.update(ctx, |_, ctx| {
         let client = ServerApiProvider::as_ref(ctx).get_harness_support_client();
@@ -330,46 +325,82 @@ fn report_shutdown(
     Ok(())
 }
 
-fn detect_oom_shutdown(exit_code: Option<u8>, pid: Option<u32>) -> Option<String> {
-    let exit_code = exit_code.filter(|exit_code| *exit_code != 0)?;
-    let kernel_evidence = pid.is_some_and(kernel_logs_contain_oom_for_pid);
-    oom_shutdown_message(exit_code == 137, kernel_evidence)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OomEvidence {
+    ExitStatus137,
+    KernelLog,
+    ExitStatus137AndKernelLog,
 }
 
-fn oom_shutdown_message(exit_137: bool, kernel_evidence: bool) -> Option<String> {
-    match (exit_137, kernel_evidence) {
-        (true, true) => {
-            Some("agent process was OOM-killed (exit status 137 and kernel evidence)".to_string())
+impl OomEvidence {
+    fn from_signals(exit_status_137: bool, kernel_log: bool) -> Option<Self> {
+        match (exit_status_137, kernel_log) {
+            (true, true) => Some(Self::ExitStatus137AndKernelLog),
+            (true, false) => Some(Self::ExitStatus137),
+            (false, true) => Some(Self::KernelLog),
+            (false, false) => None,
         }
-        (true, false) => Some("agent process was OOM-killed (exit status 137)".to_string()),
-        (false, true) => Some("agent process was OOM-killed (kernel evidence)".to_string()),
-        (false, false) => None,
     }
+}
+
+fn apply_oom_classification(args: &mut ReportShutdownArgs, evidence: OomEvidence) {
+    match evidence {
+        OomEvidence::ExitStatus137 => {
+            log::info!("[Agent harness] Classifying shutdown as OOM: source=exit_status_137");
+        }
+        OomEvidence::KernelLog => {
+            log::info!("[Agent harness] Classifying shutdown as OOM: source=kernel_log");
+        }
+        OomEvidence::ExitStatus137AndKernelLog => {
+            log::info!(
+                "[Agent harness] Classifying shutdown as OOM: source=exit_status_137_and_kernel_log"
+            );
+        }
+    }
+    args.error_category = Some("oom".to_string());
+    args.error_message = Some("The agent sandbox ran out of memory.".to_string());
+}
+
+fn detect_oom_shutdown(exit_code: Option<u8>, pid: Option<u32>) -> Option<OomEvidence> {
+    let exit_code = exit_code.filter(|exit_code| *exit_code != 0)?;
+    let kernel_evidence = pid.is_some_and(kernel_logs_contain_oom_for_pid);
+    OomEvidence::from_signals(exit_code == 137, kernel_evidence)
+}
+#[cfg(target_os = "linux")]
+fn kernel_log_commands() -> [(&'static str, &'static [&'static str]); 2] {
+    const DMESG_ARGS: &[&str] = &["--level=info,warn,err,crit,alert,emerg", "--color=never"];
+    const JOURNALCTL_ARGS: &[&str] = &[
+        "-k",
+        "--priority=0..6",
+        "--no-pager",
+        "--grep=(?i)(oom-kill:|out of memory: killed process)",
+    ];
+
+    [("dmesg", DMESG_ARGS), ("journalctl", JOURNALCTL_ARGS)]
 }
 
 #[cfg(target_os = "linux")]
 fn kernel_logs_contain_oom_for_pid(pid: u32) -> bool {
-    [
-        ("dmesg", &[][..]),
-        ("journalctl", &["-k", "--no-pager"][..]),
-    ]
-    .into_iter()
-    .filter_map(|(program, args)| Command::new(program).args(args).output().ok())
-    .filter(|output| output.status.success())
-    .any(|output| {
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .any(|line| oom_kill_line_matches_pid(line, pid))
-    })
+    kernel_log_commands()
+        .into_iter()
+        .filter_map(|(program, args)| Command::new(program).args(args).output().ok())
+        .filter(|output| output.status.success())
+        .any(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .any(|line| oom_kill_line_matches_pid(line, pid))
+        })
 }
 
 #[cfg(not(target_os = "linux"))]
 fn kernel_logs_contain_oom_for_pid(_: u32) -> bool {
     false
 }
-
+#[cfg(any(target_os = "linux", test))]
 fn oom_kill_line_matches_pid(line: &str, pid: u32) -> bool {
     let pid = pid.to_string();
+    // Linux emits this victim format in `oom_kill_process`:
+    // https://github.com/torvalds/linux/blob/fc5def2c2ad049588c875d86c7408537300ee43e/mm/oom_kill.c#L949-L950
     let killed_process = (line.contains("Out of memory:") || line.contains("out of memory:"))
         && line
             .match_indices("Killed process ")
@@ -382,6 +413,8 @@ fn oom_kill_line_matches_pid(line: &str, pid: u32) -> bool {
     if killed_process {
         return true;
     }
+    // Linux emits this victim format in `dump_oom_victim`:
+    // https://github.com/torvalds/linux/blob/fc5def2c2ad049588c875d86c7408537300ee43e/mm/oom_kill.c#L442-L451
 
     line.contains("oom-kill:")
         && line.match_indices("pid=").any(|(index, prefix)| {

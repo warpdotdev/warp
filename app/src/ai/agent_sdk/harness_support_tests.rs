@@ -1,4 +1,10 @@
-use super::{detect_oom_shutdown, oom_kill_line_matches_pid, oom_shutdown_message};
+use warp_cli::harness_support::ReportShutdownArgs;
+
+#[cfg(target_os = "linux")]
+use super::kernel_log_commands;
+use super::{
+    OomEvidence, apply_oom_classification, detect_oom_shutdown, oom_kill_line_matches_pid,
+};
 
 #[test]
 fn matches_out_of_memory_killed_process_line_for_pid() {
@@ -89,32 +95,109 @@ fn rejects_similarly_named_oom_kill_field() {
 }
 
 #[test]
-fn classifies_oom_from_exit_status() {
+fn classifies_exit_status_137_as_oom_evidence() {
     assert_eq!(
-        oom_shutdown_message(true, false).as_deref(),
-        Some("agent process was OOM-killed (exit status 137)")
+        OomEvidence::from_signals(true, false),
+        Some(OomEvidence::ExitStatus137)
     );
 }
 
 #[test]
-fn classifies_oom_from_kernel_evidence() {
+fn classifies_kernel_log_as_oom_evidence() {
     assert_eq!(
-        oom_shutdown_message(false, true).as_deref(),
-        Some("agent process was OOM-killed (kernel evidence)")
+        OomEvidence::from_signals(false, true),
+        Some(OomEvidence::KernelLog)
     );
 }
 
 #[test]
-fn classifies_oom_from_both_sources() {
+fn classifies_both_oom_signals_as_combined_evidence() {
     assert_eq!(
-        oom_shutdown_message(true, true).as_deref(),
-        Some("agent process was OOM-killed (exit status 137 and kernel evidence)")
+        OomEvidence::from_signals(true, true),
+        Some(OomEvidence::ExitStatus137AndKernelLog)
     );
 }
 
 #[test]
 fn does_not_classify_oom_without_a_signal() {
-    assert!(oom_shutdown_message(false, false).is_none());
+    assert!(OomEvidence::from_signals(false, false).is_none());
+}
+
+#[test]
+fn oom_classification_populates_an_absent_error_pair() {
+    let mut args = ReportShutdownArgs {
+        error_category: None,
+        error_message: None,
+        pid: Some(4242),
+        exit_code: Some(137),
+    };
+
+    apply_oom_classification(&mut args, OomEvidence::ExitStatus137);
+
+    assert_eq!(args.error_category.as_deref(), Some("oom"));
+    assert_eq!(
+        args.error_message.as_deref(),
+        Some("The agent sandbox ran out of memory.")
+    );
+}
+
+#[test]
+fn oom_classification_replaces_a_malformed_error_pair() {
+    let mut args = ReportShutdownArgs {
+        error_category: Some("process_exit".to_string()),
+        error_message: None,
+        pid: Some(4242),
+        exit_code: Some(137),
+    };
+
+    apply_oom_classification(&mut args, OomEvidence::ExitStatus137);
+
+    assert_eq!(args.error_category.as_deref(), Some("oom"));
+    assert_eq!(
+        args.error_message.as_deref(),
+        Some("The agent sandbox ran out of memory.")
+    );
+}
+
+#[test]
+fn oom_classification_replaces_a_different_error_pair() {
+    let mut args = ReportShutdownArgs {
+        error_category: Some("process_exit".to_string()),
+        error_message: Some("agent exited".to_string()),
+        pid: Some(4242),
+        exit_code: Some(137),
+    };
+
+    apply_oom_classification(&mut args, OomEvidence::ExitStatus137);
+
+    assert_eq!(args.error_category.as_deref(), Some("oom"));
+    assert_eq!(
+        args.error_message.as_deref(),
+        Some("The agent sandbox ran out of memory.")
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn kernel_log_commands_filter_to_oom_messages() {
+    assert_eq!(
+        kernel_log_commands(),
+        [
+            (
+                "dmesg",
+                &["--level=info,warn,err,crit,alert,emerg", "--color=never"][..]
+            ),
+            (
+                "journalctl",
+                &[
+                    "-k",
+                    "--priority=0..6",
+                    "--no-pager",
+                    "--grep=(?i)(oom-kill:|out of memory: killed process)"
+                ][..]
+            )
+        ]
+    );
 }
 
 #[test]
