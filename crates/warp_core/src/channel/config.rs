@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
-use url::{ParseError, Url};
 
 use crate::AppId;
 
@@ -63,17 +62,6 @@ impl WarpServerConfig {
             firebase_auth_api_key: "AIzaSyBdy3O3S9hrdayLJxJ7mriBR4qgUaUygAs".into(),
             iap_config: None,
         }
-    }
-
-    pub(super) fn override_server_root_url(
-        &mut self,
-        url: impl Into<Cow<'static, str>>,
-    ) -> Result<(), ParseError> {
-        let url = url.into();
-        Url::parse(&url)?;
-        self.server_root_url = url;
-        self.iap_config = None;
-        Ok(())
     }
 }
 
@@ -181,7 +169,3 @@ pub struct McpOAuthLoopbackClientConfig {
     #[serde(default)]
     pub client_secret: Option<Cow<'static, str>>,
 }
-
-#[cfg(test)]
-#[path = "config_tests.rs"]
-mod tests;

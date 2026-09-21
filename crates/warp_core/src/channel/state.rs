@@ -90,11 +90,12 @@ impl ChannelState {
     }
 
     pub fn override_server_root_url(url: impl Into<Cow<'static, str>>) -> Result<(), ParseError> {
-        CHANNEL_STATE
-            .lock()
-            .config
-            .server_config
-            .override_server_root_url(url)
+        let url = url.into();
+        Url::parse(&url)?;
+        let mut channel_state = CHANNEL_STATE.lock();
+        channel_state.config.server_config.server_root_url = url;
+        channel_state.config.server_config.iap_config = None;
+        Ok(())
     }
 
     pub fn override_ws_server_url(url: impl Into<Cow<'static, str>>) -> Result<(), ParseError> {
