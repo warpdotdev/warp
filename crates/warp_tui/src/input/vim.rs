@@ -350,7 +350,7 @@ impl VimHandler for TuiInputView {
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         ctx.notify();
-        false
+        true
     }
 
     // ── Jumps ─────────────────────────────────────────────────────────────────

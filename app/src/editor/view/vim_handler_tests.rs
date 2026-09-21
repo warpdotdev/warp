@@ -4796,65 +4796,205 @@ fn test_vim_line_text_objects() {
 }
 
 #[test]
-fn test_vim_visual_inner_line_is_cancelled_on_empty_lines() {
+fn test_vim_visual_inner_line_is_cancelled_on_blank_line() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let editor = add_editor_vim_normal_mode("", &mut app);
+        let editor = add_editor_vim_normal_mode("seed\n\nend", &mut app);
 
-        for (line, visual_command, expected_mode) in [
-            ("", "v", VimMode::Visual(MotionType::Charwise)),
-            (" \t ", "v", VimMode::Visual(MotionType::Charwise)),
-            ("", "V", VimMode::Visual(MotionType::Linewise)),
-            (" \t ", "V", VimMode::Visual(MotionType::Linewise)),
-        ] {
-            let content = format!("seed\n{line}\nend");
-            editor.update(&mut app, |view, ctx| {
-                view.vim_keystroke(&Keystroke::parse("escape").unwrap(), ctx);
-                view.set_buffer_text(&content, ctx);
-            });
-            editor.update(&mut app, |view, ctx| {
-                view.select_ranges(vec![DisplayPoint::new(0, 0)..DisplayPoint::new(0, 0)], ctx)
-                    .unwrap();
-                let column = u32::from(!line.is_empty());
-                view.select_ranges(
-                    vec![DisplayPoint::new(1, column)..DisplayPoint::new(1, column)],
-                    ctx,
-                )
+        editor.update(&mut app, |view, ctx| {
+            view.select_ranges(vec![DisplayPoint::new(1, 0)..DisplayPoint::new(1, 0)], ctx)
                 .unwrap();
-                view.vim_user_insert(visual_command, ctx);
-            });
-            VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
-                registers.write_to_register('"', "seed\n".to_owned(), MotionType::Linewise, ctx);
-            });
+            view.vim_user_insert("v", ctx);
+        });
+        VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
+            registers.write_to_register('"', "seed\n".to_owned(), MotionType::Linewise, ctx);
+        });
 
-            let selection_before = editor.read(&app, |view, ctx| {
-                let model = view.editor_model.as_ref(ctx);
-                (view.selected_ranges(ctx), model.vim_visual_tails().clone())
-            });
+        let selection_before = editor.read(&app, |view, ctx| {
+            let model = view.editor_model.as_ref(ctx);
+            (view.selected_ranges(ctx), model.vim_visual_tails().clone())
+        });
 
-            for key in ["i", "l", "y"] {
-                editor.update(&mut app, |view, ctx| {
-                    view.vim_user_insert(key, ctx);
-                });
-            }
+        editor.update(&mut app, |view, ctx| {
+            view.vim_user_insert("i", ctx);
+        });
+        editor.update(&mut app, |view, ctx| {
+            view.vim_user_insert("l", ctx);
+        });
+        editor.update(&mut app, |view, ctx| {
+            view.vim_user_insert("y", ctx);
+        });
 
-            editor.read(&app, |view, ctx| {
-                let model = view.editor_model.as_ref(ctx);
-                assert_eq!(view.buffer_text(ctx), content);
-                assert_eq!(view.vim_mode(ctx), Some(expected_mode));
-                assert_eq!(
-                    (view.selected_ranges(ctx), model.vim_visual_tails().clone(),),
-                    selection_before
-                );
-            });
-            VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
-                let register = registers.read_from_register('"', ctx).unwrap();
-                assert_eq!(register.text, "seed\n");
-                assert_eq!(register.motion_type, MotionType::Linewise);
-            });
-        }
+        editor.read(&app, |view, ctx| {
+            let model = view.editor_model.as_ref(ctx);
+            assert_eq!(view.buffer_text(ctx), "seed\n\nend");
+            assert_eq!(
+                view.vim_mode(ctx),
+                Some(VimMode::Visual(MotionType::Charwise))
+            );
+            assert_eq!(
+                (view.selected_ranges(ctx), model.vim_visual_tails().clone()),
+                selection_before
+            );
+        });
+        VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
+            let register = registers.read_from_register('"', ctx).unwrap();
+            assert_eq!(register.text, "seed\n");
+            assert_eq!(register.motion_type, MotionType::Linewise);
+        });
     });
 }
+
+#[test]
+fn test_vim_visual_inner_line_is_cancelled_on_whitespace_line() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let editor = add_editor_vim_normal_mode("seed\n \t \nend", &mut app);
+
+        editor.update(&mut app, |view, ctx| {
+            view.select_ranges(vec![DisplayPoint::new(1, 1)..DisplayPoint::new(1, 1)], ctx)
+                .unwrap();
+            view.vim_user_insert("v", ctx);
+        });
+        VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
+            registers.write_to_register('"', "seed\n".to_owned(), MotionType::Linewise, ctx);
+        });
+
+        let selection_before = editor.read(&app, |view, ctx| {
+            let model = view.editor_model.as_ref(ctx);
+            (view.selected_ranges(ctx), model.vim_visual_tails().clone())
+        });
+
+        editor.update(&mut app, |view, ctx| {
+            view.vim_user_insert("i", ctx);
+        });
+        editor.update(&mut app, |view, ctx| {
+            view.vim_user_insert("l", ctx);
+        });
+        editor.update(&mut app, |view, ctx| {
+            view.vim_user_insert("y", ctx);
+        });
+
+        editor.read(&app, |view, ctx| {
+            let model = view.editor_model.as_ref(ctx);
+            assert_eq!(view.buffer_text(ctx), "seed\n \t \nend");
+            assert_eq!(
+                view.vim_mode(ctx),
+                Some(VimMode::Visual(MotionType::Charwise))
+            );
+            assert_eq!(
+                (view.selected_ranges(ctx), model.vim_visual_tails().clone()),
+                selection_before
+            );
+        });
+        VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
+            let register = registers.read_from_register('"', ctx).unwrap();
+            assert_eq!(register.text, "seed\n");
+            assert_eq!(register.motion_type, MotionType::Linewise);
+        });
+    });
+}
+
+#[test]
+fn test_vim_visual_inner_line_is_cancelled_linewise_on_blank_line() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let editor = add_editor_vim_normal_mode("seed\n\nend", &mut app);
+
+        editor.update(&mut app, |view, ctx| {
+            view.select_ranges(vec![DisplayPoint::new(1, 0)..DisplayPoint::new(1, 0)], ctx)
+                .unwrap();
+            view.vim_user_insert("V", ctx);
+        });
+        VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
+            registers.write_to_register('"', "seed\n".to_owned(), MotionType::Linewise, ctx);
+        });
+
+        let selection_before = editor.read(&app, |view, ctx| {
+            let model = view.editor_model.as_ref(ctx);
+            (view.selected_ranges(ctx), model.vim_visual_tails().clone())
+        });
+
+        editor.update(&mut app, |view, ctx| {
+            view.vim_user_insert("i", ctx);
+        });
+        editor.update(&mut app, |view, ctx| {
+            view.vim_user_insert("l", ctx);
+        });
+        editor.update(&mut app, |view, ctx| {
+            view.vim_user_insert("y", ctx);
+        });
+
+        editor.read(&app, |view, ctx| {
+            let model = view.editor_model.as_ref(ctx);
+            assert_eq!(view.buffer_text(ctx), "seed\n\nend");
+            assert_eq!(
+                view.vim_mode(ctx),
+                Some(VimMode::Visual(MotionType::Linewise))
+            );
+            assert_eq!(
+                (view.selected_ranges(ctx), model.vim_visual_tails().clone()),
+                selection_before
+            );
+        });
+        VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
+            let register = registers.read_from_register('"', ctx).unwrap();
+            assert_eq!(register.text, "seed\n");
+            assert_eq!(register.motion_type, MotionType::Linewise);
+        });
+    });
+}
+
+#[test]
+fn test_vim_visual_inner_line_is_cancelled_linewise_on_whitespace_line() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let editor = add_editor_vim_normal_mode("seed\n \t \nend", &mut app);
+
+        editor.update(&mut app, |view, ctx| {
+            view.select_ranges(vec![DisplayPoint::new(1, 1)..DisplayPoint::new(1, 1)], ctx)
+                .unwrap();
+            view.vim_user_insert("V", ctx);
+        });
+        VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
+            registers.write_to_register('"', "seed\n".to_owned(), MotionType::Linewise, ctx);
+        });
+
+        let selection_before = editor.read(&app, |view, ctx| {
+            let model = view.editor_model.as_ref(ctx);
+            (view.selected_ranges(ctx), model.vim_visual_tails().clone())
+        });
+
+        editor.update(&mut app, |view, ctx| {
+            view.vim_user_insert("i", ctx);
+        });
+        editor.update(&mut app, |view, ctx| {
+            view.vim_user_insert("l", ctx);
+        });
+        editor.update(&mut app, |view, ctx| {
+            view.vim_user_insert("y", ctx);
+        });
+
+        editor.read(&app, |view, ctx| {
+            let model = view.editor_model.as_ref(ctx);
+            assert_eq!(view.buffer_text(ctx), "seed\n \t \nend");
+            assert_eq!(
+                view.vim_mode(ctx),
+                Some(VimMode::Visual(MotionType::Linewise))
+            );
+            assert_eq!(
+                (view.selected_ranges(ctx), model.vim_visual_tails().clone()),
+                selection_before
+            );
+        });
+        VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
+            let register = registers.read_from_register('"', ctx).unwrap();
+            assert_eq!(register.text, "seed\n");
+            assert_eq!(register.motion_type, MotionType::Linewise);
+        });
+    });
+}
+
 #[test]
 fn test_vim_operators_on_quote_text_objects() {
     App::test((), |mut app| async move {
