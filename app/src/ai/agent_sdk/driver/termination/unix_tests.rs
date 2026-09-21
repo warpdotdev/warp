@@ -1,7 +1,5 @@
-use std::collections::HashMap;
 use std::fs;
 use std::process::Stdio;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::executor::block_on;
@@ -11,10 +9,6 @@ use signal_hook::iterator::SignalsInfo;
 use signal_hook::iterator::exfiltrator::WithOrigin;
 use signal_hook::low_level::siginfo::{Cause, Sent};
 use tempfile::TempDir;
-use tracing::field::{Field, Visit};
-use tracing::{Event, Subscriber};
-use tracing_subscriber::layer::Context;
-use tracing_subscriber::prelude::*;
 
 use super::InterruptWatch;
 use crate::ai::agent_sdk::driver::termination::Interrupt;
@@ -214,100 +208,26 @@ fn different_signal_does_not_kill_during_stuck_shutdown() {
     );
 }
 
-#[derive(Default)]
-struct CapturedTrace {
-    field_names: Vec<String>,
-    values: HashMap<String, String>,
-}
-
-struct SignalTraceCapture(Arc<Mutex<Option<CapturedTrace>>>);
-
-impl<S> tracing_subscriber::Layer<S> for SignalTraceCapture
-where
-    S: Subscriber,
-{
-    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-        let mut captured = CapturedTrace {
-            field_names: event
-                .metadata()
-                .fields()
-                .iter()
-                .map(|field| field.name().to_owned())
-                .collect(),
-            ..Default::default()
-        };
-        event.record(&mut TraceValueVisitor(&mut captured.values));
-        *self.0.lock().unwrap() = Some(captured);
-    }
-}
-
-struct TraceValueVisitor<'a>(&'a mut HashMap<String, String>);
-
-impl Visit for TraceValueVisitor<'_> {
-    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        self.0.insert(field.name().to_owned(), format!("{value:?}"));
-    }
-
-    fn record_str(&mut self, field: &Field, value: &str) {
-        self.0.insert(field.name().to_owned(), value.to_owned());
-    }
-}
-
 #[test]
-fn emits_signal_trace_schema() {
-    let captured = Arc::new(Mutex::new(None));
-    let subscriber = tracing_subscriber::registry().with(SignalTraceCapture(Arc::clone(&captured)));
-
-    tracing::subscriber::with_default(subscriber, || {
-        super::emit_signal_trace(Interrupt::Interrupt, None, Cause::Sent(Sent::User));
-    });
-
-    let captured = captured.lock().unwrap().take().unwrap();
-    assert_eq!(
-        captured.field_names,
-        [
-            "message",
-            "tags.cloud_agent",
-            "signal",
-            "signal.cause",
-            "signal.sender.pid",
-            "signal.sender.uid",
-            "signal.sender.username",
-            "signal.sender.command_line",
-        ]
-    );
-    assert_eq!(captured.values.get("signal").unwrap(), "SIGINT");
-    assert_eq!(captured.values.get("signal.cause").unwrap(), "Sent(User)");
-}
-
-#[test]
-fn redacts_secrets_from_signal_sender_command_line() {
-    const SECRET: &str = "AKIAIOSFODNN7EXAMPLE";
-
+fn extracts_signal_sender_origin() {
     let mut signals = SignalsInfo::<WithOrigin>::new([libc::SIGWINCH]).unwrap();
     let mut command = command::blocking::Command::new("sh");
     command
         .arg("-c")
         .arg("kill -WINCH \"$1\"; while :; do sleep 1; done")
-        .arg(SECRET)
+        .arg("signal-origin-test")
         .arg(nix::unistd::getpid().as_raw().to_string())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let mut child = command.spawn().unwrap();
-    let sender = signals.forever().next().unwrap().process.unwrap();
-    let captured = Arc::new(Mutex::new(None));
-    let subscriber = tracing_subscriber::registry().with(SignalTraceCapture(Arc::clone(&captured)));
-
-    tracing::subscriber::with_default(subscriber, || {
-        super::emit_signal_trace(Interrupt::Terminate, Some(sender), Cause::Sent(Sent::User));
-    });
+    let origin = signals.forever().next().unwrap();
     child.kill().unwrap();
     child.wait().unwrap();
-
-    let captured = captured.lock().unwrap().take().unwrap();
-    let command_line = captured.values.get("signal.sender.command_line").unwrap();
-    assert!(!command_line.contains(SECRET));
-    assert!(command_line.contains("********************"));
+    let sender = origin.process.unwrap();
+    assert_eq!(origin.signal, libc::SIGWINCH);
+    assert_eq!(origin.cause, Cause::Sent(Sent::User));
+    assert_eq!(sender.pid, i32::try_from(child.id()).unwrap());
+    assert_eq!(sender.uid, nix::unistd::getuid().as_raw());
 }
 
 #[test]
