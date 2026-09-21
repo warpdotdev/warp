@@ -303,6 +303,10 @@ impl VimHandler for CodeEditorView {
             VimOperator::Delete | VimOperator::Change => {
                 self.model.update(ctx, |model, ctx| {
                     selection_change(model, ctx);
+                    let has_nonempty_selection = model
+                        .selections(ctx)
+                        .iter()
+                        .any(|selection| selection.head != selection.tail);
 
                     // Copy selection to vim register before modifying
                     let selected_text = selected_text_for_vim_register(model, motion_type, ctx);
@@ -323,7 +327,7 @@ impl VimHandler for CodeEditorView {
                         });
                     }
 
-                    if !selected_text.is_empty() {
+                    if has_nonempty_selection {
                         if *operator == VimOperator::Change && motion_type == MotionType::Linewise {
                             // Use smart indent to position the cursor when changing the entire
                             // line.
