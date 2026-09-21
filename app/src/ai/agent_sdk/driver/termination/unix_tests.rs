@@ -4,7 +4,8 @@ use std::time::Duration;
 use futures::executor::block_on;
 use tempfile::TempDir;
 
-use super::InterruptSignal;
+use super::InterruptWatch;
+use crate::ai::agent_sdk::driver::termination::Interrupt;
 
 /// Set on the re-executed child so it takes the [`signal_lifecycle_child`] path instead
 /// of running the test body again. Its value selects which lifecycle to exercise.
@@ -23,30 +24,29 @@ const STUCK_SHUTDOWN_BAILOUT: Duration = Duration::from_secs(60);
 fn signal_lifecycle_child() -> ! {
     let kind = std::env::var(SIGNAL_CHILD_ENV).expect("child kind");
     let expected = match kind.as_str() {
-        "term" => InterruptSignal::Term,
-        "int" | "int-hang" => InterruptSignal::Int,
+        "term" => Interrupt::Terminate,
+        "int" | "int-hang" => Interrupt::Interrupt,
         other => panic!("unknown child kind {other}"),
     };
 
     let background = warpui::r#async::executor::Background::default();
-    let (signal_rx, _watch) =
-        block_on(super::watch_interrupt_signals(&background)).expect("signal watch");
+    let mut watch = block_on(InterruptWatch::register(&background)).expect("signal watch");
     println!("{READY_MARKER}");
 
-    let signal = block_on(signal_rx).expect("interrupt signal");
-    assert_eq!(signal, expected);
+    let interrupt = block_on(watch.wait());
+    assert_eq!(interrupt, expected);
 
     if kind == "int-hang" {
         println!("{SHUTDOWN_MARKER}");
         std::thread::sleep(STUCK_SHUTDOWN_BAILOUT);
         std::process::exit(1);
     }
-    super::emulate_default_and_exit(signal);
+    watch.terminate(interrupt);
 }
 
 /// Re-executes this test binary as a child running only `test_name`, delivers
-/// `first_sig` (and `second_sig`, once the child reports it is stuck in shutdown), and
-/// asserts the child died from `expected_sig`.
+/// `first_sig`, optionally verifies another signal does not terminate it, then delivers
+/// `second_sig` and asserts the child died from `expected_sig`.
 ///
 /// Signal dispositions are process-wide, so the behavior under test is only observable
 /// in a dedicated process; `test_name` must therefore be the fully-qualified name of the
@@ -55,6 +55,7 @@ fn spawn_signal_lifecycle_child(
     kind: &str,
     test_name: &str,
     first_sig: i32,
+    non_terminating_sig: Option<i32>,
     second_sig: Option<i32>,
     expected_sig: i32,
     expect_stuck_shutdown: bool,
@@ -114,9 +115,26 @@ fn spawn_signal_lifecycle_child(
     unsafe {
         libc::kill(child.id() as libc::pid_t, first_sig);
     }
-
-    if let Some(second_sig) = second_sig {
+    if non_terminating_sig.is_some() || second_sig.is_some() {
         wait_for_marker(&mut child, SHUTDOWN_MARKER);
+    }
+    if let Some(non_terminating_sig) = non_terminating_sig {
+        unsafe {
+            libc::kill(child.id() as libc::pid_t, non_terminating_sig);
+        }
+        for _ in 0..100 {
+            if let Some(status) = child.try_wait().unwrap() {
+                panic!(
+                    "signal child exited after a different signal: status={status:?} stdout={} \
+                     stderr={}",
+                    fs::read_to_string(&stdout_path).unwrap_or_default(),
+                    fs::read_to_string(&stderr_path).unwrap_or_default()
+                );
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    if let Some(second_sig) = second_sig {
         unsafe {
             libc::kill(child.id() as libc::pid_t, second_sig);
         }
@@ -141,8 +159,9 @@ fn spawn_signal_lifecycle_child(
 fn sigterm_subprocess_exits_signaled() {
     spawn_signal_lifecycle_child(
         "term",
-        "ai::agent_sdk::driver::termination::tests::sigterm_subprocess_exits_signaled",
+        "ai::agent_sdk::driver::termination::unix::tests::sigterm_subprocess_exits_signaled",
         libc::SIGTERM,
+        None,
         None,
         libc::SIGTERM,
         false,
@@ -153,8 +172,9 @@ fn sigterm_subprocess_exits_signaled() {
 fn sigint_subprocess_exits_signaled() {
     spawn_signal_lifecycle_child(
         "int",
-        "ai::agent_sdk::driver::termination::tests::sigint_subprocess_exits_signaled",
+        "ai::agent_sdk::driver::termination::unix::tests::sigint_subprocess_exits_signaled",
         libc::SIGINT,
+        None,
         None,
         libc::SIGINT,
         false,
@@ -165,8 +185,23 @@ fn sigint_subprocess_exits_signaled() {
 fn second_sigint_kills_during_stuck_shutdown() {
     spawn_signal_lifecycle_child(
         "int-hang",
-        "ai::agent_sdk::driver::termination::tests::second_sigint_kills_during_stuck_shutdown",
+        "ai::agent_sdk::driver::termination::unix::tests::second_sigint_kills_during_stuck_shutdown",
         libc::SIGINT,
+        None,
+        Some(libc::SIGINT),
+        libc::SIGINT,
+        true,
+    );
+}
+
+#[test]
+fn different_signal_does_not_kill_during_stuck_shutdown() {
+    spawn_signal_lifecycle_child(
+        "int-hang",
+        "ai::agent_sdk::driver::termination::unix::tests::\
+         different_signal_does_not_kill_during_stuck_shutdown",
+        libc::SIGINT,
+        Some(libc::SIGTERM),
         Some(libc::SIGINT),
         libc::SIGINT,
         true,

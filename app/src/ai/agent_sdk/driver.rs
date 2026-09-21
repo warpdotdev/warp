@@ -36,6 +36,7 @@ use warp_errors::{ErrorExt, register_error, report_error, report_if_error};
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_managed_secrets::ManagedSecretValue;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warpui::r#async::executor::Background;
 use warpui::r#async::{FutureExt, TimeoutError, Timer};
 use warpui::{
     AppContext, Entity, EntityId, ModelContext, ModelHandle, ModelSpawner, SingletonEntity,
@@ -125,9 +126,7 @@ use environment::PrepareEnvironmentError;
 use mcp_startup::MCP_SERVER_STARTUP_TIMEOUT;
 pub(crate) use snapshot::upload_snapshot_for_handoff;
 use terminal::TerminalDriverEvent;
-use termination::{InterruptSignal, RunEndCause};
-#[cfg(unix)]
-use termination::{emulate_default_and_exit, watch_interrupt_signals};
+use termination::{Interrupt, InterruptWatch, RunEndCause};
 
 /// Races `run_future` against optional background credential refresh loops,
 /// dropping the loops automatically when `run_future` resolves.
@@ -972,13 +971,6 @@ pub enum AgentDriverError {
         /// whether the message points the user at upgrading.
         on_free_plan: bool,
     },
-    /// The Unix interrupt handlers that let an in-progress run save a handoff
-    /// snapshot before the process dies could not be installed. Reported as a
-    /// Warp-side failure rather than silently running without them, since the
-    /// run would then be unable to honor a graceful shutdown request.
-    #[cfg_attr(not(unix), allow(dead_code))]
-    #[error("Failed to set up graceful shutdown handling: {0}")]
-    GracefulShutdownSetupFailed(String),
 }
 
 /// User-facing message for [`AgentDriverError::SandboxDeadlineReached`].
@@ -1350,6 +1342,125 @@ impl AgentDriver {
         });
     }
 
+    /// Waits until sandbox teardown should begin and returns the corresponding deadline error.
+    async fn sandbox_shutdown_timer(
+        foreground: &ModelSpawner<Self>,
+    ) -> Result<(), AgentDriverError> {
+        /// How far before the sandbox deadline to start the teardown sequence.
+        const SHUTDOWN_WARNING_WINDOW: Duration = Duration::from_secs(5 * 60);
+
+        let maybe_wait = sandbox_deadline().and_then(|deadline| {
+            let warning_at = deadline.checked_sub(SHUTDOWN_WARNING_WINDOW)?;
+            match warning_at.duration_since(SystemTime::now()) {
+                Ok(wait) => Some(wait),
+                // Already inside the warning window — trigger immediately.
+                Err(_) => Some(Duration::ZERO),
+            }
+        });
+
+        // Resolved before waiting because everything after the timer fires competes with the
+        // shutdown window. Billing metadata is already loaded by then — cloud runs block on
+        // `SetupStep::TeamMetadataRefresh` before the driver starts — so this read does not race
+        // the initial fetch. Defaults to the non-free message if unavailable, so a paying customer
+        // is never told to upgrade.
+        let on_free_plan = if maybe_wait.is_some() {
+            foreground
+                .spawn(|_, ctx| {
+                    UserWorkspaces::as_ref(ctx)
+                        .current_workspace_billing_metadata()
+                        .is_some_and(BillingMetadata::is_free_plan)
+                })
+                .await
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        let timer = maybe_wait
+            .map(|wait| Either::Left(Timer::after(wait).map(|_| ())))
+            .unwrap_or_else(|| Either::Right(future::pending::<()>()));
+        timer.await;
+
+        Err(AgentDriverError::SandboxDeadlineReached { on_free_plan })
+    }
+
+    /// Runs `task` until it completes, the sandbox shutdown window begins, or an interrupt arrives.
+    ///
+    /// The returned [`InterruptWatch`] must stay alive through teardown: non-signal outcomes disarm
+    /// it, while signal handling retains its registrations so a second signal can terminate a
+    /// stuck artifact save.
+    async fn run_until_end(
+        task: Task,
+        foreground: &ModelSpawner<Self>,
+        background: &Background,
+    ) -> Result<
+        (
+            Option<Result<(), AgentDriverError>>,
+            RunEndCause,
+            InterruptWatch,
+        ),
+        AgentDriverError,
+    > {
+        // Primary: WARP_SANDBOX_DEADLINE client-side timer.
+        //
+        // The server injects WARP_SANDBOX_DEADLINE (Unix timestamp, seconds since
+        // epoch) into the container environment at sandbox creation time for both
+        // Docker Sandbox and Namespace. The sandbox deadline is set to
+        // MaxInstanceRuntime + SandboxShutdownWarningWindow (5 min); this timer
+        // fires SandboxShutdownWarningWindow before that hard kill, giving the
+        // normal AgentDriver teardown path — snapshot then recording — time to
+        // complete while the agent is still running.
+        //
+        // Secondary: SIGTERM / SIGINT detection (Unix only).
+        //
+        // SIGTERM is how external shutdowns reach the client: server-initiated
+        // sandbox/instance teardown (both Docker Sandbox and Namespace send
+        // SIGTERM ~10-20 seconds before SIGKILL), container-runtime stops, and
+        // self-hosted workers being terminated. When the deadline timer is
+        // active it fires 5 minutes earlier and wins this race, but SIGTERM is
+        // the primary signal whenever WARP_SANDBOX_DEADLINE is absent or the
+        // shutdown was not deadline-driven. SIGINT (Ctrl-C) uses the same killed
+        // path so a handoff snapshot can be saved before default terminate. A
+        // second SIGINT/SIGTERM emulates the default action immediately.
+        //
+        // When WARP_SANDBOX_DEADLINE is absent and no interrupt arrives,
+        // run_internal runs to completion as before (local and self-hosted runs
+        // are unaffected).
+        let mut interrupt_watch = match InterruptWatch::register(background).await {
+            Ok(watch) => watch,
+            Err(error) => {
+                log::warn!(
+                    "Failed to register interrupt handlers; continuing without graceful \
+                     interrupt handling: {error}"
+                );
+                tracing::warn!(
+                    tags.cloud_agent = true,
+                    error = ?error,
+                    "failed to register interrupt handlers; continuing without graceful interrupt handling"
+                );
+                InterruptWatch::noop()
+            }
+        };
+
+        let (finished, cause) = {
+            let signal_fut = interrupt_watch.wait();
+            let run = Self::run_internal(task, foreground.clone()).fuse();
+            let timer = Self::sandbox_shutdown_timer(foreground).fuse();
+            let signal = signal_fut.fuse();
+            futures::pin_mut!(run, timer, signal);
+
+            futures::select_biased! {
+                signal = signal => (None, RunEndCause::Signal(signal)),
+                result = run => (Some(result), RunEndCause::Completed),
+                result = timer => (
+                    Some(result),
+                    RunEndCause::SandboxDeadline,
+                ),
+            }
+        };
+
+        Ok((finished, cause, interrupt_watch))
+    }
+
     /// Runs `task` to completion and reports its terminal state to the server.
     ///
     /// Exit guarantee: before the returned future resolves (after which the
@@ -1373,7 +1484,6 @@ impl AgentDriver {
         let foreground_for_error = foreground.clone();
         let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
         let task_id = self.task_id;
-        #[cfg(unix)]
         let background = ctx.background_executor();
 
         ctx.spawn(
@@ -1397,121 +1507,16 @@ impl AgentDriver {
                 {
                     report_error!(e);
                 }
-                // Primary: WARP_SANDBOX_DEADLINE client-side timer.
-                //
-                // The server injects WARP_SANDBOX_DEADLINE (Unix timestamp, seconds since
-                // epoch) into the container environment at sandbox creation time for both
-                // Docker Sandbox and Namespace. The sandbox deadline is set to
-                // MaxInstanceRuntime + SandboxShutdownWarningWindow (5 min); this timer
-                // fires SandboxShutdownWarningWindow before that hard kill, giving the
-                // normal AgentDriver teardown path — snapshot then recording — time to
-                // complete while the agent is still running.
-                //
-                // Secondary: SIGTERM / SIGINT detection (Unix only).
-                //
-                // SIGTERM is how external shutdowns reach the client: server-initiated
-                // sandbox/instance teardown (both Docker Sandbox and Namespace send
-                // SIGTERM ~10-20 seconds before SIGKILL), container-runtime stops, and
-                // self-hosted workers being terminated. When the deadline timer is
-                // active it fires 5 minutes earlier and wins this race, but SIGTERM is
-                // the primary signal whenever WARP_SANDBOX_DEADLINE is absent or the
-                // shutdown was not deadline-driven. SIGINT (Ctrl-C) uses the same killed
-                // path so a handoff snapshot can be saved before default terminate. A
-                // second SIGINT/SIGTERM emulates the default action immediately.
-                //
-                // When WARP_SANDBOX_DEADLINE is absent and no interrupt arrives,
-                // run_internal runs to completion as before (local and self-hosted runs
-                // are unaffected).
-                #[cfg(unix)]
-                let (signal_rx, interrupt_watch) = match watch_interrupt_signals(&background).await
-                {
-                    Ok(watch) => watch,
-                    Err(error) => {
-                        let error =
-                            AgentDriverError::GracefulShutdownSetupFailed(error.to_string());
-                        if tx.send(Err(error)).is_err() {
-                            report_error!("Caller did not wait for agent driver to finish");
-                        }
-                        return;
-                    }
-                };
-                let (finished, observed_signal) = {
-                    /// How far before the sandbox deadline to start the teardown sequence.
-                    const SHUTDOWN_WARNING_WINDOW: Duration = Duration::from_secs(5 * 60);
-
-                    let maybe_wait = sandbox_deadline().and_then(|deadline| {
-                        let warning_at = deadline.checked_sub(SHUTDOWN_WARNING_WINDOW)?;
-                        match warning_at.duration_since(SystemTime::now()) {
-                            Ok(wait) => Some(wait),
-                            // Already inside the warning window — trigger immediately.
-                            Err(_) => Some(Duration::ZERO),
-                        }
-                    });
-
-                    // Resolved up front rather than inside the timer arm: `select!` arms
-                    // are synchronous (no `ctx` to read the model from), and everything
-                    // after the deadline fires competes with the shutdown window. Billing
-                    // metadata is already loaded by then — cloud runs block on
-                    // `SetupStep::TeamMetadataRefresh` before the driver starts — so this
-                    // read does not race the initial fetch. Defaults to the non-free
-                    // message if unavailable, so a paying customer is never told to
-                    // upgrade.
-                    let on_free_plan = if maybe_wait.is_some() {
-                        foreground
-                            .spawn(|_, ctx| {
-                                UserWorkspaces::as_ref(ctx)
-                                    .current_workspace_billing_metadata()
-                                    .is_some_and(BillingMetadata::is_free_plan)
-                            })
-                            .await
-                            .unwrap_or(false)
-                    } else {
-                        false
-                    };
-
-                    // Timer future: fires at deadline minus warning window, mapped to
-                    // () to avoid std::time::Instant which is disallowed on wasm targets.
-                    // Pending forever (never fires) when no deadline is set.
-                    let timer_fut = maybe_wait
-                        .map(|w| Either::Left(Timer::after(w).map(|_| ())))
-                        .unwrap_or_else(|| Either::Right(future::pending::<()>()));
-
-                    #[cfg(unix)]
-                    let signal_fut = async move {
-                        match signal_rx.await {
-                            Ok(signal) => signal,
-                            // The watch only stops reporting once it is unregistered,
-                            // which happens after this race has already been decided.
-                            Err(Canceled) => future::pending().await,
+                let (finished, cause, interrupt_watch) =
+                    match Self::run_until_end(task, &foreground, &background).await {
+                        Ok(outcome) => outcome,
+                        Err(error) => {
+                            if tx.send(Err(error)).is_err() {
+                                report_error!("Caller did not wait for agent driver to finish");
+                            }
+                            return;
                         }
                     };
-                    #[cfg(not(unix))]
-                    let signal_fut = future::pending::<InterruptSignal>();
-
-                    let run = Self::run_internal(task, foreground.clone()).fuse();
-                    let timer = timer_fut.fuse();
-                    let signal = signal_fut.fuse();
-                    futures::pin_mut!(run, timer, signal);
-
-                    futures::select_biased! {
-                        s = signal => (None, Some(s)),
-                        r = run => (Some(r), None),
-                        _ = timer => (
-                            Some(Err(AgentDriverError::SandboxDeadlineReached { on_free_plan })),
-                            None,
-                        ),
-                    }
-                };
-
-                let cause = match observed_signal {
-                    Some(signal) => RunEndCause::Signal(signal),
-                    None => match &finished {
-                        Some(Err(AgentDriverError::SandboxDeadlineReached { .. })) => {
-                            RunEndCause::SandboxDeadline
-                        }
-                        _ => RunEndCause::Completed,
-                    },
-                };
                 match cause {
                     RunEndCause::SandboxDeadline => {
                         tracing::info!(tags.cloud_agent = true, "sandbox deadline approaching");
@@ -1520,13 +1525,13 @@ impl AgentDriver {
                              run_internal to allow recording finalization"
                         );
                     }
-                    RunEndCause::Signal(InterruptSignal::Term) => {
+                    RunEndCause::Signal(Interrupt::Terminate) => {
                         log::warn!(
                             "SIGTERM received; aborting run_internal to save a handoff snapshot \
                              before remaining teardown (limited grace period before SIGKILL)"
                         );
                     }
-                    RunEndCause::Signal(InterruptSignal::Int) => {
+                    RunEndCause::Signal(Interrupt::Interrupt) => {
                         log::warn!(
                             "SIGINT received; aborting run_internal to save a handoff snapshot \
                              before restoring default terminate"
@@ -1541,32 +1546,27 @@ impl AgentDriver {
                     .unwrap_or(true);
                 let snapshot_allowed =
                     FeatureFlag::OzHandoff.is_enabled() && task_id.is_some() && !snapshot_disabled;
+                // Dropping `run_internal` bypasses `run_harness`'s final-save path. Normal completion
+                // already finished these saves inside `run_harness`. If the harness completed normally,
+                // we don't want to force-terminate and re-save its state here.
+                if !matches!(cause, RunEndCause::Completed) {
+                    Self::finish_interrupted_harness_saves(&foreground).await;
+                }
 
                 match cause {
                     RunEndCause::Signal(signal) => {
                         let signal_name = match signal {
-                            InterruptSignal::Term => "SIGTERM",
-                            InterruptSignal::Int => "SIGINT",
+                            Interrupt::Terminate => "SIGTERM",
+                            Interrupt::Interrupt => "SIGINT",
                         };
                         eprintln!("Received {signal_name}; shutting down...");
                         // Keep handlers registered so a second SIGINT/SIGTERM can still
                         // emulate default terminate if snapshot/recording gets stuck.
-                        Self::finish_interrupted_harness_saves(&foreground).await;
                         Self::save_run_artifacts(&foreground, snapshot_allowed).await;
-                        #[cfg(unix)]
-                        emulate_default_and_exit(signal);
-                        #[cfg(not(unix))]
-                        {
-                            let _ = signal;
-                            unreachable!("Unix signals are not delivered on this platform");
-                        }
+                        interrupt_watch.terminate(signal);
                     }
                     RunEndCause::Completed | RunEndCause::SandboxDeadline => {
-                        #[cfg(unix)]
-                        interrupt_watch.unregister();
-                        if matches!(cause, RunEndCause::SandboxDeadline) {
-                            Self::finish_interrupted_harness_saves(&foreground).await;
-                        }
+                        interrupt_watch.disarm();
                         Self::unregister_end_of_run_consumers(&foreground).await;
                         Self::save_run_artifacts(&foreground, snapshot_allowed).await;
                         if let Some(task_id) = task_id {

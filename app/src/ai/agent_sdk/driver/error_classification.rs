@@ -413,16 +413,6 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
             AgentTaskState::Failed,
             TaskStatusUpdate::message(error.to_string()),
         ),
-
-        // The run never started because Warp could not install its own interrupt
-        // handlers, which is a Warp-side defect rather than anything the user did.
-        AgentDriverError::GracefulShutdownSetupFailed(msg) => (
-            AgentTaskState::Error,
-            TaskStatusUpdate::with_error_code(
-                format!("Failed to set up graceful shutdown handling: {msg}"),
-                PlatformErrorCode::InternalError,
-            ),
-        ),
     }
 }
 
