@@ -6,9 +6,9 @@ use warp::integration_testing::clipboard::write_to_clipboard;
 use warp::integration_testing::input::{
     AutosuggestionState, assert_autosuggestion_state, input_contains_string, input_cursor_is_at,
     input_is_empty, latest_buffer_operations_are_empty, open_inline_model_selector_from_chip,
-    profile_selector_is_open, slash_commands_menu_is_open, suggestions_mode_is_closed,
-    tab_completions_menu_is_open, toggle_inline_model_selector_from_chip,
-    toggle_profile_selector_from_chip,
+    profile_selector_is_closed_with_active_profile, profile_selector_is_open,
+    slash_commands_menu_is_open, suggestions_mode_is_closed, tab_completions_menu_is_open,
+    toggle_inline_model_selector_from_chip, toggle_profile_selector_from_chip,
 };
 use warp::integration_testing::step::new_step_with_default_assertions;
 use warp::integration_testing::terminal::util::{
@@ -166,7 +166,12 @@ pub fn test_profile_selector_preserves_prompt_on_selection() -> Builder {
         .with_step(type_prompt_with_non_terminal_cursor(original_prompt))
         .with_step(toggle_profile_selector_from_chip())
         .with_step(assert_prompt_and_cursor_restored(
-            new_step_with_default_assertions("Select active profile").with_keystrokes(&["enter"]),
+            new_step_with_default_assertions("Select Integration Test profile")
+                .with_keystrokes(&["down", "enter"])
+                .add_named_assertion(
+                    "Profile selector closes with Integration Test active",
+                    profile_selector_is_closed_with_active_profile(0, "Integration Test"),
+                ),
             original_prompt,
             "profile selection",
         ))

@@ -1,7 +1,11 @@
 use warpui::integration::AssertionCallback;
-use warpui::{async_assert, async_assert_eq};
+use warpui::{SingletonEntity, async_assert, async_assert_eq};
 
-use crate::integration_testing::view_getters::{input_view, single_input_view_for_tab};
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::cloud_object::model::generic_string_model::StringModel;
+use crate::integration_testing::view_getters::{
+    input_view, single_input_view_for_tab, single_terminal_view_for_tab,
+};
 use crate::terminal::input::InputSuggestionsMode;
 
 pub fn assert_workflow_info_box_is_open(tab_idx: usize, pane_idx: usize) -> AssertionCallback {
@@ -96,6 +100,30 @@ pub fn profile_selector_is_open(tab_idx: usize) -> AssertionCallback {
                     .as_ref(ctx)
                     .is_model_selector_open(ctx),
                 "Profile selector should be open"
+            )
+        })
+    })
+}
+
+pub fn profile_selector_is_closed_with_active_profile(
+    tab_idx: usize,
+    expected_profile_name: &'static str,
+) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let terminal_view_id = single_terminal_view_for_tab(app, window_id, tab_idx).id();
+        let input = single_input_view_for_tab(app, window_id, tab_idx);
+        input.read(app, |view, ctx| {
+            let selector_is_open = view
+                .agent_input_footer()
+                .as_ref(ctx)
+                .is_model_selector_open(ctx);
+            let active_profile_name = AIExecutionProfilesModel::as_ref(ctx)
+                .active_profile(Some(terminal_view_id), ctx)
+                .data()
+                .display_name();
+            async_assert!(
+                !selector_is_open && active_profile_name == expected_profile_name,
+                "Profile selector should be closed and footer chip should display {expected_profile_name:?}, got open={selector_is_open}, profile={active_profile_name:?}"
             )
         })
     })
