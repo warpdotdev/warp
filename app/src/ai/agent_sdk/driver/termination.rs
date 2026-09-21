@@ -1,7 +1,7 @@
 //! Termination plumbing for [`AgentDriver`](super::AgentDriver): naming why a run stopped and
 //! mediating platform-specific interrupts so a handoff snapshot can be saved before exit.
 
-use std::io;
+use std::{fmt, io};
 
 use futures::future;
 use warpui::r#async::executor::Background;
@@ -17,6 +17,15 @@ pub(super) enum Interrupt {
     Terminate,
     #[cfg_attr(not(unix), expect(dead_code))]
     Interrupt,
+}
+
+impl fmt::Display for Interrupt {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Terminate => "SIGTERM",
+            Self::Interrupt => "SIGINT",
+        })
+    }
 }
 
 /// Why `run_internal` stopped.
