@@ -169,6 +169,41 @@ where
     }
 }
 
+async fn report_driver_task_update<T: Entity>(
+    task_id: AmbientAgentTaskId,
+    task_state: AgentTaskState,
+    status_update: TaskStatusUpdate,
+    session_debug_until: Option<DateTime<Utc>>,
+    foreground: &ModelSpawner<T>,
+) -> bool {
+    let queued = foreground
+        .spawn(move |_, ctx| {
+            LocalAgentTaskSyncModel::handle(ctx).update(ctx, |model, ctx| {
+                model.enqueue_driver_task_update(
+                    task_id,
+                    task_state,
+                    status_update,
+                    session_debug_until,
+                    ctx,
+                );
+                model.wait_for_idle(task_id)
+            })
+        })
+        .await;
+    let Ok(wait) = queued else {
+        return false;
+    };
+    wait.await;
+
+    foreground
+        .spawn(move |_, ctx| {
+            LocalAgentTaskSyncModel::as_ref(ctx).confirmed_terminal_state(&task_id)
+                == Some(task_state)
+        })
+        .await
+        .unwrap_or(false)
+}
+
 const HARNESS_SAVE_INTERVAL: Duration = Duration::from_secs(30);
 /// Delay after the initial exit request before retrying with the harness's
 /// follow-up input (e.g. Claude's confirmation-dialog dismissal). Sent
@@ -1545,7 +1580,7 @@ impl AgentDriver {
                         report_driver_error(
                             task_id,
                             &AgentDriverError::TerminatedBySignal,
-                            &server_api,
+                            &foreground,
                         )
                         .await;
                     }
@@ -1633,8 +1668,6 @@ impl AgentDriver {
             |_, _, _| {},
         );
 
-        let server_api_for_error = ServerApiProvider::as_ref(ctx).get_ai_client();
-
         async move {
             if let Some(ref task_id) = task_id {
                 log::info!("Executing task {task_id}");
@@ -1652,15 +1685,15 @@ impl AgentDriver {
                 report_error!(err);
             }
 
-            // Report driver-level errors directly to the server. These errors
+            // Report driver-level errors through the task-sync queue. These errors
             // occur before or outside a conversation (e.g. bootstrap, MCP startup,
-            // environment setup) so LocalAgentTaskSyncModel never fires for them.
-            // Success/blocked/cancelled are handled by LocalAgentTaskSyncModel.
+            // environment setup), so no conversation event enqueues them.
+            // Success/blocked/cancelled are derived from conversation or CLI status.
             // TerminatedBySignal is excluded: the run task reports it before its
             // teardown, since SIGKILL follows shortly after SIGTERM.
             if let (Some(task_id), Err(err)) = (task_id, &result) {
                 if !matches!(err, AgentDriverError::TerminatedBySignal) {
-                    report_driver_error(task_id, err, &server_api_for_error).await;
+                    report_driver_error(task_id, err, &foreground_for_error).await;
                 }
                 if matches!(
                     err,
@@ -2779,34 +2812,19 @@ impl AgentDriver {
         error: &AgentDriverError,
         window: Duration,
     ) {
-        let message = error.to_string();
-        let resolved = foreground
-            .spawn(|me, ctx| {
-                me.task_id
-                    .map(|task_id| (task_id, ServerApiProvider::as_ref(ctx).get_ai_client()))
-            })
-            .await;
-        let Ok(Some((task_id, ai_client))) = resolved else {
+        let Ok(Some(task_id)) = foreground.spawn(|me, _| me.task_id).await else {
             return;
         };
-
-        let status = setup_failure_status_update(message);
-        let deadline = debug_window_deadline(window);
-        if let Err(error) = ai_client
-            .update_agent_task(
-                task_id,
-                Some(AgentTaskState::Failed),
-                None,
-                None,
-                Some(status),
-                Some(deadline),
-                None,
-            )
-            .await
+        if !report_driver_task_update(
+            task_id,
+            AgentTaskState::Failed,
+            setup_failure_status_update(error.to_string()),
+            Some(debug_window_deadline(window)),
+            foreground,
+        )
+        .await
         {
-            log::warn!(
-                "Failed to report {stage} failure for run {task_id} before lingering: {error:#}"
-            );
+            log::warn!("Failed to report {stage} failure for run {task_id} before lingering");
         }
     }
 
@@ -4739,27 +4757,14 @@ pub(super) fn write_run_started(run_id: &str, output_format: OutputFormat) {
 /// Used for errors that occur before or outside a conversation. Errors
 /// that occur while the agent is running should be reported through
 /// the `LocalAgentTaskSyncModel`.
-pub(super) async fn report_driver_error(
+pub(super) async fn report_driver_error<T: Entity>(
     task_id: AmbientAgentTaskId,
     err: &AgentDriverError,
-    server_api: &Arc<dyn AIClient>,
+    foreground: &ModelSpawner<T>,
 ) {
     let (state, status_update) = error_classification::classify_driver_error(err);
-    if let Err(e) = server_api
-        .update_agent_task(
-            task_id,
-            Some(state),
-            None,
-            None,
-            Some(status_update),
-            None,
-            None,
-        )
-        .await
-    {
-        report_error!(
-            anyhow!(e).context(format!("Failed to report driver error for task {task_id}"))
-        );
+    if !report_driver_task_update(task_id, state, status_update, None, foreground).await {
+        report_error!(anyhow!("Failed to report driver error for task {task_id}"));
     }
 }
 

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use futures::channel::oneshot;
 use session_sharing_protocol::common::SessionId;
 use update_queue::LocalTaskUpdateQueue;
@@ -73,6 +74,7 @@ struct LocalTaskUpdate {
     session_id: Option<SessionId>,
     server_conversation_token: Option<String>,
     status_message: Option<TaskStatusUpdate>,
+    session_debug_until: Option<DateTime<Utc>>,
 }
 
 impl LocalTaskUpdate {
@@ -81,6 +83,7 @@ impl LocalTaskUpdate {
             && self.session_id.is_none()
             && self.server_conversation_token.is_none()
             && self.status_message.is_none()
+            && self.session_debug_until.is_none()
     }
 }
 
@@ -152,11 +155,33 @@ impl LocalAgentTaskSyncModel {
 
     /// Test-only constructor that lets tests inject a mock `AIClient`.
     #[cfg(test)]
-    pub(super) fn new_with_ai_client_for_test(
+    pub(crate) fn new_with_ai_client_for_test(
         ai_client: Arc<dyn AIClient>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         Self::new_with_ai_client(ai_client, ctx)
+    }
+
+    /// Queues terminal status that the driver owns because no conversation
+    /// or CLI session event can produce it.
+    pub(crate) fn enqueue_driver_task_update(
+        &mut self,
+        task_id: AmbientAgentTaskId,
+        task_state: AgentTaskState,
+        status_message: TaskStatusUpdate,
+        session_debug_until: Option<DateTime<Utc>>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.enqueue_update(
+            task_id,
+            LocalTaskUpdate {
+                task_state: Some(task_state),
+                status_message: Some(status_message),
+                session_debug_until,
+                ..LocalTaskUpdate::default()
+            },
+            ctx,
+        );
     }
 
     /// Registers a terminal view as a tracked CLI agent session so that
@@ -400,15 +425,31 @@ impl LocalAgentTaskSyncModel {
     fn send_update(
         &mut self,
         task_id: AmbientAgentTaskId,
-        update: LocalTaskUpdate,
+        mut update: LocalTaskUpdate,
         ctx: &mut ModelContext<Self>,
     ) {
+        if update.task_state.is_some_and(|state| {
+            is_terminal_task_state(state)
+                && self.confirmed_terminal_states.get(&task_id) == Some(&state)
+        }) {
+            update.task_state = None;
+            update.status_message = None;
+        }
+        if update.is_empty() {
+            if let Some(update) = self.update_queue.record_result(task_id, true) {
+                self.send_update(task_id, update, ctx);
+            } else if self.update_queue.is_idle(&task_id) {
+                self.notify_idle_waiters(&task_id);
+            }
+            return;
+        }
         let ai_client = self.ai_client.clone();
         let LocalTaskUpdate {
             task_state,
             session_id,
             server_conversation_token,
             status_message,
+            session_debug_until,
         } = update;
         ctx.spawn(
             async move {
@@ -419,7 +460,7 @@ impl LocalAgentTaskSyncModel {
                         session_id,
                         server_conversation_token.clone(),
                         status_message,
-                        None,
+                        session_debug_until,
                         None,
                     )
                     .await;
@@ -435,9 +476,12 @@ impl LocalAgentTaskSyncModel {
             move |me, result, ctx| {
                 if result.is_ok()
                     && let Some(state) = task_state
-                    && is_terminal_task_state(state)
                 {
-                    me.confirmed_terminal_states.insert(task_id, state);
+                    if is_terminal_task_state(state) {
+                        me.confirmed_terminal_states.insert(task_id, state);
+                    } else {
+                        me.confirmed_terminal_states.remove(&task_id);
+                    }
                 }
                 if let Some(update) = me.update_queue.record_result(task_id, result.is_ok()) {
                     me.send_update(task_id, update, ctx);
