@@ -2325,7 +2325,13 @@ impl View for ProfileModelSelector {
 
             let show_separator = !(profile_hovered || model_hovered);
 
-            chip_content.add_child(self.render_profile_section(app));
+            chip_content.add_child(
+                SavePosition::new(
+                    self.render_profile_section(app),
+                    "profile_model_selector_profile_button",
+                )
+                .finish(),
+            );
             chip_content.add_child(self.render_separator(app, show_separator));
         }
         chip_content.add_child(self.render_model_section(app));

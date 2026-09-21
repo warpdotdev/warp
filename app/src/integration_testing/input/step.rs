@@ -1,7 +1,7 @@
 use pathfinder_geometry::vector::Vector2F;
+use warpui::SingletonEntity;
 use warpui::integration::TestStep;
 use warpui::windowing::WindowManager;
-use warpui::{SingletonEntity, TypedActionView};
 
 use crate::ai::blocklist::{InputConfig, InputType};
 use crate::integration_testing::input::{inline_model_selector_is_open, input_is_empty};
@@ -15,24 +15,9 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext,
     CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
-use crate::terminal::profile_model_selector::{ProfileModelSelector, ProfileModelSelectorAction};
 use crate::terminal::view::TerminalAction;
-
-fn handle_profile_model_selector_action(
-    app: &mut warpui::App,
-    window_id: warpui::WindowId,
-    action: ProfileModelSelectorAction,
-) {
-    let selectors = app
-        .views_of_type::<ProfileModelSelector>(window_id)
-        .expect("profile/model selectors should be present")
-        .to_vec();
-    for selector in selectors {
-        selector.update(app, |selector, ctx| {
-            selector.handle_action(&action, ctx);
-        });
-    }
-}
+const MODEL_SELECTOR_CHIP_POSITION_ID: &str = "profile_model_selector_model_button";
+const PROFILE_SELECTOR_CHIP_POSITION_ID: &str = "profile_model_selector_profile_button";
 
 /// Opens the CLI-agent Rich Input for the terminal view at `tab_index`.
 pub fn open_cli_agent_rich_input(tab_index: usize) -> TestStep {
@@ -147,15 +132,8 @@ pub fn open_input_context_menu() -> TestStep {
 }
 
 pub fn toggle_inline_model_selector_from_chip() -> TestStep {
-    new_step_with_default_assertions("Toggle inline model selector from model chip").with_action(
-        |app, window_id, _| {
-            handle_profile_model_selector_action(
-                app,
-                window_id,
-                ProfileModelSelectorAction::ToggleModelMenu,
-            );
-        },
-    )
+    new_step_with_default_assertions("Toggle inline model selector from model chip")
+        .with_click_on_saved_position(MODEL_SELECTOR_CHIP_POSITION_ID)
 }
 
 pub fn open_inline_model_selector_from_chip() -> TestStep {
@@ -168,32 +146,6 @@ pub fn open_inline_model_selector_from_chip() -> TestStep {
 }
 
 pub fn toggle_profile_selector_from_chip() -> TestStep {
-    new_step_with_default_assertions("Toggle profile selector from profile chip").with_action(
-        |app, window_id, _| {
-            handle_profile_model_selector_action(
-                app,
-                window_id,
-                ProfileModelSelectorAction::ToggleProfileMenu,
-            );
-        },
-    )
-}
-
-pub fn select_active_profile_from_chip() -> TestStep {
-    new_step_with_default_assertions("Select active profile from profile chip").with_action(
-        |app, window_id, _| {
-            let terminal = single_terminal_view_for_tab(app, window_id, 0);
-            let profile_id = app.read(|ctx| {
-                crate::ai::execution_profiles::profiles::AIExecutionProfilesModel::as_ref(ctx)
-                    .active_profile(Some(terminal.id()), ctx)
-                    .id()
-                    .clone()
-            });
-            handle_profile_model_selector_action(
-                app,
-                window_id,
-                ProfileModelSelectorAction::SelectProfile(profile_id),
-            );
-        },
-    )
+    new_step_with_default_assertions("Toggle profile selector from profile chip")
+        .with_click_on_saved_position(PROFILE_SELECTOR_CHIP_POSITION_ID)
 }

@@ -1,12 +1,14 @@
 use std::time::Duration;
 
 use warp::features::FeatureFlag;
+use warp::integration_testing::agent_mode::enter_agent_view;
 use warp::integration_testing::clipboard::write_to_clipboard;
 use warp::integration_testing::input::{
     AutosuggestionState, assert_autosuggestion_state, input_contains_string, input_cursor_is_at,
     input_is_empty, latest_buffer_operations_are_empty, open_inline_model_selector_from_chip,
-    select_active_profile_from_chip, tab_completions_menu_is_open,
-    toggle_inline_model_selector_from_chip, toggle_profile_selector_from_chip,
+    profile_selector_is_open, slash_commands_menu_is_open, suggestions_mode_is_closed,
+    tab_completions_menu_is_open, toggle_inline_model_selector_from_chip,
+    toggle_profile_selector_from_chip,
 };
 use warp::integration_testing::step::new_step_with_default_assertions;
 use warp::integration_testing::terminal::util::{
@@ -24,6 +26,56 @@ use warpui_core::{Event, async_assert_eq};
 
 use super::new_builder;
 use crate::Builder;
+const SELECTOR_PROMPT_CURSOR_BACKTRACK: usize = 5;
+const SELECTOR_PROFILES: &str = r#"
+[agents.execution_profiles.default]
+name = "Default"
+
+[agents.execution_profiles.integration-test]
+name = "Integration Test"
+"#;
+
+fn new_profile_selector_builder() -> Builder {
+    FeatureFlag::SettingsFile.set_enabled(true);
+    FeatureFlag::FileBackedExecutionProfiles.set_enabled(true);
+
+    new_builder().with_setup(|_utils| {
+        let path = warp::settings::user_preferences_toml_file_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("should create settings directory");
+        }
+        std::fs::write(path, SELECTOR_PROFILES).expect("should write execution profiles");
+    })
+}
+
+fn type_prompt_with_non_terminal_cursor(prompt: &'static str) -> TestStep {
+    new_step_with_default_assertions("Type prompt and move cursor before opening selector")
+        .with_typed_characters(&[prompt])
+        .with_keystrokes(&["left", "left", "left", "left", "left"])
+        .add_named_assertion(
+            "Prompt is present before opening selector",
+            input_contains_string(0, prompt.to_owned()),
+        )
+        .add_named_assertion(
+            "Cursor is non-terminal before opening selector",
+            input_cursor_is_at(0, prompt.len() - SELECTOR_PROMPT_CURSOR_BACKTRACK),
+        )
+}
+
+fn assert_prompt_and_cursor_restored(
+    step: TestStep,
+    prompt: &'static str,
+    outcome: &'static str,
+) -> TestStep {
+    step.add_named_assertion(
+        format!("Prompt is restored after {outcome}"),
+        input_contains_string(0, prompt.to_owned()),
+    )
+    .add_named_assertion(
+        format!("Cursor is restored after {outcome}"),
+        input_cursor_is_at(0, prompt.len() - SELECTOR_PROMPT_CURSOR_BACKTRACK),
+    )
+}
 
 /// Ensures that tab completions are hidden when the completions menu is opened
 /// but re-appear when the menu is closed.
@@ -90,34 +142,33 @@ pub fn test_autosuggestions_are_hidden_when_opening_tab_completions() -> Builder
 
 pub fn test_profile_selector_preserves_prompt_on_dismissal() -> Builder {
     let original_prompt = "keep this draft while checking profiles";
-    new_builder()
+    new_profile_selector_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(enter_agent_view())
+        .with_step(type_prompt_with_non_terminal_cursor(original_prompt))
         .with_step(
-            new_step_with_default_assertions("Type prompt before opening profile selector")
-                .with_typed_characters(&[original_prompt]),
+            toggle_profile_selector_from_chip()
+                .add_named_assertion("Profile selector is open", profile_selector_is_open(0)),
         )
-        .with_step(toggle_profile_selector_from_chip().add_named_assertion(
-            "Prompt remains while profile selector is open",
-            input_contains_string(0, original_prompt.to_owned()),
-        ))
-        .with_step(toggle_profile_selector_from_chip().add_named_assertion(
-            "Prompt remains after profile selector dismissal",
-            input_contains_string(0, original_prompt.to_owned()),
+        .with_step(assert_prompt_and_cursor_restored(
+            new_step_with_default_assertions("Dismiss profile selector")
+                .with_keystrokes(&["escape"]),
+            original_prompt,
+            "profile dismissal",
         ))
 }
 
 pub fn test_profile_selector_preserves_prompt_on_selection() -> Builder {
     let original_prompt = "keep this draft after selecting a profile";
-    new_builder()
+    new_profile_selector_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-        .with_step(
-            new_step_with_default_assertions("Type prompt before opening profile selector")
-                .with_typed_characters(&[original_prompt]),
-        )
+        .with_step(enter_agent_view())
+        .with_step(type_prompt_with_non_terminal_cursor(original_prompt))
         .with_step(toggle_profile_selector_from_chip())
-        .with_step(select_active_profile_from_chip().add_named_assertion(
-            "Prompt remains after profile selection",
-            input_contains_string(0, original_prompt.to_owned()),
+        .with_step(assert_prompt_and_cursor_restored(
+            new_step_with_default_assertions("Select active profile").with_keystrokes(&["enter"]),
+            original_prompt,
+            "profile selection",
         ))
 }
 
@@ -125,24 +176,18 @@ pub fn test_profile_selector_restores_prompt_when_interrupting_model_selector() 
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch.set_enabled(true);
 
     let original_prompt = "keep this draft when switching selectors";
-    new_builder()
+    new_profile_selector_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-        .with_step(
-            new_step_with_default_assertions("Type prompt before opening model selector")
-                .with_typed_characters(&[original_prompt])
-                .with_keystrokes(&["left", "left", "left", "left", "left"]),
-        )
+        .with_step(enter_agent_view())
+        .with_step(type_prompt_with_non_terminal_cursor(original_prompt))
         .with_step(open_inline_model_selector_from_chip())
         .with_step(
-            toggle_profile_selector_from_chip()
-                .add_named_assertion(
-                    "Prompt is restored when profile selector interrupts model selector",
-                    input_contains_string(0, original_prompt.to_owned()),
-                )
-                .add_named_assertion(
-                    "Cursor is restored when profile selector interrupts model selector",
-                    input_cursor_is_at(0, original_prompt.len() - 5),
-                ),
+            assert_prompt_and_cursor_restored(
+                toggle_profile_selector_from_chip(),
+                original_prompt,
+                "profile selector interrupts model selector",
+            )
+            .add_named_assertion("Profile selector is open", profile_selector_is_open(0)),
         )
 }
 
@@ -152,14 +197,8 @@ pub fn test_inline_model_selector_restores_prompt_on_dismissal() -> Builder {
     let original_prompt = "explain this tricky rust lifetime";
     new_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-        .with_step(
-            new_step_with_default_assertions("Type prompt before opening model selector")
-                .with_typed_characters(&[original_prompt])
-                .add_named_assertion(
-                    "Prompt is present before opening selector",
-                    input_contains_string(0, original_prompt.to_owned()),
-                ),
-        )
+        .with_step(enter_agent_view())
+        .with_step(type_prompt_with_non_terminal_cursor(original_prompt))
         .with_step(open_inline_model_selector_from_chip())
         .with_step(
             new_step_with_default_assertions("Type model search")
@@ -169,14 +208,11 @@ pub fn test_inline_model_selector_restores_prompt_on_dismissal() -> Builder {
                     input_contains_string(0, "claude".to_owned()),
                 ),
         )
-        .with_step(
-            new_step_with_default_assertions("Dismiss model selector")
-                .with_keystrokes(&["escape"])
-                .add_named_assertion(
-                    "Original prompt is restored after dismissal",
-                    input_contains_string(0, original_prompt.to_owned()),
-                ),
-        )
+        .with_step(assert_prompt_and_cursor_restored(
+            new_step_with_default_assertions("Dismiss model selector").with_keystrokes(&["escape"]),
+            original_prompt,
+            "model dismissal",
+        ))
 }
 
 pub fn test_inline_model_selector_restores_prompt_on_model_selection() -> Builder {
@@ -185,14 +221,8 @@ pub fn test_inline_model_selector_restores_prompt_on_model_selection() -> Builde
     let original_prompt = "summarize this output without losing details";
     new_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-        .with_step(
-            new_step_with_default_assertions("Type prompt before opening model selector")
-                .with_typed_characters(&[original_prompt])
-                .add_named_assertion(
-                    "Prompt is present before opening selector",
-                    input_contains_string(0, original_prompt.to_owned()),
-                ),
-        )
+        .with_step(enter_agent_view())
+        .with_step(type_prompt_with_non_terminal_cursor(original_prompt))
         .with_step(open_inline_model_selector_from_chip())
         .with_step(
             new_step_with_default_assertions("Type model search")
@@ -202,14 +232,12 @@ pub fn test_inline_model_selector_restores_prompt_on_model_selection() -> Builde
                     input_contains_string(0, "auto".to_owned()),
                 ),
         )
-        .with_step(
+        .with_step(assert_prompt_and_cursor_restored(
             new_step_with_default_assertions("Select highlighted model")
-                .with_keystrokes(&["enter"])
-                .add_named_assertion(
-                    "Original prompt is restored after model selection",
-                    input_contains_string(0, original_prompt.to_owned()),
-                ),
-        )
+                .with_keystrokes(&["enter"]),
+            original_prompt,
+            "model selection",
+        ))
 }
 
 pub fn test_inline_model_selector_restores_prompt_on_chip_toggle_close() -> Builder {
@@ -218,14 +246,8 @@ pub fn test_inline_model_selector_restores_prompt_on_chip_toggle_close() -> Buil
     let original_prompt = "refactor this into smaller modules";
     new_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-        .with_step(
-            new_step_with_default_assertions("Type prompt before opening model selector")
-                .with_typed_characters(&[original_prompt])
-                .add_named_assertion(
-                    "Prompt is present before opening selector",
-                    input_contains_string(0, original_prompt.to_owned()),
-                ),
-        )
+        .with_step(enter_agent_view())
+        .with_step(type_prompt_with_non_terminal_cursor(original_prompt))
         .with_step(open_inline_model_selector_from_chip())
         .with_step(
             new_step_with_default_assertions("Type model search")
@@ -235,11 +257,29 @@ pub fn test_inline_model_selector_restores_prompt_on_chip_toggle_close() -> Buil
                     input_contains_string(0, "claude".to_owned()),
                 ),
         )
+        .with_step(assert_prompt_and_cursor_restored(
+            toggle_inline_model_selector_from_chip(),
+            original_prompt,
+            "model chip toggle",
+        ))
+}
+
+pub fn test_ctrl_c_does_not_restore_non_model_inline_menu_snapshot() -> Builder {
+    new_builder()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
         .with_step(
-            toggle_inline_model_selector_from_chip().add_named_assertion(
-                "Original prompt is restored after toggling closed",
-                input_contains_string(0, original_prompt.to_owned()),
-            ),
+            new_step_with_default_assertions("Open slash commands menu")
+                .with_typed_characters(&["/"])
+                .add_named_assertion(
+                    "Slash commands menu is open",
+                    slash_commands_menu_is_open(0),
+                ),
+        )
+        .with_step(
+            new_step_with_default_assertions("Clear input while slash commands menu is open")
+                .with_keystrokes(&["ctrl-c"])
+                .add_named_assertion("Input stays cleared", input_is_empty(0))
+                .add_named_assertion("Suggestions stay closed", suggestions_mode_is_closed(0)),
         )
 }
 

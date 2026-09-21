@@ -87,6 +87,46 @@ pub fn inline_model_selector_is_open(tab_idx: usize) -> AssertionCallback {
     })
 }
 
+pub fn profile_selector_is_open(tab_idx: usize) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let input = single_input_view_for_tab(app, window_id, tab_idx);
+        input.read(app, |view, ctx| {
+            async_assert!(
+                view.agent_input_footer()
+                    .as_ref(ctx)
+                    .is_model_selector_open(ctx),
+                "Profile selector should be open"
+            )
+        })
+    })
+}
+
+pub fn slash_commands_menu_is_open(tab_idx: usize) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let input = single_input_view_for_tab(app, window_id, tab_idx);
+        input.read(app, |view, ctx| {
+            async_assert_eq!(
+                view.suggestions_mode_model().as_ref(ctx).mode(),
+                &InputSuggestionsMode::SlashCommands,
+                "Slash commands menu should be open"
+            )
+        })
+    })
+}
+
+pub fn suggestions_mode_is_closed(tab_idx: usize) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let input = single_input_view_for_tab(app, window_id, tab_idx);
+        input.read(app, |view, ctx| {
+            async_assert_eq!(
+                view.suggestions_mode_model().as_ref(ctx).mode(),
+                &InputSuggestionsMode::Closed,
+                "Input suggestions should be closed"
+            )
+        })
+    })
+}
+
 pub fn tab_completions_menu_is_open(tab_idx: usize, is_opened: bool) -> AssertionCallback {
     Box::new(move |app, window_id| {
         let input = single_input_view_for_tab(app, window_id, tab_idx);

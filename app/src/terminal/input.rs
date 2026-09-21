@@ -9398,9 +9398,21 @@ impl Input {
                 .suggestions_mode_model
                 .as_ref(ctx)
                 .is_inline_menu_open();
+            let should_restore_parked_model_prompt = self
+                .suggestions_mode_model
+                .as_ref(ctx)
+                .is_inline_model_selector()
+                && self
+                    .inline_model_selector_view
+                    .as_ref(ctx)
+                    .prompt_parked_for_search();
 
             self.suggestions_mode_model.update(ctx, |model, ctx| {
-                model.close_and_restore_buffer(ctx);
+                if should_restore_parked_model_prompt {
+                    model.close_and_restore_buffer(ctx);
+                } else {
+                    model.set_mode(InputSuggestionsMode::Closed, ctx);
+                }
             });
 
             // If we're closing an inline menu, trigger autodetection on the buffer contents
