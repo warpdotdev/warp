@@ -32,8 +32,9 @@ use vim::vim::{
 };
 use vim::{
     find_next_paragraph_end, find_previous_paragraph_start, vim_a_block, vim_a_paragraph,
-    vim_a_quote, vim_a_word, vim_find_char_on_line, vim_find_matching_bracket, vim_inner_block,
-    vim_inner_paragraph, vim_inner_quote, vim_inner_word, vim_word_iterator_from_offset,
+    vim_a_quote, vim_a_word, vim_all_lines, vim_find_char_on_line, vim_find_matching_bracket,
+    vim_inner_block, vim_inner_line, vim_inner_paragraph, vim_inner_quote, vim_inner_word,
+    vim_word_iterator_from_offset,
 };
 use warp_errors::report_error;
 use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
@@ -2598,6 +2599,12 @@ impl EditorModel {
                         (TextObjectType::Paragraph, TextObjectInclusion::Inner) => {
                             vim_inner_paragraph(buffer, offset)
                         }
+                        (TextObjectType::Line, TextObjectInclusion::Around) => {
+                            vim_all_lines(buffer)
+                        }
+                        (TextObjectType::Line, TextObjectInclusion::Inner) => {
+                            vim_inner_line(buffer, offset)
+                        }
                         (TextObjectType::Quote(quote_type), TextObjectInclusion::Around) => {
                             vim_a_quote(buffer, offset, *quote_type)
                         }
@@ -2616,7 +2623,10 @@ impl EditorModel {
                 .collect_vec()
         };
         let _ = self.select_ranges_by_offset(new_selections, ctx);
-        if let TextObjectType::Paragraph = object_type {
+        if matches!(
+            (object_type, inclusion),
+            (TextObjectType::Paragraph, _) | (TextObjectType::Line, TextObjectInclusion::Around)
+        ) {
             let include_newline = operator.includes_trailing_newline();
             self.extend_selection_linewise(include_newline, ctx);
         }
