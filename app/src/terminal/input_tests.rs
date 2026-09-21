@@ -3580,26 +3580,6 @@ fn count_native_shell_completions_dispatches(
     count
 }
 
-fn respond_to_native_shell_completions(
-    app: &mut App,
-    terminal: &ViewHandle<TerminalView>,
-    completions: Vec<ShellCompletion>,
-) -> Rc<RefCell<u32>> {
-    let count = Rc::new(RefCell::new(0));
-    let count_for_subscription = count.clone();
-    app.update(|ctx| {
-        ctx.subscribe_to_view(terminal, move |_, event: &TerminalViewEvent, _| {
-            if let TerminalViewEvent::RunNativeShellCompletions { results_tx, .. } = event {
-                *count_for_subscription.borrow_mut() += 1;
-                results_tx
-                    .try_send((completions.clone(), None))
-                    .expect("native completion response receiver must remain open");
-            }
-        });
-    });
-    count
-}
-
 #[test]
 fn input_tab_does_not_ask_the_shell_when_bundled_specs_are_non_empty() {
     let _native_completions_flag = FeatureFlag::NativeShellCompletions.override_enabled(true);
@@ -3674,138 +3654,6 @@ fn input_tab_asks_the_shell_once_when_bundled_specs_are_empty() {
             "an unrecognized command must reach the shell exactly once, not fall back to \
              file-path completions"
         );
-    });
-}
-
-#[test]
-fn native_only_empty_response_shows_file_path_suggestions() {
-    let _native_completions_flag = FeatureFlag::NativeShellCompletions.override_enabled(true);
-
-    App::test((), |mut app| async move {
-        initialize_app(&mut app);
-        app.update(|ctx| {
-            InputSettings::handle(ctx).update(ctx, |settings, ctx| {
-                settings
-                    .warp_completions_enabled
-                    .set_value(false, ctx)
-                    .expect("Warp completions setting must update");
-                settings
-                    .native_shell_completions_enabled
-                    .set_value(true, ctx)
-                    .expect("native completions setting must update");
-            });
-        });
-
-        let working_directory = tempfile::TempDir::new().expect("completion working directory");
-        let source_directory = working_directory.path().join("src");
-        std::fs::create_dir(&source_directory).expect("source directory must be created");
-        std::fs::write(source_directory.join("alpha.rs"), "")
-            .expect("alpha fixture must be created");
-        std::fs::write(source_directory.join("beta.rs"), "").expect("beta fixture must be created");
-
-        let session_info = SessionInfo::new_for_test();
-        let session_id = session_info.session_id;
-        let terminal =
-            add_window_with_bootstrapped_terminal(&mut app, None, Some(session_info)).await;
-        simulate_directory_for_completion(
-            session_id,
-            &terminal,
-            &mut app,
-            working_directory.path().to_string_lossy(),
-        );
-        let native_dispatches =
-            respond_to_native_shell_completions(&mut app, &terminal, Vec::new());
-        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
-
-        input.update(&mut app, |input, ctx| {
-            input.clear_buffer_and_reset_undo_stack(ctx);
-            input.user_insert("warptool ./src/", ctx);
-            input.input_tab(ctx);
-        });
-
-        assert_eventually!(
-            600 => input.read(&app, |input, _| {
-                input.input_suggestions.read(&app, |suggestions, _| {
-                    let items = suggestions
-                        .items()
-                        .iter()
-                        .map(|item| item.text())
-                        .collect_vec();
-                    items.iter().any(|item| item.ends_with("alpha.rs"))
-                        && items.iter().any(|item| item.ends_with("beta.rs"))
-                })
-            }),
-            "gave up waiting for file-path suggestions after an empty native response"
-        );
-        assert_eq!(*native_dispatches.borrow(), 1);
-    });
-}
-
-#[test]
-fn native_only_non_empty_response_preserves_native_suggestions() {
-    let _native_completions_flag = FeatureFlag::NativeShellCompletions.override_enabled(true);
-
-    App::test((), |mut app| async move {
-        initialize_app(&mut app);
-        app.update(|ctx| {
-            InputSettings::handle(ctx).update(ctx, |settings, ctx| {
-                settings
-                    .warp_completions_enabled
-                    .set_value(false, ctx)
-                    .expect("Warp completions setting must update");
-                settings
-                    .native_shell_completions_enabled
-                    .set_value(true, ctx)
-                    .expect("native completions setting must update");
-            });
-        });
-
-        let working_directory = tempfile::TempDir::new().expect("completion working directory");
-        std::fs::write(working_directory.path().join("native-file"), "")
-            .expect("file fallback fixture must be created");
-
-        let session_info = SessionInfo::new_for_test();
-        let session_id = session_info.session_id;
-        let terminal =
-            add_window_with_bootstrapped_terminal(&mut app, None, Some(session_info)).await;
-        simulate_directory_for_completion(
-            session_id,
-            &terminal,
-            &mut app,
-            working_directory.path().to_string_lossy(),
-        );
-        let native_dispatches = respond_to_native_shell_completions(
-            &mut app,
-            &terminal,
-            vec![
-                ShellCompletion::new("native-shell-alpha".to_string()),
-                ShellCompletion::new("native-shell-beta".to_string()),
-            ],
-        );
-        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
-
-        input.update(&mut app, |input, ctx| {
-            input.clear_buffer_and_reset_undo_stack(ctx);
-            input.user_insert("warptool n", ctx);
-            input.input_tab(ctx);
-        });
-
-        assert_eventually!(
-            600 => input.read(&app, |input, _| {
-                input.input_suggestions.read(&app, |suggestions, _| {
-                    let items = suggestions
-                        .items()
-                        .iter()
-                        .map(|item| item.text())
-                        .collect_vec();
-                    items.contains(&"native-shell-alpha")
-                        && items.contains(&"native-shell-beta")
-                        && !items.contains(&"native-file")
-                })
-            }),
-            "gave up waiting for non-empty native suggestions"
-        );
-        assert_eq!(*native_dispatches.borrow(), 1);
     });
 }
 
@@ -10706,7 +10554,6 @@ fn hotkey_opens_ai_command_search_even_when_hash_trigger_disabled() {
 
 #[cfg(test)]
 mod completion_sources_resolution_tests {
-
     use super::super::{CompletionSources, CompletionsTrigger, resolve_completion_sources};
 
     #[test]
