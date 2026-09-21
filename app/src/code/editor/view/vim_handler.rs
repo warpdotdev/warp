@@ -1,7 +1,7 @@
 use vim::vim::{
     BracketChar, CharacterMotion, Direction, FindCharMotion, FirstNonWhitespaceMotion,
-    InsertPosition, LineMotion, ModeTransition, MotionType, TextObjectInclusion, TextObjectType,
-    VimHandler, VimMode, VimMotion, VimOperand, VimOperator, VimTextObject, WordMotion,
+    InsertPosition, LineMotion, ModeTransition, MotionType, VimHandler, VimMode, VimMotion,
+    VimOperand, VimOperator, VimTextObject, WordMotion,
 };
 use warp_editor::content::buffer::{
     AutoScrollBehavior, BufferEditAction, EditOrigin, SelectionOffsets, VimInsertPoint,
@@ -17,6 +17,7 @@ use crate::code::editor::find::view::Event as FindViewEvent;
 use crate::code::editor::model::{CaseTransform, CodeEditorModel, LineBound};
 use crate::view_components::find::FindDirection;
 use crate::vim_registers::{RegisterContent, VimRegisters};
+
 fn selected_text_for_vim_register(
     model: &CodeEditorModel,
     motion_type: MotionType,
@@ -371,16 +372,6 @@ impl VimHandler for CodeEditorView {
                     }
 
                     match operand {
-                        VimOperand::TextObject(VimTextObject {
-                            object_type: TextObjectType::Line,
-                            inclusion: TextObjectInclusion::Around,
-                        }) => {
-                            model.vim_set_selections(
-                                existing_selections,
-                                AutoScrollBehavior::None,
-                                ctx,
-                            );
-                        }
                         VimOperand::TextObject(_) => {
                             // For text objects, move to the start (min) of the selected range
                             let starts = model

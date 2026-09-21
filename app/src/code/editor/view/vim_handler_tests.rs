@@ -1430,12 +1430,13 @@ fn test_vim_line_text_objects() {
         });
         set_cursor_position(&editor, 3, 0, &mut app);
         vim_user_insert(&editor, "yal", &mut app);
-        assert_eq!(cursor_position(&editor, &app), (3, 0));
+        assert_eq!(cursor_position(&editor, &app), (1, 0));
         VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
             let register = registers.read_from_register('"', ctx).unwrap();
             assert_eq!(register.text, " αβ \n \nlast\n");
             assert_eq!(register.motion_type, MotionType::Linewise);
         });
+        set_cursor_position(&editor, 3, 0, &mut app);
 
         vim_user_insert(&editor, "Vily", &mut app);
         VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
