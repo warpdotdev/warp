@@ -344,13 +344,8 @@ impl VimHandler for TuiInputView {
     }
 
     /// Prompt-specific: visual text-object selection is a no-op.
-    fn visual_text_object(
-        &mut self,
-        _text_object: &VimTextObject,
-        ctx: &mut ViewContext<Self>,
-    ) -> bool {
+    fn visual_text_object(&mut self, _text_object: &VimTextObject, ctx: &mut ViewContext<Self>) {
         ctx.notify();
-        true
     }
 
     // ── Jumps ─────────────────────────────────────────────────────────────────

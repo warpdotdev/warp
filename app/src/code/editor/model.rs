@@ -3372,22 +3372,9 @@ impl CodeEditorModel {
         text_object: &VimTextObject,
         operator: Option<&VimOperator>,
         ctx: &mut ModelContext<Self>,
-    ) -> bool {
+    ) {
         let selection_model = self.selection_model.as_ref(ctx);
         let current_selections = selection_model.selection_offsets();
-
-        if operator.is_none()
-            && matches!(
-                (&text_object.object_type, text_object.inclusion),
-                (TextObjectType::Line, TextObjectInclusion::Inner)
-            )
-            && current_selections.iter().any(|selection| {
-                self.calculate_text_object_range(text_object, selection.head, operator, ctx)
-                    .is_none()
-            })
-        {
-            return false;
-        }
 
         // Visual mode (operator is None): compute and store visual tails
         match operator {
@@ -3463,7 +3450,6 @@ impl CodeEditorModel {
                 }
             }
         }
-        true
     }
 
     /// This method does Vim's "%" command. This command checks if there is a bracket under the

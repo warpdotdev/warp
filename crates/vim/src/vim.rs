@@ -44,7 +44,6 @@ pub struct VimFSA {
     pending_operand_count: Option<String>,
     /// When you do something like "vaw", set this field after "va" was typed.
     pending_visual_object: Option<TextObjectInclusion>,
-    cancelled_visual_text_object: bool,
     /// This remembers the last `f`, `F`, `t`, `T` command so that it can be repeated with `;` or
     /// `,`.
     last_find_motion: Option<FindCharMotion>,
@@ -640,10 +639,7 @@ pub enum VimEventType {
         read_register_name: char,
         write_register_name: char,
     },
-    VisualTextObject {
-        text_object: VimTextObject,
-        previous_motion_type: MotionType,
-    },
+    VisualTextObject(VimTextObject),
     GotoDefinition,
     FindReferences,
     ShowHover,
@@ -705,7 +701,7 @@ impl VimEventType {
             | VimEventType::Undo
             | VimEventType::VisualOperator { .. }
             | VimEventType::VisualPaste { .. }
-            | VimEventType::VisualTextObject { .. }
+            | VimEventType::VisualTextObject(_)
             | VimEventType::Backspace
             | VimEventType::Escape
             | VimEventType::GotoDefinition
@@ -777,7 +773,6 @@ impl VimFSA {
             pending_action_count: None,
             pending_operand_count: None,
             pending_visual_object: None,
-            cancelled_visual_text_object: false,
             last_find_motion: None,
             // When doing an operation that reads/writes to a register, the default (unnamed) register
             // is called ".
@@ -798,7 +793,6 @@ impl VimFSA {
 
     pub fn interrupt(&mut self) {
         self.clear();
-        self.cancelled_visual_text_object = false;
         match self.mode {
             VimMode::Replace | VimMode::Visual(_) => {
                 self.mode = VimMode::Normal;
@@ -877,13 +871,6 @@ impl VimFSA {
 
     /// Like Self::typed_character, but for keypresses that aren't representable by a single char.
     fn keypress(&mut self, keystroke: &str) -> Option<VimEvent> {
-        if self.cancelled_visual_text_object {
-            self.cancelled_visual_text_object = false;
-            if keystroke == "delete" && matches!(self.mode, VimMode::Visual(_)) {
-                self.clear();
-                return None;
-            }
-        }
         let event = match keystroke {
             "escape" => match self.mode {
                 VimMode::Normal => {
@@ -1559,29 +1546,6 @@ impl VimFSA {
 
     /// [`Self::typed_character`] dispatches to this method if we're in [`VimMode::Visual`].
     fn handle_visual_command(&mut self, c: char, motion_type: MotionType) -> Option<VimEventType> {
-        if self.cancelled_visual_text_object {
-            self.cancelled_visual_text_object = false;
-            if matches!(
-                c,
-                'd' | 'D'
-                    | 'y'
-                    | 'Y'
-                    | 'x'
-                    | 'X'
-                    | '~'
-                    | 'u'
-                    | 'U'
-                    | '<'
-                    | '>'
-                    | 'c'
-                    | 'C'
-                    | 's'
-                    | 'S'
-            ) {
-                self.clear();
-                return None;
-            }
-        }
         let event_type = match self.pending_action.clone() {
             Some(pending_action) => self.handle_visual_pending_action(c, pending_action)?,
             None => match self.pending_visual_object {
@@ -1597,13 +1561,10 @@ impl VimFSA {
                             }
                             _ => self.mode,
                         };
-                        VimEventType::VisualTextObject {
-                            text_object: VimTextObject {
-                                inclusion,
-                                object_type: TextObjectType::from(c),
-                            },
-                            previous_motion_type: motion_type,
-                        }
+                        VimEventType::VisualTextObject(VimTextObject {
+                            inclusion,
+                            object_type: TextObjectType::from(c),
+                        })
                     }
                     _ => {
                         self.clear();
@@ -1849,7 +1810,6 @@ impl VimFSA {
     /// current mode.
     fn force_insert_mode(&mut self) {
         self.clear();
-        self.cancelled_visual_text_object = false;
         self.mode = VimMode::Insert;
         self.continuous_replace = false;
     }
@@ -2036,12 +1996,6 @@ impl VimModel {
         self.fsa.interrupt();
         ctx.notify();
     }
-
-    fn cancel_visual_text_object(&mut self, motion_type: MotionType, ctx: &mut ModelContext<Self>) {
-        self.fsa.mode = VimMode::Visual(motion_type);
-        self.fsa.cancelled_visual_text_object = true;
-        ctx.notify();
-    }
 }
 
 impl Entity for VimModel {
@@ -2051,7 +2005,7 @@ impl Entity for VimModel {
 pub trait VimSubscriber {
     fn handle_vim_event(
         &mut self,
-        handle: ModelHandle<VimModel>,
+        _handle: ModelHandle<VimModel>,
         event: &VimEvent,
         ctx: &mut ViewContext<Self>,
     );
@@ -2059,11 +2013,11 @@ pub trait VimSubscriber {
 
 impl<T> VimSubscriber for T
 where
-    T: VimHandler + Entity,
+    T: VimHandler,
 {
     fn handle_vim_event(
         &mut self,
-        handle: ModelHandle<VimModel>,
+        _handle: ModelHandle<VimModel>,
         event: &VimEvent,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -2148,15 +2102,8 @@ where
                 read_register_name,
                 write_register_name,
             } => self.visual_paste(*motion_type, *read_register_name, *write_register_name, ctx),
-            VimEventType::VisualTextObject {
-                text_object,
-                previous_motion_type,
-            } => {
-                if !self.visual_text_object(text_object, ctx) {
-                    handle.update(ctx, |vim_model, ctx| {
-                        vim_model.cancel_visual_text_object(*previous_motion_type, ctx);
-                    });
-                }
+            VimEventType::VisualTextObject(text_object) => {
+                self.visual_text_object(text_object, ctx)
             }
             // Escape is idempotent
             VimEventType::Escape => self.escape(ctx),
@@ -2268,11 +2215,7 @@ pub trait VimHandler {
         write_register_name: char,
         ctx: &mut ViewContext<Self>,
     );
-    fn visual_text_object(
-        &mut self,
-        text_object: &VimTextObject,
-        ctx: &mut ViewContext<Self>,
-    ) -> bool;
+    fn visual_text_object(&mut self, text_object: &VimTextObject, ctx: &mut ViewContext<Self>);
     fn jump_to_first_line(&mut self, ctx: &mut ViewContext<Self>);
     fn jump_to_last_line(&mut self, ctx: &mut ViewContext<Self>);
     fn jump_to_line(&mut self, line_number: u32, ctx: &mut ViewContext<Self>);
