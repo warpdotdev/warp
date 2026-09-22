@@ -12,6 +12,39 @@ fn create_test_file(dir: &TempDir, filename: &str, content: &str) -> PathBuf {
     file.write_all(content.as_bytes()).unwrap();
     file_path
 }
+#[cfg(feature = "local_fs")]
+#[tokio::test]
+async fn folds_each_bounded_batch_into_destination_in_order() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut files = (0..=PARSE_BATCH_SIZE)
+        .map(|index| {
+            let path = create_test_file(
+                &temp_dir,
+                &format!("file_{index}.rs"),
+                &format!("fn symbol_{index}() {{}}"),
+            );
+            FileMetadata::new(path, false)
+        })
+        .collect_vec();
+    let duplicate_file_id = files[0].file_id;
+    files[PARSE_BATCH_SIZE].file_id = duplicate_file_id;
+    let mut outlines = HashMap::new();
+    let mut batch_sizes = vec![];
+
+    parse_symbols_for_files(files, |batch| {
+        batch_sizes.push(batch.len());
+        outlines.extend(batch);
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(batch_sizes, vec![PARSE_BATCH_SIZE, 1]);
+    assert_eq!(outlines.len(), PARSE_BATCH_SIZE);
+    assert_eq!(
+        outlines[&duplicate_file_id].symbols().unwrap()[0].name,
+        format!("symbol_{PARSE_BATCH_SIZE}")
+    );
+}
 
 #[test]
 fn test_parse_comments() {
