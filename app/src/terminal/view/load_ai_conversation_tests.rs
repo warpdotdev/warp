@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use chrono::{Local, TimeZone};
 
 use super::{
-    MAX_RESTORED_AI_EXCHANGES_PER_CONVERSATION, collect_bounded_exchanges_for_restoration,
-    most_recent_exchanges,
+    MAX_RESTORED_AI_EXCHANGES_PER_CONVERSATION, MAX_RESTORED_AI_EXCHANGES_PER_PANE,
+    collect_bounded_exchanges_for_restoration, most_recent_exchanges,
 };
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent::{AIAgentExchange, AIAgentExchangeId, AIAgentOutputStatus};
@@ -162,4 +162,55 @@ fn collect_bounded_exchanges_truncates_each_conversation_before_cloning_and_merg
     let mut sorted_start_times = start_times.clone();
     sorted_start_times.sort();
     assert_eq!(start_times, sorted_start_times);
+}
+
+#[test]
+fn collect_bounded_exchanges_applies_pane_wide_cap_across_many_conversations_before_cloning() {
+    // Six conversations, each under the per-conversation cap on its own, but totalling more
+    // than the pane-wide cap. The oldest conversation straddles the pane-wide cutoff so the
+    // truncation boundary falls in the middle of a conversation, not conveniently on an edge.
+    let seconds_per_conversation = MAX_RESTORED_AI_EXCHANGES_PER_CONVERSATION as i64;
+    let last_conversation_exchange_count = 50;
+    let conversations: Vec<AIConversation> = (0..6)
+        .map(|i| {
+            let start = i * seconds_per_conversation;
+            let end = if i == 5 {
+                start + last_conversation_exchange_count
+            } else {
+                start + seconds_per_conversation
+            };
+            conversation_with_exchanges_at(start..end)
+        })
+        .collect();
+    let total_exchanges: usize = conversations.iter().map(|c| c.all_exchanges().len()).sum();
+    assert!(
+        total_exchanges > MAX_RESTORED_AI_EXCHANGES_PER_PANE,
+        "test setup should exceed the pane-wide cap"
+    );
+
+    let cutoff_seconds = total_exchanges as i64 - MAX_RESTORED_AI_EXCHANGES_PER_PANE as i64;
+    let expected_retained_ids: HashSet<AIAgentExchangeId> = conversations
+        .iter()
+        .flat_map(|c| c.all_exchanges())
+        .filter(|exchange| exchange.start_time.timestamp() >= cutoff_seconds)
+        .map(|exchange| exchange.id)
+        .collect();
+    assert_eq!(
+        expected_retained_ids.len(),
+        MAX_RESTORED_AI_EXCHANGES_PER_PANE
+    );
+
+    let restored: Vec<RestoredAIConversation> = conversations
+        .into_iter()
+        .map(RestoredAIConversation::new)
+        .collect();
+
+    let collected = collect_bounded_exchanges_for_restoration(&restored);
+
+    // The pane-wide cap keeps exactly the most recent exchanges overall, cloning only those —
+    // not merely capping the count of an otherwise-unbounded clone.
+    assert_eq!(collected.len(), MAX_RESTORED_AI_EXCHANGES_PER_PANE);
+    let collected_ids: HashSet<AIAgentExchangeId> =
+        collected.iter().map(|(exchange, _)| exchange.id).collect();
+    assert_eq!(collected_ids, expected_retained_ids);
 }

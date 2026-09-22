@@ -61,6 +61,17 @@ use crate::util::bindings::keybinding_name_to_keystroke;
 /// fewer) AI blocks than command blocks.
 const MAX_RESTORED_AI_EXCHANGES_PER_CONVERSATION: usize = 100;
 
+/// Maximum total number of restored AI exchanges materialized into AI blocks for one pane,
+/// across *all* of its conversations combined, keeping the most recent overall. A pane restores
+/// every conversation live on its terminal surface with no cap on how many conversations that
+/// is, so the per-conversation cap alone is unbounded in the number of conversations: a pane
+/// with N conversations could still materialize up to N *
+/// `MAX_RESTORED_AI_EXCHANGES_PER_CONVERSATION` exchanges. Set to 5x the per-conversation cap:
+/// a pane holding more than a handful of conversations is unusual, so this comfortably covers
+/// ordinary use while still giving the pathological case (e.g. dozens of conversations on one
+/// surface) a fixed ceiling instead of a total that grows with conversation count.
+const MAX_RESTORED_AI_EXCHANGES_PER_PANE: usize = 5 * MAX_RESTORED_AI_EXCHANGES_PER_CONVERSATION;
+
 /// Returns the most recent `max` of `exchanges` ordered by `start_time`, without cloning any
 /// that are dropped — callers should clone only what this returns.
 fn most_recent_exchanges(
@@ -72,17 +83,23 @@ fn most_recent_exchanges(
     exchanges.split_off(start)
 }
 
-/// Collects exchanges across all restored conversations, keeping only the most recent
-/// `MAX_RESTORED_AI_EXCHANGES_PER_CONVERSATION` per conversation, then sorts the combined result
-/// by `start_time` in preparation for command-block index lookup.
+/// Collects exchanges across all restored conversations for one pane, applying two bounds before
+/// cloning anything: each conversation is first capped to its most recent
+/// `MAX_RESTORED_AI_EXCHANGES_PER_CONVERSATION` exchanges (so one oversized conversation can't
+/// crowd out the others), then the combined, `start_time`-sorted result across all conversations
+/// is capped to the most recent `MAX_RESTORED_AI_EXCHANGES_PER_PANE` overall (so a pane with many
+/// conversations still has a fixed ceiling). A conversation entirely older than the pane-wide
+/// cutoff contributes no exchanges and shows no AI blocks after restoration — the same
+/// most-recent-wins tradeoff the per-conversation cap already makes, just applied pane-wide.
 ///
-/// Truncating before cloning matters: `AIAgentExchange::clone` deep-copies its
+/// Truncating before cloning matters at both levels: `AIAgentExchange::clone` deep-copies its
 /// `Shared<AIAgentOutput>`, so cloning every exchange first and dropping the excess afterward
 /// would still pay for the full history's worth of clones.
 fn collect_bounded_exchanges_for_restoration(
     restored_conversations: &[RestoredAIConversation],
 ) -> Vec<(AIAgentExchange, AIConversationId)> {
-    let mut all_exchanges_with_conversation_ids = Vec::new();
+    let mut all_exchanges_with_conversation_ids: Vec<(&AIAgentExchange, AIConversationId)> =
+        Vec::new();
     for restored in restored_conversations {
         let conversation_id = restored.ai_conversation.id();
 
@@ -94,13 +111,27 @@ fn collect_bounded_exchanges_for_restoration(
             retained.len(),
         );
 
-        for exchange in retained {
-            all_exchanges_with_conversation_ids.push((exchange.clone(), conversation_id));
-        }
+        all_exchanges_with_conversation_ids.extend(
+            retained
+                .into_iter()
+                .map(|exchange| (exchange, conversation_id)),
+        );
     }
 
     all_exchanges_with_conversation_ids.sort_by_key(|(exchange, _)| exchange.start_time);
-    all_exchanges_with_conversation_ids
+
+    let total_before_pane_cap = all_exchanges_with_conversation_ids.len();
+    let pane_cap_start = total_before_pane_cap.saturating_sub(MAX_RESTORED_AI_EXCHANGES_PER_PANE);
+    let retained_for_pane = all_exchanges_with_conversation_ids.split_off(pane_cap_start);
+    log::info!(
+        "Restoring {} of {total_before_pane_cap} AI exchanges across all conversations for this pane",
+        retained_for_pane.len(),
+    );
+
+    retained_for_pane
+        .into_iter()
+        .map(|(exchange, conversation_id)| (exchange.clone(), conversation_id))
+        .collect()
 }
 
 /// Describes restore-context setup state for directory reconciliation and hinting.
