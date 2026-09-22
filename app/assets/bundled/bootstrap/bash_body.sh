@@ -460,7 +460,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
             # Suppress stderr output; kill writes to stderr if any of the given
             # PIDS are not running (which might rarely be the case due to race
             # conditions in checking which PIDS to cancel and this kill command.
-            kill -9 "${pids[@]}" >/dev/null 2>/dev/null
+            kill -9 "${pids[@]}" >/dev/null 2>&1
           fi 
         fi
     }
@@ -1553,8 +1553,7 @@ esac
     precmd_functions+=(warp_set_title_idle_on_precmd)
     preexec_functions+=(warp_set_title_active_on_preexec)
 
-    # shellcheck disable=SC2069
-    if declare -f user_prompt_command 2>&1 >/dev/null; then
+    if declare -F user_prompt_command >/dev/null; then
         precmd_functions+=(user_prompt_command)
     fi
 
