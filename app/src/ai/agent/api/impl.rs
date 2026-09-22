@@ -274,9 +274,7 @@ fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
 
     supported_tools.push(api::ToolType::InsertReviewComments);
 
-    if FeatureFlag::ListSkills.is_enabled() {
-        supported_tools.push(api::ToolType::ReadSkill);
-    }
+    supported_tools.push(api::ToolType::ReadSkill);
 
     if params.orchestration_enabled {
         supported_tools.extend([api::ToolType::RunAgents, api::ToolType::SendMessageToAgent]);

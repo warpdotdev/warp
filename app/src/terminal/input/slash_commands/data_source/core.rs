@@ -6,7 +6,6 @@ use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
 #[cfg(not(target_family = "wasm"))]
 use repo_metadata::repositories::DetectedRepositories;
-use warp_core::features::FeatureFlag;
 use warp_core::ui::Icon as WarpIcon;
 use warp_core::ui::appearance::Appearance;
 #[cfg(not(target_family = "wasm"))]
@@ -516,8 +515,7 @@ pub trait SlashCommandDataSource {
     /// vector when skills are globally unavailable. The caller decides whether skills apply for its
     /// surface (e.g. GUI hides them in cloud mode).
     fn match_skills(&self, query_text: &str, app: &AppContext) -> Vec<InlineItem> {
-        if !FeatureFlag::ListSkills.is_enabled() || !AISettings::as_ref(app).is_any_ai_enabled(app)
-        {
+        if !AISettings::as_ref(app).is_any_ai_enabled(app) {
             return Vec::new();
         }
 
