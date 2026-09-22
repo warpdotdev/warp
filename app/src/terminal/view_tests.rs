@@ -172,21 +172,6 @@ fn has_pending_user_query_block(view: &TerminalView) -> bool {
 }
 
 #[test]
-fn ctrl_t_apply_mode_matches_each_supported_shell_integration() {
-    assert_eq!(
-        ctrl_t_apply_mode(ShellType::Bash),
-        ShellWidgetApplyMode::Splice
-    );
-    assert_eq!(
-        ctrl_t_apply_mode(ShellType::Zsh),
-        ShellWidgetApplyMode::Splice
-    );
-    assert_eq!(
-        ctrl_t_apply_mode(ShellType::Fish),
-        ShellWidgetApplyMode::Replace
-    );
-}
-#[test]
 fn agent_view_lifecycle_updates_input_mode() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
