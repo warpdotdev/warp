@@ -151,6 +151,17 @@ fn idle_timeout_sender_complete_with_optional_idle_some_defers_then_delivers() {
 }
 
 #[test]
+fn idle_timeout_sender_complete_with_zero_idle_sends_immediately() {
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.end_run_after(Duration::from_millis(50), 1);
+
+    idle_timeout.complete_with_optional_idle(Some(Duration::ZERO), 7);
+
+    assert_eq!(rx.try_recv().unwrap(), Some(7));
+}
+
+#[test]
 fn idle_timeout_sender_complete_with_optional_idle_some_then_cancel_invalidates_timer() {
     // Cross-path cancellation: the Stage 2c skip-initial-turn driver path
     // schedules a deferred `Success` via `complete_with_optional_idle(Some(_), _)`
@@ -1623,6 +1634,7 @@ fn native_startup_queue_prevents_exit_until_pending_rows_are_removed() {
                     "followup".into(),
                     ParticipantId::new(),
                     vec![],
+                    None,
                 ),
                 ctx,
             )
@@ -1677,6 +1689,7 @@ fn prepared_native_followup_starts_before_the_last_queued_row_allows_exit() {
                         attachment_id: "attachment-id".into(),
                         file_name: "event-payload.json".into(),
                     }],
+                    None,
                 ),
                 ctx,
             )
@@ -1790,6 +1803,7 @@ fn native_promptless_setup_dispatches_only_the_head_queued_prompt() {
                 None,
                 vec![],
                 ParticipantId::new(),
+                None,
                 ctx,
             );
             controller.execute_warp_agent_prompt_from_shared_session_injection(
@@ -1797,6 +1811,7 @@ fn native_promptless_setup_dispatches_only_the_head_queued_prompt() {
                 None,
                 vec![],
                 ParticipantId::new(),
+                None,
                 ctx,
             );
             id

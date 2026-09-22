@@ -4,8 +4,8 @@ use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 use uuid::Uuid;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
-use crate::ai::agent::AIAgentAttachment;
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::{AIAgentAttachment, BaseUserQuery};
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PendingAttachment};
 use crate::features::FeatureFlag;
 use crate::settings::{
@@ -60,6 +60,9 @@ enum QueuedQueryKind {
         attachments: Vec<AgentAttachment>,
         /// None while downloading; Some also represents a settled partial or failed download.
         prepared_files: Option<HashMap<String, AIAgentAttachment>>,
+        /// The `Request.Input.UserQuery` warp-server injected with the prompt, when it sent one.
+        /// It seeds the input and is the base of the request once the row dispatches.
+        base: Option<BaseUserQuery>,
     },
     /// A shell command run in the terminal (or via the shared session for cloud panes).
     Command,
@@ -79,6 +82,7 @@ impl QueuedQuery {
         text: String,
         participant_id: ParticipantId,
         attachments: Vec<AgentAttachment>,
+        base: Option<BaseUserQuery>,
     ) -> Self {
         let prepared_files = (!attachments
             .iter()
@@ -92,6 +96,7 @@ impl QueuedQuery {
                 participant_id,
                 attachments,
                 prepared_files,
+                base,
             },
         }
     }
@@ -103,6 +108,14 @@ impl QueuedQuery {
                 attachments,
                 ..
             } => Some((participant_id, attachments)),
+            QueuedQueryKind::Prompt { .. } | QueuedQueryKind::Command => None,
+        }
+    }
+
+    /// The base user query warp-server injected with a shared-session prompt row, if any.
+    pub(crate) fn base_user_query(&self) -> Option<&BaseUserQuery> {
+        match &self.kind {
+            QueuedQueryKind::SharedSessionPrompt { base, .. } => base.as_ref(),
             QueuedQueryKind::Prompt { .. } | QueuedQueryKind::Command => None,
         }
     }

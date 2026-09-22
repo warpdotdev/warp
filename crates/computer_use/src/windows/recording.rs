@@ -35,6 +35,8 @@ const START_TIMEOUT: Duration = Duration::from_secs(15);
 const STOP_TIMEOUT: Duration = Duration::from_secs(15);
 /// Poll interval while waiting for capture to begin.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// How long to retry deleting an abandoned recording's files after its process is reaped.
+const ABANDONED_RECORDING_CLEANUP_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The virtual desktop's bounding box, in physical pixels, spanning all monitors.
 ///
@@ -42,11 +44,11 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// primary monitor; `width`/`height` are normalized to even values (see
 /// [`normalize_virtual_screen_geometry`]).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct VirtualScreenGeometry {
-    origin_x: i32,
-    origin_y: i32,
-    width: u32,
-    height: u32,
+pub(super) struct VirtualScreenGeometry {
+    pub(super) origin_x: i32,
+    pub(super) origin_y: i32,
+    pub(super) width: u32,
+    pub(super) height: u32,
 }
 
 pub struct Recorder {
@@ -70,18 +72,9 @@ impl Recorder {
 impl crate::Recorder for Recorder {
     async fn start(&self, config: RecordingConfig) -> Result<RecordingHandle, RecordingError> {
         let geometry = query_virtual_screen_geometry()?;
-        let (path, log_path, log_file) = new_recording_path()?;
+        let (path, log_path, log_file) = crate::recording_paths::new_recording_path()?;
         let command = new_ffmpeg_capture_command(&self.ffmpeg, &config, geometry);
-        launch_recording(
-            command,
-            path,
-            log_path,
-            log_file,
-            geometry.width,
-            geometry.height,
-            START_TIMEOUT,
-        )
-        .await
+        launch_recording(command, path, log_path, log_file, geometry, START_TIMEOUT).await
     }
 
     async fn stop(&self, mut handle: RecordingHandle) -> Result<RecordingOutput, RecordingError> {
@@ -144,7 +137,7 @@ impl crate::Recorder for Recorder {
 /// `GetSystemMetrics(SM_*VIRTUALSCREEN)` returns DPI-scaled logical coordinates unless the
 /// calling thread is per-monitor DPI aware, which would misalign the capture region on HiDPI
 /// setups; `DpiAwarenessGuard` opts in for the duration of this call.
-fn query_virtual_screen_geometry() -> Result<VirtualScreenGeometry, RecordingError> {
+pub(super) fn query_virtual_screen_geometry() -> Result<VirtualScreenGeometry, RecordingError> {
     let _dpi_guard = DpiAwarenessGuard::enter_per_monitor_v2();
     // SAFETY: `GetSystemMetrics` has no preconditions.
     let origin_x = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
@@ -186,15 +179,6 @@ fn normalize_virtual_screen_geometry(
     })
 }
 
-fn new_recording_path() -> Result<(PathBuf, PathBuf, File), RecordingError> {
-    let path = std::env::temp_dir().join(format!("warp-recording-{}.mp4", uuid::Uuid::new_v4()));
-    let log_path = path.with_extension("log");
-    let log_file = File::create(&log_path).map_err(|error| RecordingError::Start {
-        reason: format!("failed to create the recording log file: {error}"),
-    })?;
-    Ok((path, log_path, log_file))
-}
-
 fn new_ffmpeg_capture_command(
     ffmpeg: &Path,
     config: &RecordingConfig,
@@ -211,7 +195,7 @@ fn new_ffmpeg_capture_command(
             "-video_size",
             &format!("{}x{}", geometry.width, geometry.height),
         ])
-        .args(["-draw_mouse", "1"])
+        .args(["-draw_mouse", "0"])
         .arg("-t")
         .arg(format!("{:.3}", config.max_duration.as_secs_f64()))
         .args(["-i", "desktop"])
@@ -229,8 +213,7 @@ async fn launch_recording(
     path: PathBuf,
     log_path: PathBuf,
     log_file: File,
-    width: u32,
-    height: u32,
+    geometry: VirtualScreenGeometry,
     timeout: Duration,
 ) -> Result<RecordingHandle, RecordingError> {
     command
@@ -261,8 +244,9 @@ async fn launch_recording(
     }
 
     Ok(RecordingHandle {
-        width,
-        height,
+        width: geometry.width,
+        height: geometry.height,
+        capture_origin: crate::Vector2I::new(geometry.origin_x, geometry.origin_y),
         exit_state: Arc::new(Mutex::new(None)),
         path,
         started_at: Instant::now(),
@@ -393,7 +377,7 @@ pub(crate) fn spawn_abandoned_cleanup(mut process: Child, path: PathBuf) {
         .spawn(move || {
             match process.try_wait() {
                 Ok(Some(_)) => {
-                    remove_recording_files(&path);
+                    remove_abandoned_recording_files(&path);
                     return;
                 }
                 Ok(None) => {}
@@ -409,7 +393,7 @@ pub(crate) fn spawn_abandoned_cleanup(mut process: Child, path: PathBuf) {
             loop {
                 match process.try_wait() {
                     Ok(Some(_)) => {
-                        remove_recording_files(&path);
+                        remove_abandoned_recording_files(&path);
                         return;
                     }
                     Ok(None) => std::thread::sleep(Duration::from_millis(10)),
@@ -422,6 +406,43 @@ pub(crate) fn spawn_abandoned_cleanup(mut process: Child, path: PathBuf) {
         });
     if let Err(error) = result {
         log::warn!("Failed to start abandoned recording cleanup: {error}");
+    }
+}
+
+/// Deletes an abandoned recording's files, retrying for up to
+/// [`ABANDONED_RECORDING_CLEANUP_TIMEOUT`] instead of failing on the first attempt.
+///
+/// Unlike [`remove_recording_files`] (used right after `stop`/`launch_recording` reap ffmpeg
+/// themselves), the process here was force-killed rather than exiting on its own, so another
+/// process (e.g. antivirus scanning the freshly-written file) can transiently hold it open just
+/// after ffmpeg releases it. Retrying absorbs that race instead of silently leaking the file.
+fn remove_abandoned_recording_files(path: &Path) {
+    let deadline = Instant::now() + ABANDONED_RECORDING_CLEANUP_TIMEOUT;
+    let mut pending = vec![path.to_path_buf(), path.with_extension("log")];
+    loop {
+        let mut failed = Vec::new();
+        for path in pending {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => failed.push((path, error)),
+            }
+        }
+        if failed.is_empty() {
+            return;
+        }
+        if Instant::now() >= deadline {
+            for (path, error) in failed {
+                log::warn!(
+                    "Failed to remove abandoned recording file {}: {}",
+                    path.display(),
+                    error
+                );
+            }
+            return;
+        }
+        pending = failed.into_iter().map(|(path, _)| path).collect();
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 

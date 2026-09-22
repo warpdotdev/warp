@@ -32,10 +32,10 @@ use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
     AIAgentActionResult, AIAgentActionResultType, AIAgentContext, AIAgentExchange,
     AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputStatus,
-    CallMCPToolResult, CancellationReason, CloneRepositoryURL, CreateDocumentsResult,
-    DocumentContext, EditDocumentsResult, FileContext, FileGlobResult, FileGlobV2Match,
-    FileGlobV2Result, FinishedAIAgentOutput, GrepFileMatch, GrepLineMatch, GrepResult,
-    ImageContext, InsertReviewCommentsResult, OutputModelInfo, PassiveCodeDiffEntry,
+    BaseUserQuery, CallMCPToolResult, CancellationReason, CloneRepositoryURL,
+    CreateDocumentsResult, DocumentContext, EditDocumentsResult, FileContext, FileGlobResult,
+    FileGlobV2Match, FileGlobV2Result, FinishedAIAgentOutput, GrepFileMatch, GrepLineMatch,
+    GrepResult, ImageContext, InsertReviewCommentsResult, OutputModelInfo, PassiveCodeDiffEntry,
     PassiveSuggestionResultType, PassiveSuggestionTrigger, ReadDocumentsResult,
     ReadFilesFailedFile, ReadFilesResult, ReadMCPResourceResult, ReadShellCommandOutputResult,
     RequestCommandOutputResult, RequestFileEditsResult, SearchCodebaseFailureReason,
@@ -393,6 +393,7 @@ impl ConvertToExchanges for &api::Task {
                         user_query_mode: convert_user_query_mode(user_query.mode.as_ref()),
                         running_command: None,
                         intended_agent: Some(user_query.intended_agent()),
+                        base: BaseUserQuery::from_message(user_query),
                     });
                     true
                 }
@@ -411,6 +412,7 @@ impl ConvertToExchanges for &api::Task {
                                 user_query_mode: UserQueryMode::default(), // SystemQuery doesn't have mode field
                                 running_command: None,
                                 intended_agent: None,
+                                base: None,
                             });
                             true
                         }
@@ -473,6 +475,7 @@ impl ConvertToExchanges for &api::Task {
                                 .user_query
                                 .clone()
                                 .map(|user_query| crate::ai::agent::InvokeSkillUserQuery {
+                                    base: BaseUserQuery::from_message(&user_query),
                                     query: user_query.query,
                                     // Restored conversations currently do not hydrate invoke-skill
                                     // inline attachments back into client-side attachment structs.

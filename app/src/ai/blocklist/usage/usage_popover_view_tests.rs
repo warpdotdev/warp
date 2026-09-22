@@ -374,8 +374,8 @@ fn request_metadata_message(charges: api::RequestCharges) -> api::Message {
 }
 
 fn inference_usage(
-    input_tokens: u32,
-    output_tokens: u32,
+    input_tokens: u64,
+    output_tokens: u64,
     input_cost_in_cents: f32,
     output_cost_in_cents: f32,
 ) -> api::InferenceUsage {
@@ -409,7 +409,7 @@ fn charged_usage(
 
 fn single_model_usage(
     model_id: &str,
-    input_tokens: u32,
+    input_tokens: u64,
     input_cost_in_cents: f32,
 ) -> HashMap<String, api::InferenceUsage> {
     HashMap::from([(

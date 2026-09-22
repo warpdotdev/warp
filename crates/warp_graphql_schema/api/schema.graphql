@@ -1226,6 +1226,13 @@ type DiscoverableTeamData {
   teamUid: ID!
 }
 
+type DiscoverableWorkspaceData {
+  memberCount: Int!
+  name: String!
+  openTeams: [DiscoverableTeamData!]!
+  workspaceUid: ID!
+}
+
 enum DisplaySetting {
   COMMAND
   COMMAND_AND_OUTPUT
@@ -2009,6 +2016,18 @@ type JoinTeamWithTeamDiscoveryOutput implements Response {
 }
 
 union JoinTeamWithTeamDiscoveryResult = JoinTeamWithTeamDiscoveryOutput | UserFacingError
+
+input JoinWorkspaceFromDiscoveryInput {
+  teamUid: ID
+  workspaceUid: ID!
+}
+
+type JoinWorkspaceFromDiscoveryOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union JoinWorkspaceFromDiscoveryResult = JoinWorkspaceFromDiscoveryOutput | UserFacingError
 
 input LeaveObjectInput {
   objectUid: ID!
@@ -3206,6 +3225,7 @@ type RootMutation {
   issueTaskIdentityToken(input: IssueTaskIdentityTokenInput!, requestContext: RequestContext!): IssueTaskIdentityTokenResult!
   joinTeamInWorkspace(input: JoinTeamInWorkspaceInput!, requestContext: RequestContext!): JoinTeamInWorkspaceResult!
   joinTeamWithTeamDiscovery(input: JoinTeamWithTeamDiscoveryInput!, requestContext: RequestContext!): JoinTeamWithTeamDiscoveryResult!
+  joinWorkspaceFromDiscovery(input: JoinWorkspaceFromDiscoveryInput!, requestContext: RequestContext!): JoinWorkspaceFromDiscoveryResult!
 
   """The API for leaving an object as a direct guest or link-shared."""
   leaveObject(input: LeaveObjectInput!, requestContext: RequestContext!): LeaveObjectResult!
@@ -4661,6 +4681,7 @@ type User {
   """
   conversationUsage(days: Int, lastUpdatedEndTimestamp: Time, limit: Int): [ConversationUsage!]!
   discoverableTeams: [DiscoverableTeamData!]!
+  discoverableWorkspaces: [DiscoverableWorkspaceData!]!
 
   """
   We differentiate between `null` and `[]` here:

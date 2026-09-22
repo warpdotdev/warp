@@ -19,6 +19,7 @@ fn removes_unclaimed_output_when_handle_is_dropped() {
     let handle = RecordingHandle {
         width: 1,
         height: 1,
+        capture_origin: Vector2I::new(0, 0),
         exit_state: Arc::new(Mutex::new(None)),
         path: path.clone(),
         started_at: instant::Instant::now(),
@@ -41,6 +42,7 @@ fn removes_unclaimed_output_when_handle_is_dropped_windows() {
     let handle = RecordingHandle {
         width: 1,
         height: 1,
+        capture_origin: Vector2I::new(0, 0),
         exit_state: Arc::new(Mutex::new(None)),
         path: path.clone(),
         started_at: instant::Instant::now(),
@@ -66,6 +68,7 @@ fn removes_unclaimed_output_when_handle_is_dropped_macos() {
     let handle = RecordingHandle {
         width: 1,
         height: 1,
+        capture_origin: Vector2I::new(0, 0),
         exit_state: Arc::new(Mutex::new(None)),
         path: path.clone(),
         started_at: instant::Instant::now(),

@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 pub use ai::agent::convert::ConvertToAPITypeError;
 use ai::api_keys::ApiKeyManager;
+pub(crate) use convert_from::convert_user_query_mode;
 pub use convert_from::{
     ConversionParams, ConvertAPIMessageToClientOutputMessage, MaybeAIAgentOutputMessage,
     MessageToAIAgentOutputMessageError, user_inputs_from_messages,
@@ -101,6 +102,10 @@ impl std::fmt::Display for ServerConversationToken {
 #[cfg(test)]
 #[path = "api_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "api/injected_attribution_tests.rs"]
+mod injected_attribution_tests;
 impl From<ServerConversationToken> for String {
     fn from(value: ServerConversationToken) -> Self {
         value.0
