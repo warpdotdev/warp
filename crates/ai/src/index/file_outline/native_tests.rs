@@ -2,6 +2,8 @@ use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 
+#[cfg(feature = "local_fs")]
+use repo_metadata::TargetFile;
 use tempfile::TempDir;
 
 use super::*;
@@ -13,36 +15,69 @@ fn create_test_file(dir: &TempDir, filename: &str, content: &str) -> PathBuf {
     file_path
 }
 #[cfg(feature = "local_fs")]
-#[tokio::test]
-async fn folds_each_bounded_batch_into_destination_in_order() {
-    let temp_dir = TempDir::new().unwrap();
-    let mut files = (0..=PARSE_BATCH_SIZE)
+fn create_outline_files(dir: &TempDir) -> Vec<PathBuf> {
+    (0..=PARSE_BATCH_SIZE)
         .map(|index| {
-            let path = create_test_file(
-                &temp_dir,
+            create_test_file(
+                dir,
                 &format!("file_{index}.rs"),
                 &format!("fn symbol_{index}() {{}}"),
-            );
-            FileMetadata::new(path, false)
+            )
         })
-        .collect_vec();
-    let duplicate_file_id = files[0].file_id;
-    files[PARSE_BATCH_SIZE].file_id = duplicate_file_id;
-    let mut outlines = HashMap::new();
-    let mut batch_sizes = vec![];
+        .collect_vec()
+}
 
-    parse_symbols_for_files(files, |batch| {
-        batch_sizes.push(batch.len());
-        outlines.extend(batch);
-    })
-    .await
-    .unwrap();
-
-    assert_eq!(batch_sizes, vec![PARSE_BATCH_SIZE, 1]);
-    assert_eq!(outlines.len(), PARSE_BATCH_SIZE);
+#[cfg(feature = "local_fs")]
+fn assert_symbol_is_indexed(outline: &Outline, path: &PathBuf, expected: &str) {
+    let outlines = outline.to_symbols_by_file(None);
     assert_eq!(
-        outlines[&duplicate_file_id].symbols().unwrap()[0].name,
-        format!("symbol_{PARSE_BATCH_SIZE}")
+        outlines[path].symbols().unwrap()[0].name,
+        expected.to_owned()
+    );
+}
+
+#[cfg(feature = "local_fs")]
+#[tokio::test]
+async fn build_outline_indexes_symbols_across_batch_boundary() {
+    let temp_dir = TempDir::new().unwrap();
+    let files = create_outline_files(&temp_dir);
+
+    let outline = build_outline(temp_dir.path(), None).await.unwrap();
+
+    assert_eq!(outline.file_count(), PARSE_BATCH_SIZE + 1);
+    assert_symbol_is_indexed(&outline, &files[0], "symbol_0");
+    assert_symbol_is_indexed(
+        &outline,
+        &files[PARSE_BATCH_SIZE],
+        &format!("symbol_{PARSE_BATCH_SIZE}"),
+    );
+}
+
+#[cfg(feature = "local_fs")]
+#[tokio::test]
+async fn update_indexes_symbols_across_batch_boundary() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut outline = build_outline(temp_dir.path(), None).await.unwrap();
+    let files = create_outline_files(&temp_dir);
+    let added = files
+        .iter()
+        .cloned()
+        .map(|path| TargetFile::new(path, false))
+        .collect();
+
+    outline
+        .update(RepositoryUpdate {
+            added,
+            ..Default::default()
+        })
+        .await;
+
+    assert_eq!(outline.file_count(), PARSE_BATCH_SIZE + 1);
+    assert_symbol_is_indexed(&outline, &files[0], "symbol_0");
+    assert_symbol_is_indexed(
+        &outline,
+        &files[PARSE_BATCH_SIZE],
+        &format!("symbol_{PARSE_BATCH_SIZE}"),
     );
 }
 
