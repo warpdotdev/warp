@@ -2162,7 +2162,6 @@ pub fn init(app: &mut AppContext) {
     .with_context_predicate(id!("Input"))
     .with_key_binding("ctrl-l")]);
 
-    let external_alt_c_context = id!(EXTERNAL_ALT_C_BINDING_CONTEXT);
     app.register_editable_bindings([
         EditableBinding::new(
             "terminal:scroll_up_one_page",
@@ -2256,17 +2255,9 @@ pub fn init(app: &mut AppContext) {
             WorkspaceAction::TriggerExternalAltCDirectorySearch,
         )
         .with_enabled(|| FeatureFlag::ShellWidgetHandoff.is_enabled())
-        .with_context_predicate(external_alt_c_context.clone())
+        .with_context_predicate(id!(EXTERNAL_ALT_C_BINDING_CONTEXT))
         .with_key_binding("alt-c"),
     ]);
-    if cfg!(target_os = "macos") {
-        app.register_fixed_bindings([FixedBinding::new(
-            "meta-c",
-            WorkspaceAction::TriggerExternalAltCDirectorySearch,
-            external_alt_c_context,
-        )
-        .with_enabled(|| FeatureFlag::ShellWidgetHandoff.is_enabled())]);
-    }
 
     if let Some(custom_action) = workflows::CategoriesView::custom_action() {
         app.register_editable_bindings([EditableBinding::new(

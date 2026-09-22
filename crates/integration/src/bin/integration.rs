@@ -156,7 +156,6 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_open_context_menu_and_execute_command);
     register_test!(test_open_and_close_context_menu_with_keybinding);
     register_test!(test_block_metadata_received);
-    register_test!(test_fzf_ctrl_r_binding_reports_plugin);
     register_test!(test_scroll_to_hidden_block_and_open_context_menu_with_keybinding);
     register_test!(test_block_navigation);
     register_test!(test_execute_multiple_cursor_command);

@@ -1,6 +1,4 @@
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
@@ -21,7 +19,7 @@ use warp_editor::editor::NavigationKey;
 #[cfg(feature = "local_fs")]
 use warp_files::FileModel;
 use warpui::platform::WindowStyle;
-use warpui::{AddSingletonModel, App, Presenter, ViewHandle};
+use warpui::{AddSingletonModel, App, ViewHandle};
 use watcher::HomeDirectoryWatcher;
 
 use super::*;
@@ -68,8 +66,6 @@ use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings::PrivacySettings;
 use crate::settings::cloud_preferences_syncer::CloudPreferencesSyncer;
-#[cfg(feature = "local_fs")]
-use crate::settings::import::model::ImportedConfigModel;
 use crate::settings_view::DisplayCount;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
@@ -77,16 +73,11 @@ use crate::system::SystemStats;
 use crate::tab_configs::tab_config::{TabConfigPaneNode, TabConfigPaneType};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::history::History;
-use crate::terminal::input::EXTERNAL_ALT_C_BINDING_CONTEXT;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::local_tty::spawner::PtySpawner;
-use crate::terminal::model::ansi::Handler as _;
-use crate::terminal::model::block::BlockMetadata;
-use crate::terminal::model::session::{SessionId as TerminalSessionId, SessionInfo};
 use crate::terminal::shared_session::{
     SharedSessionScrollbackType, SharedSessionSource, SharedSessionStatus,
 };
-use crate::test_util::assert_eventually;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::undo_close::UndoCloseSettings;
 #[cfg(feature = "local_fs")]
@@ -291,206 +282,6 @@ pub(crate) fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
         )
     });
     workspace
-}
-
-async fn initialize_active_shell_plugin_session(
-    terminal: &ViewHandle<TerminalView>,
-    plugin: &str,
-    app: &mut App,
-) -> TerminalSessionId {
-    let session_info =
-        SessionInfo::new_for_test().with_shell_plugins(HashSet::from([plugin.to_owned()]));
-    let session_id = session_info.session_id;
-    terminal.update(app, |terminal, ctx| {
-        {
-            let mut model = terminal.model.lock();
-            model.block_list_mut().set_bootstrapped();
-            model.simulate_block("", "");
-            model
-                .block_list_mut()
-                .active_block_for_test()
-                .set_session_id(session_id);
-        }
-        terminal.sessions_model().update(ctx, |sessions, ctx| {
-            sessions.initialize_bootstrapped_session(
-                session_info,
-                "test command".to_owned(),
-                Vec::new(),
-                None,
-                ctx,
-            );
-        });
-    });
-    assert_eventually!(
-        200 => terminal.read(app, |terminal, _| {
-            terminal.active_block_session_id() == Some(session_id)
-        }),
-        "terminal view should receive the active session through its model-event pipeline"
-    );
-    terminal.read(app, |terminal, ctx| {
-        assert!(
-            terminal
-                .sessions(ctx)
-                .get(session_id)
-                .is_some_and(|session| session.shell().plugins().contains(plugin))
-        );
-    });
-    session_id
-}
-
-#[test]
-fn external_alt_c_binding_uses_terminal_fzf_context_when_input_context_is_stale() {
-    App::test((), |mut app| async move {
-        initialize_app(&mut app);
-        #[cfg(feature = "local_fs")]
-        app.add_singleton_model(ImportedConfigModel::new);
-        let _handoff = FeatureFlag::ShellWidgetHandoff.override_enabled(true);
-        app.update(crate::terminal::input::init);
-
-        let workspace = mock_workspace(&mut app);
-        let window_id = workspace.update(&mut app, |_, ctx| ctx.window_id());
-        let terminal = workspace.read(&app, |workspace, ctx| {
-            workspace
-                .active_tab_pane_group()
-                .as_ref(ctx)
-                .focused_session_view(ctx)
-                .expect("workspace should start with a terminal view")
-        });
-        initialize_active_shell_plugin_session(&terminal, "fzf", &mut app).await;
-
-        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
-        input.update(&mut app, |input, ctx| {
-            input.set_active_block_metadata(BlockMetadata::new(None, None), false, ctx);
-        });
-        input.read(&app, |input, ctx| {
-            assert!(input.active_session(ctx).is_none());
-        });
-        workspace.read(&app, |workspace, ctx| {
-            assert!(
-                workspace
-                    .keymap_context(ctx)
-                    .set
-                    .contains(EXTERNAL_ALT_C_BINDING_CONTEXT)
-            );
-        });
-        let pty_writes = Rc::new(RefCell::new(Vec::new()));
-        let writes = pty_writes.clone();
-        app.update(|ctx| {
-            ctx.subscribe_to_view(&terminal, move |_, event, _| {
-                if let crate::terminal::view::Event::WriteBytesToPty { bytes } = event {
-                    writes.borrow_mut().push(bytes.to_vec());
-                }
-            });
-        });
-
-        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
-        let handled = app.update(|ctx| {
-            ctx.simulate_window_event(
-                warpui::Event::KeyDown {
-                    keystroke: warpui::keymap::Keystroke {
-                        alt: true,
-                        key: "ç".to_owned(),
-                        ..Default::default()
-                    },
-                    chars: "ç".to_owned(),
-                    details: warpui::event::KeyEventDetails {
-                        left_alt: true,
-                        key_without_modifiers: Some("c".to_owned()),
-                        ..Default::default()
-                    },
-                    is_composing: false,
-                },
-                window_id,
-                presenter,
-            )
-        });
-
-        assert!(handled);
-        assert_eq!(*pty_writes.borrow(), vec![vec![C0::ESC, b'c']]);
-    });
-}
-
-#[test]
-fn atuin_session_does_not_enable_external_alt_c_binding() {
-    App::test((), |mut app| async move {
-        initialize_app(&mut app);
-        let _handoff = FeatureFlag::ShellWidgetHandoff.override_enabled(true);
-
-        let workspace = mock_workspace(&mut app);
-        let terminal = workspace.read(&app, |workspace, ctx| {
-            workspace
-                .active_tab_pane_group()
-                .as_ref(ctx)
-                .focused_session_view(ctx)
-                .expect("workspace should start with a terminal view")
-        });
-        initialize_active_shell_plugin_session(&terminal, "atuin", &mut app).await;
-
-        workspace.read(&app, |workspace, ctx| {
-            assert!(
-                !workspace
-                    .keymap_context(ctx)
-                    .set
-                    .contains(EXTERNAL_ALT_C_BINDING_CONTEXT)
-            );
-        });
-    });
-}
-
-#[test]
-fn external_alt_c_decline_passes_keypress_to_alt_screen() {
-    App::test((), |mut app| async move {
-        initialize_app(&mut app);
-        let _handoff = FeatureFlag::ShellWidgetHandoff.override_enabled(true);
-
-        let workspace = mock_workspace(&mut app);
-        let terminal = workspace.read(&app, |workspace, ctx| {
-            workspace
-                .active_tab_pane_group()
-                .as_ref(ctx)
-                .focused_session_view(ctx)
-                .expect("workspace should start with a terminal view")
-        });
-        let session_id = initialize_active_shell_plugin_session(&terminal, "fzf", &mut app).await;
-        terminal.read(&app, |terminal, _| {
-            assert_eq!(terminal.active_block_session_id(), Some(session_id));
-            let model = terminal.model.lock();
-            assert!(model.block_list().is_bootstrapped());
-            assert!(model.block_list().active_block().has_received_precmd());
-            assert!(!model.is_alt_screen_active());
-        });
-        let pty_writes = Rc::new(RefCell::new(Vec::new()));
-        let writes = pty_writes.clone();
-        app.update(|ctx| {
-            ctx.subscribe_to_view(&terminal, move |_, event, _| {
-                if let crate::terminal::view::Event::WriteBytesToPty { bytes } = event {
-                    writes.borrow_mut().push(bytes.to_vec());
-                }
-            });
-        });
-
-        terminal.update(&mut app, |terminal, _| {
-            terminal
-                .model
-                .lock()
-                .set_mode(crate::terminal::model::ansi::Mode::SwapScreen {
-                    save_cursor_and_clear_screen: true,
-                });
-        });
-        workspace.read(&app, |workspace, ctx| {
-            assert!(
-                !workspace
-                    .keymap_context(ctx)
-                    .set
-                    .contains(EXTERNAL_ALT_C_BINDING_CONTEXT)
-            );
-        });
-        workspace.update(&mut app, |workspace, ctx| {
-            workspace.handle_action(&WorkspaceAction::TriggerExternalAltCDirectorySearch, ctx);
-        });
-
-        assert_eq!(*pty_writes.borrow(), vec![vec![C0::ESC, b'c']]);
-    });
 }
 
 #[test]

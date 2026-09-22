@@ -724,7 +724,7 @@ const WARP_MD_PATH: &str = "WARP.md";
 
 /// `shell_plugins` tags reported by bootstrap when ctrl-r identifies a supported shell plugin.
 /// fzf provides ctrl-r, ctrl-t, and alt-c, while atuin only provides ctrl-r.
-pub(crate) const FZF_PLUGIN_TAG: &str = "fzf";
+const FZF_PLUGIN_TAG: &str = "fzf";
 const ATUIN_PLUGIN_TAG: &str = "atuin";
 
 /// Name of the bootstrap-installed shell function invoked to hand ctrl-r off to the shell's
@@ -740,22 +740,6 @@ const EXTERNAL_CTRL_T_HELPER_COMMAND: &str = "warp_run_external_ctrl_t_widget";
 /// Name of the bootstrap-installed shell function invoked to hand alt-c off to fzf's directory
 /// search widget.
 const EXTERNAL_ALT_C_HELPER_COMMAND: &str = "warp_run_external_alt_c_widget";
-
-#[derive(Clone, Copy)]
-enum ExternalShellWidget {
-    CtrlR,
-    CtrlT,
-    AltC,
-}
-
-fn shell_plugins_support_widget(plugins: &HashSet<String>, widget: ExternalShellWidget) -> bool {
-    match widget {
-        ExternalShellWidget::CtrlR => {
-            plugins.contains(FZF_PLUGIN_TAG) || plugins.contains(ATUIN_PLUGIN_TAG)
-        }
-        ExternalShellWidget::CtrlT | ExternalShellWidget::AltC => plugins.contains(FZF_PLUGIN_TAG),
-    }
-}
 
 fn ctrl_t_apply_mode(shell_type: ShellType) -> ShellWidgetApplyMode {
     match shell_type {
@@ -9643,10 +9627,8 @@ impl TerminalView {
                 .as_ref(ctx)
                 .get(session_id)
                 .is_some_and(|session| {
-                    shell_plugins_support_widget(
-                        session.shell().plugins(),
-                        ExternalShellWidget::CtrlR,
-                    )
+                    session.shell().plugins().contains(FZF_PLUGIN_TAG)
+                        || session.shell().plugins().contains(ATUIN_PLUGIN_TAG)
                 });
         if !has_external_ctrl_r_widget || self.model.lock().is_alt_screen_active() {
             return false;
@@ -9684,7 +9666,7 @@ impl TerminalView {
         let Some(session) = self.sessions.as_ref(ctx).get(session_id) else {
             return false;
         };
-        if !shell_plugins_support_widget(session.shell().plugins(), ExternalShellWidget::CtrlT)
+        if !session.shell().plugins().contains(FZF_PLUGIN_TAG)
             || self.model.lock().is_alt_screen_active()
         {
             return false;
@@ -9735,9 +9717,7 @@ impl TerminalView {
         }
         self.active_block_session_id()
             .and_then(|session_id| self.sessions.as_ref(app).get(session_id))
-            .is_some_and(|session| {
-                shell_plugins_support_widget(session.shell().plugins(), ExternalShellWidget::AltC)
-            })
+            .is_some_and(|session| session.shell().plugins().contains(FZF_PLUGIN_TAG))
     }
 
     /// Returns `true` when an interactive SSH command has been detected at

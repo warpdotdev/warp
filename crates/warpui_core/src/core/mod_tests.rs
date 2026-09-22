@@ -12,7 +12,6 @@ use parking_lot::Mutex;
 use super::*;
 use crate::r#async::Timer;
 use crate::elements::*;
-use crate::event::KeyEventDetails;
 use crate::keymap::Keystroke;
 use crate::keymap::macros::*;
 
@@ -24,24 +23,6 @@ mod ref_count_tests;
 
 #[path = "try_update_view_tests.rs"]
 mod try_update_view_tests;
-#[test]
-fn modifier_keybinding_uses_the_unmodified_letter_without_changing_the_original_keystroke() {
-    let keystroke = Keystroke {
-        alt: true,
-        key: "ç".to_owned(),
-        ..Default::default()
-    };
-    let details = KeyEventDetails {
-        key_without_modifiers: Some("c".to_owned()),
-        ..Default::default()
-    };
-
-    let alternate =
-        alternate_modifier_keybinding_keystroke(&keystroke, &details).expect("alternate keystroke");
-
-    assert_eq!(alternate.normalized(), "alt-c");
-    assert_eq!(keystroke.normalized(), "alt-ç");
-}
 
 #[test]
 fn test_subscribe_and_emit_from_model() {

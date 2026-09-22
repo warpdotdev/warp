@@ -1,6 +1,6 @@
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::pin::pin;
 use std::rc::Rc;
 use std::str::FromStr;
@@ -169,32 +169,6 @@ fn has_pending_user_query_block(view: &TerminalView) -> bool {
     view.rich_content_views.iter().any(|rich_content| {
         rich_content.view_id() == view_id && rich_content.is_pending_user_query()
     })
-}
-
-#[test]
-fn fzf_plugin_enables_all_shell_widgets_while_atuin_only_enables_ctrl_r() {
-    let fzf = HashSet::from([FZF_PLUGIN_TAG.to_string()]);
-    let atuin = HashSet::from([ATUIN_PLUGIN_TAG.to_string()]);
-
-    for widget in [
-        ExternalShellWidget::CtrlR,
-        ExternalShellWidget::CtrlT,
-        ExternalShellWidget::AltC,
-    ] {
-        assert!(shell_plugins_support_widget(&fzf, widget));
-    }
-    assert!(shell_plugins_support_widget(
-        &atuin,
-        ExternalShellWidget::CtrlR
-    ));
-    assert!(!shell_plugins_support_widget(
-        &atuin,
-        ExternalShellWidget::CtrlT
-    ));
-    assert!(!shell_plugins_support_widget(
-        &atuin,
-        ExternalShellWidget::AltC
-    ));
 }
 
 #[test]

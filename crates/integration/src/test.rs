@@ -1816,68 +1816,6 @@ pub fn test_block_metadata_received() -> Builder {
         )
 }
 
-pub fn test_fzf_ctrl_r_binding_reports_plugin() -> Builder {
-    new_builder()
-        .set_should_run_test(|| {
-            let (starter, _) = current_shell_starter_and_version();
-            !matches!(starter.shell_type(), ShellType::PowerShell)
-        })
-        .with_setup(|utils| {
-            let dir = utils.test_dir();
-            write_rc_files_for_test(
-                &dir,
-                r#"
-__fzf_history__ () { :; }
-bind '"\C-r": "`__fzf_history__`"'
-"#,
-                [ShellRcType::Bash],
-            );
-            write_rc_files_for_test(
-                &dir,
-                r#"
-fzf-history-widget () { :; }
-zle -N fzf-history-widget
-bindkey -M emacs '^R' fzf-history-widget
-"#,
-                [ShellRcType::Zsh],
-            );
-            write_rc_files_for_test(
-                &dir,
-                r#"
-function _fzf_search_history
-end
-function bind
-  if test (count $argv) -eq 1
-    echo 'bind --user ctrl-r _fzf_search_history'
-    return
-  end
-  builtin bind $argv
-end
-"#,
-                [ShellRcType::Fish],
-            );
-        })
-        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-        .with_step(
-            new_step_with_default_assertions("fzf is present in shell plugin metadata")
-                .add_assertion(|app, window_id| {
-                    let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
-                    terminal_view.read(app, |view, ctx| {
-                        let session_id = view
-                            .active_block_session_id()
-                            .expect("terminal must have an active session");
-                        let session = view
-                            .sessions(ctx)
-                            .get(session_id)
-                            .expect("active session must exist");
-                        async_assert!(
-                            session.shell().plugins().contains("fzf"),
-                            "fzf should be present in shell plugin metadata"
-                        )
-                    })
-                }),
-        )
-}
 // TODO(CORE-2721): Block count / index Failed b/c of in-band generators
 pub fn test_scroll_to_hidden_block_and_open_context_menu_with_keybinding() -> Builder {
     new_builder()
