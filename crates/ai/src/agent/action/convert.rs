@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use itertools::Itertools as _;
 use uuid::Uuid;
-use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 
 use crate::agent::FileLocations;
@@ -220,11 +219,7 @@ impl From<api::message::tool_call::read_files::File> for FileLocations {
 
 impl From<api::message::tool_call::ReadMcpResource> for AIAgentActionType {
     fn from(value: api::message::tool_call::ReadMcpResource) -> Self {
-        let server_id = if FeatureFlag::MCPGroupedServerContext.is_enabled() {
-            Uuid::parse_str(&value.server_id).ok()
-        } else {
-            None
-        };
+        let server_id = Uuid::parse_str(&value.server_id).ok();
 
         AIAgentActionType::ReadMCPResource {
             server_id,
@@ -249,11 +244,7 @@ impl TryFrom<api::message::tool_call::CallMcpTool> for AIAgentActionType {
         })
         .map_err(ToolToAIAgentActionError::CallMCPToolArgsError)?;
 
-        let server_id = if FeatureFlag::MCPGroupedServerContext.is_enabled() {
-            Uuid::parse_str(&value.server_id).ok()
-        } else {
-            None
-        };
+        let server_id = Uuid::parse_str(&value.server_id).ok();
 
         Ok(AIAgentActionType::CallMCPTool {
             server_id,
