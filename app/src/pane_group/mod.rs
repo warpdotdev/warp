@@ -4702,8 +4702,6 @@ impl PaneGroup {
         self.failed_viewer_child_sessions.remove(&conversation_id);
         self.pending_child_hydrations
             .retain(|_, child_id| *child_id != conversation_id);
-        self.pending_remote_child_hydrations
-            .retain(|_, child_id| *child_id != conversation_id);
         let split_off_child_pane = self.child_agent_origin.as_ref().and_then(|origin| {
             (origin.conversation_id == conversation_id)
                 .then(|| self.pane_id_for_conversation_owner(conversation_id, ctx))
