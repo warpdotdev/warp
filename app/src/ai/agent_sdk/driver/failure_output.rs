@@ -31,6 +31,7 @@ pub(super) fn truncate_failure_output(output: &str, truncation_marker: &str) -> 
 
 pub(super) fn prepare_failure_output(output: &str, truncation_marker: &str) -> String {
     let mut output = output.trim().to_owned();
+    // Redact before truncation so splitting a credential cannot hide it from detection.
     redact_secrets_in_string(&mut output);
     truncate_failure_output(&output, truncation_marker)
 }
