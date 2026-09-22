@@ -3,7 +3,7 @@ use warp_cli::harness_support::ReportShutdownArgs;
 #[cfg(target_os = "linux")]
 use super::kernel_log_commands;
 use super::{
-    OomEvidence, apply_oom_classification, detect_oom_shutdown, oom_kill_line_matches_pid,
+    OomDetectionResult, apply_oom_classification, detect_oom_shutdown, oom_kill_line_matches_pid,
 };
 
 #[test]
@@ -95,35 +95,6 @@ fn rejects_similarly_named_oom_kill_field() {
 }
 
 #[test]
-fn classifies_exit_status_137_as_oom_evidence() {
-    assert_eq!(
-        OomEvidence::from_signals(true, false),
-        Some(OomEvidence::ExitStatus137)
-    );
-}
-
-#[test]
-fn classifies_kernel_log_as_oom_evidence() {
-    assert_eq!(
-        OomEvidence::from_signals(false, true),
-        Some(OomEvidence::KernelLog)
-    );
-}
-
-#[test]
-fn classifies_both_oom_signals_as_combined_evidence() {
-    assert_eq!(
-        OomEvidence::from_signals(true, true),
-        Some(OomEvidence::ExitStatus137AndKernelLog)
-    );
-}
-
-#[test]
-fn does_not_classify_oom_without_a_signal() {
-    assert!(OomEvidence::from_signals(false, false).is_none());
-}
-
-#[test]
 fn oom_classification_populates_an_absent_error_pair() {
     let mut args = ReportShutdownArgs {
         error_category: None,
@@ -132,7 +103,13 @@ fn oom_classification_populates_an_absent_error_pair() {
         exit_code: Some(137),
     };
 
-    apply_oom_classification(&mut args, OomEvidence::ExitStatus137);
+    apply_oom_classification(
+        &mut args,
+        OomDetectionResult {
+            exit_status: true,
+            kernel_logs: false,
+        },
+    );
 
     assert_eq!(args.error_category.as_deref(), Some("oom"));
     assert_eq!(
@@ -150,7 +127,13 @@ fn oom_classification_replaces_a_malformed_error_pair() {
         exit_code: Some(137),
     };
 
-    apply_oom_classification(&mut args, OomEvidence::ExitStatus137);
+    apply_oom_classification(
+        &mut args,
+        OomDetectionResult {
+            exit_status: true,
+            kernel_logs: false,
+        },
+    );
 
     assert_eq!(args.error_category.as_deref(), Some("oom"));
     assert_eq!(
@@ -168,7 +151,13 @@ fn oom_classification_replaces_a_different_error_pair() {
         exit_code: Some(137),
     };
 
-    apply_oom_classification(&mut args, OomEvidence::ExitStatus137);
+    apply_oom_classification(
+        &mut args,
+        OomDetectionResult {
+            exit_status: false,
+            kernel_logs: true,
+        },
+    );
 
     assert_eq!(args.error_category.as_deref(), Some("oom"));
     assert_eq!(

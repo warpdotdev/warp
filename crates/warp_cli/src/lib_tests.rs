@@ -3408,23 +3408,41 @@ fn report_shutdown_abnormal_parses() {
 }
 
 #[test]
-fn report_shutdown_rejects_exit_code_outside_api_range() {
-    for exit_code in ["0", "256"] {
-        let result = Args::try_parse_from([
-            "warp",
-            "harness-support",
-            "--run-id",
-            "run-1",
-            "report-shutdown",
-            "--error-category",
-            "process_exit",
-            "--error-message",
-            "agent exited",
-            "--exit-code",
-            exit_code,
-        ]);
-        assert!(result.is_err(), "accepted exit code {exit_code}");
-    }
+fn report_shutdown_rejects_zero_exit_code() {
+    let result = Args::try_parse_from([
+        "warp",
+        "harness-support",
+        "--run-id",
+        "run-1",
+        "report-shutdown",
+        "--error-category",
+        "process_exit",
+        "--error-message",
+        "agent exited",
+        "--exit-code",
+        "0",
+    ]);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn report_shutdown_rejects_exit_code_above_api_range() {
+    let result = Args::try_parse_from([
+        "warp",
+        "harness-support",
+        "--run-id",
+        "run-1",
+        "report-shutdown",
+        "--error-category",
+        "process_exit",
+        "--error-message",
+        "agent exited",
+        "--exit-code",
+        "256",
+    ]);
+
+    assert!(result.is_err());
 }
 
 #[test]

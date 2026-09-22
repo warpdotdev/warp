@@ -325,47 +325,55 @@ fn report_shutdown(
     Ok(())
 }
 
+/// Results of attempting to infer whether or not the Warp agent process was OOM-killed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OomEvidence {
-    ExitStatus137,
-    KernelLog,
-    ExitStatus137AndKernelLog,
+struct OomDetectionResult {
+    /// The process exited with status 137, conventionally reserved for the OOM killer.
+    exit_status: bool,
+    /// Kernel logs include a reference to the OOM killer terminating the process.
+    kernel_logs: bool,
 }
 
-impl OomEvidence {
-    fn from_signals(exit_status_137: bool, kernel_log: bool) -> Option<Self> {
-        match (exit_status_137, kernel_log) {
-            (true, true) => Some(Self::ExitStatus137AndKernelLog),
-            (true, false) => Some(Self::ExitStatus137),
-            (false, true) => Some(Self::KernelLog),
-            (false, false) => None,
-        }
+impl OomDetectionResult {
+    fn was_oom(&self) -> bool {
+        self.exit_status || self.kernel_logs
     }
 }
 
-fn apply_oom_classification(args: &mut ReportShutdownArgs, evidence: OomEvidence) {
-    match evidence {
-        OomEvidence::ExitStatus137 => {
-            log::info!("[Agent harness] Classifying shutdown as OOM: source=exit_status_137");
-        }
-        OomEvidence::KernelLog => {
-            log::info!("[Agent harness] Classifying shutdown as OOM: source=kernel_log");
-        }
-        OomEvidence::ExitStatus137AndKernelLog => {
-            log::info!(
-                "[Agent harness] Classifying shutdown as OOM: source=exit_status_137_and_kernel_log"
-            );
-        }
+fn apply_oom_classification(args: &mut ReportShutdownArgs, result: OomDetectionResult) {
+    if !result.was_oom() {
+        return;
     }
+
+    log::info!(
+        "Classifying shutdown as OOM: exit status 137 = {}, kernel logs = {}",
+        result.exit_status,
+        result.kernel_logs
+    );
+    tracing::info!(
+        exit_status_137 = result.exit_status,
+        kernel_logs = result.kernel_logs,
+        "Classifying shutdown as OOM"
+    );
+
     args.error_category = Some("oom".to_string());
     args.error_message = Some("The agent sandbox ran out of memory.".to_string());
 }
 
-fn detect_oom_shutdown(exit_code: Option<u8>, pid: Option<u32>) -> Option<OomEvidence> {
-    let exit_code = exit_code.filter(|exit_code| *exit_code != 0)?;
-    let kernel_evidence = pid.is_some_and(kernel_logs_contain_oom_for_pid);
-    OomEvidence::from_signals(exit_code == 137, kernel_evidence)
+fn detect_oom_shutdown(exit_code: Option<u8>, pid: Option<u32>) -> Option<OomDetectionResult> {
+    let mut result = OomDetectionResult {
+        exit_status: exit_code.is_some_and(|code| code == 137),
+        kernel_logs: false,
+    };
+
+    // Only check kernel logs (potentially expensive) if the process failed.
+    if exit_code.is_some_and(|code| code != 0) {
+        result.kernel_logs = pid.is_some_and(kernel_logs_contain_oom_for_pid);
+    }
+
+    if result.was_oom() { Some(result) } else { None }
 }
+
 #[cfg(target_os = "linux")]
 fn kernel_log_commands() -> [(&'static str, &'static [&'static str]); 2] {
     const DMESG_ARGS: &[&str] = &["--level=info,warn,err,crit,alert,emerg", "--color=never"];
@@ -396,6 +404,7 @@ fn kernel_logs_contain_oom_for_pid(pid: u32) -> bool {
 fn kernel_logs_contain_oom_for_pid(_: u32) -> bool {
     false
 }
+
 #[cfg(any(target_os = "linux", test))]
 fn oom_kill_line_matches_pid(line: &str, pid: u32) -> bool {
     let pid = pid.to_string();
@@ -413,9 +422,9 @@ fn oom_kill_line_matches_pid(line: &str, pid: u32) -> bool {
     if killed_process {
         return true;
     }
+
     // Linux emits this victim format in `dump_oom_victim`:
     // https://github.com/torvalds/linux/blob/fc5def2c2ad049588c875d86c7408537300ee43e/mm/oom_kill.c#L442-L451
-
     line.contains("oom-kill:")
         && line.match_indices("pid=").any(|(index, prefix)| {
             let field_start = index + prefix.len();
