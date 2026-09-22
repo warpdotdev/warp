@@ -44,10 +44,10 @@ mod sealed {
 
 /// Reads a [`TeamContextForOperation`] or [`TeamContext`]'s team.
 ///
-/// Application code obtains a [`TeamContext`] or [`TeamContextForOperation`] by exchanging a
-/// view context or handle. Neither type can be copied or cloned. `TeamContext` is borrow-bound to
-/// an immediate read, while `TeamContextForOperation` is owned so one operation can move it across
-/// an asynchronous boundary without re-resolving against a different window team.
+/// Application code obtains a [`TeamContext`] or [`TeamContextForOperation`] from a view-bound
+/// context, handle, or window. Neither type can be copied or cloned. `TeamContext` is borrow-bound
+/// to an immediate read, while `TeamContextForOperation` is owned so one operation can move it
+/// across an asynchronous boundary without re-resolving against a different window team.
 ///
 /// Sealed: only this module implements [`sealed::Sealed`], so a scope can never be minted
 /// outside [`UserWorkspaces`].
@@ -152,6 +152,8 @@ impl TeamScope for TeamlessScopeForTest {
 /// Resolves a [`TeamContext`] on demand from a view captured up front. See
 /// [`UserWorkspaces::team_context_resolver`].
 pub type TeamContextResolver = Rc<dyn for<'a> Fn(&'a AppContext) -> TeamContext<'a>>;
+pub(crate) type TeamContextForOperationResolver =
+    Rc<dyn Fn(&AppContext) -> TeamContextForOperation>;
 
 #[cfg(not(target_family = "wasm"))]
 #[derive(Debug, thiserror::Error)]
@@ -186,15 +188,21 @@ pub(crate) enum GeminiEnterpriseBackgroundHost<'a> {
 
 impl UserWorkspaces {
     /// Captures the team selected in `ctx`'s window as an operation's
-    /// [`TeamContextForOperation`]. This is the only way application code mints one. Always
-    /// succeeds -- a window with no team selected still yields a scope, just one whose
-    /// `team_uid()` is `None`; see [`TeamScope`]'s contract for what that means to a getter.
+    /// [`TeamContextForOperation`]. Always succeeds -- a window with no team selected still yields
+    /// a scope whose `team_uid()` is `None`.
     pub fn team_context_for_operation<T: Entity>(
         &self,
         ctx: &ViewContext<T>,
     ) -> TeamContextForOperation {
+        self.team_context_for_window_operation(ctx.window_id())
+    }
+    /// Captures the team selected in a headless frontend's window.
+    pub fn team_context_for_window_operation(
+        &self,
+        window_id: WindowId,
+    ) -> TeamContextForOperation {
         TeamContextForOperation {
-            team_uid: self.team_uid_for_window(ctx.window_id()),
+            team_uid: self.team_uid_for_window(window_id),
         }
     }
 
@@ -260,6 +268,14 @@ impl UserWorkspaces {
     /// a view at the boundaries where they need one.
     pub fn team_context_resolver<T: Entity>(view: WeakViewHandle<T>) -> TeamContextResolver {
         Rc::new(move |app| Self::as_ref(app).team_context(&view, app))
+    }
+
+    pub(crate) fn team_context_for_operation_resolver(
+        resolver: TeamContextResolver,
+    ) -> TeamContextForOperationResolver {
+        Rc::new(move |app| TeamContextForOperation {
+            team_uid: resolver(app).team_uid(),
+        })
     }
 
     /// A resolver for tests that build a model without a window to resolve against.

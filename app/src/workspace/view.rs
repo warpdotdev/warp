@@ -210,7 +210,7 @@ use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, FORK_PREFIX, PendingAttachment, PendingQueryState, QueuedQueryOrigin,
     SerializedBlockListItem, SlashCommandRequest,
 };
-use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::cloud_agent_settings::{AuthSecretPreference, CloudAgentSettings};
 #[cfg(target_family = "wasm")]
 use crate::ai::conversation_details_panel::ConversationDetailsPanel;
 use crate::ai::conversation_utils;
@@ -397,7 +397,7 @@ use crate::terminal::enable_auto_reload_modal::{
 use crate::terminal::general_settings::GeneralSettings;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::input::slash_commands::fork_button_action;
-use crate::terminal::input::{Input, MenuPositioning};
+use crate::terminal::input::{EXTERNAL_ALT_C_BINDING_CONTEXT, Input, MenuPositioning};
 use crate::terminal::keys_settings::KeysSettings;
 use crate::terminal::ligature_settings::should_use_ligature_rendering;
 #[cfg(feature = "local_tty")]
@@ -600,6 +600,27 @@ const THEME_CHOOSER_RATIO: f32 = 3.5;
 pub(crate) const TAB_BAR_POSITION_ID: &str = "workspace_view:tab_bar";
 const TEAM_SWITCHER_PILL_POSITION_ID: &str = "workspace_view:team_switcher_pill";
 const TEAM_SWITCHER_DOT_ALPHA: u8 = 204;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TeamNavigationMode {
+    Hidden,
+    BrowseTeams,
+    TeamSwitcher,
+}
+
+fn team_navigation_mode(
+    has_current_team: bool,
+    has_teams: bool,
+    can_switch_teams: bool,
+    has_joinable_teams: bool,
+) -> TeamNavigationMode {
+    if has_current_team && (can_switch_teams || has_joinable_teams) {
+        TeamNavigationMode::TeamSwitcher
+    } else if !has_teams && has_joinable_teams {
+        TeamNavigationMode::BrowseTeams
+    } else {
+        TeamNavigationMode::Hidden
+    }
+}
 
 /// Save position for the vertical tabs panel.
 /// HOA onboarding callouts anchor relative to this position, so whichever code
@@ -1516,10 +1537,15 @@ impl Workspace {
             .is_any_tab_group_being_renamed()
         {
             match event {
-                EditorEvent::Blurred | EditorEvent::Enter => {
+                EditorEvent::Enter => {
                     self.finish_tab_group_rename(ctx);
                 }
-                EditorEvent::Escape => {
+                // Blur discards rather than commits. Focus can leave this editor without
+                // the user ever ending the rename — #14241 is one such case — and
+                // committing then writes a half-typed fragment as the group's real,
+                // persisted name. Discarding loses nothing the user cannot retype, and
+                // Enter remains the way to confirm.
+                EditorEvent::Blurred | EditorEvent::Escape => {
                     self.cancel_tab_group_rename(ctx);
                 }
                 _ => {}
@@ -3899,7 +3925,74 @@ impl Workspace {
         window: WindowTemplate,
         ctx: &mut ViewContext<Self>,
     ) {
-        let start_index = self.tabs.len();
+        // `tab_bar_slots` turns every *contiguous* run of same-group tabs into
+        // one group container, so interleaved membership would render as two
+        // containers sharing one id. `resolve_group_memberships` collapses that
+        // to the first run of each group; see its docs for why.
+        let group_count = if FeatureFlag::GroupedTabs.is_enabled() {
+            window.tab_groups.len()
+        } else {
+            0
+        };
+        let memberships = crate::launch_configs::launch_config::resolve_group_memberships(
+            &window.tabs,
+            group_count,
+        );
+
+        // Only mint ids for groups that kept a member. A hand-authored config
+        // can name a group no tab joins, and the collapse above can strip a
+        // group's last tab; inserting those anyway would leave empty groups in
+        // workspace state that nothing can reach. This mirrors the save path,
+        // which already drops groups whose members were all unsaveable.
+        //
+        // Ids are minted here rather than restored: a launch config can be
+        // opened repeatedly, and into a workspace that already holds groups, so
+        // reusing saved ids would collide.
+        let group_ids: Vec<Option<TabGroupId>> = window
+            .tab_groups
+            .iter()
+            .enumerate()
+            .map(|(group_index, group_template)| {
+                if !memberships.contains(&Some(group_index)) {
+                    return None;
+                }
+                let group = TabGroup {
+                    id: TabGroupId::new(),
+                    name: group_template.name.clone(),
+                    color: group_template
+                        .color
+                        .map_or(SelectedTabColor::Unset, SelectedTabColor::Color),
+                    collapsed: group_template.collapsed,
+                    draggable_state: Default::default(),
+                    // Mirrors the session-restore path: only honor pinned
+                    // state while the Pinned Tabs feature is enabled.
+                    pinned: FeatureFlag::PinnedTabs.is_enabled() && group_template.pinned,
+                };
+                let id = group.id;
+                self.tab_groups.insert(id, group);
+                Some(id)
+            })
+            .collect();
+
+        // `add_tab_with_pane_layout` honors the `NewTabPlacement` setting, so a
+        // restored tab is not always appended -- opening into the active window
+        // inserts after the current tab by default, which lands before the end
+        // whenever the active tab is not the last one. It activates whatever it
+        // inserted, so read the real index back instead of assuming
+        // `start_index + tab_index`.
+        let mut restored_indices = Vec::with_capacity(window.tabs.len());
+
+        // Opening into an active window inserts after the active tab, and
+        // `add_tab_with_pane_layout` has that insert inherit the active tab's
+        // group so groups stay contiguous. Overwriting membership below
+        // therefore drops the restored block *inside* a pre-existing group's
+        // run, splitting it in two -- and `tab_bar_slots` renders two runs of
+        // one id as two containers. Remember the host group so the block can be
+        // re-anchored past it once membership is settled.
+        let host_group_id = self
+            .tabs
+            .get(self.active_tab_index)
+            .and_then(|tab| tab.group_id);
 
         window
             .tabs
@@ -3912,20 +4005,58 @@ impl Workspace {
                     tab_template.title.clone(),
                     ctx,
                 );
-                self.tabs[start_index + tab_index].selected_color = tab_template
+                let index = self.active_tab_index;
+                restored_indices.push(index);
+                self.tabs[index].selected_color = tab_template
                     .color
                     .map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
+                // The config is the authority on membership, so a tab it leaves
+                // ungrouped stays ungrouped even though the insert above may
+                // have had it inherit the active tab's group.
+                self.tabs[index].group_id = memberships[tab_index]
+                    .and_then(|group_index| group_ids.get(group_index).copied().flatten());
             });
 
-        if !window.tabs.is_empty() {
-            // Focus the active tab from the launch config.
+        // A pinned group makes its members effectively pinned, and the pinned
+        // region is a prefix of the tab list. The inserts above ran while the
+        // tabs were still ungrouped, so `NewTabPlacement` could leave the block
+        // after the active window's unpinned tabs -- assigning membership is
+        // what pins them, so the repositioning has to happen here, not earlier.
+        // This mirrors `pin_tab_group`: move the group's block to the current
+        // pinned boundary. `restored_indices` goes stale across those moves, so
+        // resolve the tab to focus by its pane group id instead.
+        let active_pane_group_id = window
+            .active_tab_index
+            .and_then(|active| restored_indices.get(active))
+            .or_else(|| restored_indices.first())
+            .and_then(|&index| self.tabs.get(index))
+            .map(|tab| tab.pane_group.id());
 
-            let mut index = start_index + window.active_tab_index.unwrap_or_default();
+        // Re-anchor the restored block past the host group's last remaining
+        // member, mirroring `new_tab_group_from_selected_tabs`. A no-op when
+        // the block already sits outside the group's run.
+        if let Some(host_group_id) = host_group_id {
+            self.move_restored_block_past_group(&restored_indices, host_group_id);
+        }
 
-            if index >= self.tab_count() {
-                index = start_index;
+        for group_id in group_ids.iter().flatten() {
+            if self
+                .tab_groups
+                .get(group_id)
+                .is_some_and(|group| group.pinned)
+            {
+                let target = self.pinned_boundary_index(&self.tabs);
+                self.move_group_block(*group_id, target, ctx);
             }
+        }
 
+        // Focus the active tab from the launch config.
+        let active_index = active_pane_group_id.and_then(|pane_group_id| {
+            self.tabs
+                .iter()
+                .position(|tab| tab.pane_group.id() == pane_group_id)
+        });
+        if let Some(index) = active_index {
             self.activate_tab_internal(index, ctx);
         }
     }
@@ -6172,18 +6303,28 @@ impl Workspace {
     fn show_team_switcher_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
         let window_id = self.window_id;
         let user_workspaces = UserWorkspaces::as_ref(ctx);
-        // Only meaningful when the user can switch teams.
-        if !user_workspaces.can_switch_teams() {
-            return;
-        }
         let Some(workspace) = user_workspaces.current_workspace() else {
             return;
         };
+        let joinable_team_count = if workspace.is_native_workspaces_enabled() {
+            workspace.joinable_teams().count()
+        } else {
+            0
+        };
+        if !user_workspaces.can_switch_teams() && joinable_team_count == 0 {
+            return;
+        }
+        if user_workspaces.team_for_window(window_id).is_none() {
+            return;
+        }
         let current_team_uid = user_workspaces.team_uid_for_window(window_id);
         let mut items: Vec<MenuItem<WorkspaceAction>> = vec![
-            MenuItemFields::new("Switch team")
-                .with_disabled(true)
-                .into_item(),
+            MenuItem::Header {
+                fields: MenuItemFields::new("Teams"),
+                clickable: false,
+                right_side_fields: None,
+            },
+            MenuItem::Separator,
         ];
         items.extend(workspace.teams.iter().map(|team| {
             let uid = team.uid;
@@ -6196,6 +6337,19 @@ impl Workspace {
             };
             fields.into_item()
         }));
+        if joinable_team_count > 0 {
+            items.push(MenuItem::Separator);
+            items.push(
+                MenuItemFields::new("Browse teams")
+                    .with_icon(icons::Icon::Search)
+                    .with_right_side_label(
+                        format!("{joinable_team_count} available"),
+                        Properties::default(),
+                    )
+                    .with_on_select_action(WorkspaceAction::BrowseTeams)
+                    .into_item(),
+            );
+        }
         self.team_switcher_menu
             .update(ctx, |menu, ctx| menu.set_items(items, ctx));
         self.show_team_switcher_menu = true;
@@ -6203,47 +6357,57 @@ impl Workspace {
         ctx.notify();
     }
 
-    /// Renders the team-switcher pill shown in the title-bar top-right, to the
-    /// left of the right-side toolbar actions
     fn render_team_switcher_pill(
         &self,
         appearance: &Appearance,
         ctx: &AppContext,
     ) -> Option<Box<dyn Element>> {
         let user_workspaces = UserWorkspaces::as_ref(ctx);
-        // Only show when the user has access to more than one team available to them.
-        if !user_workspaces.can_switch_teams() {
-            return None;
-        }
-        let current_team = user_workspaces.team_for_window(self.window_id)?;
-        let team_name = current_team.name.clone();
-        let team_color_hex = current_team.color.clone();
+        let current_team = user_workspaces.team_for_window(self.window_id);
+        let has_joinable_teams = user_workspaces
+            .current_workspace()
+            .is_some_and(|workspace| {
+                workspace.is_native_workspaces_enabled()
+                    && workspace.joinable_teams().next().is_some()
+            });
+        let mode = team_navigation_mode(
+            current_team.is_some(),
+            user_workspaces.has_teams(),
+            user_workspaces.can_switch_teams(),
+            has_joinable_teams,
+        );
         let theme = appearance.theme();
         let text_color = theme.foreground();
         let pill_bg_normal = internal_colors::fg_overlay_1(theme);
         let pill_bg_hover = internal_colors::fg_overlay_2(theme);
-
-        // Parse the team color for the dot; fall back to a neutral theme grey
-        // (matching the server contract / admin UI default) if invalid/missing.
-        let mut dot_color = team_color_hex
-            .as_deref()
-            .and_then(|hex| warp_core::ui::color::hex_color::coloru_from_hex_string(hex).ok())
-            .unwrap_or_else(|| internal_colors::neutral_5(theme));
-        dot_color.a = TEAM_SWITCHER_DOT_ALPHA;
+        let (label, dot_color, action) = match mode {
+            TeamNavigationMode::Hidden => return None,
+            TeamNavigationMode::BrowseTeams => (
+                "Browse teams".to_string(),
+                None,
+                WorkspaceAction::BrowseTeams,
+            ),
+            TeamNavigationMode::TeamSwitcher => {
+                let current_team = current_team?;
+                let mut dot_color = current_team
+                    .color
+                    .as_deref()
+                    .and_then(|hex| {
+                        warp_core::ui::color::hex_color::coloru_from_hex_string(hex).ok()
+                    })
+                    .unwrap_or_else(|| internal_colors::neutral_5(theme));
+                dot_color.a = TEAM_SWITCHER_DOT_ALPHA;
+                (
+                    current_team.name.clone(),
+                    Some(dot_color),
+                    WorkspaceAction::ShowTeamSwitcherMenu,
+                )
+            }
+        };
 
         let pill = Hoverable::new(self.mouse_states.team_switcher_pill.clone(), move |state| {
-            let dot = ConstrainedBox::new(
-                Rect::new()
-                    .with_background(Fill::Solid(dot_color))
-                    .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
-                    .finish(),
-            )
-            .with_width(8.)
-            .with_height(8.)
-            .finish();
-
             let name_text = Text::new_inline(
-                team_name.clone(),
+                label.clone(),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )
@@ -6251,14 +6415,25 @@ impl Workspace {
             .with_clip(ClipConfig::ellipsis())
             .finish();
 
-            let row = Flex::row()
+            let mut row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_spacing(4.)
-                .with_child(dot)
-                .with_child(ConstrainedBox::new(name_text).with_max_width(120.).finish())
-                .finish();
+                .with_spacing(4.);
+            if let Some(dot_color) = dot_color {
+                row.add_child(
+                    ConstrainedBox::new(
+                        Rect::new()
+                            .with_background(Fill::Solid(dot_color))
+                            .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
+                            .finish(),
+                    )
+                    .with_width(8.)
+                    .with_height(8.)
+                    .finish(),
+                );
+            }
+            row.add_child(ConstrainedBox::new(name_text).with_max_width(120.).finish());
 
-            Container::new(row)
+            Container::new(row.finish())
                 .with_background(if state.is_hovered() {
                     pill_bg_hover
                 } else {
@@ -6272,8 +6447,8 @@ impl Workspace {
                 .finish()
         })
         .with_cursor(Cursor::PointingHand)
-        .on_click(|ctx, _, _| {
-            ctx.dispatch_typed_action(WorkspaceAction::ShowTeamSwitcherMenu);
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(action.clone());
         })
         .finish();
 
@@ -7362,6 +7537,18 @@ impl Workspace {
         }
     }
 
+    pub(crate) fn is_inline_rename_editor_focused(&self, ctx: &AppContext) -> bool {
+        match ctx.focused_view_id(self.window_id) {
+            Some(id) if id == self.tab_rename_editor.id() => {
+                self.current_workspace_state.is_tab_being_renamed()
+            }
+            Some(id) if id == self.tab_group_rename_editor.id() => self
+                .current_workspace_state
+                .is_any_tab_group_being_renamed(),
+            _ => false,
+        }
+    }
+
     /// Opens the inline rename editor over the given group's header.
     pub fn rename_tab_group(&mut self, group_id: TabGroupId, ctx: &mut ViewContext<Self>) {
         let Some(group) = self.tab_groups.get(&group_id) else {
@@ -8215,6 +8402,7 @@ impl Workspace {
         AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
             auth_manager.set_user_onboarded(ctx);
         });
+        mark_hoa_onboarding_completed(ctx);
     }
 
     /// If the user is new and therefore has not seen the in app onboarding,
@@ -8247,6 +8435,7 @@ impl Workspace {
             AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
                 auth_manager.set_user_onboarded(ctx);
             });
+            mark_hoa_onboarding_completed(ctx);
 
             return true;
         }
@@ -15414,11 +15603,15 @@ impl Workspace {
             | AuthSecretFtuxViewEvent::Created { harness, name } => {
                 let harness = *harness;
                 let name = name.clone();
+                let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
                     settings.mark_harness_auth_ftux_completed(harness, ctx);
-                    let mut map = settings.last_selected_auth_secret.value().clone();
-                    map.insert(harness.config_name().to_string(), name);
-                    let _ = settings.last_selected_auth_secret.set_value(map, ctx);
+                    settings.persist_auth_secret_preference(
+                        &team_scope,
+                        harness,
+                        Some(AuthSecretPreference::Named(name)),
+                        ctx,
+                    );
                 });
                 me.dismiss_create_auth_secret_modal(ctx);
             }
@@ -17413,6 +17606,19 @@ impl Workspace {
         }
     }
 
+    fn trigger_external_alt_c_directory_search(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.is_readonly_shared_session_active(ctx) {
+            return;
+        }
+        if let Some(terminal_view_handle) = self.active_session_view(ctx) {
+            terminal_view_handle.update(ctx, |terminal_view, ctx| {
+                if !terminal_view.maybe_trigger_external_alt_c_directory_search(ctx) {
+                    terminal_view.write_user_bytes_to_pty(vec![C0::ESC, b'c'], ctx);
+                }
+            });
+        }
+    }
+
     fn get_active_input_view_handle(&self, app: &AppContext) -> Option<ViewHandle<Input>> {
         app.view(self.active_tab_pane_group())
             .active_session_view(app)
@@ -18209,6 +18415,12 @@ impl Workspace {
             WindowSettingsChangedEvent::BackgroundOpacity { .. } => {
                 ctx.notify();
             }
+            WindowSettingsChangedEvent::BackgroundBackdrop { .. } => {
+                let backdrop = *WindowSettings::as_ref(ctx).background_backdrop;
+                if let Some(window) = ctx.windows().platform_window(ctx.window_id()) {
+                    window.set_background_backdrop(backdrop);
+                }
+            }
             WindowSettingsChangedEvent::LeftPanelVisibilityAcrossTabs { .. } => {
                 if self.left_panel_visibility_across_tabs_enabled(ctx) {
                     self.left_panel_open = self
@@ -18677,6 +18889,17 @@ impl Workspace {
     ) {
         self.close_all_overlays(ctx);
         self.open_settings_pane(section, Some(search_query), ctx);
+    }
+    fn browse_teams(&mut self, ctx: &mut ViewContext<Self>) {
+        let show_join_modal = UserWorkspaces::as_ref(ctx)
+            .team_for_window(self.window_id)
+            .is_some();
+        self.show_settings_with_section(Some(SettingsSection::Teams), ctx);
+        if show_join_modal {
+            self.settings_pane.update(ctx, |view, ctx| {
+                view.open_teams_page_join_modal(ctx);
+            });
+        }
     }
 
     /// Opens the team settings page and fills the invite field with the given email. This is used when linking directing to
@@ -21304,10 +21527,6 @@ impl Workspace {
         appearance: &Appearance,
         ctx: &AppContext,
     ) {
-        if let Some(pill) = self.render_team_switcher_pill(appearance, ctx) {
-            target.add_child(pill);
-        }
-
         if let Some(update_pill) = self.render_tab_overflow_menu(ctx, appearance) {
             target.add_child(
                 Container::new(update_pill)
@@ -21349,6 +21568,10 @@ impl Workspace {
                 .with_margin_left(TAB_BAR_PADDING_LEFT)
                 .finish(),
             );
+        }
+
+        if let Some(pill) = self.render_team_switcher_pill(appearance, ctx) {
+            target.add_child(pill);
         }
 
         if FeatureFlag::AvatarInTabBar.is_enabled() {
@@ -23134,10 +23357,6 @@ impl Workspace {
             context.set.insert(flags::OPEN_WINDOWS_AT_CUSTOM_SIZE_FLAG);
         }
 
-        if *window_settings.background_blur_texture {
-            context.set.insert(flags::WINDOW_BLUR_TEXTURE_FLAG);
-        }
-
         if *window_settings.left_panel_visibility_across_tabs {
             context
                 .set
@@ -24452,6 +24671,7 @@ impl TypedActionView for Workspace {
                 init_content,
             }) => self.show_command_search(*filter, init_content, ctx),
             TriggerExternalCtrlTFileSearch => self.trigger_external_ctrl_t_file_search(ctx),
+            TriggerExternalAltCDirectorySearch => self.trigger_external_alt_c_directory_search(ctx),
             ImportToPersonalDrive => {
                 if let Some(personal_drive) = UserWorkspaces::as_ref(ctx).personal_drive(ctx) {
                     self.open_import_modal(personal_drive, &None, ctx);
@@ -26343,6 +26563,9 @@ impl TypedActionView for Workspace {
                     }
                 }
             }
+            BrowseTeams => {
+                self.browse_teams(ctx);
+            }
             ShowTeamSwitcherMenu => {
                 self.show_team_switcher_dropdown(ctx);
             }
@@ -26563,6 +26786,9 @@ impl View for Workspace {
             .focused_session_view(app)
         {
             let terminal_view = terminal_view.as_ref(app);
+            if terminal_view.external_alt_c_binding_eligible(app) {
+                context.set.insert(EXTERNAL_ALT_C_BINDING_CONTEXT);
+            }
             if terminal_view.is_long_running() {
                 context.set.insert("LongRunningCommand");
             }

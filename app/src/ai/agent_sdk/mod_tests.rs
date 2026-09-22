@@ -1,21 +1,32 @@
 use std::sync::Arc;
 
 use clap::Parser;
+use cloud_object_models::CodeForge;
 use serde_json::json;
-use warp_cli::agent::{AgentCommand, Harness, RunAgentArgs};
+use warp_cli::agent::{
+    AgentCommand, Harness, OutputFormat, RepositoryForge, RepositoryHeadRef,
+    RepositoryPreparationOverride, RunAgentArgs,
+};
 use warp_cli::artifact::{
     ArtifactCommand, DownloadArtifactArgs, GetArtifactArgs, UploadArtifactArgs,
 };
 use warp_cli::task::{MessageCommand, MessageSendArgs, MessageWatchArgs, TaskCommand};
 use warp_cli::{Args, CliCommand, Command};
 use warp_core::telemetry::TelemetryEvent;
+use warp_graphql::ai::AgentTaskState;
 use warpui::{App, SingletonEntity, WindowId};
 
 use super::{
     AgentDriverRunner, CommandAuthentication, command_authentication, command_requires_auth,
-    command_to_telemetry_event, reconcile_task_harness, resolve_local_run_team_scope,
+    command_to_telemetry_event, reconcile_task_harness, resolve_agent_driver_team_scope,
+    team_scope_for_task_scope, validated_driver_repositories_for_preparation,
 };
-use crate::ai::agent_sdk::driver::AgentDriverOptions;
+use crate::ai::agent_sdk::driver::{AgentDriverError, AgentDriverOptions};
+use crate::ai::ambient_agents::task::TaskScope;
+use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
+use crate::auth::AuthStateProvider;
+use crate::auth::user::{PrincipalType, User};
+use crate::network::NetworkStatus;
 use crate::root_view::NewWorkspaceSource;
 use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApiProvider;
@@ -23,6 +34,8 @@ use crate::server::server_api::ai::{AIClient, AgentConfigSnapshot, MockAIClient}
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::workspaces::team::{Team, TeamVisibility};
+use crate::workspaces::team_tester::TeamTesterStatus;
+use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 
@@ -38,6 +51,54 @@ fn parse_run_agent_args(args: &[&str]) -> RunAgentArgs {
         panic!("expected `agent run`");
     };
     args.clone()
+}
+
+#[test]
+fn driver_validation_uses_live_repository_membership() {
+    let mut options = agent_driver_options();
+    let mut environment =
+        AmbientAgentEnvironment::new(String::new(), None, vec![], String::new(), vec![]);
+    environment.source_repos = Some(vec![SourceRepo::new(
+        CodeForge::GitHub,
+        "warpdotdev".to_string(),
+        "warp".to_string(),
+    )]);
+    options.additional_source_repos = vec![SourceRepo::new(
+        CodeForge::GitHub,
+        "warpdotdev".to_string(),
+        "added-after-dispatch".to_string(),
+    )];
+    options.environment = Some(environment);
+    options.repository_preparation_overrides = vec![RepositoryPreparationOverride {
+        code_forge: RepositoryForge::GitHub,
+        repo_owner: "WarpDotDev".to_string(),
+        repo_name: "Warp".to_string(),
+        head: RepositoryHeadRef::CommitSha("0123456789abcdef0123456789abcdef01234567".to_string()),
+        clone_from: Some(warp_cli::agent::RepositoryIdentity {
+            code_forge: RepositoryForge::GitHub,
+            repo_owner: "warpdotdev".to_string(),
+            repo_name: "warp-for-benchmarks".to_string(),
+        }),
+        preserve_origin: true,
+    }];
+
+    let repositories = validated_driver_repositories_for_preparation(&options).unwrap();
+
+    assert_eq!(
+        repositories,
+        vec![
+            SourceRepo::new(
+                CodeForge::GitHub,
+                "warpdotdev".to_string(),
+                "warp".to_string(),
+            ),
+            SourceRepo::new(
+                CodeForge::GitHub,
+                "warpdotdev".to_string(),
+                "added-after-dispatch".to_string(),
+            ),
+        ]
+    );
 }
 
 fn team(uid: i64, name: &str) -> Team {
@@ -90,7 +151,7 @@ fn agent_driver_options() -> AgentDriverOptions {
         cloud_providers: vec![],
         environment: None,
         additional_source_repos: vec![],
-        repository_head_overrides: vec![],
+        repository_preparation_overrides: vec![],
         remove_repository_origins: false,
         selected_harness: Harness::Oz,
         third_party_harness_model_config: None,
@@ -103,6 +164,70 @@ fn agent_driver_options() -> AgentDriverOptions {
         strict_mcp_startup: false,
         mcp_startup_timeout: None,
     }
+}
+
+#[test]
+fn agent_run_setup_reports_terminal_team_metadata_refresh_failure() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(TeamTesterStatus::new);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+
+        let mut team_client = MockTeamClient::new();
+        team_client
+            .expect_workspaces_metadata()
+            .times(4)
+            .returning(|| Err(anyhow::anyhow!("workspace metadata unavailable")));
+        app.add_singleton_model(|ctx| TeamUpdateManager::new(Arc::new(team_client), None, ctx));
+        let mut ai_client = MockAIClient::new();
+        ai_client
+            .expect_post_agent_run_client_event()
+            .times(1..=2)
+            .returning(|_, _| Ok(()));
+        ai_client
+            .expect_update_agent_task()
+            .times(1)
+            .withf(
+                |task_id,
+                 task_state,
+                 session_id,
+                 conversation_id,
+                 status_message,
+                 session_debug_until,
+                 debug_agent_active| {
+                    task_id.to_string() == TASK_ID
+                        && *task_state == Some(AgentTaskState::Error)
+                        && session_id.is_none()
+                        && conversation_id.is_none()
+                        && status_message.as_ref().is_some_and(|status| {
+                            status.message
+                                == "Failed to refresh team metadata: workspace metadata unavailable"
+                        })
+                        && session_debug_until.is_none()
+                        && debug_agent_active.is_none()
+                },
+            )
+            .returning(|_, _, _, _, _, _, _| Ok(()));
+        let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
+
+        let runner = app.add_singleton_model(|_| AgentDriverRunner);
+        let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
+        let args = parse_run_agent_args(&["agent", "run", "--task-id", TASK_ID]);
+
+        let error = AgentDriverRunner::setup_and_run_driver(
+            foreground,
+            args,
+            ai_client,
+            OutputFormat::Text,
+        )
+        .await
+        .expect_err("terminal refresh errors should abort agent run setup");
+        let AgentDriverError::TeamMetadataRefreshFailed(source) = error else {
+            panic!("unexpected setup error: {error:#}");
+        };
+        assert_eq!(source.to_string(), "workspace metadata unavailable");
+    });
 }
 
 #[test]
@@ -126,7 +251,7 @@ fn multi_team_run_passes_selected_team_to_task_creation_and_headless_window() {
             &format!("--team={selected_team_uid}"),
         ]);
         let team_scope = app
-            .read(|ctx| resolve_local_run_team_scope(&args, ctx))
+            .read(|ctx| resolve_agent_driver_team_scope(&args, ctx))
             .unwrap()
             .expect("new local run should resolve a scope");
         assert_eq!(team_scope.team_uid(), Some(selected_team_uid));
@@ -190,12 +315,71 @@ fn task_id_run_skips_cli_team_resolution_and_new_run_scopes() {
     ]);
 
     App::test((), |app| async move {
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
         assert!(
-            app.read(|ctx| resolve_local_run_team_scope(&args, ctx))
+            app.read(|ctx| resolve_agent_driver_team_scope(&args, ctx))
                 .unwrap()
                 .is_none()
         );
     });
+}
+
+#[test]
+fn service_account_task_id_run_uses_sole_team_for_agent_driver() {
+    let args = parse_run_agent_args(&["agent", "run", "--task-id", TASK_ID]);
+
+    App::test((), |mut app| async move {
+        let owning_team = team(7, "Owning team");
+        let owning_team_uid = owning_team.uid;
+        initialize_team_scope_test_app(&mut app, vec![owning_team]);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.update(|ctx| {
+            let mut user = User::test();
+            user.principal_type = PrincipalType::ServiceAccount;
+            AuthStateProvider::as_ref(ctx).get().set_user(Some(user));
+        });
+
+        let team_scope = app
+            .read(|ctx| resolve_agent_driver_team_scope(&args, ctx))
+            .unwrap()
+            .expect("service-account task runs should initialize the driver team scope");
+
+        assert_eq!(team_scope.team_uid(), Some(owning_team_uid));
+    });
+}
+
+#[test]
+fn team_scope_for_task_scope_resolves_a_team_scoped_task() {
+    let owning_team_uid = ServerId::from(7);
+    let scope = TaskScope {
+        scope_type: "team".to_string(),
+        uid: owning_team_uid.to_string(),
+    };
+
+    assert_eq!(
+        team_scope_for_task_scope(&scope).team_uid(),
+        Some(owning_team_uid)
+    );
+}
+
+#[test]
+fn team_scope_for_task_scope_resolves_a_personal_task() {
+    let scope = TaskScope {
+        scope_type: "user".to_string(),
+        uid: "some-user-uid".to_string(),
+    };
+
+    assert_eq!(team_scope_for_task_scope(&scope).team_uid(), None);
+}
+
+#[test]
+fn team_scope_for_task_scope_falls_back_to_personal_for_an_unparseable_team_uid() {
+    let scope = TaskScope {
+        scope_type: "team".to_string(),
+        uid: "not-a-valid-uid".to_string(),
+    };
+
+    assert_eq!(team_scope_for_task_scope(&scope).team_uid(), None);
 }
 
 #[test]

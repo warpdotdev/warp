@@ -116,10 +116,10 @@ async fn permanent_http_failure_does_not_retry() {
         .times(1)
         .returning(move |_, _| {
             attempts_for_mock.fetch_add(1, Ordering::SeqCst);
-            Err(anyhow::Error::new(HttpStatusError {
-                status: 400,
-                body: "missing active execution".to_string(),
-            }))
+            Err(anyhow::Error::new(HttpStatusError::new(
+                400,
+                "missing active execution".to_string(),
+            )))
         });
 
     assert!(

@@ -285,13 +285,15 @@ fn report_shutdown(
 
         ctx.spawn(
             async move {
-                match (args.error_category, args.error_message) {
-                    (Some(category), Some(message)) => {
-                        client.report_error_shutdown(category, message).await
+                match (args.error_category, args.error_message, args.exit_code) {
+                    (Some(category), Some(message), exit_code) => {
+                        client
+                            .report_error_shutdown(category, message, exit_code)
+                            .await
                     }
-                    (None, None) => client.report_clean_shutdown().await,
+                    (None, None, None) => client.report_clean_shutdown().await,
                     _ => anyhow::bail!(
-                        "--error-category and --error-message must be provided together"
+                        "--error-category and --error-message must be provided together; --exit-code is only valid for abnormal shutdown"
                     ),
                 }
             },

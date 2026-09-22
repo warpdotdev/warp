@@ -72,6 +72,7 @@ fn prepared_remote_request_matches_gui_wire_semantics() {
             lifecycle_subscription: None,
             parent_conversation_id: crate::ai::agent::conversation::AIConversationId::new(),
             parent_run_id: Some("parent-run".to_string()),
+            request_team_scope: request_team_scope(),
         };
         app.read(|ctx| {
             let prepared = prepare_remote_child_launch(
@@ -176,6 +177,7 @@ fn repo_qualified_skill_spec_resolves_into_runtime_skills() {
             lifecycle_subscription: None,
             parent_conversation_id: crate::ai::agent::conversation::AIConversationId::new(),
             parent_run_id: Some("parent-run".to_string()),
+            request_team_scope: request_team_scope(),
         };
         app.read(|ctx| {
             let prepared = prepare_remote_child_launch(
@@ -227,6 +229,7 @@ fn missing_repo_qualified_skill_reports_repository_and_reason() {
             lifecycle_subscription: None,
             parent_conversation_id: crate::ai::agent::conversation::AIConversationId::new(),
             parent_run_id: Some("parent-run".to_string()),
+            request_team_scope: request_team_scope(),
         };
         let error = app.read(|ctx| {
             prepare_remote_child_launch(

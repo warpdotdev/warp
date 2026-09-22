@@ -105,7 +105,8 @@ pub use crate::ai::blocklist::telemetry::{
 };
 pub use crate::ai::blocklist::view_util::{
     FAILED_OUTPUT_USAGE_NOTICE_TEXT, FailedOutputPresentation, OUT_OF_CREDITS_SUBSCRIBE_LABEL,
-    failed_output_presentation, format_credits, should_show_failed_output_usage_notice,
+    failed_output_presentation, format_credits, format_dollars,
+    should_show_failed_output_usage_notice,
 };
 pub use crate::ai::blocklist::{
     AIActionStatus, AskUserQuestionExecutor, AttachmentType, BlocklistAIActionEvent,
@@ -116,8 +117,8 @@ pub use crate::ai::blocklist::{
     QueuedQueryModel, RequestFileEditsExecutor, RunAgentsExecutor, RunAgentsExecutorEvent,
     RunAgentsSpawningSnapshot, ShellCommandExecutor, ShellCommandExecutorEvent, StartAgentExecutor,
     StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest, StartAgentRequestId,
-    block_context_from_terminal_model, inherit_child_agent_settings,
-    maybe_build_ai_query_upsert_event,
+    TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR, block_context_from_terminal_model,
+    inherit_child_agent_settings, maybe_build_ai_query_upsert_event,
 };
 #[cfg(not(target_family = "wasm"))]
 pub use crate::ai::blocklist::{
@@ -266,8 +267,8 @@ pub use crate::tui_test_support::{
     add_tui_history_test_models, append_tui_history_test_command,
     blocklist_ai_history_model_with_queries, forkable_tui_conversation_for_test,
     queue_tui_permission_action, register_tui_input_mode_test_settings,
-    register_tui_session_view_test_singletons, set_tui_default_team_admin_for_test,
-    set_tui_workspace_teams_for_test,
+    register_tui_session_view_test_singletons, set_tui_auth_secret_preference_for_test,
+    set_tui_default_team_admin_for_test, set_tui_workspace_teams_for_test,
 };
 pub use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 pub use crate::util::image::{
@@ -330,20 +331,10 @@ pub fn tui_completion_context_has_exact_command(
         return true;
     }
 
-    #[cfg(feature = "completions_v2")]
-    {
-        completion_context
-            .command_registry()
-            .get_signature(command)
-            .is_some()
-    }
-    #[cfg(not(feature = "completions_v2"))]
-    {
-        completion_context
-            .command_registry()
-            .signature_from_line(command, case_sensitivity)
-            .is_some()
-    }
+    completion_context
+        .command_registry()
+        .signature_from_line(command, case_sensitivity)
+        .is_some()
 }
 
 /// Returns whether cloud conversation metadata failed to load.

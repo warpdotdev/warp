@@ -140,7 +140,7 @@ mkdir -p "$EXTRAS_DIR"
 # N.B. The bundled outputs will always be warp.js and warp_bg.wasm.
 if [[ $RELEASE_CHANNEL = "local" ]]; then
   WARP_BIN="warp"
-  FEATURES="$FEATURES,remote_tty"
+  FEATURES="$FEATURES"
 elif [[ $RELEASE_CHANNEL = "dev" ]]; then
   WARP_BIN="dev"
 elif [[ $RELEASE_CHANNEL = "preview" ]]; then

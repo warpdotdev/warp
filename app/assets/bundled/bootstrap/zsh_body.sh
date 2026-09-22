@@ -736,20 +736,28 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
     warp_send_json_message "{ \"hook\": \"ExternalShellWidgetSelection\", \"value\": { \"buffer\": \"$warp_escaped_selection\", \"session_id\": $WARP_SESSION_ID } }"
   }
 
-  # Runs the shell's own ctrl-t file-search widget as a foreground command.
+  # Runs fzf's ctrl-t file-search widget as a foreground command.
   function warp_run_external_ctrl_t_widget () {
     local result=""
-    case "$_WARP_EXTERNAL_CTRL_T_WIDGET" in
-      fzf-file-widget)
-        if (( $+functions[__fzf_select] )); then
-          result="$(__fzf_select)"
-        else  # fzf < 0.48
-          result="$(__fsel)"
-        fi
-        ;;
-    esac
+    if (( $+functions[__fzf_select] )); then
+      result="$(__fzf_select)"
+    else  # fzf < 0.48
+      result="$(__fsel)"
+    fi
     local warp_escaped_selection="$(warp_escape_json "$result")"
     warp_send_json_message "{ \"hook\": \"ExternalShellWidgetSelection\", \"value\": { \"buffer\": \"$warp_escaped_selection\", \"session_id\": $WARP_SESSION_ID } }"
+  }
+
+  function warp_run_external_alt_c_widget () {
+    setopt localoptions pipefail no_aliases 2>/dev/null
+    local dir="$(
+      FZF_DEFAULT_COMMAND=${FZF_ALT_C_COMMAND:-} \
+      FZF_DEFAULT_OPTS=$(__fzf_defaults "--reverse --walker=dir,follow,hidden --scheme=path" "${FZF_ALT_C_OPTS-} +m") \
+      FZF_DEFAULT_OPTS_FILE='' $(__fzfcmd) < /dev/tty
+    )"
+    [[ -n "$dir" ]] || return 0
+    dir=$(builtin cd -q >/dev/null -- "$dir" && echo "$PWD" || echo "$dir")
+    builtin cd -- "$dir"
   }
 
   function clear() {
@@ -1322,7 +1330,8 @@ esac
   # on the zshaddhistory hook.
   _warp_zshaddhistory() {
     _is_warp_generator_command "$1" && [[ "$1" != *"warp_run_external_ctrl_r_widget"* ]] && \
-      [[ "$1" != *"warp_run_external_ctrl_t_widget"* ]]
+      [[ "$1" != *"warp_run_external_ctrl_t_widget"* ]] && \
+      [[ "$1" != *"warp_run_external_alt_c_widget"* ]]
   }
 
   # Register this zshaddhistory hook after the user's RC files have been sourced,
@@ -1402,24 +1411,13 @@ esac
   if [[ "$warp_ctrl_r_binding" == '"^R" '* ]]; then
     warp_ctrl_r_widget="${warp_ctrl_r_binding#\"^R\" }"
     case "$warp_ctrl_r_widget" in
-      fzf-history-widget|atuin-search|atuin-search-viins|atuin-search-vicmd|_atuin_search_widget)
+      fzf-history-widget)
         _WARP_EXTERNAL_CTRL_R_WIDGET="$warp_ctrl_r_widget"
-        shell_plugins+=(external_ctrl_r_history)
+        shell_plugins+=(fzf)
         ;;
-    esac
-  fi
-
-  # Detect whether ctrl-t has been rebound to fzf's file-search widget.
-  _WARP_EXTERNAL_CTRL_T_WIDGET=""
-  warp_ctrl_t_binding="$(bindkey -M main '^T' 2>/dev/null)"
-  if [[ "$warp_ctrl_t_binding" == '"^T" '* ]]; then
-    warp_ctrl_t_widget="${warp_ctrl_t_binding#\"^T\" }"
-    case "$warp_ctrl_t_widget" in
-      fzf-file-widget)
-        if (( $+functions[__fzf_select] )) || (( $+functions[__fsel] )); then
-          _WARP_EXTERNAL_CTRL_T_WIDGET="$warp_ctrl_t_widget"
-          shell_plugins+=(external_ctrl_t_file)
-        fi
+      atuin-search|atuin-search-viins|atuin-search-vicmd|_atuin_search_widget)
+        _WARP_EXTERNAL_CTRL_R_WIDGET="$warp_ctrl_r_widget"
+        shell_plugins+=(atuin)
         ;;
     esac
   fi

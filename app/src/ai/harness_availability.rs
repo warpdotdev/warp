@@ -15,13 +15,14 @@ use crate::ai::harness_display;
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
+use crate::server::ids::ServerId;
 use crate::server::retry_strategies::{
     OUT_OF_BAND_REQUEST_RETRY_STRATEGY, is_transient_graphql_or_http_error,
 };
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::managed_secrets::AppManagedSecretManager as ManagedSecretManager;
 use crate::server::team_scope::RequestTeamScope;
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces, UserWorkspacesEvent};
 
 const CACHE_KEY: &str = "AvailableHarnesses";
 const AUTH_SECRET_FETCH_FAILURE_COOLDOWN: Duration = Duration::from_secs(60);
@@ -86,15 +87,24 @@ pub struct AuthSecretEntry {
     pub name: String,
     pub owner: SecretOwner,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct AuthSecretCacheKey {
+    team_uid: Option<ServerId>,
+    harness: Harness,
+}
+
+impl AuthSecretCacheKey {
+    fn new(team_scope: &(impl TeamScope + ?Sized), harness: Harness) -> Self {
+        Self {
+            team_uid: team_scope.team_uid(),
+            harness,
+        }
+    }
+}
 
 pub enum HarnessAvailabilityEvent {
     Changed,
-    AuthSecretsLoaded,
-    /// Emitted when a lazy auth-secrets fetch fails. Subscribers should
-    /// re-render so any "Loading…" placeholders can transition to an
-    /// error state — without this signal the picker would otherwise be
-    /// stuck on the loading placeholder until the next refetch.
-    AuthSecretsFetchFailed,
+    AuthSecretsChanged,
     AuthSecretCreated {
         harness: Harness,
         name: String,
@@ -117,8 +127,8 @@ pub enum HarnessAvailabilityEvent {
 
 pub struct HarnessAvailabilityModel {
     harnesses: Vec<HarnessAvailability>,
-    auth_secrets: HashMap<Harness, AuthSecretFetchState>,
-    auth_secret_retry_after: HashMap<Harness, Instant>,
+    auth_secrets: HashMap<AuthSecretCacheKey, AuthSecretFetchState>,
+    auth_secret_retry_after: HashMap<AuthSecretCacheKey, Instant>,
 }
 
 impl HarnessAvailabilityModel {
@@ -136,16 +146,14 @@ impl HarnessAvailabilityModel {
 
         ctx.subscribe_to_model(&AuthManager::handle(ctx), |me, _, event, ctx| {
             if let AuthManagerEvent::AuthComplete = event {
-                let cached_harnesses: Vec<Harness> = me.auth_secrets.keys().copied().collect();
-                for harness in cached_harnesses {
-                    me.invalidate_auth_secrets(harness);
-                }
+                me.invalidate_auth_secrets();
                 me.refresh(ctx);
             }
         });
 
         ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
             if let UserWorkspacesEvent::TeamsChanged = event {
+                me.invalidate_auth_secrets();
                 me.refresh(ctx);
             }
         });
@@ -196,17 +204,27 @@ impl HarnessAvailabilityModel {
             .filter(|m| !m.is_empty())
     }
 
-    pub fn auth_secrets_for(&self, harness: Harness) -> &AuthSecretFetchState {
+    pub fn auth_secrets_for<S: TeamScope + ?Sized>(
+        &self,
+        team_scope: &S,
+        harness: Harness,
+    ) -> &AuthSecretFetchState {
         self.auth_secrets
-            .get(&harness)
+            .get(&AuthSecretCacheKey::new(team_scope, harness))
             .unwrap_or(&AuthSecretFetchState::NotFetched)
     }
-
-    pub fn ensure_auth_secrets_fetched(&mut self, harness: Harness, ctx: &mut ModelContext<Self>) {
-        match self.auth_secrets_for(harness) {
-            AuthSecretFetchState::NotFetched => self.fetch_auth_secrets(harness, ctx),
-            AuthSecretFetchState::Failed(_) if self.can_retry_auth_secret_fetch(harness) => {
-                self.fetch_auth_secrets(harness, ctx);
+    pub fn ensure_auth_secrets_fetched<S: TeamScope + ?Sized>(
+        &mut self,
+        team_scope: &S,
+        harness: Harness,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match self.auth_secrets_for(team_scope, harness) {
+            AuthSecretFetchState::NotFetched => self.fetch_auth_secrets(team_scope, harness, ctx),
+            AuthSecretFetchState::Failed(_)
+                if self.can_retry_auth_secret_fetch(team_scope, harness) =>
+            {
+                self.fetch_auth_secrets(team_scope, harness, ctx);
             }
             AuthSecretFetchState::Failed(_)
             | AuthSecretFetchState::Loading
@@ -214,7 +232,12 @@ impl HarnessAvailabilityModel {
         }
     }
 
-    fn fetch_auth_secrets(&mut self, harness: Harness, ctx: &mut ModelContext<Self>) {
+    fn fetch_auth_secrets<S: TeamScope + ?Sized>(
+        &mut self,
+        team_scope: &S,
+        harness: Harness,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let Some(agent_harness) = harness_to_graphql_harness(harness) else {
             return;
         };
@@ -223,18 +246,19 @@ impl HarnessAvailabilityModel {
             return;
         }
 
+        let cache_key = AuthSecretCacheKey::new(team_scope, harness);
+        let request_team_scope = RequestTeamScope::from_scope(team_scope);
         self.auth_secrets
-            .insert(harness, AuthSecretFetchState::Loading);
-        self.auth_secret_retry_after.remove(&harness);
+            .insert(cache_key, AuthSecretFetchState::Loading);
+        self.auth_secret_retry_after.remove(&cache_key);
 
         let api = ServerApiProvider::as_ref(ctx).get_managed_secrets_client();
-        let request_scope = RequestTeamScope::temporary_managed_secrets_server_fallback();
         ctx.spawn_with_retry_on_error_when(
             move || {
                 let api = api.clone();
                 let agent_harness = agent_harness.clone();
                 async move {
-                    api.list_harness_auth_secrets(&request_scope, agent_harness)
+                    api.list_harness_auth_secrets(&request_team_scope, agent_harness)
                         .await
                 }
             },
@@ -242,80 +266,80 @@ impl HarnessAvailabilityModel {
             is_transient_graphql_or_http_error,
             move |me,
                   result: RequestState<Vec<warp_graphql::managed_secrets::ManagedSecret>>,
-                  ctx| match result {
-                RequestState::RequestSucceeded(secrets) => {
-                    let entries = secrets
-                        .into_iter()
-                        .map(|s| AuthSecretEntry {
-                            owner: secret_owner_from_space(&s.owner),
-                            name: s.name,
-                        })
-                        .collect();
-                    me.auth_secrets
-                        .insert(harness, AuthSecretFetchState::Loaded(entries));
-                    me.auth_secret_retry_after.remove(&harness);
-                    ctx.emit(HarnessAvailabilityEvent::AuthSecretsLoaded);
-                }
-                RequestState::RequestFailedRetryPending(e) => {
-                    log::warn!("Failed to fetch harness auth secrets; retrying: {e:#}");
-                }
-                RequestState::RequestFailed(e) => {
-                    let msg = e.to_string();
-                    report_error!(e.context("Failed to fetch harness auth secrets"));
-                    me.auth_secrets
-                        .insert(harness, AuthSecretFetchState::Failed(msg));
-                    me.auth_secret_retry_after
-                        .insert(harness, Instant::now() + AUTH_SECRET_FETCH_FAILURE_COOLDOWN);
-                    // Notify subscribers so they can drop any
-                    // "Loading…" placeholder rendered during the
-                    // in-flight fetch and surface the error state.
-                    ctx.emit(HarnessAvailabilityEvent::AuthSecretsFetchFailed);
+                  ctx| {
+                match result {
+                    RequestState::RequestSucceeded(secrets) => {
+                        let entries = secrets
+                            .into_iter()
+                            .map(|s| AuthSecretEntry {
+                                owner: secret_owner_from_space(&s.owner),
+                                name: s.name,
+                            })
+                            .collect();
+                        me.auth_secrets
+                            .insert(cache_key, AuthSecretFetchState::Loaded(entries));
+                        me.auth_secret_retry_after.remove(&cache_key);
+                        ctx.emit(HarnessAvailabilityEvent::AuthSecretsChanged);
+                    }
+                    RequestState::RequestFailedRetryPending(e) => {
+                        log::warn!("Failed to fetch harness auth secrets; retrying: {e:#}");
+                    }
+                    RequestState::RequestFailed(e) => {
+                        let msg = e.to_string();
+                        report_error!(e.context("Failed to fetch harness auth secrets"));
+                        me.auth_secrets
+                            .insert(cache_key, AuthSecretFetchState::Failed(msg));
+                        me.auth_secret_retry_after.insert(
+                            cache_key,
+                            Instant::now() + AUTH_SECRET_FETCH_FAILURE_COOLDOWN,
+                        );
+                        ctx.emit(HarnessAvailabilityEvent::AuthSecretsChanged);
+                    }
                 }
             },
         );
     }
 
-    fn can_retry_auth_secret_fetch(&self, harness: Harness) -> bool {
+    fn invalidate_auth_secrets(&mut self) {
+        self.auth_secrets.clear();
+        self.auth_secret_retry_after.clear();
+    }
+
+    fn can_retry_auth_secret_fetch(
+        &self,
+        team_scope: &(impl TeamScope + ?Sized),
+        harness: Harness,
+    ) -> bool {
         self.auth_secret_retry_after
-            .get(&harness)
+            .get(&AuthSecretCacheKey::new(team_scope, harness))
             .map(|retry_after| Instant::now() >= *retry_after)
             .unwrap_or(true)
     }
 
-    pub fn invalidate_auth_secrets(&mut self, harness: Harness) {
-        self.auth_secrets.remove(&harness);
-        self.auth_secret_retry_after.remove(&harness);
-    }
-
-    pub fn create_auth_secret(
+    pub fn create_auth_secret<S: TeamScope + ?Sized>(
         &mut self,
+        team_scope: &S,
         harness: Harness,
         name: String,
         value: ManagedSecretValue,
         owner: SecretOwner,
         ctx: &mut ModelContext<Self>,
     ) {
+        let cache_key = AuthSecretCacheKey::new(team_scope, harness);
+        let request_team_scope = RequestTeamScope::from_scope(team_scope);
         let manager = ManagedSecretManager::handle(ctx);
-        let request_scope = RequestTeamScope::temporary_managed_secrets_server_fallback();
         let create_future =
             manager
                 .as_ref(ctx)
-                .create_secret(request_scope, owner, name, value, None);
+                .create_secret(request_team_scope, owner, name, value, None);
         ctx.spawn(create_future, move |me, result, ctx| match result {
             Ok(secret) => {
                 let entry = AuthSecretEntry {
                     name: secret.name.clone(),
                     owner: secret_owner_from_space(&secret.owner),
                 };
-                match me.auth_secrets.get_mut(&harness) {
-                    Some(AuthSecretFetchState::Loaded(entries)) => {
-                        entries.push(entry);
-                    }
-                    _ => {
-                        me.auth_secrets
-                            .insert(harness, AuthSecretFetchState::Loaded(vec![entry]));
-                    }
-                }
+                me.insert_created_auth_secret_entry(cache_key, entry);
+                ctx.emit(HarnessAvailabilityEvent::AuthSecretsChanged);
                 ctx.emit(HarnessAvailabilityEvent::AuthSecretCreated {
                     harness,
                     name: secret.name,
@@ -329,26 +353,25 @@ impl HarnessAvailabilityModel {
         });
     }
 
-    pub fn delete_auth_secret(
+    pub fn delete_auth_secret<S: TeamScope + ?Sized>(
         &mut self,
+        team_scope: &S,
         harness: Harness,
         name: String,
         owner: SecretOwner,
         ctx: &mut ModelContext<Self>,
     ) {
+        let cache_key = AuthSecretCacheKey::new(team_scope, harness);
+        let request_team_scope = RequestTeamScope::from_scope(team_scope);
         let manager = ManagedSecretManager::handle(ctx);
-        let request_scope = RequestTeamScope::temporary_managed_secrets_server_fallback();
         let delete_future =
             manager
                 .as_ref(ctx)
-                .delete_secret(request_scope, owner.clone(), name.clone());
+                .delete_secret(request_team_scope, owner.clone(), name.clone());
         ctx.spawn(delete_future, move |me, result, ctx| match result {
             Ok(()) => {
-                if let Some(AuthSecretFetchState::Loaded(entries)) =
-                    me.auth_secrets.get_mut(&harness)
-                {
-                    remove_deleted_auth_secret_entry(entries, &name, &owner);
-                }
+                me.remove_deleted_auth_secret_entries(cache_key, &name, &owner);
+                ctx.emit(HarnessAvailabilityEvent::AuthSecretsChanged);
                 ctx.emit(HarnessAvailabilityEvent::AuthSecretDeleted {
                     harness,
                     name,
@@ -368,6 +391,50 @@ impl HarnessAvailabilityModel {
         });
     }
 
+    fn insert_created_auth_secret_entry(
+        &mut self,
+        request_cache_key: AuthSecretCacheKey,
+        entry: AuthSecretEntry,
+    ) {
+        for (cache_key, state) in &mut self.auth_secrets {
+            if cache_key.harness == request_cache_key.harness
+                && cache_key_matches_owner(cache_key, &entry.owner)
+                && let AuthSecretFetchState::Loaded(entries) = state
+                && !entries
+                    .iter()
+                    .any(|existing| existing.name == entry.name && existing.owner == entry.owner)
+            {
+                entries.push(entry.clone());
+            }
+        }
+        match self.auth_secrets.get_mut(&request_cache_key) {
+            Some(AuthSecretFetchState::Loaded(entries))
+                if entries.iter().any(|existing| {
+                    existing.name == entry.name && existing.owner == entry.owner
+                }) => {}
+            Some(AuthSecretFetchState::Loaded(entries)) => entries.push(entry),
+            _ => {
+                self.auth_secrets
+                    .insert(request_cache_key, AuthSecretFetchState::Loaded(vec![entry]));
+            }
+        }
+    }
+
+    fn remove_deleted_auth_secret_entries(
+        &mut self,
+        request_cache_key: AuthSecretCacheKey,
+        name: &str,
+        owner: &SecretOwner,
+    ) {
+        for (cache_key, state) in &mut self.auth_secrets {
+            if cache_key.harness == request_cache_key.harness
+                && cache_key_matches_owner(cache_key, owner)
+                && let AuthSecretFetchState::Loaded(entries) = state
+            {
+                remove_deleted_auth_secret_entry(entries, name, owner);
+            }
+        }
+    }
     pub fn refresh(&self, ctx: &mut ModelContext<Self>) {
         // The endpoint queries `user`, which requires auth.
         if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
@@ -384,10 +451,7 @@ impl HarnessAvailabilityModel {
                         me.harnesses = new_harnesses;
                         me.cache(ctx);
                         // Invalidate cached auth secrets so the next menu open refetches.
-                        let stale: Vec<Harness> = me.auth_secrets.keys().copied().collect();
-                        for harness in stale {
-                            me.invalidate_auth_secrets(harness);
-                        }
+                        me.invalidate_auth_secrets();
                         ctx.emit(HarnessAvailabilityEvent::Changed);
                     }
                 }
@@ -449,6 +513,15 @@ fn remove_deleted_auth_secret_entry(
 ) {
     entries.retain(|entry| entry.name.as_str() != name || &entry.owner != owner);
 }
+
+fn cache_key_matches_owner(cache_key: &AuthSecretCacheKey, owner: &SecretOwner) -> bool {
+    match owner {
+        SecretOwner::CurrentUser => true,
+        SecretOwner::Team { team_uid } => cache_key
+            .team_uid
+            .is_some_and(|cached_team_uid| cached_team_uid.uid() == *team_uid),
+    }
+}
 fn harness_to_graphql_harness(harness: Harness) -> Option<warp_graphql::ai::AgentHarness> {
     match harness {
         Harness::Oz => Some(warp_graphql::ai::AgentHarness::Oz),
@@ -464,3 +537,7 @@ impl Entity for HarnessAvailabilityModel {
 }
 
 impl SingletonEntity for HarnessAvailabilityModel {}
+
+#[cfg(test)]
+#[path = "harness_availability_tests.rs"]
+mod tests;

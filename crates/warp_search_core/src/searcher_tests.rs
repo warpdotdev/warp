@@ -12,6 +12,7 @@ use crate::searcher::{
     AsyncSearcher, CustomTokenizer, FullTextSearchDocumentEntry, FullTextSearchFieldValue,
     MIN_MEMORY_BUDGET, PendingRebuild, QueuedItem, SearchDocumentEntry, SearchSchemaConfig,
     SearcherEvent, SearcherProducerState, SimpleFullTextSearcher, merge_with_rebuild,
+    process_searcher_events,
 };
 
 /// Builds an [`AsyncSearcher`] with no background writer draining its channel, so a test can
@@ -743,6 +744,36 @@ fn poll_until(deadline: Duration, mut converged: impl FnMut() -> bool) -> bool {
     }
 }
 
+/// Builds an [`AsyncSearcher`] backed by the real background writer task (unlike
+/// [`async_searcher_without_background_writer`]), with `rebuild` already stored in
+/// `producer_state` *before* that task is spawned. Setting it first, rather than after
+/// construction, guarantees the writer's very first loop iteration observes the rebuild and
+/// applies it immediately -- without ever waiting on the events channel or the idle timeout --
+/// instead of racing that first iteration against a separate call that sets it afterward.
+fn async_searcher_with_stranded_rebuild<C: SearchSchemaConfig>(
+    searcher: SimpleFullTextSearcher<C>,
+    background_executor: &Background,
+    rebuild: PendingRebuild,
+) -> AsyncSearcher<C> {
+    let (tx, rx) = async_channel::unbounded();
+    let producer_state = Arc::new(Mutex::new(SearcherProducerState {
+        next_sequence: rebuild.sequence + 1,
+        pending_rebuild: Some(rebuild),
+    }));
+    background_executor
+        .spawn(process_searcher_events(
+            rx,
+            producer_state.clone(),
+            searcher.writer.clone(),
+        ))
+        .detach();
+    AsyncSearcher {
+        searcher,
+        tx,
+        producer_state,
+    }
+}
+
 /// Regression test for a latency hazard identified while simplifying the wake-up accounting for
 /// [`QueuedItem::RebuildMarker`]: since the background writer takes the pending rebuild and
 /// drains the events channel as two separate (non-atomic) steps, a rebuild whose marker gets
@@ -752,17 +783,12 @@ fn poll_until(deadline: Duration, mut converged: impl FnMut() -> bool) -> bool {
 /// this by checking whether a rebuild is already pending *before* waiting on the channel at all,
 /// at the top of every cycle.
 ///
-/// Rather than racing real wall-clock timing against the background writer to try to land in
-/// that narrow window (which is unreliable: in practice the writer is back to idly waiting long
-/// before a next request arrives, so the race almost never reproduces), this stores a pending
-/// rebuild directly in `producer_state` without going through `rebuild_index_async` at all --
-/// deliberately bypassing the marker mechanism entirely, so no marker is ever sent for it. That
-/// is exactly the state a rebuild would be left in if its marker had been silently swallowed:
-/// `pending_rebuild` is `Some`, but nothing is going to arrive on the channel to announce it.
-/// This still requires the real background writer (not the synchronous test harness used
-/// elsewhere in this file), since the fix lives in that writer's wait/skip logic. The assertion
-/// is a bounded poll well under the idle timeout, so this test fails (times out) if the fix
-/// regresses, rather than passing on a technicality.
+/// This reproduces exactly the state a rebuild would be left in if its marker had been silently
+/// swallowed: [`async_searcher_with_stranded_rebuild`] populates `pending_rebuild` directly,
+/// bypassing `rebuild_index_async` entirely, so no marker is ever sent for it. It still requires
+/// the real background writer (not the synchronous test harness used elsewhere in this file),
+/// since the fix lives in that writer's wait/skip logic. The assertion is a bounded poll well
+/// under the idle timeout, so this test fails (times out) if the fix regresses.
 #[test]
 fn test_searcher_async_rebuild_is_not_delayed_when_its_marker_is_never_sent() {
     define_search_schema!(
@@ -774,25 +800,20 @@ fn test_searcher_async_rebuild_is_not_delayed_when_its_marker_is_never_sent() {
         id_fields: [id: u64]
     );
 
-    let background_executor = Arc::new(Background::default());
+    let background_executor = Background::default();
+    let searcher = TEST_SCHEMA.create_searcher(MIN_MEMORY_BUDGET);
+    let rebuild = PendingRebuild {
+        sequence: 0,
+        documents: vec![
+            SearchDoc {
+                name: "stranded rebuild".to_owned(),
+                id: 1,
+            }
+            .into_document_entry(),
+        ],
+    };
     let searcher_async =
-        TEST_SCHEMA.create_async_searcher(MIN_MEMORY_BUDGET, background_executor.clone());
-
-    {
-        let mut state = searcher_async.producer_state.lock();
-        let sequence = state.next_sequence;
-        state.next_sequence += 1;
-        state.pending_rebuild = Some(PendingRebuild {
-            sequence,
-            documents: vec![
-                SearchDoc {
-                    name: "stranded rebuild".to_owned(),
-                    id: 1,
-                }
-                .into_document_entry(),
-            ],
-        });
-    }
+        async_searcher_with_stranded_rebuild(searcher, &background_executor, rebuild);
 
     let converged = poll_until(Duration::from_secs(2), || {
         searcher_async

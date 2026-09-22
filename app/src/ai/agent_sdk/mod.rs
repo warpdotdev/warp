@@ -55,11 +55,13 @@ use crate::ai::agent_sdk::setup_observability::{
     OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::ambient_agents::task::HarnessConfig;
+use crate::ai::ambient_agents::task::{HarnessConfig, TaskScope};
 use crate::ai::attachment_utils::attachments_download_dir;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::aws_credentials::refresh_aws_credentials;
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::cloud_environments::{
+    AmbientAgentEnvironment, CloudAmbientAgentEnvironment, SourceRepo,
+};
 use crate::ai::llms::LLMId;
 use crate::ai::skills::{
     ResolveSkillError, ResolvedSkill, clone_repo_for_skill, resolve_skill_spec,
@@ -70,8 +72,11 @@ use crate::cloud_object::CloudObjectLookup as _;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::send_telemetry_sync_from_app_ctx;
 use crate::server::ids::{ServerId, SyncId};
+use crate::server::retry_strategies::with_retry;
 use crate::server::server_api::ServerApiProvider;
-use crate::server::server_api::ai::{AIClient, AgentConfigSnapshot, GitCredential};
+use crate::server::server_api::ai::{
+    AIClient, AgentConfigSnapshot, GitCredential, TaskGitCredentialsError,
+};
 use crate::server::server_api::managed_secrets::AppManagedSecretManager as ManagedSecretManager;
 use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
@@ -126,6 +131,24 @@ fn maybe_warn_team_api_key(ctx: &AppContext) {
         "\x1b[33mWarning: Free cloud credits apply to personal runs only but this run uses \
          a team API key. If you want to use free cloud credits, consider using a personal API key instead.\x1b[0m"
     );
+}
+
+fn validated_driver_repositories_for_preparation(
+    options: &AgentDriverOptions,
+) -> Result<Vec<SourceRepo>, driver::environment::PrepareEnvironmentError> {
+    let source_repos = driver::environment::merge_repos_deduped(
+        options
+            .environment
+            .as_ref()
+            .map(AmbientAgentEnvironment::effective_repos)
+            .unwrap_or_default(),
+        options.additional_source_repos.clone(),
+    )?;
+    driver::environment::validate_repository_preparation_overrides(
+        &source_repos,
+        &options.repository_preparation_overrides,
+    )?;
+    Ok(source_repos)
 }
 
 /// Run a Warp CLI command.
@@ -633,15 +656,42 @@ impl warpui::Entity for AgentDriverRunner {
 
 impl warpui::SingletonEntity for AgentDriverRunner {}
 
-fn resolve_local_run_team_scope(
+fn resolve_agent_driver_team_scope(
     args: &RunAgentArgs,
     ctx: &AppContext,
 ) -> anyhow::Result<Option<TeamScopeForCli>> {
-    if args.task_id.is_some() {
+    // We need a team scope if either:
+    // 1. This is a local team-visible task that doesn't exist on the server yet.
+    // 2. This task is authenticated as a service account
+    if args.task_id.is_some() && !AuthStateProvider::as_ref(ctx).get().is_service_account() {
         return Ok(None);
     }
     let scope = common::resolve_team_scope(&args.team_selection, ctx)?;
     Ok(Some(scope))
+}
+
+/// Converts a server-reported [`TaskScope`] into the [`TeamScopeForCli`] the driver's headless
+/// window should be registered under.
+///
+/// This is the task's *actual* ownership, as recorded on the server, and takes precedence over
+/// any scope resolved from CLI args or the caller's team memberships: a service-account worker
+/// resuming an existing `--task-id` run may belong to zero, one, or many teams that have nothing
+/// to do with the specific task it was asked to continue, so only the task's own scope can say
+/// which team (if any) actually owns it.
+fn team_scope_for_task_scope(scope: &TaskScope) -> TeamScopeForCli {
+    if !scope.is_team() {
+        return TeamScopeForCli::Personal;
+    }
+    match ServerId::try_from(scope.uid.as_str()) {
+        Ok(team_uid) => TeamScopeForCli::Team(team_uid),
+        Err(err) => {
+            log::warn!(
+                "Task reported an invalid team scope uid '{}': {err}",
+                scope.uid
+            );
+            TeamScopeForCli::Personal
+        }
+    }
 }
 
 impl AgentDriverRunner {
@@ -661,48 +711,48 @@ impl AgentDriverRunner {
         // Local CLI-created runs may not have a task yet, so those setup events explicitly no-op.
         let mut task_id: Option<AmbientAgentTaskId> =
             args.task_id.as_deref().and_then(|s| s.parse().ok());
-        Self::set_ambient_agent_task_id(&foreground, task_id).await?;
-        let background = foreground.spawn(|_, ctx| ctx.background_executor()).await?;
-        let setup_events = match task_id {
-            Some(task_id) => SetupClientEventReporter::new(task_id, server_api.clone(), background),
-            None => SetupClientEventReporter::noop(server_api.clone(), background),
-        };
-        setup_events
-            .post_timeline_event(OzRunTimelineEvent::WorkerContainerReady)
-            .await;
-
-        // Ensure we've synced team state before starting the driver.
-        setup_events
-            .record_result(
-                SetupStep::TeamMetadataRefresh,
-                Self::refresh_team_metadata(&foreground),
-            )
-            .await?;
-        let args_for_team_scope = args.clone();
-        let local_run_team_scope = foreground
-            .spawn(move |_, ctx| resolve_local_run_team_scope(&args_for_team_scope, ctx))
-            .await?
-            .map_err(AgentDriverError::ConfigBuildFailed)?;
-
-        // Wait for Warp Drive to sync before building the task config, since
-        // prompt resolution (SavedPrompt -> workflow lookup) and environment
-        // resolution (CloudAmbientAgentEnvironment lookup) depend on it.
-        setup_events
-            .record_result(SetupStep::WarpDriveSync, async {
-                if foreground
-                    .spawn(|_, ctx| common::refresh_warp_drive(ctx))
-                    .await?
-                    .await
-                    .is_err()
-                {
-                    return Err(AgentDriverError::WarpDriveSyncFailed);
-                }
-                Ok(())
-            })
-            .await?;
-
         // Set up and run the driver, reporting any errors back to the server.
         let result: Result<(), AgentDriverError> = async {
+            Self::set_ambient_agent_task_id(&foreground, task_id).await?;
+            let background = foreground.spawn(|_, ctx| ctx.background_executor()).await?;
+            let setup_events = match task_id {
+                Some(task_id) => SetupClientEventReporter::new(task_id, server_api.clone(), background),
+                None => SetupClientEventReporter::noop(server_api.clone(), background),
+            };
+            setup_events
+                .post_timeline_event(OzRunTimelineEvent::WorkerContainerReady)
+                .await;
+
+            // Ensure we've synced team state before starting the driver.
+            setup_events
+                .record_result(
+                    SetupStep::TeamMetadataRefresh,
+                    Self::refresh_team_metadata(&foreground),
+                )
+                .await?;
+            let args_for_team_scope = args.clone();
+            let agent_driver_team_scope = foreground
+                .spawn(move |_, ctx| resolve_agent_driver_team_scope(&args_for_team_scope, ctx))
+                .await?
+                .map_err(AgentDriverError::ConfigBuildFailed)?;
+
+            // Wait for Warp Drive to sync before building the task config, since
+            // prompt resolution (SavedPrompt -> workflow lookup) and environment
+            // resolution (CloudAmbientAgentEnvironment lookup) depend on it.
+            setup_events
+                .record_result(SetupStep::WarpDriveSync, async {
+                    if foreground
+                        .spawn(|_, ctx| common::refresh_warp_drive(ctx))
+                        .await?
+                        .await
+                        .is_err()
+                    {
+                        return Err(AgentDriverError::WarpDriveSyncFailed);
+                    }
+                    Ok(())
+                })
+                .await?;
+
             // Pull relevant variables out of args before moving it into the closure.
             let share_requests = args.share.share.clone();
             let bedrock_inference_role = args.bedrock_inference_role.clone();
@@ -734,7 +784,7 @@ impl AgentDriverRunner {
                 Self::build_driver_options_and_task(
                     &foreground,
                     args,
-                    local_run_team_scope,
+                    agent_driver_team_scope,
                     &server_api,
                     &setup_events,
                 )
@@ -858,13 +908,17 @@ impl AgentDriverRunner {
             )
             .await?
             .await
-            .map_err(|_| AgentDriverError::TeamMetadataRefreshTimeout)
+            .map_err(AgentDriverError::TeamMetadataRefreshFailed)
     }
 
     async fn set_ambient_agent_task_id(
         foreground: &ModelSpawner<Self>,
         task_id: Option<AmbientAgentTaskId>,
     ) -> Result<(), AgentDriverError> {
+        #[cfg(feature = "crash_reporting")]
+        if let Some(task_id) = task_id {
+            crate::crash_reporting::set_task_id_tag(&task_id.to_string());
+        }
         foreground
             .spawn(move |_, ctx| {
                 ServerApiProvider::handle(ctx)
@@ -879,19 +933,39 @@ impl AgentDriverRunner {
     async fn fetch_task_git_credentials(
         task_id_str: String,
         ai_client: Arc<dyn AIClient>,
-    ) -> anyhow::Result<Vec<GitCredential>> {
-        let workload_token = warp_isolation_platform::issue_workload_token(Some(
-            std::time::Duration::from_secs(5 * 60),
-        ))
-        .await?
-        .token;
-        // Bootstrap has no prior credential store, so a one-host success would
-        // leave the other host unauthenticated for the first clone. Partial
-        // refresh is reserved for later cycles after stores exist.
-        let response = ai_client
-            .get_task_git_credentials(task_id_str, workload_token, false)
-            .await?;
-        driver::git_credentials::credentials_for_bootstrap(response)
+    ) -> Result<Vec<GitCredential>, TaskGitCredentialsError> {
+        with_retry(
+            "Git credentials bootstrap",
+            || {
+                let task_id_str = task_id_str.clone();
+                let ai_client = Arc::clone(&ai_client);
+                async move {
+                    driver::git_credentials::ensure_workload_token_available()?;
+
+                    let workload_token = warp_isolation_platform::issue_workload_token(Some(
+                        std::time::Duration::from_secs(5 * 60),
+                    ))
+                    .await
+                    .map_err(|error| TaskGitCredentialsError::Request(error.into()))?
+                    .token;
+                    let response = ai_client
+                        .get_task_git_credentials(task_id_str, workload_token, false)
+                        .await?;
+                    driver::git_credentials::credentials_for_bootstrap(response)
+                        .map_err(TaskGitCredentialsError::Request)
+                }
+            },
+            driver::git_credentials::is_retryable,
+            |delay| async move {
+                warpui::r#async::Timer::after(delay).await;
+            },
+            |attempts_made| {
+                driver::git_credentials::GIT_CREDENTIALS_BOOTSTRAP_BACKOFF
+                    .get(attempts_made)
+                    .copied()
+            },
+        )
+        .await
     }
 
     async fn bootstrap_git_credentials_for_task(
@@ -944,9 +1018,14 @@ impl AgentDriverRunner {
             })
             .await?;
 
-        let credentials = match Self::fetch_task_git_credentials(task_id_str, ai_client).await {
+        let credentials = match Self::fetch_task_git_credentials(
+            task_id_str.clone(),
+            Arc::clone(&ai_client),
+        )
+        .await
+        {
             Ok(credentials) => credentials,
-            Err(err)
+            Err(TaskGitCredentialsError::Request(err))
                 if err
                     .downcast_ref::<IsolationPlatformError>()
                     .is_some_and(|err| {
@@ -957,9 +1036,9 @@ impl AgentDriverRunner {
                 return Ok(());
             }
             Err(err) if git_credentials_configured_with_gh => {
-                // gh already configured github.com above, so a failed server
-                // fetch degrades to GitHub-only credentials instead of
-                // failing a run that previously worked without the fetch.
+                // gh already configured github.com above, so a failed server fetch degrades to
+                // GitHub-only credentials instead of failing a run that previously worked without
+                // the fetch.
                 log::warn!(
                     "Failed to fetch git credentials; continuing with gh-configured GitHub credentials only: {err:#}"
                 );
@@ -971,9 +1050,7 @@ impl AgentDriverRunner {
                     error = ?err,
                     "Failed to fetch git credentials before skill resolution"
                 );
-                return Err(AgentDriverError::SkillResolutionFailed(format!(
-                    "Failed to fetch git credentials before skill resolution: {err:#}"
-                )));
+                return Err(AgentDriverError::GitCredentialsFetchFailed(err));
             }
         };
         if credentials.is_empty() {
@@ -1056,7 +1133,7 @@ impl AgentDriverRunner {
     async fn build_driver_options_and_task(
         foreground: &ModelSpawner<Self>,
         args: RunAgentArgs,
-        local_run_team_scope: Option<TeamScopeForCli>,
+        agent_driver_team_scope: Option<TeamScopeForCli>,
         server_api: &Arc<dyn AIClient>,
         setup_events: &SetupClientEventReporter,
     ) -> Result<(AgentDriverOptions, Task, Option<String>), AgentDriverError> {
@@ -1082,13 +1159,13 @@ impl AgentDriverRunner {
 
         // Build the AgentConfigSnapshot, Task, and AgentDriverOptions
         let prompt_clone = prompt.clone();
-        let (merged_config, mut task, mut driver_options, local_run_team_scope) = foreground
+        let (merged_config, mut task, mut driver_options, agent_driver_team_scope) = foreground
             .spawn(move |_, ctx| -> anyhow::Result<_> {
                 let (merged_config, task) = build_merged_config_and_task(
                     &args,
                     &resolved_skill,
                     &prompt_clone,
-                    local_run_team_scope.as_ref(),
+                    agent_driver_team_scope.as_ref(),
                     ctx,
                 )?;
 
@@ -1112,7 +1189,7 @@ impl AgentDriverRunner {
                     cloud_providers: Vec::new(),
                     environment: None,
                     additional_source_repos: Vec::new(),
-                    repository_head_overrides: args.repository_head_overrides.clone(),
+                    repository_preparation_overrides: args.repository_preparation_overrides.clone(),
                     remove_repository_origins: args.remove_repository_origins,
                     selected_harness: args.harness,
                     third_party_harness_model_config,
@@ -1132,7 +1209,7 @@ impl AgentDriverRunner {
                     mcp_startup_timeout: args.mcp_startup_timeout.map(|duration| duration.into()),
                 };
 
-                Ok((merged_config, task, driver_options, local_run_team_scope))
+                Ok((merged_config, task, driver_options, agent_driver_team_scope))
             })
             .await?
             .map_err(AgentDriverError::ConfigBuildFailed)?;
@@ -1143,6 +1220,7 @@ impl AgentDriverRunner {
         // The existing-task branch also surfaces the task's `conversation_id` (if any) so
         // the caller can wire up resume without a separate `--conversation` arg.
         let task_conversation_id = if let Some(task_id_str) = task_id_str {
+            driver_options.team_scope = agent_driver_team_scope;
             setup_events
                 .record_result(
                     SetupStep::TaskDataFetch,
@@ -1172,7 +1250,7 @@ impl AgentDriverRunner {
                 server_api,
                 prompt_for_task_creation,
                 merged_config,
-                local_run_team_scope.expect("new local runs resolve a team scope"),
+                agent_driver_team_scope.expect("new local runs resolve a team scope"),
                 &mut driver_options,
             )
             .await?;
@@ -1185,17 +1263,7 @@ impl AgentDriverRunner {
                 Self::resolve_environment(foreground, environment_id, &mut driver_options),
             )
             .await?;
-        driver::environment::validate_repository_head_overrides(
-            &driver::environment::merge_repos_deduped(
-                driver_options
-                    .environment
-                    .as_ref()
-                    .map(crate::ai::cloud_environments::AmbientAgentEnvironment::effective_repos)
-                    .unwrap_or_default(),
-                driver_options.additional_source_repos.clone(),
-            )?,
-            &driver_options.repository_head_overrides,
-        )?;
+        validated_driver_repositories_for_preparation(&driver_options)?;
 
         Ok((driver_options, task, task_conversation_id))
     }
@@ -1380,6 +1448,7 @@ impl AgentDriverRunner {
             task_harness,
             task_harness_model_config,
             additional_source_repos,
+            task_team_scope,
         ) = match task_metadata_result {
             Ok(Some(task_metadata)) => {
                 // The task's harness is stored on the snapshot; if absent, it's the default Oz.
@@ -1394,15 +1463,17 @@ impl AgentDriverRunner {
                 let additional_source_repos = agent_config_snapshot
                     .and_then(|config| config.additional_source_repos)
                     .unwrap_or_default();
+                let task_team_scope = task_metadata.scope.as_ref().map(team_scope_for_task_scope);
                 (
                     task_metadata.parent_run_id,
                     task_metadata.conversation_id,
                     Some(task_harness),
                     task_harness_model_config,
                     additional_source_repos,
+                    task_team_scope,
                 )
             }
-            Ok(None) => (None, None, None, None, Vec::new()),
+            Ok(None) => (None, None, None, None, Vec::new(), None),
             Err(err) => return Err(AgentDriverError::TaskMetadataFetchFailed(err)),
         };
 
@@ -1422,6 +1493,13 @@ impl AgentDriverRunner {
         driver_options.parent_run_id = parent_run_id;
         driver_options.additional_source_repos = additional_source_repos;
         driver_options.secrets = secrets;
+        // The server-reported task scope is authoritative for the headless window this run
+        // creates (see `team_scope_for_task_scope`); it supersedes whatever scope was resolved
+        // from CLI args before the task was fetched. Older servers that don't send `scope` fall
+        // back to that earlier resolution.
+        if let Some(task_team_scope) = task_team_scope {
+            driver_options.team_scope = Some(task_team_scope);
+        }
         // CLI flags continue to take precedence so users can still override per-invocation.
         if driver_options.third_party_harness_model_config.is_none() {
             driver_options.third_party_harness_model_config = task_harness_model_config;
@@ -1495,8 +1573,7 @@ impl AgentDriverRunner {
                 let harness_support_client = foreground
                     .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_harness_support_client())
                     .await?;
-                let resume_conversation_id = AIConversationId::try_from(conversation_id.clone())
-                    .map_err(|err| AgentDriverError::ConversationLoadFailed(format!("{err:#}")))?;
+                let resume_conversation_id = ServerConversationToken::new(conversation_id.clone());
                 Ok(
                     h.fetch_resume_payload(&resume_conversation_id, harness_support_client)
                         .await?

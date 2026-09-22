@@ -208,6 +208,7 @@ fn install_workspace_with_teams(app: &mut App, teams: Vec<Team>) {
         name: "test".to_string(),
         stripe_customer_id: None,
         teams,
+        open_teams: vec![],
         billing_metadata: Default::default(),
         bonus_grants_purchased_this_month: Default::default(),
         billing_cycle_usage: None,

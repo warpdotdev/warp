@@ -1,12 +1,4 @@
-//! "Legacy" versions of command signatures used for testing.
-//!
-//! Each signature in this file should be semantically equivalent to a command signature returned
-//! by a function of the same name in `super::v2`; this is to ensure that the same test
-//! coverage can run with the "v2" Cargo feature both enabled and disabled.
-//!
-//! Any new test signatures should also have a corresponding "v2" implementation in `super::v2`;
-//! and the test should be written using common testing APIs (e.g. create_test_command_registry) to
-//! provide coverage for both flag states of "v2".
+//! Command signatures used for testing.
 use std::borrow::Cow;
 
 use itertools::Itertools;

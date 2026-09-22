@@ -3,9 +3,11 @@ use crate::workspaces::user_workspaces::TeamScope;
 
 /// The team an outbound request is scoped to, as sent in `X-Warp-Team-Uid`.
 ///
-/// A [`TeamScope`] is the only way to name a team; there is no constructor from a bare `ServerId`,
-/// because a loose uid cannot say which team resolved it. The temporary managed-secrets fallback
-/// can only omit the header and cannot forge a team.
+/// A [`TeamScope`] is the only way to name one; there is no constructor from a bare `ServerId`,
+/// because a loose uid cannot say which team resolved it, and "no team" is a scope's answer to
+/// give rather than a value to pass. The field is private to this module and this module holds
+/// nothing else, so [`Self::from_scope`] is provably the only way to build one -- anything else
+/// added here gains the ability to forge a team.
 ///
 /// `Copy`, unlike the [`TeamScope`] types it comes from -- those are deliberately not, so a live
 /// scope cannot be stashed where it outlives its window. A resolved snapshot has no such hazard,
@@ -15,12 +17,11 @@ use crate::workspaces::user_workspaces::TeamScope;
 pub struct RequestTeamScope(Option<ServerId>);
 
 impl RequestTeamScope {
-    pub fn from_scope(scope: &impl TeamScope) -> Self {
+    pub fn from_scope(scope: &(impl TeamScope + ?Sized)) -> Self {
         Self(scope.team_uid())
     }
-    // TODO: Delete this fallback as follow-up PRs migrate managed-secret callers to explicit scopes.
-    pub(crate) fn temporary_managed_secrets_server_fallback() -> Self {
-        Self(None)
+    pub fn matches_scope(self, scope: &(impl TeamScope + ?Sized)) -> bool {
+        self.0 == scope.team_uid()
     }
 
     /// The wire uid. `None` sends no team header, leaving the server to its own default.

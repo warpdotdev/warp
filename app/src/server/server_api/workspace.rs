@@ -8,6 +8,10 @@ use warp_graphql::mutations::purchase_addon_credits::{
     PurchaseAddonCredits, PurchaseAddonCreditsInput, PurchaseAddonCreditsResult,
     PurchaseAddonCreditsVariables,
 };
+use warp_graphql::mutations::remove_user_from_workspace::{
+    RemoveUserFromWorkspace, RemoveUserFromWorkspaceInput, RemoveUserFromWorkspaceResult,
+    RemoveUserFromWorkspaceVariables,
+};
 use warp_graphql::mutations::stripe_billing_portal::{
     StripeBillingPortal, StripeBillingPortalInput, StripeBillingPortalResult,
     StripeBillingPortalVariables,
@@ -23,10 +27,14 @@ use warp_graphql::queries::get_ai_overages_for_workspace::{
 
 use super::ServerApi;
 use super::team::TeamClient;
+use crate::auth::UserUid;
+use crate::cloud_object::CloudObjectEventEntrypoint;
 use crate::server::graphql::{get_request_context, get_user_facing_error_message};
 use crate::server::ids::ServerId;
-use crate::workspaces::user_workspaces::WorkspacesMetadataResponse;
-use crate::workspaces::workspace::AiOverages;
+use crate::workspaces::user_workspaces::{
+    WorkspacesMetadataResponse, WorkspacesMetadataWithPricing,
+};
+use crate::workspaces::workspace::{AiOverages, WorkspaceUid};
 
 /// Outcome of a successful `purchaseAddonCredits` mutation. Mirrors the
 /// server's `PurchaseAddonCreditsResult` union members one-to-one.
@@ -45,6 +53,12 @@ pub enum PurchaseAddonCreditsOutcome {
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait WorkspaceClient: 'static + Send + Sync {
     async fn generate_stripe_billing_portal_link(&self, team_uid: ServerId) -> Result<String>;
+    async fn remove_user_from_workspace(
+        &self,
+        user_uid: UserUid,
+        workspace_uid: WorkspaceUid,
+        entrypoint: CloudObjectEventEntrypoint,
+    ) -> Result<WorkspacesMetadataWithPricing>;
 
     async fn update_usage_based_pricing_settings(
         &self,
@@ -89,6 +103,43 @@ impl WorkspaceClient for ServerApi {
                 Err(anyhow!(get_user_facing_error_message(error)))
             }
             StripeBillingPortalResult::Unknown => Err(anyhow!("Unknown error")),
+        }
+    }
+
+    async fn remove_user_from_workspace(
+        &self,
+        user_uid: UserUid,
+        workspace_uid: WorkspaceUid,
+        entrypoint: CloudObjectEventEntrypoint,
+    ) -> Result<WorkspacesMetadataWithPricing> {
+        let variables = RemoveUserFromWorkspaceVariables {
+            input: RemoveUserFromWorkspaceInput {
+                user_uid: user_uid.as_str().into(),
+                workspace_uid: String::from(workspace_uid).into(),
+                entrypoint: entrypoint.into(),
+            },
+            request_context: get_request_context(),
+        };
+        let operation = RemoveUserFromWorkspace::build(variables);
+        let result = self
+            .send_graphql_request(operation, None)
+            .await?
+            .remove_user_from_workspace;
+
+        match result {
+            RemoveUserFromWorkspaceResult::RemoveUserFromWorkspaceOutput(output) => {
+                if output.success {
+                    self.workspaces_metadata().await
+                } else {
+                    Err(anyhow!("failed to remove user from workspace"))
+                }
+            }
+            RemoveUserFromWorkspaceResult::UserFacingError(error) => {
+                Err(anyhow!(get_user_facing_error_message(error)))
+            }
+            RemoveUserFromWorkspaceResult::Unknown => {
+                Err(anyhow!("unknown error while removing user from workspace"))
+            }
         }
     }
 

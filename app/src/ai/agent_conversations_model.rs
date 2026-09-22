@@ -968,14 +968,15 @@ impl AgentConversationsModel {
     /// Fetches tasks and cloud conversation metadata async. Cloud conversation metadata is merged with
     /// metadata stored in local db in the BlocklistAIHistoryModel
     fn fetch_ambient_agent_tasks_and_cloud_convo_metadata(&mut self, ctx: &mut ModelContext<Self>) {
-        let Some(creator_uid) = AuthStateProvider::as_ref(ctx)
-            .get()
-            .user_id()
-            .map(|uid| uid.as_string())
-        else {
+        let auth_state = AuthStateProvider::as_ref(ctx).get();
+        let Some(creator_uid) = auth_state.user_id().map(|uid| uid.as_string()) else {
             // If we don't have a user ID, don't pull tasks
             return;
         };
+        // A service account has no personal runs to seed the view with, and its `user_id` is the
+        // `serviceAccount:`-prefixed telemetry ID rather than a principal UID the runs API's
+        // `creator` filter can resolve.
+        let personal_creator_uid = (!auth_state.is_service_account()).then_some(creator_uid);
 
         let ai_settings = AISettings::as_ref(ctx);
         if !ai_settings.is_any_ai_enabled(ctx) {
@@ -989,17 +990,24 @@ impl AgentConversationsModel {
         ctx.spawn_with_retry_on_error(
             move || {
                 let ai_client = ai_client.clone();
-                let creator_uid = creator_uid.clone();
+                let personal_creator_uid = personal_creator_uid.clone();
                 async move {
                     // Fetch personal tasks only on initialization; team tasks fetched by the view model when filters applied
-                    let personal_future = ai_client.list_ambient_agent_tasks(
-                        INITIAL_TASK_AMOUNT,
-                        TaskListFilter {
-                            creator_uid: Some(creator_uid),
-                            ..Default::default()
-                        },
-                        None,
-                    );
+                    let personal_future = async {
+                        let Some(creator_uid) = personal_creator_uid else {
+                            return Ok(Vec::new());
+                        };
+                        ai_client
+                            .list_ambient_agent_tasks(
+                                INITIAL_TASK_AMOUNT,
+                                TaskListFilter {
+                                    creator_uid: Some(creator_uid),
+                                    ..Default::default()
+                                },
+                                None,
+                            )
+                            .await
+                    };
                     let conversation_metadata_future =
                         ai_client.list_ai_conversation_metadata(None);
 
