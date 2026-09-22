@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(feature = "local_fs")]
 use repo_metadata::TargetFile;
@@ -28,12 +28,13 @@ fn create_outline_files(dir: &TempDir) -> Vec<PathBuf> {
 }
 
 #[cfg(feature = "local_fs")]
-fn assert_symbol_is_indexed(outline: &Outline, path: &PathBuf, expected: &str) {
+fn assert_symbol_is_indexed(outline: &Outline, path: &Path, expected: &str) {
     let outlines = outline.to_symbols_by_file(None);
-    assert_eq!(
-        outlines[path].symbols().unwrap()[0].name,
-        expected.to_owned()
-    );
+    let (_, file_outline) = outlines
+        .iter()
+        .find(|(indexed_path, _)| indexed_path.file_name() == path.file_name())
+        .unwrap();
+    assert_eq!(file_outline.symbols().unwrap()[0].name, expected.to_owned());
 }
 
 #[cfg(feature = "local_fs")]
