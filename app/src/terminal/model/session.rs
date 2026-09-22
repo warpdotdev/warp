@@ -1855,6 +1855,17 @@ pub mod testing {
             );
             self
         }
+
+        pub fn with_shell_plugins(mut self, shell_plugins: HashSet<String>) -> Self {
+            self.shell = Shell::new(
+                self.shell.shell_type(),
+                self.shell.version().clone(),
+                self.shell.options().clone(),
+                shell_plugins,
+                self.shell.shell_path().clone(),
+            );
+            self
+        }
     }
 
     impl Session {

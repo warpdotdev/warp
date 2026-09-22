@@ -49,6 +49,8 @@ fn create_test_task(task_id: &str) -> AmbientAgentTask {
         is_sandbox_running: false,
         last_event_sequence: None,
         children: vec![],
+        debug_agent_available: false,
+        scope: None,
     }
 }
 
@@ -126,6 +128,9 @@ fn create_message_with_directory(id: &str, task_id: &str, directory: &str) -> ap
             referenced_attachments: HashMap::new(),
             mode: None,
             intended_agent: Default::default(),
+            origin: None,
+            author: None,
+            source_message: None,
         })),
         request_id: "request-1".to_string(),
         timestamp: None,

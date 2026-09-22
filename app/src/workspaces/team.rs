@@ -2,7 +2,10 @@ use std::cmp::Ordering;
 
 use serde::{Deserialize, Serialize};
 
-use super::workspace::{BillingMetadata, EmailInvite, InviteLinkDomainRestriction, TeamSettings};
+use super::workspace::{
+    BillingMetadata, EmailInvite, InviteLinkDomainRestriction, TeamSettings, WorkspaceUid,
+};
+use crate::ai::llms::ModelsByFeature;
 use crate::auth::UserUid;
 use crate::server::ids::ServerId;
 
@@ -68,6 +71,20 @@ pub struct DiscoverableTeam {
     pub team_accepting_invites: bool,
 }
 
+#[derive(Clone, Debug)]
+pub struct DiscoverableWorkspace {
+    pub workspace_uid: WorkspaceUid,
+    pub name: String,
+    pub open_teams: Vec<DiscoverableTeam>,
+    pub member_count: i64,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct DiscoveryOptions {
+    pub workspaces: Vec<DiscoverableWorkspace>,
+    pub legacy_teams: Vec<DiscoverableTeam>,
+}
+
 #[derive(PartialEq, Eq, Clone)]
 pub enum TeamDeleteDisabledReason {
     ActivePaidSubscription,
@@ -105,6 +122,7 @@ pub struct Team {
     pub stripe_customer_id: Option<String>,
     /// The team's effective settings, sourced from the server's `Team.settings`.
     pub settings: TeamSettings,
+    pub feature_model_choice: ModelsByFeature,
     /// If the team is eligible for discovery, then show toggle for setting discoverability to the team's admin
     pub is_eligible_for_discovery: bool,
     pub has_billing_history: bool,
@@ -118,6 +136,7 @@ impl Team {
         settings: Option<TeamSettings>,
         billing_metadata: Option<BillingMetadata>,
         members: Option<Vec<TeamMember>>,
+        feature_model_choice: Option<ModelsByFeature>,
     ) -> Self {
         Self {
             uid,
@@ -130,6 +149,7 @@ impl Team {
             billing_metadata: billing_metadata.unwrap_or_default(),
             stripe_customer_id: Default::default(),
             settings: settings.unwrap_or_default(),
+            feature_model_choice: feature_model_choice.unwrap_or_default(),
             is_eligible_for_discovery: false,
             has_billing_history: false,
             visibility: TeamVisibility::default(),

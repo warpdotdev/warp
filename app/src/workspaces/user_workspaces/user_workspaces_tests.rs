@@ -14,6 +14,7 @@ use warp_graphql::queries::get_workspaces_metadata_for_user::{
     User as GqlUser, UserProfile as GqlUserProfile, UserPurchasePolicyBillingMetadata,
     UserPurchasePolicyTier,
 };
+use warp_graphql::user::DiscoverableTeamData as GqlDiscoverableTeamData;
 use warp_graphql::workspace::{
     AddonCreditsSettings as GqlAddonCreditsSettings,
     AdminEnablementSetting as GqlAdminEnablementSetting,
@@ -28,7 +29,9 @@ use warp_graphql::workspace::{
     ComputerUseAutonomyValue as GqlComputerUseAutonomyValue,
     ComputerUseSettingInfo as GqlComputerUseSettingInfo,
     FeatureModelChoice as GqlFeatureModelChoice, LinkSharingSettings as GqlLinkSharingSettings,
-    LinkSharingSettingsInfo as GqlLinkSharingSettingsInfo, LlmSettings as GqlLlmSettings,
+    LinkSharingSettingsInfo as GqlLinkSharingSettingsInfo, LlmContextWindow as GqlLlmContextWindow,
+    LlmInfo as GqlLlmInfo, LlmPricing as GqlLlmPricing, LlmProvider as GqlLlmProvider,
+    LlmSettings as GqlLlmSettings, LlmUsageMetadata as GqlLlmUsageMetadata,
     MembershipRole as GqlMembershipRole,
     SandboxedAgentSettingsInfo as GqlSandboxedAgentSettingsInfo,
     SecretRedactionRegexListInfo as GqlSecretRedactionRegexListInfo,
@@ -53,7 +56,9 @@ use warpui_extras::user_preferences;
 use super::*;
 use crate::ai::blocklist::is_agent_mode_autonomy_allowed;
 use crate::ai::execution_profiles::ActionPermission;
-use crate::ai::llms::{LLMModelHost, LLMProvider};
+use crate::ai::llms::{
+    AvailableLLMs, LLMInfo, LLMModelHost, LLMProvider, MODELS_BY_FEATURE_CACHE_KEY, ModelsByFeature,
+};
 use crate::auth::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObject, CloudObjectGuest};
@@ -72,8 +77,10 @@ use crate::settings::{
 use crate::system::SystemStats;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{CloudWorkflow, CloudWorkflowModel};
-use crate::workspaces::gql_convert::PLACEHOLDER_WORKSPACE_UID;
-use crate::workspaces::team::{Team, TeamMember, TeamVisibility};
+use crate::workspaces::gql_convert::{
+    PLACEHOLDER_WORKSPACE_UID, workspaces_metadata_response_from_gql,
+};
+use crate::workspaces::team::{DiscoverableWorkspace, Team, TeamMember, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -81,7 +88,7 @@ use crate::workspaces::workspace::{
     AdminEnablementSetting, ByoFirstPartyKey, EnforceableSetting, HostEnablementSetting,
     LinkSharingSettings, LlmHostSettings, ManagedByokByoePolicy, MultiAdminPolicy,
     PurchaseAddOnCreditsPolicy, SandboxedAgentSettings, SplitListSetting, TeamByoSettings,
-    TeamLinkSharingSettings, Workspace,
+    TeamLinkSharingSettings, Workspace, WorkspaceMember, WorkspaceMemberUsageInfo,
 };
 
 #[derive(Default)]
@@ -187,6 +194,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
         billing_metadata: Default::default(),
         stripe_customer_id: None,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
         visibility: TeamVisibility::Open,
@@ -197,11 +205,13 @@ fn test_loading_all_spaces_after_switching_from_offline() {
         name: "test".to_string(),
         stripe_customer_id: None,
         teams: vec![team.clone()],
+        open_teams: vec![],
         billing_metadata: Default::default(),
         bonus_grants_purchased_this_month: Default::default(),
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
@@ -228,7 +238,6 @@ fn test_loading_all_spaces_after_switching_from_offline() {
                         workspaces: vec![],
                         joinable_teams: vec![],
                         experiments: None,
-                        feature_model_choices: None,
                         ai_credit_availability: None,
                         user_purchase_policy: None,
                     },
@@ -247,7 +256,6 @@ fn test_loading_all_spaces_after_switching_from_offline() {
                         workspaces: vec![workspace.clone()],
                         joinable_teams: vec![],
                         experiments: None,
-                        feature_model_choices: None,
                         ai_credit_availability: None,
                         user_purchase_policy: None,
                     },
@@ -323,25 +331,52 @@ fn team_for_test() -> Team {
         billing_metadata: Default::default(),
         stripe_customer_id: None,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
         visibility: TeamVisibility::Open,
     }
 }
 
-#[test]
-fn test_aws_bedrock_credentials_default_off_when_admin_respects_user_setting() {
-    let team = team_for_test();
-    let mut workspace = workspace_for_test(&team);
-    workspace.settings.llm_settings.enabled = true;
-    workspace.settings.llm_settings.host_configs.insert(
-        LLMModelHost::AwsBedrock,
+/// Registers a fresh window on `team` and returns its id, so tests can build a
+/// [`TeamScope`] via [`UserWorkspaces::team_context_for_window_for_test`].
+fn window_on_team(app: &mut App, team: &Team) -> WindowId {
+    let window_id = WindowId::new();
+    UserWorkspaces::handle(app).update(app, |user_workspaces, ctx| {
+        user_workspaces.set_team_for_window(window_id, team.uid, ctx);
+    });
+    window_id
+}
+
+/// A team with `settings.llm_settings` configured for `host`, so a scoped read of that team
+/// (not the workspace's own settings, which the scoped accessors never read once a team is
+/// named) sees the host policy.
+fn team_with_llm_host(
+    host: LLMModelHost,
+    enabled: bool,
+    enablement_setting: HostEnablementSetting,
+) -> Team {
+    let mut team = team_for_test();
+    team.settings.llm_settings.enabled = true;
+    team.settings.llm_settings.host_configs.insert(
+        host,
         LlmHostSettings {
-            enabled: true,
-            enablement_setting: HostEnablementSetting::RespectUserSetting,
+            enabled,
+            enablement_setting,
             ..Default::default()
         },
     );
+    team
+}
+
+#[test]
+fn test_aws_bedrock_credentials_default_off_when_admin_respects_user_setting() {
+    let team = team_with_llm_host(
+        LLMModelHost::AwsBedrock,
+        true,
+        HostEnablementSetting::RespectUserSetting,
+    );
+    let workspace = workspace_for_test(&team);
 
     App::test((), |mut app| async move {
         initialize_app(
@@ -352,15 +387,14 @@ fn test_aws_bedrock_credentials_default_off_when_admin_respects_user_setting() {
             Arc::new(MockTeamClient::new()),
             Arc::new(MockWorkspaceClient::new()),
         );
+        let window_id = window_on_team(&mut app, &team);
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx),
+                !user_workspaces.is_aws_bedrock_credentials_enabled(&scope, ctx),
                 "respect-user-setting should default the local Bedrock credentials toggle to off"
-            );
-            assert!(
-                UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_toggleable(),
-                "respect-user-setting should leave the local Bedrock credentials toggle editable"
             );
         });
     })
@@ -368,17 +402,12 @@ fn test_aws_bedrock_credentials_default_off_when_admin_respects_user_setting() {
 
 #[test]
 fn test_aws_bedrock_credentials_respect_user_setting() {
-    let team = team_for_test();
-    let mut workspace = workspace_for_test(&team);
-    workspace.settings.llm_settings.enabled = true;
-    workspace.settings.llm_settings.host_configs.insert(
+    let team = team_with_llm_host(
         LLMModelHost::AwsBedrock,
-        LlmHostSettings {
-            enabled: true,
-            enablement_setting: HostEnablementSetting::RespectUserSetting,
-            ..Default::default()
-        },
+        true,
+        HostEnablementSetting::RespectUserSetting,
     );
+    let workspace = workspace_for_test(&team);
     let mut team_client = MockTeamClient::new();
     let workspace_for_poll = workspace.clone();
     team_client.expect_workspaces_metadata().returning(move || {
@@ -387,7 +416,6 @@ fn test_aws_bedrock_credentials_respect_user_setting() {
                 workspaces: vec![workspace_for_poll.clone()],
                 joinable_teams: vec![],
                 experiments: None,
-                feature_model_choices: None,
                 ai_credit_availability: None,
                 user_purchase_policy: None,
             },
@@ -404,6 +432,7 @@ fn test_aws_bedrock_credentials_respect_user_setting() {
             Arc::new(team_client),
             Arc::new(MockWorkspaceClient::new()),
         );
+        let window_id = window_on_team(&mut app, &team);
 
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
             let _ = settings
@@ -412,13 +441,11 @@ fn test_aws_bedrock_credentials_respect_user_setting() {
         });
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx),
+                !user_workspaces.is_aws_bedrock_credentials_enabled(&scope, ctx),
                 "respect-user-setting should honor the local Bedrock credentials toggle"
-            );
-            assert!(
-                UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_toggleable(),
-                "respect-user-setting should leave the local Bedrock credentials toggle editable"
             );
         });
     })
@@ -426,17 +453,12 @@ fn test_aws_bedrock_credentials_respect_user_setting() {
 
 #[test]
 fn test_aws_bedrock_credentials_enforced_by_admin() {
-    let team = team_for_test();
-    let mut workspace = workspace_for_test(&team);
-    workspace.settings.llm_settings.enabled = true;
-    workspace.settings.llm_settings.host_configs.insert(
+    let team = team_with_llm_host(
         LLMModelHost::AwsBedrock,
-        LlmHostSettings {
-            enabled: true,
-            enablement_setting: HostEnablementSetting::Enforce,
-            ..Default::default()
-        },
+        true,
+        HostEnablementSetting::Enforce,
     );
+    let workspace = workspace_for_test(&team);
     let mut team_client = MockTeamClient::new();
     let workspace_for_poll = workspace.clone();
     team_client.expect_workspaces_metadata().returning(move || {
@@ -445,7 +467,6 @@ fn test_aws_bedrock_credentials_enforced_by_admin() {
                 workspaces: vec![workspace_for_poll.clone()],
                 joinable_teams: vec![],
                 experiments: None,
-                feature_model_choices: None,
                 ai_credit_availability: None,
                 user_purchase_policy: None,
             },
@@ -462,6 +483,7 @@ fn test_aws_bedrock_credentials_enforced_by_admin() {
             Arc::new(MockTeamClient::new()),
             Arc::new(MockWorkspaceClient::new()),
         );
+        let window_id = window_on_team(&mut app, &team);
 
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
             let _ = settings
@@ -470,13 +492,63 @@ fn test_aws_bedrock_credentials_enforced_by_admin() {
         });
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
             assert!(
-                UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx),
+                user_workspaces.is_aws_bedrock_credentials_enabled(&scope, ctx),
                 "enforced Bedrock host policy should ignore the local Bedrock credentials toggle"
             );
+        });
+    })
+}
+
+/// Two teams, neither configuring AWS Bedrock. A window with no team selected reads
+/// `current_workspace().settings` unconditionally -- the server's fallback for a user on
+/// several teams (see [`UserWorkspaces::scoped_or_workspace_setting`]) -- so it inherits the
+/// workspace's own Bedrock policy rather than being denied.
+#[test]
+fn aws_bedrock_availability_falls_back_to_the_workspace_for_a_multi_team_users_teamless_window() {
+    let team_a = team_for_test();
+    let mut team_b = team_for_test();
+    team_b.uid = 456.into();
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b);
+    workspace.settings.llm_settings.enabled = true;
+    workspace.settings.llm_settings.host_configs.insert(
+        LLMModelHost::AwsBedrock,
+        LlmHostSettings {
+            enabled: true,
+            enablement_setting: HostEnablementSetting::Enforce,
+            ..Default::default()
+        },
+    );
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        let window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
+            assert_eq!(scope.team_uid(), None);
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_toggleable(),
-                "enforced Bedrock host policy should disable the local Bedrock credentials toggle"
+                user_workspaces.is_aws_bedrock_available(&scope),
+                "a multi-team user's teamless window should read the workspace's own Bedrock policy"
+            );
+            assert!(
+                user_workspaces.is_aws_bedrock_credentials_enabled(&scope, ctx),
+                "a multi-team user's teamless window should read the workspace's own Bedrock policy"
             );
         });
     })
@@ -490,9 +562,9 @@ fn workspace_with_gemini_enterprise_host(
     enabled: bool,
     enablement_setting: HostEnablementSetting,
 ) -> Workspace {
-    let mut workspace = workspace_for_test(team);
-    workspace.settings.llm_settings.enabled = true;
-    workspace.settings.llm_settings.host_configs.insert(
+    let mut team = team.clone();
+    team.settings.llm_settings.enabled = true;
+    team.settings.llm_settings.host_configs.insert(
         LLMModelHost::GeminiEnterprise,
         LlmHostSettings {
             enabled,
@@ -501,7 +573,7 @@ fn workspace_with_gemini_enterprise_host(
             gcp_sa_email: Some(TEST_GCP_SA_EMAIL.to_string()),
         },
     );
-    workspace
+    workspace_for_test(&team)
 }
 
 #[test]
@@ -523,14 +595,17 @@ fn test_gemini_enterprise_credentials_default_off_when_admin_respects_user_setti
             Arc::new(MockTeamClient::new()),
             Arc::new(MockWorkspaceClient::new()),
         );
+        let window_id = window_on_team(&mut app, &team);
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                !user_workspaces.is_gemini_enterprise_credentials_enabled(&scope, ctx),
                 "respect-user-setting should default the local Gemini Enterprise credentials toggle to off"
             );
             assert!(
-                UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_toggleable(),
+                user_workspaces.is_gemini_enterprise_credentials_toggleable(&scope),
                 "respect-user-setting should leave the local Gemini Enterprise credentials toggle editable"
             );
         });
@@ -556,6 +631,7 @@ fn test_gemini_enterprise_credentials_respect_user_setting_honors_member_toggle(
             Arc::new(MockTeamClient::new()),
             Arc::new(MockWorkspaceClient::new()),
         );
+        let window_id = window_on_team(&mut app, &team);
 
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
             let _ = settings
@@ -564,8 +640,10 @@ fn test_gemini_enterprise_credentials_respect_user_setting_honors_member_toggle(
         });
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
             assert!(
-                UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                user_workspaces.is_gemini_enterprise_credentials_enabled(&scope, ctx),
                 "respect-user-setting should honor an opted-in Gemini Enterprise credentials toggle"
             );
         });
@@ -588,6 +666,7 @@ fn test_gemini_enterprise_credentials_enforced_by_admin() {
             Arc::new(MockTeamClient::new()),
             Arc::new(MockWorkspaceClient::new()),
         );
+        let window_id = window_on_team(&mut app, &team);
 
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
             let _ = settings
@@ -596,12 +675,14 @@ fn test_gemini_enterprise_credentials_enforced_by_admin() {
         });
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
             assert!(
-                UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                user_workspaces.is_gemini_enterprise_credentials_enabled(&scope, ctx),
                 "enforced Gemini Enterprise host policy should ignore the local credentials toggle"
             );
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_toggleable(),
+                !user_workspaces.is_gemini_enterprise_credentials_toggleable(&scope),
                 "enforced Gemini Enterprise host policy should disable the local credentials toggle"
             );
         });
@@ -624,14 +705,17 @@ fn test_gemini_enterprise_credentials_disabled_when_host_disabled() {
             Arc::new(MockTeamClient::new()),
             Arc::new(MockWorkspaceClient::new()),
         );
+        let window_id = window_on_team(&mut app, &team);
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_available_from_workspace(),
+                !user_workspaces.is_gemini_enterprise_available_from_workspace(&scope),
                 "a disabled Gemini Enterprise host should not be available from the workspace"
             );
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                !user_workspaces.is_gemini_enterprise_credentials_enabled(&scope, ctx),
                 "a disabled Gemini Enterprise host should gate credentials off even under ENFORCE"
             );
         });
@@ -641,18 +725,13 @@ fn test_gemini_enterprise_credentials_disabled_when_host_disabled() {
 #[test]
 fn test_gemini_enterprise_credentials_disabled_when_host_absent() {
     let _flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
-    let team = team_for_test();
-    // Bedrock-only workspace: proves the GEAP gate reads its own host entry.
-    let mut workspace = workspace_for_test(&team);
-    workspace.settings.llm_settings.enabled = true;
-    workspace.settings.llm_settings.host_configs.insert(
+    // Bedrock-only team: proves the GEAP gate reads its own host entry.
+    let team = team_with_llm_host(
         LLMModelHost::AwsBedrock,
-        LlmHostSettings {
-            enabled: true,
-            enablement_setting: HostEnablementSetting::Enforce,
-            ..Default::default()
-        },
+        true,
+        HostEnablementSetting::Enforce,
     );
+    let workspace = workspace_for_test(&team);
 
     App::test((), |mut app| async move {
         initialize_app(
@@ -663,16 +742,19 @@ fn test_gemini_enterprise_credentials_disabled_when_host_absent() {
             Arc::new(MockTeamClient::new()),
             Arc::new(MockWorkspaceClient::new()),
         );
+        let window_id = window_on_team(&mut app, &team);
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
             assert!(
-                UserWorkspaces::as_ref(ctx)
-                    .gemini_enterprise_host_settings()
+                user_workspaces
+                    .gemini_enterprise_host_settings(&scope)
                     .is_none(),
                 "a workspace without a Gemini Enterprise host entry should expose no settings"
             );
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                !user_workspaces.is_gemini_enterprise_credentials_enabled(&scope, ctx),
                 "a workspace without a Gemini Enterprise host entry should gate credentials off"
             );
         });
@@ -696,10 +778,13 @@ fn test_gemini_enterprise_credentials_disabled_when_logged_out() {
             Arc::new(MockWorkspaceClient::new()),
             AuthStateProvider::new_logged_out_for_test(),
         );
+        let window_id = window_on_team(&mut app, &team);
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                !user_workspaces.is_gemini_enterprise_credentials_enabled(&scope, ctx),
                 "logged-out users should never mint or attach Gemini Enterprise credentials"
             );
         });
@@ -724,14 +809,111 @@ fn test_gemini_enterprise_host_settings_carries_federation_config() {
             Arc::new(MockTeamClient::new()),
             Arc::new(MockWorkspaceClient::new()),
         );
+        let window_id = window_on_team(&mut app, &team);
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
             let settings = user_workspaces
-                .gemini_enterprise_host_settings()
+                .gemini_enterprise_host_settings(&scope)
                 .expect("workspace should expose the Gemini Enterprise host settings");
             assert_eq!(settings.gcp_audience.as_deref(), Some(TEST_GCP_AUDIENCE));
             assert_eq!(settings.gcp_sa_email.as_deref(), Some(TEST_GCP_SA_EMAIL));
+        });
+    })
+}
+
+/// Two teams, neither configuring Gemini Enterprise. A window with no team selected reads
+/// `current_workspace().settings` unconditionally -- the server's fallback for a user on
+/// several teams (see [`UserWorkspaces::scoped_or_workspace_setting`]) -- so it inherits the
+/// workspace's own GEAP policy rather than being denied.
+#[test]
+fn gemini_enterprise_availability_falls_back_to_the_workspace_for_a_multi_team_users_teamless_window()
+ {
+    let _flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
+    let team_a = team_for_test();
+    let mut team_b = team_for_test();
+    team_b.uid = 456.into();
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b);
+    workspace.settings.llm_settings.enabled = true;
+    workspace.settings.llm_settings.host_configs.insert(
+        LLMModelHost::GeminiEnterprise,
+        LlmHostSettings {
+            enabled: true,
+            enablement_setting: HostEnablementSetting::Enforce,
+            gcp_audience: Some(TEST_GCP_AUDIENCE.to_string()),
+            gcp_sa_email: Some(TEST_GCP_SA_EMAIL.to_string()),
+        },
+    );
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        let window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
+            assert_eq!(scope.team_uid(), None);
+            assert!(
+                user_workspaces.is_gemini_enterprise_available_from_workspace(&scope),
+                "a multi-team user's teamless window should read the workspace's own GEAP policy"
+            );
+            assert!(
+                user_workspaces.is_gemini_enterprise_credentials_enabled(&scope, ctx),
+                "a multi-team user's teamless window should read the workspace's own GEAP policy"
+            );
+        });
+    })
+}
+
+/// No workspace at all -- e.g. before the initial metadata fetch completes -- has no admin
+/// policy to consult. Unlike a permission that defaults to allowed absent an override (see
+/// billing_workspace_settings.rs's `is_none_or` convention), AWS Bedrock and Gemini Enterprise
+/// are opt-in admin features: the pre-scoping code already denied both when
+/// `current_workspace()` was `None`, and `scoped_or_workspace_setting`'s `absent = None` for
+/// `llm_settings_for_scope` must keep it that way rather than flip it permissive.
+#[test]
+fn bedrock_and_gemini_enterprise_unavailable_with_no_workspace_at_all() {
+    let _flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources { workspaces: vec![] },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        let window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
+            assert_eq!(scope.team_uid(), None);
+            assert!(user_workspaces.current_workspace().is_none());
+            assert!(
+                !user_workspaces.is_aws_bedrock_available(&scope),
+                "no workspace at all has no admin policy to consult, so Bedrock stays unavailable"
+            );
+            assert!(
+                !user_workspaces.is_gemini_enterprise_available_from_workspace(&scope),
+                "no workspace at all has no admin policy to consult, so GEAP stays unavailable"
+            );
         });
     })
 }
@@ -742,11 +924,13 @@ fn workspace_for_test(team: &Team) -> Workspace {
         name: "test".to_string(),
         stripe_customer_id: None,
         teams: vec![team.clone()],
+        open_teams: vec![],
         billing_metadata: team.billing_metadata.clone(),
         bonus_grants_purchased_this_month: Default::default(),
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
@@ -755,6 +939,256 @@ fn workspace_for_test(team: &Team) -> Workspace {
     }
 }
 
+fn workspace_for_teams(teams: Vec<Team>) -> Workspace {
+    let mut workspace = workspace_for_test(&team_for_test());
+    workspace.teams = teams;
+    workspace
+}
+
+fn team_selection(team: Option<Option<String>>) -> warp_cli::scope::TeamSelection {
+    warp_cli::scope::TeamSelection { team }
+}
+
+fn object_scope(team: Option<Option<String>>, personal: bool) -> warp_cli::scope::ObjectScope {
+    warp_cli::scope::ObjectScope {
+        team_selection: team_selection(team),
+        personal,
+    }
+}
+
+#[test]
+fn cli_scope_without_selection_is_teamless_without_teams() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace_for_teams(vec![])]);
+
+        app.read(|ctx| {
+            let scope = UserWorkspaces::as_ref(ctx)
+                .team_scope_for_cli(&team_selection(None))
+                .expect("no selection should be teamless when the user has no teams");
+            assert!(matches!(scope, TeamScopeForCli::Personal));
+        });
+    })
+}
+
+#[test]
+fn cli_scope_without_selection_uses_the_sole_team() {
+    let team = team_for_test();
+    let team_uid = team.uid;
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace_for_teams(vec![team])]);
+
+        app.read(|ctx| {
+            let scope = UserWorkspaces::as_ref(ctx)
+                .team_scope_for_cli(&team_selection(None))
+                .expect("no selection should use the sole team");
+            assert!(matches!(scope, TeamScopeForCli::Team(uid) if uid == team_uid));
+        });
+    })
+}
+
+#[test]
+fn cli_scope_without_selection_rejects_multiple_teams() {
+    let (first_team, second_team) = two_teams();
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(
+            &mut app,
+            vec![workspace_for_teams(vec![first_team, second_team])],
+        );
+
+        app.read(|ctx| {
+            let result = UserWorkspaces::as_ref(ctx).team_scope_for_cli(&team_selection(None));
+            assert!(matches!(
+                result,
+                Err(team_workspace_settings::TeamScopeForCliError::NoSoleTeam(
+                    SoleTeamError::MoreThanOneTeam { .. }
+                ))
+            ));
+        });
+    })
+}
+
+#[test]
+fn cli_object_scope_personal_is_teamless_with_multiple_teams() {
+    let (first_team, second_team) = two_teams();
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(
+            &mut app,
+            vec![workspace_for_teams(vec![first_team, second_team])],
+        );
+
+        app.read(|ctx| {
+            let scope = UserWorkspaces::as_ref(ctx)
+                .team_scope_for_cli_object(&object_scope(None, true))
+                .expect("explicit personal scope should not require a team");
+            assert!(matches!(scope, TeamScopeForCli::Personal));
+        });
+    })
+}
+#[test]
+fn cli_scope_bare_team_requires_a_sole_team() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace_for_teams(vec![])]);
+
+        app.read(|ctx| {
+            let result =
+                UserWorkspaces::as_ref(ctx).team_scope_for_cli(&team_selection(Some(None)));
+            assert!(matches!(
+                result,
+                Err(team_workspace_settings::TeamScopeForCliError::NoSoleTeam(
+                    SoleTeamError::NoTeam
+                ))
+            ));
+        });
+    })
+}
+
+#[test]
+fn cli_scope_bare_team_uses_the_sole_team() {
+    let team = team_for_test();
+    let team_uid = team.uid;
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace_for_teams(vec![team])]);
+
+        app.read(|ctx| {
+            let scope = UserWorkspaces::as_ref(ctx)
+                .team_scope_for_cli(&team_selection(Some(None)))
+                .expect("bare --team should use the sole team");
+            assert!(matches!(scope, TeamScopeForCli::Team(uid) if uid == team_uid));
+        });
+    })
+}
+
+#[test]
+fn cli_scope_bare_team_rejects_multiple_teams() {
+    let (first_team, second_team) = two_teams();
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(
+            &mut app,
+            vec![workspace_for_teams(vec![first_team, second_team])],
+        );
+
+        app.read(|ctx| {
+            let result =
+                UserWorkspaces::as_ref(ctx).team_scope_for_cli(&team_selection(Some(None)));
+            assert!(matches!(
+                result,
+                Err(team_workspace_settings::TeamScopeForCliError::NoSoleTeam(
+                    SoleTeamError::MoreThanOneTeam { .. }
+                ))
+            ));
+        });
+    })
+}
+#[test]
+fn cli_scope_explicit_team_validates_the_uid_and_membership() {
+    let (first_team, second_team) = two_teams();
+    let second_team_uid = second_team.uid;
+    let missing_team_uid: ServerId = 789.into();
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(
+            &mut app,
+            vec![workspace_for_teams(vec![first_team, second_team])],
+        );
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces
+                .team_scope_for_cli(&team_selection(Some(Some(second_team_uid.to_string()))))
+                .expect("an explicit member team should resolve");
+            assert!(matches!(scope, TeamScopeForCli::Team(uid) if uid == second_team_uid));
+
+            let invalid =
+                user_workspaces.team_scope_for_cli(&team_selection(Some(Some("invalid".into()))));
+            assert!(matches!(
+                invalid,
+                Err(team_workspace_settings::TeamScopeForCliError::InvalidTeamUid { .. })
+            ));
+
+            let not_a_member = user_workspaces
+                .team_scope_for_cli(&team_selection(Some(Some(missing_team_uid.to_string()))));
+            assert!(matches!(
+                not_a_member,
+                Err(team_workspace_settings::TeamScopeForCliError::NotAMember(_))
+            ));
+        });
+    })
+}
+
+#[test]
+fn cli_scope_reads_the_selected_teams_model_choices() {
+    let (mut first_team, mut second_team) = two_teams();
+    let second_team_uid = second_team.uid;
+    first_team.feature_model_choice = ModelsByFeature {
+        agent_mode: AvailableLLMs::new(
+            "first-team-model".into(),
+            vec![LLMInfo::new_for_test("first-team-model")],
+            None,
+        )
+        .expect("first team model choices should be valid"),
+        ..Default::default()
+    };
+    second_team.feature_model_choice = ModelsByFeature {
+        agent_mode: AvailableLLMs::new(
+            "second-team-model".into(),
+            vec![LLMInfo::new_for_test("second-team-model")],
+            None,
+        )
+        .expect("second team model choices should be valid"),
+        ..Default::default()
+    };
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(
+            &mut app,
+            vec![workspace_for_teams(vec![first_team, second_team])],
+        );
+
+        app.read(|ctx| {
+            let workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = workspaces
+                .team_scope_for_cli(&team_selection(Some(Some(second_team_uid.to_string()))))
+                .expect("the selected team should resolve");
+            let models = &workspaces.feature_model_choice_for_scope(&scope).agent_mode;
+
+            assert!(
+                models.info_for_id(&"second-team-model".into()).is_some(),
+                "the selected team's model should be available"
+            );
+            assert!(
+                models.info_for_id(&"first-team-model".into()).is_none(),
+                "another team's model should not be available"
+            );
+        });
+    })
+}
+
+#[test]
+fn teamless_cli_scope_reads_personal_workspace_model_choices() {
+    let mut workspace = workspace_for_teams(vec![]);
+    workspace.feature_model_choice = ModelsByFeature {
+        agent_mode: AvailableLLMs::new(
+            "personal-model".into(),
+            vec![LLMInfo::new_for_test("personal-model")],
+            None,
+        )
+        .expect("personal model choices should be valid"),
+        ..Default::default()
+    };
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            let workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = workspaces
+                .team_scope_for_cli(&team_selection(None))
+                .expect("a teamless user should retain personal scope");
+            let models = &workspaces.feature_model_choice_for_scope(&scope).agent_mode;
+
+            assert!(models.info_for_id(&"personal-model".into()).is_some());
+        });
+    })
+}
 #[test]
 fn test_current_workspace_billing_metadata_uses_selected_teamless_workspace() {
     let first_team = team_for_test();
@@ -989,7 +1423,7 @@ fn admin_billing_link_for_default_team_rejects_regular_members() {
 }
 
 #[test]
-fn test_window_team_assignment_falls_back_when_team_is_removed() {
+fn test_every_departed_team_window_falls_back_when_team_is_removed() {
     let first_team = team_for_test();
     let mut removed_team = team_for_test();
     removed_team.uid = 456.into();
@@ -998,19 +1432,56 @@ fn test_window_team_assignment_falls_back_when_team_is_removed() {
 
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![workspace.clone()]);
-
-        let window_id = WindowId::new();
+        let first_removed_team_window = WindowId::new();
+        let second_removed_team_window = WindowId::new();
+        let existing_fallback_team_window = WindowId::new();
         UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.set_team_for_window(window_id, removed_team.uid, ctx);
+            user_workspaces.set_team_for_window(first_removed_team_window, removed_team.uid, ctx);
+            user_workspaces.set_team_for_window(second_removed_team_window, removed_team.uid, ctx);
+            user_workspaces.set_team_for_window(existing_fallback_team_window, first_team.uid, ctx);
             workspace.teams.retain(|team| team.uid != removed_team.uid);
             user_workspaces.update_workspaces(vec![workspace], ctx);
         });
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
             assert_eq!(
-                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
+                user_workspaces.team_uid_for_window(first_removed_team_window),
                 Some(first_team.uid)
             );
+            assert_eq!(
+                user_workspaces.team_uid_for_window(second_removed_team_window),
+                Some(first_team.uid)
+            );
+            assert_eq!(
+                user_workspaces.team_uid_for_window(existing_fallback_team_window),
+                Some(first_team.uid)
+            );
+        });
+    })
+}
+
+#[test]
+fn test_every_departed_team_window_becomes_teamless_without_remaining_memberships() {
+    let removed_team = team_for_test();
+    let mut workspace = workspace_for_test(&removed_team);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace.clone()]);
+
+        let first_window = WindowId::new();
+        let second_window = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(first_window, removed_team.uid, ctx);
+            user_workspaces.set_team_for_window(second_window, removed_team.uid, ctx);
+            workspace.teams.clear();
+            user_workspaces.update_workspaces(vec![workspace], ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(user_workspaces.team_uid_for_window(first_window), None);
+            assert_eq!(user_workspaces.team_uid_for_window(second_window), None);
         });
     })
 }
@@ -1415,6 +1886,54 @@ fn switching_a_window_to_its_current_team_announces_nothing() {
         });
 
         assert_eq!(changes.get(), 0);
+    })
+}
+
+#[test]
+fn joining_a_workspace_team_retains_memberships_and_preserves_the_current_window() {
+    let (platform, security, mut joined_workspace) = platform_and_security();
+    joined_workspace.open_teams.clear();
+    let initial_workspace = workspace_for_test(&platform);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![initial_workspace]);
+
+        let window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, Some(platform.uid), ctx);
+            user_workspaces.on_join_team_in_workspace(
+                security.uid,
+                Ok(WorkspacesMetadataWithPricing {
+                    metadata: WorkspacesMetadataResponse {
+                        workspaces: vec![joined_workspace],
+                        joinable_teams: vec![],
+                        experiments: None,
+                        ai_credit_availability: None,
+                        user_purchase_policy: None,
+                    },
+                    pricing_info: None,
+                }),
+                ctx,
+            );
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(
+                user_workspaces
+                    .current_workspace()
+                    .expect("workspace should remain selected")
+                    .teams
+                    .iter()
+                    .map(|team| team.uid)
+                    .collect::<Vec<_>>(),
+                vec![platform.uid, security.uid]
+            );
+            assert_eq!(
+                user_workspaces.team_uid_for_window(window_id),
+                Some(platform.uid)
+            );
+        });
     })
 }
 
@@ -2716,6 +3235,7 @@ fn test_joining_team_moves_objects() {
         billing_metadata: Default::default(),
         stripe_customer_id: None,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
         visibility: TeamVisibility::Open,
@@ -2726,11 +3246,13 @@ fn test_joining_team_moves_objects() {
         name: "test".to_string(),
         stripe_customer_id: None,
         teams: vec![team.clone()],
+        open_teams: vec![],
         billing_metadata: Default::default(),
         bonus_grants_purchased_this_month: Default::default(),
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
@@ -3085,6 +3607,7 @@ fn test_leaving_team_moves_objects() {
         billing_metadata: Default::default(),
         stripe_customer_id: None,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
         visibility: TeamVisibility::Open,
@@ -3095,11 +3618,13 @@ fn test_leaving_team_moves_objects() {
         name: "test".to_string(),
         stripe_customer_id: None,
         teams: vec![team.clone()],
+        open_teams: vec![],
         billing_metadata: Default::default(),
         bonus_grants_purchased_this_month: Default::default(),
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
@@ -3314,6 +3839,135 @@ fn test_purchase_addon_credits_forwards_team_uid_when_present() {
 }
 
 #[test]
+fn test_remove_user_from_workspace_refreshes_state_only_on_success() {
+    for succeeds in [true, false] {
+        let user_uid = UserUid::new("member-uid");
+        let member_email = "member@example.com".to_string();
+        let mut team = team_for_test();
+        team.members.push(TeamMember {
+            uid: user_uid,
+            email: member_email.clone(),
+            role: MembershipRole::User,
+            is_disabled: false,
+        });
+        let mut workspace = workspace_for_test(&team);
+        workspace.members.push(WorkspaceMember {
+            uid: user_uid,
+            email: member_email.clone(),
+            role: MembershipRole::User,
+            is_disabled: false,
+            usage_info: WorkspaceMemberUsageInfo {
+                is_unlimited: true,
+                request_limit: 0,
+                requests_used_since_last_refresh: 0,
+                is_request_limit_prorated: false,
+            },
+        });
+        let workspace_uid = workspace.uid;
+        let mut updated_workspace = workspace.clone();
+        updated_workspace.members.clear();
+        updated_workspace.teams[0].members.clear();
+
+        App::test((), move |mut app| async move {
+            let mut workspace_client = MockWorkspaceClient::new();
+            workspace_client
+                .expect_remove_user_from_workspace()
+                .withf(move |actual_user_uid, actual_workspace_uid, entrypoint| {
+                    *actual_user_uid == user_uid
+                        && *actual_workspace_uid == workspace_uid
+                        && matches!(entrypoint, CloudObjectEventEntrypoint::TeamSettings)
+                })
+                .times(1)
+                .returning(move |_, _, _| {
+                    if succeeds {
+                        Ok(WorkspacesMetadataWithPricing {
+                            metadata: WorkspacesMetadataResponse {
+                                workspaces: vec![updated_workspace.clone()],
+                                joinable_teams: vec![],
+                                experiments: None,
+                                ai_credit_availability: None,
+                                user_purchase_policy: None,
+                            },
+                            pricing_info: None,
+                        })
+                    } else {
+                        Err(anyhow::anyhow!("workspace removal rejected"))
+                    }
+                });
+
+            app.add_singleton_model(PrivacySettings::mock);
+            app.add_singleton_model(|ctx| {
+                UserWorkspaces::mock(
+                    Arc::new(MockTeamClient::new()),
+                    Arc::new(workspace_client),
+                    vec![workspace],
+                    ctx,
+                )
+            });
+
+            let user_workspaces_handle = UserWorkspaces::handle(&app);
+            let (sender, receiver) = async_channel::unbounded();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(
+                    &user_workspaces_handle,
+                    move |_, event: &UserWorkspacesEvent, _| match event {
+                        UserWorkspacesEvent::RemoveUserFromWorkspaceSuccess => {
+                            let _ = sender.try_send(Ok(()));
+                        }
+                        UserWorkspacesEvent::RemoveUserFromWorkspaceRejected(err) => {
+                            let _ = sender.try_send(Err(err.to_string()));
+                        }
+                        _ => {}
+                    },
+                );
+            });
+
+            UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+                user_workspaces.remove_user_from_workspace(
+                    user_uid,
+                    workspace_uid,
+                    CloudObjectEventEntrypoint::TeamSettings,
+                    ctx,
+                );
+            });
+
+            let event_result = receiver
+                .recv()
+                .await
+                .expect("expected workspace removal result event");
+            if succeeds {
+                event_result.expect("expected RemoveUserFromWorkspaceSuccess");
+            } else {
+                assert_eq!(
+                    event_result.expect_err("expected RemoveUserFromWorkspaceRejected"),
+                    "workspace removal rejected"
+                );
+            }
+
+            app.read(|ctx| {
+                let workspace = UserWorkspaces::as_ref(ctx)
+                    .current_workspace()
+                    .expect("workspace should remain available");
+                assert_eq!(
+                    workspace
+                        .members
+                        .iter()
+                        .any(|member| member.uid == user_uid),
+                    !succeeds
+                );
+                assert_eq!(
+                    workspace.teams[0]
+                        .members
+                        .iter()
+                        .any(|member| member.uid == user_uid),
+                    !succeeds
+                );
+            });
+        });
+    }
+}
+
+#[test]
 fn test_remove_user_from_team_rejected_emits_error_event_without_updating_workspaces() {
     let team = team_for_test();
     let team_uid = team.uid;
@@ -3410,7 +4064,6 @@ fn test_remove_user_from_team_success_emits_success_event_and_refreshes_members(
                         workspaces: vec![updated_workspace.clone()],
                         joinable_teams: vec![],
                         experiments: None,
-                        feature_model_choices: None,
                         ai_credit_availability: None,
                         user_purchase_policy: None,
                     },
@@ -3513,6 +4166,7 @@ fn gql_workspace(
         stripe_customer_id: None,
         members: vec![],
         teams: vec![],
+        open_teams: vec![],
         billing_metadata: GqlBillingMetadata {
             customer_type: GqlCustomerType::Free,
             delinquency_status: GqlDelinquencyStatus::NoDelinquency,
@@ -3693,6 +4347,11 @@ fn gql_team_settings() -> GqlTeamSettings {
 }
 
 fn gql_team(uid: &str, name: &str, member_uids: &[&str]) -> GqlTeam {
+    let empty_llms = GqlAvailableLlms {
+        default_id: String::new(),
+        choices: vec![],
+        preferred_codex_model_id: None,
+    };
     GqlTeam {
         // `ServerId` rejects anything but a 22-character id.
         uid: format!("{uid:0>22}").into(),
@@ -3710,6 +4369,13 @@ fn gql_team(uid: &str, name: &str, member_uids: &[&str]) -> GqlTeam {
         settings: gql_team_settings(),
         invite_link: None,
         visibility: GqlTeamVisibility::Open,
+        feature_model_choice: GqlFeatureModelChoice {
+            agent_mode: empty_llms.clone(),
+            planning: empty_llms.clone(),
+            coding: empty_llms.clone(),
+            cli_agent: empty_llms.clone(),
+            computer_use_agent: empty_llms,
+        },
     }
 }
 
@@ -3752,7 +4418,10 @@ fn test_team_switcher_drops_teams_the_admin_is_not_a_member_of() {
             gql_team("other-team", "Other Team", &["someone-else"]),
         ];
 
-        apply_workspaces_metadata(&mut app, gql_user(None, vec![workspace]).into());
+        apply_workspaces_metadata(
+            &mut app,
+            workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false),
+        );
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
@@ -3778,7 +4447,10 @@ fn test_team_switcher_keeps_every_team_the_user_is_a_member_of() {
             gql_team("second-team", "Second Team", &["test-user"]),
         ];
 
-        apply_workspaces_metadata(&mut app, gql_user(None, vec![workspace]).into());
+        apply_workspaces_metadata(
+            &mut app,
+            workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false),
+        );
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
@@ -3806,7 +4478,10 @@ fn test_teamless_user_falls_back_to_workspace_settings() {
         workspace.settings.llm_settings.enabled = true;
         workspace.teams = vec![gql_team("other-team", "Other Team", &["someone-else"])];
 
-        apply_workspaces_metadata(&mut app, gql_user(None, vec![workspace]).into());
+        apply_workspaces_metadata(
+            &mut app,
+            workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false),
+        );
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
@@ -3834,7 +4509,10 @@ fn test_member_team_settings_win_over_workspace_settings() {
         team.settings.llm_settings.enabled = false;
         workspace.teams = vec![team];
 
-        apply_workspaces_metadata(&mut app, gql_user(None, vec![workspace]).into());
+        apply_workspaces_metadata(
+            &mut app,
+            workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false),
+        );
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
@@ -3881,6 +4559,158 @@ fn gql_user(
     }
 }
 
+fn discovery_options_for_test() -> DiscoveryOptions {
+    DiscoveryOptions {
+        workspaces: vec![DiscoverableWorkspace {
+            workspace_uid: ServerId::from(10).into(),
+            name: "Discoverable Workspace".to_string(),
+            open_teams: vec![DiscoverableTeam {
+                team_uid: ServerId::from(11).to_string(),
+                num_members: 2,
+                name: "Open Team".to_string(),
+                team_accepting_invites: true,
+            }],
+            member_count: 4,
+        }],
+        legacy_teams: vec![DiscoverableTeam {
+            team_uid: ServerId::from(12).to_string(),
+            num_members: 3,
+            name: "Legacy Team".to_string(),
+            team_accepting_invites: true,
+        }],
+    }
+}
+
+#[test]
+fn test_fetch_discovery_options_success_updates_model_and_emits_event() {
+    App::test((), |mut app| async move {
+        let returned_options = discovery_options_for_test();
+        let mut team_client = MockTeamClient::new();
+        team_client
+            .expect_get_discovery_options()
+            .times(1)
+            .return_once(move || Ok(returned_options));
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(team_client),
+                Arc::new(MockWorkspaceClient::new()),
+                vec![],
+                ctx,
+            )
+        });
+
+        let user_workspaces = UserWorkspaces::handle(&app);
+        let (sender, receiver) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&user_workspaces, move |_, event, _| {
+                if let UserWorkspacesEvent::FetchDiscoveryOptionsSuccess(options) = event {
+                    let _ = sender.try_send(options.clone());
+                }
+            });
+        });
+
+        user_workspaces.update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.fetch_discovery_options(ctx);
+        });
+
+        let options = receiver
+            .recv()
+            .await
+            .expect("expected discovery-options success event");
+        assert_eq!(options.workspaces.len(), 1);
+        assert_eq!(options.workspaces[0].name, "Discoverable Workspace");
+        assert_eq!(options.legacy_teams.len(), 1);
+        app.read(|ctx| {
+            assert_eq!(UserWorkspaces::as_ref(ctx).joinable_teams.len(), 1);
+        });
+    })
+}
+
+#[test]
+fn test_join_workspace_from_discovery_with_team_forwards_target_and_updates_workspace() {
+    App::test((), |mut app| async move {
+        let workspace_uid: WorkspaceUid = ServerId::from(10).into();
+        let team_uid = ServerId::from(11);
+        let mut team_client = MockTeamClient::new();
+        team_client
+            .expect_join_workspace_from_discovery()
+            .withf(move |actual_workspace_uid, actual_team_uid| {
+                *actual_workspace_uid == workspace_uid && *actual_team_uid == Some(team_uid)
+            })
+            .times(1)
+            .return_once(move |_, _| {
+                Ok(WorkspacesMetadataWithPricing {
+                    metadata: WorkspacesMetadataResponse {
+                        workspaces: vec![Workspace::from_local_cache(
+                            workspace_uid,
+                            "Joined Workspace".to_string(),
+                            None,
+                            None,
+                        )],
+                        joinable_teams: vec![],
+                        experiments: None,
+                        ai_credit_availability: None,
+                        user_purchase_policy: None,
+                    },
+                    pricing_info: None,
+                })
+            });
+        app.add_singleton_model(PrivacySettings::mock);
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(team_client),
+                Arc::new(MockWorkspaceClient::new()),
+                vec![],
+                ctx,
+            )
+        });
+
+        let user_workspaces = UserWorkspaces::handle(&app);
+        let (sender, receiver) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&user_workspaces, move |_, event, _| {
+                if let UserWorkspacesEvent::JoinWorkspaceFromDiscoverySuccess = event {
+                    let _ = sender.try_send(());
+                }
+            });
+        });
+
+        user_workspaces.update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.join_workspace_from_discovery(workspace_uid, Some(team_uid), ctx);
+        });
+
+        receiver
+            .recv()
+            .await
+            .expect("expected workspace discovery join success event");
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx)
+                    .current_workspace()
+                    .map(|workspace| workspace.uid),
+                Some(workspace_uid)
+            );
+        });
+    })
+}
+
+#[test]
+fn test_workspace_open_teams_survive_metadata_conversion() {
+    let mut workspace = gql_workspace("workspace_uid123456789", None);
+    workspace.open_teams = vec![GqlDiscoverableTeamData {
+        team_uid: "0000000000000000000002".into(),
+        num_members: 2,
+        name: "Second Team".to_string(),
+        team_accepting_invites: true,
+    }];
+
+    let response = workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false);
+
+    let open_teams = &response.workspaces[0].open_teams;
+    assert_eq!(open_teams.len(), 1);
+    assert_eq!(open_teams[0].name, "Second Team");
+}
+
 #[test]
 fn test_user_level_policy_survives_placeholder_filtering_for_teamless_users() {
     App::test((), |mut app| async move {
@@ -3890,11 +4720,13 @@ fn test_user_level_policy_survives_placeholder_filtering_for_teamless_users() {
         // The real conversion path: a teamless user's ONLY workspace is the
         // placeholder, which must stay filtered out of `workspaces`, while
         // the user-level purchase policy is captured separately.
-        let response: WorkspacesMetadataResponse = gql_user(
-            Some(gql_premium_purchase_policy()),
-            vec![gql_workspace(PLACEHOLDER_WORKSPACE_UID, None)],
-        )
-        .into();
+        let response: WorkspacesMetadataResponse = workspaces_metadata_response_from_gql(
+            gql_user(
+                Some(gql_premium_purchase_policy()),
+                vec![gql_workspace(PLACEHOLDER_WORKSPACE_UID, None)],
+            ),
+            false,
+        );
         assert!(
             response.workspaces.is_empty(),
             "the placeholder workspace must stay filtered out"
@@ -3948,14 +4780,16 @@ fn test_workspace_policy_wins_over_user_level_policy() {
             premium_enabled: false,
             price_premium_bps: 0,
         };
-        let response: WorkspacesMetadataResponse = gql_user(
-            Some(gql_premium_purchase_policy()),
-            vec![
-                gql_workspace(PLACEHOLDER_WORKSPACE_UID, None),
-                gql_workspace("workspace_uid123456789", Some(standard_policy)),
-            ],
-        )
-        .into();
+        let response: WorkspacesMetadataResponse = workspaces_metadata_response_from_gql(
+            gql_user(
+                Some(gql_premium_purchase_policy()),
+                vec![
+                    gql_workspace(PLACEHOLDER_WORKSPACE_UID, None),
+                    gql_workspace("workspace_uid123456789", Some(standard_policy)),
+                ],
+            ),
+            false,
+        );
         assert_eq!(response.workspaces.len(), 1);
 
         UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
@@ -3981,4 +4815,150 @@ fn test_workspace_policy_wins_over_user_level_policy() {
             );
         });
     })
+}
+
+/// A `GqlLlmInfo` fixture identified by `id`, for the model-choice fixtures below.
+fn gql_llm_info(id: &str) -> GqlLlmInfo {
+    GqlLlmInfo {
+        display_name: id.to_string(),
+        base_model_name: id.to_string(),
+        id: id.to_string(),
+        reasoning_level: None,
+        usage_metadata: GqlLlmUsageMetadata {
+            credit_multiplier: None,
+            request_multiplier: 1,
+        },
+        description: None,
+        disable_reason: None,
+        vision_supported: false,
+        spec: None,
+        provider: GqlLlmProvider::Unknown,
+        host_configs: vec![],
+        pricing: GqlLlmPricing {
+            discount_percentage: None,
+        },
+        context_window: GqlLlmContextWindow {
+            is_configurable: false,
+            min: 0.into(),
+            max: 0.into(),
+            default: 0.into(),
+        },
+    }
+}
+
+/// A `GqlFeatureModelChoice` whose every feature offers exactly one model, `model_id`, so a
+/// test can tell two teams' choices apart by that single id.
+fn gql_feature_model_choice(model_id: &str) -> GqlFeatureModelChoice {
+    let llms = GqlAvailableLlms {
+        default_id: model_id.to_string(),
+        choices: vec![gql_llm_info(model_id)],
+        preferred_codex_model_id: None,
+    };
+    GqlFeatureModelChoice {
+        agent_mode: llms.clone(),
+        planning: llms.clone(),
+        coding: llms.clone(),
+        cli_agent: llms.clone(),
+        computer_use_agent: llms,
+    }
+}
+
+#[test]
+fn team_feature_model_choices_conversion_keeps_each_teams_choice_distinct() {
+    // Each team's uid must map to its own model choice, never a shared or swapped one.
+    let mut team_a = gql_team("team-a", "Team A", &["test-user"]);
+    team_a.feature_model_choice = gql_feature_model_choice("team-a-only");
+    let mut team_b = gql_team("team-b", "Team B", &["test-user"]);
+    team_b.feature_model_choice = gql_feature_model_choice("team-b-only");
+    let mut workspace = gql_workspace("workspace_uid123456789", None);
+    workspace.teams = vec![team_a, team_b];
+
+    let response: WorkspacesMetadataResponse =
+        workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false);
+
+    assert_eq!(response.workspaces.len(), 1);
+    let teams = &response.workspaces[0].teams;
+    assert_eq!(
+        teams.len(),
+        2,
+        "both teams' choices should survive the fold"
+    );
+
+    let team_a_uid = ServerId::from_string_lossy(format!("{:0>22}", "team-a"));
+    let team_b_uid = ServerId::from_string_lossy(format!("{:0>22}", "team-b"));
+
+    let choice_a = &teams
+        .iter()
+        .find(|team| team.uid == team_a_uid)
+        .expect("team A's choice should be keyed by team A's own uid")
+        .feature_model_choice;
+    let choice_b = &teams
+        .iter()
+        .find(|team| team.uid == team_b_uid)
+        .expect("team B's choice should be keyed by team B's own uid")
+        .feature_model_choice;
+
+    assert!(
+        choice_a.info_for_id(&"team-a-only".into()).is_some(),
+        "team A's uid must map to team A's own choice, not a shared or swapped payload"
+    );
+    assert!(
+        choice_a.info_for_id(&"team-b-only".into()).is_none(),
+        "team A's uid must not resolve team B's choice"
+    );
+    assert!(
+        choice_b.info_for_id(&"team-b-only".into()).is_some(),
+        "team B's uid must map to team B's own choice, not a shared or swapped payload"
+    );
+    assert!(
+        choice_b.info_for_id(&"team-a-only".into()).is_none(),
+        "team B's uid must not resolve team A's choice"
+    );
+}
+
+#[test]
+fn legacy_cache_migration_yields_a_usable_teamless_catalog() {
+    // The older, pre-`ModelsByFeature` cache shape was a bare `AvailableLLMs`, written when
+    // all available LLMs were solely for Agent Mode. Migrating it must still produce a
+    // catalog whose `agent_mode` bucket resolves the cached model -- a "usable teamless
+    // catalog" -- not an empty or default one.
+    warpui::App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| {
+                PrivatePreferences::new(
+                    Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+                )
+            });
+        });
+
+        let legacy_agent_mode = AvailableLLMs::new(
+            "legacy-model".into(),
+            vec![LLMInfo::new_for_test("legacy-model")],
+            None,
+        )
+        .expect("legacy AvailableLLMs fixture should be valid");
+
+        app.update(|ctx| {
+            ctx.private_user_preferences()
+                .write_value(
+                    MODELS_BY_FEATURE_CACHE_KEY,
+                    serde_json::to_string(&legacy_agent_mode)
+                        .expect("legacy fixture should serialize"),
+                )
+                .expect("legacy cache should be writable");
+        });
+
+        app.update(|ctx| {
+            let migrated = migrate_legacy_feature_model_choices_cache(ctx)
+                .expect("a legacy bare-AvailableLLMs cache should still migrate");
+            assert!(
+                migrated
+                    .agent_mode
+                    .info_for_id(&"legacy-model".into())
+                    .is_some(),
+                "the older bare-AvailableLLMs cache shape should become a usable teamless \
+                 agent_mode catalog"
+            );
+        });
+    });
 }

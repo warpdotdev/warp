@@ -28,6 +28,7 @@ use warpui::{
 
 use crate::LLMPreferences;
 use crate::ai::blocklist::inline_action::host_picker::HostPicker;
+use crate::ai::cloud_environments::{CloudEnvironmentCatalog, environment_matches_scope};
 use crate::ai::execution_profiles::model_menu_items::{
     CollapsedModelVariants, available_model_menu_items,
 };
@@ -35,15 +36,15 @@ use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
 use crate::ai::orchestration::{
     AUTH_SECRET_INHERIT_LABEL, OptionBadge, OptionFooter, OptionRow, OptionSnapshot,
-    OptionSourceStatus, api_key_snapshot, build_runner_snapshot, environment_snapshot,
-    harness_snapshot, host_snapshot, model_snapshot, persist_auth_secret_selection,
+    OptionSourceStatus, api_key_snapshot, build_runner_snapshot, harness_snapshot, host_snapshot,
+    model_snapshot, persist_auth_secret_selection,
 };
 pub use crate::ai::orchestration::{
     AuthSecretSelection, ORCHESTRATION_WARP_WORKER_HOST, OrchestrationConfigState,
     OrchestrationEditState, accept_disabled_reason_with_auth, empty_env_recommendation_message,
-    persist_environment_selection, persist_host_selection,
-    resolve_auth_secret_selection_for_harness, resolve_default_environment_id,
-    resolve_default_host_slug, should_show_auth_secret_picker,
+    environment_snapshot, persist_environment_selection, persist_host_selection,
+    resolve_auth_secret_selection_for_harness, resolve_default_host_slug,
+    should_show_auth_secret_picker,
 };
 use crate::appearance::Appearance;
 use crate::menu::{MenuItem, MenuItemFields};
@@ -80,6 +81,16 @@ pub fn runner_controls_enabled(ctx: &AppContext) -> bool {
     FeatureFlag::CloudAgentRunners.is_enabled()
         && ServerExperiments::as_ref(ctx)
             .is_experiment_enabled(&ServerExperiment::MacosRunnersExperiment)
+}
+
+/// Resolves the default environment visible to the current window.
+pub fn resolve_default_environment_id<V: View>(ctx: &ViewContext<V>) -> Option<String> {
+    let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+    CloudEnvironmentCatalog::as_ref(ctx)
+        .orchestration_default_environment_id_matching(ctx, |environment| {
+            environment_matches_scope(environment, &scope, true)
+        })
+        .map(|id| id.uid())
 }
 
 // ── Action trait ────────────────────────────────────────────────────
@@ -272,7 +283,10 @@ fn oz_model_menu_items<A: OrchestrationControlAction, V: View>(
     ctx: &mut ViewContext<V>,
 ) -> Vec<MenuItem<DropdownAction>> {
     let llm_prefs = LLMPreferences::as_ref(ctx);
-    let all_choices: Vec<_> = llm_prefs.get_base_llm_choices_for_agent_mode(ctx).collect();
+    let scope = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
+    let all_choices: Vec<_> = llm_prefs
+        .get_base_llm_choices_for_agent_mode(&scope, ctx)
+        .collect();
     let ordered_choices: Vec<_> = rows
         .iter()
         .filter_map(|row| {
@@ -432,7 +446,8 @@ pub fn populate_environment_picker<A: OrchestrationControlAction, V: View>(
         },
     );
     dropdown_handle.update(ctx, |dropdown, ctx_dropdown| {
-        let snapshot = environment_snapshot(&state, ctx_dropdown);
+        let scope = UserWorkspaces::as_ref(ctx_dropdown).team_context_for_view(ctx_dropdown);
+        let snapshot = environment_snapshot(&state, &scope, ctx_dropdown);
         let selected_label = selected_row_label(&snapshot);
         let items = snapshot
             .rows
@@ -629,9 +644,10 @@ pub fn populate_auth_secret_picker_for_harness<A: OrchestrationControlAction, V:
     if harness == Harness::Oz {
         return;
     }
+    let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
     // Trigger lazy fetch so the next paint shows real entries.
     HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
-        model.ensure_auth_secrets_fetched(harness, ctx);
+        model.ensure_auth_secrets_fetched(&team_scope, harness, ctx);
     });
 
     let mut state = OrchestrationConfigState::from_run_agents_fields(
@@ -641,7 +657,7 @@ pub fn populate_auth_secret_picker_for_harness<A: OrchestrationControlAction, V:
     );
     state.auth_secret_selection = selection.clone();
     dropdown.update(ctx, |dropdown, ctx_dropdown| {
-        let snapshot = api_key_snapshot(&state, ctx_dropdown);
+        let snapshot = api_key_snapshot(&state, &team_scope, ctx_dropdown);
         let supports_create_new =
             matches!(snapshot.footer, Some(OptionFooter::CreateNewAuthSecret));
         let mut items: Vec<MenuItem<DropdownAction>> = snapshot
@@ -707,7 +723,13 @@ pub fn apply_created_auth_secret_if_matches<V: View>(
         return false;
     }
     state.auth_secret_selection = AuthSecretSelection::Named(created_name.to_string());
-    persist_auth_secret_selection(&state.harness_type, &state.auth_secret_selection, ctx);
+    let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+    persist_auth_secret_selection(
+        &team_scope,
+        &state.harness_type,
+        &state.auth_secret_selection,
+        ctx,
+    );
     true
 }
 
@@ -735,7 +757,13 @@ pub fn apply_harness_change<A: OrchestrationControlAction, V: View>(
     fallback_base_model_id: Option<String>,
     ctx: &mut ViewContext<V>,
 ) {
-    orchestration_edit_state.apply_harness_change(new_harness_type, fallback_base_model_id, ctx);
+    let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+    orchestration_edit_state.apply_harness_change(
+        &team_scope,
+        new_harness_type,
+        fallback_base_model_id,
+        ctx,
+    );
     let state = &orchestration_edit_state.orchestration_config_state;
     let is_local = !state.execution_mode.is_remote();
     if is_local
@@ -774,7 +802,15 @@ pub fn apply_execution_mode_change<A: OrchestrationControlAction, V: View>(
     fallback_base_model_id: Option<String>,
     ctx: &mut ViewContext<V>,
 ) {
+    let needs_environment_default = is_remote
+        && match &state.execution_mode {
+            RunAgentsExecutionMode::Local => true,
+            RunAgentsExecutionMode::Remote { environment_id, .. } => environment_id.is_empty(),
+        };
     state.apply_execution_mode_change(is_remote, fallback_base_model_id, ctx);
+    if needs_environment_default {
+        state.set_environment_id(resolve_default_environment_id(ctx).unwrap_or_default());
+    }
     let is_local = !state.execution_mode.is_remote();
     if let Some(handle) = &handles.harness_picker {
         populate_harness_picker(handle, &state.harness_type, is_local, ctx);
@@ -805,7 +841,8 @@ pub fn repopulate_all_pickers<A: OrchestrationControlAction, V: View>(
     handles: &OrchestrationPickerHandles<A>,
     ctx: &mut ViewContext<V>,
 ) {
-    state.revalidate_after_catalog_change(ctx);
+    let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+    state.revalidate_after_catalog_change(&team_scope, ctx);
     let is_local = !state.execution_mode.is_remote();
     if let Some(handle) = &handles.harness_picker {
         populate_harness_picker(handle, &state.harness_type, is_local, ctx);
@@ -859,7 +896,8 @@ pub fn sync_picker_selections<A: OrchestrationControlAction, V: View>(
         });
     }
     if let Some(environment_picker) = handles.environment_picker.clone() {
-        let snapshot = environment_snapshot(state, ctx);
+        let scope = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
+        let snapshot = environment_snapshot(state, &scope, ctx);
         if let Some(label) = selected_row_label(&snapshot) {
             environment_picker.update(ctx, |dropdown, ctx_dropdown| {
                 dropdown.set_selected_by_name(&label, ctx_dropdown);
@@ -873,8 +911,9 @@ pub fn sync_picker_selections<A: OrchestrationControlAction, V: View>(
         });
     }
     if let Some(auth_secret_picker) = handles.auth_secret_picker.clone() {
+        let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
         let supports_create_new = matches!(
-            api_key_snapshot(state, ctx).footer,
+            api_key_snapshot(state, &team_scope, ctx).footer,
             Some(OptionFooter::CreateNewAuthSecret)
         );
         let label = auth_secret_trigger_label(&state.auth_secret_selection, supports_create_new);

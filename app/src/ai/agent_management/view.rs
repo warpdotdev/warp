@@ -70,6 +70,7 @@ use crate::editor::{
 };
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::notebooks::NotebookId;
+use crate::server::team_scope::RequestTeamScope;
 use crate::settings::ai::AISettings;
 use crate::ui_components::agent_icon::agent_conversation_entry_icon_variant;
 use crate::ui_components::avatar::{Avatar, AvatarContent};
@@ -89,7 +90,7 @@ use crate::workflows::WorkflowType;
 use crate::workspace::{
     ForkedConversationDestination, RestoreConversationLayout, ToastStack, WorkspaceAction,
 };
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::{AgentModeEntrypoint, send_telemetry_from_ctx};
 
 lazy_static! {
@@ -212,6 +213,18 @@ impl AgentManagementView {
             &AgentConversationsModel::handle(ctx),
             Self::handle_agent_management_model_event,
         );
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            if matches!(
+                event,
+                UserWorkspacesEvent::WindowTeamChanged { window_id }
+                    if *window_id == ctx.window_id()
+            ) {
+                me.trigger_filter_fetch(ctx);
+                me.update_creator_dropdown(ctx);
+                me.update_environment_dropdown(ctx);
+                me.get_tasks_from_model(ctx);
+            }
+        });
 
         ctx.subscribe_to_model(
             &HarnessAvailabilityModel::handle(ctx),
@@ -380,9 +393,6 @@ impl AgentManagementView {
         view.sync_with_loaded_filters(ctx);
         view.update_creator_dropdown(ctx);
         view.update_environment_dropdown(ctx);
-
-        // Trigger server fetch if persisted filters differ from defaults
-        // (team tasks are not loaded at startup, so we need to fetch them)
         if view.filters != AgentManagementFilters::default() {
             view.trigger_filter_fetch(ctx);
         }
@@ -393,7 +403,8 @@ impl AgentManagementView {
 
     fn get_view_state(&self, app: &AppContext) -> ViewState {
         let model = AgentConversationsModel::as_ref(app);
-        let has_items = model.has_items(app);
+        let scope = UserWorkspaces::as_ref(app).team_context(&self.view_handle, app);
+        let has_items = model.has_items(&scope, app);
 
         // If loading with zero items, show skeleton cards
         // If loading with items, show list of interactive conversations (with loading indicator in header)
@@ -777,7 +788,8 @@ impl AgentManagementView {
     /// set of tasks.
     fn update_environment_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
         let model = AgentConversationsModel::as_ref(ctx);
-        let envs = model.get_all_environment_ids_and_names(ctx);
+        let scope = UserWorkspaces::as_ref(ctx).team_context(&self.view_handle, ctx);
+        let envs = model.get_all_environment_ids_and_names(&scope, ctx);
 
         let selected_name = match &self.filters.environment {
             EnvironmentFilter::All => Some("All".to_string()),
@@ -827,7 +839,8 @@ impl AgentManagementView {
     }
 
     fn update_creator_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
-        let creators = AgentConversationsModel::as_ref(ctx).get_all_creators(ctx);
+        let scope = UserWorkspaces::as_ref(ctx).team_context(&self.view_handle, ctx);
+        let creators = AgentConversationsModel::as_ref(ctx).get_all_creators(&scope, ctx);
         let creator_filter_name = match &self.filters.creator {
             CreatorFilter::All => "All",
             CreatorFilter::Specific { name, .. } => name,
@@ -883,8 +896,10 @@ impl AgentManagementView {
             .map(|uid| uid.as_string());
         if let Some(uid) = current_user_uid {
             let filters = self.filters.clone();
+            let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+            let request_team_scope = RequestTeamScope::from_scope(&scope);
             AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
-                model.fetch_tasks_for_filters(&filters, &uid, ctx);
+                model.fetch_tasks_for_filters(&filters, &uid, request_team_scope, ctx);
             });
         }
     }
@@ -953,9 +968,10 @@ impl AgentManagementView {
 
         // Get sorted tasks and conversations from model
         let model = AgentConversationsModel::as_ref(ctx);
+        let scope = UserWorkspaces::as_ref(ctx).team_context(&self.view_handle, ctx);
         let search_query = self.search_query.trim().to_lowercase();
         let cards: Vec<CardData> = model
-            .get_entries(&self.filters, ctx)
+            .get_entries(&self.filters, &scope, ctx)
             .into_iter()
             .filter(|entry| {
                 if search_query.is_empty() {

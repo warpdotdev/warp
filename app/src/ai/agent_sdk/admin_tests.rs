@@ -22,6 +22,7 @@ fn workspace(teams: Vec<Team>) -> Workspace {
         "workspace_uid123456789".to_string().into(),
         "Acme".to_string(),
         Some(teams),
+        None,
     )
 }
 
@@ -42,6 +43,7 @@ fn team(uid: i64, name: &str, member_uids: &[&str]) -> Team {
                 })
                 .collect(),
         ),
+        None,
     )
 }
 

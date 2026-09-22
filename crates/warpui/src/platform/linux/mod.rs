@@ -24,14 +24,14 @@ impl AppBuilderExt for super::AppBuilder {
     fn set_window_class(&mut self, window_class: String) {
         match self.as_inner_mut() {
             AppBackend::CurrentPlatform(app) => app.set_window_class(window_class),
-            AppBackend::Headless(_) => (),
+            AppBackend::Windowless(_) => (),
         }
     }
 
     fn force_x11(&mut self, force_x11: bool) {
         match self.as_inner_mut() {
             AppBackend::CurrentPlatform(app) => app.force_x11(force_x11),
-            AppBackend::Headless(_) => (),
+            AppBackend::Windowless(_) => (),
         }
     }
 }

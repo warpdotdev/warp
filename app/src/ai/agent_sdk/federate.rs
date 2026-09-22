@@ -7,11 +7,11 @@ use warp_cli::agent::OutputFormat;
 use warp_cli::federate::{FederateCommand, IssueGcpTokenArgs, IssueTokenArgs};
 use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
-use warp_managed_secrets::ManagedSecretManager;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, SingletonEntity as _};
 
 use super::common::set_ambient_task_context_from_run_id;
+use crate::server::server_api::managed_secrets::AppManagedSecretManager as ManagedSecretManager;
 
 /// Run identity federation commands.
 pub fn run(

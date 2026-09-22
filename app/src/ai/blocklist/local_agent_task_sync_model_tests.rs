@@ -13,7 +13,9 @@ use super::{
     LocalAgentTaskSyncModel, classify_renderable_error, map_cli_session_status,
     map_conversation_status,
 };
-use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
+use crate::ai::agent::conversation::{
+    AIConversation, AIConversationId, ConversationStatus, TaskSyncMode,
+};
 use crate::ai::agent::{
     AIAgentExchange, AIAgentExchangeId, AIAgentOutputStatus, FinishedAIAgentOutput,
     RenderableAIError, TransientNetworkErrorKind,
@@ -37,6 +39,14 @@ fn assert_update(
     match (update, expected_code, message_contains) {
         (Some(u), code, msg) => {
             assert_eq!(u.error_code, code, "unexpected PlatformErrorCode");
+            if let Some(code) = code {
+                let platform_error = u
+                    .platform_error
+                    .as_ref()
+                    .expect("error codes must include structured platform error information");
+                assert_eq!(platform_error.code, code);
+                assert!(!platform_error.retryable);
+            }
             if let Some(substr) = msg {
                 assert!(
                     u.message.contains(substr),
@@ -160,7 +170,7 @@ fn other_user_error_is_failed_with_invalid_request() {
 }
 
 #[test]
-fn transient_network_error_is_error_with_internal_and_debug_details() {
+fn transient_network_error_has_network_error_code() {
     assert_update(
         classify_renderable_error(&RenderableAIError::transient_network_error(
             false,
@@ -168,8 +178,20 @@ fn transient_network_error_is_error_with_internal_and_debug_details() {
             TransientNetworkErrorKind::UnfinishedExchange,
         )),
         AgentTaskState::Error,
-        Some(PlatformErrorCode::InternalError),
+        Some(PlatformErrorCode::AgentStreamNetworkError),
         Some("Debug info: stream completed with an unfinished exchange"),
+    );
+}
+
+#[test]
+fn server_finished_stream_error_has_stream_failure_code() {
+    assert_update(
+        classify_renderable_error(&RenderableAIError::AgentStreamFailure {
+            error_message: "The LLM is currently unavailable.".into(),
+        }),
+        AgentTaskState::Error,
+        Some(PlatformErrorCode::AgentStreamFailure),
+        Some("LLM is currently unavailable"),
     );
 }
 
@@ -503,7 +525,7 @@ fn install_model_with_call_counter(
     let counter_for_mock = counter.clone();
     let mut mock = MockAIClient::new();
     mock.expect_update_agent_task()
-        .returning(move |_, _, _, _, _, _| {
+        .returning(move |_, _, _, _, _, _, _| {
             counter_for_mock.fetch_add(1, Ordering::SeqCst);
             Ok(())
         });
@@ -532,7 +554,7 @@ fn cli_task_mapping_survives_cli_session_end() {
         let succeeded_updates_for_mock = succeeded_updates.clone();
         let mut mock = MockAIClient::new();
         mock.expect_update_agent_task()
-            .returning(move |_, task_state, _, _, _, _| {
+            .returning(move |_, task_state, _, _, _, _, _| {
                 if task_state == Some(AgentTaskState::Succeeded) {
                     succeeded_updates_for_mock.fetch_add(1, Ordering::SeqCst);
                 }
@@ -596,7 +618,7 @@ fn install_model_with_constant_result(
     let cli_sessions_model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     let mut mock = MockAIClient::new();
     mock.expect_update_agent_task()
-        .returning(move |_, _, _, _, _, _| {
+        .returning(move |_, _, _, _, _, _, _| {
             if succeed {
                 Ok(())
             } else {
@@ -793,7 +815,7 @@ fn shared_session_link_uses_correct_argument_order() {
         let mut mock = MockAIClient::new();
         mock.expect_update_agent_task()
             .withf(
-                move |arg_task_id, task_state, arg_session_id, conv_id, status_msg, _| {
+                move |arg_task_id, task_state, arg_session_id, conv_id, status_msg, _, _| {
                     *arg_task_id == task_id
                         && task_state.is_none()
                         && *arg_session_id == Some(session_id)
@@ -802,7 +824,7 @@ fn shared_session_link_uses_correct_argument_order() {
                 },
             )
             .times(1)
-            .returning(|_, _, _, _, _, _| Ok(()));
+            .returning(|_, _, _, _, _, _, _| Ok(()));
         let ai_client: Arc<dyn AIClient> = Arc::new(mock);
         let _model = app.add_singleton_model(|ctx| {
             LocalAgentTaskSyncModel::new_with_ai_client_for_test(ai_client, ctx)
@@ -973,7 +995,7 @@ fn conversation_server_token_assigned_fires_update_with_conversation_id() {
         let mut mock = MockAIClient::new();
         mock.expect_update_agent_task()
             .withf(
-                move |arg_task_id, task_state, arg_session_id, conv_id, status_msg, _| {
+                move |arg_task_id, task_state, arg_session_id, conv_id, status_msg, _, _| {
                     *arg_task_id == task_id
                         && task_state.is_some()
                         && arg_session_id.is_none()
@@ -982,7 +1004,7 @@ fn conversation_server_token_assigned_fires_update_with_conversation_id() {
                 },
             )
             .times(1)
-            .returning(|_, _, _, _, _, _| Ok(()));
+            .returning(|_, _, _, _, _, _, _| Ok(()));
         let ai_client: Arc<dyn AIClient> = Arc::new(mock);
         let _model = app.add_singleton_model(|ctx| {
             LocalAgentTaskSyncModel::new_with_ai_client_for_test(ai_client, ctx)
@@ -1067,6 +1089,66 @@ fn conversation_server_token_assigned_skips_remote_child_conversations() {
             0,
             "remote-child guard must skip the RPC for token-assigned events"
         );
+    });
+}
+
+/// A debug conversation bootstrapped into a retained setup-failure session
+/// (`TaskSyncMode::PreserveTerminalSetupFailure`) must keep reporting its conversation ID —
+/// live injection and transcript APIs depend on it — but must never drive task state or a
+/// status message from its own status, since that would overwrite the original setup-failure
+/// record the server is preserving for the retained execution's lifetime.
+#[test]
+fn preserve_terminal_setup_failure_conversation_reports_token_without_task_state() {
+    App::test((), |mut app| async move {
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+
+        let mut conversation = AIConversation::new(false, false);
+        let task_id = fixed_task_id();
+        conversation.set_run_id(task_id.to_string());
+        conversation.set_task_sync_mode(TaskSyncMode::PreserveTerminalSetupFailure);
+        conversation.set_server_conversation_token("debug-conversation-token".to_string());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        register_cli_agent_sessions_model(&mut app);
+        let mut mock = MockAIClient::new();
+        mock.expect_update_agent_task()
+            .withf(
+                move |arg_task_id, task_state, _, conv_id, status_msg, _, _| {
+                    *arg_task_id == task_id
+                        && task_state.is_none()
+                        && conv_id.is_some()
+                        && status_msg.is_none()
+                },
+            )
+            .times(1)
+            .returning(|_, _, _, _, _, _, _| Ok(()));
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let _model = app.add_singleton_model(|ctx| {
+            LocalAgentTaskSyncModel::new_with_ai_client_for_test(ai_client, ctx)
+        });
+
+        // A debug turn running to a terminal Error status must not construct a task-state
+        // update, even though an ordinary conversation would report FAILED/ERROR here.
+        history_model.update(&mut app, |model, ctx| {
+            let conv = model
+                .conversation_mut(&conversation_id)
+                .expect("conversation was just restored");
+            conv.update_status_with_error(
+                ConversationStatus::Error,
+                Some(RenderableAIError::other("debug turn failed", false)),
+                terminal_view_id,
+                ctx,
+            );
+        });
+
+        pump_spawned_tasks().await;
+        // Mock drop verifies `.times(1)` and the predicate: exactly one update, carrying only
+        // the conversation token.
     });
 }
 

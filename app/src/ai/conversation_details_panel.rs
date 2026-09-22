@@ -49,7 +49,7 @@ use crate::ai::ambient_agents::task::TaskPrincipalInfo;
 use crate::ai::ambient_agents::{AmbientAgentTaskId, cancel_task_with_toast};
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
-use crate::ai::blocklist::view_util::format_usage_parenthetical;
+use crate::ai::blocklist::view_util::{UsageLabelKind, format_usage, usage_label};
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, CloudAmbientAgentEnvironment};
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
@@ -63,7 +63,7 @@ use crate::send_telemetry_from_ctx;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::AmbientAgentTask;
-#[cfg(not(target_family = "wasm"))]
+use crate::server::team_scope::RequestTeamScope;
 use crate::settings::ai::{AISettings, AISettingsChangedEvent};
 use crate::ui_components::avatar::{Avatar, AvatarContent};
 use crate::ui_components::blended_colors;
@@ -80,6 +80,7 @@ use crate::view_components::copyable_text_field::{
 };
 use crate::workspace::{ForkedConversationDestination, ToastStack, WorkspaceAction};
 use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const FIELD_SPACING: f32 = 16.0;
 const HEADER_SPACING: f32 = 12.0;
@@ -769,9 +770,12 @@ impl ConversationDetailsPanel {
                     ctx.dispatch_typed_action(ConversationDetailsPanelAction::OpenInOz);
                 })
         });
-        #[cfg(not(target_family = "wasm"))]
         ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
-            if matches!(event, AISettingsChangedEvent::IsAnyAIEnabled { .. }) {
+            if matches!(
+                event,
+                AISettingsChangedEvent::IsAnyAIEnabled { .. }
+                    | AISettingsChangedEvent::UsageDisplayUnit { .. }
+            ) {
                 ctx.notify();
             }
         });
@@ -856,11 +860,13 @@ impl ConversationDetailsPanel {
         if self.runner_platforms.contains_key(&runner_uid) {
             return;
         }
-
         self.runners_loading = true;
         let client = ServerApiProvider::as_ref(ctx).get_factory_client();
+        let team_scope = RequestTeamScope::from_scope(
+            &UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx),
+        );
         ctx.spawn(
-            async move { client.get_runners(None).await },
+            async move { client.get_runners(None, Some(team_scope)).await },
             |me, result: anyhow::Result<Vec<Runner>>, ctx| {
                 me.runners_loading = false;
                 match result {
@@ -2310,24 +2316,24 @@ impl View for ConversationDetailsPanel {
         }
 
         if let Some(credits) = self.data.credits {
-            // A single compact "X (N tokens, $Y)" line rather than separate
-            // rows for credits/tokens/per-category cost: for now this
-            // inline figure is enough (see `format_usage_parenthetical` doc
-            // comment for why the deeper per-category breakdown was dropped
-            // from display, though it's still computed and available on
-            // `self.data.charged_usage` for a future expandable treatment).
             let cost_in_cents = self
                 .data
                 .charged_usage
                 .map(|charged_usage| charged_usage.total_cost_in_cents());
-            let mut formatted = format!("{credits:.1}");
-            if let Some(parenthetical) =
-                format_usage_parenthetical(self.data.total_tokens, cost_in_cents)
-            {
-                formatted = format!("{formatted} ({parenthetical})");
-            }
+            let usage_display_unit = AISettings::as_ref(app).usage_display_unit;
+            let formatted = format_usage(
+                credits,
+                self.data.total_tokens,
+                cost_in_cents,
+                usage_display_unit,
+            );
+            let label = usage_label(
+                UsageLabelKind::DetailsPanel,
+                cost_in_cents,
+                usage_display_unit,
+            );
             content.add_child(
-                Container::new(self.render_simple_field("Credits used", &formatted, appearance))
+                Container::new(self.render_simple_field(&label, &formatted, appearance))
                     .with_margin_bottom(FIELD_SPACING)
                     .finish(),
             );

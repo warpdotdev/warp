@@ -48,6 +48,13 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
               isDisabled
             }
             visibility
+            featureModelChoice { ... }
+          }
+          openTeams {
+            teamUid
+            numMembers
+            name
+            teamAcceptingInvites
           }
           billingMetadata {
             customerType

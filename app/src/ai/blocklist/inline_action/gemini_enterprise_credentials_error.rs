@@ -62,6 +62,7 @@ impl GeminiEnterpriseCredentialsErrorView {
                 GeapCredentialsState::Missing
                 | GeapCredentialsState::Disabled
                 | GeapCredentialsState::Unconfigured
+                | GeapCredentialsState::ConflictingAcrossTeams { .. }
                 | GeapCredentialsState::Loaded { .. }
                 | GeapCredentialsState::Failed { .. } => {
                     view.refresh_requested = false;

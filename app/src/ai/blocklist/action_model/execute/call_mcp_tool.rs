@@ -310,9 +310,9 @@ fn handle_call_tool_result(
                             .content
                             .into_iter()
                             .filter_map(|content| {
-                                use rmcp::model::RawContent::*;
-                                if let Text(raw_text_content) = content.raw {
-                                    Some(raw_text_content.text)
+                                use rmcp::model::ContentBlock::*;
+                                if let Text(text_content) = content {
+                                    Some(text_content.text)
                                 } else {
                                     log::warn!("Error content found unsupported content type");
                                     None

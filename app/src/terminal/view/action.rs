@@ -189,7 +189,8 @@ pub enum TerminalAction {
     ControlSequence(Vec<u8>),
     RunNativeShellCompletions {
         buffer_text: String,
-        results_tx: async_channel::Sender<Vec<ShellCompletion>>,
+        results_tx:
+            async_channel::Sender<(Vec<ShellCompletion>, Option<warp_completer::meta::Span>)>,
     },
     KeyDown(String),
     TypedCharacters(String),
@@ -352,6 +353,7 @@ pub enum TerminalAction {
         index: usize,
     },
     WriteCodebaseIndex,
+    AttachFile,
     ToggleAutoexecuteMode,
     ToggleQueueNextPrompt,
     CodebaseIndexSpeedbumpBanner(CodebaseIndexSpeedbumpBannerAction),
@@ -681,6 +683,7 @@ impl fmt::Debug for TerminalAction {
                 write!(f, "OpenAttachmentLightbox({index:?})")
             }
             WriteCodebaseIndex => write!(f, "PersistCodebaseIndex"),
+            AttachFile => write!(f, "AttachFile"),
             ToggleAutoexecuteMode => write!(f, "ToggleAutoexecuteMode"),
             ToggleQueueNextPrompt => write!(f, "ToggleQueueNextPrompt"),
             CodebaseIndexSpeedbumpBanner(action) => {

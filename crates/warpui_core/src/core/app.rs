@@ -61,8 +61,8 @@ use crate::{
     EntityIdSet, Event, GetSingletonModelHandle, ModelAsRef, ModelContext, ModelHandle,
     NextNewWindowsHasThisWindowsBoundsUponClose, Presenter, ReadModel, ReadView, Scene,
     SingletonEntity, SpawnedFuture, TaskId, TypedActionView, UpdateModel, UpdateView, View,
-    ViewAsRef, ViewContext, ViewHandle, WindowId, WindowInvalidation, ZoomFactor, assets,
-    rendering,
+    ViewAsRef, ViewContext, ViewHandle, ViewUpdateError, WindowId, WindowInvalidation, ZoomFactor,
+    assets, rendering,
 };
 
 #[cfg(feature = "tui")]
@@ -482,6 +482,18 @@ impl UpdateView for App {
         F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
     {
         self.as_mut().update_view(handle, update)
+    }
+
+    fn try_update_view<T, F, S>(
+        &mut self,
+        handle: &ViewHandle<T>,
+        update: F,
+    ) -> Result<S, ViewUpdateError>
+    where
+        T: Entity,
+        F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
+    {
+        self.as_mut().try_update_view(handle, update)
     }
 }
 
@@ -2480,7 +2492,7 @@ impl AppContext {
             title,
             fullscreen_state,
             background_blur_radius_pixels,
-            background_blur_texture,
+            background_backdrop,
             anchor_new_windows_from_closed_position,
             on_gpu_driver_selected: on_gpu_driver_reported,
             window_instance,
@@ -2508,7 +2520,7 @@ impl AppContext {
             title,
             style: window_style,
             background_blur_radius_pixels,
-            background_blur_texture,
+            background_backdrop,
             gpu_power_preference: self.rendering_config.gpu_power_preference,
             backend_preference: self.rendering_config.backend_preference,
             on_gpu_device_info_reported: on_gpu_driver_reported.unwrap_or(Box::new(|_| {})),
@@ -2809,7 +2821,12 @@ impl AppContext {
         result
     }
 
-    pub fn reopen_closed_window(&mut self, data: ClosedWindowData) {
+    pub fn reopen_closed_window(
+        &mut self,
+        data: ClosedWindowData,
+        background_blur_radius_pixels: Option<u8>,
+        background_backdrop: platform::WindowBackdrop,
+    ) {
         let ClosedWindowData {
             window_id,
             window,
@@ -2836,9 +2853,8 @@ impl AppContext {
         }
 
         let add_window_options = AddWindowOptions {
-            // TODO(vorporeal): what's the right value here?
-            background_blur_radius_pixels: None,
-            background_blur_texture: false,
+            background_blur_radius_pixels,
+            background_backdrop,
             window_bounds: WindowBounds::ExactPosition(bounds),
             // TODO(alokedesai): Determine if, and how, we want to pass the on_gpu_driver_reported
             // callback from the original window back to this window.
@@ -3520,6 +3536,11 @@ impl AppContext {
             .handled
     }
 
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn simulate_window_closed(&mut self, window_id: WindowId) {
+        let _ = self.handle_window_closed(window_id);
+    }
+
     fn handle_window_event(
         &mut self,
         mut event: Event,
@@ -3765,6 +3786,7 @@ impl AppContext {
                             .remove_text_frame(&key);
                     }
                 }
+                RequestedFallbackFontSource::UncachedText => {}
             }
         }
 
@@ -4620,16 +4642,20 @@ impl AppContext {
     /// Removes the view with the given ID so that an update closure can run against it.
     ///
     /// This bookkeeping is not generic, so it is compiled once instead of being duplicated into
-    /// every instantiation of [`UpdateView::update_view`].
-    fn take_view_for_update(&mut self, window_id: WindowId, view_id: EntityId) -> StoredView {
-        self.pending_flushes += 1;
+    /// every instantiation of [`UpdateView`].
+    fn take_view_for_update(
+        &mut self,
+        window_id: WindowId,
+        view_id: EntityId,
+    ) -> Result<StoredView, ViewUpdateError> {
         let Some(window) = self.windows.get_mut(&window_id) else {
-            panic!("Window does not exist");
+            return Err(ViewUpdateError::WindowClosed);
         };
         let Some(view) = window.views.remove(&view_id) else {
-            panic!("Circular view update");
+            return Err(ViewUpdateError::CircularUpdate);
         };
-        view
+        self.pending_flushes += 1;
+        Ok(view)
     }
 
     /// Restores a view removed by [`Self::take_view_for_update`] and flushes pending effects.
@@ -4682,12 +4708,28 @@ impl UpdateView for AppContext {
         T: Entity,
         F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
     {
+        match self.try_update_view(handle, update) {
+            Ok(result) => result,
+            Err(ViewUpdateError::WindowClosed) => panic!("Window does not exist"),
+            Err(ViewUpdateError::CircularUpdate) => panic!("Circular view update"),
+        }
+    }
+
+    fn try_update_view<T, F, S>(
+        &mut self,
+        handle: &ViewHandle<T>,
+        update: F,
+    ) -> Result<S, ViewUpdateError>
+    where
+        T: Entity,
+        F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
+    {
         let window_id = handle.window_id(self);
-        let mut view = self.take_view_for_update(window_id, handle.id());
+        let mut view = self.take_view_for_update(window_id, handle.id())?;
         let mut ctx = ViewContext::new(self, window_id, handle.id());
         let result = update(downcast_view_mut(&mut view), &mut ctx);
         self.finish_view_update(window_id, handle.id(), view);
-        result
+        Ok(result)
     }
 }
 
@@ -4780,8 +4822,8 @@ impl AppContext {
         self.platform_delegate.system_theme()
     }
 
-    pub fn is_headless(&self) -> bool {
-        self.platform_delegate.is_headless()
+    pub fn is_gui(&self) -> bool {
+        self.platform_delegate.is_gui()
     }
 
     pub fn microphone_access_state(&self) -> MicrophoneAccessState {

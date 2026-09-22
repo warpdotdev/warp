@@ -73,6 +73,7 @@ pub use selectable_area::*;
 pub use shared_scrollbar::*;
 pub use size_constraint_switch::*;
 pub use stack::*;
+use string_offset::StringRange;
 pub use table::{
     RowBackground, Table, TableColumnWidth, TableConfig, TableHeader, TableState, TableStateHandle,
     TableVerticalSizing,
@@ -81,6 +82,8 @@ pub use text::*;
 pub use uniform_list::*;
 pub use viewported_list::*;
 
+#[cfg(any(test, feature = "test-util"))]
+use crate::EntityId;
 use crate::Gradient;
 use crate::event::{DispatchedEvent, ModifiersState};
 use crate::platform::Cursor;
@@ -175,6 +178,12 @@ pub trait Element {
     #[cfg(any(test, feature = "test-util"))]
     fn debug_text_content(&self) -> Option<String> {
         None
+    }
+
+    /// Child-view entity IDs embedded in this subtree, for tests that inspect render output.
+    #[cfg(any(test, feature = "test-util"))]
+    fn debug_child_view_ids(&self) -> Vec<EntityId> {
+        Vec::new()
     }
 }
 
@@ -703,23 +712,6 @@ impl HoverableCharRange {
     }
 }
 
-/// SecretRange is used to store both the char range and byte range of a secret.
-/// We need to do this since several APIs e.g. hover/click APIs, use char ranges,
-/// whereas text-related APIs e.g. Regex and replace_range, use byte ranges.
-#[derive(Debug, Eq, PartialEq, Hash, Clone)]
-pub struct SecretRange {
-    pub char_range: Range<usize>,
-    pub byte_range: Range<usize>,
-}
-
-impl SecretRange {
-    /// Extends the current range to include the provided range.
-    pub fn extend_range_end(&mut self, other: &SecretRange) {
-        self.char_range.end = self.char_range.end.max(other.char_range.end);
-        self.byte_range.end = self.byte_range.end.max(other.byte_range.end);
-    }
-}
-
 pub trait PartialClickableElement {
     /// clickable_char_ranges is the vector of char ranges that the caller can
     /// specify, where the callback will be called if any character in one of
@@ -745,7 +737,7 @@ pub trait PartialClickableElement {
         F: 'static + FnMut(bool, &mut EventContext, &AppContext);
 
     /// Replace in the given range of the text with the replacement text.
-    fn replace_text_range(&mut self, range: SecretRange, replacement: Cow<'static, str>);
+    fn replace_text_range(&mut self, range: StringRange, replacement: Cow<'static, str>);
 }
 
 /// An element that can be selected, for use with the SelectableArea element.

@@ -46,6 +46,10 @@ use crate::ai::agent::icons::{
     failed_icon, gray_stop_icon, in_progress_icon, succeeded_icon, yellow_stop_icon,
 };
 use crate::ai::agent::linearization::compute_task_depths;
+use crate::ai::agent::request_metadata::{
+    InferenceUsageType, LegacyCharges, RequestMetadataRecord, RequestModelCharge,
+    RequestPlatformCharge, TurnPanelData,
+};
 use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
     AIAgentOutputMessage, AIAgentOutputMessageType, AIIdentifiers, CancellationOutcome,
@@ -64,7 +68,7 @@ use crate::notebooks::NotebookId;
 use crate::persistence::ModelEvent;
 use crate::persistence::model::{
     AgentConversationData, ChargedUsageTotals, ContextWindowSegment, ConversationUsageMetadata,
-    ModelTokenUsage, PersistedAutoexecuteMode, ToolUsageMetadata,
+    ModelTokenUsage, PRIMARY_AGENT_CATEGORY, PersistedAutoexecuteMode, ToolUsageMetadata,
 };
 use crate::server::ids::ServerId;
 use crate::terminal::general_settings::GeneralSettings;
@@ -74,6 +78,28 @@ use crate::terminal::model::block::{
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_profiles::UserProfileWithUID;
 use crate::{BlocklistAIHistoryModel, GlobalResourceHandlesProvider};
+
+/// How a conversation's status should synchronize to the server `ai_tasks` row via
+/// `LocalAgentTaskSyncModel` (REMOTE-2661).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TaskSyncMode {
+    /// Ordinary conversation: its status drives the task's state and status message.
+    #[default]
+    Normal,
+    /// A debug conversation bootstrapped into a retained setup-failure session. Its
+    /// conversation ID is still reported, but its status must never construct a new task
+    /// status message — the original failure record is preserved. Defense in depth: the
+    /// server independently guards this by comparing the active execution ID.
+    PreserveTerminalSetupFailure,
+}
+
+impl TaskSyncMode {
+    /// Whether conversation status updates should be suppressed from constructing a new task
+    /// state or status message for this conversation.
+    pub fn suppresses_task_lifecycle_updates(self) -> bool {
+        matches!(self, TaskSyncMode::PreserveTerminalSetupFailure)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TodoStatus {
@@ -102,6 +128,13 @@ pub enum RecordingSpanStatus {
     Captured,
 }
 
+/// The wire counters are `uint64` while the persisted and displayed usage rows
+/// are `u32`, so an oversized count saturates instead of wrapping to a small
+/// number that would read as a plausible total.
+fn narrow_token_count(tokens: u64) -> u32 {
+    u32::try_from(tokens).unwrap_or(u32::MAX)
+}
+
 fn footer_model_token_usage(
     usage_metadata: &stream_finished::ConversationUsageMetadata,
     llm_preferences: &LLMPreferences,
@@ -120,12 +153,15 @@ fn footer_model_token_usage(
                 model_id: model_id.clone(),
                 ..Default::default()
             });
-        entry.warp_tokens += usage.total_tokens;
+        entry.warp_tokens = entry
+            .warp_tokens
+            .saturating_add(narrow_token_count(usage.total_tokens));
         for (category, tokens) in &usage.token_usage_by_category {
-            *entry
+            let category_tokens = entry
                 .warp_token_usage_by_category
                 .entry(category.clone())
-                .or_default() += *tokens;
+                .or_default();
+            *category_tokens = category_tokens.saturating_add(narrow_token_count(*tokens));
         }
     }
     for (model_id, usage) in &usage_metadata.byok_token_usage {
@@ -135,12 +171,15 @@ fn footer_model_token_usage(
                 model_id: model_id.clone(),
                 ..Default::default()
             });
-        entry.byok_tokens += usage.total_tokens;
+        entry.byok_tokens = entry
+            .byok_tokens
+            .saturating_add(narrow_token_count(usage.total_tokens));
         for (category, tokens) in &usage.token_usage_by_category {
-            *entry
+            let category_tokens = entry
                 .byok_token_usage_by_category
                 .entry(category.clone())
-                .or_default() += *tokens;
+                .or_default();
+            *category_tokens = category_tokens.saturating_add(narrow_token_count(*tokens));
         }
     }
 
@@ -153,12 +192,15 @@ fn footer_model_token_usage(
                 model_id: label,
                 ..Default::default()
             });
-        entry.custom_endpoint_tokens += usage.total_tokens;
+        entry.custom_endpoint_tokens = entry
+            .custom_endpoint_tokens
+            .saturating_add(narrow_token_count(usage.total_tokens));
         for (category, tokens) in &usage.token_usage_by_category {
-            *entry
+            let category_tokens = entry
                 .custom_endpoint_token_usage_by_category
                 .entry(category.clone())
-                .or_default() += *tokens;
+                .or_default();
+            *category_tokens = category_tokens.saturating_add(narrow_token_count(*tokens));
         }
     }
 
@@ -400,9 +442,14 @@ pub struct AIConversation {
     /// Keyed by `plan_id`; snapshots with empty `plan_id` are ignored.
     orchestration_configs: HashMap<String, (OrchestrationConfig, OrchestrationConfigStatus)>,
 
-    /// Whether the user has pinned this child agent in the orchestration
-    /// pill bar. Persisted via `AgentConversationData.pinned`.
+    /// Whether the user has pinned this child agent in the
+    /// orchestration pill bar. Persisted via `AgentConversationData.pinned`.
     pinned: bool,
+
+    /// How this conversation's status synchronizes to the server task row. Not persisted: it
+    /// only matters for the live process that bootstrapped the conversation, and a restored
+    /// conversation resumes ordinary synchronization.
+    task_sync_mode: TaskSyncMode,
 }
 
 pub(crate) fn artifact_from_fork_proto(
@@ -459,6 +506,7 @@ impl AIConversation {
             last_event_sequence: None,
             orchestration_configs: HashMap::new(),
             pinned: false,
+            task_sync_mode: TaskSyncMode::default(),
         }
     }
 
@@ -711,6 +759,7 @@ impl AIConversation {
             last_event_sequence,
             orchestration_configs: HashMap::new(),
             pinned,
+            task_sync_mode: TaskSyncMode::default(),
         })
     }
 
@@ -830,6 +879,13 @@ impl AIConversation {
     ) {
         self.conversation_usage_metadata
             .charged_usage_for_last_block = charged_usage;
+    }
+
+    /// Test-only helper to set credits directly without generating a full `StreamFinished` event.
+    #[cfg(test)]
+    pub(crate) fn set_credits_spent_for_last_block_for_test(&mut self, credits: f32) {
+        self.conversation_usage_metadata
+            .credits_spent_for_last_block = Some(credits);
     }
 
     /// Test-only helper that simulates the root-task upgrade performed by the
@@ -1290,6 +1346,17 @@ impl AIConversation {
     /// Marks this conversation as a remote child placeholder.
     pub fn mark_as_remote_child(&mut self) {
         self.is_remote_child = true;
+    }
+
+    /// Returns how this conversation's status synchronizes to the server task row.
+    pub fn task_sync_mode(&self) -> TaskSyncMode {
+        self.task_sync_mode
+    }
+
+    /// Sets how this conversation's status synchronizes to the server task row. Called once,
+    /// right after creating a debug-turn bootstrap conversation with no prior token.
+    pub fn set_task_sync_mode(&mut self, mode: TaskSyncMode) {
+        self.task_sync_mode = mode;
     }
 
     /// Returns the orchestration config and status for a specific plan,
@@ -2252,7 +2319,7 @@ impl AIConversation {
     pub fn update_cost_and_usage_for_request(
         &mut self,
         request_cost: Option<RequestCost>,
-        request_charges: Option<stream_finished::RequestCharges>,
+        request_charges: Option<api::RequestCharges>,
         token_usage: Vec<TokenUsage>,
         usage_metadata: Option<stream_finished::ConversationUsageMetadata>,
         was_user_initiated_request: bool,
@@ -2976,6 +3043,7 @@ impl AIConversation {
                                 );
                                 ctx.emit(BlocklistAIHistoryEvent::UpdatedTodoList {
                                     terminal_surface_id,
+                                    conversation_id: self.id,
                                 });
                             }
                         }
@@ -3257,15 +3325,19 @@ impl AIConversation {
                 }
 
                 let task_id = TaskId::new(task_id);
-                let exchange_id = self
+                // Updates may target messages from exchanges added by earlier response
+                // streams (e.g. the server swapping computer-use screenshot bytes for a
+                // stored ref), so the current stream is not required to have added an
+                // exchange for this task. `Task::upsert_message` resolves the exchange
+                // that owns the message and only needs this one for new messages.
+                let current_stream_exchange_id = self
                     .added_exchanges_by_response
                     .get(response_stream_id)
                     .ok_or(UpdateConversationError::NoPendingRequest)?
                     .iter()
                     .find_map(|new_exchange| {
                         (new_exchange.task_id == task_id).then_some(new_exchange.exchange_id)
-                    })
-                    .ok_or(UpdateConversationError::ExchangeNotFound)?;
+                    });
 
                 let current_todo_list = self.todo_lists.last().cloned();
                 let current_comment_state = self.code_review.as_ref().cloned();
@@ -3275,12 +3347,12 @@ impl AIConversation {
                 // sent on this client). Once we reconstruct these inputs, we will insert them
                 // to mimic the normal conversation flow. (If this is not a shared session, the
                 // exchange inputs will already be populated).
-                let todos_op = self
+                let (exchange_id, todos_op) = self
                     .task_store
                     .modify_task(&task_id, |task| {
                         task.upsert_message(
                             message,
-                            exchange_id,
+                            current_stream_exchange_id,
                             TaskMessageContext {
                                 current_todo_list: current_todo_list.as_ref(),
                                 active_code_review: current_comment_state.as_ref(),
@@ -3289,7 +3361,7 @@ impl AIConversation {
                             mask,
                             is_viewing_shared_session,
                         )
-                        .map(|msg| msg.todos_op().cloned())
+                        .map(|(exchange_id, msg)| (exchange_id, msg.todos_op().cloned()))
                     })
                     .ok_or(UpdateConversationError::TaskNotFound)??;
                 // Update todo list if needed
@@ -3297,6 +3369,7 @@ impl AIConversation {
                     update_todo_list_from_todo_op(&mut self.todo_lists, todos_op);
                     ctx.emit(BlocklistAIHistoryEvent::UpdatedTodoList {
                         terminal_surface_id,
+                        conversation_id: self.id,
                     });
                 }
                 ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {
@@ -3346,6 +3419,7 @@ impl AIConversation {
                     update_todo_list_from_todo_op(&mut self.todo_lists, todos_op);
                     ctx.emit(BlocklistAIHistoryEvent::UpdatedTodoList {
                         terminal_surface_id,
+                        conversation_id: self.id,
                     });
                 }
                 ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {
@@ -3452,6 +3526,218 @@ impl AIConversation {
 
     pub fn get_task(&self, task_id: &TaskId) -> Option<&Task> {
         self.task_store.get(task_id)
+    }
+
+    /// We have to check all tasks for the messages because summarization moves them to a new task
+    /// (`Action::MoveMessagesToNewTask`)
+    fn exchange_request_ids(&self, exchange_id: AIAgentExchangeId) -> HashSet<String> {
+        let Some(exchange) = self.all_tasks().find_map(|task| task.exchange(exchange_id)) else {
+            return HashSet::new();
+        };
+        self.all_tasks()
+            .flat_map(|task| task.messages())
+            .filter(|message| {
+                exchange
+                    .added_message_ids
+                    .contains(&MessageId::new(message.id.clone()))
+            })
+            .map(|message| message.request_id.clone())
+            .filter(|request_id| !request_id.is_empty())
+            .collect()
+    }
+
+    pub fn request_metadata_records_for_exchange(
+        &self,
+        exchange_id: AIAgentExchangeId,
+    ) -> Vec<RequestMetadataRecord> {
+        let request_ids = self.exchange_request_ids(exchange_id);
+        if request_ids.is_empty() {
+            return Vec::new();
+        }
+        let mut seen_message_ids = HashSet::new();
+        self.all_tasks()
+            .flat_map(|task| task.messages())
+            .filter(|message| request_ids.contains(message.request_id.as_str()))
+            .filter_map(RequestMetadataRecord::from_message)
+            .filter(|record| seen_message_ids.insert(record.message_id.clone()))
+            .collect()
+    }
+
+    /// Given the provided exchange id, get all exchange ids for the turn containing that exchange
+    pub fn turn_exchange_ids(&self, exchange_id: AIAgentExchangeId) -> Vec<AIAgentExchangeId> {
+        let mut turn = Vec::new();
+        let mut turn_contains_exchange = false;
+        for exchange in self.root_task_exchanges() {
+            if exchange.has_user_query() {
+                if turn_contains_exchange {
+                    break;
+                }
+                turn.clear();
+            }
+            turn.push(exchange.id);
+            turn_contains_exchange |= exchange.id == exchange_id;
+        }
+        if turn_contains_exchange {
+            turn
+        } else {
+            vec![exchange_id]
+        }
+    }
+
+    pub fn is_last_exchange_in_turn(&self, exchange_id: AIAgentExchangeId) -> bool {
+        self.turn_exchange_ids(exchange_id).last() == Some(&exchange_id)
+    }
+
+    pub fn request_metadata_records_for_turn(
+        &self,
+        exchange_id: AIAgentExchangeId,
+    ) -> Vec<RequestMetadataRecord> {
+        let mut seen_message_ids = HashSet::new();
+        self.turn_exchange_ids(exchange_id)
+            .into_iter()
+            .flat_map(|id| self.request_metadata_records_for_exchange(id))
+            .filter(|record| seen_message_ids.insert(record.message_id.clone()))
+            .collect()
+    }
+
+    /// Because this panel relies on `RequestMetadata` to populate its fields, and that message
+    /// does not exist for historical conversations, we fallback to `conversation_metadata` to
+    /// display what we have
+    pub fn turn_panel_data(&self, exchange_id: AIAgentExchangeId) -> Option<TurnPanelData> {
+        if !self.is_last_exchange_in_turn(exchange_id) {
+            return None;
+        }
+        if let Some(records) = self.turn_panel_records(exchange_id) {
+            return Some(TurnPanelData::Records(records));
+        }
+
+        let turn_exchange_ids = self.turn_exchange_ids(exchange_id);
+        let mut records: Vec<RequestMetadataRecord> = turn_exchange_ids
+            .iter()
+            .filter_map(|id| self.exchange_with_id(*id))
+            .map(|exchange| RequestMetadataRecord {
+                request_started_at: Some(exchange.start_time),
+                first_token_at: exchange
+                    .time_to_first_token_ms
+                    .map(|ms| exchange.start_time + chrono::Duration::milliseconds(ms)),
+                request_ended_at: exchange.finish_time,
+                ..Default::default()
+            })
+            .collect();
+
+        let is_latest_turn = self
+            .root_task_exchanges()
+            .last()
+            .is_some_and(|latest| turn_exchange_ids.last() == Some(&latest.id));
+        let context_window_usage = self
+            .request_metadata_records_for_turn(exchange_id)
+            .iter()
+            .rev()
+            .find_map(|record| record.context_window_usage)
+            .or_else(|| {
+                is_latest_turn
+                    .then(|| self.context_window_usage())
+                    .filter(|usage| *usage > 0.0)
+            });
+
+        let legacy_charges = if !is_latest_turn {
+            LegacyCharges::Unknown
+        } else {
+            // The unrounded credits figure: the footer's one-decimal rounding would turn a real
+            // sub-0.1 charge into zero before the panel could label it "<0.1 credits".
+            let credits_spent_for_last_block = self
+                .conversation_usage_metadata
+                .credits_spent_for_last_block;
+            match self.charged_usage_for_last_block() {
+                Some(totals) => LegacyCharges::Breakdown(Box::new(totals)),
+                None => match credits_spent_for_last_block {
+                    Some(credits) => LegacyCharges::CreditsOnly(credits),
+                    None => LegacyCharges::Unknown,
+                },
+            }
+        };
+
+        let (model_charges, platform_charges) = match &legacy_charges {
+            LegacyCharges::Breakdown(totals) => {
+                let inference_credits = (
+                    totals.input_cost_in_credits,
+                    totals.output_cost_in_credits,
+                    totals.input_cache_read_cost_in_credits,
+                    totals.input_cache_write_cost_in_credits,
+                );
+                let model_charge = RequestModelCharge {
+                    category: PRIMARY_AGENT_CATEGORY.to_string(),
+                    usage_type: InferenceUsageType::DirectApi,
+                    model_id: "Models".to_string(),
+                    input_tokens: totals.input_tokens,
+                    output_tokens: totals.output_tokens,
+                    cache_read_tokens: totals.input_cache_read_tokens,
+                    cache_write_tokens: totals.input_cache_write_tokens,
+                    input_cost_in_cents: totals.input_cost_in_cents,
+                    output_cost_in_cents: totals.output_cost_in_cents,
+                    cache_read_cost_in_cents: totals.input_cache_read_cost_in_cents,
+                    cache_write_cost_in_cents: totals.input_cache_write_cost_in_cents,
+                    input_cost_in_credits: inference_credits.0,
+                    output_cost_in_credits: inference_credits.1,
+                    cache_read_cost_in_credits: inference_credits.2,
+                    cache_write_cost_in_credits: inference_credits.3,
+                    web_search_count: totals.web_search_count,
+                    web_search_cost_in_cents: totals.web_search_cost_in_cents,
+                    web_search_cost_in_credits: totals.web_search_cost_in_credits,
+                };
+                let platform_charges = [(
+                    totals.platform_cost_in_cents,
+                    totals.platform_cost_in_credits,
+                )]
+                .iter()
+                .filter(|(cents, credits)| *cents != 0.0 || *credits != 0.0)
+                .map(|&(cents, credits)| RequestPlatformCharge {
+                    category: PRIMARY_AGENT_CATEGORY.to_string(),
+                    cost_in_cents: cents,
+                    cost_in_credits: credits,
+                    duration_seconds: 0.0,
+                })
+                .collect::<Vec<_>>();
+                (vec![model_charge], platform_charges)
+            }
+            LegacyCharges::CreditsOnly(_) | LegacyCharges::Unknown => (Vec::new(), Vec::new()),
+        };
+
+        if let Some(last) = records.last_mut() {
+            last.model_charges = model_charges;
+            last.platform_charges = platform_charges;
+            last.context_window_usage = context_window_usage;
+        }
+
+        Some(TurnPanelData::Legacy {
+            records,
+            charges: legacy_charges,
+        })
+    }
+
+    /// Get all request metadata for the turn that ENDS with the provided exchange_id
+    /// If the exchange_id is not the last in its turn, this will return `None`, indicating that the
+    /// turn details panel should not be displayed for that exchange
+    pub fn turn_panel_records(
+        &self,
+        exchange_id: AIAgentExchangeId,
+    ) -> Option<Vec<RequestMetadataRecord>> {
+        if !self.is_last_exchange_in_turn(exchange_id) {
+            return None;
+        }
+        let records = self.request_metadata_records_for_turn(exchange_id);
+        let covered_request_ids: HashSet<String> = records
+            .iter()
+            .map(|record| record.request_id.clone())
+            .collect();
+        let complete = self.turn_exchange_ids(exchange_id).into_iter().all(|id| {
+            let request_ids = self.exchange_request_ids(id);
+            !request_ids.is_empty()
+                && request_ids
+                    .iter()
+                    .all(|request_id| covered_request_ids.contains(request_id))
+        });
+        complete.then_some(records)
     }
 
     /// Optimistically creates a subtask for the CLISubagent task when a user query is sent while
@@ -3631,15 +3917,9 @@ impl AIConversation {
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) {
         // Don't persist viewer conversations (e.g. shared sessions).
-        // Under the unified stack, remote child placeholder conversations are
-        // also not persisted — they are rediscovered on restore via the
+        // Remote child placeholder conversations are rediscovered on restore via the
         // ancestor-list seed, so a persisted row would only risk going stale.
-        // Under the flag-off path, remote children must be persisted so they
-        // survive restarts.
-        if self.is_viewing_shared_session
-            || (self.is_remote_child
-                && crate::features::FeatureFlag::OrchestrationUnifiedStack.is_enabled())
-        {
+        if self.is_viewing_shared_session || self.is_remote_child {
             return;
         }
 

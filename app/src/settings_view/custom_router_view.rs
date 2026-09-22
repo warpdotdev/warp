@@ -333,7 +333,7 @@ fn render_targets_row(
 /// model isn't known to the client.
 fn model_display_name(model_id: &str, app: &AppContext) -> String {
     LLMPreferences::as_ref(app)
-        .get_llm_info(&LLMId::from(model_id))
+        .get_llm_info(&LLMId::from(model_id), app)
         .map(|info| info.display_name.clone())
         .unwrap_or_else(|| model_id.to_string())
 }

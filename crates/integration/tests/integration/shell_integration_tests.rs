@@ -40,6 +40,7 @@ integration_tests! {
     test_ps1_value_not_null_or_exit,
     // Tests bash-specific behavior.
     test_custom_ps1_expansion_bash,
+    test_bash_honor_ps1_expands_dynamic_prompt_once,
     // Tests zsh-specific behavior.
     test_auto_title,
     // Tests zsh-specific behavior.
@@ -60,6 +61,13 @@ integration_tests! {
     test_builtin_completions,
     // Tests bootstrap reports completable keywords.
     test_keyword_completions,
+    // Native shell completions, driven against the user's real shell.
+    test_native_shell_completions_menu,
+    test_command_runs_cleanly_after_native_shell_completion,
+    test_native_shell_completions_used_when_no_bundled_spec,
+    test_native_shell_completions_skipped_when_a_bundled_spec_answers,
+    test_native_shell_completions_reach_a_spec_command_native_only,
+    test_native_shell_completions_powershell_member_access,
     // Tests bash-specific behavior.
     test_histcontrol_env_var,
     // Tests initial working directory behavior.

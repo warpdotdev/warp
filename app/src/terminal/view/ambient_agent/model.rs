@@ -10,7 +10,7 @@ use warp_core::send_telemetry_from_ctx;
 use warp_errors::report_error;
 use warp_terminal::model::BlockId;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
-use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
+use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, WeakViewHandle};
 
 use super::AmbientAgentProgressUIState;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
@@ -42,11 +42,13 @@ use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{
-    AgentConfigSnapshot, AmbientAgentTaskState, AttachmentInput, SpawnAgentRequest,
+    AgentConfigSnapshot, AmbientAgentTaskState, AttachmentInput, RunFollowupRequest,
+    SpawnAgentRequest,
 };
-use crate::terminal::CLIAgent;
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::view::ambient_agent::{SetupCommandGroupId, SetupCommandState};
-use crate::workspaces::user_workspaces::TeamScope;
+use crate::terminal::{CLIAgent, TerminalView};
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 /// Tracks progress timestamps for each step during ambient agent spawning.
 #[derive(Debug, Clone)]
@@ -131,9 +133,12 @@ pub struct AmbientAgentViewModel {
 
     /// The request with which the cloud agent was spawned, if it was spawned.
     request: Option<SpawnAgentRequest>,
+    request_team_scope: Option<RequestTeamScope>,
 
     /// The terminal view this model is part of.
     terminal_view_id: EntityId,
+
+    terminal_view: WeakViewHandle<TerminalView>,
 
     /// Selected cloud environment to launch the ambient agent with.
     environment_id: Option<SyncId>,
@@ -194,7 +199,11 @@ pub struct AmbientAgentViewModel {
 }
 
 impl AmbientAgentViewModel {
-    pub(crate) fn new(terminal_view_id: EntityId, ctx: &mut ModelContext<Self>) -> Self {
+    pub fn new(
+        terminal_view_id: EntityId,
+        terminal_view: WeakViewHandle<TerminalView>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
         ctx.subscribe_to_model(&CloudModel::handle(ctx), |me, _, event, ctx| {
             me.handle_cloud_model_event(event, ctx);
         });
@@ -239,7 +248,9 @@ impl AmbientAgentViewModel {
         Self {
             status: Status::Composing,
             request: None,
+            request_team_scope: None,
             terminal_view_id,
+            terminal_view,
             environment_id: None,
             environment_id_from_viewed_task: false,
             progress_timer_handle: None,
@@ -264,6 +275,14 @@ impl AmbientAgentViewModel {
 
     pub fn request(&self) -> Option<&SpawnAgentRequest> {
         self.request.as_ref()
+    }
+
+    fn team_uid(&self, app: &AppContext) -> Option<ServerId> {
+        self.terminal_view.window_id(app).and_then(|window_id| {
+            UserWorkspaces::as_ref(app)
+                .team_context_for_window(window_id)
+                .team_uid()
+        })
     }
 
     /// The terminal view this model belongs to. Used by the handoff open path
@@ -502,12 +521,14 @@ impl AmbientAgentViewModel {
     pub(crate) fn begin_local_to_cloud_handoff(
         &mut self,
         request: SpawnAgentRequest,
+        team_scope: RequestTeamScope,
         cancel: oneshot::Sender<()>,
         ctx: &mut ModelContext<Self>,
     ) {
         let previous_harness = self.selected_harness();
         self.local_to_cloud_handoff_state = Some(LocalToCloudHandoffState::Preparing { cancel });
         self.request = Some(request);
+        self.request_team_scope = Some(team_scope);
         self.source = None;
         self.status = Status::WaitingForSession {
             progress: AgentProgress::new(),
@@ -850,8 +871,10 @@ impl AmbientAgentViewModel {
         self.set_environment_id_from_viewed_task(environment_id, ctx);
 
         if let Some(model_id) = snapshot.and_then(|s| s.model_id.as_deref()) {
+            let team_uid = self.team_uid(ctx);
             LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-                prefs.update_preferred_agent_mode_llm(
+                prefs.update_preferred_agent_mode_llm_for_team_uid(
+                    team_uid,
                     &LLMId::from(model_id),
                     self.terminal_view_id,
                     ctx,
@@ -917,7 +940,55 @@ impl AmbientAgentViewModel {
             log::warn!("Attempted to submit cloud follow-up while HandoffCloudCloud is disabled");
             return;
         }
+        self.submit_run_followup_unchecked(prompt, ctx);
+    }
 
+    /// Submits a follow-up into a retained environment-setup-failure debug session
+    /// (REMOTE-2661), via the same authenticated `submit_run_followup` service call as
+    /// [`Self::submit_cloud_followup`] but not gated on `HandoffCloudCloud`, and not routed
+    /// through [`Self::submit_run_followup_unchecked`]'s task-state polling: a retained run's
+    /// task is supposed to stay failure-like for the whole debug conversation, so that polling
+    /// would eventually misreport it. Treat this as sent once the server accepts the request.
+    pub fn submit_setup_failure_debug_followup(
+        &mut self,
+        prompt: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(task_id) = self.task_id else {
+            log::warn!(
+                "Attempted to submit a setup-failure debug follow-up without an ambient task ID"
+            );
+            return;
+        };
+
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let request = RunFollowupRequest {
+            message: prompt.clone(),
+        };
+        if self.pending_followup_prompt.is_some() {
+            log::warn!(
+                "event=viewer_followup_slot_replaced task_id={task_id} route=setup_failure_debug",
+            );
+        }
+        self.pending_followup_prompt = Some(prompt);
+        ctx.emit(AmbientAgentViewModelEvent::FollowupDispatched);
+
+        ctx.spawn(
+            async move { ai_client.submit_run_followup(&task_id, request).await },
+            |me, result, ctx| {
+                me.pending_followup_prompt = None;
+                if let Err(err) = result {
+                    log::warn!("Failed to submit setup-failure debug follow-up: {err}");
+                    ctx.emit(AmbientAgentViewModelEvent::FollowupSubmissionFailed {
+                        error_message: err.to_string(),
+                    });
+                }
+                ctx.notify();
+            },
+        );
+    }
+
+    fn submit_run_followup_unchecked(&mut self, prompt: String, ctx: &mut ModelContext<Self>) {
         let Some(task_id) = self.task_id else {
             log::warn!("Attempted to submit cloud follow-up without an ambient task ID");
             return;
@@ -935,6 +1006,9 @@ impl AmbientAgentViewModel {
             None,
         );
 
+        if self.pending_followup_prompt.is_some() {
+            log::warn!("event=viewer_followup_slot_replaced task_id={task_id} route=run_followup",);
+        }
         self.pending_followup_prompt = Some(prompt);
         self.status = Status::WaitingForSession {
             progress: AgentProgress::new(),
@@ -984,6 +1058,7 @@ impl AmbientAgentViewModel {
         self.last_ended_execution_session_id = None;
         self.pending_followup_prompt = None;
         self.request = None;
+        self.request_team_scope = None;
         #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
         {
             self.local_to_cloud_handoff_state = None;
@@ -1022,7 +1097,7 @@ impl AmbientAgentViewModel {
         let oz_model = (selected_harness == Harness::Oz).then(|| {
             let prefs = LLMPreferences::as_ref(ctx);
             let active_id = &prefs
-                .get_active_base_model(ctx, Some(self.terminal_view_id))
+                .get_active_base_model(scope, ctx, Some(self.terminal_view_id))
                 .id;
             prefs.cloud_runnable_oz_model_id_or_fallback(active_id)
         });
@@ -1074,7 +1149,7 @@ impl AmbientAgentViewModel {
             mode,
             config,
             title: None,
-            team: None,
+            team: Some(scope.team_uid().is_some()),
             agent_identity_uid: None,
             skill: None,
             attachments,
@@ -1088,13 +1163,14 @@ impl AmbientAgentViewModel {
             orchestration_handoff: None,
         };
 
-        self.spawn_internal(request, ctx);
+        self.spawn_internal(request, RequestTeamScope::from_scope(scope), ctx);
     }
 
     /// Spawn an ambient agent with a fully-constructed request.
     pub fn spawn_agent_with_request(
         &mut self,
         request: SpawnAgentRequest,
+        team_scope: RequestTeamScope,
         ctx: &mut ModelContext<Self>,
     ) {
         // Apply pane settings from the request.
@@ -1107,8 +1183,10 @@ impl AmbientAgentViewModel {
             self.environment_id_from_viewed_task = false;
 
             if let Some(model_id) = config.model_id.as_deref() {
+                let team_uid = self.team_uid(ctx);
                 LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-                    prefs.update_preferred_agent_mode_llm(
+                    prefs.update_preferred_agent_mode_llm_for_team_uid(
+                        team_uid,
                         &LLMId::from(model_id),
                         self.terminal_view_id,
                         ctx,
@@ -1122,16 +1200,22 @@ impl AmbientAgentViewModel {
             }
         }
 
-        self.spawn_internal(request, ctx);
+        self.spawn_internal(request, team_scope, ctx);
     }
 
     /// Stores `request` and starts the combined spawn-and-monitor stream.
-    fn start_spawn_stream(&mut self, mut request: SpawnAgentRequest, ctx: &mut ModelContext<Self>) {
+    fn start_spawn_stream(
+        &mut self,
+        mut request: SpawnAgentRequest,
+        team_scope: RequestTeamScope,
+        ctx: &mut ModelContext<Self>,
+    ) {
         request.interactive = Some(true);
         self.request = Some(request.clone());
+        self.request_team_scope = Some(team_scope);
         self.source = None;
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-        let stream = spawn_task(request, ai_client, None);
+        let stream = spawn_task(request, team_scope, ai_client, None);
         ctx.spawn_stream_local(
             stream,
             |me, event_result, ctx| me.handle_ambient_agent_event_result(event_result, ctx),
@@ -1140,8 +1224,13 @@ impl AmbientAgentViewModel {
     }
 
     /// Spawn an ambient agent given `request`.
-    fn spawn_internal(&mut self, request: SpawnAgentRequest, ctx: &mut ModelContext<Self>) {
-        self.start_spawn_stream(request, ctx);
+    fn spawn_internal(
+        &mut self,
+        request: SpawnAgentRequest,
+        team_scope: RequestTeamScope,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.start_spawn_stream(request, team_scope, ctx);
         self.status = Status::WaitingForSession {
             progress: AgentProgress::new(),
             kind: SessionStartupKind::InitialRun,
@@ -1429,6 +1518,7 @@ impl AmbientAgentViewModel {
 
         if !matches!(startup_kind, Some(SessionStartupKind::InitialRun)) {
             self.request = None;
+            self.request_team_scope = None;
         };
 
         self.status = Status::NeedsGithubAuth {
@@ -1445,12 +1535,11 @@ impl AmbientAgentViewModel {
         if !matches!(self.status, Status::NeedsGithubAuth { .. }) {
             return;
         }
-
-        let Some(request) = self.request.clone() else {
+        let (Some(request), Some(team_scope)) = (self.request.clone(), self.request_team_scope)
+        else {
             return;
         };
-
-        self.spawn_internal(request, ctx);
+        self.spawn_internal(request, team_scope, ctx);
     }
 
     /// Handles cancellation by transitioning to the Cancelled state.
@@ -1558,6 +1647,12 @@ pub enum AmbientAgentViewModelEvent {
     EnvironmentSelected,
     /// The ambient agent failed.
     Failed {
+        error_message: String,
+    },
+    /// A retained-setup-failure debug follow-up (REMOTE-2661) failed to submit. Distinct from
+    /// `Failed`: the run's failure state is expected to persist, so this is just a lightweight
+    /// signal that this one message didn't go through.
+    FollowupSubmissionFailed {
         error_message: String,
     },
     /// Request to show the cloud agent concurrency/capacity modal.

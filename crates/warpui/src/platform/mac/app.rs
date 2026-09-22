@@ -181,35 +181,35 @@ impl AppExt for AppBuilder {
     fn set_activate_on_launch(&mut self, value: bool) {
         match self.as_inner_mut() {
             AppBackend::CurrentPlatform(app) => app.activate_on_launch = value,
-            AppBackend::Headless(_) => (),
+            AppBackend::Windowless(_) => (),
         }
     }
 
     fn set_dev_icon(&mut self, value: Cow<'static, [u8]>) {
         match self.as_inner_mut() {
             AppBackend::CurrentPlatform(app) => app.dev_icon = Some(value),
-            AppBackend::Headless(_) => (),
+            AppBackend::Windowless(_) => (),
         }
     }
 
     fn set_menu_bar_builder(&mut self, value: impl FnOnce(&mut AppContext) -> MenuBar + 'static) {
         match self.as_inner_mut() {
             AppBackend::CurrentPlatform(app) => app.menu_bar_builder = Some(Box::new(value)),
-            AppBackend::Headless(_) => (),
+            AppBackend::Windowless(_) => (),
         }
     }
 
     fn set_dock_menu_builder(&mut self, value: impl FnOnce(&mut AppContext) -> Menu + 'static) {
         match self.as_inner_mut() {
             AppBackend::CurrentPlatform(app) => app.dock_menu_builder = Some(Box::new(value)),
-            AppBackend::Headless(_) => (),
+            AppBackend::Windowless(_) => (),
         }
     }
 
     fn set_show_dock_icon_on_launch(&mut self, value: bool) {
         match self.as_inner_mut() {
             AppBackend::CurrentPlatform(app) => app.show_dock_icon_on_launch = value,
-            AppBackend::Headless(_) => (),
+            AppBackend::Windowless(_) => (),
         }
     }
 }

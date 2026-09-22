@@ -110,6 +110,7 @@ pub struct Team {
     pub name: String,
     pub server_uid: String,
     pub billing_metadata_json: Option<String>,
+    pub feature_model_choice_json: Option<String>,
 }
 
 #[derive(Insertable, AsChangeset)]
@@ -118,6 +119,7 @@ pub struct NewTeam {
     pub name: String,
     pub server_uid: String,
     pub billing_metadata_json: Option<String>,
+    pub feature_model_choice_json: Option<String>,
 }
 
 #[derive(Identifiable, Queryable)]
@@ -147,6 +149,7 @@ pub struct Workspace {
     pub name: String,
     pub server_uid: String,
     pub is_selected: bool,
+    pub feature_model_choice_json: Option<String>,
 }
 
 #[derive(Insertable, AsChangeset)]
@@ -155,6 +158,7 @@ pub struct NewWorkspace {
     pub name: String,
     pub server_uid: String,
     pub is_selected: bool,
+    pub feature_model_choice_json: Option<String>,
 }
 
 #[derive(Identifiable, Insertable, Queryable)]
@@ -1164,7 +1168,7 @@ fn is_false(value: &bool) -> bool {
 }
 
 // Serializes to `conversation_data` column in `agent_conversations`.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct AgentConversationData {
     pub server_conversation_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1295,10 +1299,10 @@ impl ModelTokenUsage {
             self.model_id.clone(),
             stream_finished::ModelTokenUsage {
                 model_id: self.model_id.clone(),
-                total_tokens,
+                total_tokens: u64::from(total_tokens),
                 token_usage_by_category: usage_by_category
                     .iter()
-                    .map(|(cat, tokens)| (cat.clone(), *tokens))
+                    .map(|(cat, tokens)| (cat.clone(), u64::from(*tokens)))
                     .collect(),
             },
         ))
@@ -1322,11 +1326,11 @@ impl ModelTokenUsage {
             self.model_id.clone(),
             stream_finished::ModelTokenUsage {
                 model_id: self.model_id.clone(),
-                total_tokens: self.custom_endpoint_tokens,
+                total_tokens: u64::from(self.custom_endpoint_tokens),
                 token_usage_by_category: self
                     .custom_endpoint_token_usage_by_category
                     .iter()
-                    .map(|(cat, tokens)| (cat.clone(), *tokens))
+                    .map(|(cat, tokens)| (cat.clone(), u64::from(*tokens)))
                     .collect(),
             },
         ))
@@ -1336,14 +1340,16 @@ impl ModelTokenUsage {
     pub fn to_proto_combined(&self) -> stream_finished::ModelTokenUsage {
         stream_finished::ModelTokenUsage {
             model_id: self.model_id.clone(),
-            total_tokens: self.warp_tokens + self.byok_tokens + self.custom_endpoint_tokens,
+            total_tokens: u64::from(self.warp_tokens)
+                + u64::from(self.byok_tokens)
+                + u64::from(self.custom_endpoint_tokens),
             token_usage_by_category: self
                 .warp_token_usage_by_category
                 .iter()
                 .chain(self.byok_token_usage_by_category.iter())
                 .chain(self.custom_endpoint_token_usage_by_category.iter())
                 .fold(HashMap::new(), |mut acc, (cat, tokens)| {
-                    *acc.entry(cat.clone()).or_insert(0) += tokens;
+                    *acc.entry(cat.clone()).or_insert(0) += u64::from(*tokens);
                     acc
                 }),
         }
@@ -1629,10 +1635,20 @@ impl From<&ContextWindowSegment> for stream_finished::ContextWindowSegment {
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq)]
 pub struct ChargedUsageTotals {
     pub input_cost_in_cents: f32,
+    #[serde(default)]
+    pub input_cost_in_credits: f32,
     pub output_cost_in_cents: f32,
+    #[serde(default)]
+    pub output_cost_in_credits: f32,
     pub input_cache_read_cost_in_cents: f32,
+    #[serde(default)]
+    pub input_cache_read_cost_in_credits: f32,
     pub input_cache_write_cost_in_cents: f32,
+    #[serde(default)]
+    pub input_cache_write_cost_in_credits: f32,
     pub platform_cost_in_cents: f32,
+    #[serde(default)]
+    pub platform_cost_in_credits: f32,
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub input_cache_read_tokens: u32,
@@ -1647,6 +1663,8 @@ pub struct ChargedUsageTotals {
     /// charged dollar total (see `warp-proto-apis` PR #363).
     #[serde(default)]
     pub web_search_cost_in_cents: f32,
+    #[serde(default)]
+    pub web_search_cost_in_credits: f32,
 }
 
 impl ChargedUsageTotals {
@@ -1660,55 +1678,90 @@ impl ChargedUsageTotals {
             + self.web_search_cost_in_cents
     }
 
+    pub fn total_cost_in_credits(&self) -> f32 {
+        self.input_cost_in_credits
+            + self.output_cost_in_credits
+            + self.input_cache_read_cost_in_credits
+            + self.input_cache_write_cost_in_credits
+            + self.platform_cost_in_credits
+            + self.web_search_cost_in_credits
+    }
+
     /// Total tokens across every category (input + output + cache-read + cache-write).
     pub fn total_tokens(&self) -> u32 {
         self.input_tokens
-            + self.output_tokens
-            + self.input_cache_read_tokens
-            + self.input_cache_write_tokens
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.input_cache_read_tokens)
+            .saturating_add(self.input_cache_write_tokens)
     }
 
-    fn add_inference_usage(&mut self, usage: &stream_finished::InferenceUsage) {
+    fn add_inference_usage(&mut self, usage: &api::InferenceUsage) {
         if let Some(token_count) = usage.token_count.as_ref() {
-            self.input_tokens += token_count.input;
-            self.output_tokens += token_count.output;
-            self.input_cache_read_tokens += token_count.input_cache_read;
-            self.input_cache_write_tokens += token_count.input_cache_write;
+            // Wire counts are u64 (proto TokenCount); persisted totals stay u32 and saturate.
+            // TODO(Xavientois): widen these fields to u64 to match the proto TokenCount and drop
+            // the saturating narrowing.
+            self.input_tokens = self
+                .input_tokens
+                .saturating_add(u32::try_from(token_count.input).unwrap_or(u32::MAX));
+            self.output_tokens = self
+                .output_tokens
+                .saturating_add(u32::try_from(token_count.output).unwrap_or(u32::MAX));
+            self.input_cache_read_tokens = self
+                .input_cache_read_tokens
+                .saturating_add(u32::try_from(token_count.input_cache_read).unwrap_or(u32::MAX));
+            self.input_cache_write_tokens = self
+                .input_cache_write_tokens
+                .saturating_add(u32::try_from(token_count.input_cache_write).unwrap_or(u32::MAX));
         }
         if let Some(token_cost) = usage.token_cost.as_ref() {
             self.input_cost_in_cents += token_cost.input_cost_in_cents;
+            self.input_cost_in_credits += token_cost.input_cost_in_credits;
             self.output_cost_in_cents += token_cost.output_cost_in_cents;
+            self.output_cost_in_credits += token_cost.output_cost_in_credits;
             self.input_cache_read_cost_in_cents += token_cost.input_cache_read_cost_in_cents;
+            self.input_cache_read_cost_in_credits += token_cost.input_cache_read_cost_in_credits;
             self.input_cache_write_cost_in_cents += token_cost.input_cache_write_cost_in_cents;
+            self.input_cache_write_cost_in_credits += token_cost.input_cache_write_cost_in_credits;
         }
         self.web_search_count += usage.web_search_count;
         self.web_search_cost_in_cents += usage.web_search_cost_in_cents;
+        self.web_search_cost_in_credits += usage.web_search_cost_in_credits;
     }
 }
 
 impl std::ops::AddAssign for ChargedUsageTotals {
     fn add_assign(&mut self, rhs: Self) {
         self.input_cost_in_cents += rhs.input_cost_in_cents;
+        self.input_cost_in_credits += rhs.input_cost_in_credits;
         self.output_cost_in_cents += rhs.output_cost_in_cents;
+        self.output_cost_in_credits += rhs.output_cost_in_credits;
         self.input_cache_read_cost_in_cents += rhs.input_cache_read_cost_in_cents;
+        self.input_cache_read_cost_in_credits += rhs.input_cache_read_cost_in_credits;
         self.input_cache_write_cost_in_cents += rhs.input_cache_write_cost_in_cents;
+        self.input_cache_write_cost_in_credits += rhs.input_cache_write_cost_in_credits;
         self.platform_cost_in_cents += rhs.platform_cost_in_cents;
-        self.input_tokens += rhs.input_tokens;
-        self.output_tokens += rhs.output_tokens;
-        self.input_cache_read_tokens += rhs.input_cache_read_tokens;
-        self.input_cache_write_tokens += rhs.input_cache_write_tokens;
+        self.platform_cost_in_credits += rhs.platform_cost_in_credits;
+        self.input_tokens = self.input_tokens.saturating_add(rhs.input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(rhs.output_tokens);
+        self.input_cache_read_tokens = self
+            .input_cache_read_tokens
+            .saturating_add(rhs.input_cache_read_tokens);
+        self.input_cache_write_tokens = self
+            .input_cache_write_tokens
+            .saturating_add(rhs.input_cache_write_tokens);
         self.web_search_count += rhs.web_search_count;
         self.web_search_cost_in_cents += rhs.web_search_cost_in_cents;
+        self.web_search_cost_in_credits += rhs.web_search_cost_in_credits;
     }
 }
 
-impl From<&stream_finished::RequestCharges> for ChargedUsageTotals {
+impl From<&api::RequestCharges> for ChargedUsageTotals {
     /// Sums a category-keyed `RequestCharges` map (per-turn or cumulative)
     /// into a single flat breakdown, mirroring the Go `SumChargedUsage`
     /// helper. Categories and models are summed together; per-category/
     /// per-model detail is discarded, matching the single
     /// pricing-breakdown-section display convention (`warp` PR #15015).
-    fn from(charges: &stream_finished::RequestCharges) -> Self {
+    fn from(charges: &api::RequestCharges) -> Self {
         let mut totals = Self::default();
         for usage in charges.usage_by_category.values() {
             for inference_usage in usage
@@ -1720,6 +1773,7 @@ impl From<&stream_finished::RequestCharges> for ChargedUsageTotals {
                 totals.add_inference_usage(inference_usage);
             }
             totals.platform_cost_in_cents += usage.platform_usage_in_cents;
+            totals.platform_cost_in_credits += usage.platform_usage_in_credits;
         }
         totals
     }

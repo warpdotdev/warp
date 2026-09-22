@@ -86,7 +86,7 @@ fn provider_key_controls_key_connected_callout() {
         let scope = UserWorkspaces::teamless_context_resolver_for_test();
         let mut llm = app.read(|ctx| {
             LLMPreferences::as_ref(ctx)
-                .get_active_base_model(ctx, None)
+                .get_active_base_model_for_team_uid(None, ctx, None)
                 .clone()
         });
         llm.provider = LLMProvider::OpenAI;

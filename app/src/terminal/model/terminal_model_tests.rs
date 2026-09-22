@@ -4,6 +4,7 @@ use std::sync::Arc;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use chrono::{DateTime, Local};
 use vec1::vec1;
+use warp_completer::completer::MatchedSuggestion;
 use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
 use warp_terminal::model::ansi::ClearMode;
@@ -1224,6 +1225,80 @@ fn normal_lifecycle_pipeline_emits_completion_and_prompt_side_effects_once() {
         Ok(OrderedTerminalEventType::CommandExecutionFinished { .. })
     ));
     assert!(ordered_rx.try_recv().is_err());
+}
+
+/// The shell ranks its own completions by relevance, so the order it emits them in is information
+/// the client should not throw away: for `git ch`, zsh puts `checkout` first, which sorting buries
+/// in the middle of the `check-*` candidates.
+#[test]
+fn completions_are_emitted_in_the_order_the_shell_sent_them() {
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let event_proxy = ChannelEventListener::builder_for_test()
+        .with_terminal_events_tx(event_tx)
+        .build();
+    let mut terminal = TerminalModel::mock(None, Some(event_proxy));
+
+    let shell_order = [
+        "checkout",
+        "cherry-pick",
+        "check-attr",
+        "cherry",
+        "check-ignore",
+    ];
+    terminal.start_completions_output();
+    for name in shell_order {
+        terminal.on_completion_result_received(ShellCompletion::new(name.to_owned()));
+    }
+    terminal.end_completions_output();
+
+    let emitted = std::iter::from_fn(|| event_rx.try_recv().ok())
+        .find_map(|event| match event {
+            Event::CompletionsFinished(completions, _) => Some(completions),
+            _ => None,
+        })
+        .expect("a CompletionsFinished event should have been emitted");
+    let emitted_names: Vec<String> = emitted
+        .into_iter()
+        .map(|completion| {
+            MatchedSuggestion::from(completion)
+                .suggestion
+                .display
+                .to_string()
+        })
+        .collect();
+
+    assert_eq!(emitted_names, shell_order);
+}
+
+#[test]
+fn completion_replacement_span_saturates_an_out_of_range_pair_rather_than_panicking() {
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let event_proxy = ChannelEventListener::builder_for_test()
+        .with_terminal_events_tx(event_tx)
+        .build();
+    let mut terminal = TerminalModel::mock(None, Some(event_proxy));
+
+    terminal.start_completions_output();
+    terminal.on_completion_replacement_span_received(3, 4);
+    terminal.end_completions_output();
+    let well_formed = std::iter::from_fn(|| event_rx.try_recv().ok())
+        .find_map(|event| match event {
+            Event::CompletionsFinished(_, span) => Some(span.map(|s| (s.start(), s.end()))),
+            _ => None,
+        })
+        .expect("a CompletionsFinished event should have been emitted");
+    assert_eq!(well_formed, Some((3, 7)));
+
+    terminal.start_completions_output();
+    terminal.on_completion_replacement_span_received(usize::MAX, 1);
+    terminal.end_completions_output();
+    let saturated = std::iter::from_fn(|| event_rx.try_recv().ok())
+        .find_map(|event| match event {
+            Event::CompletionsFinished(_, span) => Some(span.map(|s| (s.start(), s.end()))),
+            _ => None,
+        })
+        .expect("a CompletionsFinished event should have been emitted");
+    assert_eq!(saturated, Some((usize::MAX, usize::MAX)));
 }
 
 #[test]

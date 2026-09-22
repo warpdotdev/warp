@@ -23,6 +23,8 @@ prost-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
+schemars = "1"
+settings_value.workspace = true
 string-offset.workspace = true
 typed-path.workspace = true
 anyhow.workspace = true
@@ -30,6 +32,7 @@ base16ct = "0.2.0"
 streaming-iterator.workspace = true
 instant.workspace = true
 itertools.workspace = true
+indexmap = { version = "2.0.2", features = ["serde"] }
 rayon.workspace = true
 ignore = "0.4.23"
 line-span = "0.1.5"
@@ -53,6 +56,7 @@ tokio = { workspace = true, features = ["rt"] }
 futures.workspace = true
 generic-array = "0.14.7"
 derivative.workspace = true
+hex.workspace = true
 warp_core.workspace = true
 warp_errors.workspace = true
 warp_terminal.workspace = true
@@ -63,6 +67,7 @@ priority-queue = "2.3.1"
 repo_metadata.workspace = true
 uuid.workspace = true
 unicode-width.workspace = true
+url.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true

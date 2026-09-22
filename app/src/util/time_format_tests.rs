@@ -1,4 +1,25 @@
+use chrono::TimeZone;
+
 use super::*;
+
+#[test]
+fn format_message_timestamp_uses_friendly_local_time() {
+    let morning = Local.with_ymd_and_hms(2026, 8, 10, 9, 2, 0).unwrap();
+    let noon = Local.with_ymd_and_hms(2026, 12, 31, 12, 45, 0).unwrap();
+    let midnight = Local.with_ymd_and_hms(2026, 12, 31, 0, 5, 0).unwrap();
+
+    assert_eq!(format_message_timestamp(&morning), "8/10 at 9:02 AM");
+    assert_eq!(format_message_timestamp(&noon), "12/31 at 12:45 PM");
+    assert_eq!(format_message_timestamp(&midnight), "12/31 at 12:05 AM");
+}
+
+#[test]
+fn default_message_timestamp_is_not_trustworthy() {
+    assert!(!is_trustworthy_message_timestamp(&DateTime::default()));
+    assert!(is_trustworthy_message_timestamp(
+        &Local.with_ymd_and_hms(2026, 8, 10, 9, 22, 0).unwrap()
+    ));
+}
 
 #[test]
 fn test_format_sigfigs() {

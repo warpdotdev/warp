@@ -3,7 +3,7 @@ use std::rc::Rc;
 use warp::settings::AISettingsChangedEvent;
 use warp::tui_export::{
     BlocklistAIInputModel, ConversationSelectionEvent, InputConfig, InputModePolicy, InputType,
-    PolicyConfigUpdate, VoiceInput,
+    PolicyConfigUpdate, UserWorkspaces, VoiceInput,
 };
 use warpui_core::event::KeyState;
 use warpui_core::platform::keyboard::KeyCode;
@@ -52,7 +52,13 @@ impl InputModePolicy for TestInputModePolicy {
 fn add_voice_model(app: &mut App) -> ModelHandle<TuiVoiceInputModel> {
     let input_mode =
         app.update(|ctx| BlocklistAIInputModel::mock(Rc::new(TestInputModePolicy), ctx));
-    app.add_model(|ctx| TuiVoiceInputModel::new(input_mode, ctx))
+    app.add_model(|ctx| {
+        TuiVoiceInputModel::new(
+            input_mode,
+            UserWorkspaces::teamless_context_resolver_for_test(),
+            ctx,
+        )
+    })
 }
 
 #[test]

@@ -1089,8 +1089,11 @@ impl Buffer {
     }
 
     fn ensure_plain_text(&mut self, range: Range<CharOffset>) -> CoreEditorActionResult {
-        let updated_range = if range.end >= self.max_charoffset()
-            && self.block_type_at_point(range.end) != BlockType::Text(BufferBlockStyle::PlainText)
+        let buffer_end = self.max_charoffset();
+        let updated_range = if buffer_end == CharOffset::zero()
+            || (range.end >= buffer_end
+                && self.block_type_at_point(range.end)
+                    != BlockType::Text(BufferBlockStyle::PlainText))
         {
             log::trace!("Inserting <text> marker at end of buffer");
             self.content.push(BufferText::BlockMarker {

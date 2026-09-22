@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 use ai::project_context::model::{
     ProjectContextModel, ProjectContextModelEvent, ProjectRulesResult,
 };
@@ -152,6 +153,10 @@ impl TuiZeroStateView {
             |_, _, SkillManagerEvent::SkillsChanged { .. }, ctx| ctx.notify(),
         );
         ctx.subscribe_to_model(&TuiMcpManager::handle(ctx), |_, _, _, ctx| ctx.notify());
+        ctx.subscribe_to_model(
+            &ApiKeyManager::handle(ctx),
+            |_, _, _: &ApiKeyManagerEvent, ctx| ctx.notify(),
+        );
         ctx.subscribe_to_model(&TuiUserInfoManager::handle(ctx), |_, _, event, ctx| {
             let TuiUserInfoManagerEvent::Updated = event;
             ctx.notify();
@@ -604,17 +609,14 @@ fn build_zero_state_overlay_with_variant(
         column = column.child(blank_row()).child(path_header);
     }
 
-    if project_cwd.is_some() || visibility.mcp {
-        let rules_ref = project_rules.flatten();
-        let constrained_bottom = TuiConstrainedBox::new(
-            render_bottom_section(project_cwd, rules_ref.as_ref(), visibility, builder, ctx)
-                .finish(),
-        )
-        .with_min_cols(LEFT_COLUMN_COLS)
-        .with_max_cols(LEFT_COLUMN_COLS)
-        .finish();
-        column = column.child(constrained_bottom);
-    }
+    let rules_ref = project_rules.flatten();
+    let constrained_bottom = TuiConstrainedBox::new(
+        render_bottom_section(project_cwd, rules_ref.as_ref(), visibility, builder, ctx).finish(),
+    )
+    .with_min_cols(LEFT_COLUMN_COLS)
+    .with_max_cols(LEFT_COLUMN_COLS)
+    .finish();
+    column = column.child(constrained_bottom);
 
     column.finish()
 }
@@ -721,9 +723,9 @@ fn render_bottom_section(
         column
     };
     if visibility.mcp {
-        render_mcp_section(column, builder, app)
+        render_custom_endpoints_section(render_mcp_section(column, builder, app), builder, app)
     } else {
-        column
+        render_custom_endpoints_section(column, builder, app)
     }
 }
 
@@ -760,6 +762,57 @@ fn render_mcp_section(mut column: TuiFlex, builder: &TuiUiBuilder, app: &AppCont
         muted
     };
     column.child(TuiText::new(label).with_style(style).truncate().finish())
+}
+
+fn render_custom_endpoints_section(
+    column: TuiFlex,
+    builder: &TuiUiBuilder,
+    app: &AppContext,
+) -> TuiFlex {
+    let Some((label, is_error)) = custom_endpoint_status_label(ApiKeyManager::as_ref(app)) else {
+        return column;
+    };
+    let header_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
+    let style = if is_error {
+        builder.error_text_style()
+    } else {
+        builder.muted_text_style()
+    };
+    column
+        .child(blank_row())
+        .child(
+            TuiText::new("Custom endpoints")
+                .with_style(header_style)
+                .truncate()
+                .finish(),
+        )
+        .child(TuiText::new(label).with_style(style).truncate().finish())
+}
+
+fn custom_endpoint_status_label(manager: &ApiKeyManager) -> Option<(String, bool)> {
+    if !manager.custom_endpoint_settings_valid() {
+        return Some((
+            "Configuration error · fix agents.custom_endpoints".to_owned(),
+            true,
+        ));
+    }
+    let definitions = manager.custom_endpoint_definitions()?;
+    if definitions.is_empty() {
+        return None;
+    }
+    let connected = definitions
+        .definitions()
+        .filter(|(id, _)| manager.custom_endpoint_key(id).is_some())
+        .count();
+    let missing = definitions.len() - connected;
+    let label = match (connected, missing) {
+        (0, missing) => format!("{missing} need API keys · /api-keys"),
+        (connected, 0) => format!("{connected} connected · /api-keys"),
+        (connected, missing) => {
+            format!("{connected} connected · {missing} need API keys · /api-keys")
+        }
+    };
+    Some((label, false))
 }
 #[derive(Default)]
 struct McpStatusCounts {

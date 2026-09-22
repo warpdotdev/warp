@@ -57,6 +57,7 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::comment::ReviewComment;
 use crate::ai::agent::conversation::{RecordingSpanInfo, RecordingSpanStatus};
 use crate::ai::agent::icons::{self, gray_stop_icon, yellow_stop_icon};
+use crate::ai::agent::request_metadata::TurnPanelData;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
@@ -102,10 +103,10 @@ use crate::ai::blocklist::inline_action::web_fetch::WebFetchView;
 use crate::ai::blocklist::inline_action::web_search::WebSearchView;
 use crate::ai::blocklist::keyboard_navigable_buttons::KeyboardNavigableButtons;
 use crate::ai::blocklist::secret_redaction::SecretRedactionState;
+use crate::ai::blocklist::usage::request_metadata_turn_view::turn_panel_tooltip_text_for_data;
 use crate::ai::blocklist::usage::rollup::compute_orchestration_rollup;
 use crate::ai::blocklist::view_util::{
-    FAILED_OUTPUT_USAGE_NOTICE_TEXT, format_credits_with_cost, format_usage_parenthetical,
-    should_show_failed_output_usage_notice,
+    FAILED_OUTPUT_USAGE_NOTICE_TEXT, format_usage, should_show_failed_output_usage_notice,
 };
 use crate::ai::blocklist::{AIBlockResponseRating, BlocklistAIActionModel, SuggestionChipView};
 use crate::ai::paths::shell_native_absolute_path;
@@ -116,6 +117,7 @@ use crate::ai::skills::{
 use crate::appearance::Appearance;
 use crate::code::diff_viewer::DisplayMode;
 use crate::code::editor_management::CodeSource;
+use crate::settings::AISettings;
 use crate::settings_view::SettingsSection;
 use crate::terminal::ShellLaunchData;
 #[cfg(not(target_family = "wasm"))]
@@ -184,6 +186,7 @@ pub(crate) struct Props<'a> {
     pub(super) has_accepted_edits: bool,
     pub(super) finish_reason: Option<&'a FinishReason>,
     pub(super) is_usage_footer_expanded: bool,
+    pub(super) is_turn_panel_expanded: bool,
     pub(super) shared_session_status: &'a SharedSessionStatus,
     pub(super) terminal_view_id: EntityId,
     pub(super) is_conversation_transcript_viewer: bool,
@@ -3200,7 +3203,8 @@ fn render_use_computer(
             renderable_action.with_footer(render_recording_footer(recording_span.status, app));
     }
 
-    // Add a "View screenshot" button if the action result contains a screenshot.
+    // Add a "View screenshot" button if the action result contains a screenshot,
+    // either inline or offloaded to object storage.
     let has_screenshot = props
         .action_model
         .as_ref(app)
@@ -3209,8 +3213,11 @@ fn render_use_computer(
             matches!(
                 &result.result,
                 AIAgentActionResultType::UseComputer(
-                    crate::ai::agent::UseComputerResult::Success(action_result)
-                ) if action_result.screenshot.is_some()
+                    crate::ai::agent::UseComputerResult::Success {
+                        screenshot: Some(_),
+                        ..
+                    }
+                )
             )
         });
 
@@ -3451,16 +3458,9 @@ fn render_suggested_rules_and_prompts_footer(
     )
 }
 
-fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Element>> {
-    if props.model.status(app).is_streaming() {
-        return None;
-    }
-
+/// The shared (idle, hovered/active) styles for the icon buttons in a block's response footer.
+fn footer_icon_button_styles(app: &AppContext) -> (UiComponentStyles, UiComponentStyles) {
     let appearance = Appearance::as_ref(app);
-    let mut flex = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-    let is_passive_code_diff = props.model.request_type(app).is_passive_code_diff();
-
-    // Show footer for any terminal state (complete, cancelled, or failed)
     let style_override = UiComponentStyles {
         font_color: Some(
             appearance
@@ -3476,6 +3476,27 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         background: Some(blended_colors::neutral_4(appearance.theme()).into()),
         ..style_override
     };
+    (style_override, style_override_with_background)
+}
+
+/// The Turn panel contents for the user-visible turn this block closes
+fn turn_panel_data_for_block(props: Props, app: &AppContext) -> Option<TurnPanelData> {
+    let exchange_id = props.model.exchange_id(app)?;
+    let conversation = props.model.conversation(app)?;
+    conversation.turn_panel_data(exchange_id)
+}
+
+fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Element>> {
+    if props.model.status(app).is_streaming() {
+        return None;
+    }
+
+    let appearance = Appearance::as_ref(app);
+    let mut flex = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+    let is_passive_code_diff = props.model.request_type(app).is_passive_code_diff();
+
+    // Show footer for any terminal state (complete, cancelled, or failed)
+    let (style_override, style_override_with_background) = footer_icon_button_styles(app);
 
     let ui_builder = appearance.ui_builder().clone();
 
@@ -3634,7 +3655,25 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         flex.add_child(fork_button);
     }
 
-    flex.add_child(render_usage_button(props, app));
+    let turn_panel_data = FeatureFlag::PricingTransparency
+        .is_enabled()
+        .then(|| turn_panel_data_for_block(props, app))
+        .flatten();
+    if let Some(data) = turn_panel_data {
+        flex.add_child(
+            Container::new(render_turn_panel_button(
+                props,
+                &data,
+                style_override,
+                style_override_with_background,
+                app,
+            ))
+            .with_margin_left(4.)
+            .finish(),
+        );
+    } else {
+        flex.add_child(render_usage_button(props, app));
+    }
 
     // Review changes button.
     if props.has_accepted_edits && !props.shared_session_status.is_viewer() {
@@ -3664,6 +3703,39 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
     }
 
     Some(flex.finish().with_content_item_spacing().finish())
+}
+
+/// Renders the per-turn icon that, on click, opens/closes the docked "Turn" panel backed by the
+/// turn's usage data.
+fn render_turn_panel_button(
+    props: Props,
+    data: &TurnPanelData,
+    style_override: UiComponentStyles,
+    style_override_with_background: UiComponentStyles,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let ui_builder = appearance.ui_builder().clone();
+    let tooltip_text =
+        turn_panel_tooltip_text_for_data(data, AISettings::as_ref(app).usage_display_unit);
+
+    icon_button(
+        appearance,
+        Icon::TurnUsagePie,
+        // Keep the trigger visibly "active" while the panel is open, not just while
+        // hovered/clicked, so the icon reads as the panel's open/closed toggle.
+        props.is_turn_panel_expanded,
+        props.state_handles.turn_panel_button_handle.clone(),
+    )
+    .with_tooltip(move || ui_builder.tool_tip(tooltip_text.clone()).build().finish())
+    .with_style(style_override)
+    .with_hovered_styles(style_override_with_background)
+    .with_active_styles(style_override_with_background)
+    .build()
+    .on_click(|ctx, _, _| {
+        ctx.dispatch_typed_action(AIBlockAction::ToggleIsTurnPanelExpanded);
+    })
+    .finish()
 }
 
 /// Renders the usage button that, on click, will expand & collapse the usage summary footer.
@@ -3722,9 +3794,14 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
         Icon::ChevronRight
     };
 
+    let usage_display_unit = AISettings::as_ref(app).usage_display_unit;
     let total_credits_spent = headline_credits;
-    let mut credit_usage_text =
-        format_credits_with_cost(total_credits_spent, headline_tokens, headline_cost_in_cents);
+    let mut usage_text = format_usage(
+        total_credits_spent,
+        headline_tokens,
+        headline_cost_in_cents,
+        usage_display_unit,
+    );
     if let Some(credits_spent_for_last_block) = conversation.credits_spent_for_last_block() {
         // Only show the credits spent for the last block if it is different from the total credits spent
         // and we spent a non-zero amount of credits for the last block.
@@ -3734,26 +3811,17 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
             && total_credits_spent != credits_spent_for_last_block
             && props.model.status(app).error().is_none()
         {
-            // If the first part of the decimal is 0, we just display the whole number.
-            let last_block_credits_text = if credits_spent_for_last_block.fract() < 0.1 {
-                format!("{}", credits_spent_for_last_block.trunc() as i32)
-            } else {
-                format!("{credits_spent_for_last_block:.1}")
-            };
             // The last-block figure has no rollup equivalent: it stays
             // bound to the orchestrator's own last block, same as
             // `credits_spent_for_last_block` above.
             let last_block_charged_usage = conversation.charged_usage_for_last_block();
-            let last_block_detail = format_usage_parenthetical(
+            let last_block_text = format_usage(
+                credits_spent_for_last_block,
                 last_block_charged_usage.map(|usage| usage.total_tokens()),
                 last_block_charged_usage.map(|usage| usage.total_cost_in_cents()),
+                usage_display_unit,
             );
-            credit_usage_text = match last_block_detail {
-                Some(detail) => {
-                    format!("{credit_usage_text} (+{last_block_credits_text}, {detail})")
-                }
-                None => format!("{credit_usage_text} (+{last_block_credits_text})"),
-            };
+            usage_text = format!("{usage_text} (+{last_block_text})");
         }
     }
 
@@ -3764,7 +3832,7 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
         .with_child(
             Container::new(
                 Text::new_inline(
-                    credit_usage_text,
+                    usage_text,
                     appearance.ui_font_family(),
                     appearance.monospace_font_size(),
                 )
@@ -4025,7 +4093,6 @@ fn render_collapsible_text_block_section(
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
     let text_color = blended_colors::text_disabled(theme, theme.surface_2());
-    let selectable = false;
     let is_streaming = props.model.status(app).is_streaming();
 
     let mut container = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
@@ -4058,7 +4125,7 @@ fn render_collapsible_text_block_section(
             starting_image_section_index: &mut image_section_index,
             sections,
             text_color,
-            selectable,
+            selectable: true,
             find_context: props.find_context,
             current_working_directory: props.current_working_directory,
             shell_launch_data: props.shell_launch_data,

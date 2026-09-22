@@ -14,7 +14,7 @@ use warpui::{
     ViewHandle, WindowId,
 };
 
-use super::{EDIT_WINDOW_DURATION, NotebookEvent, NotebookView, SAVE_PERIOD};
+use super::{EDIT_WINDOW_DURATION, NotebookEvent, NotebookView};
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::user::{TEST_USER_EMAIL, TEST_USER_UID};
 use crate::auth::{AuthStateProvider, UserUid};
@@ -43,6 +43,7 @@ use crate::server::sync_queue::{QueueItem, SyncQueue, SyncQueueEvent};
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::terminal::keys::TerminalKeybindings;
+use crate::test_util::assert_eventually;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{WorkflowSource, WorkflowType};
@@ -207,16 +208,12 @@ async fn initial_load(app: &mut App, updated_notebooks: impl Into<Vec<ServerNote
 
 /// Wait for all edits to be saved.
 async fn ensure_saved(app: &mut App, notebook_view: &ViewHandle<NotebookView>) {
-    loop {
-        let has_edits = notebook_view.read(app, |notebook, _| {
+    assert_eventually!(
+        4000 => !notebook_view.read(app, |notebook, _| {
             notebook.content_is_dirty || notebook.title_is_dirty
-        });
-        if has_edits {
-            Timer::after(SAVE_PERIOD).await;
-        } else {
-            break;
-        }
-    }
+        }),
+        "timed out after ~20s waiting for notebook edits to save"
+    );
 
     // Ensure that any updates from the debounced save were processed.
     app.update(|_| ());

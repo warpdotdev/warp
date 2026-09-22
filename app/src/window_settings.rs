@@ -1,6 +1,8 @@
 use settings::macros::define_settings_group;
-use settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
-use warpui::{AppContext, WindowId};
+use settings::{RespectUserSyncSetting, Setting as _, SupportedPlatforms, SyncToCloud};
+use warp_errors::report_if_error;
+use warpui::platform::WindowBackdrop;
+use warpui::{AppContext, SingletonEntity, WindowId};
 
 define_settings_group!(WindowSettings, settings: [
     background_blur_radius: BackgroundBlurRadius {
@@ -14,7 +16,17 @@ define_settings_group!(WindowSettings, settings: [
         toml_path: "appearance.window.override_blur",
         description: "The blur radius applied to the window background.",
     },
-    background_blur_texture: BackgroundBlurTexture {
+    background_backdrop: BackgroundBackdrop {
+        type: WindowBackdrop,
+        default: WindowBackdrop::None,
+        supported_platforms: SupportedPlatforms::WINDOWS,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "appearance.window.backdrop",
+        description: "The system backdrop material applied to the window background.",
+    },
+    legacy_override_blur_texture: LegacyOverrideBlurTexture {
         type: bool,
         default: false,
         supported_platforms: SupportedPlatforms::WINDOWS,
@@ -23,8 +35,8 @@ define_settings_group!(WindowSettings, settings: [
         private: false,
         storage_key: "OverrideBlurTexture",
         toml_path: "appearance.window.override_blur_texture",
-        description: "Whether to apply a blur texture to the window background.",
-    }
+        description: "Deprecated legacy setting for the Acrylic window backdrop.",
+    },
     background_opacity: BackgroundOpacity {
         type: u8,
         default: 100,
@@ -87,6 +99,42 @@ define_settings_group!(WindowSettings, settings: [
         description: "The zoom level for the window, as a percentage.",
     },
 ]);
+
+pub(crate) fn stage_legacy_background_backdrop(ctx: &mut AppContext) {
+    WindowSettings::handle(ctx).update(ctx, |settings, ctx| {
+        if settings.background_backdrop.is_value_explicitly_set()
+            || !*settings.legacy_override_blur_texture
+        {
+            return;
+        }
+        report_if_error!(settings.background_backdrop.load_value(
+            WindowBackdrop::Acrylic,
+            false,
+            ctx
+        ));
+    });
+}
+
+pub(crate) fn migrate_legacy_background_backdrop(ctx: &mut AppContext) {
+    WindowSettings::handle(ctx).update(ctx, |settings, ctx| {
+        if settings.background_backdrop.is_value_explicitly_set() {
+            return;
+        }
+        if *settings.legacy_override_blur_texture {
+            report_if_error!(
+                settings
+                    .background_backdrop
+                    .set_value(WindowBackdrop::Acrylic, ctx)
+            );
+        } else {
+            report_if_error!(settings.background_backdrop.load_value(
+                WindowBackdrop::None,
+                false,
+                ctx
+            ));
+        }
+    });
+}
 
 impl ZoomLevel {
     /// Available zoom values (percent): 50, 60, 70, 80, 90, 100, 110, 125, 150, 175, 200, 225, 250, 300, 350.

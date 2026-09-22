@@ -16,12 +16,13 @@ use warpui::{ModelHandle, ModelSpawner};
 
 use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
+use super::harness_persistence::{HarnessPersistence, PersistenceOutcome};
 use super::json_utils::{read_json_file_or_default, write_json_file};
 use super::{
     HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint,
     ThirdPartyHarness, write_temp_file,
 };
-use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::setup_observability::{
     OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
 };
@@ -60,7 +61,8 @@ impl ThirdPartyHarness for GeminiHarness {
         system_prompt: Option<&str>,
         _resumption_prompt: Option<&str>,
         context: Option<&str>,
-        working_dir: &Path,
+        _workspace_root: &Path,
+        harness_working_dir: &Path,
         _task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
@@ -71,7 +73,7 @@ impl ThirdPartyHarness for GeminiHarness {
         _third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
         // Prepare the environment config files.
-        prepare_gemini_environment_config(working_dir, system_prompt).map_err(|error| {
+        prepare_gemini_environment_config(harness_working_dir, system_prompt).map_err(|error| {
             AgentDriverError::HarnessConfigSetupFailed {
                 harness: self.cli_agent().command_prefix().to_owned(),
                 error,
@@ -91,7 +93,6 @@ impl ThirdPartyHarness for GeminiHarness {
             self.cli_agent().command_prefix(),
             &effective_prompt,
             system_prompt,
-            working_dir,
             client,
             terminal_driver,
         )?))
@@ -109,7 +110,7 @@ fn gemini_command(cli_name: &str, prompt_path: &str) -> String {
 enum GeminiRunnerState {
     Preexec,
     Running {
-        conversation_id: AIConversationId,
+        conversation_id: ServerConversationToken,
         block_id: BlockId,
     },
 }
@@ -123,6 +124,7 @@ struct GeminiHarnessRunner {
     client: Arc<dyn HarnessSupportClient>,
     terminal_driver: ModelHandle<TerminalDriver>,
     state: Mutex<GeminiRunnerState>,
+    persistence: HarnessPersistence,
 }
 
 impl GeminiHarnessRunner {
@@ -130,7 +132,6 @@ impl GeminiHarnessRunner {
         cli_command: &str,
         prompt: &str,
         _system_prompt: Option<&str>,
-        _working_dir: &Path,
         client: Arc<dyn HarnessSupportClient>,
         terminal_driver: ModelHandle<TerminalDriver>,
     ) -> Result<Self, AgentDriverError> {
@@ -144,6 +145,7 @@ impl GeminiHarnessRunner {
             client,
             terminal_driver,
             state: Mutex::new(GeminiRunnerState::Preexec),
+            persistence: HarnessPersistence::default(),
         })
     }
 }
@@ -153,6 +155,9 @@ impl GeminiHarnessRunner {
 impl HarnessRunner for GeminiHarnessRunner {
     fn harness_name(&self) -> &str {
         &self.cli_name
+    }
+    fn persistence(&self) -> &HarnessPersistence {
+        &self.persistence
     }
 
     async fn start(
@@ -213,34 +218,36 @@ impl HarnessRunner for GeminiHarnessRunner {
         &self,
         save_point: SavePoint,
         foreground: &ModelSpawner<AgentDriver>,
-    ) -> Result<()> {
+    ) -> PersistenceOutcome {
         if matches!(save_point, SavePoint::Periodic)
             && !super::has_running_cli_agent(&self.terminal_driver, foreground).await
         {
             log::debug!("Will not save conversation, Gemini not in progress");
-            return Ok(());
+            return PersistenceOutcome::block_only(Ok(()));
         }
 
         let (conversation_id, block_id) = match &*self.state.lock() {
             GeminiRunnerState::Preexec => {
                 log::warn!("save_conversation called before start");
-                return Ok(());
+                return PersistenceOutcome::block_only(Ok(()));
             }
             GeminiRunnerState::Running {
                 conversation_id,
                 block_id,
-            } => (*conversation_id, block_id.clone()),
+            } => (conversation_id.clone(), block_id.clone()),
         };
 
         // TODO(REMOTE-1408) Also save the conversation transcript.
-        super::upload_current_block_snapshot(
-            foreground,
-            &self.terminal_driver,
-            self.client.as_ref(),
-            conversation_id,
-            block_id,
+        PersistenceOutcome::block_only(
+            super::upload_current_block_snapshot(
+                foreground,
+                &self.terminal_driver,
+                self.client.as_ref(),
+                &conversation_id,
+                block_id,
+            )
+            .await,
         )
-        .await
     }
 
     async fn cleanup(
@@ -253,7 +260,7 @@ impl HarnessRunner for GeminiHarnessRunner {
 }
 
 fn prepare_gemini_environment_config(
-    working_dir: &Path,
+    harness_working_dir: &Path,
     system_prompt: Option<&str>,
 ) -> Result<()> {
     let home_dir =
@@ -265,7 +272,7 @@ fn prepare_gemini_environment_config(
     )?;
     prepare_gemini_trusted_folders(
         &gemini_dir.join(GEMINI_TRUSTED_FOLDERS_FILE_NAME),
-        working_dir,
+        harness_working_dir,
     )?;
     if let Some(prompt) = system_prompt {
         let prompt_path = gemini_dir.join(GEMINI_SYSTEM_PROMPT_FILE_NAME);

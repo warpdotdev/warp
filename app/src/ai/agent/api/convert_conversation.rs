@@ -10,8 +10,8 @@ use std::time::{Duration, SystemTime};
 
 use ai::agent::action_result::{
     AskUserQuestionAnswerItem, AskUserQuestionResult, FetchConversationResult, ReadSkillResult,
-    RecordingStarted, RecordingStopped, RequestComputerUseResult, SendMessageToAgentResult,
-    StartRecordingResult, StopRecordingResult, UseComputerResult,
+    RecordingStarted, RecordingStopped, RequestComputerUseResult, ScreenshotSource,
+    SendMessageToAgentResult, StartRecordingResult, StopRecordingResult, UseComputerResult,
 };
 use ai::skills::{ParsedSkill, SkillPathOrigin};
 use chrono::{DateTime, Local, TimeZone};
@@ -32,10 +32,10 @@ use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
     AIAgentActionResult, AIAgentActionResultType, AIAgentContext, AIAgentExchange,
     AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputStatus,
-    CallMCPToolResult, CancellationReason, CloneRepositoryURL, CreateDocumentsResult,
-    DocumentContext, EditDocumentsResult, FileContext, FileGlobResult, FileGlobV2Match,
-    FileGlobV2Result, FinishedAIAgentOutput, GrepFileMatch, GrepLineMatch, GrepResult,
-    ImageContext, InsertReviewCommentsResult, OutputModelInfo, PassiveCodeDiffEntry,
+    BaseUserQuery, CallMCPToolResult, CancellationReason, CloneRepositoryURL,
+    CreateDocumentsResult, DocumentContext, EditDocumentsResult, FileContext, FileGlobResult,
+    FileGlobV2Match, FileGlobV2Result, FinishedAIAgentOutput, GrepFileMatch, GrepLineMatch,
+    GrepResult, ImageContext, InsertReviewCommentsResult, OutputModelInfo, PassiveCodeDiffEntry,
     PassiveSuggestionResultType, PassiveSuggestionTrigger, ReadDocumentsResult,
     ReadFilesFailedFile, ReadFilesResult, ReadMCPResourceResult, ReadShellCommandOutputResult,
     RequestCommandOutputResult, RequestFileEditsResult, SearchCodebaseFailureReason,
@@ -393,6 +393,7 @@ impl ConvertToExchanges for &api::Task {
                         user_query_mode: convert_user_query_mode(user_query.mode.as_ref()),
                         running_command: None,
                         intended_agent: Some(user_query.intended_agent()),
+                        base: BaseUserQuery::from_message(user_query),
                     });
                     true
                 }
@@ -411,6 +412,7 @@ impl ConvertToExchanges for &api::Task {
                                 user_query_mode: UserQueryMode::default(), // SystemQuery doesn't have mode field
                                 running_command: None,
                                 intended_agent: None,
+                                base: None,
                             });
                             true
                         }
@@ -473,6 +475,7 @@ impl ConvertToExchanges for &api::Task {
                                 .user_query
                                 .clone()
                                 .map(|user_query| crate::ai::agent::InvokeSkillUserQuery {
+                                    base: BaseUserQuery::from_message(&user_query),
                                     query: user_query.query,
                                     // Restored conversations currently do not hydrate invoke-skill
                                     // inline attachments back into client-side attachment structs.
@@ -519,7 +522,8 @@ impl ConvertToExchanges for &api::Task {
                 | api::message::Message::ArtifactEvent(_)
                 | api::message::Message::MessagesReceivedFromAgents(_)
                 | api::message::Message::ModelUsed(_)
-                | api::message::Message::OrchestrationConfigSnapshot(_) => false,
+                | api::message::Message::OrchestrationConfigSnapshot(_)
+                | api::message::Message::RequestMetadata(_) => false,
             };
 
             if !added_message_as_exchange_input
@@ -605,6 +609,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                     grid_contents: snapshot.output.clone(),
                     cursor: snapshot.cursor.clone(),
                     is_alt_screen_active: snapshot.is_alt_screen_active,
+                    activity: snapshot.activity.as_ref().map(Into::into),
                 },
                 Some(api::run_shell_command_result::Result::PermissionDenied(
                     api::PermissionDenied { .. },
@@ -634,6 +639,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                         cursor: snapshot.cursor.clone(),
                         is_alt_screen_active: snapshot.is_alt_screen_active,
                         is_preempted: snapshot.is_preempted,
+                        activity: snapshot.activity.as_ref().map(Into::into),
                     },
                     Some(api::write_to_long_running_shell_command_result::Result::CommandFinished(
                         finished,
@@ -970,10 +976,10 @@ pub(crate) fn convert_tool_call_result_to_input(
                         .map(|api_result| match &api_result.result {
                             Some(api::call_mcp_tool_result::success::result::Result::Text(
                                 text,
-                            )) => rmcp::model::Content::text(text.text.clone()),
+                            )) => rmcp::model::ContentBlock::text(text.text.clone()),
                             Some(api::call_mcp_tool_result::success::result::Result::Image(
                                 image,
-                            )) => rmcp::model::Content::image(
+                            )) => rmcp::model::ContentBlock::image(
                                 String::from_utf8_lossy(&image.data).to_string(),
                                 image.mime_type.clone(),
                             ),
@@ -981,7 +987,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                                 resource,
                             )) => match &resource.content_type {
                                 Some(api::mcp_resource_content::ContentType::Text(text)) => {
-                                    rmcp::model::Content::resource(
+                                    rmcp::model::ContentBlock::resource(
                                         rmcp::model::ResourceContents::text(
                                             text.content.clone(),
                                             resource.uri.clone(),
@@ -989,7 +995,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                                     )
                                 }
                                 Some(api::mcp_resource_content::ContentType::Binary(binary)) => {
-                                    rmcp::model::Content::resource(
+                                    rmcp::model::ContentBlock::resource(
                                         rmcp::model::ResourceContents::BlobResourceContents {
                                             uri: resource.uri.clone(),
                                             mime_type: Some(binary.mime_type.clone()),
@@ -998,14 +1004,14 @@ pub(crate) fn convert_tool_call_result_to_input(
                                         },
                                     )
                                 }
-                                None => rmcp::model::Content::resource(
+                                None => rmcp::model::ContentBlock::resource(
                                     rmcp::model::ResourceContents::text(
                                         String::new(),
                                         resource.uri.clone(),
                                     ),
                                 ),
                             },
-                            None => rmcp::model::Content::text(String::new()),
+                            None => rmcp::model::ContentBlock::text(String::new()),
                         })
                         .collect();
 
@@ -1276,6 +1282,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                     cursor: snapshot.cursor.clone(),
                     is_alt_screen_active: snapshot.is_alt_screen_active,
                     is_preempted: snapshot.is_preempted,
+                    activity: snapshot.activity.as_ref().map(Into::into),
                 },
                 Some(api::read_shell_command_output_result::Result::Error(
                     api::ShellCommandError {
@@ -1306,6 +1313,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                     cursor: snapshot.cursor.clone(),
                     is_alt_screen_active: snapshot.is_alt_screen_active,
                     is_preempted: snapshot.is_preempted,
+                    activity: snapshot.activity.as_ref().map(Into::into),
                 },
                 Some(
                     api::transfer_shell_command_control_to_user_result::Result::CommandFinished(finished),
@@ -1367,15 +1375,32 @@ pub(crate) fn convert_tool_call_result_to_input(
                 match &result.result {
                     Some(api::use_computer_result::Result::Success(success)) => {
                         let screenshot = success.screenshot.as_ref().map(|s| {
-                            // The original dimensions are not preserved through the API, so we use
-                            // the current dimensions for both.
-                            computer_use::Screenshot {
-                                width: s.width as usize,
-                                height: s.height as usize,
-                                original_width: s.width as usize,
-                                original_height: s.height as usize,
-                                data: s.data.clone(),
-                                mime_type: s.mime_type.clone().into(),
+                            // The original dimensions are not preserved through the API, so
+                            // we use the current dimensions for both.
+                            let inline = |data| {
+                                ScreenshotSource::Inline(computer_use::Screenshot {
+                                    width: s.width as usize,
+                                    height: s.height as usize,
+                                    original_width: s.width as usize,
+                                    original_height: s.height as usize,
+                                    data,
+                                    mime_type: s.mime_type.clone().into(),
+                                })
+                            };
+                            match &s.source {
+                                Some(api::raw_image::Source::Data(data)) => inline(data.clone()),
+                                // A screenshot whose bytes were offloaded to object storage
+                                // arrives with the `StoredRef` source variant; the ref is
+                                // carried for on-demand fetching.
+                                Some(api::raw_image::Source::StoredRef(stored_ref)) => {
+                                    ScreenshotSource::Stored {
+                                        stored_ref: stored_ref.clone(),
+                                        mime_type: s.mime_type.clone(),
+                                        width: s.width,
+                                        height: s.height,
+                                    }
+                                }
+                                None => inline(Vec::new()),
                             }
                         });
                         let cursor_position = success
@@ -1397,12 +1422,12 @@ pub(crate) fn convert_tool_call_result_to_input(
                                 height_px: c.height_px,
                             }
                         });
-                        UseComputerResult::Success(computer_use::ActionResult {
+                        UseComputerResult::Success {
                             screenshot,
                             cursor_position,
                             windows,
                             captured_window,
-                        })
+                        }
                     }
                     Some(api::use_computer_result::Result::Error(error)) => {
                         UseComputerResult::Error(error.message.clone())
@@ -1437,7 +1462,12 @@ pub(crate) fn convert_tool_call_result_to_input(
                                 height: initial_screenshot.height as usize,
                                 original_width: screen_dimensions.width_px as usize,
                                 original_height: screen_dimensions.height_px as usize,
-                                data: initial_screenshot.data.clone(),
+                                // Initial screenshots are never offloaded, so any non-inline
+                                // source defensively converts to an empty image.
+                                data: match &initial_screenshot.source {
+                                    Some(api::raw_image::Source::Data(data)) => data.clone(),
+                                    Some(api::raw_image::Source::StoredRef(_)) | None => Vec::new(),
+                                },
                                 mime_type: initial_screenshot.mime_type.clone().into(),
                             },
                             platform,
@@ -1903,15 +1933,18 @@ fn create_exchange_from_messages(
                 _ => None,
             })
         })
-        // Fall back to any timestamp from the messages in this exchange
+        // Fall back to the earliest message timestamp in this exchange
         .or_else(|| {
-            message_ids.iter().find_map(|message_id| {
-                message_map.get(message_id.as_str()).and_then(|message| {
-                    message.timestamp.as_ref().map(|timestamp| {
-                        proto_timestamp_to_local_datetime(timestamp.seconds, timestamp.nanos)
+            message_ids
+                .iter()
+                .filter_map(|message_id| {
+                    message_map.get(message_id.as_str()).and_then(|message| {
+                        message.timestamp.as_ref().map(|timestamp| {
+                            proto_timestamp_to_local_datetime(timestamp.seconds, timestamp.nanos)
+                        })
                     })
                 })
-            })
+                .min()
         })
         .unwrap_or_default();
 
@@ -2055,7 +2088,8 @@ where
                 | api::message::Message::UpdateTodos(_)
                 | api::message::Message::MessagesReceivedFromAgents(_)
                 | api::message::Message::EventsFromAgents(_)
-                | api::message::Message::PassiveSuggestionResult(_) => None,
+                | api::message::Message::PassiveSuggestionResult(_)
+                | api::message::Message::RequestMetadata(_) => None,
                 // Anything else is considered agent/stream activity we want to measure
                 api::message::Message::AgentOutput(_)
                 | api::message::Message::AgentReasoning(_)

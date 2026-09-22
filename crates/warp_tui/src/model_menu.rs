@@ -244,19 +244,19 @@ impl TuiModelMenuModel {
             return;
         }
         let query = input_text(&self.input_editor, ctx);
+        let scope = (self.team_context)(ctx);
         let preferences = LLMPreferences::as_ref(ctx);
         let active_id = preferences
-            .get_active_base_model(ctx, Some(self.terminal_view_id))
+            .get_active_base_model(&scope, ctx, Some(self.terminal_view_id))
             .id
             .clone();
         let profile_default_id = preferences
-            .get_active_profile_base_model(ctx, Some(self.terminal_view_id))
+            .get_active_profile_base_model(&scope, ctx, Some(self.terminal_view_id))
             .id
             .clone();
-        let scope = (self.team_context)(ctx);
         let choices = query_model_picker_choices(
             preferences,
-            preferences.get_base_llm_choices_for_agent_mode(ctx),
+            preferences.get_base_llm_choices_for_agent_mode(&scope, ctx),
             &query,
             &scope,
             ctx,
@@ -284,8 +284,8 @@ fn model_menu_row(
 ) -> TuiModelMenuRow {
     let is_key_connected = should_show_key_icon_for_model(&choice.llm, scope, app);
     let uses_external_inference = is_key_connected
-        || should_show_bedrock_icon_for_model(&choice.llm, app)
-        || should_show_gemini_enterprise_agent_platform_icon_for_model(&choice.llm, app);
+        || should_show_bedrock_icon_for_model(&choice.llm, scope, app)
+        || should_show_gemini_enterprise_agent_platform_icon_for_model(&choice.llm, scope, app);
     TuiModelMenuRow {
         is_selectable: choice.is_selectable(),
         is_key_connected,

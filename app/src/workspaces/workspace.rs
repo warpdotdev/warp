@@ -11,11 +11,11 @@ pub use warp_graphql::billing::{
 };
 
 use super::gql_convert::{ToAgentModeCommandExecutionPredicates, ToPathBufs};
-use super::team::{MembershipRole, Team};
+use super::team::{DiscoverableTeam, MembershipRole, Team};
 use crate::ai::execution_profiles::{
     ActionPermission, ComputerUsePermission, WriteToPtyPermission,
 };
-use crate::ai::llms::{LLMModelHost, LLMProvider};
+use crate::ai::llms::{LLMModelHost, LLMProvider, ModelsByFeature};
 use crate::auth::UserUid;
 use crate::server::ids::ServerId;
 use crate::settings::AgentModeCommandExecutionPredicate;
@@ -44,11 +44,14 @@ pub struct Workspace {
     pub name: String,
     pub stripe_customer_id: Option<String>,
     pub teams: Vec<Team>,
+    pub open_teams: Vec<DiscoverableTeam>,
     pub billing_metadata: BillingMetadata,
     pub bonus_grants_purchased_this_month: BonusGrantsPurchased,
     pub billing_cycle_usage: Option<BillingCycleUsageData>,
     pub has_billing_history: bool,
     pub settings: WorkspaceSettings,
+    /// The resolved-teamless model catalog -- fallback to this when teams[x].feature_model_choice isn't available
+    pub feature_model_choice: ModelsByFeature,
     pub invite_link_domain_restrictions: Vec<InviteLinkDomainRestriction>,
     pub pending_email_invites: Vec<EmailInvite>,
     // If the team is eligible for discovery, then show toggle for setting discoverability to the team's admin
@@ -58,7 +61,12 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    pub fn from_local_cache(uid: WorkspaceUid, name: String, teams: Option<Vec<Team>>) -> Self {
+    pub fn from_local_cache(
+        uid: WorkspaceUid,
+        name: String,
+        teams: Option<Vec<Team>>,
+        feature_model_choice: Option<ModelsByFeature>,
+    ) -> Self {
         // Derive the workspace billing metadata from the first team's cached billing
         // metadata, if available. This ensures the workspace-level billing info is
         // consistent with team-level data loaded from the cache.
@@ -72,11 +80,13 @@ impl Workspace {
             name,
             stripe_customer_id: Default::default(),
             teams: teams.unwrap_or_default(),
+            open_teams: Default::default(),
             billing_metadata,
             bonus_grants_purchased_this_month: Default::default(),
             billing_cycle_usage: None,
             has_billing_history: false,
             settings: Default::default(), // TODO: persistence wrapper instead of default
+            feature_model_choice: feature_model_choice.unwrap_or_default(),
             invite_link_domain_restrictions: Default::default(),
             pending_email_invites: Default::default(),
             is_eligible_for_discovery: false,
@@ -99,6 +109,13 @@ impl Workspace {
             .tier
             .native_workspaces_policy
             .is_some_and(|policy| policy.enabled)
+    }
+
+    pub fn joinable_teams(&self) -> impl Iterator<Item = &DiscoverableTeam> {
+        self.open_teams.iter().filter(|open_team| {
+            let open_team_uid = ServerId::from_string_lossy(&open_team.team_uid);
+            self.teams.iter().all(|team| team.uid != open_team_uid)
+        })
     }
 
     pub fn is_native_workspaces_admin(&self, user_email: &str) -> bool {

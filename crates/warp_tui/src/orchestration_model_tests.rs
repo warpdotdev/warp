@@ -1,17 +1,19 @@
 use warp::tui_export::{
-    AIConversationId, BlocklistAIHistoryModel, CloudAgentStartupBlocker, CloudAgentStartupFailure,
-    CloudAgentStartupIssue, ConversationStatus, Harness, OrchestrationEventStreamerEvent,
-    RenderableAIError, StartAgentExecutionMode, StartAgentExecutor, StartAgentExecutorEvent,
-    StartAgentOutcome, StartAgentRequest, register_tui_session_view_test_singletons,
+    AIConversationId, AmbientAgentTaskId, BlocklistAIHistoryModel, CloudAgentStartupBlocker,
+    CloudAgentStartupFailure, CloudAgentStartupIssue, ConversationStatus, Harness,
+    OrchestrationEventStreamerEvent, RenderableAIError, RequestTeamScope, StartAgentExecutionMode,
+    StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest,
+    TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR, UserWorkspaces,
+    register_tui_session_view_test_singletons, set_tui_workspace_teams_for_test,
 };
 use warp_core::features::FeatureFlag;
 use warpui::platform::WindowStyle;
-use warpui::{AddWindowOptions, ModelHandle, ReadModel, SingletonEntity as _, UpdateModel};
+use warpui::{AddWindowOptions, Entity, ModelHandle, ReadModel, SingletonEntity as _, UpdateModel};
 use warpui_core::elements::tui::{TuiBufferExt, TuiRect, text_width};
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, TuiView as _, TypedActionView as _, WindowId};
 
-use super::{ORCHESTRATOR_TAB_LABEL, TuiOrchestrationModel};
+use super::{MaterializedLocalOzChildSession, ORCHESTRATOR_TAB_LABEL, TuiOrchestrationModel};
 use crate::cloud_run::TuiCloudRunStartup;
 use crate::cloud_run_view::{TuiCloudRunAction, TuiCloudRunView};
 use crate::root_view::RootTuiView;
@@ -24,6 +26,93 @@ struct OrchestrationFixture {
     window_id: WindowId,
 }
 
+#[derive(Default)]
+struct CapturedRemoteDispatch {
+    team_scope: Option<RequestTeamScope>,
+    auth_secret_name: Option<String>,
+}
+
+impl Entity for CapturedRemoteDispatch {
+    type Event = ();
+}
+
+#[test]
+fn local_dispatch_fails_after_window_team_change() {
+    App::test((), |mut app| async move {
+        let fixture = orchestration_fixture_with_session_materialization(&mut app, false);
+        let parent_session_id = add_dispatching_session(&mut app, &fixture, true);
+        let parent_conversation_id = read_active_conversation_id(&app, parent_session_id);
+        let team_a_uid = 7.into();
+        let team_b_uid = 8.into();
+        app.update(|ctx| {
+            set_tui_workspace_teams_for_test(
+                vec![
+                    (team_a_uid, "team-a".to_string()),
+                    (team_b_uid, "team-b".to_string()),
+                ],
+                ctx,
+            );
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+                workspaces.set_team_for_window(fixture.window_id, team_a_uid, ctx);
+            });
+        });
+        let request_team_scope = app.read(|ctx| {
+            RequestTeamScope::from_scope(
+                &UserWorkspaces::as_ref(ctx).team_context_for_window(fixture.window_id),
+            )
+        });
+        let (dispatch_tx, dispatch_rx) = async_channel::bounded(1);
+        let orchestration = app.read(TuiOrchestrationModel::handle);
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&orchestration, move |_, event, _| {
+                if let super::TuiOrchestrationEvent::CreateLocalChildSession { .. } = event {
+                    dispatch_tx.try_send(()).unwrap();
+                }
+            });
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+                workspaces.switch_window_to_team(fixture.window_id, team_b_uid, ctx);
+            });
+            orchestration.update(ctx, |model, ctx| {
+                model.dispatch_create_agent(
+                    parent_session_id,
+                    StartAgentRequest {
+                        id: Default::default(),
+                        name: "local-child".to_string(),
+                        prompt: "work".to_string(),
+                        execution_mode: StartAgentExecutionMode::Local {
+                            harness_type: Some("claude".to_string()),
+                            model_id: None,
+                        },
+                        lifecycle_subscription: None,
+                        parent_conversation_id,
+                        parent_run_id: Some("parent-run".to_string()),
+                        request_team_scope,
+                    },
+                    None,
+                    ctx,
+                );
+            });
+        });
+
+        assert!(dispatch_rx.try_recv().is_err());
+        app.read(|ctx| {
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            let [child_conversation_id] =
+                history.child_conversation_ids_of(&parent_conversation_id)
+            else {
+                panic!("expected one failed child conversation");
+            };
+            let child = history
+                .conversation(child_conversation_id)
+                .expect("failed child conversation should exist");
+            assert_eq!(child.status(), &ConversationStatus::Error);
+            assert_eq!(
+                child.status_error_message().as_deref(),
+                Some(TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR)
+            );
+        });
+    });
+}
 fn remote_request(parent_conversation_id: AIConversationId) -> StartAgentRequest {
     StartAgentRequest {
         id: Default::default(),
@@ -44,11 +133,21 @@ fn remote_request(parent_conversation_id: AIConversationId) -> StartAgentRequest
         lifecycle_subscription: None,
         parent_conversation_id,
         parent_run_id: Some("parent-run-1".to_string()),
+        request_team_scope: RequestTeamScope::from_scope(
+            &UserWorkspaces::teamless_context_for_operation_for_test(),
+        ),
     }
 }
 
 /// Boots the container + root + orchestration model wiring (no live PTYs).
 fn orchestration_fixture(app: &mut App) -> OrchestrationFixture {
+    orchestration_fixture_with_session_materialization(app, true)
+}
+
+fn orchestration_fixture_with_session_materialization(
+    app: &mut App,
+    materialize_sessions: bool,
+) -> OrchestrationFixture {
     register_tui_session_view_test_singletons(app);
     add_test_semantic_selection(app);
     app.update(crate::autoupdate::TuiAutoupdater::register);
@@ -66,7 +165,9 @@ fn orchestration_fixture(app: &mut App) -> OrchestrationFixture {
         ctx.subscribe_to_model(&sessions, |_, _, _, ctx| ctx.notify());
     });
     let orchestration = app.update(TuiOrchestrationModel::register);
-    app.update(|ctx| TuiSessions::wire_orchestration(&sessions, &orchestration, ctx));
+    if materialize_sessions {
+        app.update(|ctx| TuiSessions::wire_orchestration(&sessions, &orchestration, ctx));
+    }
     OrchestrationFixture {
         sessions,
         window_id,
@@ -218,6 +319,9 @@ fn dispatch_and_recv(
             None,
             parent_conversation_id,
             Some("parent-run-1".to_string()),
+            RequestTeamScope::from_scope(
+                &UserWorkspaces::teamless_context_for_operation_for_test(),
+            ),
             ctx,
         )
     });
@@ -263,6 +367,148 @@ fn assert_failed_launch_cleaned_up(
         app.read_model(&fixture.sessions, |sessions, _| sessions.len()),
         expected_session_count,
     );
+}
+
+#[test]
+fn remote_dispatch_uses_captured_scope_and_auth_secret() {
+    App::test((), |mut app| async move {
+        let fixture = orchestration_fixture(&mut app);
+        let parent_session_id = add_dispatching_session(&mut app, &fixture, true);
+        let parent_conversation_id = read_active_conversation_id(&app, parent_session_id);
+        app.update(|ctx| {
+            set_tui_workspace_teams_for_test(vec![(7.into(), "team-a".to_string())], ctx);
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+                workspaces.set_team_for_window(fixture.window_id, 7.into(), ctx);
+            });
+        });
+        let mut request = remote_request(parent_conversation_id);
+        let captured_scope = app.read(|ctx| {
+            RequestTeamScope::from_scope(
+                &UserWorkspaces::as_ref(ctx).team_context_for_window(fixture.window_id),
+            )
+        });
+        request.request_team_scope = captured_scope;
+        let StartAgentExecutionMode::Remote {
+            harness_type,
+            auth_secret_name,
+            ..
+        } = &mut request.execution_mode
+        else {
+            panic!("expected remote request");
+        };
+        *harness_type = "claude".to_string();
+        *auth_secret_name = Some("team-a-key".to_string());
+
+        let captured = app.add_model(|_| CapturedRemoteDispatch::default());
+        let orchestration = app.read(TuiOrchestrationModel::handle);
+        captured.update(&mut app, |_, ctx| {
+            ctx.subscribe_to_model(&orchestration, |captured, _, event, _| {
+                if let super::TuiOrchestrationEvent::CreateRemoteChildSession {
+                    request,
+                    team_scope,
+                    ..
+                } = event
+                {
+                    captured.team_scope = Some(*team_scope);
+                    let StartAgentExecutionMode::Remote {
+                        auth_secret_name, ..
+                    } = &request.execution_mode
+                    else {
+                        panic!("expected remote request");
+                    };
+                    captured.auth_secret_name = auth_secret_name.clone();
+                }
+            });
+        });
+
+        app.update(|ctx| {
+            TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+                model.dispatch_create_agent(parent_session_id, request, None, ctx);
+            });
+        });
+
+        captured.read(&app, |captured, _| {
+            assert_eq!(captured.team_scope, Some(captured_scope));
+            assert_eq!(captured.auth_secret_name.as_deref(), Some("team-a-key"));
+        });
+    });
+}
+
+/// Regression for QUALITY-1902 (the TUI counterpart of QUALITY-1897):
+/// `register_local_oz_child_session` must index the run id through
+/// `assign_run_id_for_conversation`, not a bare `set_task_id`, so the SSE
+/// remote-child placeholder path's idempotency check
+/// (`conversation_id_for_agent_id`) can see it immediately. Drives
+/// `register_local_oz_child_session` itself (not just the shared helper it
+/// calls), so a regression at that call site fails this test.
+#[test]
+fn local_oz_child_session_indexes_run_id_immediately() {
+    App::test((), |mut app| async move {
+        let fixture = orchestration_fixture(&mut app);
+        let parent_session_id = add_dispatching_session(&mut app, &fixture, true);
+        let parent_conversation_id = read_active_conversation_id(&app, parent_session_id);
+
+        let (child_view, child_manager) = add_test_terminal_session(&mut app, fixture.window_id);
+        let child_session_id = app.update(|ctx| {
+            TuiSessions::register_session(
+                &fixture.sessions,
+                child_view.clone(),
+                child_manager,
+                false,
+                ctx,
+            )
+        });
+
+        let task_id: AmbientAgentTaskId = "44444444-4444-4444-4444-444444444444".parse().unwrap();
+        let request = StartAgentRequest {
+            id: Default::default(),
+            name: "verify-child".to_string(),
+            prompt: "echo hello".to_string(),
+            execution_mode: StartAgentExecutionMode::Local {
+                harness_type: None,
+                model_id: None,
+            },
+            lifecycle_subscription: None,
+            parent_conversation_id,
+            parent_run_id: Some("parent-run-1".to_string()),
+            request_team_scope: RequestTeamScope::from_scope(
+                &UserWorkspaces::teamless_context_for_operation_for_test(),
+            ),
+        };
+        app.update(|ctx| {
+            let team_scope = UserWorkspaces::teamless_context_for_operation_for_test();
+            TuiOrchestrationModel::handle(ctx).update(ctx, |orchestration, ctx| {
+                orchestration.register_local_oz_child_session(
+                    MaterializedLocalOzChildSession {
+                        parent_session_id,
+                        session_id: child_session_id,
+                        session_view: child_view,
+                        request,
+                        model_id: None,
+                        task_id,
+                        conversation_name: "verify-child".to_string(),
+                    },
+                    &team_scope,
+                    ctx,
+                );
+            });
+        });
+
+        app.read(|ctx| {
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            let child_ids = history.child_conversation_ids_of(&parent_conversation_id);
+            assert_eq!(
+                child_ids.len(),
+                1,
+                "expected exactly one materialized child"
+            );
+            assert_eq!(
+                history.conversation_id_for_agent_id(&task_id.to_string()),
+                Some(child_ids[0]),
+                "run id must resolve immediately after register_local_oz_child_session"
+            );
+        });
+    });
 }
 
 #[test]

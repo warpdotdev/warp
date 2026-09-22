@@ -3,6 +3,7 @@ use mockito::Server;
 
 use super::*;
 use crate::server::retry_strategies::is_transient_http_error;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeForTest};
 
 /// Sends a GET request to a mock endpoint returning `status`/`headers`/`body`, then feeds the
 /// resulting response through [`ServerApi::error_from_response`].
@@ -107,4 +108,19 @@ fn out_of_credits_429_wraps_quota_limit_and_stays_transient() {
             user_display_message: Some(message)
         } if message == "You're out of credits"
     ));
+}
+
+#[test]
+fn team_uid_header_value_includes_only_resolved_team_scope() {
+    let team_uid = 7.into();
+    let team_scope = RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid));
+
+    assert_eq!(
+        ServerApi::team_uid_header_value(team_scope),
+        Some(team_uid.uid().to_string())
+    );
+    assert_eq!(
+        ServerApi::team_uid_header_value(RequestTeamScope::from_scope(&TeamlessScopeForTest)),
+        None
+    );
 }

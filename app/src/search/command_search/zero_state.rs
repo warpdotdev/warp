@@ -25,10 +25,6 @@ lazy_static! {
             "# find \"foo\" in files",
             QueryFilter::NaturalLanguage
         ),
-        (
-            "notebooks: deploy production server",
-            QueryFilter::Notebooks
-        ),
     ]);
 }
 
@@ -283,8 +279,6 @@ impl TypedActionView for CommandSearchZeroStateView {
     }
 }
 
-/// Returns list of valid query filters that may be applied. This does not include notebooks if the
-/// notebooks feature flag is disabled.
 fn valid_query_filters(app: &AppContext) -> Vec<QueryFilter> {
     let mut filters = vec![QueryFilter::History];
 
@@ -296,8 +290,7 @@ fn valid_query_filters(app: &AppContext) -> Vec<QueryFilter> {
     }
 
     if WarpDriveSettings::is_warp_drive_enabled(app) {
-        filters.extend([QueryFilter::Workflows, QueryFilter::Notebooks]);
-
+        filters.push(QueryFilter::Workflows);
         filters.push(QueryFilter::EnvironmentVariables);
     }
 

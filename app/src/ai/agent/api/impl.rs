@@ -8,6 +8,7 @@ use warp_multi_agent_api as api;
 use super::convert_to::convert_input;
 use super::{ConvertToAPITypeError, RequestParams, ResponseStream};
 use crate::ai::agent::redaction;
+use crate::ai::blocklist::video_recording_enabled;
 use crate::server::server_api::{AIApiError, ServerApi};
 use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::model::session::SessionType;
@@ -80,6 +81,7 @@ pub async fn generate_multi_agent_output(
             use_anthropic_text_editor_tools: false,
             planning_enabled: params.planning_enabled,
             supports_create_files: true,
+            supports_create_file_overwrite: true,
             supported_tools: supported_tools.into_iter().map(Into::into).collect(),
             supports_long_running_commands: true,
             should_preserve_file_content_in_history: true,
@@ -107,6 +109,8 @@ pub async fn generate_multi_agent_output(
                 && FeatureFlag::CloudAgentRunners.is_enabled(),
             supports_background_computer_use: FeatureFlag::BackgroundComputerUse.is_enabled()
                 && computer_use::background_supported(),
+            supports_stored_screenshots: FeatureFlag::StoredScreenshots.is_enabled(),
+            supports_chatgpt_subscription_error: false,
             custom_model_providers: params.custom_model_providers,
             custom_model_routers: params.custom_model_routers,
         }),
@@ -263,7 +267,7 @@ fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
         supported_tools.extend(&[api::ToolType::UseComputer]);
         supported_tools.extend(&[api::ToolType::RequestComputerUse]);
 
-        if FeatureFlag::VideoRecording.is_enabled() {
+        if video_recording_enabled() {
             supported_tools.extend(&[api::ToolType::StartRecording, api::ToolType::StopRecording]);
         }
     }

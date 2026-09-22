@@ -418,6 +418,7 @@ fn team_with_members(uids: &[&str]) -> Team {
         None,
         None,
         Some(members),
+        None,
     )
 }
 

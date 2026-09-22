@@ -1,31 +1,26 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use chrono::Local;
 use cloud_object_models::CodeForge;
 use futures::channel::oneshot;
 use futures::executor::block_on;
-use http::StatusCode;
 use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
+use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 use tempfile::TempDir;
 use warp_cli::agent::Harness;
-use warp_cli::mcp::MCPSpec;
 use warp_cli::skill::SkillSpec;
 use warp_cli::{
     OZ_CLI_ENV, OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV, SERVER_ROOT_URL_OVERRIDE_ENV,
     SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WS_SERVER_URL_OVERRIDE_ENV,
 };
 use warp_core::channel::ChannelState;
-use warp_core::features::FeatureFlag;
-use warp_graphql::mutations::create_managed_mcp_client_config::{
-    CreateManagedMcpClientConfigOutput, ManagedMcpTransportKind,
-};
-use warp_graphql::response_context::ResponseContext;
+use warp_graphql::ai::AgentTaskState;
 use warp_managed_secrets::ManagedSecretValue;
 use warp_multi_agent_api::response_event;
 use warp_util::standardized_path::StandardizedPath;
@@ -33,18 +28,17 @@ use warpui::r#async::Timer;
 use warpui::{App, SingletonEntity as _};
 
 use super::{
-    AgentDriver, AgentDriverError, AgentRunPrompt, CLIAgentSessionStatus, IdleTimeoutSender,
+    AgentDriver, AgentRunPrompt, CLIAgentSessionStatus, DebugWindowController, IdleTimeoutSender,
     LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
-    MANAGED_MCP_RESOLVE_MAX_ATTEMPTS, OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
-    OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, PlatformErrorCode, SDKConversationOutputStatus,
-    WARP_MESSAGE_LISTENER_STATE_ROOT_ENV, build_secret_env_vars,
-    idle_window_for_cli_session_status, idle_window_for_terminal_status,
-    setup_failure_status_update, terminal_status_log_outcome,
+    OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
+    PlatformErrorCode, SDKConversationOutputStatus, WARP_MESSAGE_LISTENER_STATE_ROOT_ENV,
+    build_secret_env_vars, debug_turn_task_state, idle_window_for_cli_session_status,
+    idle_window_for_terminal_status, setup_failure_status_update, terminal_status_log_outcome,
 };
-use crate::ai::agent::conversation::ConversationStatus;
+use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentActionResult, AIAgentActionResultType, AIAgentInput, AIAgentOutput,
+    AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment, AIAgentInput, AIAgentOutput,
     AIAgentOutputMessage, ArtifactCreatedData, CancellationReason, MessageId, RenderableAIError,
     UploadArtifactResult,
 };
@@ -54,746 +48,14 @@ use crate::ai::blocklist::orchestration_events::{
     OrchestrationEventService, PendingEvent, PendingEventDetail,
 };
 use crate::ai::blocklist::{
-    BlocklistAIHistoryModel, RequestInput, ResponseStream, ResponseStreamId,
+    BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin, RequestInput,
+    ResponseStream, ResponseStreamId,
 };
 use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
 use crate::ai::llms::LLMId;
-use crate::ai::mcp::JSONTransportType;
-use crate::ai::mcp::builtin::{FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_NAME};
-use crate::ai::mcp::parsing::normalize_mcp_json;
 use crate::ai::skills::SkillManager;
-use crate::auth::credentials::Credentials;
-use crate::server::graphql::GraphQLError;
-use crate::server::server_api::managed_mcp::MockManagedMcpClient;
+use crate::test_util::assert_eventually;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
-
-#[test]
-fn test_normalize_single_cli_server() {
-    let input = r#"{"command": "npx", "args": ["-y", "mcp-server"]}"#;
-    let result = normalize_mcp_json(input).unwrap();
-
-    // Should wrap with a generated name
-    let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
-    let parsed = parsed.as_object().unwrap();
-    assert_eq!(parsed.len(), 1);
-    let (_name, server) = parsed.iter().next().unwrap();
-    assert_eq!(server["command"].as_str().unwrap(), "npx");
-}
-
-#[test]
-fn test_normalize_single_sse_server() {
-    let input = r#"{"url": "http://localhost:3000/mcp", "headers": {"API_KEY": "value"}}"#;
-    let result = normalize_mcp_json(input).unwrap();
-
-    // Should wrap with a generated name
-    let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
-    let parsed = parsed.as_object().unwrap();
-    assert_eq!(parsed.len(), 1);
-    let (_name, server) = parsed.iter().next().unwrap();
-    assert_eq!(server["url"].as_str().unwrap(), "http://localhost:3000/mcp");
-}
-
-#[test]
-fn test_normalize_already_wrapped_server() {
-    let input = r#"{"my-server": {"command": "npx", "args": []}}"#;
-    let result = normalize_mcp_json(input).unwrap();
-
-    // Should return as-is (no command/url at top level)
-    assert_eq!(result, input);
-}
-
-#[test]
-fn test_normalize_mcp_servers_wrapper() {
-    let input = r#"{"mcpServers": {"server-name": {"command": "npx", "args": []}}}"#;
-    let result = normalize_mcp_json(input).unwrap();
-
-    // Should return as-is (no command/url at top level)
-    assert_eq!(result, input);
-}
-
-#[test]
-fn test_normalize_servers_wrapper() {
-    let input = r#"{"servers": {"server-name": {"url": "http://example.com"}}}"#;
-    let result = normalize_mcp_json(input).unwrap();
-
-    // Should return as-is (no command/url at top level)
-    assert_eq!(result, input);
-}
-
-#[test]
-fn test_normalize_invalid_json() {
-    let input = "not valid json";
-    let result = normalize_mcp_json(input);
-
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_normalize_cli_server_with_env() {
-    let input = r#"{"command": "npx", "args": ["-y", "mcp-server"], "env": {"API_KEY": "secret"}}"#;
-    let result = normalize_mcp_json(input).unwrap();
-
-    let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
-    let parsed = parsed.as_object().unwrap();
-    assert_eq!(parsed.len(), 1);
-    let (_name, server) = parsed.iter().next().unwrap();
-    assert_eq!(server["env"]["API_KEY"].as_str().unwrap(), "secret");
-}
-
-#[test]
-fn test_normalize_sse_server_with_headers() {
-    let input =
-        r#"{"url": "http://localhost:5000/mcp", "headers": {"Authorization": "Bearer token"}}"#;
-    let result = normalize_mcp_json(input).unwrap();
-
-    let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
-    let parsed = parsed.as_object().unwrap();
-    assert_eq!(parsed.len(), 1);
-    let (_name, server) = parsed.iter().next().unwrap();
-    assert_eq!(
-        server["headers"]["Authorization"].as_str().unwrap(),
-        "Bearer token"
-    );
-}
-
-fn managed_client_config_output(mcp_config_json: &str) -> CreateManagedMcpClientConfigOutput {
-    CreateManagedMcpClientConfigOutput {
-        transport_kind: ManagedMcpTransportKind::Command,
-        mcp_config_json: mcp_config_json.to_string(),
-        proxy_url: None,
-        proxy_token: None,
-        authorization_header_name: None,
-        authorization_header_value: None,
-        expires_at: None,
-        response_context: ResponseContext {
-            server_version: None,
-        },
-    }
-}
-
-fn raw_secret(value: &str) -> ManagedSecretValue {
-    ManagedSecretValue::RawValue {
-        value: value.to_string(),
-    }
-}
-
-fn render_installations(
-    installations: Vec<crate::ai::mcp::TemplatableMCPServerInstallation>,
-    secrets: HashMap<String, ManagedSecretValue>,
-) -> HashMap<String, crate::ai::mcp::JSONMCPServer> {
-    AgentDriver::mcp_installations_to_json(installations, &secrets).unwrap()
-}
-
-#[test]
-fn managed_resolver_local_uuid_does_not_call_managed_client() {
-    let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-    let mock = MockManagedMcpClient::new();
-    let local_installed_uuids = HashSet::from([uuid]);
-
-    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
-        &[MCPSpec::Uuid(uuid)],
-        &local_installed_uuids,
-        Arc::new(mock),
-        None,
-    ))
-    .unwrap();
-
-    assert_eq!(resolved.local_uuids, vec![uuid]);
-    assert!(resolved.ephemeral_installations.is_empty());
-}
-
-#[test]
-fn managed_resolver_non_local_uuid_calls_managed_client() {
-    let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-    let config_json =
-        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"API_TOKEN":"{{API_TOKEN}}"}}}}"#;
-    let mut mock = MockManagedMcpClient::new();
-    mock.expect_create_managed_mcp_client_config()
-        .times(1)
-        .returning(move |requested_uid| {
-            assert_eq!(requested_uid, uuid.to_string());
-            Ok(managed_client_config_output(config_json))
-        });
-
-    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
-        &[MCPSpec::Uuid(uuid)],
-        &HashSet::new(),
-        Arc::new(mock),
-        None,
-    ))
-    .unwrap();
-
-    assert!(resolved.local_uuids.is_empty());
-    assert_eq!(resolved.ephemeral_installations.len(), 1);
-}
-
-#[test]
-fn well_known_spec_resolves_via_managed_client() {
-    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
-    let config_json = r#"{"mcpServers":{"linear":{"url":"https://app.warp.dev/mcp/integration-proxy/linear","headers":{"Authorization":"Bearer tok"}}}}"#;
-    let mut mock = MockManagedMcpClient::new();
-    mock.expect_create_managed_mcp_client_config()
-        .times(1)
-        .returning(move |requested_uid| {
-            assert_eq!(requested_uid, "linear");
-            Ok(managed_client_config_output(config_json))
-        });
-
-    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
-        &[MCPSpec::WellKnown("linear".to_string())],
-        &HashSet::new(),
-        Arc::new(mock),
-        None,
-    ))
-    .unwrap();
-
-    assert!(resolved.local_uuids.is_empty());
-    assert_eq!(resolved.ephemeral_installations.len(), 1);
-}
-
-#[test]
-fn well_known_resolution_failure_skips_server() {
-    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
-    let mut mock = MockManagedMcpClient::new();
-    mock.expect_create_managed_mcp_client_config()
-        .times(1)
-        .returning(|_| Err(anyhow::anyhow!("Linear is not connected for this team")));
-
-    // Well-known references are server-injected and best-effort: a failure must
-    // skip the server, not fail run setup.
-    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
-        &[MCPSpec::WellKnown("linear".to_string())],
-        &HashSet::new(),
-        Arc::new(mock),
-        None,
-    ))
-    .unwrap();
-
-    assert!(resolved.local_uuids.is_empty());
-    assert!(resolved.ephemeral_installations.is_empty());
-}
-
-#[test]
-fn well_known_resolution_failure_does_not_drop_other_specs() {
-    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
-    let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-    let config_json =
-        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"API_TOKEN":"{{API_TOKEN}}"}}}}"#;
-    let mut mock = MockManagedMcpClient::new();
-    mock.expect_create_managed_mcp_client_config()
-        .times(2)
-        .returning(move |requested_uid| {
-            if requested_uid == "linear" {
-                Err(anyhow::anyhow!("Linear is not connected for this team"))
-            } else {
-                assert_eq!(requested_uid, uuid.to_string());
-                Ok(managed_client_config_output(config_json))
-            }
-        });
-
-    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
-        &[
-            MCPSpec::WellKnown("linear".to_string()),
-            MCPSpec::Uuid(uuid),
-        ],
-        &HashSet::new(),
-        Arc::new(mock),
-        None,
-    ))
-    .unwrap();
-
-    assert_eq!(resolved.ephemeral_installations.len(), 1);
-}
-
-#[test]
-fn well_known_spec_is_skipped_when_flag_disabled() {
-    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(false);
-    // The managed client must not be called for well-known specs when the
-    // feature is disabled (e.g. a persisted config from a dogfood build).
-    let mock = MockManagedMcpClient::new();
-
-    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
-        &[MCPSpec::WellKnown("linear".to_string())],
-        &HashSet::new(),
-        Arc::new(mock),
-        None,
-    ))
-    .unwrap();
-
-    assert!(resolved.local_uuids.is_empty());
-    assert!(resolved.ephemeral_installations.is_empty());
-}
-
-#[test]
-fn managed_command_config_env_placeholder_uses_local_secret() {
-    let installations = AgentDriver::installations_from_managed_client_config_json(
-        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"API_TOKEN":"{{API_TOKEN}}"}}}}"#,
-        None,
-        "github",
-    )
-    .unwrap();
-    let rendered = render_installations(
-        installations,
-        HashMap::from([("API_TOKEN".to_string(), raw_secret("real"))]),
-    );
-
-    match &rendered["GitHub MCP"].transport_type {
-        JSONTransportType::CLIServer { env, .. } => {
-            assert_eq!(env.get("API_TOKEN").map(String::as_str), Some("real"));
-        }
-        other => panic!("expected CLI server, got {other:?}"),
-    }
-}
-
-#[test]
-fn managed_command_config_arg_placeholder_uses_local_secret() {
-    let installations = AgentDriver::installations_from_managed_client_config_json(
-        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"]}}}"#,
-        None,
-        "github",
-    )
-    .unwrap();
-    let rendered = render_installations(
-        installations,
-        HashMap::from([("API_TOKEN".to_string(), raw_secret("real"))]),
-    );
-
-    match &rendered["GitHub MCP"].transport_type {
-        JSONTransportType::CLIServer { args, .. } => {
-            assert_eq!(args, &vec!["--token=real".to_string()]);
-        }
-        other => panic!("expected CLI server, got {other:?}"),
-    }
-}
-
-#[test]
-fn managed_command_config_preserves_literal_env_when_synthesizing_arg_placeholder() {
-    let installations = AgentDriver::installations_from_managed_client_config_json(
-        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"],"env":{"LOG_LEVEL":"info"}}}}"#,
-        None,
-        "github",
-    )
-    .unwrap();
-    let rendered = render_installations(
-        installations,
-        HashMap::from([("API_TOKEN".to_string(), raw_secret("real"))]),
-    );
-
-    match &rendered["GitHub MCP"].transport_type {
-        JSONTransportType::CLIServer { args, env, .. } => {
-            assert_eq!(args, &vec!["--token=real".to_string()]);
-            assert_eq!(env.get("LOG_LEVEL").map(String::as_str), Some("info"));
-        }
-        other => panic!("expected CLI server, got {other:?}"),
-    }
-}
-
-#[test]
-fn managed_url_config_preserves_proxy_url_and_header() {
-    let installations = AgentDriver::installations_from_managed_client_config_json(
-        r#"{"mcpServers":{"GitHub MCP":{"url":"https://proxy.example/mcp","headers":{"Authorization":"Bearer proxy-token"}}}}"#,
-        None,
-        "github",
-    )
-    .unwrap();
-    let rendered = render_installations(installations, HashMap::new());
-
-    match &rendered["GitHub MCP"].transport_type {
-        JSONTransportType::SSEServer { url, headers } => {
-            assert_eq!(url, "https://proxy.example/mcp");
-            assert_eq!(
-                headers.get("Authorization").map(String::as_str),
-                Some("Bearer proxy-token")
-            );
-        }
-        other => panic!("expected SSE server, got {other:?}"),
-    }
-}
-
-#[test]
-fn managed_url_config_preserves_header_despite_colliding_local_secret() {
-    // A server-rendered proxy header must not be overwritten by a local secret that
-    // happens to share the header's key name (`apply_secrets` implicit key-name match).
-    let installations = AgentDriver::installations_from_managed_client_config_json(
-        r#"{"mcpServers":{"GitHub MCP":{"url":"https://proxy.example/mcp","headers":{"Authorization":"Bearer proxy-token"}}}}"#,
-        None,
-        "github",
-    )
-    .unwrap();
-    let rendered = render_installations(
-        installations,
-        HashMap::from([("Authorization".to_string(), raw_secret("local-secret"))]),
-    );
-
-    match &rendered["GitHub MCP"].transport_type {
-        JSONTransportType::SSEServer { url, headers } => {
-            assert_eq!(url, "https://proxy.example/mcp");
-            assert_eq!(
-                headers.get("Authorization").map(String::as_str),
-                Some("Bearer proxy-token")
-            );
-        }
-        other => panic!("expected SSE server, got {other:?}"),
-    }
-}
-
-#[test]
-fn managed_command_config_preserves_literal_env_despite_colliding_local_secret() {
-    // A literal env value rendered by the server must survive even when a local secret
-    // shares the env key name.
-    let installations = AgentDriver::installations_from_managed_client_config_json(
-        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"LOG_LEVEL":"info"}}}}"#,
-        None,
-        "github",
-    )
-    .unwrap();
-    let rendered = render_installations(
-        installations,
-        HashMap::from([("LOG_LEVEL".to_string(), raw_secret("debug"))]),
-    );
-
-    match &rendered["GitHub MCP"].transport_type {
-        JSONTransportType::CLIServer { env, .. } => {
-            assert_eq!(env.get("LOG_LEVEL").map(String::as_str), Some("info"));
-        }
-        other => panic!("expected CLI server, got {other:?}"),
-    }
-}
-
-#[test]
-fn managed_command_config_missing_secret_leaves_placeholder() {
-    let installations = AgentDriver::installations_from_managed_client_config_json(
-        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"]}}}"#,
-        None,
-        "github",
-    )
-    .unwrap();
-    let rendered = render_installations(installations, HashMap::new());
-
-    match &rendered["GitHub MCP"].transport_type {
-        JSONTransportType::CLIServer { args, .. } => {
-            assert_eq!(args, &vec!["--token={{API_TOKEN}}".to_string()]);
-        }
-        other => panic!("expected CLI server, got {other:?}"),
-    }
-}
-
-// ── Ephemeral MCP installation ids: stable across rebuilds ─────────────────
-
-#[test]
-fn ephemeral_installation_id_is_stable_across_resolutions_for_same_run() {
-    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440010".parse().unwrap();
-    let config_json =
-        r#"{"mcpServers":{"slack":{"url":"https://app.warp.dev/mcp/integration-proxy/slack"}}}"#;
-
-    // Same run re-resolving the same server after a rebuild.
-    let first = AgentDriver::installations_from_managed_client_config_json(
-        config_json,
-        Some(task_id),
-        "slack",
-    )
-    .unwrap();
-    let second = AgentDriver::installations_from_managed_client_config_json(
-        config_json,
-        Some(task_id),
-        "slack",
-    )
-    .unwrap();
-
-    assert_eq!(first.len(), 1);
-    assert_eq!(second.len(), 1);
-    assert_eq!(
-        first[0].uuid(),
-        second[0].uuid(),
-        "same run + same server must yield the same id across rebuilds"
-    );
-}
-
-#[test]
-fn ephemeral_installation_id_differs_across_runs() {
-    let task_id_a: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440011".parse().unwrap();
-    let task_id_b: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440012".parse().unwrap();
-    let config_json =
-        r#"{"mcpServers":{"slack":{"url":"https://app.warp.dev/mcp/integration-proxy/slack"}}}"#;
-
-    let a = AgentDriver::installations_from_managed_client_config_json(
-        config_json,
-        Some(task_id_a),
-        "slack",
-    )
-    .unwrap();
-    let b = AgentDriver::installations_from_managed_client_config_json(
-        config_json,
-        Some(task_id_b),
-        "slack",
-    )
-    .unwrap();
-
-    assert_ne!(
-        a[0].uuid(),
-        b[0].uuid(),
-        "different runs must not collide onto the same id"
-    );
-}
-
-#[test]
-fn ephemeral_installation_id_differs_across_servers_in_same_run() {
-    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440013".parse().unwrap();
-    let slack_config =
-        r#"{"mcpServers":{"slack":{"url":"https://app.warp.dev/mcp/integration-proxy/slack"}}}"#;
-    let linear_config =
-        r#"{"mcpServers":{"linear":{"url":"https://app.warp.dev/mcp/integration-proxy/linear"}}}"#;
-
-    let slack = AgentDriver::installations_from_managed_client_config_json(
-        slack_config,
-        Some(task_id),
-        "slack",
-    )
-    .unwrap();
-    let linear = AgentDriver::installations_from_managed_client_config_json(
-        linear_config,
-        Some(task_id),
-        "linear",
-    )
-    .unwrap();
-
-    assert_ne!(
-        slack[0].uuid(),
-        linear[0].uuid(),
-        "different servers in one run must not collide onto the same id"
-    );
-}
-
-#[test]
-fn ephemeral_installation_id_is_random_without_task_id() {
-    let config_json =
-        r#"{"mcpServers":{"slack":{"url":"https://app.warp.dev/mcp/integration-proxy/slack"}}}"#;
-
-    let first =
-        AgentDriver::installations_from_managed_client_config_json(config_json, None, "slack")
-            .unwrap();
-    let second =
-        AgentDriver::installations_from_managed_client_config_json(config_json, None, "slack")
-            .unwrap();
-
-    assert_ne!(
-        first[0].uuid(),
-        second[0].uuid(),
-        "no task_id means no rebuild to survive, so ids stay random"
-    );
-}
-
-// ── Built-in Factory MCP injection tests ────────────────────────────────────
-
-fn api_key_credentials() -> Credentials {
-    Credentials::ApiKey {
-        key: "wk-test-key".to_string(),
-        owner_type: None,
-    }
-}
-
-#[test]
-fn builtin_factory_mcp_attaches_with_api_key_credentials() {
-    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
-
-    let installation =
-        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &HashSet::new())
-            .expect("built-in Factory MCP should attach when eligible");
-
-    assert_eq!(installation.uuid(), FACTORY_MCP_INSTALLATION_UUID);
-    assert_eq!(
-        installation.templatable_mcp_server().name,
-        FACTORY_MCP_SERVER_NAME
-    );
-}
-
-#[test]
-fn builtin_factory_mcp_skipped_when_flag_disabled() {
-    let _flag = FeatureFlag::FactoryMcp.override_enabled(false);
-
-    assert!(
-        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &HashSet::new())
-            .is_none()
-    );
-}
-
-#[test]
-fn builtin_factory_mcp_skipped_without_credentials() {
-    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
-
-    assert!(AgentDriver::builtin_factory_mcp_for_run(None, &HashSet::new()).is_none());
-}
-
-#[test]
-fn builtin_factory_mcp_skipped_on_name_collision() {
-    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
-    // A user-configured server named `warp-factory` wins over the built-in.
-    let taken_server_names = HashSet::from([FACTORY_MCP_SERVER_NAME.to_string()]);
-
-    assert!(
-        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &taken_server_names)
-            .is_none()
-    );
-}
-
-#[test]
-fn managed_resolution_failure_includes_uid_and_message() {
-    let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-    let mut mock = MockManagedMcpClient::new();
-    mock.expect_create_managed_mcp_client_config()
-        .times(1)
-        .returning(|_| Err(anyhow::anyhow!("not active")));
-
-    let err = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
-        &[MCPSpec::Uuid(uuid)],
-        &HashSet::new(),
-        Arc::new(mock),
-        None,
-    ))
-    .unwrap_err();
-
-    match err {
-        AgentDriverError::ManagedMcpResolutionFailed { uid, message } => {
-            assert_eq!(uid, uuid);
-            assert!(message.contains("not active"));
-        }
-        other => panic!("expected managed MCP resolution failure, got {other:?}"),
-    }
-}
-
-fn transient_managed_mcp_error() -> anyhow::Error {
-    // A transport-level 503 with no GraphQL user-facing payload, matching what
-    // `send_graphql_request` produces for a genuinely transient backend failure (as opposed
-    // to a `UserFacingError`, which `ManagedMcpClient::create_managed_mcp_client_config`
-    // converts into a plain, untyped `anyhow!(message)`).
-    anyhow::Error::new(GraphQLError::HttpError {
-        status: StatusCode::SERVICE_UNAVAILABLE,
-        body: "unavailable".to_string(),
-    })
-}
-
-#[test]
-fn managed_resolution_retries_transient_error_then_succeeds() {
-    let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-    let config_json =
-        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"API_TOKEN":"{{API_TOKEN}}"}}}}"#;
-    let calls = Arc::new(AtomicUsize::new(0));
-    let calls_clone = Arc::clone(&calls);
-    let mut mock = MockManagedMcpClient::new();
-    mock.expect_create_managed_mcp_client_config()
-        .times(2)
-        .returning(move |_| {
-            if calls_clone.fetch_add(1, Ordering::SeqCst) == 0 {
-                Err(transient_managed_mcp_error())
-            } else {
-                Ok(managed_client_config_output(config_json))
-            }
-        });
-
-    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
-        &[MCPSpec::Uuid(uuid)],
-        &HashSet::new(),
-        Arc::new(mock),
-        None,
-    ))
-    .unwrap();
-
-    assert_eq!(resolved.ephemeral_installations.len(), 1);
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
-}
-
-#[test]
-fn managed_resolution_does_not_retry_permanent_typed_http_error() {
-    // A typed but permanent (403) transport error must fail fast, same as the untyped
-    // user-facing error covered by `managed_resolution_failure_includes_uid_and_message`.
-    let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-    let mut mock = MockManagedMcpClient::new();
-    mock.expect_create_managed_mcp_client_config()
-        .times(1)
-        .returning(|_| {
-            Err(anyhow::Error::new(GraphQLError::HttpError {
-                status: StatusCode::FORBIDDEN,
-                body: "forbidden".to_string(),
-            }))
-        });
-
-    let err = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
-        &[MCPSpec::Uuid(uuid)],
-        &HashSet::new(),
-        Arc::new(mock),
-        None,
-    ))
-    .unwrap_err();
-
-    assert!(matches!(
-        err,
-        AgentDriverError::ManagedMcpResolutionFailed { uid, .. } if uid == uuid
-    ));
-}
-
-#[test]
-fn managed_resolution_exhausts_retry_budget_on_persistent_transient_error() {
-    let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-    let calls = Arc::new(AtomicUsize::new(0));
-    let calls_clone = Arc::clone(&calls);
-    let mut mock = MockManagedMcpClient::new();
-    mock.expect_create_managed_mcp_client_config()
-        .times(MANAGED_MCP_RESOLVE_MAX_ATTEMPTS)
-        .returning(move |_| {
-            calls_clone.fetch_add(1, Ordering::SeqCst);
-            Err(transient_managed_mcp_error())
-        });
-
-    let err = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
-        &[MCPSpec::Uuid(uuid)],
-        &HashSet::new(),
-        Arc::new(mock),
-        None,
-    ))
-    .unwrap_err();
-
-    assert!(matches!(
-        err,
-        AgentDriverError::ManagedMcpResolutionFailed { uid, .. } if uid == uuid
-    ));
-    // A persistently transient error must still exhaust the full retry budget rather than
-    // giving up early, and must not retry beyond it.
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        MANAGED_MCP_RESOLVE_MAX_ATTEMPTS
-    );
-}
-
-#[test]
-fn well_known_resolution_retries_transient_error_then_succeeds() {
-    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
-    let config_json = r#"{"mcpServers":{"linear":{"url":"https://app.warp.dev/mcp/integration-proxy/linear","headers":{"Authorization":"Bearer tok"}}}}"#;
-    let calls = Arc::new(AtomicUsize::new(0));
-    let calls_clone = Arc::clone(&calls);
-    let mut mock = MockManagedMcpClient::new();
-    mock.expect_create_managed_mcp_client_config()
-        .times(2)
-        .returning(move |_| {
-            if calls_clone.fetch_add(1, Ordering::SeqCst) == 0 {
-                Err(transient_managed_mcp_error())
-            } else {
-                Ok(managed_client_config_output(config_json))
-            }
-        });
-
-    // A transient failure must not silently skip the server the way a permanent one does
-    // (see `well_known_resolution_failure_skips_server`): it should retry and still resolve.
-    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
-        &[MCPSpec::WellKnown("linear".to_string())],
-        &HashSet::new(),
-        Arc::new(mock),
-        None,
-    ))
-    .unwrap();
-
-    assert_eq!(resolved.ephemeral_installations.len(), 1);
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
-}
 
 // ── IdleTimeoutSender tests ──────────────────────────────────────────────────────
 
@@ -889,6 +151,17 @@ fn idle_timeout_sender_complete_with_optional_idle_some_defers_then_delivers() {
 }
 
 #[test]
+fn idle_timeout_sender_complete_with_zero_idle_sends_immediately() {
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.end_run_after(Duration::from_millis(50), 1);
+
+    idle_timeout.complete_with_optional_idle(Some(Duration::ZERO), 7);
+
+    assert_eq!(rx.try_recv().unwrap(), Some(7));
+}
+
+#[test]
 fn idle_timeout_sender_complete_with_optional_idle_some_then_cancel_invalidates_timer() {
     // Cross-path cancellation: the Stage 2c skip-initial-turn driver path
     // schedules a deferred `Success` via `complete_with_optional_idle(Some(_), _)`
@@ -908,6 +181,157 @@ fn idle_timeout_sender_complete_with_optional_idle_some_then_cancel_invalidates_
     // Sender was never consumed by the cancelled timer, so the channel is
     // still open but empty.
     assert_eq!(rx.try_recv().unwrap(), None);
+}
+
+// ── DebugWindowController tests ───────────────────────────────────────────────────
+
+#[test]
+fn debug_window_controller_pin_blocks_refresh_and_finish_rearms() {
+    let (tx, mut rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+    let turn_id = AIConversationId::new();
+
+    // A short window so an unpinned controller would fire almost immediately.
+    controller.refresh_idle((), Duration::from_millis(30));
+    assert!(
+        controller.pin_for_turn(turn_id),
+        "first pin must be accepted"
+    );
+
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        None,
+        "a pinned debug turn must not let the idle window expire, however long it runs"
+    );
+
+    assert!(
+        controller.finish_turn(turn_id, (), Duration::from_millis(30)),
+        "finishing a tracked turn must report a real transition"
+    );
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        Some(()),
+        "finishing the last active turn must re-arm the full idle window"
+    );
+}
+
+#[test]
+fn debug_window_controller_duplicate_pin_is_idempotent() {
+    let (tx, _rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+    let turn_id = AIConversationId::new();
+
+    assert!(
+        controller.pin_for_turn(turn_id),
+        "first pin is a real transition"
+    );
+    assert!(
+        !controller.pin_for_turn(turn_id),
+        "a duplicate pin for the same turn id must be a no-op"
+    );
+}
+
+#[test]
+fn debug_window_controller_overlapping_turns_stay_pinned_until_the_last_turn_finishes() {
+    let (tx, _rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+    let first_turn = AIConversationId::new();
+    let second_turn = AIConversationId::new();
+
+    assert!(controller.pin_for_turn(first_turn));
+    assert!(controller.pin_for_turn(second_turn));
+    assert!(controller.finish_turn(first_turn, (), Duration::from_secs(60)));
+    assert!(controller.is_pinned());
+    assert!(controller.finish_turn(second_turn, (), Duration::from_secs(60)));
+    assert!(!controller.is_pinned());
+}
+
+#[test]
+fn debug_turn_task_state_maps_timeline_states() {
+    let blocked = ConversationStatus::Blocked {
+        blocked_action: "approval".to_string(),
+    };
+    let cases = [
+        (
+            ConversationStatus::InProgress,
+            Some(AgentTaskState::InProgress),
+        ),
+        (ConversationStatus::Success, Some(AgentTaskState::Succeeded)),
+        (ConversationStatus::Error, Some(AgentTaskState::Error)),
+        (
+            ConversationStatus::Cancelled,
+            Some(AgentTaskState::Cancelled),
+        ),
+        (blocked, Some(AgentTaskState::Blocked)),
+        (ConversationStatus::TransientError, None),
+        (ConversationStatus::WaitingForEvents, None),
+    ];
+
+    for (status, expected) in cases {
+        assert_eq!(debug_turn_task_state(&status), expected);
+    }
+}
+#[test]
+fn debug_window_controller_duplicate_finish_is_idempotent() {
+    let (tx, mut rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+    let turn_id = AIConversationId::new();
+
+    controller.pin_for_turn(turn_id);
+    assert!(controller.finish_turn(turn_id, (), Duration::from_millis(30)));
+    assert!(
+        !controller.finish_turn(turn_id, (), Duration::from_millis(30)),
+        "a duplicate terminal event for the same turn id must be a no-op"
+    );
+
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        Some(()),
+        "the single real finish must still re-arm exactly one full window"
+    );
+}
+
+#[test]
+fn debug_window_controller_finish_of_unknown_turn_is_a_no_op() {
+    let (tx, mut rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+
+    controller.refresh_idle((), Duration::from_millis(30));
+    assert!(
+        !controller.finish_turn(AIConversationId::new(), (), Duration::from_millis(30)),
+        "finishing a turn id that was never pinned must be a no-op"
+    );
+
+    // The unrelated finish_turn call must not have disturbed the already-armed window.
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(rx.try_recv().unwrap(), Some(()));
+}
+
+#[test]
+fn debug_window_controller_refresh_is_inert_while_pinned() {
+    // Both refresh entry points — the viewer-input keystroke path and the general re-arm path —
+    // must be no-ops while a debug turn is pinning the window, for the same reason: neither may
+    // move a deadline that finish_turn is about to race by re-arming the full interval anyway.
+    let (tx, _rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+
+    controller.refresh_idle((), Duration::from_secs(60));
+    controller.pin_for_turn(AIConversationId::new());
+    assert_eq!(
+        controller.refresh_from_last_armed(),
+        None,
+        "a viewer-input refresh must not move the deadline while a debug turn is pinning it"
+    );
+
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(oneshot::channel::<()>().0));
+    controller.pin_for_turn(AIConversationId::new());
+    assert!(
+        !controller.refresh_idle((), Duration::from_millis(30)),
+        "refreshing while pinned must not arm a deadline that finish_turn would then race"
+    );
 }
 
 #[test]
@@ -947,7 +371,7 @@ fn idle_timeout_sender_on_commit_runs_before_value_is_delivered() {
     );
 }
 
-// ── Terminal-status idle window routing ──────────────────────────────────────────
+// ── Terminal-status idle window routing ────────────────────────────────────────────
 
 fn error_status() -> SDKConversationOutputStatus {
     SDKConversationOutputStatus::Error {
@@ -1613,6 +1037,27 @@ fn worker_injected_env_skips_entire_bedrock_secret() {
     unsafe { std::env::remove_var("AWS_REGION") };
 }
 
+#[test]
+#[serial_test::serial]
+fn docker_registry_secret_never_injected_as_env_var() {
+    let secrets = HashMap::from([(
+        "my-registry".to_string(),
+        ManagedSecretValue::docker_registry("us-docker.pkg.dev", "_json_key", "s3cret-pass"),
+    )]);
+    let env_vars = build_secret_env_vars(&secrets);
+    assert!(
+        env_vars.is_empty(),
+        "a registry credential authenticates an image pull, not the agent process, and must \
+         never appear in the terminal session's environment: {env_vars:?}"
+    );
+    assert!(!env_vars.contains_key(&OsString::from("my-registry")));
+    for value in env_vars.values() {
+        assert_ne!(value, &OsString::from("us-docker.pkg.dev"));
+        assert_ne!(value, &OsString::from("_json_key"));
+        assert_ne!(value, &OsString::from("s3cret-pass"));
+    }
+}
+
 // ── Skill-loading integration test ───────────────────────────────────────────
 
 /// Verifies that `load_environment_skills` loads every skill from an env repo
@@ -2028,29 +1473,6 @@ fn warp_skill_dirs_env_relative_entries_resolve_against_working_dir() {
 
 // ── QUALITY-1801: buffered child event vs. ambient-run teardown ─────────────
 
-/// Polls `condition` on a short interval until it returns true, or panics with an
-/// actionable message after `timeout` elapses. Used to deterministically await
-/// scheduled async work (e.g. a `ctx.spawn`ed eligibility check) without guessing a
-/// fixed sleep duration that a loaded test runner could exceed.
-async fn poll_until(
-    app: &App,
-    timeout: Duration,
-    description: &str,
-    mut condition: impl FnMut(&App) -> bool,
-) {
-    let deadline = instant::Instant::now() + timeout;
-    loop {
-        if condition(app) {
-            return;
-        }
-        assert!(
-            instant::Instant::now() < deadline,
-            "timed out after {timeout:?} waiting for: {description}"
-        );
-        Timer::after(Duration::from_millis(5)).await;
-    }
-}
-
 /// Creates a conversation on `terminal_id` and attaches an in-flight mock response
 /// stream to it (mirroring an in-progress parent turn), registered through
 /// `ai_controller`. Returns the conversation and stream so the caller can drive the
@@ -2186,6 +1608,237 @@ fn driver_wired_for_terminal(
     driver_handle
 }
 
+#[test]
+fn native_startup_queue_prevents_exit_until_pending_rows_are_removed() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let (terminal_id, controller) = terminal.read(&app, |terminal, _| {
+            (terminal.id(), terminal.ai_controller().clone())
+        });
+        let (id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &controller);
+        controller.update(&mut app, |controller, ctx| {
+            controller.bind_native_prompt_conversation(Some(id), ctx);
+        });
+        // The driver's own skip_initial_turn dispatch drains an (empty, at this point) startup
+        // queue for `id` here, so it doesn't disturb the mock stream created above.
+        let _driver = driver_wired_for_terminal(&mut app, terminal, None);
+
+        // A row queued for this conversation after setup has finished keeps the driver from
+        // exiting even once the (unrelated, pre-existing) stream finishes successfully.
+        let queued_id = QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "followup".into(),
+                    ParticipantId::new(),
+                    vec![],
+                    None,
+                ),
+                ctx,
+            )
+        });
+        complete_mock_stream_successfully(&mut app, &stream);
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(!service.is_conversation_exiting(id));
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            assert!(queue.remove_by_id(id, queued_id, ctx).is_some());
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(service.is_conversation_exiting(id));
+        });
+    });
+}
+
+#[test]
+fn prepared_native_followup_starts_before_the_last_queued_row_allows_exit() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let (terminal_id, controller) = terminal.read(&app, |terminal, _| {
+            (terminal.id(), terminal.ai_controller().clone())
+        });
+        let (id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &controller);
+        controller.update(&mut app, |controller, ctx| {
+            controller.bind_native_prompt_conversation(Some(id), ctx);
+        });
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal, ctx);
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.skip_initial_turn = true;
+            driver.idle_on_complete = None;
+            driver.run_conversation_id = Some(id);
+            driver
+        });
+        let _run_exit_rx = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+        });
+        let query_id = QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "file followup".into(),
+                    ParticipantId::new(),
+                    vec![AgentAttachment::FileReference {
+                        attachment_id: "attachment-id".into(),
+                        file_name: "event-payload.json".into(),
+                    }],
+                    None,
+                ),
+                ctx,
+            )
+        });
+
+        complete_mock_stream_successfully(&mut app, &stream);
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                history.conversation(&id).unwrap().status(),
+                &ConversationStatus::Success
+            );
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(!service.is_conversation_exiting(id));
+        });
+
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.complete_preparation(
+                id,
+                query_id,
+                HashMap::from([(
+                    "event-payload.json".into(),
+                    AIAgentAttachment::FilePathReference {
+                        file_id: "attachment-id".into(),
+                        file_name: "event-payload.json".into(),
+                        file_path: "/workspace/.warp/attachments/attachment-id_event-payload.json"
+                            .into(),
+                    },
+                )]),
+                ctx,
+            );
+        });
+
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(!service.is_conversation_exiting(id));
+        });
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let conversation = history.conversation(&id).unwrap();
+            assert_eq!(conversation.status(), &ConversationStatus::InProgress);
+            assert_eq!(conversation.exchange_count(), 2);
+            assert!(conversation.root_task_exchanges().any(|exchange| {
+                exchange.input.iter().any(
+                    |input| matches!(input, AIAgentInput::UserQuery { query, .. } if query == "file followup"),
+                )
+            }));
+        });
+        controller.read(&app, |controller, ctx| {
+            assert!(controller.has_active_stream_for_conversation(id, ctx));
+        });
+        QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+            assert!(!queue.has_queue(id));
+        });
+    });
+}
+
+#[test]
+fn native_startup_queue_prevents_exit_until_a_local_row_is_removed() {
+    // Regression test: exit-deferral must not be specific to shared-session-injected rows --
+    // a plain local row (e.g. queued via `/queue` against this same conversation) has to hold
+    // the run open exactly the same way, since `dispatch_queued_warp_agent_prompt` dispatches
+    // either kind identically.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let (terminal_id, controller) = terminal.read(&app, |terminal, _| {
+            (terminal.id(), terminal.ai_controller().clone())
+        });
+        let (id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &controller);
+        controller.update(&mut app, |controller, ctx| {
+            controller.bind_native_prompt_conversation(Some(id), ctx);
+        });
+        let _driver = driver_wired_for_terminal(&mut app, terminal, None);
+
+        let queued_id = QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.append(
+                id,
+                QueuedQuery::new(
+                    "local followup".into(),
+                    QueuedQueryOrigin::QueueSlashCommand,
+                ),
+                ctx,
+            )
+        });
+        complete_mock_stream_successfully(&mut app, &stream);
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(!service.is_conversation_exiting(id));
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            assert!(queue.remove_by_id(id, queued_id, ctx).is_some());
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(service.is_conversation_exiting(id));
+        });
+    });
+}
+
+#[test]
+fn native_promptless_setup_dispatches_only_the_head_queued_prompt() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        let id = controller.update(&mut app, |controller, ctx| {
+            let id = controller.bind_native_prompt_conversation(None, ctx);
+            controller.execute_warp_agent_prompt_from_shared_session_injection(
+                "first".into(),
+                None,
+                vec![],
+                ParticipantId::new(),
+                None,
+                ctx,
+            );
+            controller.execute_warp_agent_prompt_from_shared_session_injection(
+                "second".into(),
+                None,
+                vec![],
+                ParticipantId::new(),
+                None,
+                ctx,
+            );
+            id
+        });
+        let _driver = driver_wired_for_terminal(&mut app, terminal, None);
+        // Only the head ("first") is sent as soon as setup finishes; "second" stays queued for
+        // the next natural request boundary (a tool-result follow-up) or the conversation going
+        // idle, rather than being dispatched right away and interrupting "first"'s barely-started
+        // stream before it produces any output.
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let conversation = history.conversation(&id).unwrap();
+            assert_eq!(conversation.exchange_count(), 1);
+            assert_eq!(conversation.status(), &ConversationStatus::InProgress);
+        });
+        QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+            assert_eq!(
+                queue
+                    .queue(id)
+                    .iter()
+                    .map(QueuedQuery::text)
+                    .collect::<Vec<_>>(),
+                vec!["second"],
+            );
+        });
+    });
+}
+
 /// QUALITY-1801 regression: a child agent's message, queued in
 /// `OrchestrationEventService` while the parent's own turn is still streaming, must
 /// not start a new MAA request once the parent's ambient run has committed to an
@@ -2265,17 +1918,13 @@ fn ambient_driver_immediate_exit_blocks_buffered_child_event_from_restarting_maa
         // events lives in `execute_run`'s forwarder, which only runs once the async round trip
         // back from `run_exit`'s internal signal completes — so this is polled rather than
         // checked immediately.
-        poll_until(
-            &app,
-            Duration::from_secs(2),
-            "the buffered event to be dropped by the forwarder's model-side cleanup",
-            |app| {
-                OrchestrationEventService::handle(app).read(app, |service, _| {
-                    !service.has_pending_events(conversation_id)
-                })
-            },
-        )
-        .await;
+        assert_eventually!(
+            400 => OrchestrationEventService::handle(&app).read(&app, |service, _| {
+                !service.has_pending_events(conversation_id)
+            }),
+            "timed out after 2s waiting for: the buffered event to be dropped by the forwarder's \
+             model-side cleanup"
+        );
     });
 }
 
@@ -2319,20 +1968,16 @@ fn ambient_driver_with_idle_window_still_injects_buffered_child_event() {
         // non-child conversation like this one and falls back to direct injection.
         // Poll for that scheduled work to land instead of guessing a fixed sleep
         // duration a loaded test runner could exceed.
-        poll_until(
-            &app,
-            Duration::from_secs(2),
-            "the buffered event to be injected as an InProgress follow-up",
-            |app| {
-                BlocklistAIHistoryModel::handle(app).read(app, |history, _| {
-                    matches!(
-                        history.conversation(&conversation_id).map(|c| c.status()),
-                        Some(ConversationStatus::InProgress)
-                    )
-                })
-            },
-        )
-        .await;
+        assert_eventually!(
+            400 => BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+                matches!(
+                    history.conversation(&conversation_id).map(|c| c.status()),
+                    Some(ConversationStatus::InProgress)
+                )
+            }),
+            "timed out after 2s waiting for: the buffered event to be injected as an InProgress \
+             follow-up"
+        );
 
         // The buffered event should have been injected as a real follow-up: the
         // conversation is back `InProgress` and the queue has been drained.
@@ -2494,17 +2139,13 @@ fn ambient_driver_elapsed_idle_window_blocks_buffered_child_event_from_restartin
             .send(())
             .expect("background timer thread should still be waiting on the manual release");
 
-        poll_until(
-            &app,
-            Duration::from_secs(2),
-            "the conversation to be marked exiting once the idle window elapses",
-            |app| {
-                OrchestrationEventService::handle(app).read(app, |service, _| {
-                    service.is_conversation_exiting(conversation_id)
-                })
-            },
-        )
-        .await;
+        assert_eventually!(
+            400 => OrchestrationEventService::handle(&app).read(&app, |service, _| {
+                service.is_conversation_exiting(conversation_id)
+            }),
+            "timed out after 2s waiting for: the conversation to be marked exiting once the idle \
+             window elapses"
+        );
 
         // Deterministically inside the interleaving window now: exiting is committed, and
         // the forwarder cannot have run yet. Give the in-flight eligibility check
@@ -2676,18 +2317,14 @@ fn ambient_driver_resumed_conversation_elapsed_idle_window_commits_exiting() {
         // post-commit gate, strictly before sending the completion value. The async
         // forwarder therefore cannot have run yet, so this check is a direct, uncontaminated
         // proof of `on_commit`'s own write, not of the forwarder's fallback.
-        poll_until(
-            &app,
-            Duration::from_secs(2),
-            "the resumed conversation to be marked exiting once its idle window elapses, \
-             via on_commit's seeded conversation id (not the async forwarder)",
-            |app| {
-                OrchestrationEventService::handle(app).read(app, |service, _| {
-                    service.is_conversation_exiting(conversation_id)
-                })
-            },
-        )
-        .await;
+        assert_eventually!(
+            400 => OrchestrationEventService::handle(&app).read(&app, |service, _| {
+                service.is_conversation_exiting(conversation_id)
+            }),
+            "timed out after 2s waiting for: the resumed conversation to be marked exiting once \
+             its idle window elapses, via on_commit's seeded conversation id (not the async \
+             forwarder)"
+        );
 
         // Release the post-commit gate so the run can finish tearing down normally.
         post_commit_release_tx

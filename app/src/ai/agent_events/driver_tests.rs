@@ -370,11 +370,8 @@ fn failure_threshold_is_reached_at_and_above_limit() {
 }
 
 fn make_http_status_error(status: u16) -> anyhow::Error {
-    anyhow::Error::new(HttpStatusError {
-        status,
-        body: "not found".to_string(),
-    })
-    .context("SSE stream error")
+    anyhow::Error::new(HttpStatusError::new(status, "not found".to_string()))
+        .context("SSE stream error")
 }
 
 #[test]

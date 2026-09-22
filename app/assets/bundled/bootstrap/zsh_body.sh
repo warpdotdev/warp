@@ -571,6 +571,41 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
     printf '%s' "$1" | command -p od -An -v -tx1 | command -p tr -d ' \n'
   }
 
+  warp_completions_hex_encode_into () {
+    setopt localoptions nomultibyte
+    # `LC_ALL=C` keeps indexing byte-wise, so a multibyte character encodes as its UTF-8 bytes rather than its code point.
+    local LC_ALL=C
+    local __warp_hex_var="$1"
+    local __warp_hex_in="$2"
+    # This branch is faster for longer values.
+    if (( ${#__warp_hex_in} > 256 )); then
+      typeset -g "$__warp_hex_var=$(printf '%s' "$__warp_hex_in" \
+        | command -p od -An -v -tx1 | command -p tr -d ' \n')"
+      return
+    fi
+    # This branch is faster for shorter values. The "for" loop is O(n²) which is fine for short
+    # values, bad for long values. The case above avoids that at the cost of using piping into
+    # subprocesses instead.
+    local __warp_hex_i __warp_hex_char __warp_hex_byte __warp_hex_acc=""
+    for (( __warp_hex_i = 1; __warp_hex_i <= ${#__warp_hex_in}; __warp_hex_i++ )); do
+      __warp_hex_char=${__warp_hex_in[__warp_hex_i]}
+      __warp_hex_byte=$(( [##16] #__warp_hex_char ))
+      __warp_hex_acc+=${(l:2::0:)${(L)__warp_hex_byte}}
+    done
+    typeset -g "$__warp_hex_var=$__warp_hex_acc"
+  }
+
+  warp_hex_decode_string () {
+    if command -pv xxd >/dev/null 2>&1; then
+      printf '%s' "$1" | command -p xxd -p -r
+    else
+      local hex="$1" i
+      for ((i = 0; i < ${#hex}; i += 2)); do
+        builtin printf "\x${hex:$i:2}"
+      done
+    fi
+  }
+
   # We set precmd and preexec hooks in order to set the title for the idle
   # terminal and the terminal running a command respectively. This is so we
   # provide a reasonable default behavior in the case where the user doesn't
@@ -617,6 +652,8 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
     # If the user wants to set the title using oh-my-zsh, they can
     # set the WARP_DISABLE_AUTO_TITLE flag.
     [[ "${WARP_DISABLE_AUTO_TITLE:-}" != true ]] || return
+
+    _is_warp_generator_command "$1" || return
 
     emulate -L zsh
     setopt extended_glob
@@ -672,6 +709,56 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
     BUFFER=""
   }
   zle -N warp_report_input
+
+  # Runs the shell's own ctrl-r history widget as a foreground command.
+  function warp_run_external_ctrl_r_widget () {
+    local result=""
+    case "$_WARP_EXTERNAL_CTRL_R_WIDGET" in
+      fzf-history-widget)
+        result="$(fc -rl 1 \
+          | command -p awk '{ cmd=$0; sub(/^[ \t]*[0-9]+\**[ \t]+/, "", cmd); if (!seen[cmd]++) print cmd }' \
+          | fzf --scheme=history --tiebreak=index +m)"
+        ;;
+      atuin-search|atuin-search-viins|atuin-search-vicmd|_atuin_search_widget)
+        # atuin writes its TUI to stdout; under plain command substitution that's a pipe, and
+        # its cursor-position query (\x1b[6n) has nothing to answer it, so it bails during
+        # startup. Swap stdout/stderr through fd 3, matching atuin's own zsh integration
+        # (_atuin_search -> __atuin_search_cmd), so the TUI reaches the tty while the
+        # selection is still captured via command substitution.
+        result="$(ATUIN_SHELL=zsh atuin search -i 3>&1 1>&2 2>&3 3>&-)"
+        # If the user has atuin's enter_accept config on, Enter both selects and runs the
+        # command, signaled by this prefix; we only ever want the selection, never to run it,
+        # so strip the prefix in both cases (see atuin's _atuin_search for the same check).
+        result="${result#__atuin_accept__:}"
+        ;;
+    esac
+    local warp_escaped_selection="$(warp_escape_json "$result")"
+    warp_send_json_message "{ \"hook\": \"ExternalShellWidgetSelection\", \"value\": { \"buffer\": \"$warp_escaped_selection\", \"session_id\": $WARP_SESSION_ID } }"
+  }
+
+  # Runs fzf's ctrl-t file-search widget as a foreground command.
+  function warp_run_external_ctrl_t_widget () {
+    local result=""
+    if (( $+functions[__fzf_select] )); then
+      result="$(__fzf_select)"
+    else  # fzf < 0.48
+      result="$(__fsel)"
+    fi
+    local warp_escaped_selection="$(warp_escape_json "$result")"
+    warp_send_json_message "{ \"hook\": \"ExternalShellWidgetSelection\", \"value\": { \"buffer\": \"$warp_escaped_selection\", \"session_id\": $WARP_SESSION_ID } }"
+  }
+
+  function warp_run_external_alt_c_widget () {
+    setopt localoptions pipefail no_aliases 2>/dev/null
+    local dir="$(
+      FZF_DEFAULT_COMMAND=${FZF_ALT_C_COMMAND:-} \
+      FZF_DEFAULT_OPTS=$(__fzf_defaults "--reverse --walker=dir,follow,hidden --scheme=path" "${FZF_ALT_C_OPTS-} +m") \
+      FZF_DEFAULT_OPTS_FILE='' $(__fzfcmd) < /dev/tty
+    )"
+    [[ -n "$dir" ]] || return 0
+    dir=$(builtin cd -q >/dev/null -- "$dir" && echo "$PWD" || echo "$dir")
+    builtin cd -- "$dir"
+  }
 
   function clear() {
       warp_send_json_message "{\"hook\": \"Clear\", \"value\": {\"session_id\": $WARP_SESSION_ID}}"
@@ -1242,7 +1329,9 @@ esac
   # See https://zsh.sourceforge.io/Doc/Release/Functions.html for more context
   # on the zshaddhistory hook.
   _warp_zshaddhistory() {
-    _is_warp_generator_command "$1"
+    _is_warp_generator_command "$1" && [[ "$1" != *"warp_run_external_ctrl_r_widget"* ]] && \
+      [[ "$1" != *"warp_run_external_ctrl_t_widget"* ]] && \
+      [[ "$1" != *"warp_run_external_alt_c_widget"* ]]
   }
 
   # Register this zshaddhistory hook after the user's RC files have been sourced,
@@ -1316,6 +1405,23 @@ esac
     shell_plugins+=(vi)
   fi
 
+  # Detect whether ctrl-r has been rebound to fzf's or atuin's history widget.
+  _WARP_EXTERNAL_CTRL_R_WIDGET=""
+  warp_ctrl_r_binding="$(bindkey -M main '^R' 2>/dev/null)"
+  if [[ "$warp_ctrl_r_binding" == '"^R" '* ]]; then
+    warp_ctrl_r_widget="${warp_ctrl_r_binding#\"^R\" }"
+    case "$warp_ctrl_r_widget" in
+      fzf-history-widget)
+        _WARP_EXTERNAL_CTRL_R_WIDGET="$warp_ctrl_r_widget"
+        shell_plugins+=(fzf)
+        ;;
+      atuin-search|atuin-search-viins|atuin-search-vicmd|_atuin_search_widget)
+        _WARP_EXTERNAL_CTRL_R_WIDGET="$warp_ctrl_r_widget"
+        shell_plugins+=(atuin)
+        ;;
+    esac
+  fi
+
   if kernel_name="$(uname)"; then
     if [[ "$kernel_name" == "Darwin" ]]; then
       os_category="MacOS"
@@ -1379,14 +1485,10 @@ esac
     # note we don''t use zparseopts here because of combined option parameters
     # with arguments like -default- confuse it.
     #
-    # -d can be passed on its own (e.g. from _arguments) or clustered with other short
-    # flags (e.g. -ld from _describe). Match any flag token consisting of a leading -,
-    # zero or more letters, and a trailing d, rather than requiring an exact "-d". Use
-    # (I), not (i): (i) returns one past the end (not 0) when nothing matches, which
-    # would make the presence test below true on every call. Restrict the search to the
-    # same leading flags-only prefix the -O/-A/-D check above uses (everything before the
-    # first bare "-"/"--"), so a completion candidate that happens to look like a flag
-    # (a literal "-d"/"-ld" match, e.g. for ls or find) is never mistaken for the flag.
+    # -d can be passed alone (from _arguments) or clustered (e.g. -ld from _describe), so match
+    # any flag token of the form -<letters>d, not an exact "-d". Use (I) not (i): (i) returns
+    # one-past-the-end on no match, making the presence test below always true. Restrict to the
+    # leading flags-only prefix so a candidate that looks like a flag isn't mistaken for it.
     setopt localoptions extendedglob
     local -a __flags
     __flags=(${@[1,(i)(-|--)]})
@@ -1402,8 +1504,7 @@ esac
         fi
     fi
 
-    # capture completions by injecting -A parameter into the compadd call.
-    # this takes care of matching for us.
+    # Capture completions by injecting -A parameter into the compadd call. This takes care of matching for us.
     builtin compadd -A __hits -D __dscr "$@"
 
     setopt localoptions norcexpandparam extendedglob
@@ -1426,33 +1527,88 @@ esac
     # this is the point where we have all matches in $__hits and all
     # descriptions in $__dscr!
 
+    # $PREFIX is the part of the current word these matches replace, except when the completion
+    # function reported part of it as a display-only hint via `-p`/`-P` (parsed into $hpre/$apre).
+    # `_path_files` does this for a multi-component path: it sets $PREFIX to the whole remaining
+    # path (`/et` for `cd /et`) but the matches are bare basenames (`etc`), so the real replaced
+    # text is $PREFIX minus that hint prefix (`et`). Reporting the whole $PREFIX would name a span
+    # no candidate starts with, which the client filters out -- Tab silently doing nothing.
+    local __hint_prefix="${(v)apre}${(v)hpre}"
+    local __replaced_prefix="$PREFIX"
+    if [[ -n $__hint_prefix && $PREFIX == "${__hint_prefix}"* ]]; then
+        __replaced_prefix="${PREFIX#$__hint_prefix}"
+    fi
+
+    # Native completions only complete up to the cursor, so there's no $SUFFIX and
+    # $__replaced_prefix is a trailing substring of the line, in the exact characters typed: its
+    # start is the line length minus its own.
+    #
+    # The wire format is byte offsets, but zsh's `${#...}` counts characters, not bytes, once the
+    # line has non-ASCII text (the same class of bug as PowerShell's UTF-16 offsets). `LC_ALL=C`
+    # makes it count bytes; nothing later in this function counts characters, so scoping it here is
+    # fine.
+    local LC_ALL=C
+    local __span_start=$(( ${#_WARP_NATIVE_COMPLETIONS_LINE} - ${#__replaced_prefix} ))
+    local __span_len=${#__replaced_prefix}
+    warp_mark_replacement_span_for_compadd_override $__span_start $__span_len
+
     # display all matches
+    #
+    # $asuf (compadd's -S) is inserted after every match -- e.g. `_arguments` passes -S '=' for
+    # `--color=` so the option and value join. $hsuf (-s) is its display-only counterpart, so
+    # only $asuf belongs in the inserted text. Without it, `--color` for `ls --col` loses its `=`.
+    local asuf_str="${(v)asuf}"
     local dsuf dscr
+    local __warp_hex_match __warp_hex_dscr
     for i in {1..$#__hits}; do
-        # add a dir suffix?
-        (( dirsuf )) && [[ -d $__hits[$i] ]] && dsuf=/ || dsuf=
+        # Add a dir suffix? Test the real path, not the bare basename: $__hits[$i] is a basename
+        # only when $__hint_prefix is non-empty, so testing it alone resolves against $PWD and
+        # gives a wrong `/` whenever $PWD differs. The `${~...}` flag forces tilde/glob expansion,
+        # since a `~` from parameter substitution is otherwise left literal and the -d test would
+        # fail for a `~`-relative directory.
+        (( dirsuf )) && [[ -d ${~__hint_prefix}$__hits[$i] ]] && dsuf=/ || dsuf=
         # description to be displayed afterwards
         (( $#__dscr >= $i )) && dscr="${${__dscr[$i]}##$__hits[$i] #}" || dscr=""
 
-        local match="$__hits[$i]$dsuf"
+        local match="$__hits[$i]$dsuf$asuf_str"
 
-        print -n "\e]9280;C"$OSC_PARAM_SEPARATOR$match$OSC_END
-        print -n "\e]9280;D?description"$OSC_PARAM_SEPARATOR$dscr$OSC_END
+        # A capture-only compadd (-A/-D) never adds to zsh's real match list, so _main_complete
+        # concludes every completer failed and runs the whole `completer` list, and _path_files
+        # compadds once per tag -- both re-emit identical rows. Dedup per request on the full
+        # emitted identity (replacement span + inserted text + description) so identical rows
+        # collapse, while a same-name/different-description pair survives (keying on the name alone
+        # would drop the latter -- the silent loss a dedup must avoid).
+        local __dedup_key="${__span_start},${__span_len}"$'\x1f'"${match}"$'\x1f'"${dscr}"
+        if (( ${+_WARP_SEEN_COMPLETIONS[$__dedup_key]} )); then
+            continue
+        fi
+        _WARP_SEEN_COMPLETIONS[$__dedup_key]=1
+
+        warp_completions_hex_encode_into __warp_hex_match "$match"
+        print -n "\e]9280;C"$OSC_PARAM_SEPARATOR$__warp_hex_match$OSC_END
+        if [[ -n "$dscr" ]]; then
+            warp_completions_hex_encode_into __warp_hex_dscr "$dscr"
+            print -n "\e]9280;D?description"$OSC_PARAM_SEPARATOR$__warp_hex_dscr$OSC_END
+        fi
     done
   }
 
   # Marks the start of completions generation using a custom OSC.
-  # Expects the `format` as the first positional argument.
   function warp_mark_start_of_completions () {
-    printf '\e]9280;A;%s\a' $1
-  }
-
-  function warp_mark_start_of_completions_for_list_choices () {
-    warp_mark_start_of_completions 'raw'
+    printf '\e]9280;A\a'
   }
 
   function warp_mark_start_of_completions_for_compadd_override () {
-    warp_mark_start_of_completions 'incrementally_typed'
+    warp_mark_start_of_completions
+    # Start of a completion request: reset the per-request dedup set consulted in the compadd
+    # override, so candidates are only deduped within a single request.
+    typeset -gA _WARP_SEEN_COMPLETIONS
+    _WARP_SEEN_COMPLETIONS=()
+  }
+
+  # Reports the byte-offset range of the line that the matches replace.
+  function warp_mark_replacement_span_for_compadd_override () {
+    printf '\e]9280;S;%s,%s\a' $1 $2
   }
 
   # Marks the end of completions generation using a custom OSC.
@@ -1472,92 +1628,123 @@ esac
     COLUMNS=500 _generic
   }
 
-  # Lists completion matches via the builtin list-choices widget.
-  function warp_complete_via_list_choices () {
-    # Start by reading in the completion buffer.
-    zle warp_read_completion_buffer
-
-    # Adding a post-hook here is not helpful because
-    # it doesn't tell us when the completions have all been _listed_.
-    # So instead, we unset ALWAYS_LAST_PROMPT so that the prompt
-    # is always returned and then use prompt markers to determine
-    # when completions output is finished.
-    unsetopt ALWAYS_LAST_PROMPT
-    compprefuncs=( warp_mark_start_of_completions_for_list_choices )
-    zle warp_complete_via_list_choices_internal
-    BUFFER=""
-  }
-
-  # Gathers completion matches by overriding compadd
-  # and emitting the completions directly there.
-  function warp_complete_via_compadd_override () {
-    # Start by reading in the completion buffer.
-    zle warp_read_completion_buffer
-
-    compprefuncs=( warp_mark_start_of_completions_for_compadd_override )
-    comppostfuncs=( warp_mark_end_of_completions )
-    COMPADD_OVERRIDE=true
-    zle warp_complete_via_compadd_override_internal
-    BUFFER=""
-    unset COMPADD_OVERRIDE
-  }
-
-  function warp_read_completion_buffer() {
-    # Read data from the terminal into a temporary variable and set it as the
-    # current zle buffer.  We want to prevent anything visible from being sent
-    # to the terminal (it would be treated as background output), so we use -s
-    # to suppress echoing and send an OSC as the synchronization signal (so the
-    # terminal knows when to send the input buffer that needs completions).
-    local TEMP
-    IFS= read -d $'\4' -s "$(echo -e "TEMP?\e]9280;P\a")" < /dev/tty
-    BUFFER="$TEMP"
-
-    # We push and pop the buffer stack to get zle to properly treat the buffer
-    # as the data for the completer run.  Without this, the completer will
-    # attempt to complete on an empty string.
-    #
-    # We use DCS start and end markers to swallow the line editor redraw that
-    # occurs when we call `get-line`; we want to make sure it doesn't get
-    # shown in a background block.  The "a" after the DCS start sequence
-    # ensures we don't try to parse this as a JSON-encoded hook.
-    echo -n "${DCS_START}a"
-    zle push-line
-    zle get-line
-    echo -n "$DCS_END"
-  }
-  zle -N warp_read_completion_buffer
-
-  # Registers the custom completion widgets and hooks them up to
-  # the main logic for completing.
-  zle -C warp_complete_via_list_choices_internal list-choices warp_main_completer
+  # Registers the custom completion widget and hooks it up to the main logic for completing.
   zle -C warp_complete_via_compadd_override_internal list-choices warp_main_completer
 
-  # Registers widgets for generating native-shell completions 
-  # and sets up bindkeys to trigger them.
+  # Avoid grouping, which can print options after the compostfunc hook runs.
   #
-  # We use intermediate widgets rather than binding
-  # directly to the completion widgets so that we can
-  # access normal widget features (e.g. BUFFER).
-  zle -N warp_complete_via_list_choices
-  zle -N warp_complete_via_compadd_override
-  bindkey '^X' warp_complete_via_list_choices
-  bindkey '^Y' warp_complete_via_compadd_override
-
-  # Set style for the list-choices approach
-  zstyle ':completion:warp_complete_via_list_choices:*' verbose no
-  zstyle ':completion:warp_complete_via_list_choices:*' list-packed yes
-  zstyle ':completion:warp_complete_via_list_choices:*' list-rows-first yes
-  zstyle ':completion:warp_complete_via_list_choices:*' list-prompt ''
-
-  # Avoid grouping. Under certain conditions, grouping can cause options to be printed
-  # after the compostfunc hook is called.
-  zstyle ':completion:warp_complete_via_compadd_override:*' list-grouped false
-  zstyle ':completion:warp_complete_via_compadd_override:*' insert-tab false
-  zstyle ':completion:warp_complete_via_compadd_override:*' verbose yes
+  # These zstyle patterns must match on 'zle-line-init', not the widget name: this completion is
+  # driven from inside the zle-line-init hook, so $curcontext's leading component is always
+  # literally "zle-line-init" regardless of the command being completed. The earlier widget-name
+  # pattern matched nothing, silently suppressing descriptions for _describe-driven completions.
+  zstyle ':completion:zle-line-init:*' list-grouped false
+  zstyle ':completion:zle-line-init:*' insert-tab false
+  zstyle ':completion:zle-line-init:*' verbose yes
   # Setting list-separator to an empty string avoids an extra `--` from being added
   # between the hit and the description.
-  zstyle ':completion:warp_complete_via_compadd_override:*' list-separator ''
+  zstyle ':completion:zle-line-init:*' list-separator ''
 
+  # Native shell completions: foreground generator.
+  #
+  # `select` is the only builtin that lets an ordinary (non-ZLE) command reach a real ZLE
+  # completion context: a subshell, `$( )`, `( )`, a pipeline, or a backgrounded job all clear
+  # `USEZLE` so the completion widgets never run. So the request must be a foreground command in
+  # the main shell with no command substitution around the `select`, and cannot be cancelled by PID.
+  #
+  # `zle-line-init` fires once per `select` iteration. Plugins (p10k, zsh-syntax-highlighting,
+  # zsh-autosuggestions) install their own via `add-zle-hook-widget`, which binds the *widget*
+  # named `zle-line-init` to a differently-named function, so the capture below works entirely
+  # through widget names (`zle -A`/`zle -N`/`$widgets`), not `functions[...]`.
+  #
+  # Our widget stays permanently bound to `zle-line-init` for the session rather than being torn
+  # down per request: tearing down races chained hooks that rebind it, and leaving it bound
+  # without a guard can alias it to itself and recurse. It always chains to whatever was bound
+  # before, so it is transparent on ordinary prompt reads. The reentrancy guard below makes this
+  # safe regardless of the order in which deferred plugin loaders rebind the hook.
+  function _warp_native_completions_zle_line_init () {
+    if (( _WARP_NATIVE_COMPLETIONS_ZLE_LINE_INIT_RUNNING )); then
+      return 0
+    fi
+    _WARP_NATIVE_COMPLETIONS_ZLE_LINE_INIT_RUNNING=1
+    {
+      # zle-line-init can fire more than once while we own the widget
+      if (( ! _WARP_NATIVE_COMPLETIONS_ARMED )); then
+        (( ${+widgets[_warp_saved_zle_line_init]} )) && zle _warp_saved_zle_line_init
+        return 0
+      fi
+      _WARP_NATIVE_COMPLETIONS_ARMED=0
+
+      BUFFER=$_WARP_NATIVE_COMPLETIONS_LINE
+      CURSOR=${#BUFFER}
+
+      # Chain to whatever was bound to zle-line-init before we took it over, if anything.
+      (( ${+widgets[_warp_saved_zle_line_init]} )) && zle _warp_saved_zle_line_init
+
+      compprefuncs=( warp_mark_start_of_completions_for_compadd_override )
+      comppostfuncs=( warp_mark_end_of_completions )
+      COMPADD_OVERRIDE=true
+      zle warp_complete_via_compadd_override_internal
+      unset COMPADD_OVERRIDE
+
+      # A single-space throwaway buffer (rather than an empty one) is what `select`
+      # reliably accepts as ending its one read iteration without re-prompting.
+      BUFFER=' '
+      CURSOR=1
+      zle accept-line
+    } always {
+      _WARP_NATIVE_COMPLETIONS_ZLE_LINE_INIT_RUNNING=0
+    }
+  }
+
+  # Native shell completions generator command for zsh; the only argument is the hex-encoded
+  # command line to complete. Emits the same OSC 9280 protocol as the compadd shim above. Unlike
+  # `warp_run_generator_command`, this must run in the foreground in the main shell (never
+  # backgrounded or in command substitution) so a `select` can reach a real ZLE completion
+  # context, and so it cannot be cancelled by PID. See the "Native shell completions: foreground
+  # generator" comment above `_warp_native_completions_zle_line_init`.
+  warp_run_generator_command_native_completions() {
+    _WARP_GENERATOR_COMMAND=1
+    _USER_PRECMD_FUNCTIONS=($precmd_functions)
+    precmd_functions=(${(M)precmd_functions:#*(warp|p9k)*})
+
+    local line=$(warp_hex_decode_string "$1")
+
+    if [[ -z ${line//[[:space:]]/} ]] || ! { [[ -o zle ]] && [[ -o interactive ]] && [[ "$TERM" != emacs ]] }; then
+      printf '\e]9280;A\a'
+      printf '\e]9280;B\a'
+      return
+    fi
+
+    _WARP_NATIVE_COMPLETIONS_LINE=$line
+    _WARP_NATIVE_COMPLETIONS_ARMED=1
+
+    # Take over zle-line-init for this select, saving whatever was bound to it under a private
+    # widget name so it can be chained. Skip if it's already our own capture widget (left from a
+    # prior request, since it is never torn down) -- there'd be nothing new to save.
+    if [[ "${widgets[zle-line-init]:-}" != user:_warp_native_completions_zle_line_init ]]; then
+      if (( ${+widgets[zle-line-init]} )); then
+        zle -A zle-line-init _warp_saved_zle_line_init
+      fi
+      zle -N zle-line-init _warp_native_completions_zle_line_init
+    fi
+
+    local PS3='' REPLY
+    # Swallow the line editor redraw the `select` causes with the same DCS bracketing
+    # `warp_read_completion_buffer` uses above. A byte sequence starting with ESC ends DCS
+    # passthrough, so this only swallows what precedes the first one.
+    echo -n "${DCS_START}a"
+    { select _ in 1; do break; done } 2>/dev/null
+    echo -n "$DCS_END"
+
+    # Fail safe: if the capture widget never ran (some other zle-line-init fired, or `select`
+    # never entered ZLE), the armed flag would hijack the next real prompt read. Clear it and
+    # answer with zero matches so the client always gets a response.
+    if (( _WARP_NATIVE_COMPLETIONS_ARMED )); then
+      _WARP_NATIVE_COMPLETIONS_ARMED=0
+      printf '\e]9280;A\a'
+      printf '\e]9280;B\a'
+    fi
+  }
 
   function warp_bootstrapped () {
     # Note that for now we don't support dynamically changing HISTFILE within a session.

@@ -1,36 +1,21 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use itertools::Itertools;
+pub use secret_redaction::{
+    SECRET_REDACTION_REPLACEMENT_CHARACTER, find_secrets_in_text, find_secrets_in_text_with_levels,
+};
 use similar::DiffableStr;
-use warp_terminal::model::secrets::find_secrets_in_text_with_levels_using_regex;
-use warpui::elements::{MouseStateHandle, PartialClickableElement, SecretRange};
+use string_offset::StringRange;
+use warpui::elements::{MouseStateHandle, PartialClickableElement};
 use warpui::platform::Cursor;
 
 use super::{AIBlockAction, TextLocation};
 use crate::ai::agent::{AIAgentOutput, AIAgentTextSection, AgentOutputText};
-use crate::terminal::model::secrets::{SECRETS_REGEX, SecretLevel, SecretsRegex};
-
-pub const SECRET_REDACTION_REPLACEMENT_CHARACTER: &str = "*";
-
-/// Returns the ranges of detected secrets in the given text.
-pub(crate) fn find_secrets_in_text(text: &str) -> Vec<SecretRange> {
-    find_secrets_in_text_with_levels(text)
-        .into_iter()
-        .map(|(range, _level)| range)
-        .collect()
-}
-
-/// Returns the ranges of detected secrets in the given text along with their SecretLevel.
-pub(crate) fn find_secrets_in_text_with_levels(text: &str) -> Vec<(SecretRange, SecretLevel)> {
-    let secrets_regex: Arc<SecretsRegex> = { SECRETS_REGEX.lock().clone() };
-
-    find_secrets_in_text_with_levels_using_regex(text, &secrets_regex)
-}
+use crate::terminal::model::secrets::SecretLevel;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct SecretLocation {
-    pub secret_range: SecretRange,
+    pub secret_range: StringRange,
     pub location: TextLocation,
 }
 
@@ -44,7 +29,7 @@ pub struct Secret {
 
 #[derive(Default, Debug)]
 pub struct DetectedSecretsInTextLocation {
-    pub detected_secrets: HashMap<SecretRange, Secret>,
+    pub detected_secrets: HashMap<StringRange, Secret>,
 }
 
 #[derive(Default, Debug)]
@@ -82,14 +67,14 @@ impl SecretRedactionState {
         self.currently_hovered_secret_location.as_ref()
     }
 
-    pub fn has_open_tooltip(&self, location: &TextLocation, range: &SecretRange) -> bool {
+    pub fn has_open_tooltip(&self, location: &TextLocation, range: &StringRange) -> bool {
         self.open_tooltip_location()
             .is_some_and(|tooltip_location| {
                 tooltip_location.location == *location && tooltip_location.secret_range == *range
             })
     }
 
-    pub fn is_hovered(&self, location: &TextLocation, range: &SecretRange) -> bool {
+    pub fn is_hovered(&self, location: &TextLocation, range: &StringRange) -> bool {
         self.hovered_location().is_some_and(|tooltip_location| {
             tooltip_location.location == *location && tooltip_location.secret_range == *range
         })
@@ -130,7 +115,7 @@ impl SecretRedactionState {
     pub fn show_secret_tooltip(
         &mut self,
         location: &TextLocation,
-        secret_range: &SecretRange,
+        secret_range: &StringRange,
     ) -> Option<&mut Secret> {
         self.secret_location_open_tooltip = Some(SecretLocation {
             secret_range: secret_range.clone(),
@@ -146,7 +131,7 @@ impl SecretRedactionState {
     pub fn set_obfuscated(
         &mut self,
         location: &TextLocation,
-        secret_range: &SecretRange,
+        secret_range: &StringRange,
         is_obfuscated: bool,
     ) {
         if let Some(hoverable_secret_mut) = self.get_secret_mut(location, secret_range) {
@@ -157,7 +142,7 @@ impl SecretRedactionState {
     pub fn set_hover_state_for_secret(
         &mut self,
         location: &TextLocation,
-        secret_range: &SecretRange,
+        secret_range: &StringRange,
         is_hovering: bool,
     ) {
         if is_hovering {
@@ -185,7 +170,7 @@ impl SecretRedactionState {
     fn get_secret_mut(
         &mut self,
         location: &TextLocation,
-        secret_range: &SecretRange,
+        secret_range: &StringRange,
     ) -> Option<&mut Secret> {
         self.detected_secrets
             .get_mut(location)
@@ -430,7 +415,7 @@ impl SecretRedactionState {
                         let adjusted_char_start = text[..adjusted_byte_start].chars().count();
                         let adjusted_char_end = text[..adjusted_byte_end].chars().count();
 
-                        let adjusted_secret_range = SecretRange {
+                        let adjusted_secret_range = StringRange {
                             char_range: adjusted_char_start..adjusted_char_end,
                             byte_range: adjusted_byte_start..adjusted_byte_end,
                         };
@@ -571,7 +556,7 @@ pub(crate) fn redact_secrets_in_element<T: PartialClickableElement>(
     should_hide: bool,
 ) -> T {
     // Collect the secrets into a Vec, so we can reverse sort them by starting byte position.
-    let secrets: std::iter::Rev<std::vec::IntoIter<(SecretRange, Secret)>> = detected_secrets
+    let secrets: std::iter::Rev<std::vec::IntoIter<(StringRange, Secret)>> = detected_secrets
         .detected_secrets
         .iter()
         .map(|(range, hoverable)| (range.clone(), hoverable.clone()))

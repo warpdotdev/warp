@@ -1,11 +1,18 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use warp_cli::environment::EnvironmentCreateArgs;
 use warpui::App;
 
 use super::{
-    classify_agent_mode_base_model_id, parse_ambient_task_id, validate_agent_mode_base_model_id,
+    EnvironmentChoice, classify_agent_mode_base_model_id, parse_ambient_task_id,
+    validate_agent_mode_base_model_id, validate_agent_mode_base_model_id_for_scope,
 };
 use crate::LaunchMode;
+use crate::ai::cloud_environments::{
+    AmbientAgentEnvironment, CloudAmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel,
+    environment_matches_scope,
+};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::llms::{
     AvailableLLMs, LLMContextWindow, LLMId, LLMInfo, LLMPreferences, LLMProvider, LLMUsageMetadata,
@@ -15,13 +22,147 @@ use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{CloudObjectMetadata, CloudObjectPermissions, Owner};
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::team::MockTeamClient;
+use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::sync_queue::SyncQueue;
 use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workspaces::team::{Team, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{
+    TeamContextForOperation, TeamlessScopeForTest, UserWorkspaces,
+};
+use crate::workspaces::workspace::{Workspace, WorkspaceUid};
+fn environment_with_owner(
+    sync_id: SyncId,
+    name: &str,
+    owner: Owner,
+) -> CloudAmbientAgentEnvironment {
+    let environment = AmbientAgentEnvironment::new(
+        name.to_string(),
+        None,
+        Vec::new(),
+        "ubuntu:latest".to_string(),
+        Vec::new(),
+    );
+    let mut permissions = CloudObjectPermissions::mock_personal();
+    permissions.owner = owner;
+    CloudAmbientAgentEnvironment::new(
+        sync_id,
+        CloudAmbientAgentEnvironmentModel::new(environment),
+        CloudObjectMetadata::mock(),
+        permissions,
+    )
+}
+
+#[test]
+fn environment_matching_respects_user_owned_policy() {
+    let selected_team_uid = ServerId::from(123);
+    let other_team_uid = ServerId::from(456);
+    let selected_scope = TeamContextForOperation::new_for_test(selected_team_uid);
+    let personal_environment = environment_with_owner(
+        SyncId::ServerId(ServerId::from(1)),
+        "Personal",
+        Owner::mock_current_user(),
+    );
+    let selected_team_environment = environment_with_owner(
+        SyncId::ServerId(ServerId::from(2)),
+        "Selected team",
+        Owner::Team {
+            team_uid: selected_team_uid,
+        },
+    );
+    let other_team_environment = environment_with_owner(
+        SyncId::ServerId(ServerId::from(3)),
+        "Other team",
+        Owner::Team {
+            team_uid: other_team_uid,
+        },
+    );
+
+    assert!(environment_matches_scope(
+        &personal_environment,
+        &selected_scope,
+        true
+    ));
+    assert!(environment_matches_scope(
+        &selected_team_environment,
+        &selected_scope,
+        true
+    ));
+    assert!(!environment_matches_scope(
+        &other_team_environment,
+        &selected_scope,
+        true
+    ));
+
+    assert!(environment_matches_scope(
+        &personal_environment,
+        &TeamlessScopeForTest,
+        false
+    ));
+    assert!(!environment_matches_scope(
+        &selected_team_environment,
+        &TeamlessScopeForTest,
+        false
+    ));
+    assert!(!environment_matches_scope(
+        &personal_environment,
+        &selected_scope,
+        false
+    ));
+    assert!(environment_matches_scope(
+        &selected_team_environment,
+        &selected_scope,
+        false
+    ));
+    assert!(!environment_matches_scope(
+        &other_team_environment,
+        &selected_scope,
+        false
+    ));
+}
+#[test]
+fn explicit_environment_id_remains_resource_authoritative() {
+    App::test((), |mut app| async move {
+        let cloud_model = app.add_singleton_model(CloudModel::mock);
+        let server_id = ServerId::from(123);
+        let sync_id = SyncId::ServerId(server_id);
+        let team_environment = environment_with_owner(
+            sync_id,
+            "Other team",
+            Owner::Team {
+                team_uid: ServerId::from(456),
+            },
+        );
+        cloud_model.update(&mut app, |model, ctx| {
+            model.create_object(sync_id, team_environment, ctx);
+        });
+
+        let choice = app.update(|ctx| {
+            EnvironmentChoice::resolve_for_create(
+                EnvironmentCreateArgs {
+                    environment: Some(server_id.to_string()),
+                    no_environment: false,
+                },
+                &TeamlessScopeForTest,
+                ctx,
+            )
+        });
+
+        assert_eq!(
+            choice.unwrap(),
+            EnvironmentChoice::Environment {
+                id: server_id.to_string(),
+                name: "Other team".to_string(),
+            }
+        );
+    });
+}
 
 #[test]
 fn parse_ambient_task_id_accepts_valid_ids() {
@@ -116,6 +257,96 @@ fn available(default_id: &str, choices: Vec<LLMInfo>) -> AvailableLLMs {
     AvailableLLMs::new(default_id.into(), choices, None).expect("choices are non-empty")
 }
 
+fn models_with_agent_model(id: &str) -> ModelsByFeature {
+    ModelsByFeature {
+        agent_mode: available(id, vec![server_llm(id)]),
+        coding: available("coding", vec![server_llm("coding")]),
+        cli_agent: None,
+        computer_use: None,
+    }
+}
+
+#[test]
+fn model_validation_reads_the_selected_team_catalog() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+
+        let team_uid = ServerId::from(7);
+        let team = Team {
+            uid: team_uid,
+            name: "Selected team".to_string(),
+            color: None,
+            invite_link: None,
+            members: vec![],
+            pending_email_invites: vec![],
+            invite_link_domain_restrictions: vec![],
+            billing_metadata: Default::default(),
+            stripe_customer_id: None,
+            settings: Default::default(),
+            feature_model_choice: models_with_agent_model("team-model"),
+            is_eligible_for_discovery: false,
+            has_billing_history: false,
+            visibility: TeamVisibility::Open,
+        };
+        let mut workspace = Workspace::from_local_cache(
+            WorkspaceUid::from(ServerId::from(1)),
+            "Workspace".to_string(),
+            None,
+            None,
+        );
+        workspace.feature_model_choice = models_with_agent_model("personal-model");
+        workspace.teams = vec![team];
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(MockTeamClient::new()),
+                Arc::new(MockWorkspaceClient::new()),
+                vec![workspace],
+                ctx,
+            )
+        });
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+        app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        app.add_singleton_model(LLMPreferences::new);
+
+        app.read(|ctx| {
+            let team_scope = TeamContextForOperation::new_for_test(team_uid);
+            assert!(
+                validate_agent_mode_base_model_id_for_scope("team-model", &team_scope, ctx).is_ok()
+            );
+            assert!(
+                validate_agent_mode_base_model_id_for_scope("personal-model", &team_scope, ctx)
+                    .is_err()
+            );
+            assert!(
+                validate_agent_mode_base_model_id_for_scope(
+                    "personal-model",
+                    &TeamlessScopeForTest,
+                    ctx
+                )
+                .is_ok()
+            );
+            assert!(
+                validate_agent_mode_base_model_id_for_scope(
+                    "team-model",
+                    &TeamlessScopeForTest,
+                    ctx
+                )
+                .is_err()
+            );
+        });
+    });
+}
+
 #[test]
 fn update_feature_model_choices_clears_unavailable_flag_after_failed_fetch() {
     App::test((), |mut app| async move {
@@ -138,11 +369,11 @@ fn update_feature_model_choices_clears_unavailable_flag_after_failed_fetch() {
         // Simulate a failed authed fetch: the server was unhealthy, so the
         // agent-mode model list is marked unavailable.
         llm_preferences.update(&mut app, |preferences, _| {
-            preferences.set_agent_mode_models_unavailable(true);
+            preferences.set_agent_mode_models_unavailable_for_team_uid(None, true);
         });
         assert!(
             llm_preferences.read(&app, |preferences, _| {
-                preferences.agent_mode_models_unavailable()
+                preferences.agent_mode_models_unavailable(&TeamlessScopeForTest)
             }),
             "flag should be set after a failed fetch"
         );
@@ -183,7 +414,7 @@ fn update_feature_model_choices_clears_unavailable_flag_after_failed_fetch() {
         // The successful update must have cleared the unavailable flag ...
         assert!(
             !llm_preferences.read(&app, |preferences, _| {
-                preferences.agent_mode_models_unavailable()
+                preferences.agent_mode_models_unavailable(&TeamlessScopeForTest)
             }),
             "a successful model-list update through update_feature_model_choices must clear the unavailable flag"
         );

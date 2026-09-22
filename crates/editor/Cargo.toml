@@ -37,7 +37,7 @@ mermaid_to_svg.workspace = true
 parking_lot.workspace = true
 rand.workspace = true
 rangemap.workspace = true
-regex-automata = "0.4.3"
+regex-automata.workspace = true
 regex-syntax = "0.8.2"
 urlocator.workspace = true
 serde.workspace = true
@@ -76,3 +76,7 @@ harness = false
 name = "char_cell_bench"
 harness = false
 required-features = ["test-util"]
+
+[[bench]]
+name = "text_layout_bench"
+harness = false

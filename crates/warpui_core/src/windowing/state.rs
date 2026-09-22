@@ -127,11 +127,6 @@ impl WindowManager {
             .set_all_windows_background_blur_radius(blur_radius_pixels)
     }
 
-    pub fn set_all_windows_background_blur_texture(&self, use_blur_texture: bool) {
-        self.platform
-            .set_all_windows_background_blur_texture(use_blur_texture)
-    }
-
     pub fn set_window_title(&self, window_id: WindowId, title: &str) {
         self.platform.set_window_title(window_id, title)
     }
@@ -151,6 +146,14 @@ impl WindowManager {
 
     pub fn active_window(&self) -> Option<WindowId> {
         self.platform.active_window_id()
+    }
+
+    /// Test-only helper: returns the window most recently passed to
+    /// `show_window_and_focus_app`. Only the `test` platform tracks this; other platforms
+    /// report focus via `active_window` instead.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn last_window_shown_and_focused_for_test(&self) -> Option<WindowId> {
+        self.platform.last_window_shown_and_focused_for_test()
     }
 
     // Get the rect of the current active screen. We need the bound instead of just

@@ -29,6 +29,7 @@ pub mod list_managed_secrets;
 pub mod list_warp_dev_images;
 pub mod managed_secret_config;
 pub mod rerank_fragments;
+pub mod setup_failure_debug_authorization;
 pub mod suggest_cloud_environment_image;
 pub mod sync_merkle_tree;
 pub mod task_attachments;

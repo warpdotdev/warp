@@ -4,8 +4,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use warp_core::features::FeatureFlag;
 use warp_core::settings::{ChangeEventReason, Setting};
+use warp_core::user_preferences::GetUserPreferences;
 use warp_errors::report_error;
-use warp_graphql::workspace::FeatureModelChoice;
 use warpui::{
     AppContext, Entity, ModelContext, SingletonEntity, Tracked, ViewContext, WeakViewHandle,
     WindowId,
@@ -13,15 +13,15 @@ use warpui::{
 
 #[cfg(test)]
 use super::team::TeamVisibility;
-use super::team::{DiscoverableTeam, MembershipRole, Team};
+use super::team::{DiscoverableTeam, DiscoveryOptions, MembershipRole, Team};
 #[cfg(test)]
 use super::workspace::WorkspaceMemberUsageInfo;
 use super::workspace::{
-    AdminEnablementSetting, EnterpriseSecretRegex, HostEnablementSetting,
-    UgcCollectionEnablementSetting, Workspace, WorkspaceUid,
+    AdminEnablementSetting, EnterpriseSecretRegex, UgcCollectionEnablementSetting, Workspace,
+    WorkspaceUid,
 };
 use crate::ai::credit_availability::AICreditAvailability;
-use crate::ai::llms::LLMModelHost;
+use crate::ai::llms::{AvailableLLMs, MODELS_BY_FEATURE_CACHE_KEY, ModelsByFeature};
 use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::channel::ChannelState;
@@ -47,10 +47,14 @@ use crate::workspaces::workspace::{
 };
 pub(crate) mod billing_workspace_settings;
 pub(crate) mod team_workspace_settings;
-pub(crate) use team_workspace_settings::TeamContextForOperation;
+pub(crate) use team_workspace_settings::TeamContextForOperationResolver;
 #[cfg(test)]
 pub(crate) use team_workspace_settings::TeamlessScopeForTest;
-pub use team_workspace_settings::{TeamContext, TeamContextResolver, TeamScope};
+#[cfg(not(target_family = "wasm"))]
+pub(crate) use team_workspace_settings::{GeminiEnterpriseBackgroundHost, TeamScopeForCli};
+pub use team_workspace_settings::{
+    ResolvedTeamScope, TeamContext, TeamContextForOperation, TeamContextResolver, TeamScope,
+};
 
 const STRIPE_SUBSCRIPTION_INTERVAL_PAGE_PREFIX: &str = "/upgrade";
 
@@ -76,14 +80,23 @@ pub enum UserWorkspacesEvent {
     ToggleTeamDiscoverabilityRejected(anyhow::Error),
     JoinTeamWithTeamDiscoverySuccess,
     JoinTeamWithTeamDiscoveryRejected(anyhow::Error),
+    JoinTeamInWorkspaceSuccess {
+        team_uid: ServerId,
+    },
+    JoinTeamInWorkspaceRejected(anyhow::Error),
+    JoinWorkspaceFromDiscoverySuccess,
+    JoinWorkspaceFromDiscoveryRejected(anyhow::Error),
     FetchDiscoverableTeamsSuccess(Vec<DiscoverableTeam>),
-    FetchDiscoverableTeamsRejected(anyhow::Error),
+    FetchDiscoveryOptionsSuccess(DiscoveryOptions),
+    FetchDiscoveryOptionsRejected(anyhow::Error),
     TransferTeamOwnershipSuccess,
     TransferTeamOwnershipRejected(anyhow::Error),
     SetTeamMemberRoleSuccess,
     SetTeamMemberRoleRejected(anyhow::Error),
     RemoveUserFromTeamSuccess,
     RemoveUserFromTeamRejected(anyhow::Error),
+    RemoveUserFromWorkspaceSuccess,
+    RemoveUserFromWorkspaceRejected(anyhow::Error),
     UpdateWorkspaceSettingsSuccess,
     UpdateWorkspaceSettingsRejected(anyhow::Error),
     AiOveragesUpdated,
@@ -124,6 +137,10 @@ pub struct UserWorkspaces {
     /// filtered out of `workspaces` — this is the only place their purchase
     /// policy survives.
     user_purchase_policy: Option<PurchaseAddOnCreditsPolicy>,
+    /// The model catalog to fall back to when no current workspace exists: before login, or
+    /// for a logged-in user whose only workspace is the server's placeholder, which is
+    /// filtered out of `workspaces`.
+    workspaceless_models_by_feature: Option<ModelsByFeature>,
     team_client: Arc<dyn TeamClient>,
     workspace_client: Arc<dyn WorkspaceClient>,
 }
@@ -137,11 +154,6 @@ pub struct WorkspacesMetadataResponse {
     pub joinable_teams: Vec<DiscoverableTeam>,
     /// The list of experiments applicable to the user.
     pub experiments: Option<Vec<ServerExperiment>>,
-    /// TODO(Tyler): Post-workspaces, move this into the workspace object.
-    /// Feature model choices may change from user to user and while the app is open, so we need to periodically update this list.
-    /// It makes most sense to fetch this in workspaces which is queried every 10 minutes.
-    /// This is list of available LLM models for the user.
-    pub feature_model_choices: Option<FeatureModelChoice>,
     /// The server-authoritative AI credit availability decision, piggybacked
     /// on the metadata query so every refresh keeps the shared state fresh.
     pub ai_credit_availability: Option<AICreditAvailability>,
@@ -188,6 +200,7 @@ impl UserWorkspaces {
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
             user_purchase_policy: None,
+            workspaceless_models_by_feature: None,
             team_client,
             workspace_client,
         }
@@ -232,15 +245,37 @@ impl UserWorkspaces {
             }
         });
 
-        Self {
+        let mut me = Self {
             current_workspace_uid: current_workspace_uid.into(),
             workspaces: cached_workspaces.into(),
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
             user_purchase_policy: None,
+            workspaceless_models_by_feature: None,
             team_client,
             workspace_client,
+        };
+
+        // One-release migration: moving feature_model_choices off of `LLMPreferences` to `Workspace`.
+        // This means that on the first time the user opens a version of warp without a
+        // Workspace.feature_model_choice saved in their sqlite db, we can fall back to reading feature
+        // model choices from the old LLMPreferences cache.
+        // TODO: delete once it's safe to assume every client has fetched at least once since
+        // this migration shipped.
+        if me
+            .current_workspace()
+            .is_some_and(|workspace| workspace.feature_model_choice == ModelsByFeature::default())
+            && let Some(legacy_catalog) = migrate_legacy_feature_model_choices_cache(ctx)
+            && let Some(workspace) = me.current_workspace_mut()
+        {
+            workspace.feature_model_choice = legacy_catalog;
         }
+
+        me
+    }
+
+    pub(crate) fn set_workspaceless_models_by_feature(&mut self, models: ModelsByFeature) {
+        self.workspaceless_models_by_feature = Some(models);
     }
 
     pub fn upgrade_link(user_id: UserUid) -> String {
@@ -326,6 +361,16 @@ impl UserWorkspaces {
         if self.team_uid_for_window(window_id) != previous_team_uid {
             ctx.emit(UserWorkspacesEvent::WindowTeamChanged { window_id });
         }
+        ctx.notify();
+    }
+
+    fn update_discovery_options(
+        &mut self,
+        options: DiscoveryOptions,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.joinable_teams.clone_from(&options.legacy_teams);
+        ctx.emit(UserWorkspacesEvent::FetchDiscoveryOptionsSuccess(options));
         ctx.notify();
     }
     pub fn inherited_or_default_team_uid(
@@ -623,112 +668,6 @@ impl UserWorkspaces {
         }
     }
 
-    pub fn aws_bedrock_host_settings(&self) -> Option<&super::workspace::LlmHostSettings> {
-        self.current_workspace().and_then(|workspace| {
-            workspace
-                .settings
-                .llm_settings
-                .host_configs
-                .get(&LLMModelHost::AwsBedrock)
-        })
-    }
-
-    /// Did the admin enable AWS Bedrock for the current workspace?
-    pub fn is_aws_bedrock_available_from_workspace(&self) -> bool {
-        self.current_workspace().is_some_and(|workspace| {
-            workspace.settings.llm_settings.enabled
-                && self
-                    .aws_bedrock_host_settings()
-                    .is_some_and(|settings| settings.enabled)
-        })
-    }
-    pub fn aws_bedrock_host_enablement_setting(&self) -> HostEnablementSetting {
-        self.aws_bedrock_host_settings()
-            .map(|settings| settings.enablement_setting.clone())
-            .unwrap_or_default()
-    }
-
-    pub fn is_aws_bedrock_credentials_toggleable(&self) -> bool {
-        matches!(
-            self.aws_bedrock_host_enablement_setting(),
-            HostEnablementSetting::RespectUserSetting
-        )
-    }
-
-    pub fn is_aws_bedrock_credentials_enabled(&self, app: &AppContext) -> bool {
-        // i.e. did the admin go and toggle on aws bedrock in the admin panel?
-        if !self.is_aws_bedrock_available_from_workspace() {
-            return false;
-        }
-
-        match self.aws_bedrock_host_enablement_setting() {
-            HostEnablementSetting::Enforce => true,
-            HostEnablementSetting::RespectUserSetting => *AISettings::as_ref(app)
-                .aws_bedrock_credentials_enabled
-                .value(),
-        }
-    }
-
-    pub fn gemini_enterprise_host_settings(&self) -> Option<&super::workspace::LlmHostSettings> {
-        self.current_workspace().and_then(|workspace| {
-            workspace
-                .settings
-                .llm_settings
-                .host_configs
-                .get(&LLMModelHost::GeminiEnterprise)
-        })
-    }
-
-    /// Did the admin enable Gemini Enterprise (GEAP) for the current workspace?
-    pub fn is_gemini_enterprise_available_from_workspace(&self) -> bool {
-        self.current_workspace().is_some_and(|workspace| {
-            workspace.settings.llm_settings.enabled
-                && self
-                    .gemini_enterprise_host_settings()
-                    .is_some_and(|settings| settings.enabled)
-        })
-    }
-
-    pub fn gemini_enterprise_host_enablement_setting(&self) -> HostEnablementSetting {
-        self.gemini_enterprise_host_settings()
-            .map(|settings| settings.enablement_setting.clone())
-            .unwrap_or_default()
-    }
-
-    pub fn is_gemini_enterprise_credentials_toggleable(&self) -> bool {
-        matches!(
-            self.gemini_enterprise_host_enablement_setting(),
-            HostEnablementSetting::RespectUserSetting
-        )
-    }
-
-    /// Whether Gemini Enterprise (GEAP) credentials should be minted and attached for the
-    /// current user. Anonymous/logged-out guard from [`Self::is_byo_api_key_enabled`]:
-    /// a GEAP credential mint is rooted in the user's Warp session, so without one
-    /// there is nothing to mint from.
-    pub fn is_gemini_enterprise_credentials_enabled(&self, app: &AppContext) -> bool {
-        if !FeatureFlag::GeminiEnterprise.is_enabled() {
-            return false;
-        }
-        if AuthStateProvider::as_ref(app)
-            .get()
-            .is_anonymous_or_logged_out()
-        {
-            return false;
-        }
-        // i.e. did the admin toggle on Gemini Enterprise in the admin panel?
-        if !self.is_gemini_enterprise_available_from_workspace() {
-            return false;
-        }
-
-        match self.gemini_enterprise_host_enablement_setting() {
-            HostEnablementSetting::Enforce => true,
-            HostEnablementSetting::RespectUserSetting => *AISettings::as_ref(app)
-                .gemini_enterprise_credentials_enabled
-                .value(),
-        }
-    }
-
     // Returns a Vec of the user's active spaces, based on their
     // team membership.
     pub fn team_spaces(&self) -> Vec<Space> {
@@ -835,6 +774,16 @@ impl UserWorkspaces {
 
     pub fn has_workspaces(&self) -> bool {
         !self.workspaces.is_empty()
+    }
+
+    /// Cloud agents require a team only in native workspaces: a legacy
+    /// (non-native) workspace's teamless state is resolved by creating a
+    /// team, not by joining an existing one, so it isn't subject to this
+    /// blocker (see `TeamsPageView::page_sections_for`).
+    pub fn cloud_agents_require_team(&self) -> bool {
+        self.current_workspace().is_some_and(|workspace| {
+            workspace.is_native_workspaces_enabled() && workspace.teams.is_empty()
+        })
     }
 
     pub fn update_workspaces(&mut self, workspaces: Vec<Workspace>, ctx: &mut ModelContext<Self>) {
@@ -1008,6 +957,58 @@ impl UserWorkspaces {
                     .await
             },
             Self::on_remove_user_from_team,
+        );
+    }
+
+    fn on_fetch_discovery_options(
+        &mut self,
+        options: Result<DiscoveryOptions, anyhow::Error>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match options {
+            Err(err) => ctx.emit(UserWorkspacesEvent::FetchDiscoveryOptionsRejected(err)),
+            Ok(options) => self.update_discovery_options(options, ctx),
+        }
+    }
+
+    pub fn fetch_discovery_options(&mut self, ctx: &mut ModelContext<Self>) {
+        let team_client = self.team_client.clone();
+        let _ = ctx.spawn(
+            async move { team_client.get_discovery_options().await },
+            Self::on_fetch_discovery_options,
+        );
+    }
+
+    fn on_remove_user_from_workspace(
+        &mut self,
+        result: Result<WorkspacesMetadataWithPricing>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match result {
+            Err(err) => ctx.emit(UserWorkspacesEvent::RemoveUserFromWorkspaceRejected(err)),
+            Ok(result) => {
+                self.on_workspaces_updated(Ok(result), ctx);
+                ctx.emit(UserWorkspacesEvent::RemoveUserFromWorkspaceSuccess);
+            }
+        };
+        ctx.notify();
+    }
+
+    pub fn remove_user_from_workspace(
+        &mut self,
+        user_uid: UserUid,
+        workspace_uid: WorkspaceUid,
+        entrypoint: CloudObjectEventEntrypoint,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let workspace_client = self.workspace_client.clone();
+        let _ = ctx.spawn(
+            async move {
+                workspace_client
+                    .remove_user_from_workspace(user_uid, workspace_uid, entrypoint)
+                    .await
+            },
+            Self::on_remove_user_from_workspace,
         );
     }
 
@@ -1221,25 +1222,67 @@ impl UserWorkspaces {
         );
     }
 
-    fn on_fetch_discoverable_teams(
+    fn on_join_team_in_workspace(
         &mut self,
-        teams: Result<Vec<DiscoverableTeam>, anyhow::Error>,
+        team_uid: ServerId,
+        result: Result<WorkspacesMetadataWithPricing>,
         ctx: &mut ModelContext<Self>,
     ) {
-        match teams {
-            Err(e) => ctx.emit(UserWorkspacesEvent::FetchDiscoverableTeamsRejected(e)),
-            Ok(teams) => {
-                self.update_joinable_teams(teams, ctx);
+        match result {
+            Err(err) => ctx.emit(UserWorkspacesEvent::JoinTeamInWorkspaceRejected(err)),
+            Ok(result) => {
+                self.on_workspaces_updated(Ok(result), ctx);
+                if self.is_member_of_team(team_uid) {
+                    ctx.emit(UserWorkspacesEvent::JoinTeamInWorkspaceSuccess { team_uid });
+                } else {
+                    ctx.emit(UserWorkspacesEvent::JoinTeamInWorkspaceRejected(
+                        anyhow::anyhow!("joined team missing from refreshed workspace metadata"),
+                    ));
+                }
             }
         }
+        ctx.notify();
     }
 
-    /// Make request to get list of discoverable teams for a user
-    pub fn fetch_discoverable_teams(&mut self, ctx: &mut ModelContext<Self>) {
+    pub fn join_team_in_workspace(&mut self, team_uid: ServerId, ctx: &mut ModelContext<Self>) {
         let team_client = self.team_client.clone();
         let _ = ctx.spawn(
-            async move { team_client.get_discoverable_teams().await },
-            Self::on_fetch_discoverable_teams,
+            async move { team_client.join_team_in_workspace(team_uid).await },
+            move |me, result, ctx| {
+                me.on_join_team_in_workspace(team_uid, result, ctx);
+            },
+        );
+    }
+
+    fn on_join_workspace_from_discovery(
+        &mut self,
+        result: Result<WorkspacesMetadataWithPricing>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match result {
+            Err(err) => ctx.emit(UserWorkspacesEvent::JoinWorkspaceFromDiscoveryRejected(err)),
+            Ok(result) => {
+                self.on_workspaces_updated(Ok(result), ctx);
+                ctx.emit(UserWorkspacesEvent::JoinWorkspaceFromDiscoverySuccess);
+            }
+        }
+        ctx.notify();
+    }
+
+    pub fn join_workspace_from_discovery(
+        &mut self,
+        workspace_uid: WorkspaceUid,
+        team_uid: Option<ServerId>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let team_client = self.team_client.clone();
+        let _ = ctx.spawn(
+            async move {
+                team_client
+                    .join_workspace_from_discovery(workspace_uid, team_uid)
+                    .await
+            },
+            Self::on_join_workspace_from_discovery,
         );
     }
 
@@ -1705,10 +1748,12 @@ impl UserWorkspaces {
                 pending_email_invites: vec![],
                 invite_link_domain_restrictions: vec![],
                 stripe_customer_id: None,
+                feature_model_choice: Default::default(),
                 is_eligible_for_discovery: false,
                 has_billing_history: false,
                 visibility: TeamVisibility::Open,
             }],
+            open_teams: vec![],
             members: vec![WorkspaceMember {
                 uid: owner_uid,
                 email: "test@example.com".to_string(),
@@ -1726,6 +1771,7 @@ impl UserWorkspaces {
             billing_cycle_usage: None,
             has_billing_history: false,
             settings: workspace_settings,
+            feature_model_choice: Default::default(),
             invite_link_domain_restrictions: vec![],
             pending_email_invites: vec![],
             is_eligible_for_discovery: false,
@@ -1817,6 +1863,32 @@ impl UserWorkspaces {
             },
             ctx,
         );
+    }
+}
+
+/// Reads the legacy, pre-team-keyed model catalog cache (`MODELS_BY_FEATURE_CACHE_KEY`), for
+/// the one-release migration in [`UserWorkspaces::new`]. Understands both real shapes an older
+/// client could have written: the (more recent) single `ModelsByFeature`, and (older still) a
+/// bare `AvailableLLMs`, which becomes the `agent_mode` field.
+fn migrate_legacy_feature_model_choices_cache(app: &mut AppContext) -> Option<ModelsByFeature> {
+    let value = app
+        .private_user_preferences()
+        .read_value(MODELS_BY_FEATURE_CACHE_KEY)
+        .ok()
+        .flatten()?;
+
+    match serde_json::from_str::<ModelsByFeature>(&value) {
+        Ok(models) => Some(models),
+        Err(e1) => match serde_json::from_str::<AvailableLLMs>(&value) {
+            Ok(agent_mode) => Some(ModelsByFeature {
+                agent_mode,
+                ..Default::default()
+            }),
+            Err(e2) => {
+                log::warn!("Failed to deserialize legacy cached LLMs: {e1}\n{e2}");
+                None
+            }
+        },
     }
 }
 

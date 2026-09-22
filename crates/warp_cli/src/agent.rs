@@ -12,7 +12,7 @@ use crate::environment::EnvironmentCreateArgs;
 use crate::json_filter::JsonOutput;
 use crate::mcp::MCPSpec;
 use crate::model::ModelArgs;
-use crate::scope::ObjectScope;
+use crate::scope::{ObjectScope, TeamSelection};
 use crate::share::ShareArgs;
 use crate::skill::SkillSpec;
 
@@ -48,6 +48,8 @@ pub enum RepositoryForge {
     GitHub,
     #[serde(rename = "GITLAB")]
     GitLab,
+    #[serde(rename = "AZURE_DEVOPS")]
+    AzureDevOps,
 }
 /// Server-supplied repository HEAD used to prepare an agent run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,31 +67,71 @@ impl RepositoryHeadRef {
     }
 }
 
-/// Server-supplied override for an environment repository's initial HEAD.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Canonical repository identity used by server-owned preparation instructions.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RepositoryHeadOverride {
+pub struct RepositoryIdentity {
     pub code_forge: RepositoryForge,
+    #[serde(rename = "owner")]
     pub repo_owner: String,
+    #[serde(rename = "repo")]
     pub repo_name: String,
-    pub head: RepositoryHeadRef,
 }
 
-impl RepositoryHeadOverride {
-    pub fn identity(&self) -> (RepositoryForge, &str, &str) {
+impl RepositoryIdentity {
+    pub fn identity(&self) -> (RepositoryForge, String, String) {
         (
             self.code_forge,
-            self.repo_owner.as_str(),
-            self.repo_name.as_str(),
+            self.repo_owner.to_lowercase(),
+            self.repo_name.to_lowercase(),
         )
     }
 
     fn validate(&self) -> Result<(), String> {
-        if self.repo_owner.is_empty() {
-            return Err("repo_owner must not be empty".to_string());
+        if self.repo_owner.is_empty() || self.repo_owner.trim() != self.repo_owner {
+            return Err(
+                "repo_owner must not be empty or contain surrounding whitespace".to_string(),
+            );
         }
-        if self.repo_name.is_empty() {
-            return Err("repo_name must not be empty".to_string());
+        if self.repo_name.is_empty() || self.repo_name.trim() != self.repo_name {
+            return Err(
+                "repo_name must not be empty or contain surrounding whitespace".to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+/// Server-supplied repository preparation override.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryPreparationOverride {
+    pub code_forge: RepositoryForge,
+    pub repo_owner: String,
+    pub repo_name: String,
+    pub head: RepositoryHeadRef,
+    pub clone_from: Option<RepositoryIdentity>,
+    #[serde(default)]
+    pub preserve_origin: bool,
+}
+
+impl RepositoryPreparationOverride {
+    pub fn identity(&self) -> (RepositoryForge, String, String) {
+        (
+            self.code_forge,
+            self.repo_owner.to_lowercase(),
+            self.repo_name.to_lowercase(),
+        )
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        RepositoryIdentity {
+            code_forge: self.code_forge,
+            repo_owner: self.repo_owner.clone(),
+            repo_name: self.repo_name.clone(),
+        }
+        .validate()?;
+        if let Some(clone_from) = &self.clone_from {
+            clone_from.validate()?;
         }
         match &self.head {
             RepositoryHeadRef::CommitSha(commit_sha) => {
@@ -112,18 +154,27 @@ impl RepositoryHeadOverride {
                 }
             }
         }
+        if self.clone_from.is_some() && !self.preserve_origin {
+            return Err("clone_from requires preserve_origin".to_string());
+        }
+        if self.preserve_origin && self.clone_from.is_none() {
+            return Err("preserve_origin requires clone_from".to_string());
+        }
+        if self.clone_from.is_some() && !matches!(self.head, RepositoryHeadRef::CommitSha(_)) {
+            return Err("clone_from requires an exact COMMIT_SHA repository head".to_string());
+        }
         Ok(())
     }
 }
 
-impl FromStr for RepositoryHeadOverride {
+impl FromStr for RepositoryPreparationOverride {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let head_override = serde_json::from_str::<Self>(value)
-            .map_err(|error| format!("invalid repository head override JSON: {error}"))?;
-        head_override.validate()?;
-        Ok(head_override)
+        let preparation_override = serde_json::from_str::<Self>(value)
+            .map_err(|error| format!("invalid repository preparation override JSON: {error}"))?;
+        preparation_override.validate()?;
+        Ok(preparation_override)
     }
 }
 
@@ -418,6 +469,8 @@ impl AgentCommand {
 pub struct RunAgentArgs {
     #[command(flatten)]
     pub prompt_arg: PromptArg,
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
 
     #[command(flatten)]
     pub model: ModelArgs,
@@ -581,7 +634,7 @@ pub struct RunAgentArgs {
     #[arg(long = "configure-git-credentials-with-github", hide = true, requires_all = ["task_id"])]
     pub configure_git_credentials_with_github: bool,
 
-    /// Repository HEAD override supplied by the server for this task.
+    /// Repository preparation override supplied by the server for this task.
     #[arg(
         long = "repository-head-override-json",
         value_name = "JSON",
@@ -589,7 +642,7 @@ pub struct RunAgentArgs {
         requires = "task_id",
         hide = true
     )]
-    pub repository_head_overrides: Vec<RepositoryHeadOverride>,
+    pub repository_preparation_overrides: Vec<RepositoryPreparationOverride>,
 
     /// Remove the origin remote from environment repositories after setup.
     #[arg(long = "remove-repository-origins", requires = "task_id", hide = true)]
@@ -799,6 +852,8 @@ pub enum AgentSortByArg {
 /// Arguments for listing named agents.
 #[derive(Debug, Clone, Args)]
 pub struct AgentListArgs {
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
     /// Sort field. Only supported for pretty, text, and ndjson output.
     #[arg(long = "sort-by", value_enum, value_name = "FIELD")]
     pub sort_by: Option<AgentSortByArg>,
@@ -826,6 +881,8 @@ pub struct AgentGetArgs {
 /// Arguments for creating a named agent.
 #[derive(Debug, Clone, Args)]
 pub struct AgentCreateArgs {
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
     /// Name of the agent.
     #[arg(long = "name", short = 'n')]
     pub name: String,
@@ -971,6 +1028,8 @@ pub struct AgentDeleteArgs {
 /// Arguments for listing available agent skills.
 #[derive(Debug, Clone, Args)]
 pub struct ListAgentSkillsArgs {
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
     /// List skills from a specific GitHub repository.
     ///
     /// Format: `owner/repo` or `https://github.com/owner/repo`

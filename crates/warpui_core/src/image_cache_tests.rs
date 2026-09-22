@@ -712,3 +712,245 @@ fn test_respects_max_dimensions_for_cacheoption_bysize() {
     // Assert that, when we specify a max dimension of 512, the image is resized accordingly.
     assert_eq!(image.img.dimensions(), (512, 512));
 }
+
+#[test]
+fn animated_image_get_current_frame_advances_with_elapsed_time() {
+    let asset_cache = new_asset_cache();
+    let image_cache = ImageCache::new();
+
+    // Load an animated GIF with FullAnimation behavior to get an AnimatedImage
+    let image = load_bundled_image(
+        &image_cache,
+        &asset_cache,
+        "numbers-1000ms.gif",
+        Vector2I::new(16, 16),
+        FitType::Contain,
+        AnimatedImageBehavior::FullAnimation,
+    );
+
+    let Image::Animated(animated) = image.as_ref() else {
+        panic!("Expected animated image but got static image!");
+    };
+
+    // The numbers-1000ms.gif has multiple frames with various delays
+    assert!(
+        animated.frames.len() >= 2,
+        "Expected at least 2 frames for testing"
+    );
+    assert!(animated.duration > 0, "Expected positive total duration");
+
+    let (_frame_0, remaining_0) = animated
+        .get_current_frame(0)
+        .expect("Should get frame at elapsed 0ms");
+    let (_frame_100, remaining_100) = animated
+        .get_current_frame(100)
+        .expect("Should get frame at elapsed 100ms");
+    let (_frame_500, remaining_500) = animated
+        .get_current_frame(500)
+        .expect("Should get frame at elapsed 500ms");
+
+    assert_ne!(
+        remaining_0, remaining_100,
+        "Remaining delay should differ at different elapsed times"
+    );
+    assert_ne!(
+        remaining_100, remaining_500,
+        "Remaining delay should differ at different elapsed times"
+    );
+}
+
+#[test]
+fn animated_image_get_current_frame_wraps_at_duration() {
+    let asset_cache = new_asset_cache();
+    let image_cache = ImageCache::new();
+
+    let image = load_bundled_image(
+        &image_cache,
+        &asset_cache,
+        "numbers-1000ms.gif",
+        Vector2I::new(16, 16),
+        FitType::Contain,
+        AnimatedImageBehavior::FullAnimation,
+    );
+
+    let Image::Animated(animated) = image.as_ref() else {
+        panic!("Expected animated image but got static image!");
+    };
+
+    let duration = animated.duration;
+
+    let (frame_start, _) = animated
+        .get_current_frame(0)
+        .expect("Should get frame at start");
+    let (frame_end, _) = animated
+        .get_current_frame(duration - 1)
+        .expect("Should get frame near end");
+
+    // After wrapping (elapsed >= duration), should return to start of animation
+    let (frame_wrapped_start, _) = animated
+        .get_current_frame(duration)
+        .expect("Should get frame after one complete cycle");
+    let (frame_wrapped_end, _) = animated
+        .get_current_frame(duration * 2 - 1)
+        .expect("Should get frame in second cycle");
+
+    assert!(
+        Arc::ptr_eq(&frame_start, &frame_wrapped_start),
+        "Frame at start should equal frame at wrapped start"
+    );
+
+    assert!(
+        Arc::ptr_eq(&frame_end, &frame_wrapped_end),
+        "Frame at cycle end should equal frame at next cycle end"
+    );
+}
+
+#[test]
+fn static_image_not_affected_by_animation_behavior_change() {
+    let asset_cache = new_asset_cache();
+    let image_cache = ImageCache::new();
+
+    // Load a static PNG with FullAnimation behavior (should remain static)
+    let static_full_animation = load_bundled_image(
+        &image_cache,
+        &asset_cache,
+        "local.png",
+        Vector2I::new(512, 512),
+        FitType::Cover,
+        AnimatedImageBehavior::FullAnimation,
+    );
+
+    // Load the same static PNG with FirstFramePreview behavior (should remain static)
+    let static_preview = load_bundled_image(
+        &image_cache,
+        &asset_cache,
+        "local.png",
+        Vector2I::new(512, 512),
+        FitType::Cover,
+        AnimatedImageBehavior::FirstFramePreview,
+    );
+
+    // Both should be static images
+    assert!(matches!(static_full_animation.as_ref(), Image::Static(_)));
+    assert!(matches!(static_preview.as_ref(), Image::Static(_)));
+
+    // Extract and verify they're the same image data
+    let Image::Static(full_static) = static_full_animation.as_ref() else {
+        unreachable!();
+    };
+    let Image::Static(preview_static) = static_preview.as_ref() else {
+        unreachable!();
+    };
+
+    // Both should have the same dimensions
+    assert_eq!(
+        full_static.img.dimensions(),
+        preview_static.img.dimensions()
+    );
+}
+
+#[test]
+fn animated_gif_shows_first_frame_preview_when_requested() {
+    let asset_cache = new_asset_cache();
+    let image_cache = ImageCache::new();
+
+    // Request FirstFramePreview behavior for an animated GIF
+    let preview = load_bundled_image(
+        &image_cache,
+        &asset_cache,
+        "numbers-1000ms.gif",
+        Vector2I::new(16, 16),
+        FitType::Contain,
+        AnimatedImageBehavior::FirstFramePreview,
+    );
+
+    // Should get a static image (the first frame)
+    let Image::Static(_) = preview.as_ref() else {
+        panic!("Expected static image for FirstFramePreview");
+    };
+
+    // But the underlying asset in asset_cache should still be the full AnimatedBitmap
+    let asset: AssetState<ImageType> = asset_cache.load_asset(AssetSource::Bundled {
+        path: "numbers-1000ms.gif",
+    });
+    let AssetState::Loaded { data } = asset else {
+        panic!("Bundled asset should be available immediately!");
+    };
+    assert!(matches!(data.as_ref(), ImageType::AnimatedBitmap { .. }));
+}
+
+#[test]
+fn animated_image_remaining_delay_decreases_within_frame() {
+    let asset_cache = new_asset_cache();
+    let image_cache = ImageCache::new();
+
+    let image = load_bundled_image(
+        &image_cache,
+        &asset_cache,
+        "numbers-1000ms.gif",
+        Vector2I::new(16, 16),
+        FitType::Contain,
+        AnimatedImageBehavior::FullAnimation,
+    );
+
+    let Image::Animated(animated) = image.as_ref() else {
+        panic!("Expected animated image");
+    };
+
+    // Assumes the gif's first frame lasts at least 50ms.
+    let (_, remaining_at_start) = animated
+        .get_current_frame(0)
+        .expect("Should get frame at 0ms");
+    let (_, remaining_at_50) = animated
+        .get_current_frame(50)
+        .expect("Should get frame at 50ms");
+
+    assert!(
+        remaining_at_50 < remaining_at_start,
+        "Remaining delay should decrease as we progress through a frame"
+    );
+}
+
+#[test]
+fn animated_webp_also_advances_frames() {
+    let asset_cache = new_asset_cache();
+    let image_cache = ImageCache::new();
+
+    let image = load_bundled_image(
+        &image_cache,
+        &asset_cache,
+        "animated.webp",
+        Vector2I::new(16, 16),
+        FitType::Contain,
+        AnimatedImageBehavior::FullAnimation,
+    );
+
+    let Image::Animated(animated) = image.as_ref() else {
+        panic!("Expected animated image");
+    };
+
+    assert!(
+        animated.frames.len() > 1,
+        "WebP should have multiple frames"
+    );
+
+    let (frame_0, _) = animated
+        .get_current_frame(0)
+        .expect("Should get frame at 0ms");
+    let (frame_near_end, _) = animated
+        .get_current_frame(animated.duration - 1)
+        .expect("Should get frame near end");
+
+    assert!(
+        !Arc::ptr_eq(&frame_0, &frame_near_end) || animated.frames.len() == 1,
+        "WebP animation should traverse different frames or only have one frame"
+    );
+
+    let (frame_wrapped, _) = animated
+        .get_current_frame(animated.duration)
+        .expect("Should get frame after one cycle");
+    assert!(
+        Arc::ptr_eq(&frame_0, &frame_wrapped),
+        "Frame should wrap back to start after duration"
+    );
+}

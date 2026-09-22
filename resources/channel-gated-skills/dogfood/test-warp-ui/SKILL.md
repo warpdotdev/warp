@@ -2,14 +2,14 @@
 name: test-warp-ui
 description: >
   Guides testing Warp UI features and changes using the computer use tool.
-  Use this skill only when the computer_use tool is available to the agent.
+  Use this skill only when computer-use testing was requested (explicit request or accepted offer) and the computer_use tool is available to the agent.
   Covers launching Warp and verifying UI behavior.
 user-invocable: false
 ---
 
 # Computer Use for Warp UI Testing
 
-Use the `computer_use` tool to visually test that Warp looks and behaves as intended after UI changes.
+Use the `computer_use` tool to visually test that Warp looks and behaves as intended after UI changes, when computer-use testing was requested.
 
 ## Running Warp
 

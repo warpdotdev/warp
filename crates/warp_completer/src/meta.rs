@@ -94,10 +94,18 @@ impl Span {
         self.end
     }
 
-    pub fn slice<'a>(&self, source: &'a str) -> &'a str {
+    /// Returns this span with both ends pulled inside `source` and floored to char boundaries, so
+    /// the result is always safe to index `source` with. This is the range [`Self::slice`] cuts.
+    pub fn clamped_to(&self, source: &str) -> Span {
         let len = source.len();
         let start = floor_char_boundary(source, self.start.min(len));
         let end = floor_char_boundary(source, self.end.min(len)).max(start);
+
+        Span { start, end }
+    }
+
+    pub fn slice<'a>(&self, source: &'a str) -> &'a str {
+        let Span { start, end } = self.clamped_to(source);
 
         &source[start..end]
     }

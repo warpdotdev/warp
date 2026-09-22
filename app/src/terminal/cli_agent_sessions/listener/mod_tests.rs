@@ -5,7 +5,8 @@ use crate::terminal::cli_agent_sessions::event::{
 
 #[test]
 fn codex_parses_any_text_as_stop() {
-    let event = CodexSessionHandler::parse_osc9_text("Agent turn complete").unwrap();
+    let event = Osc9FallbackSessionHandler::parse_osc9_text(CLIAgent::Codex, "Agent turn complete")
+        .unwrap();
     assert_eq!(event.event, CLIAgentEventType::Stop);
     assert_eq!(event.agent, CLIAgent::Codex);
     assert_eq!(event.payload.query.as_deref(), Some("Agent turn complete"));
@@ -13,9 +14,11 @@ fn codex_parses_any_text_as_stop() {
 
 #[test]
 fn codex_body_becomes_query() {
-    let event =
-        CodexSessionHandler::parse_osc9_text("I've updated the README with the new instructions.")
-            .unwrap();
+    let event = Osc9FallbackSessionHandler::parse_osc9_text(
+        CLIAgent::Codex,
+        "I've updated the README with the new instructions.",
+    )
+    .unwrap();
     assert_eq!(event.event, CLIAgentEventType::Stop);
     assert_eq!(
         event.payload.query.as_deref(),
@@ -25,8 +28,11 @@ fn codex_body_becomes_query() {
 
 #[test]
 fn codex_approval_text_still_becomes_stop() {
-    let event =
-        CodexSessionHandler::parse_osc9_text("Approval requested: rm -rf /tmp/foo").unwrap();
+    let event = Osc9FallbackSessionHandler::parse_osc9_text(
+        CLIAgent::Codex,
+        "Approval requested: rm -rf /tmp/foo",
+    )
+    .unwrap();
     assert_eq!(event.event, CLIAgentEventType::Stop);
     assert_eq!(
         event.payload.query.as_deref(),
@@ -36,13 +42,15 @@ fn codex_approval_text_still_becomes_stop() {
 
 #[test]
 fn codex_ignores_empty_body() {
-    assert!(CodexSessionHandler::parse_osc9_text("").is_none());
-    assert!(CodexSessionHandler::parse_osc9_text("   ").is_none());
+    assert!(Osc9FallbackSessionHandler::parse_osc9_text(CLIAgent::Codex, "").is_none());
+    assert!(Osc9FallbackSessionHandler::parse_osc9_text(CLIAgent::Codex, "   ").is_none());
 }
 
 #[test]
 fn codex_try_parse_ignores_titled_notifications() {
-    let mut handler = CodexSessionHandler;
+    let mut handler = Osc9FallbackSessionHandler {
+        agent: CLIAgent::Codex,
+    };
     assert!(
         handler
             .try_parse(Some("some-title"), "Agent turn complete", false)
@@ -52,7 +60,9 @@ fn codex_try_parse_ignores_titled_notifications() {
 
 #[test]
 fn codex_try_parse_handles_osc9() {
-    let mut handler = CodexSessionHandler;
+    let mut handler = Osc9FallbackSessionHandler {
+        agent: CLIAgent::Codex,
+    };
     let event = handler
         .try_parse(None, "Agent turn complete", false)
         .unwrap();
@@ -62,7 +72,9 @@ fn codex_try_parse_handles_osc9() {
 #[test]
 fn codex_try_parse_ignores_osc9_when_plugin_already_active() {
     let _guard = FeatureFlag::CodexPlugin.override_enabled(true);
-    let mut handler = CodexSessionHandler;
+    let mut handler = Osc9FallbackSessionHandler {
+        agent: CLIAgent::Codex,
+    };
     let body = r#"{"v":1,"agent":"codex","event":"permission_request","summary":"Approve?","tool_name":"Bash"}"#;
 
     let event = handler
@@ -81,7 +93,9 @@ fn codex_try_parse_ignores_osc9_when_plugin_already_active() {
 #[test]
 fn codex_try_parse_ignores_structured_event_without_codex_plugin() {
     let _guard = FeatureFlag::CodexPlugin.override_enabled(false);
-    let mut handler = CodexSessionHandler;
+    let mut handler = Osc9FallbackSessionHandler {
+        agent: CLIAgent::Codex,
+    };
     let body = r#"{"v":1,"agent":"codex","event":"permission_request","summary":"Approve?","tool_name":"Bash"}"#;
 
     assert!(
@@ -98,7 +112,9 @@ fn codex_try_parse_ignores_structured_event_without_codex_plugin() {
 
 #[test]
 fn codex_try_parse_ignores_other_structured_agents() {
-    let mut handler = CodexSessionHandler;
+    let mut handler = Osc9FallbackSessionHandler {
+        agent: CLIAgent::Codex,
+    };
     let body = r#"{"v":1,"agent":"claude","event":"stop"}"#;
 
     assert!(
@@ -116,6 +132,43 @@ fn codex_try_parse_ignores_other_structured_agents() {
 #[test]
 fn auggie_is_supported() {
     assert!(is_agent_supported(&CLIAgent::Auggie));
+}
+
+#[test]
+fn grok_listener_prefers_rich_events_over_osc9_fallback() {
+    let mut handler = create_handler(&CLIAgent::Grok).expect("Grok should support notifications");
+    let osc9 = handler
+        .try_parse(None, "Turn complete · Grok", false)
+        .unwrap();
+    assert_eq!(osc9.event, CLIAgentEventType::Stop);
+    assert_eq!(osc9.agent, CLIAgent::Grok);
+    assert_eq!(osc9.payload.query.as_deref(), Some("Turn complete · Grok"));
+    assert_eq!(osc9.source, CLIAgentEventSource::CodexOsc9Fallback);
+
+    let body = r#"{"v":1,"agent":"grok","event":"session_start","session_id":"s1","plugin_version":"1.0.0"}"#;
+    let rich = handler
+        .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), body, false)
+        .unwrap();
+    assert_eq!(rich.event, CLIAgentEventType::SessionStart);
+    assert_eq!(rich.agent, CLIAgent::Grok);
+    assert_eq!(rich.payload.plugin_version.as_deref(), Some("1.0.0"));
+
+    assert!(
+        handler
+            .try_parse(None, "Turn complete · Grok", true)
+            .is_none()
+    );
+}
+
+#[test]
+fn grok_try_parse_ignores_other_agents() {
+    let mut handler = create_handler(&CLIAgent::Grok).expect("Grok should support notifications");
+    let body = r#"{"v":1,"agent":"claude","event":"stop"}"#;
+    assert!(
+        handler
+            .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), body, false)
+            .is_none()
+    );
 }
 
 #[test]
