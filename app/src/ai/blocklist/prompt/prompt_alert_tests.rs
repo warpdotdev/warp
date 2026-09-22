@@ -194,7 +194,7 @@ fn test_spend_limit_presentation_identifies_scope() {
     );
     assert_eq!(
         PromptAlertState::EnterpriseUnassignedUserSpendLimitReached.primary_text(),
-        "Spend limit reached for members without a team."
+        "Spend limit reached for members without a team"
     );
     assert_eq!(
         PromptAlertState::EnterpriseWorkspaceSpendLimitReached.primary_text(),
@@ -214,7 +214,7 @@ fn test_spend_limit_tooltips_identify_scope() {
     );
     assert_eq!(
         PromptAlertState::EnterpriseUnassignedUserSpendLimitReached.tooltip_text(),
-        Some("Spend limit reached for members without a team.")
+        Some("Spend limit reached for members without a team")
     );
     assert_eq!(
         PromptAlertState::EnterpriseWorkspaceSpendLimitReached.tooltip_text(),
@@ -224,12 +224,15 @@ fn test_spend_limit_tooltips_identify_scope() {
 
 #[test]
 fn test_team_spend_limit_cta_uses_selected_team_authority() {
+    let workspace_member = workspace_with_role(MembershipRole::User);
     let workspace_admin = workspace_with_role(MembershipRole::Admin);
     let team_member = team_with_role(MembershipRole::User);
+    let team_admin = team_with_role(MembershipRole::Admin);
+
     assert_eq!(
         enterprise_limit_cta(
             &PromptAlertState::EnterpriseTeamSpendLimitReached,
-            Some(&workspace_admin),
+            Some(&workspace_member),
             Some(&team_member),
             Some(TEST_EMAIL),
         ),
@@ -237,12 +240,25 @@ fn test_team_spend_limit_cta_uses_selected_team_authority() {
             ", contact a team admin"
         )])
     );
-
-    let team_admin = team_with_role(MembershipRole::Admin);
     assert_eq!(
         enterprise_limit_cta(
             &PromptAlertState::EnterpriseTeamSpendLimitReached,
             Some(&workspace_admin),
+            Some(&team_member),
+            Some(TEST_EMAIL),
+        ),
+        Some(vec![
+            FormattedTextFragment::plain_text("  "),
+            FormattedTextFragment::hyperlink(
+                "Manage limit",
+                AdminActions::admin_panel_link_for_team(ServerId::from(TEST_TEAM_UID)),
+            ),
+        ])
+    );
+    assert_eq!(
+        enterprise_limit_cta(
+            &PromptAlertState::EnterpriseTeamSpendLimitReached,
+            Some(&workspace_member),
             Some(&team_admin),
             Some(TEST_EMAIL),
         ),
@@ -258,12 +274,15 @@ fn test_team_spend_limit_cta_uses_selected_team_authority() {
 
 #[test]
 fn test_individual_spend_limit_cta_uses_selected_team_authority() {
+    let workspace_member = workspace_with_role(MembershipRole::User);
     let workspace_admin = workspace_with_role(MembershipRole::Admin);
     let team_member = team_with_role(MembershipRole::User);
+    let team_admin = team_with_role(MembershipRole::Admin);
+
     assert_eq!(
         enterprise_limit_cta(
             &PromptAlertState::EnterpriseIndividualSpendLimitReached,
-            Some(&workspace_admin),
+            Some(&workspace_member),
             Some(&team_member),
             Some(TEST_EMAIL),
         ),
@@ -271,12 +290,25 @@ fn test_individual_spend_limit_cta_uses_selected_team_authority() {
             ", contact a team admin"
         )])
     );
-
-    let team_admin = team_with_role(MembershipRole::Admin);
     assert_eq!(
         enterprise_limit_cta(
             &PromptAlertState::EnterpriseIndividualSpendLimitReached,
             Some(&workspace_admin),
+            Some(&team_member),
+            Some(TEST_EMAIL),
+        ),
+        Some(vec![
+            FormattedTextFragment::plain_text("  "),
+            FormattedTextFragment::hyperlink(
+                "Manage limit",
+                AdminActions::admin_panel_link_for_team(ServerId::from(TEST_TEAM_UID)),
+            ),
+        ])
+    );
+    assert_eq!(
+        enterprise_limit_cta(
+            &PromptAlertState::EnterpriseIndividualSpendLimitReached,
+            Some(&workspace_member),
             Some(&team_admin),
             Some(TEST_EMAIL),
         ),

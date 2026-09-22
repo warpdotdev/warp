@@ -34,7 +34,7 @@ const MONTHLY_SPEND_LIMIT_PRIMARY_TEXT: &str = "You've reached your monthly spen
 const TEAM_SPEND_LIMIT_PRIMARY_TEXT: &str = "You've reached your team's spend limit";
 const INDIVIDUAL_SPEND_LIMIT_PRIMARY_TEXT: &str = "You've reached the spend limit set for you";
 const UNASSIGNED_USER_SPEND_LIMIT_PRIMARY_TEXT: &str =
-    "Spend limit reached for members without a team.";
+    "Spend limit reached for members without a team";
 const WORKSPACE_SPEND_LIMIT_PRIMARY_TEXT: &str = "You've reached this workspace's spend limit";
 
 const ANONYMOUS_USER_REQUEST_LIMIT_ACTION_TEXT: &str = "Sign up for more AI credits";
@@ -64,8 +64,12 @@ fn enterprise_limit_cta(
     let (admin_panel_link, non_admin_text, can_join_team) = match state {
         PromptAlertState::EnterpriseTeamSpendLimitReached
         | PromptAlertState::EnterpriseIndividualSpendLimitReached => (
-            team.filter(|team| team.has_admin_permissions(user_email))
-                .map(|team| AdminActions::admin_panel_link_for_team(team.uid)),
+            team.filter(|team| {
+                team.has_admin_permissions(user_email)
+                    || workspace
+                        .is_some_and(|workspace| workspace.is_native_workspaces_admin(user_email))
+            })
+            .map(|team| AdminActions::admin_panel_link_for_team(team.uid)),
             NON_ADMIN_CONTACT_ADMIN_TEXT,
             false,
         ),
