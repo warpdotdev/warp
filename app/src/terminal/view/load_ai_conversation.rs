@@ -55,21 +55,13 @@ use crate::terminal::view::{
 };
 use crate::util::bindings::keybinding_name_to_keystroke;
 
-/// Maximum number of restored AI exchanges materialized into AI blocks per conversation when
-/// restoring a pane, keeping the most recent. Mirrors `AIConversation`'s
-/// `MAX_RESTORED_COMMAND_BLOCKS` cap so a restored pane doesn't come back with far more (or
-/// fewer) AI blocks than command blocks.
+/// Maximum number of restored AI exchanges materialized into AI blocks per conversation.
+/// Mirrors `AIConversation`'s `MAX_RESTORED_COMMAND_BLOCKS`.
 const MAX_RESTORED_AI_EXCHANGES_PER_CONVERSATION: usize = 100;
 
-/// Maximum total number of restored AI exchanges materialized into AI blocks for one pane,
-/// across *all* of its conversations combined, keeping the most recent overall. A pane restores
-/// every conversation live on its terminal surface with no cap on how many conversations that
-/// is, so the per-conversation cap alone is unbounded in the number of conversations: a pane
-/// with N conversations could still materialize up to N *
-/// `MAX_RESTORED_AI_EXCHANGES_PER_CONVERSATION` exchanges. Set to 5x the per-conversation cap:
-/// a pane holding more than a handful of conversations is unusual, so this comfortably covers
-/// ordinary use while still giving the pathological case (e.g. dozens of conversations on one
-/// surface) a fixed ceiling instead of a total that grows with conversation count.
+/// Maximum total restored AI exchanges materialized into AI blocks for one pane, across all its
+/// conversations combined. A pane restoring more than a handful of conversations is unusual, so
+/// 5x the per-conversation cap bounds the pathological case without affecting ordinary use.
 const MAX_RESTORED_AI_EXCHANGES_PER_PANE: usize = 5 * MAX_RESTORED_AI_EXCHANGES_PER_CONVERSATION;
 
 /// Returns the most recent `max` of `exchanges` ordered by `start_time`, without cloning any
@@ -83,18 +75,10 @@ fn most_recent_exchanges(
     exchanges.split_off(start)
 }
 
-/// Collects exchanges across all restored conversations for one pane, applying two bounds before
-/// cloning anything: each conversation is first capped to its most recent
-/// `MAX_RESTORED_AI_EXCHANGES_PER_CONVERSATION` exchanges (so one oversized conversation can't
-/// crowd out the others), then the combined, `start_time`-sorted result across all conversations
-/// is capped to the most recent `MAX_RESTORED_AI_EXCHANGES_PER_PANE` overall (so a pane with many
-/// conversations still has a fixed ceiling). A conversation entirely older than the pane-wide
-/// cutoff contributes no exchanges and shows no AI blocks after restoration — the same
-/// most-recent-wins tradeoff the per-conversation cap already makes, just applied pane-wide.
-///
-/// Truncating before cloning matters at both levels: `AIAgentExchange::clone` deep-copies its
-/// `Shared<AIAgentOutput>`, so cloning every exchange first and dropping the excess afterward
-/// would still pay for the full history's worth of clones.
+/// Applies `MAX_RESTORED_AI_EXCHANGES_PER_CONVERSATION` and `MAX_RESTORED_AI_EXCHANGES_PER_PANE`,
+/// returning the exchanges to materialize, sorted by `start_time`. Both caps must be applied
+/// before cloning: `AIAgentExchange::clone` deep-copies its `Shared<AIAgentOutput>`, so cloning
+/// first and truncating after would still pay for the full history's worth of clones.
 fn collect_bounded_exchanges_for_restoration(
     restored_conversations: &[RestoredAIConversation],
 ) -> Vec<(AIAgentExchange, AIConversationId)> {
