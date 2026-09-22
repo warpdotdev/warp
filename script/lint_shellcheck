@@ -19,7 +19,6 @@ done
 
 if ! command -v shellcheck >/dev/null 2>&1; then
   echo "No ShellCheck installation detected."
-  echo "Install it with ./script/bootstrap, brew install shellcheck, or sudo apt-get install shellcheck."
   if [[ "$CI_MODE" == true || "${GITHUB_ACTIONS:-}" == true ]]; then
     echo "Aborting because ShellCheck is required in CI." >&2
     exit 1
