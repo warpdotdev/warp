@@ -1,0 +1,3 @@
+# The SSH option parser only handles options that make a session non-interactive.
+# Keep the bootstrap's established declaration-and-assignment style.
+disable=SC2213,SC2155

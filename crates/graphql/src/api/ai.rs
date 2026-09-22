@@ -21,6 +21,7 @@ pub enum AICreditAvailabilityDenialReason {
     Delinquent,
     EnterpriseTeamSpendLimitHit,
     EnterprisePerUserSpendLimitHit,
+    EnterprisePerUnassignedUserSpendLimitHit,
     EnterpriseWorkspaceSpendLimitHit,
     #[cynic(fallback)]
     Other(String),

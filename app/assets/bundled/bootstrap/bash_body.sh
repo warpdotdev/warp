@@ -38,6 +38,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
     # Attempt to cd to the desired initial working directory, swallowing any
     # errors.  If this fails, the user will end up in their home directory.
     if [[ ! -z "$WARP_INITIAL_WORKING_DIR" ]]; then
+        # shellcheck disable=SC2164
         cd "$WARP_INITIAL_WORKING_DIR" >/dev/null 2>&1
         unset WARP_INITIAL_WORKING_DIR
     fi
@@ -188,6 +189,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
       # This must be double-quoted to prevent bash word-splitting, which would effectively replace
       # newlines and tabs with spaces, potentially invalidating the syntactical correctness of the
       # command.
+      # shellcheck disable=SC2124
       local command="${@:2}"
       # Bash cannot handle null characters in variables or command substitutions, so hex encode the
       # output immediately before it's stored anywhere. This hex encoding must be done inline --
@@ -258,7 +260,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
       # To minimize latency and prevent the user from being blocked from entering a command,
       # cache the user's precmd_functions and only register warp_precmd. In the warp_precmd
       # execution following this generator command, the user's precmd_functions are restored.
-      _USER_PRECMD_FUNCTIONS=(${precmd_functions[@]})
+      _USER_PRECMD_FUNCTIONS=("${precmd_functions[@]}")
       precmd_functions=(warp_precmd)
 
       # $@ must be double-quoted to prevent word-splitting, which would cause the given command to
@@ -454,11 +456,11 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
           done < $_WARP_GENERATOR_PIDS_STARTED_TMP_FILE
 
           # If the array is not empty, kill the ongoing pids.
-          if [[ ! -z $pids ]]; then
+          if (( ${#pids[@]} > 0 )); then
             # Suppress stderr output; kill writes to stderr if any of the given
             # PIDS are not running (which might rarely be the case due to race
             # conditions in checking which PIDS to cancel and this kill command.
-            kill -9 $pids >/dev/null 2>/dev/null
+            kill -9 "${pids[@]}" >/dev/null 2>&1
           fi 
         fi
     }
@@ -468,6 +470,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
     # Usage warp_title "title"
     # Users can disable the auto title if they chose to by setting WARP_DISABLE_AUTO_TITLE.
     warp_title () {
+      # shellcheck disable=SC2034
       DISABLE_AUTO_TITLE="1"
 
       # truncating the title's len to 25 characters and leading ".."
@@ -597,7 +600,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         if [ ! -z  $_WARP_GENERATOR_COMMAND ]; then
             # Restore the user's precmd_functions, since they were un-registered prior to executing
             # the generator.
-            precmd_functions=(${_USER_PRECMD_FUNCTIONS[@]})
+            precmd_functions=("${_USER_PRECMD_FUNCTIONS[@]}")
 
             unset _WARP_GENERATOR_COMMAND
             warp_send_json_message "{\"hook\": \"Precmd\", \"value\": {
@@ -926,14 +929,14 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
     # Accepts one argument: shell [bash, zsh, fish (future)]
     init_shell_hook () {
       init_shell="{\"hook\": \"InitShell\", \"value\": {\"shell\": \"$1\"}}"
-      echo $(warp_hex_encode_string "$init_shell")
+      echo "$(warp_hex_encode_string "$init_shell")"
     }
 
     # Checks whether the current version of bash is at least as high as the expected ($1) one.
     # To match rest of our codebase, it returns "1" if the bash version is higher or equal, and 
     # 0 otherwise.
     warp_at_least_bash_version () {
-      if [[ $(printf '%s\n%s\n' "$BASH_VERSION" "$1" | command -p sort -rVC ; echo $?) -eq 0 ]]; then
+      if [[ "$(printf '%s\n%s\n' "$BASH_VERSION" "$1" | command -p sort -rVC ; echo $?)" -eq 0 ]]; then
         echo "1"
       else 
         echo "0"
@@ -1205,7 +1208,9 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         }
 
         function warp_ssh_helper() {
+            # shellcheck disable=SC2034
             init_shell_bash=$(init_shell_hook "bash")
+            # shellcheck disable=SC2034
             init_shell_zsh=$(init_shell_hook "zsh")
             local remote_session_id=$(command -p od -An -N8 -tu8 /dev/urandom 2>/dev/null | command -p tr -d ' \n')
             if [[ -z "$remote_session_id" || "$remote_session_id" == "0" ]]; then
@@ -1427,11 +1432,11 @@ esac
     # set initial values.
     #
     # For more context, see: https://github.com/warpdotdev/Warp/issues/1262
-    if [[ $HISTFILESIZE == $WARP_INITIAL_HISTFILESIZE ]]; then
+    if [[ $HISTFILESIZE == "$WARP_INITIAL_HISTFILESIZE" ]]; then
         unset HISTFILESIZE
     fi
     unset WARP_INITIAL_HISTFILESIZE
-    if [[ $HISTSIZE == $WARP_INITIAL_HISTSIZE ]]; then
+    if [[ $HISTSIZE == "$WARP_INITIAL_HISTSIZE" ]]; then
         unset HISTSIZE
     fi
     unset WARP_INITIAL_HISTSIZE
@@ -1548,7 +1553,7 @@ esac
     precmd_functions+=(warp_set_title_idle_on_precmd)
     preexec_functions+=(warp_set_title_active_on_preexec)
 
-    if declare -f user_prompt_command 2>&1 >/dev/null; then
+    if declare -F user_prompt_command >/dev/null; then
         precmd_functions+=(user_prompt_command)
     fi
 
@@ -1575,6 +1580,7 @@ esac
       # atuin >= 18.10 binds ctrl-r through the indirect dispatcher above rather than a plain
       # `bind -x`. Instead use atuin's own init-time flag ($__atuin_bind_ctrl_r) plus
         # __atuin_history being defined.
+      # shellcheck disable=SC2154
       if [ -z "$_WARP_EXTERNAL_CTRL_R_WIDGET" ] && [ "$__atuin_bind_ctrl_r" = true ] &&
         declare -F __atuin_history >/dev/null; then
         _WARP_EXTERNAL_CTRL_R_WIDGET="__atuin_history"
