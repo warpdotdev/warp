@@ -717,7 +717,8 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
       fzf-history-widget)
         result="$(fc -rl 1 \
           | command -p awk '{ cmd=$0; sub(/^[ \t]*[0-9]+\**[ \t]+/, "", cmd); if (!seen[cmd]++) print cmd }' \
-          | fzf --scheme=history --tiebreak=index +m)"
+          | FZF_DEFAULT_OPTS=$(__fzf_defaults "" "${FZF_CTRL_R_OPTS-}") \
+            FZF_DEFAULT_OPTS_FILE='' fzf --scheme=history --tiebreak=index +m)"
         ;;
       atuin-search|atuin-search-viins|atuin-search-vicmd|_atuin_search_widget)
         # atuin writes its TUI to stdout; under plain command substitution that's a pipe, and
