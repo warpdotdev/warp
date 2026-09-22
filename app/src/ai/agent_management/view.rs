@@ -1881,7 +1881,7 @@ impl AgentManagementView {
         if let Some(credits) = entry.display.request_usage {
             metadata_parts.push(format_request_usage(
                 credits,
-                entry.display.request_cost_in_cents,
+                entry.display.cost_in_cents,
                 AISettings::as_ref(app).usage_display_unit,
             ));
         }

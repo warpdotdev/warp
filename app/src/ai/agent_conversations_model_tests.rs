@@ -1064,7 +1064,7 @@ fn test_task_entry_includes_server_reported_dollar_cost() {
             let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
 
             assert_eq!(entries[0].display.request_usage, Some(15.0));
-            assert_eq!(entries[0].display.request_cost_in_cents, Some(27.0));
+            assert_eq!(entries[0].display.cost_in_cents, Some(27.0));
         });
     });
 }
@@ -1202,7 +1202,7 @@ fn test_local_conversation_entry_uses_charged_usage_dollar_total() {
             let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
 
             assert_eq!(entries[0].display.request_usage, Some(20.0));
-            assert_eq!(entries[0].display.request_cost_in_cents, Some(36.0));
+            assert_eq!(entries[0].display.cost_in_cents, Some(36.0));
         });
     });
 }

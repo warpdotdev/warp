@@ -501,7 +501,7 @@ impl ConversationDetailsData {
                 .or(entry.display.request_usage);
             let cost_in_cents = task
                 .and_then(AmbientAgentTask::cost_in_cents)
-                .or(entry.display.request_cost_in_cents);
+                .or(entry.display.cost_in_cents);
             let skill_spec = task
                 .and_then(|task| task.agent_config_snapshot.as_ref())
                 .and_then(|config| config.skill_spec.as_ref())
@@ -558,7 +558,7 @@ impl ConversationDetailsData {
             created_at,
             credits: entry.display.request_usage,
             total_tokens: None,
-            cost_in_cents: entry.display.request_cost_in_cents,
+            cost_in_cents: entry.display.cost_in_cents,
             run_time: None,
             artifacts: entry.display.artifacts.clone(),
             open_action,
