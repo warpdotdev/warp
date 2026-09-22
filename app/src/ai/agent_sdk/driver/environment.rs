@@ -23,6 +23,7 @@ use warpui::{ModelContext, ModelSpawner, SingletonEntity};
 
 #[cfg(feature = "local_fs")]
 use super::cache_setup;
+use super::failure_output;
 use super::terminal::TerminalDriver;
 use super::{AgentDriverError, Harness, git_credentials};
 use crate::ai::agent_sdk::environment_snapshot::{
@@ -30,20 +31,26 @@ use crate::ai::agent_sdk::environment_snapshot::{
 };
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::cloud_environments::SourceRepo;
+use crate::terminal::model::BlockId;
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
 
 const CODEBASE_INDEX_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 const ENVIRONMENT_SNAPSHOT_CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
 const CLONE_FAILURE_IDENTITY_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
+const CLONE_FAILURE_OUTPUT_TRUNCATION_MARKER: &str = "\n… clone output truncated …\n";
 
 #[derive(Debug, thiserror::Error)]
 pub enum PrepareEnvironmentError {
     #[error("Invalid runtime state - please file a bug report.")]
     InvalidRuntimeState,
-    #[error("Failed to clone {repo_name}{identity_diagnostics}")]
+    #[error(
+        "Failed to clone {repo_name}{}{identity_diagnostics}",
+        clone_failure_output_suffix(.output.as_deref())
+    )]
     CloneRepo {
         repo_name: String,
+        output: Option<String>,
         identity_diagnostics: CloneFailureIdentityDiagnostics,
     },
     #[error("Failed to check out {checkout_ref} in {repo_name}{identity_diagnostics}")]
@@ -74,6 +81,16 @@ pub enum PrepareEnvironmentError {
     UnsupportedRepositoryForge { repo_name: String },
     #[error("Terminal driver error while preparing environment: {source}")]
     TerminalDriver { source: AgentDriverError },
+}
+fn clone_failure_output_suffix(output: Option<&str>) -> String {
+    output
+        .filter(|output| !output.is_empty())
+        .map(|output| format!(": {output}"))
+        .unwrap_or_default()
+}
+
+fn prepare_clone_failure_output(output: &str) -> String {
+    failure_output::prepare_failure_output(output, CLONE_FAILURE_OUTPUT_TRUNCATION_MARKER)
 }
 
 fn parse_resolved_head_sha(line: &str) -> Option<String> {
@@ -505,8 +522,8 @@ async fn prepare_environment_impl(
                         full: ("Running setup command: {command}")
                     );
 
-                    let exit_code = execute_command(command, spawner).await?;
-                    if exit_code != 0.into() {
+                    let command_result = execute_command(command, spawner).await?;
+                    if command_result.exit_code != 0.into() {
                         return Err(PrepareEnvironmentError::SetupCommand {
                             command: command_for_error,
                         });
@@ -837,12 +854,14 @@ async fn collect_clone_failure_identity_diagnostics(
 async fn clone_repo_failure(
     request: &RepositoryCloneRequest,
     repo_name: String,
+    block_id: &BlockId,
     spawner: &ModelSpawner<TerminalDriver>,
 ) -> PrepareEnvironmentError {
     let hosts = unique_clone_hosts(std::iter::once(request));
     let identity_diagnostics = collect_clone_failure_identity_diagnostics(hosts, spawner).await;
     PrepareEnvironmentError::CloneRepo {
         repo_name,
+        output: fetch_clone_failure_output(block_id, spawner).await,
         identity_diagnostics,
     }
 }
@@ -1126,8 +1145,8 @@ async fn clone_checkout_requests(
             let failed_repos_path =
                 std::env::temp_dir().join(format!(".warp-clone-failed-{}", Uuid::new_v4()));
             let command = build_parallel_clone_command(repos, shell_type, &failed_repos_path);
-            let exit_code = execute_command(command, spawner).await?;
-            if exit_code != 0.into() {
+            let command_result = execute_command(command, spawner).await?;
+            if command_result.exit_code != 0.into() {
                 // Best-effort: report only the repos the script actually
                 // recorded as failed. Fall back to the whole batch if the
                 // marker file couldn't be read, e.g. the script errored
@@ -1144,6 +1163,7 @@ async fn clone_checkout_requests(
                     collect_clone_failure_identity_diagnostics(hosts, spawner).await;
                 return Err(PrepareEnvironmentError::CloneRepo {
                     repo_name: failed_repo_names.join(", "),
+                    output: fetch_clone_failure_output(&command_result.block_id, spawner).await,
                     identity_diagnostics,
                 });
             }
@@ -1223,9 +1243,12 @@ async fn clone_repo(
             let init_command = format!(
                 "git init --quiet '{escaped_dir}' && git -C '{escaped_dir}' remote add origin '{escaped_url}'"
             );
-            let exit_code = execute_command(init_command, spawner).await?;
-            if exit_code != 0.into() {
-                return Err(clone_repo_failure(request, repo_name.clone(), spawner).await);
+            let command_result = execute_command(init_command, spawner).await?;
+            if command_result.exit_code != 0.into() {
+                return Err(
+                    clone_repo_failure(request, repo_name.clone(), &command_result.block_id, spawner)
+                        .await,
+                );
             }
         }
     } else if dir_exists {
@@ -1247,9 +1270,12 @@ async fn clone_repo(
         // promisor remote.
         let escaped_dir = shell_escape_single_quotes(&repo_dir.to_string_lossy(), shell_type);
         let command = format!("git clone --filter=blob:none '{escaped_url}' '{escaped_dir}'");
-        let exit_code = execute_command(command, spawner).await?;
-        if exit_code != 0.into() {
-            return Err(clone_repo_failure(request, repo_name.clone(), spawner).await);
+        let command_result = execute_command(command, spawner).await?;
+        if command_result.exit_code != 0.into() {
+            return Err(
+                clone_repo_failure(request, repo_name.clone(), &command_result.block_id, spawner)
+                    .await,
+            );
         }
 
         safe_info!(
@@ -1514,12 +1540,17 @@ async fn index_repo_codebase(
         .map_err(|_| PrepareEnvironmentError::InvalidRuntimeState)
 }
 
+struct ExecutedCommand {
+    exit_code: ExitCode,
+    block_id: BlockId,
+}
+
 /// Execute a command in the context of a terminal session.
 async fn execute_command(
     command: String,
     spawner: &ModelSpawner<TerminalDriver>,
-) -> Result<ExitCode, PrepareEnvironmentError> {
-    spawner
+) -> Result<ExecutedCommand, PrepareEnvironmentError> {
+    let command_handle = spawner
         .spawn(move |terminal_driver, ctx| terminal_driver.execute_command(&command, ctx))
         .await
         .map_err(|_| PrepareEnvironmentError::InvalidRuntimeState)?
@@ -1531,12 +1562,30 @@ async fn execute_command(
         .map_err(|error| match error {
             AgentDriverError::InvalidRuntimeState => PrepareEnvironmentError::InvalidRuntimeState,
             source => PrepareEnvironmentError::TerminalDriver { source },
-        })?
+        })?;
+    let block_id = command_handle.block_id().clone();
+    let exit_code = command_handle.await.map_err(|error| match error {
+        AgentDriverError::InvalidRuntimeState => PrepareEnvironmentError::InvalidRuntimeState,
+        source => PrepareEnvironmentError::TerminalDriver { source },
+    })?;
+    Ok(ExecutedCommand {
+        exit_code,
+        block_id,
+    })
+}
+
+async fn fetch_clone_failure_output(
+    block_id: &BlockId,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Option<String> {
+    let block_id = block_id.clone();
+    spawner
+        .spawn(move |driver, ctx| driver.block_output_plaintext(&block_id, ctx))
         .await
-        .map_err(|error| match error {
-            AgentDriverError::InvalidRuntimeState => PrepareEnvironmentError::InvalidRuntimeState,
-            source => PrepareEnvironmentError::TerminalDriver { source },
-        })
+        .ok()
+        .flatten()
+        .map(|output| prepare_clone_failure_output(&output))
+        .filter(|output| !output.is_empty())
 }
 
 async fn execute_silent_command(
