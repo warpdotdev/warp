@@ -122,7 +122,7 @@ fn publication_reuses_workload_auth_but_not_an_unrelated_ambient_task() {
         let request = {
             let mut server = ChannelState::mock_server();
             server
-                .mock("POST", "/api/v1/harness-support/harness-usage")
+                .mock("POST", "/api/v1/harness-support/usage")
                 .match_header(CLOUD_AGENT_ID_HEADER, task_id.to_string().as_str())
                 .match_header(AMBIENT_WORKLOAD_TOKEN_HEADER, "synthetic-workload-token")
                 .match_body(Matcher::Json(serde_json::to_value(&report).unwrap()))
@@ -183,7 +183,7 @@ fn publication_preserves_http_failure_classification() {
         let request = {
             let mut server = ChannelState::mock_server();
             server
-                .mock("POST", "/api/v1/harness-support/harness-usage")
+                .mock("POST", "/api/v1/harness-support/usage")
                 .with_status(status)
                 .with_header("Retry-After", "2")
                 .with_body(

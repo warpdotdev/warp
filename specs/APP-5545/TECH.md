@@ -35,7 +35,7 @@ types in its `harness_usage.rs` module.
 Reuse the existing task authentication, run headers, workload token, and HTTP client. Do not add a
 secret, decode execution identity from an unverified token, or modify generic shutdown authentication.
 
-The server's `public_api/openapi.yaml` defines `POST /api/v1/harness-support/harness-usage` with:
+The server's `public_api/openapi.yaml` defines `POST /api/v1/harness-support/usage` with:
 - `harness` (`CLAUDE_CODE` or `CODEX`), positive `execution_id`,
   positive `capture_sequence`, and read-start `captured_at`.
 - `snapshot`: typed `payload`; `coverage` with independent `token_status` and `tool_status`,

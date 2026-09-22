@@ -177,7 +177,7 @@ impl ServerApi {
             .await
             .map_err(HarnessUsageError::from_request_preparation_error)?;
         let url = format!(
-            "{}/api/v1/harness-support/harness-usage",
+            "{}/api/v1/harness-support/usage",
             crate::ChannelState::server_root_url()
         );
         let mut http_request = self
