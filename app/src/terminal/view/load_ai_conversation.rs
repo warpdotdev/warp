@@ -55,6 +55,54 @@ use crate::terminal::view::{
 };
 use crate::util::bindings::keybinding_name_to_keystroke;
 
+/// Maximum number of restored AI exchanges materialized into AI blocks per conversation when
+/// restoring a pane, keeping the most recent. Mirrors `AIConversation`'s
+/// `MAX_RESTORED_COMMAND_BLOCKS` cap so a restored pane doesn't come back with far more (or
+/// fewer) AI blocks than command blocks.
+const MAX_RESTORED_AI_EXCHANGES_PER_CONVERSATION: usize = 100;
+
+/// Returns the most recent `max` of `exchanges` ordered by `start_time`, without cloning any
+/// that are dropped — callers should clone only what this returns.
+fn most_recent_exchanges(
+    mut exchanges: Vec<&AIAgentExchange>,
+    max: usize,
+) -> Vec<&AIAgentExchange> {
+    exchanges.sort_by_key(|exchange| exchange.start_time);
+    let start = exchanges.len().saturating_sub(max);
+    exchanges.split_off(start)
+}
+
+/// Collects exchanges across all restored conversations, keeping only the most recent
+/// `MAX_RESTORED_AI_EXCHANGES_PER_CONVERSATION` per conversation, then sorts the combined result
+/// by `start_time` in preparation for command-block index lookup.
+///
+/// Truncating before cloning matters: `AIAgentExchange::clone` deep-copies its
+/// `Shared<AIAgentOutput>`, so cloning every exchange first and dropping the excess afterward
+/// would still pay for the full history's worth of clones.
+fn collect_bounded_exchanges_for_restoration(
+    restored_conversations: &[RestoredAIConversation],
+) -> Vec<(AIAgentExchange, AIConversationId)> {
+    let mut all_exchanges_with_conversation_ids = Vec::new();
+    for restored in restored_conversations {
+        let conversation_id = restored.ai_conversation.id();
+
+        let exchanges = exchanges_for_blocklist(&restored.ai_conversation);
+        let total_exchanges = exchanges.len();
+        let retained = most_recent_exchanges(exchanges, MAX_RESTORED_AI_EXCHANGES_PER_CONVERSATION);
+        log::info!(
+            "Restoring {} of {total_exchanges} AI exchanges for conversation {conversation_id}",
+            retained.len(),
+        );
+
+        for exchange in retained {
+            all_exchanges_with_conversation_ids.push((exchange.clone(), conversation_id));
+        }
+    }
+
+    all_exchanges_with_conversation_ids.sort_by_key(|(exchange, _)| exchange.start_time);
+    all_exchanges_with_conversation_ids
+}
+
 /// Describes restore-context setup state for directory reconciliation and hinting.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RestorationDirState {
@@ -698,22 +746,10 @@ impl TerminalView {
             .into_pixels()
             .to_lines(size_info.cell_height_px());
 
-        // Construct list of AIBlockCreationParams before moving conversations into history model
-        let mut all_exchanges_with_conversation_ids = Vec::new();
-
-        // Collect all exchanges from all conversations
-        for restored in &restored_conversations {
-            let conversation_id = restored.ai_conversation.id();
-
-            let exchanges = exchanges_for_blocklist(&restored.ai_conversation);
-
-            for exchange in exchanges {
-                all_exchanges_with_conversation_ids.push((exchange.clone(), conversation_id));
-            }
-        }
-
-        // Sort by timestamp to prepare for batch block index lookup
-        all_exchanges_with_conversation_ids.sort_by_key(|(exchange, _)| exchange.start_time);
+        // Construct list of AIBlockCreationParams before moving conversations into history model,
+        // bounding the exchange count per conversation (see `collect_bounded_exchanges_for_restoration`).
+        let all_exchanges_with_conversation_ids =
+            collect_bounded_exchanges_for_restoration(&restored_conversations);
 
         // Compute all block indices based on the restoration type
         let command_block_indices = {
@@ -1177,3 +1213,7 @@ impl TerminalView {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "load_ai_conversation_tests.rs"]
+mod tests;
