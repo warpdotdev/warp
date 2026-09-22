@@ -715,9 +715,15 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
     local result=""
     case "$_WARP_EXTERNAL_CTRL_R_WIDGET" in
       fzf-history-widget)
+        local fzf_default_opts
+        if (( $+functions[__fzf_defaults] )); then
+          fzf_default_opts="$(__fzf_defaults "" "${FZF_CTRL_R_OPTS-}")"
+        else
+          fzf_default_opts="--height ${FZF_TMUX_HEIGHT:-40%} ${FZF_DEFAULT_OPTS-} ${FZF_CTRL_R_OPTS-}"
+        fi
         result="$(fc -rl 1 \
           | command -p awk '{ cmd=$0; sub(/^[ \t]*[0-9]+\**[ \t]+/, "", cmd); if (!seen[cmd]++) print cmd }' \
-          | FZF_DEFAULT_OPTS=$(__fzf_defaults "" "${FZF_CTRL_R_OPTS-}") \
+          | FZF_DEFAULT_OPTS="$fzf_default_opts" \
             FZF_DEFAULT_OPTS_FILE='' fzf --scheme=history --tiebreak=index +m)"
         ;;
       atuin-search|atuin-search-viins|atuin-search-vicmd|_atuin_search_widget)
