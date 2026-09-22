@@ -10,7 +10,7 @@ use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
-use crate::workspaces::team::{MembershipRole, Team, TeamMember};
+use crate::workspaces::team::{DiscoverableTeam, MembershipRole, Team, TeamMember};
 use crate::workspaces::user_workspaces::TeamlessScopeForTest;
 use crate::workspaces::workspace::{
     ByoApiKeyPolicy, MultiAdminPolicy, NativeWorkspacesPolicy, Workspace, WorkspaceMember,
@@ -154,6 +154,16 @@ fn test_server_spend_limit_reasons_preserve_scope() {
             determine_state(&mut app),
             PromptAlertState::EnterpriseIndividualSpendLimitReached
         );
+        apply_server_availability(
+            &mut app,
+            AICreditAvailability::unavailable(
+                AICreditDenialReason::EnterprisePerUnassignedUserSpendLimitHit,
+            ),
+        );
+        assert_eq!(
+            determine_state(&mut app),
+            PromptAlertState::EnterpriseUnassignedUserSpendLimitReached
+        );
 
         apply_server_availability(
             &mut app,
@@ -180,7 +190,11 @@ fn test_spend_limit_presentation_identifies_scope() {
     );
     assert_eq!(
         PromptAlertState::EnterpriseIndividualSpendLimitReached.primary_text(),
-        "You've reached your individual spend limit"
+        "You've reached the spend limit set for you"
+    );
+    assert_eq!(
+        PromptAlertState::EnterpriseUnassignedUserSpendLimitReached.primary_text(),
+        "Spend limit reached for members without a team."
     );
     assert_eq!(
         PromptAlertState::EnterpriseWorkspaceSpendLimitReached.primary_text(),
@@ -196,7 +210,11 @@ fn test_spend_limit_tooltips_identify_scope() {
     );
     assert_eq!(
         PromptAlertState::EnterpriseIndividualSpendLimitReached.tooltip_text(),
-        Some("You've reached your individual spend limit")
+        Some("You've reached the spend limit set for you")
+    );
+    assert_eq!(
+        PromptAlertState::EnterpriseUnassignedUserSpendLimitReached.tooltip_text(),
+        Some("Spend limit reached for members without a team.")
     );
     assert_eq!(
         PromptAlertState::EnterpriseWorkspaceSpendLimitReached.tooltip_text(),
@@ -305,6 +323,110 @@ fn test_workspace_spend_limit_cta_uses_workspace_authority() {
         ])
     );
 }
+
+#[test]
+fn test_unassigned_user_spend_limit_cta_uses_workspace_authority() {
+    let workspace_admin = workspace_with_role(MembershipRole::Admin);
+    assert_eq!(
+        enterprise_limit_cta(
+            &PromptAlertState::EnterpriseUnassignedUserSpendLimitReached,
+            Some(&workspace_admin),
+            None,
+            Some(TEST_EMAIL),
+        ),
+        Some(vec![
+            FormattedTextFragment::plain_text("  "),
+            FormattedTextFragment::hyperlink(
+                "Manage limit",
+                AdminActions::admin_panel_link_for_workspace(),
+            ),
+        ])
+    );
+}
+
+#[test]
+fn test_unassigned_user_spend_limit_cta_offers_admin_both_actions() {
+    let mut workspace_admin = workspace_with_role(MembershipRole::Admin);
+    workspace_admin.open_teams.push(DiscoverableTeam {
+        team_uid: "0000000000000000000002".to_string(),
+        num_members: 2,
+        name: "Open Team".to_string(),
+        team_accepting_invites: true,
+    });
+
+    let cta = enterprise_limit_cta(
+        &PromptAlertState::EnterpriseUnassignedUserSpendLimitReached,
+        Some(&workspace_admin),
+        None,
+        Some(TEST_EMAIL),
+    )
+    .expect("workspace admin should receive CTAs");
+    assert_eq!(cta.len(), 4);
+    assert_eq!(cta[0], FormattedTextFragment::plain_text("  "));
+    assert_eq!(
+        cta[1],
+        FormattedTextFragment::hyperlink(
+            "Manage limit",
+            AdminActions::admin_panel_link_for_workspace(),
+        )
+    );
+    assert_eq!(cta[2], FormattedTextFragment::plain_text(" or "));
+    assert_eq!(cta[3].text, "join a team");
+    let Some(markdown_parser::Hyperlink::Action(action)) = &cta[3].styles.hyperlink else {
+        panic!("join CTA should dispatch an action");
+    };
+    assert!(matches!(
+        action.as_any().downcast_ref::<WorkspaceAction>(),
+        Some(WorkspaceAction::BrowseTeams)
+    ));
+}
+#[test]
+fn test_unassigned_user_spend_limit_cta_offers_open_teams() {
+    let mut workspace_member = workspace_with_role(MembershipRole::User);
+    workspace_member.open_teams.push(DiscoverableTeam {
+        team_uid: "0000000000000000000002".to_string(),
+        num_members: 2,
+        name: "Open Team".to_string(),
+        team_accepting_invites: true,
+    });
+
+    let cta = enterprise_limit_cta(
+        &PromptAlertState::EnterpriseUnassignedUserSpendLimitReached,
+        Some(&workspace_member),
+        None,
+        Some(TEST_EMAIL),
+    )
+    .expect("unassigned user should receive a CTA");
+    assert_eq!(cta.len(), 2);
+    assert_eq!(
+        cta[0],
+        FormattedTextFragment::plain_text("  Ask a workspace admin to increase it, or ")
+    );
+    assert_eq!(cta[1].text, "join a team");
+    let Some(markdown_parser::Hyperlink::Action(action)) = &cta[1].styles.hyperlink else {
+        panic!("join CTA should dispatch an action");
+    };
+    assert!(matches!(
+        action.as_any().downcast_ref::<WorkspaceAction>(),
+        Some(WorkspaceAction::BrowseTeams)
+    ));
+}
+
+#[test]
+fn test_unassigned_user_spend_limit_cta_asks_workspace_admin_without_open_teams() {
+    let workspace_member = workspace_with_role(MembershipRole::User);
+    assert_eq!(
+        enterprise_limit_cta(
+            &PromptAlertState::EnterpriseUnassignedUserSpendLimitReached,
+            Some(&workspace_member),
+            None,
+            Some(TEST_EMAIL),
+        ),
+        Some(vec![FormattedTextFragment::plain_text(
+            "  Ask a workspace admin to increase it"
+        )])
+    );
+}
 #[test]
 fn test_server_out_of_credits_maps_to_request_limit_reached() {
     App::test((), |mut app| async move {
@@ -326,7 +448,7 @@ fn test_server_out_of_credits_maps_to_request_limit_reached() {
 }
 
 #[test]
-fn test_legacy_fallback_used_before_first_server_response() {
+fn test_local_fallback_used_before_first_server_response() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         // No server availability applied: the default request limit info has

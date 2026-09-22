@@ -32,7 +32,9 @@ const DELINQUENT_DUE_TO_PAYMENT_ISSUE_PRIMARY_TEXT: &str = "Restricted due to pa
 const OUT_OF_REQUESTS_PRIMARY_TEXT: &str = "Out of credits";
 const MONTHLY_SPEND_LIMIT_PRIMARY_TEXT: &str = "You've reached your monthly spend limit";
 const TEAM_SPEND_LIMIT_PRIMARY_TEXT: &str = "You've reached your team's spend limit";
-const INDIVIDUAL_SPEND_LIMIT_PRIMARY_TEXT: &str = "You've reached your individual spend limit";
+const INDIVIDUAL_SPEND_LIMIT_PRIMARY_TEXT: &str = "You've reached the spend limit set for you";
+const UNASSIGNED_USER_SPEND_LIMIT_PRIMARY_TEXT: &str =
+    "Spend limit reached for members without a team.";
 const WORKSPACE_SPEND_LIMIT_PRIMARY_TEXT: &str = "You've reached this workspace's spend limit";
 
 const ANONYMOUS_USER_REQUEST_LIMIT_ACTION_TEXT: &str = "Sign up for more AI credits";
@@ -40,12 +42,14 @@ const DELINQUENT_DUE_TO_PAYMENT_ISSUE_ACTION_TEXT: &str = "Manage billing";
 const OVERAGES_TOGGLEABLE_BUT_NOT_ENABLED_ACTION_TEXT: &str = "Enable premium overages";
 const MONTHLY_OVERAGES_SPEND_LIMIT_REACHED_ACTION_TEXT: &str = "Increase monthly spend limit";
 const MANAGE_LIMIT_TEXT: &str = "Manage limit";
+const JOIN_A_TEAM_TEXT: &str = "join a team";
 const UPGRADE_TEXT: &str = "Upgrade";
 const COMPARE_PLANS_TEXT: &str = "Compare plans";
 const CONTACT_SUPPORT_TEXT: &str = "Contact support";
 const NON_ADMIN_CONTACT_ADMIN_TEXT: &str = ", contact a team admin";
-const NON_ADMIN_CONTACT_ANY_ADMIN_TEXT: &str = ", contact an admin";
 const NON_ADMIN_CONTACT_WORKSPACE_ADMIN_TEXT: &str = ", contact a workspace admin";
+const NON_ADMIN_ASK_WORKSPACE_ADMIN_TO_INCREASE_LIMIT_TEXT: &str =
+    "  Ask a workspace admin to increase it";
 const NON_ADMIN_ASK_ADMIN_TO_ENABLE_OVERAGES_TEXT: &str = ", ask a team admin to enable overages";
 const NON_ADMIN_ASK_ADMIN_TO_INCREASE_OVERAGES_TEXT: &str =
     ", ask a team admin to increase overages";
@@ -57,18 +61,27 @@ fn enterprise_limit_cta(
     user_email: Option<&str>,
 ) -> Option<Vec<FormattedTextFragment>> {
     let user_email = user_email.unwrap_or_default();
-    let (admin_panel_link, non_admin_text) = match state {
+    let (admin_panel_link, non_admin_text, can_join_team) = match state {
         PromptAlertState::EnterpriseTeamSpendLimitReached
         | PromptAlertState::EnterpriseIndividualSpendLimitReached => (
             team.filter(|team| team.has_admin_permissions(user_email))
                 .map(|team| AdminActions::admin_panel_link_for_team(team.uid)),
             NON_ADMIN_CONTACT_ADMIN_TEXT,
+            false,
+        ),
+        PromptAlertState::EnterpriseUnassignedUserSpendLimitReached => (
+            workspace
+                .filter(|workspace| workspace.is_native_workspaces_admin(user_email))
+                .map(|_| AdminActions::admin_panel_link_for_workspace()),
+            NON_ADMIN_ASK_WORKSPACE_ADMIN_TO_INCREASE_LIMIT_TEXT,
+            true,
         ),
         PromptAlertState::EnterpriseWorkspaceSpendLimitReached => (
             workspace
                 .filter(|workspace| workspace.is_native_workspaces_admin(user_email))
                 .map(|_| AdminActions::admin_panel_link_for_workspace()),
             NON_ADMIN_CONTACT_WORKSPACE_ADMIN_TEXT,
+            false,
         ),
         PromptAlertState::NoConnection
         | PromptAlertState::AnonymousUserRequestLimitSoftGate
@@ -79,38 +92,30 @@ fn enterprise_limit_cta(
         | PromptAlertState::RequestLimitReached
         | PromptAlertState::NoAlert => return None,
     };
-    Some(match admin_panel_link {
-        Some(link) => vec![
+    let has_joinable_team = can_join_team
+        && !cfg!(target_family = "wasm")
+        && workspace.is_some_and(|workspace| workspace.joinable_teams().next().is_some());
+    if let Some(link) = admin_panel_link {
+        let mut fragments = vec![
             FormattedTextFragment::plain_text("  "),
             FormattedTextFragment::hyperlink(MANAGE_LIMIT_TEXT, link),
-        ],
-        None => vec![FormattedTextFragment::plain_text(non_admin_text)],
-    })
-}
-
-fn legacy_enterprise_limit_cta(
-    workspace: Option<&Workspace>,
-    team: Option<&Team>,
-    user_email: Option<&str>,
-) -> Option<Vec<FormattedTextFragment>> {
-    let workspace =
-        workspace.filter(|workspace| workspace.billing_metadata.is_enterprise_plan())?;
-    let user_email = user_email.unwrap_or_default();
-    let admin_panel_link = if workspace.is_native_workspaces_admin(user_email) {
-        Some(AdminActions::admin_panel_link_for_workspace())
-    } else {
-        team.filter(|team| team.has_admin_permissions(user_email))
-            .map(|team| AdminActions::admin_panel_link_for_team(team.uid))
-    };
-    Some(match admin_panel_link {
-        Some(link) => vec![
-            FormattedTextFragment::plain_text("  "),
-            FormattedTextFragment::hyperlink(MANAGE_LIMIT_TEXT, link),
-        ],
-        None => vec![FormattedTextFragment::plain_text(
-            NON_ADMIN_CONTACT_ANY_ADMIN_TEXT,
-        )],
-    })
+        ];
+        if has_joinable_team {
+            fragments.push(FormattedTextFragment::plain_text(" or "));
+            fragments.push(FormattedTextFragment::hyperlink_action(
+                JOIN_A_TEAM_TEXT,
+                WorkspaceAction::BrowseTeams,
+            ));
+        }
+        return Some(fragments);
+    }
+    if has_joinable_team {
+        return Some(vec![
+            FormattedTextFragment::plain_text(format!("{non_admin_text}, or ")),
+            FormattedTextFragment::hyperlink_action(JOIN_A_TEAM_TEXT, WorkspaceAction::BrowseTeams),
+        ]);
+    }
+    Some(vec![FormattedTextFragment::plain_text(non_admin_text)])
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +150,7 @@ pub enum PromptAlertState {
     MonthlyOveragesSpendLimitReached,
     EnterpriseTeamSpendLimitReached,
     EnterpriseIndividualSpendLimitReached,
+    EnterpriseUnassignedUserSpendLimitReached,
     EnterpriseWorkspaceSpendLimitReached,
     /// The user has reached the request limit.
     RequestLimitReached,
@@ -169,6 +175,9 @@ impl PromptAlertState {
             Self::MonthlyOveragesSpendLimitReached => MONTHLY_SPEND_LIMIT_PRIMARY_TEXT,
             Self::EnterpriseTeamSpendLimitReached => TEAM_SPEND_LIMIT_PRIMARY_TEXT,
             Self::EnterpriseIndividualSpendLimitReached => INDIVIDUAL_SPEND_LIMIT_PRIMARY_TEXT,
+            Self::EnterpriseUnassignedUserSpendLimitReached => {
+                UNASSIGNED_USER_SPEND_LIMIT_PRIMARY_TEXT
+            }
             Self::EnterpriseWorkspaceSpendLimitReached => WORKSPACE_SPEND_LIMIT_PRIMARY_TEXT,
             Self::NoAlert => "",
         }
@@ -183,6 +192,7 @@ impl PromptAlertState {
             | Self::MonthlyOveragesSpendLimitReached
             | Self::EnterpriseTeamSpendLimitReached
             | Self::EnterpriseIndividualSpendLimitReached
+            | Self::EnterpriseUnassignedUserSpendLimitReached
             | Self::EnterpriseWorkspaceSpendLimitReached
             | Self::RequestLimitReached => Some(self.primary_text()),
             Self::NoConnection | Self::NoAlert => None,
@@ -313,6 +323,9 @@ impl PromptAlertView {
             AICreditDenialReason::EnterprisePerUserSpendLimitHit => {
                 PromptAlertState::EnterpriseIndividualSpendLimitReached
             }
+            AICreditDenialReason::EnterprisePerUnassignedUserSpendLimitHit => {
+                PromptAlertState::EnterpriseUnassignedUserSpendLimitReached
+            }
             AICreditDenialReason::EnterpriseWorkspaceSpendLimitHit => {
                 PromptAlertState::EnterpriseWorkspaceSpendLimitReached
             }
@@ -393,8 +406,6 @@ impl PromptAlertView {
             team.has_admin_permissions(user_email.as_deref().unwrap_or_default())
         });
         let current_workspace = UserWorkspaces::as_ref(app).current_workspace();
-        let legacy_enterprise_limit_cta =
-            legacy_enterprise_limit_cta(current_workspace, current_team, user_email.as_deref());
 
         match state {
             PromptAlertState::NoConnection => {}
@@ -439,9 +450,7 @@ impl PromptAlertView {
                 }
             }
             PromptAlertState::MonthlyOveragesSpendLimitReached => {
-                if let Some(cta) = legacy_enterprise_limit_cta {
-                    text_fragments.extend(cta);
-                } else if has_admin_permissions {
+                if has_admin_permissions {
                     text_fragments.push(FormattedTextFragment::plain_text("  "));
                     text_fragments.push(FormattedTextFragment::hyperlink_action(
                         MONTHLY_OVERAGES_SPEND_LIMIT_REACHED_ACTION_TEXT,
@@ -455,6 +464,7 @@ impl PromptAlertView {
             }
             PromptAlertState::EnterpriseTeamSpendLimitReached
             | PromptAlertState::EnterpriseIndividualSpendLimitReached
+            | PromptAlertState::EnterpriseUnassignedUserSpendLimitReached
             | PromptAlertState::EnterpriseWorkspaceSpendLimitReached => {
                 if let Some(cta) = enterprise_limit_cta(
                     state,
@@ -466,10 +476,6 @@ impl PromptAlertView {
                 }
             }
             PromptAlertState::RequestLimitReached => {
-                if let Some(cta) = legacy_enterprise_limit_cta {
-                    text_fragments.extend(cta);
-                    return;
-                }
                 if let Some(team) = current_team {
                     text_fragments.push(FormattedTextFragment::plain_text("  "));
                     if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
@@ -532,6 +538,7 @@ fn does_alert_block_ai_requests(state: &PromptAlertState) -> bool {
         | PromptAlertState::MonthlyOveragesSpendLimitReached
         | PromptAlertState::EnterpriseTeamSpendLimitReached
         | PromptAlertState::EnterpriseIndividualSpendLimitReached
+        | PromptAlertState::EnterpriseUnassignedUserSpendLimitReached
         | PromptAlertState::EnterpriseWorkspaceSpendLimitReached
         | PromptAlertState::RequestLimitReached => true,
     }
