@@ -34,6 +34,7 @@ use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::mcp::JSONMCPServer;
 use crate::server::server_api::ServerApi;
 use crate::server::server_api::harness_support::{HarnessSupportClient, upload_to_target};
+use crate::server::telemetry::secret_redaction::redact_secrets_in_string;
 use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::{CLIAgentSessionStatus, CLIAgentSessionsModel};
 use crate::terminal::model::block::{BlockId, SerializedBlock};
@@ -57,6 +58,44 @@ use codex_transcript::CodexResumeInfo;
 use gemini::GeminiHarness;
 use save_coordinator::{SaveCoordinator, final_save_budget};
 pub(crate) use telemetry::ThirdPartyHarnessTelemetryEvent;
+
+const HARNESS_FAILURE_OUTPUT_MAX_BYTES: usize = 4 * 1024;
+const HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER: &str = "\n… harness output truncated …\n";
+
+fn truncate_harness_failure_output(output: &str) -> String {
+    if output.len() <= HARNESS_FAILURE_OUTPUT_MAX_BYTES {
+        return output.to_owned();
+    }
+
+    let retained_bytes =
+        HARNESS_FAILURE_OUTPUT_MAX_BYTES - HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER.len();
+    let prefix_budget = retained_bytes / 2;
+    let suffix_budget = retained_bytes - prefix_budget;
+
+    let mut prefix_end = prefix_budget;
+    while !output.is_char_boundary(prefix_end) {
+        prefix_end -= 1;
+    }
+
+    let mut suffix_start = output.len() - suffix_budget;
+    while !output.is_char_boundary(suffix_start) {
+        suffix_start += 1;
+    }
+
+    format!(
+        "{}{}{}",
+        &output[..prefix_end],
+        HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER,
+        &output[suffix_start..]
+    )
+}
+
+pub(super) fn prepare_harness_failure_output(output: &str) -> String {
+    let mut output = output.trim().to_owned();
+    // Redact before truncation so splitting a credential cannot hide it from detection.
+    redact_secrets_in_string(&mut output);
+    truncate_harness_failure_output(&output)
+}
 
 /// Harness-agnostic payload describing how to resume an existing conversation.
 ///
