@@ -99,7 +99,7 @@ fn fourth_repo_evicts_lru_state_and_rejects_its_stale_updates() {
             });
         }
         repo_outlines.update(&mut app, |outlines, ctx| {
-            outlines.index_repo(repositories[0].clone(), ctx);
+            let _ = outlines.repo_recency.touch(&repo_paths[0]);
             outlines.retain_outline_state(
                 repo_paths[3].clone(),
                 OutlineState {

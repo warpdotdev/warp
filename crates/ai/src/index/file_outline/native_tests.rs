@@ -90,19 +90,14 @@ async fn rejected_new_file_does_not_evict_a_later_modified_file() {
     };
 
     outline.update(update).await;
-    let symbols_by_file = outline.to_symbols_by_file(None);
+    let file_symbols = outline.to_file_symbols(None);
 
-    assert!(
-        !outline
-            .to_file_symbols(None)
-            .iter()
-            .any(|file| file.path == "a.rs")
-    );
-    assert!(!symbols_by_file.contains_key(&added_path));
-    assert_eq!(
-        symbols_by_file[&modified_path].symbols().unwrap()[0].name,
-        "new_symbol"
-    );
+    assert!(!file_symbols.iter().any(|file| file.path == "a.rs"));
+    let modified_symbols = file_symbols
+        .iter()
+        .find(|file| file.path == "z.rs")
+        .unwrap();
+    assert_eq!(modified_symbols.symbols, "  fn new_symbol (line 1)");
 }
 #[test]
 fn multiline_block_comments_count_each_physical_line() {
