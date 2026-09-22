@@ -77,6 +77,7 @@ use crate::view_components::{
 };
 use crate::word_block_editor::{ChipEditorState, WordBlockEditorView, WordBlockEditorViewEvent};
 use crate::workspace::WorkspaceAction;
+use crate::workspace::util::team_switcher_menu_items;
 use crate::workspaces::team::{
     DiscoverableTeam, DiscoverableWorkspace, MembershipRole, Team, TeamDeleteDisabledReason,
 };
@@ -95,6 +96,7 @@ const CREATE_TEAM_DESCRIPTION: &str = "When you create a team, you can collabora
 const OR_JOIN_TEAM_HEADER: &str = "Or, join an existing team within your company";
 const JOIN_TEAM_HEADER: &str = "Join an existing team within your company";
 const BROWSE_TEAMS_BUTTON_LABEL: &str = "Browse teams";
+const SWITCH_TEAM_BUTTON_LABEL: &str = "Switch team";
 const JOIN_WORKSPACE_OR_TEAM_HEADER: &str =
     "Join an existing workspace or team within your company";
 const OR_JOIN_WORKSPACE_OR_TEAM_HEADER: &str =
@@ -255,6 +257,7 @@ pub enum TeamsPageAction {
         team_uid: Option<ServerId>,
     },
     ShowJoinTeamsModal,
+    ShowTeamSwitcherMenu,
     ShowTransferOwnershipModal {
         new_owner_email: String,
         new_owner_uid: UserUid,
@@ -383,6 +386,7 @@ struct TeamsWidgetMouseHandles {
     outgrow_upgrade_link: MouseStateHandle,
     workspace_admin_panel_link: HighlightedHyperlink,
     browse_teams_button: MouseStateHandle,
+    switch_team_button: MouseStateHandle,
     discovery_back_button: MouseStateHandle,
 }
 
@@ -668,6 +672,8 @@ pub struct TeamsPageView {
     checkbox_value: bool,
     member_actions_menu: ViewHandle<Menu<TeamsPageAction>>,
     open_member_actions_menu_index: Option<usize>,
+    team_switcher_menu: ViewHandle<Menu<WorkspaceAction>>,
+    show_team_switcher_menu: bool,
 }
 
 impl Entity for TeamsPageView {
@@ -835,6 +841,7 @@ impl TypedActionView for TeamsPageView {
                 ctx.notify();
             }
             TeamsPageAction::ShowJoinTeamsModal => self.show_join_teams_modal(ctx),
+            TeamsPageAction::ShowTeamSwitcherMenu => self.show_team_switcher_dropdown(ctx),
             TeamsPageAction::ShowTransferOwnershipModal {
                 new_owner_email,
                 new_owner_uid,
@@ -1098,6 +1105,18 @@ impl TeamsPageView {
             }
         });
 
+        let team_switcher_menu = ctx.add_typed_action_view(|_| {
+            Menu::new()
+                .with_drop_shadow()
+                .prevent_interaction_with_other_elements()
+        });
+        ctx.subscribe_to_view(&team_switcher_menu, |me, _, event, ctx| {
+            if let menu::Event::Close { .. } = event {
+                me.show_team_switcher_menu = false;
+                ctx.notify();
+            }
+        });
+
         let page = PageType::new_monolith(TeamsWidget::default(), None, true);
         TeamsPageView {
             self_handle: ctx.handle(),
@@ -1138,6 +1157,8 @@ impl TeamsPageView {
             checkbox_value: true,
             member_actions_menu,
             open_member_actions_menu_index: None,
+            team_switcher_menu,
+            show_team_switcher_menu: false,
         }
     }
 
@@ -1686,6 +1707,20 @@ impl TeamsPageView {
         self.join_teams_modal_state.open();
         ctx.focus(&self.join_teams_modal_state.view);
         ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
+        ctx.notify();
+    }
+
+    fn show_team_switcher_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
+        let user_workspaces = self.user_workspaces.as_ref(ctx);
+        let Some(workspace) = user_workspaces.current_workspace() else {
+            return;
+        };
+        let current_team_uid = user_workspaces.team_for_view(ctx).map(|team| team.uid);
+        let items = team_switcher_menu_items(&workspace.teams, current_team_uid);
+        self.team_switcher_menu
+            .update(ctx, |menu, ctx| menu.set_items(items, ctx));
+        self.show_team_switcher_menu = true;
+        ctx.focus(&self.team_switcher_menu);
         ctx.notify();
     }
 
@@ -2878,6 +2913,7 @@ impl TeamsWidget {
             has_admin_permissions,
             team_metadata,
             use_workspace_admin_panel,
+            workspace.teams.len() > 1,
             view,
             appearance,
         ));
@@ -3017,6 +3053,52 @@ impl TeamsWidget {
             })
             .finish()
     }
+
+    fn render_switch_team_button(
+        &self,
+        view: &TeamsPageView,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let button = appearance
+            .ui_builder()
+            .button(
+                ButtonVariant::Link,
+                self.mouse_state_handles.switch_team_button.clone(),
+            )
+            .with_text_and_icon_label(
+                TextAndIcon::new(
+                    TextAndIconAlignment::IconFirst,
+                    SWITCH_TEAM_BUTTON_LABEL,
+                    Icon::SwitchHorizontal01.to_warpui_icon(appearance.theme().accent()),
+                    MainAxisSize::Min,
+                    MainAxisAlignment::Center,
+                    vec2f(14., 14.),
+                )
+                .with_inner_padding(4.),
+            )
+            .build()
+            .with_cursor(Cursor::PointingHand)
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(TeamsPageAction::ShowTeamSwitcherMenu);
+            })
+            .finish();
+
+        let mut stack = Stack::new();
+        stack.add_child(button);
+        if view.show_team_switcher_menu {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&view.team_switcher_menu).finish(),
+                OffsetPositioning::offset_from_parent(
+                    vec2f(0., 4.),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::BottomLeft,
+                    ChildAnchor::TopLeft,
+                ),
+            );
+        }
+        stack.finish()
+    }
+
     fn team_footer_action(
         team: &Team,
         workspace: &Workspace,
@@ -3041,6 +3123,7 @@ impl TeamsWidget {
         has_admin_permissions: bool,
         team: &Team,
         use_workspace_admin_panel: bool,
+        can_switch_teams: bool,
         view: &TeamsPageView,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
@@ -3109,13 +3192,23 @@ impl TeamsWidget {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_alignment(MainAxisAlignment::End)
             .with_main_axis_size(MainAxisSize::Min);
+        if can_switch_teams {
+            right_side.add_child(self.render_switch_team_button(view, appearance));
+        }
         if has_joinable_teams {
-            right_side.add_child(self.render_browse_teams_button(appearance));
+            let browse_teams_button = self.render_browse_teams_button(appearance);
+            right_side.add_child(if can_switch_teams {
+                Container::new(browse_teams_button)
+                    .with_margin_left(12.)
+                    .finish()
+            } else {
+                browse_teams_button
+            });
         }
         if has_admin_permissions {
             let billing_links =
                 self.render_billing_links(team, use_workspace_admin_panel, appearance);
-            right_side.add_child(if has_joinable_teams {
+            right_side.add_child(if has_joinable_teams || can_switch_teams {
                 Container::new(billing_links)
                     .with_border(Border::left(1.).with_border_fill(appearance.theme().outline()))
                     .with_margin_left(12.)
@@ -3124,7 +3217,7 @@ impl TeamsWidget {
                 billing_links
             });
         }
-        if has_joinable_teams || has_admin_permissions {
+        if has_joinable_teams || has_admin_permissions || can_switch_teams {
             team_name_header.add_child(right_side.finish());
         }
 
