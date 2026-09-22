@@ -248,6 +248,21 @@ fn treats_dash_prefixed_tokens_after_end_of_options_as_arguments() {
 }
 
 #[test]
+fn treats_single_dash_after_end_of_options_as_an_argument() {
+    let command = "git".to_owned().spanned(Span::new(0, 3));
+    let registry = create_test_command_registry([git_signature()]);
+
+    assert_eq!(
+        location("git -- -", registry, 8),
+        vec![LocationType::Argument {
+            command_name: command,
+            argument_name: None,
+            parsed_token: ParsedToken::new("-"),
+        }]
+    );
+}
+
+#[test]
 fn completes_flags_after_double_dash_for_posix_noncompliant_commands() {
     let command = "Add-Content".to_owned().spanned(Span::new(0, 11));
     let registry = create_test_command_registry([add_content_signature()]);

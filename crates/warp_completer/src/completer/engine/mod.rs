@@ -431,7 +431,7 @@ pub fn completion_location(
                         ..
                     } => {
                         let cmd = cmd.clone();
-                        if loc.span.slice(line) == "-" {
+                        if !options_terminated && loc.span.slice(line) == "-" {
                             let span = loc.span;
                             return vec![
                                 loc,

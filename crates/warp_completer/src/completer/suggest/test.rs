@@ -1895,6 +1895,14 @@ fn test_completes_flags() {
         ),
         vec!["add", "branch", "checkout", "clone"]
     );
+    assert_eq!(
+        complete_at_end_of_line_with_options(
+            "ls -la; git -- branch -",
+            MatchStrategy::CaseInsensitive,
+            &ctx
+        ),
+        Vec::<String>::new()
+    );
 
     // Should complete long hand flags only (that begin with "v")
     assert_eq!(
