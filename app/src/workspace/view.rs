@@ -7423,7 +7423,9 @@ impl Workspace {
     fn save_current_tab_as_new_config(&mut self, tab_index: usize, ctx: &mut ViewContext<Self>) {
         use crate::tab_configs::session_config::{tab_config_from_pane_snapshot, write_tab_config};
 
-        let tab = &self.tabs[tab_index];
+        let Some(tab) = self.tabs.get(tab_index) else {
+            return;
+        };
         let snapshot = tab.pane_group.as_ref(ctx).snapshot(ctx);
         let custom_title = tab.pane_group.as_ref(ctx).custom_title(ctx);
         let color = tab.color();

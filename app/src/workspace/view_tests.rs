@@ -2445,6 +2445,26 @@ fn test_close_other_tabs_confirmation_dialog() {
 }
 
 #[test]
+fn test_save_current_tab_as_new_config_ignores_stale_tab_index() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            for _ in 1..6 {
+                workspace.add_terminal_tab(false, ctx);
+            }
+
+            workspace.close_other_tabs(5, true, ctx);
+            workspace.handle_action(&WorkspaceAction::SaveCurrentTabAsNewConfig(5), ctx);
+
+            assert_eq!(workspace.tab_count(), 1);
+        });
+    });
+}
+
+#[test]
 fn test_close_tabs_right_confirmation_dialog() {
     let _guard = FeatureFlag::CreatingSharedSessions.override_enabled(true);
     App::test((), |mut app| async move {
