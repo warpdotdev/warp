@@ -717,8 +717,7 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
       fzf-history-widget)
         local cursor_and_line="${1:-0:}"
         local char_cursor="${cursor_and_line%%:*}"
-        local original_line="$(warp_hex_decode_string "${cursor_and_line#*:}"; printf x)"
-        original_line="${original_line%x}"
+        local original_line="$(warp_hex_decode_string "${cursor_and_line#*:}")"
         local query="${original_line[1,$char_cursor]}"
         result="$(fc -rl 1 \
           | command -p awk '{ cmd=$0; sub(/^[ \t]*[0-9]+\**[ \t]+/, "", cmd); if (!seen[cmd]++) print cmd }' \
