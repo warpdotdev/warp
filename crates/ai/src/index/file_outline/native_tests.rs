@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(feature = "local_fs")]
 use repo_metadata::TargetFile;
@@ -8,14 +8,14 @@ use tempfile::TempDir;
 
 use super::*;
 
-fn create_test_file(dir: &TempDir, filename: &str, content: &str) -> PathBuf {
-    let file_path = dir.path().join(filename);
+fn create_test_file(dir: &Path, filename: &str, content: &str) -> PathBuf {
+    let file_path = dir.join(filename);
     let mut file = File::create(&file_path).unwrap();
     file.write_all(content.as_bytes()).unwrap();
     file_path
 }
 #[cfg(feature = "local_fs")]
-fn create_outline_files(dir: &TempDir) -> Vec<PathBuf> {
+fn create_outline_files(dir: &Path) -> Vec<PathBuf> {
     (0..=PARSE_BATCH_SIZE)
         .map(|index| {
             create_test_file(
@@ -41,9 +41,10 @@ fn assert_symbol_is_indexed(outline: &Outline, expected: &str) {
 #[tokio::test]
 async fn build_outline_indexes_symbols_across_batch_boundary() {
     let temp_dir = TempDir::new().unwrap();
-    let _files = create_outline_files(&temp_dir);
+    let root = dunce::canonicalize(temp_dir.path()).unwrap();
+    let _files = create_outline_files(&root);
 
-    let outline = build_outline(temp_dir.path(), None).await.unwrap();
+    let outline = build_outline(&root, None).await.unwrap();
 
     assert_eq!(outline.file_count(), PARSE_BATCH_SIZE + 1);
     assert_symbol_is_indexed(&outline, "symbol_0");
@@ -54,8 +55,9 @@ async fn build_outline_indexes_symbols_across_batch_boundary() {
 #[tokio::test]
 async fn update_indexes_symbols_across_batch_boundary() {
     let temp_dir = TempDir::new().unwrap();
-    let mut outline = build_outline(temp_dir.path(), None).await.unwrap();
-    let files = create_outline_files(&temp_dir);
+    let root = dunce::canonicalize(temp_dir.path()).unwrap();
+    let mut outline = build_outline(&root, None).await.unwrap();
+    let files = create_outline_files(&root);
     let added = files
         .iter()
         .cloned()
@@ -95,7 +97,7 @@ fn second_function() {
 }
 }
 "#;
-    let file_path = create_test_file(&temp_dir, "multiple.rs", content);
+    let file_path = create_test_file(temp_dir.path(), "multiple.rs", content);
 
     let outline = parse_file_outline(&file_path).unwrap();
     let symbols = outline.symbols.unwrap();
@@ -132,7 +134,7 @@ fn second_function() {
 }
 }
 "#;
-    let file_path = create_test_file(&temp_dir, "multiple.rs", content);
+    let file_path = create_test_file(temp_dir.path(), "multiple.rs", content);
 
     let outline = parse_file_outline(&file_path).unwrap();
     let symbols = outline.symbols.unwrap();
@@ -163,7 +165,7 @@ def class_method(self):
 def second_function():
 print("Second")
 "#;
-    let file_path = create_test_file(&temp_dir, "multiple.py", python_content);
+    let file_path = create_test_file(temp_dir.path(), "multiple.py", python_content);
     let outline = parse_file_outline(&file_path).unwrap();
     let symbols = outline.symbols.unwrap();
     assert_eq!(symbols.len(), 5);
@@ -199,7 +201,7 @@ classMethod() {
 }
 }
 "#;
-    let file_path = create_test_file(&temp_dir, "multiple.js", js_content);
+    let file_path = create_test_file(temp_dir.path(), "multiple.js", js_content);
     let outline = parse_file_outline(&file_path).unwrap();
     let symbols = outline.symbols.unwrap();
     assert_eq!(symbols.len(), 4);
@@ -240,7 +242,7 @@ func helperFunction() {
 fmt.Println("Helper function")
 }
 "#;
-    let file_path = create_test_file(&temp_dir, "multiple.go", go_content);
+    let file_path = create_test_file(temp_dir.path(), "multiple.go", go_content);
     let outline = parse_file_outline(&file_path).unwrap();
     let symbols = outline.symbols.unwrap();
     assert_eq!(symbols.len(), 5);
