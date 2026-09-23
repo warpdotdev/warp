@@ -3,6 +3,7 @@ pub(crate) mod conversation_yaml;
 pub(crate) mod todos;
 
 pub(crate) mod api;
+pub(crate) mod base_user_query;
 pub(crate) mod comment;
 pub(crate) mod icons;
 pub(crate) mod linearization;
@@ -42,6 +43,7 @@ use warp_editor::render::model::LineCount;
 use warp_multi_agent_api::{AgentEvent, AgentType, diff_hunk as diff_hunk_api};
 
 pub use self::api::{MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError};
+pub use self::base_user_query::BaseUserQuery;
 use super::llms::LLMId;
 use crate::TelemetryEvent;
 use crate::ai::block_context::BlockContext;
@@ -72,6 +74,9 @@ impl std::fmt::Display for ServerOutputId {
 pub struct InvokeSkillUserQuery {
     pub query: String,
     pub referenced_attachments: HashMap<String, AIAgentAttachment>,
+    /// Attribution carried over from the message this invocation was restored from, so a
+    /// resent skill query keeps its original author; `None` for a locally typed one.
+    pub base: Option<BaseUserQuery>,
 }
 
 impl ServerOutputId {
@@ -2190,6 +2195,9 @@ pub struct MCPServer {
     pub id: String,
     pub name: String,
     pub description: String,
+    /// Managed MCP server uid or well-known integration id the server was
+    /// resolved from; empty for local servers. Mirrors `MCPServerConfig.warp_id`.
+    pub warp_id: String,
     pub resources: Vec<rmcp::model::Resource>,
     pub tools: Vec<rmcp::model::Tool>,
 }
@@ -2893,6 +2901,12 @@ pub enum AIAgentInput {
         user_query_mode: UserQueryMode,
         running_command: Option<RunningCommand>,
         intended_agent: Option<AgentType>,
+        /// The `Request.Input.UserQuery` this input starts from, when warp-server injected one
+        /// with a shared-session prompt. `query`, `user_query_mode`, and `intended_agent` were
+        /// seeded from it (see [`BaseUserQuery::seed_input_fields`]) and `convert_to` writes
+        /// them back over it, so fields this client does not model travel through untouched.
+        /// `None` for everything typed locally.
+        base: Option<BaseUserQuery>,
     },
 
     AutoCodeDiffQuery {

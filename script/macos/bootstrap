@@ -61,6 +61,7 @@ export HOMEBREW_NO_ASK=1
 brew update
 
 brew install jq
+brew install shellcheck
 brew install getsentry/tools/sentry-cli
 brew install clang-format
 brew install create-dmg

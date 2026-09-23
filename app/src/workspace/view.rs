@@ -397,7 +397,7 @@ use crate::terminal::enable_auto_reload_modal::{
 use crate::terminal::general_settings::GeneralSettings;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::input::slash_commands::fork_button_action;
-use crate::terminal::input::{Input, MenuPositioning};
+use crate::terminal::input::{EXTERNAL_ALT_C_BINDING_CONTEXT, Input, MenuPositioning};
 use crate::terminal::keys_settings::KeysSettings;
 use crate::terminal::ligature_settings::should_use_ligature_rendering;
 #[cfg(feature = "local_tty")]
@@ -17606,6 +17606,19 @@ impl Workspace {
         }
     }
 
+    fn trigger_external_alt_c_directory_search(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.is_readonly_shared_session_active(ctx) {
+            return;
+        }
+        if let Some(terminal_view_handle) = self.active_session_view(ctx) {
+            terminal_view_handle.update(ctx, |terminal_view, ctx| {
+                if !terminal_view.maybe_trigger_external_alt_c_directory_search(ctx) {
+                    terminal_view.write_user_bytes_to_pty(vec![C0::ESC, b'c'], ctx);
+                }
+            });
+        }
+    }
+
     fn get_active_input_view_handle(&self, app: &AppContext) -> Option<ViewHandle<Input>> {
         app.view(self.active_tab_pane_group())
             .active_session_view(app)
@@ -24658,6 +24671,7 @@ impl TypedActionView for Workspace {
                 init_content,
             }) => self.show_command_search(*filter, init_content, ctx),
             TriggerExternalCtrlTFileSearch => self.trigger_external_ctrl_t_file_search(ctx),
+            TriggerExternalAltCDirectorySearch => self.trigger_external_alt_c_directory_search(ctx),
             ImportToPersonalDrive => {
                 if let Some(personal_drive) = UserWorkspaces::as_ref(ctx).personal_drive(ctx) {
                     self.open_import_modal(personal_drive, &None, ctx);
@@ -26772,6 +26786,9 @@ impl View for Workspace {
             .focused_session_view(app)
         {
             let terminal_view = terminal_view.as_ref(app);
+            if terminal_view.external_alt_c_binding_eligible(app) {
+                context.set.insert(EXTERNAL_ALT_C_BINDING_CONTEXT);
+            }
             if terminal_view.is_long_running() {
                 context.set.insert("LongRunningCommand");
             }

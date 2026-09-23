@@ -882,11 +882,15 @@ fn test_handle_pty_read_event_while_batching() {
             .try_send(event)
             .expect("Can send event over ordered_events_tx");
 
-        // The batching status should reflect the accumulated bytes.
+        // The batching status should reflect the accumulated bytes. Use the same generous tick
+        // budget as `test_handle_pty_read_event_while_not_batching`: the event is handled on the
+        // test executor, and the default budget flaked under coarse scheduling on Windows CI.
         assert_eventually!(
+            200 =>
             network.read(&app, |network, _ctx| {
                 matches!(&network.pty_bytes_batch_status, PtyBytesBatchStatus::Batching { accumulated, .. } if accumulated == b"aa" )
-            }), "Batching status should reflect accumulated bytes"
+            }),
+            "Batching status should reflect accumulated bytes"
         );
 
         // Technically, we didn't start a task to send the event to the server after a timer. So let's do it manually.

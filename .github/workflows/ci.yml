@@ -659,6 +659,14 @@ jobs:
           cargo install --git https://github.com/wgsl-analyzer/wgsl-analyzer --tag "2025-06-28" wgslfmt && \
           find . -name "*.wgsl" -exec wgslfmt --check {} +
 
+      - name: Install ShellCheck
+        uses: ConorMacBride/install-package@3e7ad059e07782ee54fa35f827df52aae0626f30 # v1
+        with:
+          apt: shellcheck
+
+      - name: Run ShellCheck
+        run: ./script/lint_shellcheck --ci
+
       - name: Run PSScriptAnalyzer (PowerShell Lint)
         run: ./script/lint_powershell -ci
         shell: pwsh

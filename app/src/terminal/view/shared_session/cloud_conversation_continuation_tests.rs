@@ -1152,13 +1152,10 @@ fn owned_third_party_task_without_metadata_shows_continue_in_cloud_tombstone() {
     });
 }
 
-/// With `TaskScope` removed, task ownership under `OrchestrationUnifiedStack`
-/// reduces to the same `creator.uid == current_user_uid` check as the
-/// flag-OFF path; owned tasks fall back to the metadata-free continuation
-/// path when no server conversation metadata is available yet.
+/// Owned tasks fall back to the metadata-free continuation path when no
+/// server conversation metadata is available yet.
 #[test]
 fn owned_task_without_metadata_allows_metadata_free_fallback() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         let TestHandles {
             terminal_view_id,

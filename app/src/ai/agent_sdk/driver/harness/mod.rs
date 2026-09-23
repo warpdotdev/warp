@@ -16,7 +16,6 @@ use warp_cli::{
     WARP_PARENT_RUN_ID_ENV, WARP_RUN_ID_ENV, WS_SERVER_URL_OVERRIDE_ENV,
 };
 use warp_core::channel::ChannelState;
-use warp_errors::report_if_error;
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
@@ -34,6 +33,7 @@ use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::mcp::JSONMCPServer;
 use crate::server::server_api::ServerApi;
 use crate::server::server_api::harness_support::{HarnessSupportClient, upload_to_target};
+use crate::server::telemetry::secret_redaction::redact_secrets_in_string;
 use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::{CLIAgentSessionStatus, CLIAgentSessionsModel};
 use crate::terminal::model::block::{BlockId, SerializedBlock};
@@ -45,18 +45,59 @@ mod codex;
 pub(crate) mod codex_transcript;
 pub(crate) mod exit_escalation;
 mod gemini;
+mod harness_persistence;
 mod json_utils;
 pub(crate) mod process_control;
 mod save_coordinator;
 mod skill_dirs_publish;
 mod telemetry;
+mod transcript_persistence;
+mod usage_reporting;
 pub(crate) use claude_code::ClaudeHarness;
 use claude_transcript::ClaudeResumeInfo;
 use codex::CodexHarness;
 use codex_transcript::CodexResumeInfo;
 use gemini::GeminiHarness;
-use save_coordinator::{SaveCoordinator, final_save_budget};
+use harness_persistence::{HarnessPersistence, PersistenceOutcome};
 pub(crate) use telemetry::ThirdPartyHarnessTelemetryEvent;
+
+const HARNESS_FAILURE_OUTPUT_MAX_BYTES: usize = 4 * 1024;
+const HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER: &str = "\n… harness output truncated …\n";
+
+fn truncate_harness_failure_output(output: &str) -> String {
+    if output.len() <= HARNESS_FAILURE_OUTPUT_MAX_BYTES {
+        return output.to_owned();
+    }
+
+    let retained_bytes =
+        HARNESS_FAILURE_OUTPUT_MAX_BYTES - HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER.len();
+    let prefix_budget = retained_bytes / 2;
+    let suffix_budget = retained_bytes - prefix_budget;
+
+    let mut prefix_end = prefix_budget;
+    while !output.is_char_boundary(prefix_end) {
+        prefix_end -= 1;
+    }
+
+    let mut suffix_start = output.len() - suffix_budget;
+    while !output.is_char_boundary(suffix_start) {
+        suffix_start += 1;
+    }
+
+    format!(
+        "{}{}{}",
+        &output[..prefix_end],
+        HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER,
+        &output[suffix_start..]
+    )
+}
+
+pub(super) fn prepare_harness_failure_output(output: &str) -> String {
+    let mut output = output.trim().to_owned();
+    // Redact before truncation so splitting a credential cannot hide it from detection.
+    redact_secrets_in_string(&mut output);
+    truncate_harness_failure_output(&output)
+}
 
 /// Harness-agnostic payload describing how to resume an existing conversation.
 ///
@@ -491,7 +532,7 @@ pub(crate) fn harness_model_env_vars(
 pub(crate) enum SavePoint {
     /// A periodic auto-save to minimize data loss.
     Periodic,
-    /// The final save of conversation state, after the harness has completed.
+    /// The closing save after graceful or forced harness termination.
     Final,
     /// A save after session activity such as prompt submission or completed tool use.
     PostTurn,
@@ -538,56 +579,30 @@ pub(crate) trait HarnessRunner: Send + Sync + 'static {
         &self,
         save_point: SavePoint,
         foreground: &ModelSpawner<AgentDriver>,
-    ) -> Result<()>;
-    /// Returns the coordinator owned by this runner for its full lifecycle.
-    fn save_coordinator(&self) -> &SaveCoordinator;
+    ) -> PersistenceOutcome;
+    fn persistence(&self) -> &HarnessPersistence;
 
     /// Queues a save without waiting for persistence; overlapping requests are coalesced.
-    async fn request_save(
+    async fn enqueue_save(
         self: Arc<Self>,
         save_point: SavePoint,
         foreground: &ModelSpawner<AgentDriver>,
     ) -> Result<()> {
-        let coordinator = self.save_coordinator();
         let background = foreground.spawn(|_, ctx| ctx.background_executor()).await?;
-        let runner = self.clone();
-        let foreground = foreground.clone();
-        coordinator.request(
+        self.persistence().enqueue(
+            Arc::downgrade(&self),
             save_point,
-            Arc::new(move |save_point| {
-                let runner = runner.clone();
-                let foreground = foreground.clone();
-                Box::pin(async move {
-                    if matches!(save_point, SavePoint::PostTurn) {
-                        report_if_error!(
-                            runner
-                                .handle_session_update(&foreground)
-                                .await
-                                .context("Failed to handle harness session update before save")
-                        );
-                    }
-                    runner.save_conversation(save_point, &foreground).await
-                })
-            }),
-            &background,
+            foreground.clone(),
+            background,
         );
         Ok(())
     }
 
-    /// Stops ordinary requests and runs one final save within the remaining shutdown budget.
-    async fn finish_saves(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
-        self.save_coordinator()
-            .finish(
-                async {
-                    report_if_error!(
-                        self.handle_session_update(foreground)
-                            .await
-                            .context("Failed to handle harness session update before final save")
-                    );
-                    self.save_conversation(SavePoint::Final, foreground).await
-                },
-                final_save_budget(),
-            )
+    /// Finalizes persistence within one deadline; staged usage does not determine its result.
+    async fn finalize_saves(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
+        let background = foreground.spawn(|_, ctx| ctx.background_executor()).await?;
+        self.persistence()
+            .finalize(self, foreground, &background)
             .await
     }
 

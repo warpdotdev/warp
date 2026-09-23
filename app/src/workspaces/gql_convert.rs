@@ -28,7 +28,10 @@ use warp_graphql::billing::{
 use warp_graphql::queries::get_conversation_usage as gql_usage;
 use warp_graphql::queries::get_workspaces_metadata_for_user::User as GqlUser;
 use warp_graphql::subscriptions::get_warp_drive_updates::WarpDriveUpdate;
-use warp_graphql::user::DiscoverableTeamData as GqlDiscoverableTeamData;
+use warp_graphql::user::{
+    DiscoverableTeamData as GqlDiscoverableTeamData,
+    DiscoverableWorkspaceData as GqlDiscoverableWorkspaceData,
+};
 use warp_graphql::workspace::{
     AddonCreditsSettings as GqlAddonCreditsSettings,
     AdminEnablementSetting as GqlAdminEnablementSetting, AiAutonomyValue as GqlAiAutonomyValue,
@@ -48,7 +51,9 @@ use warp_graphql::workspace::{
     WriteToPtyAutonomyValue as GqlWriteToPtyAutonomyValue,
 };
 
-use super::team::{DiscoverableTeam, MembershipRole, Team, TeamMember, TeamVisibility};
+use super::team::{
+    DiscoverableTeam, DiscoverableWorkspace, MembershipRole, Team, TeamMember, TeamVisibility,
+};
 use super::user_workspaces::WorkspacesMetadataResponse;
 use super::workspace::{
     AIAutonomyPolicy, AddonCreditsSettings, AdminEnablementSetting, AiAutonomySettings,
@@ -95,6 +100,21 @@ impl From<GqlTeamMember> for TeamMember {
             email: gql_team_member.email,
             role: gql_team_member.role.into(),
             is_disabled: gql_team_member.is_disabled,
+        }
+    }
+}
+
+impl From<GqlDiscoverableWorkspaceData> for DiscoverableWorkspace {
+    fn from(gql_workspace: GqlDiscoverableWorkspaceData) -> Self {
+        Self {
+            workspace_uid: gql_workspace.workspace_uid.into_inner().into(),
+            name: gql_workspace.name,
+            open_teams: gql_workspace
+                .open_teams
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            member_count: i64::from(gql_workspace.member_count),
         }
     }
 }

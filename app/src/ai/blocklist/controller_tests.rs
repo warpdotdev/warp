@@ -10,15 +10,15 @@ use chrono::Local;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
-use warp_multi_agent_api::response_event;
+use warp_multi_agent_api::{AgentType, response_event};
 use warpui::{App, ModelHandle, SingletonEntity, ViewHandle};
 
 use super::response_stream::{PendingResume, RecoveryBudget};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentAttachment, AIAgentContext, AIAgentInput, CancellationReason, ImageContext,
-    PassiveSuggestionTrigger, UserQueryMode,
+    AIAgentAttachment, AIAgentContext, AIAgentInput, BaseUserQuery, CancellationReason,
+    ImageContext, PassiveSuggestionTrigger, UserQueryMode,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::local_agent_task_sync_model::map_conversation_status_for_test;
@@ -284,6 +284,7 @@ fn input_for_query_converts_prompt_attachments_and_ignores_live_staging() {
                 None,
                 UserQueryMode::Normal,
                 None,
+                None,
                 HashMap::new(),
                 prompt_attachments,
                 context_model.as_ref(ctx),
@@ -329,6 +330,71 @@ fn input_for_query_converts_prompt_attachments_and_ignores_live_staging() {
             assert!(referenced_attachments.contains_key("notes.txt"));
             assert!(referenced_attachments.contains_key("notes.txt (1)"));
             assert!(!referenced_attachments.contains_key("live.txt"));
+        });
+    });
+}
+
+#[test]
+fn input_for_query_seeds_query_mode_and_agent_from_the_base() {
+    // A base carried by a shared-session prompt is authoritative for what it set: the input's
+    // rendered text, mode, and agent come from it (normalized like typed text), the client's
+    // resolved attachments still ride along, and the base is kept for the outgoing request.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |terminal, ctx| {
+            let conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                    history_model.start_new_conversation(terminal.id(), false, false, false, ctx)
+                });
+            let controller = terminal.ai_controller();
+            let context_model = controller.as_ref(ctx).context_model.clone();
+            let active_session = controller.as_ref(ctx).active_session.clone();
+            let task_id = TaskId::new("test-task".to_owned());
+
+            let base = BaseUserQuery::from_proto(warp_multi_agent_api::request::input::UserQuery {
+                query: "/plan from the server".to_owned(),
+                intended_agent: AgentType::Cli.into(),
+                ..Default::default()
+            });
+            let additional_attachments = HashMap::from([(
+                "notes.md".to_owned(),
+                AIAgentAttachment::PlainText("downloaded".to_owned()),
+            )]);
+
+            let input = super::input_for_query(
+                "from the prompt".to_owned(),
+                &task_id,
+                conversation_id,
+                None,
+                UserQueryMode::Normal,
+                None,
+                Some(base.clone()),
+                additional_attachments,
+                vec![],
+                context_model.as_ref(ctx),
+                active_session.as_ref(ctx),
+                ctx,
+            );
+
+            let AIAgentInput::UserQuery {
+                query,
+                user_query_mode,
+                intended_agent,
+                referenced_attachments,
+                base: input_base,
+                ..
+            } = input
+            else {
+                panic!("expected UserQuery");
+            };
+
+            assert_eq!(query, "from the server");
+            assert_eq!(user_query_mode, UserQueryMode::Plan);
+            assert_eq!(intended_agent, Some(AgentType::Cli));
+            assert!(referenced_attachments.contains_key("notes.md"));
+            assert_eq!(input_base, Some(base));
         });
     });
 }
@@ -441,6 +507,12 @@ fn explicit_stream_finished_failures_are_classified_without_init() {
         let reasons = [
             response_event::stream_finished::Reason::Other(Default::default()),
             response_event::stream_finished::Reason::LlmUnavailable(Default::default()),
+            response_event::stream_finished::Reason::ChatgptSubscriptionError(
+                response_event::stream_finished::ChatGptSubscriptionError {
+                    message: "subscription limit reached".to_owned(),
+                    ..Default::default()
+                },
+            ),
             response_event::stream_finished::Reason::InternalError(
                 response_event::stream_finished::InternalError {
                     message: "server stream failure".to_owned(),

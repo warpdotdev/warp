@@ -185,10 +185,15 @@ impl RequestMetadataRecord {
                             category: category.clone(),
                             usage_type,
                             model_id: model_id.clone(),
-                            input_tokens: tokens.input,
-                            output_tokens: tokens.output,
-                            cache_read_tokens: tokens.input_cache_read,
-                            cache_write_tokens: tokens.input_cache_write,
+                            // Wire counts are u64 (proto TokenCount); the record keeps u32 and saturates.
+                            // TODO(Xavientois): widen these fields to u64 to match the proto
+                            // TokenCount and drop the saturating narrowing.
+                            input_tokens: u32::try_from(tokens.input).unwrap_or(u32::MAX),
+                            output_tokens: u32::try_from(tokens.output).unwrap_or(u32::MAX),
+                            cache_read_tokens: u32::try_from(tokens.input_cache_read)
+                                .unwrap_or(u32::MAX),
+                            cache_write_tokens: u32::try_from(tokens.input_cache_write)
+                                .unwrap_or(u32::MAX),
                             input_cost_in_cents: cost.input_cost_in_cents,
                             output_cost_in_cents: cost.output_cost_in_cents,
                             cache_read_cost_in_cents: cost.input_cache_read_cost_in_cents,

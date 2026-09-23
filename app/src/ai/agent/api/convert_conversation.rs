@@ -32,10 +32,10 @@ use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
     AIAgentActionResult, AIAgentActionResultType, AIAgentContext, AIAgentExchange,
     AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputStatus,
-    CallMCPToolResult, CancellationReason, CloneRepositoryURL, CreateDocumentsResult,
-    DocumentContext, EditDocumentsResult, FileContext, FileGlobResult, FileGlobV2Match,
-    FileGlobV2Result, FinishedAIAgentOutput, GrepFileMatch, GrepLineMatch, GrepResult,
-    ImageContext, InsertReviewCommentsResult, OutputModelInfo, PassiveCodeDiffEntry,
+    BaseUserQuery, CallMCPToolResult, CancellationReason, CloneRepositoryURL,
+    CreateDocumentsResult, DocumentContext, EditDocumentsResult, FileContext, FileGlobResult,
+    FileGlobV2Match, FileGlobV2Result, FinishedAIAgentOutput, GrepFileMatch, GrepLineMatch,
+    GrepResult, ImageContext, InsertReviewCommentsResult, OutputModelInfo, PassiveCodeDiffEntry,
     PassiveSuggestionResultType, PassiveSuggestionTrigger, ReadDocumentsResult,
     ReadFilesFailedFile, ReadFilesResult, ReadMCPResourceResult, ReadShellCommandOutputResult,
     RequestCommandOutputResult, RequestFileEditsResult, SearchCodebaseFailureReason,
@@ -393,6 +393,7 @@ impl ConvertToExchanges for &api::Task {
                         user_query_mode: convert_user_query_mode(user_query.mode.as_ref()),
                         running_command: None,
                         intended_agent: Some(user_query.intended_agent()),
+                        base: BaseUserQuery::from_message(user_query),
                     });
                     true
                 }
@@ -411,6 +412,7 @@ impl ConvertToExchanges for &api::Task {
                                 user_query_mode: UserQueryMode::default(), // SystemQuery doesn't have mode field
                                 running_command: None,
                                 intended_agent: None,
+                                base: None,
                             });
                             true
                         }
@@ -473,6 +475,7 @@ impl ConvertToExchanges for &api::Task {
                                 .user_query
                                 .clone()
                                 .map(|user_query| crate::ai::agent::InvokeSkillUserQuery {
+                                    base: BaseUserQuery::from_message(&user_query),
                                     query: user_query.query,
                                     // Restored conversations currently do not hydrate invoke-skill
                                     // inline attachments back into client-side attachment structs.
@@ -973,10 +976,10 @@ pub(crate) fn convert_tool_call_result_to_input(
                         .map(|api_result| match &api_result.result {
                             Some(api::call_mcp_tool_result::success::result::Result::Text(
                                 text,
-                            )) => rmcp::model::Content::text(text.text.clone()),
+                            )) => rmcp::model::ContentBlock::text(text.text.clone()),
                             Some(api::call_mcp_tool_result::success::result::Result::Image(
                                 image,
-                            )) => rmcp::model::Content::image(
+                            )) => rmcp::model::ContentBlock::image(
                                 String::from_utf8_lossy(&image.data).to_string(),
                                 image.mime_type.clone(),
                             ),
@@ -984,7 +987,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                                 resource,
                             )) => match &resource.content_type {
                                 Some(api::mcp_resource_content::ContentType::Text(text)) => {
-                                    rmcp::model::Content::resource(
+                                    rmcp::model::ContentBlock::resource(
                                         rmcp::model::ResourceContents::text(
                                             text.content.clone(),
                                             resource.uri.clone(),
@@ -992,7 +995,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                                     )
                                 }
                                 Some(api::mcp_resource_content::ContentType::Binary(binary)) => {
-                                    rmcp::model::Content::resource(
+                                    rmcp::model::ContentBlock::resource(
                                         rmcp::model::ResourceContents::BlobResourceContents {
                                             uri: resource.uri.clone(),
                                             mime_type: Some(binary.mime_type.clone()),
@@ -1001,14 +1004,14 @@ pub(crate) fn convert_tool_call_result_to_input(
                                         },
                                     )
                                 }
-                                None => rmcp::model::Content::resource(
+                                None => rmcp::model::ContentBlock::resource(
                                     rmcp::model::ResourceContents::text(
                                         String::new(),
                                         resource.uri.clone(),
                                     ),
                                 ),
                             },
-                            None => rmcp::model::Content::text(String::new()),
+                            None => rmcp::model::ContentBlock::text(String::new()),
                         })
                         .collect();
 
