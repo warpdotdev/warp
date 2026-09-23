@@ -52,6 +52,7 @@ pub struct ActionButton {
     /// An optional tooltip to show on hover.
     tooltip: Option<String>,
     tooltip_sublabel: Option<String>,
+    tooltip_keybinding: Option<&'static str>,
     /// Maximum height of a tooltip before it truncates.
     tooltip_max_height: Option<f32>,
     size: ButtonSize,
@@ -224,6 +225,7 @@ impl ActionButton {
             label: label.into(),
             tooltip: None,
             tooltip_sublabel: None,
+            tooltip_keybinding: None,
             tooltip_max_height: None,
             has_menu: false,
             size: Default::default(),
@@ -269,6 +271,11 @@ impl ActionButton {
 
     pub fn with_tooltip_sublabel(mut self, tooltip_sublabel: impl Into<String>) -> Self {
         self.tooltip_sublabel = Some(tooltip_sublabel.into());
+        self
+    }
+
+    pub fn with_tooltip_keybinding(mut self, binding_name: &'static str) -> Self {
+        self.tooltip_keybinding = Some(binding_name);
         self
     }
 
@@ -436,6 +443,11 @@ impl ActionButton {
         ctx.notify();
     }
 
+    #[cfg(test)]
+    pub fn tooltip_for_test(&self) -> Option<&str> {
+        self.tooltip.as_deref()
+    }
+
     pub fn clear_tooltip(&mut self, ctx: &mut ViewContext<Self>) {
         self.tooltip = None;
         ctx.notify();
@@ -556,7 +568,11 @@ impl ActionButton {
             return;
         };
 
-        let tooltip_element = if let Some(tooltip_sublabel) = self.tooltip_sublabel.clone() {
+        let tooltip_sublabel = self
+            .tooltip_keybinding
+            .and_then(|name| KeystrokeSource::Binding(name).displayed(app))
+            .or_else(|| self.tooltip_sublabel.clone());
+        let tooltip_element = if let Some(tooltip_sublabel) = tooltip_sublabel {
             appearance
                 .ui_builder()
                 .tool_tip_with_sublabel(tooltip, tooltip_sublabel)

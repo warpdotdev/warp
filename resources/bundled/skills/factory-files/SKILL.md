@@ -1,6 +1,6 @@
 ---
 name: factory-files
-description: Create and edit file-based Warp software factory definitions, in a repository tree rooted at a factory.yaml. Use when authoring or changing that factory.yaml, Agent, Automation, Scorer, Runner, or Webhook files under that root, or its factory and agent skill trees, and when fixing Factory file diagnostics. Do not use for agent-definition Markdown that belongs to another tool, for a tree with no factory.yaml, or to operate a live factory or hand work to one through Factory MCP.
+description: Create and edit file-based Warp software factory definitions, in a repository tree rooted at a factory.yaml. Use when authoring or changing that factory.yaml, Agent, Automation, Scorer, Benchmark, Runner, or Webhook files under that root, or its factory and agent skill trees, and when fixing Factory file diagnostics. Do not use for agent-definition Markdown that belongs to another tool, for a tree with no factory.yaml, or to operate a live factory or hand work to one through Factory MCP.
 ---
 
 # Factory Files
@@ -40,6 +40,8 @@ agents/<name>/skills/**             skills only that agent can use
 automations/<name>/automation.md    optional
 runners/<name>.yaml                 optional
 scorers/<name>/scorer.md            optional; Markdown body is the rubric
+benchmarks/<name>/suite.yaml         optional; benchmark suite manifest
+benchmarks/<name>/tasks/<name>.yaml  optional; benchmark suite task
 webhooks/<name>.yaml                optional; custom webhook sources
 skills/**                           skills every agent in the factory can use
 ```
@@ -72,6 +74,7 @@ The registry lists the versions the server supports. The version endpoint
 returns every document describing one version, keyed by file name:
 `factory.schema.json` for `factory.yaml`, `agent.schema.json`,
 `automation.schema.json`, `runner.schema.json`, `scorer.schema.json` and
+`benchmark_suite.schema.json`, `benchmark_suite_task.schema.json`, and
 `webhook.schema.json` for the corresponding resources, and
 `common.schema.json` for the definitions they share. Both endpoints are
 unauthenticated. They are exact for the version they describe: an unknown

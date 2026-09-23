@@ -14,6 +14,7 @@ use warp_graphql::queries::get_workspaces_metadata_for_user::{
     User as GqlUser, UserProfile as GqlUserProfile, UserPurchasePolicyBillingMetadata,
     UserPurchasePolicyTier,
 };
+use warp_graphql::user::DiscoverableTeamData as GqlDiscoverableTeamData;
 use warp_graphql::workspace::{
     AddonCreditsSettings as GqlAddonCreditsSettings,
     AdminEnablementSetting as GqlAdminEnablementSetting,
@@ -55,7 +56,9 @@ use warpui_extras::user_preferences;
 use super::*;
 use crate::ai::blocklist::is_agent_mode_autonomy_allowed;
 use crate::ai::execution_profiles::ActionPermission;
-use crate::ai::llms::{LLMInfo, LLMModelHost, LLMProvider, MODELS_BY_FEATURE_CACHE_KEY};
+use crate::ai::llms::{
+    AvailableLLMs, LLMInfo, LLMModelHost, LLMProvider, MODELS_BY_FEATURE_CACHE_KEY, ModelsByFeature,
+};
 use crate::auth::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObject, CloudObjectGuest};
@@ -74,8 +77,10 @@ use crate::settings::{
 use crate::system::SystemStats;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{CloudWorkflow, CloudWorkflowModel};
-use crate::workspaces::gql_convert::PLACEHOLDER_WORKSPACE_UID;
-use crate::workspaces::team::{Team, TeamMember, TeamVisibility};
+use crate::workspaces::gql_convert::{
+    PLACEHOLDER_WORKSPACE_UID, workspaces_metadata_response_from_gql,
+};
+use crate::workspaces::team::{DiscoverableWorkspace, Team, TeamMember, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -83,7 +88,7 @@ use crate::workspaces::workspace::{
     AdminEnablementSetting, ByoFirstPartyKey, EnforceableSetting, HostEnablementSetting,
     LinkSharingSettings, LlmHostSettings, ManagedByokByoePolicy, MultiAdminPolicy,
     PurchaseAddOnCreditsPolicy, SandboxedAgentSettings, SplitListSetting, TeamByoSettings,
-    TeamLinkSharingSettings, Workspace,
+    TeamLinkSharingSettings, Workspace, WorkspaceMember, WorkspaceMemberUsageInfo,
 };
 
 #[derive(Default)]
@@ -200,6 +205,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
         name: "test".to_string(),
         stripe_customer_id: None,
         teams: vec![team.clone()],
+        open_teams: vec![],
         billing_metadata: Default::default(),
         bonus_grants_purchased_this_month: Default::default(),
         billing_cycle_usage: None,
@@ -918,6 +924,7 @@ fn workspace_for_test(team: &Team) -> Workspace {
         name: "test".to_string(),
         stripe_customer_id: None,
         teams: vec![team.clone()],
+        open_teams: vec![],
         billing_metadata: team.billing_metadata.clone(),
         bonus_grants_purchased_this_month: Default::default(),
         billing_cycle_usage: None,
@@ -932,6 +939,256 @@ fn workspace_for_test(team: &Team) -> Workspace {
     }
 }
 
+fn workspace_for_teams(teams: Vec<Team>) -> Workspace {
+    let mut workspace = workspace_for_test(&team_for_test());
+    workspace.teams = teams;
+    workspace
+}
+
+fn team_selection(team: Option<Option<String>>) -> warp_cli::scope::TeamSelection {
+    warp_cli::scope::TeamSelection { team }
+}
+
+fn object_scope(team: Option<Option<String>>, personal: bool) -> warp_cli::scope::ObjectScope {
+    warp_cli::scope::ObjectScope {
+        team_selection: team_selection(team),
+        personal,
+    }
+}
+
+#[test]
+fn cli_scope_without_selection_is_teamless_without_teams() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace_for_teams(vec![])]);
+
+        app.read(|ctx| {
+            let scope = UserWorkspaces::as_ref(ctx)
+                .team_scope_for_cli(&team_selection(None))
+                .expect("no selection should be teamless when the user has no teams");
+            assert!(matches!(scope, TeamScopeForCli::Personal));
+        });
+    })
+}
+
+#[test]
+fn cli_scope_without_selection_uses_the_sole_team() {
+    let team = team_for_test();
+    let team_uid = team.uid;
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace_for_teams(vec![team])]);
+
+        app.read(|ctx| {
+            let scope = UserWorkspaces::as_ref(ctx)
+                .team_scope_for_cli(&team_selection(None))
+                .expect("no selection should use the sole team");
+            assert!(matches!(scope, TeamScopeForCli::Team(uid) if uid == team_uid));
+        });
+    })
+}
+
+#[test]
+fn cli_scope_without_selection_rejects_multiple_teams() {
+    let (first_team, second_team) = two_teams();
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(
+            &mut app,
+            vec![workspace_for_teams(vec![first_team, second_team])],
+        );
+
+        app.read(|ctx| {
+            let result = UserWorkspaces::as_ref(ctx).team_scope_for_cli(&team_selection(None));
+            assert!(matches!(
+                result,
+                Err(team_workspace_settings::TeamScopeForCliError::NoSoleTeam(
+                    SoleTeamError::MoreThanOneTeam { .. }
+                ))
+            ));
+        });
+    })
+}
+
+#[test]
+fn cli_object_scope_personal_is_teamless_with_multiple_teams() {
+    let (first_team, second_team) = two_teams();
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(
+            &mut app,
+            vec![workspace_for_teams(vec![first_team, second_team])],
+        );
+
+        app.read(|ctx| {
+            let scope = UserWorkspaces::as_ref(ctx)
+                .team_scope_for_cli_object(&object_scope(None, true))
+                .expect("explicit personal scope should not require a team");
+            assert!(matches!(scope, TeamScopeForCli::Personal));
+        });
+    })
+}
+#[test]
+fn cli_scope_bare_team_requires_a_sole_team() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace_for_teams(vec![])]);
+
+        app.read(|ctx| {
+            let result =
+                UserWorkspaces::as_ref(ctx).team_scope_for_cli(&team_selection(Some(None)));
+            assert!(matches!(
+                result,
+                Err(team_workspace_settings::TeamScopeForCliError::NoSoleTeam(
+                    SoleTeamError::NoTeam
+                ))
+            ));
+        });
+    })
+}
+
+#[test]
+fn cli_scope_bare_team_uses_the_sole_team() {
+    let team = team_for_test();
+    let team_uid = team.uid;
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace_for_teams(vec![team])]);
+
+        app.read(|ctx| {
+            let scope = UserWorkspaces::as_ref(ctx)
+                .team_scope_for_cli(&team_selection(Some(None)))
+                .expect("bare --team should use the sole team");
+            assert!(matches!(scope, TeamScopeForCli::Team(uid) if uid == team_uid));
+        });
+    })
+}
+
+#[test]
+fn cli_scope_bare_team_rejects_multiple_teams() {
+    let (first_team, second_team) = two_teams();
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(
+            &mut app,
+            vec![workspace_for_teams(vec![first_team, second_team])],
+        );
+
+        app.read(|ctx| {
+            let result =
+                UserWorkspaces::as_ref(ctx).team_scope_for_cli(&team_selection(Some(None)));
+            assert!(matches!(
+                result,
+                Err(team_workspace_settings::TeamScopeForCliError::NoSoleTeam(
+                    SoleTeamError::MoreThanOneTeam { .. }
+                ))
+            ));
+        });
+    })
+}
+#[test]
+fn cli_scope_explicit_team_validates_the_uid_and_membership() {
+    let (first_team, second_team) = two_teams();
+    let second_team_uid = second_team.uid;
+    let missing_team_uid: ServerId = 789.into();
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(
+            &mut app,
+            vec![workspace_for_teams(vec![first_team, second_team])],
+        );
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces
+                .team_scope_for_cli(&team_selection(Some(Some(second_team_uid.to_string()))))
+                .expect("an explicit member team should resolve");
+            assert!(matches!(scope, TeamScopeForCli::Team(uid) if uid == second_team_uid));
+
+            let invalid =
+                user_workspaces.team_scope_for_cli(&team_selection(Some(Some("invalid".into()))));
+            assert!(matches!(
+                invalid,
+                Err(team_workspace_settings::TeamScopeForCliError::InvalidTeamUid { .. })
+            ));
+
+            let not_a_member = user_workspaces
+                .team_scope_for_cli(&team_selection(Some(Some(missing_team_uid.to_string()))));
+            assert!(matches!(
+                not_a_member,
+                Err(team_workspace_settings::TeamScopeForCliError::NotAMember(_))
+            ));
+        });
+    })
+}
+
+#[test]
+fn cli_scope_reads_the_selected_teams_model_choices() {
+    let (mut first_team, mut second_team) = two_teams();
+    let second_team_uid = second_team.uid;
+    first_team.feature_model_choice = ModelsByFeature {
+        agent_mode: AvailableLLMs::new(
+            "first-team-model".into(),
+            vec![LLMInfo::new_for_test("first-team-model")],
+            None,
+        )
+        .expect("first team model choices should be valid"),
+        ..Default::default()
+    };
+    second_team.feature_model_choice = ModelsByFeature {
+        agent_mode: AvailableLLMs::new(
+            "second-team-model".into(),
+            vec![LLMInfo::new_for_test("second-team-model")],
+            None,
+        )
+        .expect("second team model choices should be valid"),
+        ..Default::default()
+    };
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(
+            &mut app,
+            vec![workspace_for_teams(vec![first_team, second_team])],
+        );
+
+        app.read(|ctx| {
+            let workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = workspaces
+                .team_scope_for_cli(&team_selection(Some(Some(second_team_uid.to_string()))))
+                .expect("the selected team should resolve");
+            let models = &workspaces.feature_model_choice_for_scope(&scope).agent_mode;
+
+            assert!(
+                models.info_for_id(&"second-team-model".into()).is_some(),
+                "the selected team's model should be available"
+            );
+            assert!(
+                models.info_for_id(&"first-team-model".into()).is_none(),
+                "another team's model should not be available"
+            );
+        });
+    })
+}
+
+#[test]
+fn teamless_cli_scope_reads_personal_workspace_model_choices() {
+    let mut workspace = workspace_for_teams(vec![]);
+    workspace.feature_model_choice = ModelsByFeature {
+        agent_mode: AvailableLLMs::new(
+            "personal-model".into(),
+            vec![LLMInfo::new_for_test("personal-model")],
+            None,
+        )
+        .expect("personal model choices should be valid"),
+        ..Default::default()
+    };
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            let workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = workspaces
+                .team_scope_for_cli(&team_selection(None))
+                .expect("a teamless user should retain personal scope");
+            let models = &workspaces.feature_model_choice_for_scope(&scope).agent_mode;
+
+            assert!(models.info_for_id(&"personal-model".into()).is_some());
+        });
+    })
+}
 #[test]
 fn test_current_workspace_billing_metadata_uses_selected_teamless_workspace() {
     let first_team = team_for_test();
@@ -1166,7 +1423,7 @@ fn admin_billing_link_for_default_team_rejects_regular_members() {
 }
 
 #[test]
-fn test_window_team_assignment_falls_back_when_team_is_removed() {
+fn test_every_departed_team_window_falls_back_when_team_is_removed() {
     let first_team = team_for_test();
     let mut removed_team = team_for_test();
     removed_team.uid = 456.into();
@@ -1175,19 +1432,56 @@ fn test_window_team_assignment_falls_back_when_team_is_removed() {
 
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![workspace.clone()]);
-
-        let window_id = WindowId::new();
+        let first_removed_team_window = WindowId::new();
+        let second_removed_team_window = WindowId::new();
+        let existing_fallback_team_window = WindowId::new();
         UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.set_team_for_window(window_id, removed_team.uid, ctx);
+            user_workspaces.set_team_for_window(first_removed_team_window, removed_team.uid, ctx);
+            user_workspaces.set_team_for_window(second_removed_team_window, removed_team.uid, ctx);
+            user_workspaces.set_team_for_window(existing_fallback_team_window, first_team.uid, ctx);
             workspace.teams.retain(|team| team.uid != removed_team.uid);
             user_workspaces.update_workspaces(vec![workspace], ctx);
         });
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
             assert_eq!(
-                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
+                user_workspaces.team_uid_for_window(first_removed_team_window),
                 Some(first_team.uid)
             );
+            assert_eq!(
+                user_workspaces.team_uid_for_window(second_removed_team_window),
+                Some(first_team.uid)
+            );
+            assert_eq!(
+                user_workspaces.team_uid_for_window(existing_fallback_team_window),
+                Some(first_team.uid)
+            );
+        });
+    })
+}
+
+#[test]
+fn test_every_departed_team_window_becomes_teamless_without_remaining_memberships() {
+    let removed_team = team_for_test();
+    let mut workspace = workspace_for_test(&removed_team);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace.clone()]);
+
+        let first_window = WindowId::new();
+        let second_window = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(first_window, removed_team.uid, ctx);
+            user_workspaces.set_team_for_window(second_window, removed_team.uid, ctx);
+            workspace.teams.clear();
+            user_workspaces.update_workspaces(vec![workspace], ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(user_workspaces.team_uid_for_window(first_window), None);
+            assert_eq!(user_workspaces.team_uid_for_window(second_window), None);
         });
     })
 }
@@ -1592,6 +1886,54 @@ fn switching_a_window_to_its_current_team_announces_nothing() {
         });
 
         assert_eq!(changes.get(), 0);
+    })
+}
+
+#[test]
+fn joining_a_workspace_team_retains_memberships_and_preserves_the_current_window() {
+    let (platform, security, mut joined_workspace) = platform_and_security();
+    joined_workspace.open_teams.clear();
+    let initial_workspace = workspace_for_test(&platform);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![initial_workspace]);
+
+        let window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, Some(platform.uid), ctx);
+            user_workspaces.on_join_team_in_workspace(
+                security.uid,
+                Ok(WorkspacesMetadataWithPricing {
+                    metadata: WorkspacesMetadataResponse {
+                        workspaces: vec![joined_workspace],
+                        joinable_teams: vec![],
+                        experiments: None,
+                        ai_credit_availability: None,
+                        user_purchase_policy: None,
+                    },
+                    pricing_info: None,
+                }),
+                ctx,
+            );
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(
+                user_workspaces
+                    .current_workspace()
+                    .expect("workspace should remain selected")
+                    .teams
+                    .iter()
+                    .map(|team| team.uid)
+                    .collect::<Vec<_>>(),
+                vec![platform.uid, security.uid]
+            );
+            assert_eq!(
+                user_workspaces.team_uid_for_window(window_id),
+                Some(platform.uid)
+            );
+        });
     })
 }
 
@@ -2904,6 +3246,7 @@ fn test_joining_team_moves_objects() {
         name: "test".to_string(),
         stripe_customer_id: None,
         teams: vec![team.clone()],
+        open_teams: vec![],
         billing_metadata: Default::default(),
         bonus_grants_purchased_this_month: Default::default(),
         billing_cycle_usage: None,
@@ -3275,6 +3618,7 @@ fn test_leaving_team_moves_objects() {
         name: "test".to_string(),
         stripe_customer_id: None,
         teams: vec![team.clone()],
+        open_teams: vec![],
         billing_metadata: Default::default(),
         bonus_grants_purchased_this_month: Default::default(),
         billing_cycle_usage: None,
@@ -3495,6 +3839,135 @@ fn test_purchase_addon_credits_forwards_team_uid_when_present() {
 }
 
 #[test]
+fn test_remove_user_from_workspace_refreshes_state_only_on_success() {
+    for succeeds in [true, false] {
+        let user_uid = UserUid::new("member-uid");
+        let member_email = "member@example.com".to_string();
+        let mut team = team_for_test();
+        team.members.push(TeamMember {
+            uid: user_uid,
+            email: member_email.clone(),
+            role: MembershipRole::User,
+            is_disabled: false,
+        });
+        let mut workspace = workspace_for_test(&team);
+        workspace.members.push(WorkspaceMember {
+            uid: user_uid,
+            email: member_email.clone(),
+            role: MembershipRole::User,
+            is_disabled: false,
+            usage_info: WorkspaceMemberUsageInfo {
+                is_unlimited: true,
+                request_limit: 0,
+                requests_used_since_last_refresh: 0,
+                is_request_limit_prorated: false,
+            },
+        });
+        let workspace_uid = workspace.uid;
+        let mut updated_workspace = workspace.clone();
+        updated_workspace.members.clear();
+        updated_workspace.teams[0].members.clear();
+
+        App::test((), move |mut app| async move {
+            let mut workspace_client = MockWorkspaceClient::new();
+            workspace_client
+                .expect_remove_user_from_workspace()
+                .withf(move |actual_user_uid, actual_workspace_uid, entrypoint| {
+                    *actual_user_uid == user_uid
+                        && *actual_workspace_uid == workspace_uid
+                        && matches!(entrypoint, CloudObjectEventEntrypoint::TeamSettings)
+                })
+                .times(1)
+                .returning(move |_, _, _| {
+                    if succeeds {
+                        Ok(WorkspacesMetadataWithPricing {
+                            metadata: WorkspacesMetadataResponse {
+                                workspaces: vec![updated_workspace.clone()],
+                                joinable_teams: vec![],
+                                experiments: None,
+                                ai_credit_availability: None,
+                                user_purchase_policy: None,
+                            },
+                            pricing_info: None,
+                        })
+                    } else {
+                        Err(anyhow::anyhow!("workspace removal rejected"))
+                    }
+                });
+
+            app.add_singleton_model(PrivacySettings::mock);
+            app.add_singleton_model(|ctx| {
+                UserWorkspaces::mock(
+                    Arc::new(MockTeamClient::new()),
+                    Arc::new(workspace_client),
+                    vec![workspace],
+                    ctx,
+                )
+            });
+
+            let user_workspaces_handle = UserWorkspaces::handle(&app);
+            let (sender, receiver) = async_channel::unbounded();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(
+                    &user_workspaces_handle,
+                    move |_, event: &UserWorkspacesEvent, _| match event {
+                        UserWorkspacesEvent::RemoveUserFromWorkspaceSuccess => {
+                            let _ = sender.try_send(Ok(()));
+                        }
+                        UserWorkspacesEvent::RemoveUserFromWorkspaceRejected(err) => {
+                            let _ = sender.try_send(Err(err.to_string()));
+                        }
+                        _ => {}
+                    },
+                );
+            });
+
+            UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+                user_workspaces.remove_user_from_workspace(
+                    user_uid,
+                    workspace_uid,
+                    CloudObjectEventEntrypoint::TeamSettings,
+                    ctx,
+                );
+            });
+
+            let event_result = receiver
+                .recv()
+                .await
+                .expect("expected workspace removal result event");
+            if succeeds {
+                event_result.expect("expected RemoveUserFromWorkspaceSuccess");
+            } else {
+                assert_eq!(
+                    event_result.expect_err("expected RemoveUserFromWorkspaceRejected"),
+                    "workspace removal rejected"
+                );
+            }
+
+            app.read(|ctx| {
+                let workspace = UserWorkspaces::as_ref(ctx)
+                    .current_workspace()
+                    .expect("workspace should remain available");
+                assert_eq!(
+                    workspace
+                        .members
+                        .iter()
+                        .any(|member| member.uid == user_uid),
+                    !succeeds
+                );
+                assert_eq!(
+                    workspace.teams[0]
+                        .members
+                        .iter()
+                        .any(|member| member.uid == user_uid),
+                    !succeeds
+                );
+            });
+        });
+    }
+}
+
+#[test]
 fn test_remove_user_from_team_rejected_emits_error_event_without_updating_workspaces() {
     let team = team_for_test();
     let team_uid = team.uid;
@@ -3693,6 +4166,7 @@ fn gql_workspace(
         stripe_customer_id: None,
         members: vec![],
         teams: vec![],
+        open_teams: vec![],
         billing_metadata: GqlBillingMetadata {
             customer_type: GqlCustomerType::Free,
             delinquency_status: GqlDelinquencyStatus::NoDelinquency,
@@ -3944,7 +4418,10 @@ fn test_team_switcher_drops_teams_the_admin_is_not_a_member_of() {
             gql_team("other-team", "Other Team", &["someone-else"]),
         ];
 
-        apply_workspaces_metadata(&mut app, gql_user(None, vec![workspace]).into());
+        apply_workspaces_metadata(
+            &mut app,
+            workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false),
+        );
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
@@ -3970,7 +4447,10 @@ fn test_team_switcher_keeps_every_team_the_user_is_a_member_of() {
             gql_team("second-team", "Second Team", &["test-user"]),
         ];
 
-        apply_workspaces_metadata(&mut app, gql_user(None, vec![workspace]).into());
+        apply_workspaces_metadata(
+            &mut app,
+            workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false),
+        );
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
@@ -3998,7 +4478,10 @@ fn test_teamless_user_falls_back_to_workspace_settings() {
         workspace.settings.llm_settings.enabled = true;
         workspace.teams = vec![gql_team("other-team", "Other Team", &["someone-else"])];
 
-        apply_workspaces_metadata(&mut app, gql_user(None, vec![workspace]).into());
+        apply_workspaces_metadata(
+            &mut app,
+            workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false),
+        );
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
@@ -4026,7 +4509,10 @@ fn test_member_team_settings_win_over_workspace_settings() {
         team.settings.llm_settings.enabled = false;
         workspace.teams = vec![team];
 
-        apply_workspaces_metadata(&mut app, gql_user(None, vec![workspace]).into());
+        apply_workspaces_metadata(
+            &mut app,
+            workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false),
+        );
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
@@ -4073,6 +4559,158 @@ fn gql_user(
     }
 }
 
+fn discovery_options_for_test() -> DiscoveryOptions {
+    DiscoveryOptions {
+        workspaces: vec![DiscoverableWorkspace {
+            workspace_uid: ServerId::from(10).into(),
+            name: "Discoverable Workspace".to_string(),
+            open_teams: vec![DiscoverableTeam {
+                team_uid: ServerId::from(11).to_string(),
+                num_members: 2,
+                name: "Open Team".to_string(),
+                team_accepting_invites: true,
+            }],
+            member_count: 4,
+        }],
+        legacy_teams: vec![DiscoverableTeam {
+            team_uid: ServerId::from(12).to_string(),
+            num_members: 3,
+            name: "Legacy Team".to_string(),
+            team_accepting_invites: true,
+        }],
+    }
+}
+
+#[test]
+fn test_fetch_discovery_options_success_updates_model_and_emits_event() {
+    App::test((), |mut app| async move {
+        let returned_options = discovery_options_for_test();
+        let mut team_client = MockTeamClient::new();
+        team_client
+            .expect_get_discovery_options()
+            .times(1)
+            .return_once(move || Ok(returned_options));
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(team_client),
+                Arc::new(MockWorkspaceClient::new()),
+                vec![],
+                ctx,
+            )
+        });
+
+        let user_workspaces = UserWorkspaces::handle(&app);
+        let (sender, receiver) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&user_workspaces, move |_, event, _| {
+                if let UserWorkspacesEvent::FetchDiscoveryOptionsSuccess(options) = event {
+                    let _ = sender.try_send(options.clone());
+                }
+            });
+        });
+
+        user_workspaces.update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.fetch_discovery_options(ctx);
+        });
+
+        let options = receiver
+            .recv()
+            .await
+            .expect("expected discovery-options success event");
+        assert_eq!(options.workspaces.len(), 1);
+        assert_eq!(options.workspaces[0].name, "Discoverable Workspace");
+        assert_eq!(options.legacy_teams.len(), 1);
+        app.read(|ctx| {
+            assert_eq!(UserWorkspaces::as_ref(ctx).joinable_teams.len(), 1);
+        });
+    })
+}
+
+#[test]
+fn test_join_workspace_from_discovery_with_team_forwards_target_and_updates_workspace() {
+    App::test((), |mut app| async move {
+        let workspace_uid: WorkspaceUid = ServerId::from(10).into();
+        let team_uid = ServerId::from(11);
+        let mut team_client = MockTeamClient::new();
+        team_client
+            .expect_join_workspace_from_discovery()
+            .withf(move |actual_workspace_uid, actual_team_uid| {
+                *actual_workspace_uid == workspace_uid && *actual_team_uid == Some(team_uid)
+            })
+            .times(1)
+            .return_once(move |_, _| {
+                Ok(WorkspacesMetadataWithPricing {
+                    metadata: WorkspacesMetadataResponse {
+                        workspaces: vec![Workspace::from_local_cache(
+                            workspace_uid,
+                            "Joined Workspace".to_string(),
+                            None,
+                            None,
+                        )],
+                        joinable_teams: vec![],
+                        experiments: None,
+                        ai_credit_availability: None,
+                        user_purchase_policy: None,
+                    },
+                    pricing_info: None,
+                })
+            });
+        app.add_singleton_model(PrivacySettings::mock);
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(team_client),
+                Arc::new(MockWorkspaceClient::new()),
+                vec![],
+                ctx,
+            )
+        });
+
+        let user_workspaces = UserWorkspaces::handle(&app);
+        let (sender, receiver) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&user_workspaces, move |_, event, _| {
+                if let UserWorkspacesEvent::JoinWorkspaceFromDiscoverySuccess = event {
+                    let _ = sender.try_send(());
+                }
+            });
+        });
+
+        user_workspaces.update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.join_workspace_from_discovery(workspace_uid, Some(team_uid), ctx);
+        });
+
+        receiver
+            .recv()
+            .await
+            .expect("expected workspace discovery join success event");
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx)
+                    .current_workspace()
+                    .map(|workspace| workspace.uid),
+                Some(workspace_uid)
+            );
+        });
+    })
+}
+
+#[test]
+fn test_workspace_open_teams_survive_metadata_conversion() {
+    let mut workspace = gql_workspace("workspace_uid123456789", None);
+    workspace.open_teams = vec![GqlDiscoverableTeamData {
+        team_uid: "0000000000000000000002".into(),
+        num_members: 2,
+        name: "Second Team".to_string(),
+        team_accepting_invites: true,
+    }];
+
+    let response = workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false);
+
+    let open_teams = &response.workspaces[0].open_teams;
+    assert_eq!(open_teams.len(), 1);
+    assert_eq!(open_teams[0].name, "Second Team");
+}
+
 #[test]
 fn test_user_level_policy_survives_placeholder_filtering_for_teamless_users() {
     App::test((), |mut app| async move {
@@ -4082,11 +4720,13 @@ fn test_user_level_policy_survives_placeholder_filtering_for_teamless_users() {
         // The real conversion path: a teamless user's ONLY workspace is the
         // placeholder, which must stay filtered out of `workspaces`, while
         // the user-level purchase policy is captured separately.
-        let response: WorkspacesMetadataResponse = gql_user(
-            Some(gql_premium_purchase_policy()),
-            vec![gql_workspace(PLACEHOLDER_WORKSPACE_UID, None)],
-        )
-        .into();
+        let response: WorkspacesMetadataResponse = workspaces_metadata_response_from_gql(
+            gql_user(
+                Some(gql_premium_purchase_policy()),
+                vec![gql_workspace(PLACEHOLDER_WORKSPACE_UID, None)],
+            ),
+            false,
+        );
         assert!(
             response.workspaces.is_empty(),
             "the placeholder workspace must stay filtered out"
@@ -4140,14 +4780,16 @@ fn test_workspace_policy_wins_over_user_level_policy() {
             premium_enabled: false,
             price_premium_bps: 0,
         };
-        let response: WorkspacesMetadataResponse = gql_user(
-            Some(gql_premium_purchase_policy()),
-            vec![
-                gql_workspace(PLACEHOLDER_WORKSPACE_UID, None),
-                gql_workspace("workspace_uid123456789", Some(standard_policy)),
-            ],
-        )
-        .into();
+        let response: WorkspacesMetadataResponse = workspaces_metadata_response_from_gql(
+            gql_user(
+                Some(gql_premium_purchase_policy()),
+                vec![
+                    gql_workspace(PLACEHOLDER_WORKSPACE_UID, None),
+                    gql_workspace("workspace_uid123456789", Some(standard_policy)),
+                ],
+            ),
+            false,
+        );
         assert_eq!(response.workspaces.len(), 1);
 
         UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
@@ -4231,7 +4873,8 @@ fn team_feature_model_choices_conversion_keeps_each_teams_choice_distinct() {
     let mut workspace = gql_workspace("workspace_uid123456789", None);
     workspace.teams = vec![team_a, team_b];
 
-    let response: WorkspacesMetadataResponse = gql_user(None, vec![workspace]).into();
+    let response: WorkspacesMetadataResponse =
+        workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false);
 
     assert_eq!(response.workspaces.len(), 1);
     let teams = &response.workspaces[0].teams;

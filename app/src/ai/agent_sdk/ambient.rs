@@ -10,6 +10,7 @@ use futures::{StreamExt, future};
 use serde::{Deserialize, Serialize};
 use warp_cli::agent::{Harness, OutputFormat, Prompt, RunCloudArgs};
 use warp_cli::json_filter::JsonOutput;
+use warp_cli::scope::TeamSelection;
 use warp_cli::task::{
     ArtifactTypeArg, ExecutionLocationArg, ListTasksArgs, MessageCommand, MessageDeliveredArgs,
     MessageListArgs, MessageReadArgs, MessageSendArgs, MessageWatchArgs, RunSortByArg,
@@ -46,9 +47,10 @@ use crate::server::server_api::ai::{
     ListAgentMessagesRequest, ReadAgentMessageResponse, RunSortBy, RunSortOrder,
     SendAgentMessageRequest, SendAgentMessageResponse, SpawnAgentRequest, TaskListFilter,
 };
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::shared_session;
 use crate::util::time_format::format_approx_duration_from_now_utc;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamScopeForCli, UserWorkspaces};
 
 const MAX_LINE_WIDTH: usize = 90;
 const STREAM_RETRY_BACKOFF_STEPS: &[u64] = &[1, 2, 5, 10];
@@ -78,7 +80,14 @@ pub fn list_ambient_agent_tasks(
     let json_output = args.json_output.clone();
     let output_format = global_options.output_format;
     runner.update(ctx, |runner, ctx| {
-        runner.list_tasks(args.limit, filter, output_format, json_output, ctx)
+        runner.list_tasks(
+            args.team_selection,
+            args.limit,
+            filter,
+            output_format,
+            json_output,
+            ctx,
+        )
     })
 }
 
@@ -195,6 +204,31 @@ fn sort_order_from_arg(arg: SortOrderArg) -> RunSortOrder {
     }
 }
 
+enum ListTasksOutput {
+    Raw(serde_json::Value),
+    Tasks(Vec<AmbientAgentTask>),
+}
+
+async fn load_tasks_for_output(
+    ai_client: &dyn AIClient,
+    limit: i32,
+    filter: TaskListFilter,
+    request_team_scope: RequestTeamScope,
+    output_format: OutputFormat,
+    json_output: &JsonOutput,
+) -> anyhow::Result<ListTasksOutput> {
+    if matches!(output_format, OutputFormat::Json) || json_output.force_json_output() {
+        let response = ai_client
+            .list_agent_runs_raw(limit, filter, Some(request_team_scope))
+            .await?;
+        Ok(ListTasksOutput::Raw(response))
+    } else {
+        let tasks = ai_client
+            .list_ambient_agent_tasks(limit, filter, Some(request_team_scope))
+            .await?;
+        Ok(ListTasksOutput::Tasks(tasks))
+    }
+}
 /// Run a message-related CLI command.
 pub fn run_message(
     ctx: &mut AppContext,
@@ -386,10 +420,13 @@ impl AmbientAgentRunner {
                 vec![]
             };
 
-            if let Err(err) = super::common::validate_team_scope(&args.scope, ctx) {
-                super::report_fatal_error(err, ctx);
-                return;
-            }
+            let team_scope = match super::common::resolve_object_scope(&args.scope, ctx) {
+                Ok(team_scope) => team_scope,
+                Err(err) => {
+                    super::report_fatal_error(err, ctx);
+                    return;
+                }
+            };
 
             let mut environment_args = args.environment;
             if environment_args.environment.is_none() && !environment_args.no_environment
@@ -400,8 +437,11 @@ impl AmbientAgentRunner {
                     environment_args.environment = Some(environment_id);
                 }
 
-            let environment_id = match EnvironmentChoice::resolve_for_create(environment_args, ctx)
-            {
+            let environment_id = match EnvironmentChoice::resolve_for_create(
+                environment_args,
+                &team_scope,
+                ctx,
+            ) {
                 Ok(EnvironmentChoice::None) => {
                     eprintln!("Agent will run without an environment.");
                     None
@@ -488,7 +528,7 @@ impl AmbientAgentRunner {
                     .map(|model_id| {
                         super::common::validate_agent_mode_base_model_id_for_scope(
                             model_id,
-                            &args.scope,
+                            &team_scope,
                             ctx,
                         )
                     })
@@ -531,11 +571,10 @@ impl AmbientAgentRunner {
                 mode,
                 config,
                 title: args.title,
-                team: match (args.scope.is_team(), args.scope.personal) {
-                    (true, _) => Some(true),
-                    (_, true) => Some(false),
-                    _ => None,
-                },
+                team: Some(match &team_scope {
+                    TeamScopeForCli::Personal => false,
+                    TeamScopeForCli::Team(_) => true,
+                }),
                 agent_identity_uid: args.agent_uid,
                 skill,
                 attachments,
@@ -552,8 +591,14 @@ impl AmbientAgentRunner {
             let should_open = args.open;
             let oz_root_url = ChannelState::oz_root_url();
             let ai_client_clone = ai_client.clone();
+            let request_team_scope = RequestTeamScope::from_scope(&team_scope);
             let spawn_future = async move {
-                let mut stream = Box::pin(spawn_task(request, ai_client_clone, Some(TASK_STATUS_POLLING_DURATION)));
+                let mut stream = Box::pin(spawn_task(
+                    request,
+                    request_team_scope,
+                    ai_client_clone,
+                    Some(TASK_STATUS_POLLING_DURATION),
+                ));
                 let mut session_join_info = None;
                 let mut spawned_task_id = None;
 
@@ -638,32 +683,76 @@ impl AmbientAgentRunner {
 
     fn list_tasks(
         &self,
+        team_selection: TeamSelection,
         limit: i32,
         filter: TaskListFilter,
         output_format: OutputFormat,
         json_output: JsonOutput,
         ctx: &mut ModelContext<Self>,
     ) -> anyhow::Result<()> {
-        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let refresh_future = super::common::refresh_workspace_metadata(ctx);
+        ctx.spawn(refresh_future, move |runner, refresh_result, ctx| {
+            if let Err(err) = refresh_result {
+                super::report_fatal_error(err, ctx);
+                return;
+            }
+            runner.list_tasks_after_workspace_refresh(
+                team_selection,
+                limit,
+                filter,
+                output_format,
+                json_output,
+                ctx,
+            );
+        });
 
-        let list_future = async move {
-            if matches!(output_format, OutputFormat::Json) || json_output.force_json_output() {
-                let response = ai_client.list_agent_runs_raw(limit, filter).await?;
-                super::output::print_raw_json(response, &json_output)?;
-            } else if matches!(output_format, OutputFormat::Ndjson) {
-                let tasks = ai_client.list_ambient_agent_tasks(limit, filter).await?;
-                for task in tasks {
-                    super::output::write_json_line(&task, std::io::stdout())?;
+        Ok(())
+    }
+
+    fn list_tasks_after_workspace_refresh(
+        &self,
+        team_selection: TeamSelection,
+        limit: i32,
+        filter: TaskListFilter,
+        output_format: OutputFormat,
+        json_output: JsonOutput,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let request_team_scope =
+            match UserWorkspaces::as_ref(ctx).team_scope_for_cli(&team_selection) {
+                Ok(scope) => RequestTeamScope::from_scope(&scope),
+                Err(err) => {
+                    super::report_fatal_error(err.into(), ctx);
+                    return;
                 }
-            } else {
-                let tasks = ai_client.list_ambient_agent_tasks(limit, filter).await?;
-                Self::print_tasks_table(&tasks);
+            };
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let list_future = async move {
+            match load_tasks_for_output(
+                ai_client.as_ref(),
+                limit,
+                filter,
+                request_team_scope,
+                output_format,
+                &json_output,
+            )
+            .await?
+            {
+                ListTasksOutput::Raw(response) => {
+                    super::output::print_raw_json(response, &json_output)?;
+                }
+                ListTasksOutput::Tasks(tasks) if matches!(output_format, OutputFormat::Ndjson) => {
+                    for task in tasks {
+                        super::output::write_json_line(&task, std::io::stdout())?;
+                    }
+                }
+                ListTasksOutput::Tasks(tasks) => {
+                    Self::print_tasks_table(&tasks);
+                }
             }
             Ok(())
         };
         self.spawn_command(list_future, ctx);
-
-        Ok(())
     }
 
     fn get_task_status(

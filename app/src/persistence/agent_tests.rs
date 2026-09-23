@@ -1,7 +1,9 @@
 use chrono::NaiveDate;
 use diesel_migrations::MigrationHarness;
+use prost::Message as _;
 
 use super::*;
+use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 
 /// Builds an in-memory SQLite database with all migrations applied.
 fn test_connection() -> SqliteConnection {
@@ -84,6 +86,124 @@ fn upsert_writes_summary_and_metadata_read_skips_tasks() {
     assert_eq!(summary.initial_query, "Initial query");
     assert_eq!(summary.title, "Root title");
     assert!(summary.is_restorable);
+}
+#[test]
+fn request_metadata_round_trips_through_conversation_and_persistence() {
+    let request_metadata = api::message::RequestMetadata {
+        timing: Some(api::RequestTiming {
+            request_timespan: Some(api::TimeSpan {
+                started_at: Some(prost_types::Timestamp {
+                    seconds: 1_000,
+                    nanos: 100,
+                }),
+                ended_at: Some(prost_types::Timestamp {
+                    seconds: 1_010,
+                    nanos: 200,
+                }),
+            }),
+            first_token_at: Some(prost_types::Timestamp {
+                seconds: 1_002,
+                nanos: 300,
+            }),
+            llm_generation_timespans: vec![api::TimeSpan {
+                started_at: Some(prost_types::Timestamp {
+                    seconds: 1_001,
+                    nanos: 400,
+                }),
+                ended_at: Some(prost_types::Timestamp {
+                    seconds: 1_009,
+                    nanos: 500,
+                }),
+            }],
+        }),
+        charges: Some(api::RequestCharges {
+            usage_by_category: HashMap::from([(
+                "primary_agent".to_string(),
+                api::ChargedUsage {
+                    direct_api_inference_usage: HashMap::from([(
+                        "model".to_string(),
+                        api::InferenceUsage {
+                            token_count: Some(api::TokenCount {
+                                input: 100,
+                                output: 20,
+                                input_cache_read: 30,
+                                input_cache_write: 40,
+                            }),
+                            token_cost: Some(api::TokenCost {
+                                input_cost_in_cents: 1.0,
+                                output_cost_in_cents: 2.0,
+                                input_cache_read_cost_in_cents: 3.0,
+                                input_cache_write_cost_in_cents: 4.0,
+                                input_cost_in_credits: 1.5,
+                                output_cost_in_credits: 2.5,
+                                input_cache_read_cost_in_credits: 3.5,
+                                input_cache_write_cost_in_credits: 4.5,
+                            }),
+                            web_search_count: 2,
+                            web_search_cost_in_cents: 5.0,
+                            web_search_cost_in_credits: 5.5,
+                        },
+                    )]),
+                    byok_inference_usage: HashMap::new(),
+                    custom_endpoint_inference_usage: HashMap::new(),
+                    platform_usage_in_cents: 6.0,
+                    platform_usage_duration: Some(prost_types::Duration {
+                        seconds: 7,
+                        nanos: 600,
+                    }),
+                    platform_usage_in_credits: 6.5,
+                },
+            )]),
+        }),
+        incomplete: false,
+        outcome: api::message::request_metadata::Outcome::Completed as i32,
+        tool_call_summary: Some(api::message::request_metadata::ToolCallSummary {
+            tool_calls: 8,
+            commands_executed: 9,
+            files_changed: 10,
+            lines_added: 11,
+            lines_removed: 12,
+        }),
+        context_window: Some(api::message::request_metadata::ContextWindow { usage: 0.75 }),
+    };
+    let mut task = task_with_user_query("task-metadata", "Inspect metadata", "Root title");
+    task.messages.push(api::Message {
+        id: "request-metadata".to_string(),
+        task_id: task.id.clone(),
+        request_id: "request-1".to_string(),
+        message: Some(api::message::Message::RequestMetadata(request_metadata)),
+        ..Default::default()
+    });
+
+    let decoded_task =
+        api::Task::decode(task.encode_to_vec().as_slice()).expect("task should decode");
+    let conversation =
+        AIConversation::new_restored(AIConversationId::new(), vec![decoded_task], None)
+            .expect("task should apply to a restored conversation");
+    let applied_task = conversation
+        .all_tasks()
+        .next()
+        .and_then(|task| task.source())
+        .expect("restored task should retain its API source")
+        .clone();
+    assert_eq!(applied_task, task);
+
+    let mut conn = test_connection();
+    upsert_agent_conversation(
+        &mut conn,
+        "conv-metadata",
+        [&applied_task],
+        empty_conversation_data(),
+    )
+    .expect("upsert should succeed");
+    let restored = read_agent_conversation_by_id(&mut conn, "conv-metadata")
+        .expect("persistence read should succeed")
+        .expect("conversation should exist");
+    assert_eq!(restored.tasks, vec![task.clone()]);
+
+    let echoed_task = api::Task::decode(restored.tasks[0].encode_to_vec().as_slice())
+        .expect("persisted task should encode for the next request");
+    assert_eq!(echoed_task, task);
 }
 
 #[test]

@@ -17,8 +17,11 @@ use crate::workspaces::user_workspaces::TeamScope;
 pub struct RequestTeamScope(Option<ServerId>);
 
 impl RequestTeamScope {
-    pub fn from_scope(scope: &impl TeamScope) -> Self {
+    pub fn from_scope(scope: &(impl TeamScope + ?Sized)) -> Self {
         Self(scope.team_uid())
+    }
+    pub fn matches_scope(self, scope: &(impl TeamScope + ?Sized)) -> bool {
+        self.0 == scope.team_uid()
     }
 
     /// The wire uid. `None` sends no team header, leaving the server to its own default.

@@ -151,6 +151,7 @@ impl OneTimeModalModel {
                 // Accounts created after the removal of free AI go through the new
                 // onboarding and are treated as already-noticed (no modal).
                 mark_free_ai_removal_notice_seen(ctx);
+                hoa_onboarding::mark_hoa_onboarding_completed(ctx);
                 GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
                     if let Err(e) = settings
                         .did_check_to_trigger_openwarp_launch_modal

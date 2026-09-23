@@ -2,6 +2,8 @@ mod docker;
 pub mod parse_url_paths;
 pub mod web_intent_parser;
 
+pub(crate) mod browser_url_resolution;
+
 #[cfg(target_family = "wasm")]
 pub mod browser_url_handler;
 
@@ -1390,6 +1392,7 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
                 open_new_with_workspace_source(
                     NewWorkspaceSource::Session {
                         options: Box::default(),
+                        initial_team_uid: None,
                     },
                     ctx,
                 )
@@ -1484,6 +1487,7 @@ fn open_file_editor(
             open_new_with_workspace_source(
                 NewWorkspaceSource::Session {
                     options: Box::default(),
+                    initial_team_uid: None,
                 },
                 ctx,
             )

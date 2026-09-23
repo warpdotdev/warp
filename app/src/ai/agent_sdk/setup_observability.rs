@@ -198,6 +198,8 @@ pub(crate) enum SetupStep {
     EnvironmentCodebaseIndexing,
     FileBasedMcpDiscovery,
     FileBasedMcpReadiness,
+    InitialGlobalMcpScan,
+    InitialGlobalMcpReadiness,
     EnvironmentSkillLoading,
     GlobalSkillLoading,
     SkillsDirsLoading,
@@ -277,6 +279,12 @@ impl SetupStep {
             }
             Self::FileBasedMcpReadiness => {
                 span_and_name!("setup_file_based_mcp_readiness")
+            }
+            Self::InitialGlobalMcpScan => {
+                span_and_name!("setup_initial_global_mcp_scan")
+            }
+            Self::InitialGlobalMcpReadiness => {
+                span_and_name!("setup_initial_global_mcp_readiness")
             }
             Self::EnvironmentSkillLoading => {
                 span_and_name!("setup_environment_skill_loading")

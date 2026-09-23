@@ -267,11 +267,10 @@ async fn download_attachment(
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(anyhow::Error::new(HttpStatusError {
-                status: status.as_u16(),
-                body: body.clone(),
-            })
-            .context(format!("Download failed with status {status}: {body}")));
+            return Err(
+                anyhow::Error::new(HttpStatusError::new(status.as_u16(), body.clone()))
+                    .context(format!("Download failed with status {status}: {body}")),
+            );
         }
 
         // Stream the response body directly to disk instead of buffering the full payload

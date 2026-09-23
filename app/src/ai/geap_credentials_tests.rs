@@ -3,13 +3,13 @@ use std::time::{Duration, SystemTime};
 
 use ai::api_keys::ApiKeyManager;
 use settings::{PrivatePreferences, PublicPreferences};
-use warp_managed_secrets::ManagedSecretManager;
 use warpui::{AddSingletonModel, App};
 use warpui_extras::user_preferences;
 
 use super::*;
 use crate::features::FeatureFlag;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::managed_secrets::AppManagedSecretManager as ManagedSecretManager;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::workspaces::team::{Team, TeamVisibility};
@@ -175,6 +175,7 @@ fn workspace_with_geap_host(enabled: bool) -> Workspace {
         name: "test".to_string(),
         stripe_customer_id: None,
         teams: vec![team],
+        open_teams: vec![],
         billing_metadata: Default::default(),
         bonus_grants_purchased_this_month: Default::default(),
         billing_cycle_usage: None,
@@ -342,6 +343,7 @@ fn workspace_with_teams(teams: Vec<Team>) -> Workspace {
         name: "test".to_string(),
         stripe_customer_id: None,
         teams,
+        open_teams: vec![],
         billing_metadata: Default::default(),
         bonus_grants_purchased_this_month: Default::default(),
         billing_cycle_usage: None,

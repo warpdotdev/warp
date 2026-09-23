@@ -14,7 +14,6 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::orchestration_topology::{
     OrchestrationNavigationDirection, adjacent_orchestration_child_conversation_id,
 };
-use crate::features::FeatureFlag;
 use crate::terminal::TerminalModel;
 use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::terminal::input::slash_commands::SlashCommandTrigger;
@@ -854,9 +853,7 @@ impl AgentViewController {
         // viewer-side shared-session children. Preserve that distinction so
         // TerminalView does not insert cloud composition UI while the child is
         // restoring or waiting for its first streamed exchange.
-        let is_new = exchange_count == 0
-            && !(FeatureFlag::OrchestrationUnifiedStack.is_enabled()
-                && is_existing_child_placeholder);
+        let is_new = exchange_count == 0 && !is_existing_child_placeholder;
         ctx.emit(AgentViewControllerEvent::EnteredAgentView {
             conversation_id,
             is_new,

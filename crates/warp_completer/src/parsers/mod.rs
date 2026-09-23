@@ -1,9 +1,6 @@
-#[cfg_attr(feature = "v2", path = "v2.rs")]
-#[cfg_attr(not(feature = "v2"), path = "legacy.rs")]
-mod imp;
-#[cfg(not(feature = "v2"))]
-pub use imp::SignatureAtTokenIndex;
-use imp::*;
+mod legacy;
+pub use legacy::SignatureAtTokenIndex;
+use legacy::*;
 
 mod errors;
 pub use errors::{ArgumentError, ParseError, ParseErrorReason};

@@ -1,9 +1,10 @@
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
+use warp_graphql::platform_error::PlatformErrorInfo;
 
 use super::AgentDriverError;
 use super::terminal::ShareSessionError;
 use crate::ai::blocklist::local_agent_task_sync_model::classify_renderable_error;
-use crate::server::server_api::ai::TaskStatusUpdate;
+use crate::server::server_api::ai::{TaskGitCredentialsError, TaskStatusUpdate};
 
 /// Classify an `AgentDriverError` into a task state and a `TaskStatusUpdate`
 /// suitable for reporting via `update_agent_task`.
@@ -238,10 +239,10 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
         ),
 
         // --- Setup errors ---
-        AgentDriverError::TeamMetadataRefreshTimeout => (
+        AgentDriverError::TeamMetadataRefreshFailed(err) => (
             AgentTaskState::Error,
             TaskStatusUpdate::with_error_code(
-                "Timed out refreshing team metadata. Please check your network connection and try again.",
+                format!("Failed to refresh team metadata: {err:#}"),
                 PlatformErrorCode::InternalError,
             ),
         ),
@@ -252,6 +253,7 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::ResourceNotFound,
             ),
         ),
+        AgentDriverError::GitCredentialsFetchFailed(error) => classify_git_credentials_error(error),
         AgentDriverError::ConfigBuildFailed(err) => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
@@ -335,13 +337,19 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::ResourceNotFound,
             ),
         ),
-        AgentDriverError::HarnessCommandFailed { exit_code } => (
-            AgentTaskState::Failed,
-            TaskStatusUpdate::with_error_code(
-                format!("Harness command exited with code {exit_code}"),
-                PlatformErrorCode::InternalError,
-            ),
-        ),
+        AgentDriverError::HarnessCommandFailed { exit_code, output } => {
+            let mut platform_error =
+                PlatformErrorInfo::new(PlatformErrorCode::InternalError, false);
+            platform_error.detail.clone_from(output);
+            (
+                AgentTaskState::Failed,
+                TaskStatusUpdate {
+                    message: format!("Harness command exited with code {exit_code}"),
+                    error_code: Some(PlatformErrorCode::InternalError),
+                    platform_error: Some(Box::new(platform_error)),
+                },
+            )
+        }
         AgentDriverError::HarnessSetupFailed { harness, reason } => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
@@ -411,14 +419,77 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
             AgentTaskState::Failed,
             TaskStatusUpdate::message(error.to_string()),
         ),
+    }
+}
 
-        // SIGTERM reaches the client from externally-originating shutdowns —
-        // server-initiated instance teardown, container-runtime stops, self-hosted
-        // worker termination — and the client cannot distinguish which initiated
-        // it. Not a Warp-side defect the user can act on, so report FAILED.
-        AgentDriverError::TerminatedBySignal => (
+/// Map a `PlatformErrorCode` to the `AgentTaskState` it implies. Not specific
+/// to any one error source: callers translate their own error into a
+/// `PlatformErrorCode` first, then share this mapping.
+fn task_state_for_platform_error_code(code: PlatformErrorCode) -> AgentTaskState {
+    match code {
+        PlatformErrorCode::AgentStreamFailure
+        | PlatformErrorCode::AgentStreamNetworkError
+        | PlatformErrorCode::AuthenticationRequired
+        | PlatformErrorCode::InternalError
+        | PlatformErrorCode::ResourceUnavailable => AgentTaskState::Error,
+        PlatformErrorCode::BudgetExceeded
+        | PlatformErrorCode::ContentPolicyViolation
+        | PlatformErrorCode::EnvironmentSetupFailed
+        | PlatformErrorCode::ExternalAuthenticationRequired
+        | PlatformErrorCode::FeatureNotAvailable
+        | PlatformErrorCode::InsufficientCredits
+        | PlatformErrorCode::IntegrationDisabled
+        | PlatformErrorCode::IntegrationNotConfigured
+        | PlatformErrorCode::InvalidRequest
+        | PlatformErrorCode::NotAuthorized
+        | PlatformErrorCode::ResourceNotFound => AgentTaskState::Failed,
+    }
+}
+
+/// Classify a `TaskGitCredentialsError` into a task state and a `TaskStatusUpdate`.
+fn classify_git_credentials_error(
+    error: &TaskGitCredentialsError,
+) -> (AgentTaskState, TaskStatusUpdate) {
+    match error {
+        TaskGitCredentialsError::Platform {
+            message,
+            detail,
+            info,
+        } => {
+            let message = match detail {
+                Some(detail) if !detail.is_empty() => format!("{message} ({detail})"),
+                _ => message.clone(),
+            };
+            (
+                task_state_for_platform_error_code(info.code),
+                TaskStatusUpdate {
+                    message,
+                    error_code: Some(info.code),
+                    platform_error: Some(info.clone()),
+                },
+            )
+        }
+        TaskGitCredentialsError::Unstructured { message } => (
             AgentTaskState::Failed,
-            TaskStatusUpdate::message(error.to_string()),
+            TaskStatusUpdate {
+                message: message.clone(),
+                error_code: Some(PlatformErrorCode::InvalidRequest),
+                platform_error: Some(Box::new(PlatformErrorInfo::new(
+                    PlatformErrorCode::InvalidRequest,
+                    false,
+                ))),
+            },
+        ),
+        TaskGitCredentialsError::Request(_) => (
+            AgentTaskState::Error,
+            TaskStatusUpdate {
+                message: error.to_string(),
+                error_code: Some(PlatformErrorCode::InternalError),
+                platform_error: Some(Box::new(PlatformErrorInfo::new(
+                    PlatformErrorCode::InternalError,
+                    true,
+                ))),
+            },
         ),
     }
 }

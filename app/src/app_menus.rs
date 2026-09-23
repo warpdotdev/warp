@@ -983,7 +983,17 @@ fn make_new_elements_menu_items(ctx: &AppContext) -> Vec<MenuItem> {
         MenuItem::Custom(CustomMenuItem::new(
             "New Window",
             open_new_window,
-            no_updates,
+            move |_props: &MenuItemProperties, ctx: &mut AppContext| {
+                let mut changes = MenuItemPropertyChanges::default();
+                let trigger = Trigger::Custom(CustomAction::AddWindow.into());
+                let binding = ctx
+                    .get_key_bindings()
+                    .find(|b| b.trigger == &trigger || b.original_trigger == Some(&trigger));
+                if let Some(binding) = binding {
+                    changes.keystroke = Some(bindings::trigger_to_keystroke(binding.trigger));
+                }
+                changes
+            },
             Some(Keystroke::parse("cmd-n").expect("Valid keystroke")),
         )),
         MenuItem::Custom(CustomMenuItem::new(

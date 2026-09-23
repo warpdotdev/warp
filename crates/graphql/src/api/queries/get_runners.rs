@@ -24,6 +24,8 @@ pub enum RunnerOs {
     Linux,
     #[cynic(rename = "MACOS")]
     Macos,
+    #[cynic(rename = "WINDOWS")]
+    Windows,
 }
 
 #[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]

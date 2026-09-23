@@ -1010,6 +1010,24 @@ fn test_setup_dropdown_without_branches_only_has_uncommitted_changes() {
 }
 
 #[test]
+fn test_duplicate_single_file_discard_confirmation_is_ignored() {
+    App::test((), |mut app| async move {
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
+
+        ctx.code_review_view.update(&mut app, |view, view_ctx| {
+            view.discard_dialog_state.operation_type = DiscardOperationType::FileUncommittedChanges;
+            view.discard_dialog_state.show_discard_confirm_dialog = false;
+            view.discard_dialog_state.discard_file_paths.clear();
+
+            view.handle_action(&CodeReviewAction::ConfirmDiscardFile, view_ctx);
+
+            assert!(!view.discard_dialog_state.show_discard_confirm_dialog);
+            assert!(view.discard_dialog_state.discard_file_paths.is_empty());
+        });
+    });
+}
+
+#[test]
 fn test_on_close_then_on_open_reinitializes_repo_state() {
     App::test((), |mut app| async move {
         let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");

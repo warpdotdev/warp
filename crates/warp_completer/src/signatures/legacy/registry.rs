@@ -251,6 +251,19 @@ impl CommandRegistry {
             }
 
             let token = tokens[token_idx];
+            if is_completed_options_terminator(
+                curr_signature,
+                token,
+                tokens.len(),
+                token_idx,
+                has_post_whitespace,
+            ) {
+                return SignatureResult::Success(SignatureAtTokenIndex::new(
+                    curr_signature,
+                    dynamic_completion_data,
+                    signature_start_idx,
+                ));
+            }
             // Check if there is any alias at the current signature.
             if let Some(alias) =
                 curr_signature.alias(dynamic_completion_data.map(DynamicCompletionData::aliases))
@@ -326,7 +339,9 @@ impl CommandRegistry {
                         token_idx += advance_by;
                     }
                     TokenAction::SkippedUnrecognizedFlag => {}
-                    TokenAction::VariadicOption | TokenAction::StopAtCurrentToken => {
+                    TokenAction::EndOfOptions
+                    | TokenAction::VariadicOption
+                    | TokenAction::StopAtCurrentToken => {
                         return SignatureResult::Success(SignatureAtTokenIndex::new(
                             curr_signature,
                             dynamic_completion_data,
@@ -418,7 +433,9 @@ impl CommandRegistry {
                         token_idx += advance_by;
                     }
                     TokenAction::SkippedUnrecognizedFlag => {}
-                    TokenAction::VariadicOption | TokenAction::StopAtCurrentToken => {
+                    TokenAction::EndOfOptions
+                    | TokenAction::VariadicOption
+                    | TokenAction::StopAtCurrentToken => {
                         return Some(SignatureAtTokenIndex::new(
                             curr_signature,
                             dynamic_completion_data,
@@ -458,6 +475,8 @@ impl CommandRegistry {
 enum TokenAction<'a> {
     /// The token matched a subcommand of the current signature.
     ResolvedSubcommand { signature: &'a Signature },
+    /// A completed standalone `--` ended option parsing.
+    EndOfOptions,
     /// The token matched a recognized option whose last argument is variadic.
     /// The caller should stop walking tokens and return the current signature.
     VariadicOption,
@@ -484,6 +503,15 @@ fn classify_token<'a>(
     token_idx: usize,
     has_post_whitespace: bool,
 ) -> TokenAction<'a> {
+    if is_completed_options_terminator(
+        curr_signature,
+        token,
+        num_tokens,
+        token_idx,
+        has_post_whitespace,
+    ) {
+        return TokenAction::EndOfOptions;
+    }
     if let Some(subcommand) = curr_signature.subcommands().iter().find(|s| {
         should_complete_on_subcmd(s.name(), token, num_tokens, token_idx, has_post_whitespace)
     }) {
@@ -511,6 +539,18 @@ fn classify_token<'a>(
     }
 
     TokenAction::StopAtCurrentToken
+}
+
+fn is_completed_options_terminator(
+    signature: &Signature,
+    token: &str,
+    num_tokens: usize,
+    token_idx: usize,
+    has_post_whitespace: bool,
+) -> bool {
+    !signature.parser_directives.flags_are_posix_noncompliant
+        && token == "--"
+        && (token_idx + 1 < num_tokens || has_post_whitespace)
 }
 
 /// Finds an option by exact name match against the token.

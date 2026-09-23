@@ -6,10 +6,11 @@ use ai::agent::orchestration_config::{
 };
 use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionType, AIConversationId,
-    Appearance, AuthSecretSelection, OptionRow, OptionSnapshot, OptionSourceStatus,
-    OrchestrationConfigState, OrchestrationEditState, RunAgentsAgentRunConfig,
+    Appearance, AuthSecretSelection, Harness, OptionRow, OptionSnapshot, OptionSourceStatus,
+    OrchestrationConfigState, OrchestrationEditState, ResolvedTeamScope, RunAgentsAgentRunConfig,
     RunAgentsExecutionMode, RunAgentsRequest, ServerApiProvider, TaskId, TeamContext,
     UserWorkspaces, register_tui_session_view_test_singletons,
+    set_tui_auth_secret_preference_for_test, set_tui_workspace_teams_for_test,
 };
 use warp_core::features::FeatureFlag;
 use warpui::platform::WindowStyle;
@@ -24,7 +25,7 @@ use super::{
     TuiOrchestrationBlockAction, TuiOrchestrationBlockEvent, build_request,
 };
 use crate::option_selector::{TuiOptionSelectorAction, TuiOptionSelectorEvent};
-use crate::test_fixtures::TestHostView;
+use crate::test_fixtures::{TestHostView, add_test_action_model};
 
 /// Builds a request with the given harness and execution mode.
 fn request(harness: &str, execution_mode: RunAgentsExecutionMode) -> RunAgentsRequest {
@@ -149,6 +150,137 @@ fn edit_state_carries_the_request_auth_secret() {
     let state =
         TuiOrchestrationBlock::config_state_from_request(&request("claude", remote("", "")), None);
     assert_eq!(state.auth_secret_selection, AuthSecretSelection::Unset);
+}
+
+#[test]
+fn window_team_change_reseeds_the_auth_secret_for_the_new_scope() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        let (window_id, _) = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                |_| TestHostView,
+            )
+        });
+        let (other_window_id, _) = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                |_| TestHostView,
+            )
+        });
+        let team_a = 1.into();
+        let team_b = 2.into();
+        app.update(|ctx| {
+            set_tui_workspace_teams_for_test(
+                vec![
+                    (team_a, "Team A".to_string()),
+                    (team_b, "Team B".to_string()),
+                ],
+                ctx,
+            );
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+                workspaces.register_window(window_id, Some(team_a), ctx);
+                workspaces.register_window(other_window_id, Some(team_a), ctx);
+                workspaces.switch_window_to_team(window_id, team_b, ctx);
+            });
+            let team_b_scope =
+                UserWorkspaces::as_ref(ctx).team_context_for_window_operation(window_id);
+            set_tui_auth_secret_preference_for_test(
+                &team_b_scope,
+                Harness::Claude,
+                "team-b-key".to_string(),
+                ctx,
+            );
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+                workspaces.switch_window_to_team(window_id, team_a, ctx);
+            });
+        });
+
+        let mut incoming = request("claude", remote("env-1", "warp"));
+        incoming.harness_auth_secret_name = Some("team-a-key".to_string());
+        let action = AIAgentAction {
+            id: AIAgentActionId::from("run-agents-team-scope".to_string()),
+            task_id: TaskId::new("task-1".to_string()),
+            action: AIAgentActionType::RunAgents(incoming.clone()),
+            requires_result: true,
+        };
+        let action_model = add_test_action_model(&mut app);
+        let run_agents_executor = app.read(|ctx| action_model.as_ref(ctx).run_agents_executor(ctx));
+        let other_action_model = action_model.clone();
+        let other_run_agents_executor = run_agents_executor.clone();
+        let other_incoming = incoming.clone();
+        let other_action = AIAgentAction {
+            id: AIAgentActionId::from("run-agents-other-window".to_string()),
+            task_id: TaskId::new("task-2".to_string()),
+            action: AIAgentActionType::RunAgents(other_incoming.clone()),
+            requires_result: true,
+        };
+        let block = app.update(|ctx| {
+            ctx.add_typed_action_tui_view(window_id, move |ctx| {
+                TuiOrchestrationBlock::new(
+                    AIConversationId::new(),
+                    action,
+                    &incoming,
+                    None,
+                    action_model,
+                    run_agents_executor,
+                    Some("auto".to_string()),
+                    false,
+                    ctx,
+                )
+            })
+        });
+        let other_block = app.update(|ctx| {
+            ctx.add_typed_action_tui_view(other_window_id, move |ctx| {
+                TuiOrchestrationBlock::new(
+                    AIConversationId::new(),
+                    other_action,
+                    &other_incoming,
+                    None,
+                    other_action_model,
+                    other_run_agents_executor,
+                    Some("auto".to_string()),
+                    false,
+                    ctx,
+                )
+            })
+        });
+
+        assert_eq!(
+            block.read(&app, |block, _| block.to_request().harness_auth_secret_name),
+            Some("team-a-key".to_string())
+        );
+        block.update(&mut app, |block, ctx| {
+            block.open_page(ConfigPage::ApiKey, ctx);
+        });
+
+        app.update(|ctx| {
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+                workspaces.switch_window_to_team(window_id, team_b, ctx);
+            });
+        });
+
+        assert_eq!(
+            block.read(&app, |block, _| block.to_request().harness_auth_secret_name),
+            Some("team-b-key".to_string())
+        );
+        assert_eq!(
+            other_block.read(&app, |block, _| block.to_request().harness_auth_secret_name),
+            Some("team-a-key".to_string())
+        );
+        assert_eq!(
+            block.read(&app, |block, _| block.mode),
+            CardMode::Configuring {
+                page: ConfigPage::ApiKey
+            }
+        );
+    });
 }
 
 #[test]
@@ -297,6 +429,7 @@ impl OrchestrationBlockController for TestController {
         id: &str,
         edit_state: &mut OrchestrationEditState,
         _fallback_base_model_id: Option<String>,
+        _team_scope: &ResolvedTeamScope,
         _ctx: &mut warpui::AppContext,
     ) {
         let state = &mut edit_state.orchestration_config_state;

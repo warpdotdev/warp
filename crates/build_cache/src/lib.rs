@@ -23,11 +23,13 @@ use std::fmt;
 use std::future::Future;
 use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_io::Timer;
 use command::Stdio;
 use command::r#async::Command;
+use futures::stream::{self, StreamExt as _};
 use futures_lite::future;
 use is_executable::IsExecutable as _;
 use itertools::Itertools;
@@ -35,9 +37,13 @@ use sha2::{Digest, Sha256};
 use warp_core::safe_info;
 use warp_errors::{ErrorExt, register_error};
 
+mod discovery;
 pub mod spacectl;
 
-use spacectl::{MountResponse, run_spacectl_mount};
+#[cfg(test)]
+use discovery::produce_candidates;
+use discovery::{CacheCandidate, CandidateKey, DETECTION_CONCURRENCY, candidate_receiver};
+use spacectl::{MountContext, MountResponse, run_spacectl_mount};
 
 const SPACECTL_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_CAPTURED_STDERR_BYTES: usize = 4 * 1024;
@@ -180,7 +186,8 @@ impl CacheSetupPlan {
     /// Validate that a cache plan is valid. A valid plan:
     /// * Contains one or more cache configurations
     /// * Ends in a globally-scoped cache configuration
-    /// * Lists each repository exactly once, in order by cache key
+    /// * Lists repository configurations in order by cache key
+    /// * Uses unique repository working directories and cache locations
     /// * Only uses safe cache locations within the cache volume (no absolute paths, `..`, or `.` components)
     pub fn validate(&self) -> Result<(), PlanInvariantError> {
         let Some((global, repositories)) = self.configurations.split_last() else {
@@ -191,6 +198,8 @@ impl CacheSetupPlan {
         }
 
         let mut previous_key: Option<&RepoCacheKey> = None;
+        let mut repository_cwds = BTreeSet::new();
+        let mut repository_cache_dirs = BTreeSet::new();
         for configuration in repositories {
             let CacheScope::Repository { key, .. } = &configuration.scope else {
                 return Err(PlanInvariantError);
@@ -199,6 +208,11 @@ impl CacheSetupPlan {
                 return Err(PlanInvariantError);
             }
             previous_key = Some(key);
+            if !repository_cwds.insert(&configuration.cwd)
+                || !repository_cache_dirs.insert(&configuration.relative_cache_dir)
+            {
+                return Err(PlanInvariantError);
+            }
         }
 
         for configuration in &self.configurations {
@@ -248,6 +262,8 @@ pub enum CacheSetupError {
     Timeout,
     #[error("failed to export build cache environment variables")]
     EnvExportFailed,
+    #[error("cache setup plan invariant violated")]
+    PlanInvariantFailed,
 }
 
 impl CacheSetupError {
@@ -259,6 +275,7 @@ impl CacheSetupError {
             Self::JsonParseFailed => "json_parse_failed",
             Self::Timeout => "timeout",
             Self::EnvExportFailed => "env_export_failed",
+            Self::PlanInvariantFailed => "plan_invariant_failed",
         }
     }
 
@@ -269,7 +286,8 @@ impl CacheSetupError {
             | Self::SpawnFailed
             | Self::JsonParseFailed
             | Self::Timeout
-            | Self::EnvExportFailed => None,
+            | Self::EnvExportFailed
+            | Self::PlanInvariantFailed => None,
         }
     }
 }
@@ -277,7 +295,7 @@ impl CacheSetupError {
 impl ErrorExt for CacheSetupError {
     fn is_actionable(&self) -> bool {
         match self {
-            Self::JsonParseFailed | Self::EnvExportFailed => true,
+            Self::JsonParseFailed | Self::EnvExportFailed | Self::PlanInvariantFailed => true,
             Self::RootCreationFailed
             | Self::SpawnFailed
             | Self::NonzeroExit { .. }
@@ -332,9 +350,17 @@ impl CacheSetupReport {
 
 #[derive(Clone)]
 struct DetectedCacheModes {
+    order: CandidateKey,
     source: RepositoryCacheSource,
-    key: RepoCacheKey,
+    relative_cache_dir: PathBuf,
     modes: Vec<String>,
+}
+
+struct CandidateDetection {
+    order: CandidateKey,
+    invocation: CachePreparationReport,
+    detected: Option<DetectedCacheModes>,
+    scheduled: bool,
 }
 
 /// Calculates cache modes corresponding to global tools like package managers, which are not
@@ -363,12 +389,9 @@ fn has_command(command: &str) -> bool {
 /// target and then transfer ownership of that target directory to the current effective user.
 /// Intermediate directories are not chowned, and any unavailable or unsuccessful fallback
 /// operation degrades to [`CacheSetupError::RootCreationFailed`].
-async fn create_cache_dir_all<F, Fut>(
-    path: &Path,
-    run_command: &mut F,
-) -> Result<(), CacheSetupError>
+async fn create_cache_dir_all<F, Fut>(path: &Path, run_command: &F) -> Result<(), CacheSetupError>
 where
-    F: FnMut(Command) -> Fut,
+    F: Fn(Command) -> Fut,
     Fut: Future<Output = Result<Vec<u8>, CacheSetupError>>,
 {
     if path.is_dir() {
@@ -496,76 +519,80 @@ fn bounded_stderr(stderr: &[u8]) -> String {
 ///
 /// This should only be called once per sandbox, as it modifies shared filesystem locations.
 /// The calling process need not run with superuser privileges, but the implementation may
-/// escalate privileges with `sudo` or similar.
-#[tracing::instrument(name = "setup_caches", skip_all, fields(tags.cloud_agent = true))]
+/// escalate privileges with `sudo` or similar. It must be called from a Tokio runtime because
+/// repository discovery uses Tokio's blocking pool.
+#[tracing::instrument(
+    name = "setup_caches",
+    skip_all,
+    fields(
+        tags.cloud_agent = true,
+        detection_limit = DETECTION_CONCURRENCY,
+        total_scheduled_detects = tracing::field::Empty,
+    )
+)]
 pub async fn setup_cache<F, Fut>(
     cache_root: PathBuf,
     repositories: Vec<RepositoryCacheSource>,
     additional_global_modes: Vec<String>,
-    mut run_command: F,
+    run_command: F,
 ) -> CacheSetupReport
 where
-    F: FnMut(Command) -> Fut,
+    F: Fn(Command) -> Fut,
     Fut: Future<Output = Result<Vec<u8>, CacheSetupError>>,
 {
     let mut report = CacheSetupReport::default();
-    let mut keyed_repositories: Vec<_> = repositories
-        .into_iter()
-        .map(|source| {
-            let key = RepoCacheKey::derive(&source.identity);
-            (key, source)
-        })
-        .collect();
-    keyed_repositories.sort();
+    let run_command = Arc::new(run_command);
 
-    // Step 1: Detect the cache modes that apply to each repository. A mode corresponds to a tool
-    // or language runtime, such as `apt-get` or Swift.
-    let mut detected_modes = Vec::new();
-    for (key, source) in keyed_repositories {
-        let relative_cache_dir = PathBuf::from("repos").join(key.as_str());
-        let configuration_root = cache_root.join(&relative_cache_dir);
-        let scope = CacheScope::Repository {
-            name: source.name.clone(),
-            key: key.clone(),
-        };
-
-        // We create the scoped cache directory here, as `spacectl` fails if it doesn't exist.
-        if create_cache_dir_all(&configuration_root, &mut run_command)
-            .await
-            .is_err()
-        {
-            report.invocations.push(failed_invocation(
-                scope,
-                Vec::new(),
-                relative_cache_dir,
-                CacheSetupError::RootCreationFailed,
-                Duration::ZERO,
-            ));
-            continue;
+    let prepare_run_command = Arc::clone(&run_command);
+    let prepare_cache_root = cache_root.clone();
+    // Preparing inside the source stream prevents permission fallbacks from racing while still
+    // allowing each preparation to overlap dry-run detections already in flight.
+    let candidates = stream::unfold(candidate_receiver(repositories), move |mut receiver| {
+        let run_command = Arc::clone(&prepare_run_command);
+        let cache_root = prepare_cache_root.clone();
+        async move {
+            let candidate = receiver.recv().await?;
+            let configuration_root = cache_root.join(&candidate.relative_cache_dir);
+            let preparation_error = create_cache_dir_all(&configuration_root, run_command.as_ref())
+                .await
+                .err();
+            Some(((candidate, configuration_root, preparation_error), receiver))
         }
-
-        // Run `spacectl` in dry-run mode, so that it detects all relevant cache modes.
-        let invocation = run_spacectl_mount(
-            scope,
-            Vec::new(),
-            true,
-            relative_cache_dir,
-            &configuration_root,
-            &source.cwd,
-            &mut run_command,
-        )
-        .await;
-        if let Some(response) = &invocation.response {
-            let modes = canonical_modes(response.input.modes.clone());
-            if !modes.is_empty() {
-                detected_modes.push(DetectedCacheModes { source, key, modes });
+    });
+    let detect_run_command = Arc::clone(&run_command);
+    let mut detection_results = candidates
+        .map(move |(candidate, configuration_root, preparation_error)| {
+            let run_command = Arc::clone(&detect_run_command);
+            async move {
+                detect_candidate(
+                    candidate,
+                    configuration_root,
+                    preparation_error,
+                    run_command.as_ref(),
+                )
+                .await
             }
+        })
+        .buffer_unordered(DETECTION_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
+    tracing::Span::current().record(
+        "total_scheduled_detects",
+        detection_results
+            .iter()
+            .filter(|result| result.scheduled)
+            .count() as u64,
+    );
+    detection_results.sort_by(|left, right| left.order.cmp(&right.order));
+    let mut detected_modes = Vec::new();
+    for result in detection_results {
+        if let Some(detected) = result.detected {
+            detected_modes.push(detected);
         }
-        report.invocations.push(invocation);
+        report.invocations.push(result.invocation);
     }
 
-    // Step 2: Given the per-repository results, construct the cache plan. This tells us which
-    // caches to set up, and in what order.
+    // Canonical ordering keeps detection timing from changing the resulting mount plan.
     let plan = match construct_plan(cache_root, detected_modes, additional_global_modes) {
         Ok(Some(plan)) => plan,
         Ok(None) => return report,
@@ -582,13 +609,12 @@ where
         }
     };
 
-    // Step 3: Run `spacectl cache mount` for real, setting up all the cache mounts.
+    // Real mounts remain serial because cache destinations may overlap across scopes.
     let mut repository_env = BTreeMap::new();
     let mut global_env = None;
     for configuration in &plan.configurations {
         let configuration_root = plan.cache_root.join(&configuration.relative_cache_dir);
-        // All repo-scoped cache roots should already exist. However, we still need to create the global root.
-        let invocation = if create_cache_dir_all(&configuration_root, &mut run_command)
+        let invocation = if create_cache_dir_all(&configuration_root, run_command.as_ref())
             .await
             .is_err()
         {
@@ -608,10 +634,13 @@ where
                 configuration.scope.clone(),
                 configuration.modes.clone(),
                 false,
-                configuration.relative_cache_dir.clone(),
-                &configuration_root,
-                &configuration.cwd,
-                &mut run_command,
+                MountContext {
+                    relative_cache_dir: configuration.relative_cache_dir.clone(),
+                    cache_root: configuration_root,
+                    cwd: configuration.cwd.clone(),
+                    stable_child_id: String::new(),
+                },
+                run_command.as_ref(),
             )
             .await
         };
@@ -637,12 +666,7 @@ where
         report.invocations.push(invocation);
     }
 
-    // Step 4: Construct the merged environment variable map. If multiple repo-scoped cache
-    // configurations set the same environment variable, we'll already have deduplicated them
-    // (with last-repo-wins semantics) above. Here, we prefer using the globally-scoped set of
-    // environment variables, but fall back to the combined set of repository environment variables.
-    // We don't need to merge the two - the global cache configuration includes all modes set
-    // by per-repo configurations, so it should have all the same variables.
+    // The global response covers all detected modes; repository values are only a fallback.
     report.add_envs = global_env.unwrap_or(repository_env);
     report.add_envs.retain(|name, _| {
         if is_valid_env_name(name) {
@@ -657,6 +681,69 @@ where
     });
     report.plan = Some(plan);
     report
+}
+
+async fn detect_candidate<F, Fut>(
+    candidate: CacheCandidate,
+    configuration_root: PathBuf,
+    preparation_error: Option<CacheSetupError>,
+    run_command: &F,
+) -> CandidateDetection
+where
+    F: Fn(Command) -> Fut,
+    Fut: Future<Output = Result<Vec<u8>, CacheSetupError>>,
+{
+    let scope = CacheScope::Repository {
+        name: candidate.source.name.clone(),
+        key: candidate.key.repo_key.clone(),
+    };
+    if let Some(error) = preparation_error {
+        return CandidateDetection {
+            order: candidate.key,
+            invocation: failed_invocation(
+                scope,
+                Vec::new(),
+                candidate.relative_cache_dir,
+                error,
+                Duration::ZERO,
+            ),
+            detected: None,
+            scheduled: false,
+        };
+    }
+
+    let invocation = run_spacectl_mount(
+        scope,
+        Vec::new(),
+        true,
+        MountContext {
+            relative_cache_dir: candidate.relative_cache_dir.clone(),
+            cache_root: configuration_root,
+            cwd: candidate.source.cwd.clone(),
+            stable_child_id: candidate.stable_child_id.clone().unwrap_or_default(),
+        },
+        run_command,
+    )
+    .await;
+    let detected = invocation.response.as_ref().and_then(|response| {
+        let modes = canonical_modes(response.input.modes.clone());
+        if modes.is_empty() {
+            None
+        } else {
+            Some(DetectedCacheModes {
+                order: candidate.key.clone(),
+                source: candidate.source,
+                relative_cache_dir: candidate.relative_cache_dir,
+                modes,
+            })
+        }
+    });
+    CandidateDetection {
+        order: candidate.key,
+        invocation,
+        detected,
+        scheduled: true,
+    }
 }
 
 /// Construct a plan for setting up build caches on the current system. This requires:
@@ -694,9 +781,10 @@ fn construct_plan(
         "additional_global_modes",
         additional_global_modes.iter().join(", "),
     );
+    detections.sort_by(|left, right| left.order.cmp(&right.order));
     for detection in &mut detections {
         detection.modes = canonical_modes(std::mem::take(&mut detection.modes));
-        tracing::info!(modes = ?detection.modes, repo_key = %detection.key, "Adding detected cache modes");
+        tracing::info!(modes = ?detection.modes, repo_key = %detection.order.repo_key, "Adding detected cache modes");
     }
     let mut global_modes = BTreeSet::new();
     for detection in &detections {
@@ -722,19 +810,13 @@ fn construct_plan(
         .map(|detection| CacheConfiguration {
             scope: CacheScope::Repository {
                 name: detection.source.name,
-                key: detection.key.clone(),
+                key: detection.order.repo_key,
             },
             cwd: detection.source.cwd,
-            relative_cache_dir: PathBuf::from("repos").join(detection.key.as_str()),
+            relative_cache_dir: detection.relative_cache_dir,
             modes: detection.modes,
         })
         .collect::<Vec<_>>();
-    configurations.sort_by(|left, right| {
-        left.scope
-            .repo_key()
-            .expect("repository configuration")
-            .cmp(right.scope.repo_key().expect("repository configuration"))
-    });
     tracing::Span::current().record("resolved_modes", global_modes.iter().join(", "));
     configurations.push(CacheConfiguration {
         scope: CacheScope::Global,
@@ -744,7 +826,7 @@ fn construct_plan(
     });
     CacheSetupPlan::try_new(cache_root, configurations)
         .map(Some)
-        .map_err(|_| CacheSetupError::RootCreationFailed)
+        .map_err(|_| CacheSetupError::PlanInvariantFailed)
 }
 
 /// Create a temporary scratch directory for setting up the global cache scope.

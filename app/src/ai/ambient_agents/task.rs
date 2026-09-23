@@ -8,6 +8,7 @@ use iso8601_duration::Duration as Iso8601Duration;
 use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::SessionId;
 use url::Url;
+use warp_cli::agent::Harness;
 use warp_core::ui::theme::WarpTheme;
 use warp_errors::report_error;
 use warpui::color::ColorU;
@@ -371,6 +372,26 @@ impl AmbientAgentTask {
         self.is_setup_failure_debug_session_open() && self.conversation_id().is_none()
     }
 
+    /// The third-party CLI harness this task is configured to run, if any. `None` means the
+    /// task runs on Warp's native Oz harness (the default when no harness is configured), whose
+    /// conversations are represented locally in `BlocklistAIHistoryModel`. A `Some` task has no
+    /// such local conversation, whether or not its CLI-harness session has started yet — callers
+    /// that route or gate on "is this task backed by a native conversation" must check this
+    /// independent of runtime CLI-session state.
+    pub fn third_party_harness_type(&self) -> Option<Harness> {
+        let harness_type = self
+            .agent_config_snapshot
+            .as_ref()
+            .and_then(|config| config.harness.as_ref())?
+            .harness_type;
+        (harness_type != Harness::Oz).then_some(harness_type)
+    }
+
+    /// Whether this task is configured for a third-party CLI harness rather than Oz.
+    pub fn is_third_party_harness(&self) -> bool {
+        self.third_party_harness_type().is_some()
+    }
+
     /// Returns true when this task's source must not accept user-triggered cloud follow-ups.
     pub fn blocks_cloud_followups(&self) -> bool {
         self.source
@@ -441,6 +462,19 @@ impl AmbientAgentTask {
                 + u.compute_cost.unwrap_or(0.0)
                 + u.platform_cost.unwrap_or(0.0)) as f32
         })
+    }
+    /// Total server-reported run cost, in US cents.
+    pub fn cost_in_cents(&self) -> Option<f32> {
+        let usage = self.active_run_execution().request_usage?;
+        let costs = [
+            usage.inference_cost_usd,
+            usage.compute_cost_usd,
+            usage.platform_cost_usd,
+        ];
+        costs
+            .iter()
+            .any(Option::is_some)
+            .then(|| (costs.into_iter().flatten().sum::<f64>() * 100.0) as f32)
     }
 
     /// Server-reported run duration.
@@ -645,6 +679,9 @@ pub struct RequestUsage {
     pub inference_cost: Option<f64>,
     pub compute_cost: Option<f64>,
     pub platform_cost: Option<f64>,
+    pub inference_cost_usd: Option<f64>,
+    pub compute_cost_usd: Option<f64>,
+    pub platform_cost_usd: Option<f64>,
 }
 
 /// Cancel an ambient agent task and show a toast with the result.
