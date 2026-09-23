@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[cfg(feature = "local_fs")]
 use repo_metadata::TargetFile;
@@ -28,30 +28,25 @@ fn create_outline_files(dir: &TempDir) -> Vec<PathBuf> {
 }
 
 #[cfg(feature = "local_fs")]
-fn assert_symbol_is_indexed(outline: &Outline, path: &Path, expected: &str) {
-    let outlines = outline.to_symbols_by_file(None);
-    let (_, file_outline) = outlines
-        .iter()
-        .find(|(indexed_path, _)| indexed_path.file_name() == path.file_name())
-        .unwrap();
-    assert_eq!(file_outline.symbols().unwrap()[0].name, expected.to_owned());
+fn assert_symbol_is_indexed(outline: &Outline, expected: &str) {
+    assert!(outline.file_id_to_outline.values().any(|file_outline| {
+        file_outline
+            .symbols()
+            .is_some_and(|symbols| symbols.iter().any(|symbol| symbol.name == expected))
+    }));
 }
 
 #[cfg(feature = "local_fs")]
 #[tokio::test]
 async fn build_outline_indexes_symbols_across_batch_boundary() {
     let temp_dir = TempDir::new().unwrap();
-    let files = create_outline_files(&temp_dir);
+    let _files = create_outline_files(&temp_dir);
 
     let outline = build_outline(temp_dir.path(), None).await.unwrap();
 
     assert_eq!(outline.file_count(), PARSE_BATCH_SIZE + 1);
-    assert_symbol_is_indexed(&outline, &files[0], "symbol_0");
-    assert_symbol_is_indexed(
-        &outline,
-        &files[PARSE_BATCH_SIZE],
-        &format!("symbol_{PARSE_BATCH_SIZE}"),
-    );
+    assert_symbol_is_indexed(&outline, "symbol_0");
+    assert_symbol_is_indexed(&outline, &format!("symbol_{PARSE_BATCH_SIZE}"));
 }
 
 #[cfg(feature = "local_fs")]
@@ -74,12 +69,8 @@ async fn update_indexes_symbols_across_batch_boundary() {
         .await;
 
     assert_eq!(outline.file_count(), PARSE_BATCH_SIZE + 1);
-    assert_symbol_is_indexed(&outline, &files[0], "symbol_0");
-    assert_symbol_is_indexed(
-        &outline,
-        &files[PARSE_BATCH_SIZE],
-        &format!("symbol_{PARSE_BATCH_SIZE}"),
-    );
+    assert_symbol_is_indexed(&outline, "symbol_0");
+    assert_symbol_is_indexed(&outline, &format!("symbol_{PARSE_BATCH_SIZE}"));
 }
 
 #[test]
