@@ -97,9 +97,9 @@ const MAX_FILES_PER_REPO: usize = 200_000;
 #[cfg(feature = "local_fs")]
 const MAX_PENDING_WATCHER_PATHS: usize = 4_096;
 #[cfg(feature = "local_fs")]
-const MAX_REFRESH_ATTEMPTS: usize = 3;
-#[cfg(feature = "local_fs")]
 const REFRESH_RETRY_DELAY_MILLIS: u64 = 50;
+#[cfg(feature = "local_fs")]
+const MAX_REFRESH_RETRY_DELAY_MILLIS: u64 = 1_000;
 
 /// Maximum number of results to return from get_repo_contents to prevent accidentally
 /// materializing the entire repository
@@ -313,7 +313,7 @@ struct RepoUpdate {
 #[derive(Default)]
 struct WatcherUpdateQueue {
     in_flight: Option<SpawnedFutureHandle>,
-    pending: PendingWatcherUpdate,
+    pending: VecDeque<PendingWatcherUpdate>,
 }
 
 #[cfg(feature = "local_fs")]
@@ -321,8 +321,8 @@ struct WatcherUpdateQueue {
 struct PendingWatcherUpdate {
     sequence: Option<u64>,
     refresh: bool,
-    added: HashSet<PathBuf>,
-    deleted: HashSet<PathBuf>,
+    added: Vec<PathBuf>,
+    deleted: Vec<PathBuf>,
     moved: HashMap<PathBuf, PathBuf>,
 }
 
@@ -337,22 +337,28 @@ impl PendingWatcherUpdate {
             return;
         }
         for path in update.added {
-            self.added.insert(path);
+            if !self.added.contains(&path) {
+                self.added.push(path);
+            }
             if self.exceeds_limit() {
                 self.require_refresh();
                 return;
             }
         }
         for path in update.deleted {
-            self.deleted.insert(path);
+            if !self.deleted.contains(&path) {
+                self.deleted.push(path);
+            }
             if self.exceeds_limit() {
                 self.require_refresh();
                 return;
             }
         }
         for (destination, source) in update.moved {
-            if let Some(displaced_source) = self.moved.insert(destination, source) {
-                self.deleted.insert(displaced_source);
+            if let Some(displaced_source) = self.moved.insert(destination, source)
+                && !self.deleted.contains(&displaced_source)
+            {
+                self.deleted.push(displaced_source);
             }
             if self.exceeds_limit() {
                 self.require_refresh();
@@ -384,8 +390,8 @@ impl PendingWatcherUpdate {
             return None;
         }
         let work = WatcherWork::Incremental(RepoUpdate {
-            added: std::mem::take(&mut self.added).into_iter().collect(),
-            deleted: std::mem::take(&mut self.deleted).into_iter().collect(),
+            added: std::mem::take(&mut self.added),
+            deleted: std::mem::take(&mut self.deleted),
             moved: std::mem::take(&mut self.moved),
         });
         self.sequence = None;
@@ -779,11 +785,32 @@ impl LocalRepoMetadataModel {
     ) {
         let sequence = self.next_repository_walk_sequence;
         self.next_repository_walk_sequence = self.next_repository_walk_sequence.wrapping_add(1);
-        self.watcher_update_tasks
+        let latest_directory_sequence = self
+            .pending_directory_load_order
+            .get(&repo_path)
+            .and_then(|queue| {
+                queue
+                    .iter()
+                    .rev()
+                    .find_map(|key| self.pending_directory_loads.get(key))
+            })
+            .map(|pending| pending.sequence);
+        let queue = self
+            .watcher_update_tasks
             .entry(repo_path.clone())
-            .or_default()
-            .pending
-            .merge_update(update, sequence);
+            .or_default();
+        if let Some(pending) = queue.pending.back_mut()
+            && pending.sequence.is_some_and(|watcher_sequence| {
+                latest_directory_sequence
+                    .is_none_or(|directory_sequence| watcher_sequence > directory_sequence)
+            })
+        {
+            pending.merge_update(update, sequence);
+        } else {
+            let mut pending = PendingWatcherUpdate::default();
+            pending.merge_update(update, sequence);
+            queue.pending.push_back(pending);
+        }
         self.dispatch_next_repository_walk(&repo_path, ctx);
     }
 
@@ -810,7 +837,8 @@ impl LocalRepoMetadataModel {
         let watcher_sequence = self
             .watcher_update_tasks
             .get(repo_path)
-            .and_then(|queue| queue.pending.sequence);
+            .and_then(|queue| queue.pending.front())
+            .and_then(|pending| pending.sequence);
         let directory_load = self.next_pending_directory_load(repo_path);
 
         if let Some((task_key, directory_sequence)) = directory_load
@@ -824,7 +852,13 @@ impl LocalRepoMetadataModel {
         let work = self
             .watcher_update_tasks
             .get_mut(repo_path)
-            .and_then(|queue| queue.pending.take());
+            .and_then(|queue| {
+                let work = queue.pending.front_mut()?.take();
+                if work.is_some() {
+                    queue.pending.pop_front();
+                }
+                work
+            });
         if let Some((sequence, work)) = work {
             self.spawn_watcher_update(repo_path.clone(), sequence, work, ctx);
         } else {
@@ -910,7 +944,26 @@ impl LocalRepoMetadataModel {
                     continue;
                 }
                 let mut load_gitignores = gitignores.clone();
-                entry.load(&mut load_gitignores).await?;
+                let mut remaining_file_quota = LAZY_LOAD_FILE_LIMIT;
+                let mut files = Vec::new();
+                let ancestor_is_ignored = entry.ignored();
+                *entry = Entry::build_tree_with_standing_queries(
+                    local_path,
+                    &mut files,
+                    &mut load_gitignores,
+                    Some(&mut remaining_file_quota),
+                    BuildTreeOptions {
+                        max_depth: 1,
+                        current_depth: 0,
+                        ignored_path_strategy: &IgnoredPathStrategy::Include,
+                        force_included_paths: &[],
+                        budget_exceeded_behavior: BudgetExceededBehavior::StopAndLazyLoad,
+                    },
+                    ancestor_is_ignored,
+                    &mut standing_results,
+                    standing_query_definitions,
+                )
+                .await?;
             }
             Ok(root_entry)
         }
@@ -965,7 +1018,7 @@ impl LocalRepoMetadataModel {
                         }
                     }
                     WatcherWork::Refresh => {
-                        let mut attempt = 0;
+                        let mut retry_delay_millis = REFRESH_RETRY_DELAY_MILLIS;
                         loop {
                             let (root_entry, gitignores, standing_results) =
                                 Self::compute_repository_refresh(
@@ -976,8 +1029,7 @@ impl LocalRepoMetadataModel {
                                     &loaded_directory_paths,
                                 )
                                 .await;
-                            attempt += 1;
-                            if root_entry.is_ok() || attempt == MAX_REFRESH_ATTEMPTS {
+                            if root_entry.is_ok() {
                                 break ComputedWatcherUpdate::Refresh {
                                     root_entry,
                                     gitignores,
@@ -985,9 +1037,11 @@ impl LocalRepoMetadataModel {
                                 };
                             }
                             warpui_core::r#async::Timer::after(std::time::Duration::from_millis(
-                                REFRESH_RETRY_DELAY_MILLIS * attempt as u64,
+                                retry_delay_millis,
                             ))
                             .await;
+                            retry_delay_millis =
+                                (retry_delay_millis * 2).min(MAX_REFRESH_RETRY_DELAY_MILLIS);
                         }
                     }
                 };
@@ -1111,12 +1165,14 @@ impl LocalRepoMetadataModel {
                     model.repositories.get(&repo_path_for_abort),
                     Some(IndexedRepoState::Indexed(_))
                 ) {
+                    let mut pending = PendingWatcherUpdate::default();
+                    pending.merge_work(work_for_abort, sequence);
                     model
                         .watcher_update_tasks
                         .entry(repo_path_for_abort.clone())
                         .or_default()
                         .pending
-                        .merge_work(work_for_abort, sequence);
+                        .push_front(pending);
                 }
                 model.dispatch_next_repository_walk(&repo_path_for_abort, ctx);
             },
