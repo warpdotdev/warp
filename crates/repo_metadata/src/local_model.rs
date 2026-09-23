@@ -258,7 +258,7 @@ pub struct LocalRepoMetadataModel {
     lazy_loaded_paths: HashMap<StandardizedPath, usize>,
     /// Spawned filesystem tree build tasks keyed by owning repo and target directory.
     build_tasks: HashMap<BuildTaskKey, BuildTask>,
-    /// Watcher update work keyed by repository root.
+    /// Per-repository queues that cap watcher filesystem walks at one in flight.
     #[cfg(feature = "local_fs")]
     watcher_update_tasks: HashMap<StandardizedPath, WatcherUpdateQueue>,
     /// File system watcher for monitoring changes.
@@ -732,10 +732,7 @@ impl LocalRepoMetadataModel {
                       (mutations, discovered_results, removed_roots, repo_path, lazy_load),
                       ctx| {
                     if model
-                        .finish_watcher_update_task(
-                            &repo_path,
-                            task_future_id_for_completion.get(),
-                        )
+                        .finish_watcher_update_task(&repo_path, task_future_id_for_completion.get())
                         .is_none()
                     {
                         return;
@@ -787,6 +784,8 @@ impl LocalRepoMetadataModel {
             );
             task_future_id.set(Some(update_handle.future_id()));
             self.track_watcher_update_task(task_repo_path, update_handle);
+        } else {
+            self.watcher_update_tasks.remove(&repo_path);
         }
     }
 
@@ -934,10 +933,10 @@ impl LocalRepoMetadataModel {
 
     #[cfg(feature = "local_fs")]
     fn abort_watcher_update_tasks_for_repo(&mut self, repo_path: &StandardizedPath) {
-        if let Some(queue) = self.watcher_update_tasks.remove(repo_path) {
-            if let Some(handle) = queue.in_flight {
-                handle.abort();
-            }
+        if let Some(queue) = self.watcher_update_tasks.remove(repo_path)
+            && let Some(handle) = queue.in_flight
+        {
+            handle.abort();
         }
     }
 

@@ -509,12 +509,11 @@ fn watcher_updates_are_serialized_and_coalesced_per_repository() {
     VirtualFS::test(
         "watcher_updates_serialized_and_coalesced",
         |dirs, mut vfs| {
-            vfs.mkdir("repo")
-                .with_files(vec![
-                    Stub::FileWithContent("repo/first.txt", "first"),
-                    Stub::FileWithContent("repo/second.txt", "second"),
-                    Stub::FileWithContent("repo/third.txt", "third"),
-                ]);
+            vfs.mkdir("repo").with_files(vec![
+                Stub::FileWithContent("repo/first.txt", "first"),
+                Stub::FileWithContent("repo/second.txt", "second"),
+                Stub::FileWithContent("repo/third.txt", "third"),
+            ]);
             let repo = dirs.tests().join("repo");
             let repo_path = StandardizedPath::from_local_canonicalized(&repo).unwrap();
             let first = repo.join("first.txt");
@@ -571,8 +570,7 @@ fn watcher_updates_are_serialized_and_coalesced_per_repository() {
 
                 model_handle.read(&app, |model, _ctx| {
                     assert!(!model.watcher_update_tasks.contains_key(&repo_path));
-                    let Some(IndexedRepoState::Indexed(state)) =
-                        model.repository_state(&repo_path)
+                    let Some(IndexedRepoState::Indexed(state)) = model.repository_state(&repo_path)
                     else {
                         panic!("repository should remain indexed");
                     };
