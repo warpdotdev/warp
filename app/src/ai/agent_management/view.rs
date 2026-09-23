@@ -55,7 +55,7 @@ use crate::ai::agent_management::telemetry::{
 };
 use crate::ai::ambient_agents::{AgentSource, cancel_task_with_toast};
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
-use crate::ai::blocklist::format_credits;
+use crate::ai::blocklist::view_util::{UsageLabelKind, format_usage, usage_label};
 use crate::ai::conversation_details_panel::{
     ConversationDetailsData, ConversationDetailsPanel, ConversationDetailsPanelEvent,
 };
@@ -71,7 +71,8 @@ use crate::editor::{
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::notebooks::NotebookId;
 use crate::server::team_scope::RequestTeamScope;
-use crate::settings::ai::AISettings;
+use crate::settings::UsageDisplayUnit;
+use crate::settings::ai::{AISettings, AISettingsChangedEvent};
 use crate::ui_components::agent_icon::agent_conversation_entry_icon_variant;
 use crate::ui_components::avatar::{Avatar, AvatarContent};
 use crate::ui_components::icon_with_status::render_icon_with_status;
@@ -96,6 +97,24 @@ use crate::{AgentModeEntrypoint, send_telemetry_from_ctx};
 lazy_static! {
     static ref HASHER: SipHasher = SipHasher::new_with_keys(0, 0);
 }
+
+fn format_request_usage(
+    credits: f32,
+    cost_in_cents: Option<f32>,
+    usage_display_unit: UsageDisplayUnit,
+) -> String {
+    let label = usage_label(
+        UsageLabelKind::DetailsPanel,
+        cost_in_cents,
+        usage_display_unit,
+    );
+    let value = format_usage(credits, None, cost_in_cents, usage_display_unit);
+    format!("{label}: {value}")
+}
+
+#[cfg(test)]
+#[path = "view_tests.rs"]
+mod tests;
 
 const MANAGEMENT_PANEL_WIDTH: f32 = 400.;
 // Vertical margin for filter row elements to align with dropdown buttons
@@ -232,6 +251,11 @@ impl AgentManagementView {
                 me.update_harness_dropdown(ctx);
             },
         );
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
+            if matches!(event, AISettingsChangedEvent::UsageDisplayUnit { .. }) {
+                ctx.notify();
+            }
+        });
 
         let view_handle = ctx.handle();
         let list_state = Self::construct_fresh_list_state(view_handle.clone());
@@ -1854,8 +1878,12 @@ impl AgentManagementView {
             metadata_parts.push(format!("Run time: {run_time}"));
         }
 
-        if let Some(usage) = entry.display.request_usage.map(format_credits) {
-            metadata_parts.push(format!("Credits used: {usage}"));
+        if let Some(credits) = entry.display.request_usage {
+            metadata_parts.push(format_request_usage(
+                credits,
+                entry.display.cost_in_cents,
+                AISettings::as_ref(app).usage_display_unit,
+            ));
         }
 
         Text::new(metadata_parts.join(" • "), font_family, font_size)
