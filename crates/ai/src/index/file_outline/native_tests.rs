@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use repo_metadata::TargetFile;
 use tempfile::TempDir;
@@ -92,10 +92,14 @@ async fn rejected_new_file_does_not_evict_a_later_modified_file() {
     outline.update(update).await;
     let file_symbols = outline.to_file_symbols(None);
 
-    assert!(!file_symbols.iter().any(|file| file.path == "a.rs"));
+    assert!(
+        !file_symbols
+            .iter()
+            .any(|file| Path::new(&file.path).ends_with("a.rs"))
+    );
     let modified_symbols = file_symbols
         .iter()
-        .find(|file| file.path == "z.rs")
+        .find(|file| Path::new(&file.path).ends_with("z.rs"))
         .unwrap();
     assert_eq!(modified_symbols.symbols, "  fn new_symbol (line 1)");
 }
