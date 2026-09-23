@@ -2218,22 +2218,24 @@ impl AIBlock {
                 _ => (),
             }
         }
-        // Build the views and stream new content for suggested code snippets.
-        output
-            .all_text()
-            .flat_map(|text| text.sections.iter())
-            .filter_map(|section| match section {
-                AIAgentTextSection::Code {
-                    code,
-                    language,
-                    source,
-                } => Some((code, language, source)),
-                _ => None,
-            })
-            .enumerate()
-            .for_each(|(index, (code, language, source))| {
-                self.handle_code_section_stream_update(index, code, language, source, ctx);
-            });
+        // Restored sections render as selectable plain text to avoid constructing editor graphs.
+        if !self.model.is_restored() {
+            output
+                .all_text()
+                .flat_map(|text| text.sections.iter())
+                .filter_map(|section| match section {
+                    AIAgentTextSection::Code {
+                        code,
+                        language,
+                        source,
+                    } => Some((code, language, source)),
+                    _ => None,
+                })
+                .enumerate()
+                .for_each(|(index, (code, language, source))| {
+                    self.handle_code_section_stream_update(index, code, language, source, ctx);
+                });
+        }
 
         // Register the mouse state handles for citations.
         for citation in &output.citations {
