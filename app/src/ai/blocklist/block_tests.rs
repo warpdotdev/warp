@@ -1,7 +1,9 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode};
 use ai::skills::SkillReference;
+use chrono::Local;
 use settings::Setting;
 use warp_core::channel::ChannelState;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -16,21 +18,29 @@ use super::{
     default_collapsible_state_for_orchestration_action,
     default_collapsible_state_for_orchestration_message, received_message_collapsible_id,
     recording_artifact_view_url, user_avatar_info_for_conversation_creator,
-    visit_code_sections_for_editor_materialization,
 };
 use crate::ai::agent::{
-    AIAgentActionType, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentText,
-    AIAgentTextSection, MessageId, StartAgentExecutionMode,
+    AIAgentActionType, AIAgentExchange, AIAgentExchangeId, AIAgentOutput, AIAgentOutputMessage,
+    AIAgentOutputMessageType, AIAgentOutputStatus, AIAgentText, AIAgentTextSection,
+    FinishedAIAgentOutput, MessageId, Shared, StartAgentExecutionMode,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::action_model::{
     compose_run_agents_child_prompt, run_agents_to_start_agent_mode,
 };
+use crate::ai::blocklist::{BlocklistAIHistoryModel, ResponseStreamId};
+use crate::ai::llms::LLMId;
 use crate::auth::UserUid;
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
+use crate::features::FeatureFlag;
 use crate::settings::{AISettings, OrchestrationMessageDisplayMode};
+use crate::terminal::view::load_ai_conversation::{
+    RestoreConversationEntryBehavior, RestoredAIConversation,
+};
 use crate::test_util::settings::initialize_settings_for_tests;
+use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
+use crate::vim_registers::VimRegisters;
 use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
 
 #[test]
@@ -137,44 +147,130 @@ fn recording_artifact_view_url_requires_task_id() {
     assert_eq!(recording_artifact_view_url(None, "recording-123"), None);
 }
 
-#[test]
-fn restored_code_sections_do_not_materialize_editor_views() {
-    let output = AIAgentOutput {
+fn code_output(code: &str) -> AIAgentOutput {
+    AIAgentOutput {
         messages: vec![AIAgentOutputMessage {
             id: MessageId::new("code-message".to_owned()),
             message: AIAgentOutputMessageType::Text(AIAgentText {
-                sections: vec![
-                    AIAgentTextSection::Code {
-                        code: "first".to_owned(),
-                        language: None,
-                        source: None,
-                    },
-                    AIAgentTextSection::Code {
-                        code: "second".to_owned(),
-                        language: None,
-                        source: None,
-                    },
-                ],
+                sections: vec![AIAgentTextSection::Code {
+                    code: code.to_owned(),
+                    language: None,
+                    source: None,
+                }],
             }),
             citations: vec![],
         }],
         ..Default::default()
-    };
+    }
+}
 
-    let mut restored_visits = 0;
-    visit_code_sections_for_editor_materialization(&output, true, |_, _, _, _| {
-        restored_visits += 1;
-    });
-    assert_eq!(restored_visits, 0);
+fn completed_exchange_with_code(code: &str) -> AIAgentExchange {
+    AIAgentExchange {
+        id: AIAgentExchangeId::new(),
+        input: vec![],
+        output_status: AIAgentOutputStatus::Finished {
+            finished_output: FinishedAIAgentOutput::Success {
+                output: Shared::new(code_output(code)),
+            },
+        },
+        added_message_ids: HashSet::new(),
+        start_time: Local::now(),
+        finish_time: None,
+        time_to_first_token_ms: None,
+        working_directory: None,
+        model_id: LLMId::from("test-model"),
+        request_cost: None,
+        coding_model_id: LLMId::from("test-coding-model"),
+        cli_agent_model_id: LLMId::from("test-cli-agent-model"),
+        computer_use_model_id: LLMId::from("test-computer-use-model"),
+        response_initiator: None,
+    }
+}
 
-    let mut live_sections = vec![];
-    visit_code_sections_for_editor_materialization(&output, false, |index, code, _, _| {
-        live_sections.push((index, code.to_owned()));
+#[test]
+fn restored_and_streaming_code_blocks_materialize_editors_independently() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(crate::NotebookKeybindings::new);
+        app.add_singleton_model(|_| VimRegisters::new());
+        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
+        let source_terminal = add_window_with_terminal(&mut app, None);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let restored_conversation = source_terminal.update(&mut app, |_view, ctx| {
+            let terminal_view_id = ctx.view_id();
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                let conversation_id =
+                    history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history
+                    .conversation_mut(&conversation_id)
+                    .expect("conversation should exist")
+                    .append_reassigned_exchange(
+                        &ResponseStreamId::new_for_test(),
+                        completed_exchange_with_code("restored"),
+                        terminal_view_id,
+                        ctx,
+                    )
+                    .expect("completed exchange should append");
+                history
+                    .conversation(&conversation_id)
+                    .cloned()
+                    .expect("conversation should exist")
+            })
+        });
+
+        let restored_block = terminal.update(&mut app, |view, ctx| {
+            view.restore_conversation_after_view_creation(
+                RestoredAIConversation::new(restored_conversation),
+                true,
+                RestoreConversationEntryBehavior::EnterRestoredConversation,
+                ctx,
+            );
+            view.last_ai_block()
+                .expect("restored AI block should exist")
+        });
+        restored_block.read(&app, |block, ctx| {
+            assert!(block.model.is_restored());
+            assert_eq!(block.code_editor_views.len(), 0);
+            let output = block
+                .model
+                .status(ctx)
+                .output_to_render()
+                .expect("completed restored output should remain renderable");
+            assert!(matches!(
+                &output.get().messages[0].message,
+                AIAgentOutputMessageType::Text(text)
+                    if matches!(
+                        &text.sections[0],
+                        AIAgentTextSection::Code { code, .. } if code == "restored"
+                    )
+            ));
+        });
+
+        let streaming_block = terminal.update(&mut app, |view, ctx| {
+            view.insert_dummy_streaming_ai_block("live query".to_owned(), ctx)
+        });
+        streaming_block.update(&mut app, |block, ctx| {
+            block.handle_updated_output(&code_output("live"), ctx);
+            block.handle_updated_output(&code_output("live updated"), ctx);
+        });
+
+        restored_block.read(&app, |block, _| {
+            assert_eq!(block.code_editor_views.len(), 0);
+        });
+        streaming_block.read(&app, |block, ctx| {
+            assert!(!block.model.is_restored());
+            assert_eq!(block.code_editor_views.len(), 1);
+            assert_eq!(
+                block.code_editor_views[0]
+                    .view
+                    .as_ref(ctx)
+                    .text(ctx)
+                    .as_str(),
+                "live updated"
+            );
+        });
     });
-    assert_eq!(
-        live_sections,
-        vec![(0, "first".to_owned()), (1, "second".to_owned())]
-    );
 }
 
 #[cfg(feature = "local_fs")]
