@@ -322,7 +322,9 @@ struct PendingWatcherUpdate {
     sequence: Option<u64>,
     refresh: bool,
     added: Vec<PathBuf>,
+    added_membership: HashSet<PathBuf>,
     deleted: Vec<PathBuf>,
+    deleted_membership: HashSet<PathBuf>,
     moved: HashMap<PathBuf, PathBuf>,
 }
 
@@ -337,7 +339,7 @@ impl PendingWatcherUpdate {
             return;
         }
         for path in update.added {
-            if !self.added.contains(&path) {
+            if self.added_membership.insert(path.clone()) {
                 self.added.push(path);
             }
             if self.exceeds_limit() {
@@ -346,7 +348,7 @@ impl PendingWatcherUpdate {
             }
         }
         for path in update.deleted {
-            if !self.deleted.contains(&path) {
+            if self.deleted_membership.insert(path.clone()) {
                 self.deleted.push(path);
             }
             if self.exceeds_limit() {
@@ -356,7 +358,7 @@ impl PendingWatcherUpdate {
         }
         for (destination, source) in update.moved {
             if let Some(displaced_source) = self.moved.insert(destination, source)
-                && !self.deleted.contains(&displaced_source)
+                && self.deleted_membership.insert(displaced_source.clone())
             {
                 self.deleted.push(displaced_source);
             }
@@ -394,6 +396,8 @@ impl PendingWatcherUpdate {
             deleted: std::mem::take(&mut self.deleted),
             moved: std::mem::take(&mut self.moved),
         });
+        self.added_membership.clear();
+        self.deleted_membership.clear();
         self.sequence = None;
         Some((sequence, work))
     }
@@ -405,7 +409,9 @@ impl PendingWatcherUpdate {
     fn require_refresh(&mut self) {
         self.refresh = true;
         self.added.clear();
+        self.added_membership.clear();
         self.deleted.clear();
+        self.deleted_membership.clear();
         self.moved.clear();
     }
 }

@@ -86,6 +86,29 @@ async fn await_watcher_updates_for_repo(
     }
 }
 
+#[cfg(feature = "local_fs")]
+fn create_hard_links(directory: &std::path::Path, count: usize, sources: &[PathBuf]) {
+    std::fs::create_dir_all(directory).unwrap();
+    for index in 0..count {
+        std::fs::hard_link(
+            &sources[index % sources.len()],
+            directory.join(format!("file-{index:06}.txt")),
+        )
+        .unwrap();
+    }
+}
+
+#[cfg(feature = "local_fs")]
+fn file_count(entry: &FileTreeEntry, path: &StandardizedPath) -> usize {
+    match entry.get(path) {
+        Some(FileTreeEntryState::File(_)) => 1,
+        Some(FileTreeEntryState::Directory(_)) => entry
+            .child_paths(path)
+            .map(|child| file_count(entry, child))
+            .sum(),
+        None => 0,
+    }
+}
 #[test]
 #[should_panic(expected = "force-included paths must be repository-relative")]
 fn force_included_paths_must_be_relative() {
@@ -181,28 +204,6 @@ fn repository_indexed_resolves_immediately_for_indexed_repo() {
 #[cfg(feature = "local_fs")]
 #[test]
 fn watcher_added_directories_share_one_eager_file_budget() {
-    fn create_hard_links(directory: &std::path::Path, count: usize, sources: &[PathBuf]) {
-        std::fs::create_dir_all(directory).unwrap();
-        for index in 0..count {
-            std::fs::hard_link(
-                &sources[index % sources.len()],
-                directory.join(format!("file-{index:06}.txt")),
-            )
-            .unwrap();
-        }
-    }
-
-    fn file_count(entry: &FileTreeEntry, path: &StandardizedPath) -> usize {
-        match entry.get(path) {
-            Some(FileTreeEntryState::File(_)) => 1,
-            Some(FileTreeEntryState::Directory(_)) => entry
-                .child_paths(path)
-                .map(|child| file_count(entry, child))
-                .sum(),
-            None => 0,
-        }
-    }
-
     VirtualFS::test("watcher_cumulative_file_budget", |dirs, mut vfs| {
         vfs.mkdir("repo/first/eager/lazy")
             .mkdir("repo/second/eager/lazy");
@@ -261,6 +262,60 @@ fn watcher_added_directories_share_one_eager_file_budget() {
     });
 }
 
+#[cfg(feature = "local_fs")]
+#[test]
+fn watcher_added_directory_enforces_file_budget_and_preserves_force_included_file() {
+    VirtualFS::test("watcher_single_directory_file_budget", |dirs, mut vfs| {
+        vfs.mkdir("repo/oversized/.agents/skills/example");
+        let repo = dirs.tests().join("repo");
+        let oversized = repo.join("oversized");
+        let skill = oversized.join(".agents/skills/example/SKILL.md");
+        std::fs::write(&skill, "name: example").unwrap();
+        let templates = (0..4)
+            .map(|index| {
+                let path = repo.join(format!("template-{index}.txt"));
+                std::fs::write(&path, "template").unwrap();
+                path
+            })
+            .collect::<Vec<_>>();
+        create_hard_links(&oversized, MAX_FILES_PER_REPO + 1, &templates);
+
+        let repo = StandardizedPath::from_local_canonicalized(&repo).unwrap();
+        let oversized = StandardizedPath::from_local_canonicalized(&oversized).unwrap();
+        let skill = StandardizedPath::from_local_canonicalized(&skill).unwrap();
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| {
+                let mut model = LocalRepoMetadataModel::new_for_test();
+                model.register_force_included_paths([PathBuf::from(".agents/skills")]);
+                model
+            });
+            model_handle.update(&mut app, |model, ctx| {
+                model.repositories.insert(
+                    repo.clone(),
+                    IndexedRepoState::Indexed(empty_repo_state(&repo)),
+                );
+                model.handle_watcher_event(
+                    &BulkFilesystemWatcherEvent {
+                        added: std::collections::HashSet::from([oversized
+                            .to_local_path()
+                            .unwrap()]),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+            });
+            await_watcher_updates_for_repo(&mut app, &model_handle, &repo).await;
+
+            model_handle.read(&app, |model, _ctx| {
+                let state = model
+                    .get_repository(&repo)
+                    .expect("repository should remain indexed");
+                assert_eq!(file_count(&state.entry, &oversized), MAX_FILES_PER_REPO + 1);
+                assert!(state.entry.contains(&skill));
+            });
+        });
+    });
+}
 #[test]
 fn repository_indexed_waits_for_pending_repo() {
     VirtualFS::test("repository_indexed_pending", |dirs, mut vfs| {
