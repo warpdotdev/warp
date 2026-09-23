@@ -18,6 +18,7 @@ There is a second, compounding problem. If a group is collapsed, its members are
 ## Goals
 
 - A query matching a group's displayed name surfaces that group and all of its member tabs.
+- Matching portions of the displayed group name appear in bold while searching.
 - Matches inside a collapsed group are visible without the user having to expand it first.
 - Tabs outside a matched group continue to filter on their own text, unchanged.
 - Search matches what the user can actually read on screen, including the placeholder name shown for a group that was never renamed.
@@ -66,6 +67,8 @@ A workspace with a tab group named `backend` containing three tabs titled `api s
 13. A query matching neither any tab text nor any group name shows the existing "No tabs match your search." empty state.
 14. Behavior is consistent across all three vertical tabs display modes (Summary, FocusedSession, Panes), since group headers render in each.
 15. The next/previous-tab keybindings, while a search is active, cycle through exactly the tabs the panel shows — including members admitted by a group-name match. What is visible and what is reachable by keyboard never disagree.
+16. Matching substrings in a group header use bold text, including repeated and overlapping matches and the `New Group` fallback. Highlight positions refer to the original characters, even when Unicode lowercasing changes their byte length.
+17. Clearing the query removes group-name highlighting. Inline rename editors remain editable without search styling.
 
 ## Success criteria
 
@@ -82,9 +85,10 @@ A workspace with a tab group named `backend` containing three tabs titled `api s
 - **Unit tests:** cover name matching including the untitled placeholder, and the merge of group matches into text matches (member inclusion, ordering, pane-row upgrade, empty group, non-member exclusion, no-match passthrough).
 - **Manual test:** create a group named `backend` with tabs whose titles do not contain "backend", collapse it, type `backend` in the panel search, and confirm the group appears expanded with all members; clear the query and confirm it re-collapses.
 - **Regression test:** confirm searching for a plain tab title still behaves as before, and that the empty state still appears for a nonsense query.
+- **Highlight tests:** cover mixed case, repeated and overlapping matches, multibyte prefixes, expanding and contextual Unicode lowercasing, empty queries, non-substring queries, and the untitled fallback.
+- **Highlight visual check:** search `back` in a group named `My Backend`; only `Back` should be bold. Clear the query and confirm normal text returns.
 - **Navigation test:** with a group-name query active, cycle tabs with the next/previous-tab keybindings and confirm the matched group's members are visited.
 
 ## Open questions
 
-1. Should a matched group's *header* be visually distinguished from a group that is present only because a member matched? This spec treats them identically.
-2. Should this fold into #9155 ("Search sessions by renamed tab name") as one "search matches every name you can see" effort? The two are independent but adjacent.
+1. Should this fold into #9155 ("Search sessions by renamed tab name") as one "search matches every name you can see" effort? The two are independent but adjacent.

@@ -169,3 +169,15 @@ Gates: `./script/presubmit`, `./script/format --check`, and `cargo clippy --work
 - Ctrl+Tab command palette switcher (`app/src/search/command_palette/tabs/`) has no group concept; making it group-aware is separate work.
 - #9666 covers an adjacent gap in the same `render_groups` function: the `title_override` gate drops a tab's custom title from search fragments in Panes mode. Independent of this change.
 - End-to-end coverage under `crates/integration/` for the search-matches-group flow.
+
+## Group-name match highlighting
+
+`render_grouped_tabs_header` receives the active search query and applies WarpUI's
+`Highlight` with bold font weight to matching characters in the displayed name.
+The inline rename editor keeps its existing rendering.
+
+`group_name_highlight_indices` uses the same whole-string lowercase substring
+semantics as group filtering. It maps matched byte ranges back to original character
+indices, accounting for multibyte characters and lowercase expansion such as `İ`.
+The tests in `vertical_tabs_tests.rs` cover repeated and overlapping matches, mixed case, Unicode,
+empty and nonmatching queries, and the untitled fallback.

@@ -21,11 +21,11 @@ use warpui::elements::{
     Border, ChildAnchor, Clipped, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
     Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, DragAxis, DragBarSide,
     Draggable, DropShadow, DropTarget, Element, Empty, EventHandler, Expanded, Fill as ElementFill,
-    Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, Padding,
-    ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor,
-    PositionedElementOffsetBounds, Radius, Resizable, ResizableStateHandle, SavePosition,
-    ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable, Stack, Text,
-    resizable_state_handle,
+    Flex, Highlight, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds,
+    PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Resizable,
+    ResizableStateHandle, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth,
+    Shrinkable, Stack, Text, resizable_state_handle,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
@@ -2775,6 +2775,7 @@ fn render_tab_group_header_icon_button(
 #[allow(clippy::too_many_arguments)]
 fn render_grouped_tabs_header(
     group: &TabGroup,
+    search_query: &str,
     member_count: usize,
     mouse_states: &TabGroupMouseStates,
     is_collapsed: bool,
@@ -2783,9 +2784,9 @@ fn render_grouped_tabs_header(
     is_being_renamed: bool,
     rename_editor: Option<&ViewHandle<EditorView>>,
     collapsed_member_kinds: Option<&[SummaryPaneKind]>,
-    app: &AppContext,
+    ctx: &AppContext,
 ) -> Box<dyn Element> {
-    let appearance = Appearance::as_ref(app);
+    let appearance = Appearance::as_ref(ctx);
     let theme = appearance.theme();
     let font_family = appearance.ui_font_family();
     let main_text_color = theme.main_text_color(theme.background());
@@ -2823,12 +2824,17 @@ fn render_grouped_tabs_header(
 
     let title_element: Box<dyn Element> =
         if let Some(editor) = rename_editor.filter(|_| is_being_renamed) {
-            render_inline_tab_rename_editor(editor, appearance, app)
+            render_inline_tab_rename_editor(editor, appearance, ctx)
         } else {
             let title_text = group_display_name(group);
+            let highlight_indices = group_name_highlight_indices(&title_text, search_query);
             Text::new_inline(title_text, font_family, 12.)
                 .with_clip(ClipConfig::ellipsis())
                 .with_color(main_text_color.into())
+                .with_single_highlight(
+                    Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
+                    highlight_indices,
+                )
                 .finish()
         };
     let subtitle_text = if member_count == 1 {
@@ -3047,6 +3053,7 @@ fn render_grouped_tab_container(
             is_collapsed.then(|| workspace.compute_group_member_kinds(group.id, app));
         let header = render_grouped_tabs_header(
             &group,
+            &state.search_query,
             member_count,
             &mouse_states,
             is_collapsed,
@@ -4084,6 +4091,34 @@ fn group_display_name(group: &TabGroup) -> String {
         .name
         .clone()
         .unwrap_or_else(|| UNTITLED_GROUP_NAME.to_string())
+}
+
+fn group_name_highlight_indices(text: &str, query: &str) -> Vec<usize> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+
+    let text_lower = text.to_lowercase();
+    let query_lower = query.to_lowercase();
+    let matches: Vec<_> = text_lower
+        .char_indices()
+        .filter(|(start, _)| text_lower[*start..].starts_with(&query_lower))
+        .map(|(start, _)| start..start + query_lower.len())
+        .collect();
+    let mut indices = Vec::new();
+    let mut offset = 0;
+    // Lowercasing can expand a character, so match bytes must map back to original char indices.
+    for (index, character) in text.chars().enumerate() {
+        let end = offset + character.to_lowercase().map(char::len_utf8).sum::<usize>();
+        if matches
+            .iter()
+            .any(|range| range.start < end && offset < range.end)
+        {
+            indices.push(index);
+        }
+        offset = end;
+    }
+    indices
 }
 
 /// Returns the ids of tab groups whose displayed name contains `query_lower`.
