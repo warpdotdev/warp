@@ -71,6 +71,12 @@ zbus.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 image.workspace = true
+# The gdigrab video recorder (`windows/recording.rs`) shells out to a supervised ffmpeg
+# subprocess, mirroring `linux/recording.rs`/`mac/recording.rs`: tokio `process`/`time` drive
+# the spawn + finalize timeouts, `io-util` sends ffmpeg its graceful stdin quit command (there's
+# no POSIX signal to send instead), and `uuid` names the ephemeral recording file.
+tokio = { workspace = true, features = ["io-util", "process", "time"] }
+uuid.workspace = true
 warpui_core.workspace = true
 windows = { workspace = true, features = [
     "Win32_Foundation",

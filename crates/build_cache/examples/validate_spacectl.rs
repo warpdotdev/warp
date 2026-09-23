@@ -1,9 +1,8 @@
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::{env, fs};
 
 use build_cache::{
@@ -11,7 +10,6 @@ use build_cache::{
     setup_cache,
 };
 use command::r#async::Command;
-use futures_lite::future;
 use serde_json::Value;
 
 struct Fixture {
@@ -22,6 +20,10 @@ struct Fixture {
 const CARGO_TOML: &str =
     "[package]\nname = \"cache-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
 const GO_MOD: &str = "module example.com/cache-fixture\n\ngo 1.22\n";
+const PACKAGE_JSON: &str =
+    "{\"name\":\"cache-fixture\",\"version\":\"1.0.0\",\"lockfileVersion\":3}\n";
+const PACKAGE_LOCK: &str =
+    "{\"name\":\"cache-fixture\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"packages\":{}}\n";
 
 const FIXTURES: &[Fixture] = &[
     Fixture {
@@ -48,6 +50,16 @@ const FIXTURES: &[Fixture] = &[
         name: "rust-go",
         files: &[("Cargo.toml", CARGO_TOML), ("go.mod", GO_MOD)],
         expected_modes: &["go", "rust"],
+    },
+    Fixture {
+        name: "nested",
+        files: &[
+            ("Cargo.toml", CARGO_TOML),
+            ("frontend/package.json", PACKAGE_JSON),
+            ("frontend/package-lock.json", PACKAGE_LOCK),
+            ("backend/go.mod", GO_MOD),
+        ],
+        expected_modes: &[],
     },
     Fixture {
         name: "node",
@@ -129,13 +141,16 @@ fn run() -> Result<bool, String> {
         println!("  {}: {}", repository.name, repository.cwd.display());
     }
 
-    let responses = Rc::new(RefCell::new(Vec::new()));
-    let report = future::block_on(setup_cache(
+    let responses = Arc::new(Mutex::new(Vec::new()));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .map_err(|error| error.to_string())?;
+    let report = runtime.block_on(setup_cache(
         cache_root,
         repositories,
         additional_global_modes,
         {
-            let responses = Rc::clone(&responses);
+            let responses = Arc::clone(&responses);
             move |mut command| {
                 let cwd = command
                     .get_current_dir()
@@ -145,11 +160,11 @@ fn run() -> Result<bool, String> {
                     .get_args()
                     .any(|argument| argument == OsStr::new("--dry_run=true"));
                 configure_isolated_environment(&mut command, &isolated_home, &command_path);
-                let responses = Rc::clone(&responses);
+                let responses = Arc::clone(&responses);
                 async move {
                     let bytes = default_run_command(command).await?;
                     let value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-                    responses.borrow_mut().push(CapturedResponse {
+                    responses.lock().unwrap().push(CapturedResponse {
                         cwd,
                         dry_run,
                         value,
@@ -165,11 +180,13 @@ fn run() -> Result<bool, String> {
     print_environment(&report);
 
     let expected_mode_failures = validate_fixture_modes(&report, &fixtures);
+    let nested_fixture_failures = validate_nested_fixture(&report, &fixtures);
     let repository_cache_root_failures = validate_repository_cache_roots(&report);
-    let mount_failures = validate_mounts(&responses.borrow());
+    let mount_failures = validate_mounts(&responses.lock().unwrap());
     let degradation_count = report.degradations().count();
     let missing_plan = usize::from(report.plan.is_none());
     let failure_count = expected_mode_failures
+        + nested_fixture_failures
         + repository_cache_root_failures
         + mount_failures
         + degradation_count
@@ -182,6 +199,7 @@ fn run() -> Result<bool, String> {
         println!(
             "validation failed: {degradation_count} degraded invocation(s), \
              {expected_mode_failures} mode mismatch(es), \
+             {nested_fixture_failures} nested fixture mismatch(es), \
              {repository_cache_root_failures} duplicate repository cache root(s), \
              {mount_failures} mount mismatch(es), \
              {missing_plan} missing plan(s)"
@@ -390,6 +408,9 @@ fn validate_fixture_modes(report: &build_cache::CacheSetupReport, fixtures: &[&F
 
     let mut failures = 0;
     for fixture in fixtures {
+        if fixture.name == "nested" {
+            continue;
+        }
         let actual_modes = actual.get(fixture.name).copied().unwrap_or_default();
         let expected_modes = fixture.expected_modes;
         if actual_modes == expected_modes {
@@ -403,6 +424,59 @@ fn validate_fixture_modes(report: &build_cache::CacheSetupReport, fixtures: &[&F
             );
             failures += 1;
         }
+    }
+    failures
+}
+
+fn validate_nested_fixture(report: &build_cache::CacheSetupReport, fixtures: &[&Fixture]) -> usize {
+    if !fixtures.iter().any(|fixture| fixture.name == "nested") {
+        return 0;
+    }
+
+    println!();
+    println!("nested fixture checks:");
+    let Some(plan) = &report.plan else {
+        println!("  mismatch: no cache plan");
+        return 1;
+    };
+    let configurations = plan
+        .configurations
+        .iter()
+        .filter(|configuration| {
+            matches!(
+                &configuration.scope,
+                CacheScope::Repository { name, .. } if name == "nested"
+            )
+        })
+        .collect::<Vec<_>>();
+    let expected = [
+        (Path::new("nested"), "rust"),
+        (Path::new("nested/backend"), "go"),
+        (Path::new("nested/frontend"), "npm"),
+    ];
+    let mut failures = 0;
+    for (suffix, mode) in expected {
+        let matched = configurations.iter().any(|configuration| {
+            configuration.cwd.ends_with(suffix)
+                && configuration.modes.iter().any(|actual| actual == mode)
+        });
+        if matched {
+            println!("  ok {}: {mode}", suffix.display());
+        } else {
+            println!("  mismatch {}: expected {mode}", suffix.display());
+            failures += 1;
+        }
+    }
+    let distinct_cache_roots = configurations
+        .iter()
+        .map(|configuration| &configuration.relative_cache_dir)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    if distinct_cache_roots == configurations.len() {
+        println!("  ok: distinct nested cache roots");
+    } else {
+        println!("  mismatch: nested cache roots are not distinct");
+        failures += 1;
     }
     failures
 }

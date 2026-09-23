@@ -11,6 +11,7 @@ use cloud_object_models::CodeForge;
 use futures::channel::oneshot;
 use futures::executor::block_on;
 use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
+use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 use tempfile::TempDir;
 use warp_cli::agent::Harness;
 use warp_cli::skill::SkillSpec;
@@ -37,7 +38,7 @@ use super::{
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentActionResult, AIAgentActionResultType, AIAgentInput, AIAgentOutput,
+    AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment, AIAgentInput, AIAgentOutput,
     AIAgentOutputMessage, ArtifactCreatedData, CancellationReason, MessageId, RenderableAIError,
     UploadArtifactResult,
 };
@@ -47,7 +48,8 @@ use crate::ai::blocklist::orchestration_events::{
     OrchestrationEventService, PendingEvent, PendingEventDetail,
 };
 use crate::ai::blocklist::{
-    BlocklistAIHistoryModel, RequestInput, ResponseStream, ResponseStreamId,
+    BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin, RequestInput,
+    ResponseStream, ResponseStreamId,
 };
 use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
 use crate::ai::llms::LLMId;
@@ -145,6 +147,17 @@ fn idle_timeout_sender_complete_with_optional_idle_some_defers_then_delivers() {
     assert_eq!(rx.try_recv().unwrap(), None);
 
     std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(rx.try_recv().unwrap(), Some(7));
+}
+
+#[test]
+fn idle_timeout_sender_complete_with_zero_idle_sends_immediately() {
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.end_run_after(Duration::from_millis(50), 1);
+
+    idle_timeout.complete_with_optional_idle(Some(Duration::ZERO), 7);
+
     assert_eq!(rx.try_recv().unwrap(), Some(7));
 }
 
@@ -1593,6 +1606,237 @@ fn driver_wired_for_terminal(
         driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
     });
     driver_handle
+}
+
+#[test]
+fn native_startup_queue_prevents_exit_until_pending_rows_are_removed() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let (terminal_id, controller) = terminal.read(&app, |terminal, _| {
+            (terminal.id(), terminal.ai_controller().clone())
+        });
+        let (id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &controller);
+        controller.update(&mut app, |controller, ctx| {
+            controller.bind_native_prompt_conversation(Some(id), ctx);
+        });
+        // The driver's own skip_initial_turn dispatch drains an (empty, at this point) startup
+        // queue for `id` here, so it doesn't disturb the mock stream created above.
+        let _driver = driver_wired_for_terminal(&mut app, terminal, None);
+
+        // A row queued for this conversation after setup has finished keeps the driver from
+        // exiting even once the (unrelated, pre-existing) stream finishes successfully.
+        let queued_id = QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "followup".into(),
+                    ParticipantId::new(),
+                    vec![],
+                    None,
+                ),
+                ctx,
+            )
+        });
+        complete_mock_stream_successfully(&mut app, &stream);
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(!service.is_conversation_exiting(id));
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            assert!(queue.remove_by_id(id, queued_id, ctx).is_some());
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(service.is_conversation_exiting(id));
+        });
+    });
+}
+
+#[test]
+fn prepared_native_followup_starts_before_the_last_queued_row_allows_exit() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let (terminal_id, controller) = terminal.read(&app, |terminal, _| {
+            (terminal.id(), terminal.ai_controller().clone())
+        });
+        let (id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &controller);
+        controller.update(&mut app, |controller, ctx| {
+            controller.bind_native_prompt_conversation(Some(id), ctx);
+        });
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal, ctx);
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.skip_initial_turn = true;
+            driver.idle_on_complete = None;
+            driver.run_conversation_id = Some(id);
+            driver
+        });
+        let _run_exit_rx = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+        });
+        let query_id = QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "file followup".into(),
+                    ParticipantId::new(),
+                    vec![AgentAttachment::FileReference {
+                        attachment_id: "attachment-id".into(),
+                        file_name: "event-payload.json".into(),
+                    }],
+                    None,
+                ),
+                ctx,
+            )
+        });
+
+        complete_mock_stream_successfully(&mut app, &stream);
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                history.conversation(&id).unwrap().status(),
+                &ConversationStatus::Success
+            );
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(!service.is_conversation_exiting(id));
+        });
+
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.complete_preparation(
+                id,
+                query_id,
+                HashMap::from([(
+                    "event-payload.json".into(),
+                    AIAgentAttachment::FilePathReference {
+                        file_id: "attachment-id".into(),
+                        file_name: "event-payload.json".into(),
+                        file_path: "/workspace/.warp/attachments/attachment-id_event-payload.json"
+                            .into(),
+                    },
+                )]),
+                ctx,
+            );
+        });
+
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(!service.is_conversation_exiting(id));
+        });
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let conversation = history.conversation(&id).unwrap();
+            assert_eq!(conversation.status(), &ConversationStatus::InProgress);
+            assert_eq!(conversation.exchange_count(), 2);
+            assert!(conversation.root_task_exchanges().any(|exchange| {
+                exchange.input.iter().any(
+                    |input| matches!(input, AIAgentInput::UserQuery { query, .. } if query == "file followup"),
+                )
+            }));
+        });
+        controller.read(&app, |controller, ctx| {
+            assert!(controller.has_active_stream_for_conversation(id, ctx));
+        });
+        QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+            assert!(!queue.has_queue(id));
+        });
+    });
+}
+
+#[test]
+fn native_startup_queue_prevents_exit_until_a_local_row_is_removed() {
+    // Regression test: exit-deferral must not be specific to shared-session-injected rows --
+    // a plain local row (e.g. queued via `/queue` against this same conversation) has to hold
+    // the run open exactly the same way, since `dispatch_queued_warp_agent_prompt` dispatches
+    // either kind identically.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let (terminal_id, controller) = terminal.read(&app, |terminal, _| {
+            (terminal.id(), terminal.ai_controller().clone())
+        });
+        let (id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &controller);
+        controller.update(&mut app, |controller, ctx| {
+            controller.bind_native_prompt_conversation(Some(id), ctx);
+        });
+        let _driver = driver_wired_for_terminal(&mut app, terminal, None);
+
+        let queued_id = QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.append(
+                id,
+                QueuedQuery::new(
+                    "local followup".into(),
+                    QueuedQueryOrigin::QueueSlashCommand,
+                ),
+                ctx,
+            )
+        });
+        complete_mock_stream_successfully(&mut app, &stream);
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(!service.is_conversation_exiting(id));
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            assert!(queue.remove_by_id(id, queued_id, ctx).is_some());
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(service.is_conversation_exiting(id));
+        });
+    });
+}
+
+#[test]
+fn native_promptless_setup_dispatches_only_the_head_queued_prompt() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        let id = controller.update(&mut app, |controller, ctx| {
+            let id = controller.bind_native_prompt_conversation(None, ctx);
+            controller.execute_warp_agent_prompt_from_shared_session_injection(
+                "first".into(),
+                None,
+                vec![],
+                ParticipantId::new(),
+                None,
+                ctx,
+            );
+            controller.execute_warp_agent_prompt_from_shared_session_injection(
+                "second".into(),
+                None,
+                vec![],
+                ParticipantId::new(),
+                None,
+                ctx,
+            );
+            id
+        });
+        let _driver = driver_wired_for_terminal(&mut app, terminal, None);
+        // Only the head ("first") is sent as soon as setup finishes; "second" stays queued for
+        // the next natural request boundary (a tool-result follow-up) or the conversation going
+        // idle, rather than being dispatched right away and interrupting "first"'s barely-started
+        // stream before it produces any output.
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let conversation = history.conversation(&id).unwrap();
+            assert_eq!(conversation.exchange_count(), 1);
+            assert_eq!(conversation.status(), &ConversationStatus::InProgress);
+        });
+        QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+            assert_eq!(
+                queue
+                    .queue(id)
+                    .iter()
+                    .map(QueuedQuery::text)
+                    .collect::<Vec<_>>(),
+                vec!["second"],
+            );
+        });
+    });
 }
 
 /// QUALITY-1801 regression: a child agent's message, queued in

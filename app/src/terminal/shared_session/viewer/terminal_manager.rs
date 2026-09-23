@@ -1039,12 +1039,11 @@ impl TerminalManager {
                 let Some(view) = weak_view_handle.upgrade(ctx) else {
                     return;
                 };
-                if FeatureFlag::OrchestrationUnifiedStack.is_enabled()
-                    && matches!(
-                        reason,
-                        FailedToJoinReason::SessionNotFound
-                            | FailedToJoinReason::SessionNotAccessible
-                    )
+                if matches!(
+                    reason,
+                    FailedToJoinReason::SessionNotFound
+                        | FailedToJoinReason::SessionNotAccessible
+                )
                     && let Some(conversation_id) = orchestration_child_conversation_id
                 {
                     view.update(ctx, |_terminal_view, ctx| {

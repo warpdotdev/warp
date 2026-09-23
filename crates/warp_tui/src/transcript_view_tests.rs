@@ -514,6 +514,7 @@ fn todo_and_conversation_status_events_refresh_affected_agent_blocks() {
             view.handle_history_event(
                 &BlocklistAIHistoryEvent::UpdatedTodoList {
                     terminal_surface_id,
+                    conversation_id: first_conversation_id,
                 },
                 ctx,
             );
@@ -977,6 +978,7 @@ fn query_input(query: &str) -> AIAgentInput {
         user_query_mode: UserQueryMode::default(),
         running_command: None,
         intended_agent: None,
+        base: None,
     }
 }
 

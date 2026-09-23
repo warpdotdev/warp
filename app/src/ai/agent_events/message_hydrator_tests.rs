@@ -39,10 +39,10 @@ fn make_message_response(message_id: &str) -> ReadAgentMessageResponse {
 }
 
 fn http_status_read_error(status: u16) -> anyhow::Error {
-    anyhow::Error::new(HttpStatusError {
+    anyhow::Error::new(HttpStatusError::new(
         status,
-        body: format!("status {status} body"),
-    })
+        format!("status {status} body"),
+    ))
 }
 
 #[tokio::test]

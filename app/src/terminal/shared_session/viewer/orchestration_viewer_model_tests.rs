@@ -75,13 +75,11 @@ fn task_id(id: &str) -> AmbientAgentTaskId {
 
 #[test]
 fn registers_child_as_remote_child_conversation() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         let fixture = setup(&mut app);
         register_child(&mut app, &fixture, queued_task(CHILD_A_TASK_ID, "Worker"));
 
         read_child(&app, &fixture, CHILD_A_TASK_ID, |entry| {
-            assert!(entry.session_id.is_none());
             assert!(!entry.pane_materialization_requested);
             assert_eq!(entry.last_state, AmbientAgentTaskState::Queued);
         });
@@ -103,21 +101,7 @@ fn registers_child_as_remote_child_conversation() {
 }
 
 #[test]
-fn registers_child_as_shared_session_viewer_when_unified_stack_is_disabled() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(false);
-    App::test((), |mut app| async move {
-        let fixture = setup(&mut app);
-        register_child(&mut app, &fixture, queued_task(CHILD_A_TASK_ID, "Worker"));
-
-        let child = only_child_conversation(&app, &fixture);
-        assert!(child.is_viewing_shared_session());
-        assert!(!child.is_remote_child());
-    });
-}
-
-#[test]
 fn skips_registration_for_the_parent_task() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         // The server's ancestor response includes the parent itself.
         let fixture = setup(&mut app);
@@ -132,7 +116,6 @@ fn skips_registration_for_the_parent_task() {
 
 #[test]
 fn skips_registration_without_an_active_parent_conversation() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         // Registering without a parent conversation would lose the child's
         // parent linkage, so the child is dropped until one exists.
@@ -155,7 +138,6 @@ fn skips_registration_without_an_active_parent_conversation() {
 
 #[test]
 fn updates_child_status_when_task_state_changes() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         let fixture = setup(&mut app);
         register_child(&mut app, &fixture, queued_task(CHILD_A_TASK_ID, "Worker"));
@@ -175,7 +157,6 @@ fn updates_child_status_when_task_state_changes() {
 
 #[test]
 fn maps_child_run_id_to_its_local_conversation() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         // Sibling references in transcript bodies resolve display names
         // through this mapping.
@@ -196,7 +177,6 @@ fn maps_child_run_id_to_its_local_conversation() {
 
 #[test]
 fn child_display_name_prefers_snapshot_name_over_title() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         let long_title = "Long descriptive task title";
         // (snapshot name, title) -> (agent name, fallback display title)
@@ -243,7 +223,6 @@ fn child_display_name_prefers_snapshot_name_over_title() {
 
 #[test]
 fn requests_materialization_once_when_the_child_becomes_attachable() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         let fixture = setup(&mut app);
         register_child(&mut app, &fixture, queued_task(CHILD_A_TASK_ID, "Worker"));
@@ -260,7 +239,6 @@ fn requests_materialization_once_when_the_child_becomes_attachable() {
             live_task(CHILD_A_TASK_ID, "Worker", SESSION_A),
         );
         read_child(&app, &fixture, CHILD_A_TASK_ID, |entry| {
-            assert_eq!(entry.session_id, Some(session_id(SESSION_A)));
             assert!(entry.pane_materialization_requested);
         });
 
@@ -278,7 +256,6 @@ fn requests_materialization_once_when_the_child_becomes_attachable() {
 
 #[test]
 fn requests_materialization_for_a_completed_child_with_a_stale_session() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         // A completed run can still carry the session id of its finished
         // execution; the transcript decides materialization, not that id.
@@ -290,7 +267,6 @@ fn requests_materialization_for_a_completed_child_with_a_stale_session() {
 
         read_child(&app, &fixture, CHILD_A_TASK_ID, |entry| {
             assert!(entry.pane_materialization_requested);
-            assert_eq!(entry.session_id, Some(session_id(SESSION_A)));
         });
         fixture.model.read(&app, |model, _| {
             assert!(
@@ -305,7 +281,6 @@ fn requests_materialization_for_a_completed_child_with_a_stale_session() {
 
 #[test]
 fn parks_an_undiscovered_child_until_its_task_data_arrives() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         // A lifecycle event can arrive before (or instead of) `ChildSpawned`;
         // either way the child waits on the shared task cache.
@@ -341,7 +316,6 @@ fn parks_an_undiscovered_child_until_its_task_data_arrives() {
 
 #[test]
 fn malformed_run_ids_never_create_a_child() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         let fixture = setup(&mut app);
         fixture.model.update(&mut app, |model, ctx| {
@@ -360,7 +334,6 @@ fn malformed_run_ids_never_create_a_child() {
 
 #[test]
 fn status_change_updates_a_registered_child() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         let fixture = setup(&mut app);
         register_child(&mut app, &fixture, queued_task(CHILD_A_TASK_ID, "Worker"));
@@ -378,7 +351,6 @@ fn status_change_updates_a_registered_child() {
 
 #[test]
 fn ignores_streamer_events_for_other_parents() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         // Every viewer pane subscribes to the same shared streamer, so each
         // model must filter on its own parent.
@@ -403,7 +375,6 @@ fn ignores_streamer_events_for_other_parents() {
 
 #[test]
 fn status_change_refetches_metadata_while_the_child_is_unmaterialized() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         // A child first seen pre-claim has no attachable session; lifecycle
         // events are the trigger to pick up fresher task data.
@@ -424,7 +395,6 @@ fn status_change_refetches_metadata_while_the_child_is_unmaterialized() {
 
 #[test]
 fn status_change_does_not_refetch_metadata_after_materialization() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         // Otherwise every status change on a long-running child would cost a
         // metadata fetch.
@@ -453,7 +423,6 @@ fn status_change_does_not_refetch_metadata_after_materialization() {
 
 #[test]
 fn polls_for_task_metadata_until_the_child_is_materialized() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         // Without lifecycle events, the poll is the only thing that picks up
         // the claim-time session id for a child first seen pre-claim.
@@ -494,7 +463,6 @@ fn polls_for_task_metadata_until_the_child_is_materialized() {
 
 #[test]
 fn does_not_poll_when_the_child_is_already_materialized() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         let fixture = setup(&mut app);
         register_child(
@@ -512,7 +480,6 @@ fn does_not_poll_when_the_child_is_already_materialized() {
 
 #[test]
 fn poll_dispatches_one_fetch_per_pending_child() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         let fixture = setup(&mut app);
         register_child(&mut app, &fixture, queued_task(CHILD_A_TASK_ID, "Worker"));
@@ -531,7 +498,6 @@ fn poll_dispatches_one_fetch_per_pending_child() {
 
 #[test]
 fn backfills_parent_agent_id_when_the_orchestrator_run_id_arrives() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         // Children registered before the orchestrator has a run id would
         // otherwise never resolve back to their parent conversation.
@@ -557,7 +523,6 @@ fn backfills_parent_agent_id_when_the_orchestrator_run_id_arrives() {
 
 #[test]
 fn backfill_preserves_an_existing_parent_agent_id() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         let fixture = setup(&mut app);
         assign_parent_run_id(&mut app, &fixture);
@@ -577,7 +542,6 @@ fn backfill_preserves_an_existing_parent_agent_id() {
 
 #[test]
 fn backfill_ignores_conversations_other_than_the_orchestrator() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         let fixture = setup(&mut app);
         register_child(&mut app, &fixture, queued_task(CHILD_A_TASK_ID, "Worker"));
@@ -609,7 +573,6 @@ fn backfill_ignores_conversations_other_than_the_orchestrator() {
 
 #[test]
 fn registers_streamer_consumer_when_the_parent_placeholder_becomes_active() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         // The parent placeholder is usually marked active after the model is
         // constructed, so registration has to retry on history events or the
@@ -643,7 +606,6 @@ fn registers_streamer_consumer_when_the_parent_placeholder_becomes_active() {
 
 #[test]
 fn does_not_register_streamer_consumer_for_a_child_placeholder() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         // Registering against a child would persist the orchestration cursor
         // on the wrong conversation.
@@ -716,15 +678,10 @@ fn test_model(
         terminal_view: terminal_view.downgrade(),
         children: HashMap::new(),
         children_by_run_id: HashMap::new(),
-        metadata_fetches: HashSet::new(),
         pending_task_ids_for_discovery: HashSet::new(),
         pending_session_id_poll_handle: None,
         metadata_fetch_dispatch_count: 0,
     }
-}
-
-fn session_id(id: &str) -> SessionId {
-    id.parse().expect("hardcoded session id parses")
 }
 
 fn nth_child_task_id(index: usize) -> String {

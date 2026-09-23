@@ -59,6 +59,12 @@ pub struct DiskUsage {
     pub total: String,
     pub used: String,
 }
+pub(super) struct MountContext {
+    pub relative_cache_dir: PathBuf,
+    pub cache_root: PathBuf,
+    pub cwd: PathBuf,
+    pub stable_child_id: String,
+}
 
 /// Construct a `spacectl` command for detecting all cache modes that apply to
 /// `cwd`. Currently, this uses `spacectl cache mount`, though we could use
@@ -102,7 +108,8 @@ fn mount_command(cache_root: &Path, cwd: &Path, modes: &[String]) -> Command {
         repo_key = scope.repo_key().map(RepoCacheKey::as_str).unwrap_or(""),
         modes = tracing::field::Empty,
         dry_run,
-        relative_cache_dir = %relative_cache_dir.display(),
+        relative_cache_dir = %context.relative_cache_dir.display(),
+        stable_child_id = context.stable_child_id.as_str(),
         duration_ms = tracing::field::Empty,
         disk_usage_total = tracing::field::Empty,
         disk_usage_used = tracing::field::Empty,
@@ -117,19 +124,17 @@ pub(super) async fn run_spacectl_mount<F, Fut>(
     scope: CacheScope,
     modes: Vec<String>,
     dry_run: bool,
-    relative_cache_dir: PathBuf,
-    cache_root: &Path,
-    cwd: &Path,
-    run_command: &mut F,
+    context: MountContext,
+    run_command: &F,
 ) -> CachePreparationReport
 where
-    F: FnMut(Command) -> Fut,
+    F: Fn(Command) -> Fut,
     Fut: Future<Output = Result<Vec<u8>, CacheSetupError>>,
 {
     let command = if dry_run {
-        detect_command(cache_root, cwd)
+        detect_command(&context.cache_root, &context.cwd)
     } else {
-        mount_command(cache_root, cwd, &modes)
+        mount_command(&context.cache_root, &context.cwd, &modes)
     };
     tracing::info!(?command, "Executing spacectl");
     let started = Instant::now();
@@ -167,7 +172,7 @@ where
             CachePreparationReport {
                 scope,
                 modes: selected_modes,
-                relative_cache_dir,
+                relative_cache_dir: context.relative_cache_dir,
                 response: Some(response),
                 error: None,
                 duration,
@@ -181,7 +186,7 @@ where
             span.record("otel.status_code", "ERROR");
             span.record("otel.status_description", err.to_string());
             tracing::error!(error = ?err, "spacectl cache mount failed");
-            failed_invocation(scope, modes, relative_cache_dir, err, duration)
+            failed_invocation(scope, modes, context.relative_cache_dir, err, duration)
         }
     }
 }
@@ -198,7 +203,8 @@ fn mount_error_diagnostic(error: &CacheSetupError) -> Cow<'_, str> {
         | CacheSetupError::SpawnFailed
         | CacheSetupError::JsonParseFailed
         | CacheSetupError::Timeout
-        | CacheSetupError::EnvExportFailed => Cow::Owned(error.to_string()),
+        | CacheSetupError::EnvExportFailed
+        | CacheSetupError::PlanInvariantFailed => Cow::Owned(error.to_string()),
     }
 }
 

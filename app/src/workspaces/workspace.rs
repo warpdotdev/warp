@@ -11,7 +11,7 @@ pub use warp_graphql::billing::{
 };
 
 use super::gql_convert::{ToAgentModeCommandExecutionPredicates, ToPathBufs};
-use super::team::{MembershipRole, Team};
+use super::team::{DiscoverableTeam, MembershipRole, Team};
 use crate::ai::execution_profiles::{
     ActionPermission, ComputerUsePermission, WriteToPtyPermission,
 };
@@ -44,6 +44,7 @@ pub struct Workspace {
     pub name: String,
     pub stripe_customer_id: Option<String>,
     pub teams: Vec<Team>,
+    pub open_teams: Vec<DiscoverableTeam>,
     pub billing_metadata: BillingMetadata,
     pub bonus_grants_purchased_this_month: BonusGrantsPurchased,
     pub billing_cycle_usage: Option<BillingCycleUsageData>,
@@ -79,6 +80,7 @@ impl Workspace {
             name,
             stripe_customer_id: Default::default(),
             teams: teams.unwrap_or_default(),
+            open_teams: Default::default(),
             billing_metadata,
             bonus_grants_purchased_this_month: Default::default(),
             billing_cycle_usage: None,
@@ -107,6 +109,13 @@ impl Workspace {
             .tier
             .native_workspaces_policy
             .is_some_and(|policy| policy.enabled)
+    }
+
+    pub fn joinable_teams(&self) -> impl Iterator<Item = &DiscoverableTeam> {
+        self.open_teams.iter().filter(|open_team| {
+            let open_team_uid = ServerId::from_string_lossy(&open_team.team_uid);
+            self.teams.iter().all(|team| team.uid != open_team_uid)
+        })
     }
 
     pub fn is_native_workspaces_admin(&self, user_email: &str) -> bool {

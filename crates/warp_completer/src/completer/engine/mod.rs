@@ -10,15 +10,8 @@ pub use flag::complete as flag_suggestions;
 pub use path::{EngineDirEntry, EngineFileType};
 pub use variable::suggestions as variable_suggestions;
 
-cfg_if::cfg_if! {
-    if #[cfg(feature = "v2")] {
-        mod v2;
-        use v2::argument_name_at_index_for_command;
-    } else {
-        mod legacy;
-        use legacy::argument_name_at_index_for_command;
-    }
-}
+mod legacy;
+use legacy::argument_name_at_index_for_command;
 
 use crate::completer::{CompletionContext, TopLevelCommandCaseSensitivity};
 use crate::meta::{HasSpan, Span, Spanned, SpannedItem};
@@ -504,7 +497,6 @@ pub fn completion_location(
     }
 }
 
-#[cfg(not(feature = "v2"))]
 #[cfg(test)]
 #[path = "test.rs"]
 mod tests;

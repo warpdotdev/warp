@@ -259,6 +259,9 @@ use crate::ai::blocklist::telemetry_banner::{TelemetryBanner, should_collect_ai_
 use crate::ai::blocklist::usage::conversation_usage_view::{
     ConversationUsageInfo, ConversationUsageView, TimingInfo,
 };
+use crate::ai::blocklist::usage::request_metadata_turn_view::{
+    RequestMetadataTurnView, RequestMetadataTurnViewEvent,
+};
 use crate::ai::blocklist::{
     AIBlock, AIBlockEvent, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, AutofireAction,
     BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextEvent,
@@ -546,6 +549,7 @@ use crate::workspace::view::cloud_agent_capacity_modal::CloudAgentCapacityModalV
 use crate::workspace::{
     CommandSearchOptions, ForkAIConversationParams, ForkFromExchange,
     ForkedConversationDestination, OneTimeModalModel, ToastStack, WorkspaceAction,
+    WorkspaceRegistry,
 };
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::CustomerType;
@@ -718,17 +722,10 @@ pub const DEFAULT_ASK_AI_AUTOSUGGESTION_TEXT: &str = "What happened here?";
 
 const WARP_MD_PATH: &str = "WARP.md";
 
-/// `shell_plugins` tag reported by bootstrap when the shell's `^R` binding has been rebound away
-/// from its default reverse-history-search widget (e.g. by fzf or atuin). Must match the tag
-/// name used in `app/assets/bundled/bootstrap/zsh_body.sh`.
-const EXTERNAL_CTRL_R_HISTORY_PLUGIN_TAG: &str = "external_ctrl_r_history";
-
-/// `shell_plugins` tag reported by bootstrap when the shell's `^T` binding has been rebound away
-/// from its default line-editor binding to an external file-search widget (e.g. fzf). Independent
-/// of [`EXTERNAL_CTRL_R_HISTORY_PLUGIN_TAG`] -- a shell can have either, both, or neither, since
-/// each binding is detected and reported on its own. Must match the tag name used in
-/// `app/assets/bundled/bootstrap/zsh_body.sh`.
-const EXTERNAL_CTRL_T_FILE_PLUGIN_TAG: &str = "external_ctrl_t_file";
+/// `shell_plugins` tags reported by bootstrap when ctrl-r identifies a supported shell plugin.
+/// fzf provides ctrl-r, ctrl-t, and alt-c, while atuin only provides ctrl-r.
+const FZF_PLUGIN_TAG: &str = "fzf";
+const ATUIN_PLUGIN_TAG: &str = "atuin";
 
 /// Name of the bootstrap-installed shell function invoked to hand ctrl-r off to the shell's
 /// own external history widget. Must match the function name defined in
@@ -739,6 +736,17 @@ const EXTERNAL_CTRL_R_HELPER_COMMAND: &str = "warp_run_external_ctrl_r_widget";
 /// external file-search widget. Must match the function name defined in
 /// `app/assets/bundled/bootstrap/zsh_body.sh`.
 const EXTERNAL_CTRL_T_HELPER_COMMAND: &str = "warp_run_external_ctrl_t_widget";
+
+/// Name of the bootstrap-installed shell function invoked to hand alt-c off to fzf's directory
+/// search widget.
+const EXTERNAL_ALT_C_HELPER_COMMAND: &str = "warp_run_external_alt_c_widget";
+
+fn ctrl_t_apply_mode(shell_type: ShellType) -> ShellWidgetApplyMode {
+    match shell_type {
+        ShellType::Fish => ShellWidgetApplyMode::Replace,
+        ShellType::Bash | ShellType::Zsh | ShellType::PowerShell => ShellWidgetApplyMode::Splice,
+    }
+}
 
 pub const LONG_RUNNING_AGENT_REQUESTED_COMMAND_CONTEXT_KEY: &str = "LongRunningRequestedCommand";
 pub const LONG_RUNNING_AGENT_REQUESTED_COMMAND_USER_TOOK_OVER_CONTEXT_KEY: &str =
@@ -2045,17 +2053,6 @@ pub enum Event {
     SwapPaneToConversation {
         conversation_id: AIConversationId,
     },
-    /// Emitted by `OrchestrationViewerModel` when a child of a shared-session
-    /// orchestration first reports a `session_id`. The pane group materializes
-    /// a dedicated hidden shared-session viewer pane for the child, with its
-    /// own `TerminalView`, `BlocklistAIController`, and viewer-side `Network`
-    /// joining the child's session. Subsequent pill clicks navigate to the
-    /// hidden pane via the existing `SwapPaneToConversation` mechanism.
-    EnsureSharedSessionViewerChildPane {
-        conversation_id: AIConversationId,
-        session_id: session_sharing_protocol::common::SessionId,
-    },
-    /// Unified-stack counterpart to [`Self::EnsureSharedSessionViewerChildPane`].
     /// Carries the fetched task snapshot so pane construction uses the same
     /// current-state materialization decision as pill-click restoration.
     EnsureUnifiedViewerChildPane {
@@ -2753,6 +2750,10 @@ pub struct TerminalView {
 
     /// Cached view ids for usage footers keyed by the AI block view id that owns them.
     usage_footer_view_ids: HashMap<EntityId, EntityId>,
+
+    /// Cached view ids for per-turn request-metadata "Turn" panels, keyed by the AI block
+    /// view id that owns them.
+    turn_panel_view_ids: HashMap<EntityId, EntityId>,
 
     // Whether the block onboarding view is active or not.
     block_onboarding_active: bool,
@@ -4451,6 +4452,7 @@ impl TerminalView {
             last_observed_conversation_status: Default::default(),
             last_observed_active_subagent: Default::default(),
             usage_footer_view_ids: Default::default(),
+            turn_panel_view_ids: Default::default(),
             block_onboarding_active: false,
             onboarding_prompt_block: None,
             settings_import_onboarding_block: None,
@@ -5468,6 +5470,14 @@ impl TerminalView {
                 && let Some(reason) = self.finish_reason_for_conversation(*conversation_id, ctx)
             {
                 self.drain_queued_prompts(*conversation_id, reason, ctx);
+            } else if QueuedQueryModel::as_ref(ctx).has_queue(*conversation_id) {
+                log::info!(
+                    "event=turn_drain_deferred terminal_id={:?} conversation_id={conversation_id} active_subagent={has_active_subagent} has_finished_block={} queue_len={}",
+                    self.view_id,
+                    self.finish_reason_for_conversation(*conversation_id, ctx)
+                        .is_some(),
+                    QueuedQueryModel::as_ref(ctx).queue(*conversation_id).len(),
+                );
             }
 
             // If the most recent action in the current interaction turn created or updated a plan
@@ -5540,6 +5550,7 @@ impl TerminalView {
         let id = QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
             model.append(conversation_id, QueuedQuery::new(prompt, origin), ctx)
         });
+        self.maybe_dispatch_steering_prompt_now(conversation_id, ctx);
         Some(id)
     }
 
@@ -5574,6 +5585,7 @@ impl TerminalView {
                     ctx,
                 );
             });
+            self.maybe_dispatch_steering_prompt_now(conversation_id, ctx);
         } else {
             self.send_user_query_after_next_conversation_finished(
                 prompt, /* show_close_button */ true, /* show_send_now_button */ false,
@@ -5582,9 +5594,33 @@ impl TerminalView {
         }
     }
 
+    /// If `conversation_id`'s queue is in `Steering` mode and nothing is currently streaming for
+    /// it, attempts to dispatch the just-queued row immediately rather than waiting for a future
+    /// turn-completion event that may never come (e.g. the conversation has nothing else in
+    /// flight right now). No-ops when a stream is already active for the conversation --
+    /// `Steering`'s piggyback-on-next-request and idle-drain mechanisms pick the row up once
+    /// that stream's turn produces a natural boundary, so firing here too would interrupt it.
+    fn maybe_dispatch_steering_prompt_now(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !QueuedQueryModel::as_ref(ctx).is_steering(conversation_id) {
+            return;
+        }
+        if self
+            .ai_controller
+            .as_ref(ctx)
+            .has_active_stream_for_conversation(conversation_id, ctx)
+        {
+            return;
+        }
+        self.drain_queued_prompts(conversation_id, FinishReason::Complete, ctx);
+    }
+
     /// Drains one prompt from the queued-query singleton for `conversation_id` when that
     /// conversation finishes.
-    fn drain_queued_prompts(
+    pub(crate) fn drain_queued_prompts(
         &mut self,
         conversation_id: AIConversationId,
         finish_reason: FinishReason,
@@ -5596,6 +5632,9 @@ impl TerminalView {
                 let first_row_is_in_edit_mode =
                     QueuedQueryModel::as_ref(ctx).first_row_is_in_edit_mode(conversation_id);
                 if first_row_is_in_edit_mode && !input_is_empty {
+                    log::info!(
+                        "event=turn_drain_deferred conversation_id={conversation_id} reason=editing_head_with_local_draft",
+                    );
                     return;
                 }
 
@@ -5604,6 +5643,27 @@ impl TerminalView {
                 let action = QueuedQueryModel::as_ref(ctx).peek_autofire(conversation_id);
                 match action {
                     Some(AutofireAction::Submit { query_id, text }) => {
+                        if QueuedQueryModel::as_ref(ctx)
+                            .queue(conversation_id)
+                            .iter()
+                            .any(|row| {
+                                row.id() == query_id && row.shared_session_prompt().is_some()
+                            })
+                        {
+                            // Shared-session injections are normally dispatched via `Steering`'s
+                            // piggyback-on-next-request mechanism, or immediately when queued
+                            // while idle; reaching one here means neither applied (e.g. a prior
+                            // dispatch was deferred because a CLI subagent was active), so try
+                            // dispatching the head row now that this turn finished.
+                            self.ai_controller.update(ctx, |controller, ctx| {
+                                controller.dispatch_queued_warp_agent_prompt(
+                                    conversation_id,
+                                    None,
+                                    ctx,
+                                );
+                            });
+                            return;
+                        }
                         self.input.update(ctx, |input, ctx| {
                             input.submit_queued_prompt_for_active_pane(
                                 text,
@@ -6121,6 +6181,149 @@ impl TerminalView {
         }
         self.remove_cloud_mode_queue_row(ctx);
     }
+
+    fn ai_block_targets_for_history_event(
+        &self,
+        event: &BlocklistAIHistoryEvent,
+        ctx: &AppContext,
+    ) -> Vec<ViewHandle<AIBlock>> {
+        match event {
+            BlocklistAIHistoryEvent::AppendedExchange {
+                conversation_id, ..
+            } => {
+                // The pane's latest block and the conversation's latest block may each lose
+                // latest-only controls when a new exchange starts.
+                let mut targets = Vec::with_capacity(2);
+                if let Some(handle) =
+                    self.rich_content_views
+                        .iter()
+                        .rev()
+                        .find_map(|rich_content| {
+                            rich_content
+                                .ai_block_metadata()
+                                .map(|metadata| metadata.ai_block_handle.clone())
+                        })
+                {
+                    targets.push(handle);
+                }
+                if let Some(handle) =
+                    self.rich_content_views
+                        .iter()
+                        .rev()
+                        .find_map(|rich_content| {
+                            let metadata = rich_content.ai_block_metadata()?;
+                            (metadata.conversation_id == *conversation_id)
+                                .then(|| metadata.ai_block_handle.clone())
+                        })
+                    && targets.iter().all(|target| target.id() != handle.id())
+                {
+                    targets.push(handle);
+                }
+                targets
+            }
+            BlocklistAIHistoryEvent::UpdatedStreamingExchange { exchange_id, .. } => {
+                // Only the matching block that began live can consume output updates; completed
+                // restored blocks receive replay-only events.
+                self.ai_block_for_exchange(exchange_id)
+                    .filter(|handle| handle.as_ref(ctx).receives_live_output_updates())
+                    .cloned()
+                    .into_iter()
+                    .collect()
+            }
+            BlocklistAIHistoryEvent::UpdatedTodoList {
+                conversation_id, ..
+            } => {
+                // Todo state can appear in earlier exchanges, so every todo-bearing block in the
+                // conversation must refresh.
+                self.rich_content_views
+                    .iter()
+                    .filter_map(|rich_content| {
+                        let metadata = rich_content.ai_block_metadata()?;
+                        (metadata.conversation_id == *conversation_id
+                            && metadata.ai_block_handle.as_ref(ctx).contains_todo_list())
+                        .then(|| metadata.ai_block_handle.clone())
+                    })
+                    .collect()
+            }
+            BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { conversation_id } => {
+                // The conversation's latest usage pill and each ancestor's latest rollup depend on
+                // this metadata.
+                let history = BlocklistAIHistoryModel::as_ref(ctx);
+                let mut affected_conversation_ids = HashSet::from([*conversation_id]);
+                let mut current_conversation_id = *conversation_id;
+                while let Some(parent_conversation_id) = history
+                    .conversation(&current_conversation_id)
+                    .and_then(|conversation| {
+                        history.resolved_parent_conversation_id_for_conversation(conversation)
+                    })
+                {
+                    if !affected_conversation_ids.insert(parent_conversation_id) {
+                        break;
+                    }
+                    current_conversation_id = parent_conversation_id;
+                }
+                let latest_exchange_ids = affected_conversation_ids
+                    .into_iter()
+                    .filter_map(|conversation_id| {
+                        history
+                            .conversation(&conversation_id)
+                            .and_then(|conversation| conversation.latest_visible_exchange())
+                            .map(|exchange| exchange.id)
+                    })
+                    .collect::<HashSet<_>>();
+
+                self.rich_content_views
+                    .iter()
+                    .filter_map(|rich_content| {
+                        let metadata = rich_content.ai_block_metadata()?;
+                        latest_exchange_ids
+                            .contains(&metadata.exchange_id)
+                            .then(|| metadata.ai_block_handle.clone())
+                    })
+                    .collect()
+            }
+            BlocklistAIHistoryEvent::StartedNewConversation { .. }
+            | BlocklistAIHistoryEvent::CreatedSubtask { .. }
+            | BlocklistAIHistoryEvent::UpgradedTask { .. }
+            | BlocklistAIHistoryEvent::ReassignedExchange { .. }
+            | BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
+            | BlocklistAIHistoryEvent::SetActiveConversation { .. }
+            | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
+            | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
+            | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
+            | BlocklistAIHistoryEvent::SplitConversation { .. }
+            | BlocklistAIHistoryEvent::RemoveConversation { .. }
+            | BlocklistAIHistoryEvent::DeletedConversation { .. }
+            | BlocklistAIHistoryEvent::RestoredConversations { .. }
+            | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
+            | BlocklistAIHistoryEvent::UpdatedConversationTitle { .. }
+            | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
+            | BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. }
+            | BlocklistAIHistoryEvent::ConversationTransferredBetweenTerminalSurfaces { .. }
+            | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
+            | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
+            | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => Vec::new(),
+        }
+    }
+
+    fn route_ai_block_history_event(
+        &self,
+        event: &BlocklistAIHistoryEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        for ai_block in self.ai_block_targets_for_history_event(event, ctx) {
+            ai_block.update(ctx, |block, ctx| {
+                if matches!(
+                    event,
+                    BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. }
+                ) {
+                    block.handle_history_output_update(ctx);
+                } else {
+                    ctx.notify();
+                }
+            });
+        }
+    }
     fn render_owner_for_ai_history_event(
         &self,
         history_model: &BlocklistAIHistoryModel,
@@ -6186,6 +6389,7 @@ impl TerminalView {
         if !should_handle {
             return;
         }
+        self.route_ai_block_history_event(event, ctx);
         // If the conversation details panel is open and showing an active local
         // AI conversation in this terminal view, refresh its data when status,
         // artifacts, exchanges, or metadata change. Mirrors the WASM transcript
@@ -6240,6 +6444,21 @@ impl TerminalView {
                             ai_block_handle.update(ctx, |block, ctx| {
                                 block.handle_action(
                                     &AIBlockAction::ToggleIsUsageFooterExpanded,
+                                    ctx,
+                                );
+                            });
+                        }
+                    }
+                }
+                // Likewise for any open per-turn "Turn" panel(s).
+                if !self.turn_panel_view_ids.is_empty() {
+                    let owner_block_ids: Vec<EntityId> =
+                        self.turn_panel_view_ids.keys().copied().collect();
+                    for owner_id in &owner_block_ids {
+                        if let Some(ai_block_handle) = self.ai_block_handle_by_view_id(*owner_id) {
+                            ai_block_handle.update(ctx, |block, ctx| {
+                                block.handle_action(
+                                    &AIBlockAction::SetIsTurnPanelExpanded(false),
                                     ctx,
                                 );
                             });
@@ -7105,6 +7324,97 @@ impl TerminalView {
                 None,
                 usage_view,
                 Some(RichContentMetadata::UsageFooter),
+                RichContentInsertionPosition::Append {
+                    insert_below_long_running_block: true,
+                },
+                ctx,
+            );
+        }
+
+        ctx.notify();
+    }
+
+    fn handle_turn_panel_toggled(
+        &mut self,
+        source_ai_block_view_id: EntityId,
+        conversation_id: AIConversationId,
+        exchange_id: AIAgentExchangeId,
+        is_expanded: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // Close any existing turn panel for this specific AI block.
+        if let Some(id) = self.turn_panel_view_ids.remove(&source_ai_block_view_id) {
+            let mut model = self.model.lock();
+            model.block_list_mut().remove_rich_content(id);
+            drop(model);
+            self.rich_content_views.retain(|rc| rc.view_id() != id);
+        }
+
+        if !is_expanded {
+            ctx.notify();
+            return;
+        }
+
+        if !FeatureFlag::PricingTransparency.is_enabled() {
+            ctx.notify();
+            return;
+        }
+
+        let Some(conversation) =
+            BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
+        else {
+            report_error!("Could not find conversation for turn panel");
+            return;
+        };
+        let Some(data) = conversation.turn_panel_data(exchange_id) else {
+            log::warn!("Exchange {exchange_id} does not close its turn; not opening turn panel");
+            return;
+        };
+
+        let turn_view = ctx.add_typed_action_view(|ctx| RequestMetadataTurnView::new(data, ctx));
+
+        // Close the panel when the user clicks its "X" button.
+        ctx.subscribe_to_view(&turn_view, move |me, _, event, ctx| match event {
+            RequestMetadataTurnViewEvent::CloseRequested => {
+                if let Some(ai_block_handle) =
+                    me.ai_block_handle_by_view_id(source_ai_block_view_id)
+                {
+                    ai_block_handle.update(ctx, |block, ctx| {
+                        block.handle_action(&AIBlockAction::SetIsTurnPanelExpanded(false), ctx);
+                    });
+                }
+            }
+        });
+
+        self.turn_panel_view_ids
+            .insert(source_ai_block_view_id, turn_view.id());
+
+        let agent_view_conversation_id = self
+            .agent_view_controller
+            .as_ref(ctx)
+            .agent_view_state()
+            .active_conversation_id();
+
+        let item = RichContentItem::new(None, turn_view.id(), agent_view_conversation_id, false);
+
+        let mut model = self.model.lock();
+        let inserted = model.block_list_mut().insert_rich_content_after_item(
+            RemovableBlocklistItem::RichContent(source_ai_block_view_id),
+            item,
+        );
+        drop(model);
+
+        if inserted {
+            self.rich_content_views.push(
+                RichContent::new(turn_view, agent_view_conversation_id)
+                    .with_metadata(RichContentMetadata::TurnPanel),
+            );
+        } else {
+            // Fallback: append the turn panel to the end of the blocklist.
+            self.insert_rich_content(
+                None,
+                turn_view,
+                Some(RichContentMetadata::TurnPanel),
                 RichContentInsertionPosition::Append {
                     insert_below_long_running_block: true,
                 },
@@ -8896,6 +9206,24 @@ impl TerminalView {
         }
     }
 
+    /// Handles a shared-session cancel control action (a viewer's stop or a server-side steering
+    /// interrupt) for the live conversation bound to `server_conversation_token`. The conversation
+    /// is stopped the same way a local stop is, so an in-flight agent command is interrupted along
+    /// with the turn rather than left running to completion.
+    #[cfg(feature = "local_tty")]
+    pub(crate) fn handle_shared_session_cancel_action(
+        &mut self,
+        server_conversation_token: SessionSharingServerConversationToken,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let conversation_id = self.ai_controller.update(ctx, |controller, ctx| {
+            controller.conversation_for_shared_session_cancel_action(server_conversation_token, ctx)
+        });
+        if let Some(conversation_id) = conversation_id {
+            self.stop_local_agent_conversation(conversation_id, ctx);
+        }
+    }
+
     fn user_write_ctrl_c_to_pty(&mut self, ctx: &mut ViewContext<Self>) {
         self.write_user_bytes_to_pty(vec![escape_sequences::C0::ETX], ctx);
     }
@@ -9268,10 +9596,8 @@ impl TerminalView {
             && !model.is_read_only()
     }
 
-    /// If ctrl-r was pressed at an idle prompt on a session whose shell has rebound `^R` away
-    /// from its default reverse-history-search widget (reported via the
-    /// [`EXTERNAL_CTRL_R_HISTORY_PLUGIN_TAG`] shell plugin tag, e.g. by fzf or atuin), hands the
-    /// keypress off to that widget instead of opening Warp's own command search.
+    /// If ctrl-r was pressed at an idle prompt on a session using fzf or atuin, hands the keypress
+    /// off to that plugin instead of opening Warp's own command search.
     ///
     /// Returns `true` if the handoff was triggered, in which case the caller should not open
     /// Warp's command search.
@@ -9290,10 +9616,8 @@ impl TerminalView {
                 .as_ref(ctx)
                 .get(session_id)
                 .is_some_and(|session| {
-                    session
-                        .shell()
-                        .plugins()
-                        .contains(EXTERNAL_CTRL_R_HISTORY_PLUGIN_TAG)
+                    session.shell().plugins().contains(FZF_PLUGIN_TAG)
+                        || session.shell().plugins().contains(ATUIN_PLUGIN_TAG)
                 });
         if !has_external_ctrl_r_widget || self.model.lock().is_alt_screen_active() {
             return false;
@@ -9309,9 +9633,8 @@ impl TerminalView {
         })
     }
 
-    /// If ctrl-t was pressed at an idle prompt on a session whose shell has rebound `^T` to an
-    /// external file-search widget (reported via the [`EXTERNAL_CTRL_T_FILE_PLUGIN_TAG`] shell
-    /// plugin tag, e.g. by fzf), hands the keypress off to that widget. Mirrors
+    /// If ctrl-t was pressed at an idle prompt on a session using fzf, hands the keypress off to
+    /// fzf's file-search widget. Mirrors
     /// [`Self::maybe_trigger_external_ctrl_r_history_search`], but lands the selection either by
     /// inserting it into the input editor at the cursor position or by replacing the whole
     /// buffer, depending on the session's shell; see [`Input::trigger_external_shell_widget_handoff`]
@@ -9332,10 +9655,7 @@ impl TerminalView {
         let Some(session) = self.sessions.as_ref(ctx).get(session_id) else {
             return false;
         };
-        if !session
-            .shell()
-            .plugins()
-            .contains(EXTERNAL_CTRL_T_FILE_PLUGIN_TAG)
+        if !session.shell().plugins().contains(FZF_PLUGIN_TAG)
             || self.model.lock().is_alt_screen_active()
         {
             return false;
@@ -9344,12 +9664,7 @@ impl TerminalView {
         // own token-aware replacement and so returns the whole new line; bash/zsh's helper
         // instead searches independently of the draft and reports a plain path to splice in at
         // the cursor. See `ShellWidgetApplyMode` and the fish/bash/zsh helper implementations.
-        let apply_mode = match session.shell().shell_type() {
-            ShellType::Fish => ShellWidgetApplyMode::Replace,
-            ShellType::Bash | ShellType::Zsh | ShellType::PowerShell => {
-                ShellWidgetApplyMode::Splice
-            }
-        };
+        let apply_mode = ctrl_t_apply_mode(session.shell().shell_type());
 
         self.input.update(ctx, |input, ctx| {
             input.trigger_external_shell_widget_handoff(
@@ -9359,6 +9674,39 @@ impl TerminalView {
                 ctx,
             )
         })
+    }
+
+    /// If alt-c was pressed at an idle prompt on a session using fzf, hands the keypress off to
+    /// fzf's directory-search widget.
+    pub fn maybe_trigger_external_alt_c_directory_search(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if !self.external_alt_c_binding_eligible(ctx) {
+            return false;
+        }
+
+        self.input.update(ctx, |input, ctx| {
+            input.trigger_external_shell_widget_handoff(
+                EXTERNAL_ALT_C_HELPER_COMMAND,
+                ShellWidgetApplyMode::Replace,
+                true, /* capture_cursor */
+                ctx,
+            )
+        })
+    }
+
+    pub(crate) fn external_alt_c_binding_eligible(&self, app: &AppContext) -> bool {
+        if !FeatureFlag::ShellWidgetHandoff.is_enabled()
+            || self.is_long_running()
+            || self.input.as_ref(app).is_voltron_open()
+            || self.model.lock().is_alt_screen_active()
+        {
+            return false;
+        }
+        self.active_block_session_id()
+            .and_then(|session_id| self.sessions.as_ref(app).get(session_id))
+            .is_some_and(|session| session.shell().plugins().contains(FZF_PLUGIN_TAG))
     }
 
     /// Returns `true` when an interactive SSH command has been detected at
@@ -12165,7 +12513,17 @@ impl TerminalView {
                 // case, we want the block to be focused because otherwise,
                 // users get stuck as they'd otherwise need to click into the
                 // box to respond to whether or not they want to update oh my zsh.
-                self.focus_terminal(ctx);
+                //
+                // Skipped while a tab or tab-group rename editor is focused. Taking focus
+                // would end the rename and lose user inputs (#14241).
+                let inline_rename_editor_is_focused = WorkspaceRegistry::as_ref(ctx)
+                    .get(self.window_id, ctx)
+                    .is_some_and(|workspace| {
+                        workspace.as_ref(ctx).is_inline_rename_editor_focused(ctx)
+                    });
+                if !inline_rename_editor_is_focused {
+                    self.focus_terminal(ctx);
+                }
             }
             ModelEvent::AfterBlockStarted {
                 command,
@@ -12333,13 +12691,14 @@ impl TerminalView {
                                         },
                                     );
 
-                                    // Codex doesn't use the sentinel-based plugin protocol,
-                                    // so create the listener proactively on command detection
-                                    // (rather than waiting for a SessionStart event).
-                                    if matches!(detection, Some((CLIAgent::Codex, _))) {
+                                    // Codex and Grok use OSC 9 (and optional rich OSC 777)
+                                    // without requiring a SessionStart sentinel first, so
+                                    // create the listener proactively on command detection.
+                                    if let Some((agent @ (CLIAgent::Codex | CLIAgent::Grok), _)) =
+                                        detection
+                                    {
                                         me.register_cli_agent_listener_without_session_start_event(
-                                            CLIAgent::Codex,
-                                            ctx,
+                                            agent, ctx,
                                         );
                                     }
 
@@ -13612,8 +13971,8 @@ impl TerminalView {
         &self,
         ctx: &AppContext,
     ) -> Option<AIConversationId> {
-        let task_id =
-            LocalAgentTaskSyncModel::as_ref(ctx).task_id_for_terminal_view(self.view_id)?;
+        let task_id = LocalAgentTaskSyncModel::as_ref(ctx)
+            .cli_harness_task_id_for_terminal_view(self.view_id)?;
         let matches_task = |conversation: &&AIConversation| conversation.task_id() == Some(task_id);
 
         let history_model = BlocklistAIHistoryModel::as_ref(ctx);
@@ -15550,6 +15909,11 @@ impl TerminalView {
             if self.usage_footer_view_ids.contains_key(view_id) {
                 handle.update(ctx, |block, ctx| {
                     block.handle_action(&AIBlockAction::ToggleIsUsageFooterExpanded, ctx);
+                });
+            }
+            if self.turn_panel_view_ids.contains_key(view_id) {
+                handle.update(ctx, |block, ctx| {
+                    block.handle_action(&AIBlockAction::SetIsTurnPanelExpanded(false), ctx);
                 });
             }
         }
@@ -21018,6 +21382,19 @@ impl TerminalView {
             } => {
                 self.handle_usage_footer_toggled(block.id(), *conversation_id, *is_expanded, ctx);
             }
+            AIBlockEvent::TurnPanelToggled {
+                conversation_id,
+                exchange_id,
+                is_expanded,
+            } => {
+                self.handle_turn_panel_toggled(
+                    block.id(),
+                    *conversation_id,
+                    *exchange_id,
+                    *is_expanded,
+                    ctx,
+                );
+            }
             AIBlockEvent::OpenSettings => {
                 ctx.emit(Event::OpenSettings(SettingsSection::WarpAgent));
             }
@@ -23539,6 +23916,7 @@ impl TerminalView {
             user_query_mode: UserQueryMode::default(),
             running_command: None,
             intended_agent: None,
+            base: None,
         }];
 
         // Create a real conversation in the history model for this dummy block so it renders.
@@ -23619,7 +23997,7 @@ impl TerminalView {
         self.rich_content_views
             .iter()
             .rev()
-            .find(|rc| !rc.is_usage_footer() && !rc.is_pending_user_query())
+            .find(|rc| !rc.is_usage_footer() && !rc.is_turn_panel() && !rc.is_pending_user_query())
             .and_then(|rich_content| rich_content.ai_block_metadata())
             .map(|ai_metadata| ai_metadata.ai_block_handle.clone())
     }
@@ -28923,9 +29301,12 @@ impl View for TerminalView {
         if self.is_input_box_visible(&model_lock, app) {
             context.set.insert(INPUT_BOX_VISIBLE_KEY);
         }
-
-        if self.input.as_ref(app).editor().as_ref(app).is_focused() {
+        let input = self.input.as_ref(app);
+        if input.editor().as_ref(app).is_focused() {
             context.set.insert("EditorFocused");
+        }
+        if input.is_voltron_open() {
+            context.set.insert("VoltronActive");
         }
 
         if model_lock.block_list().selection().is_some() {

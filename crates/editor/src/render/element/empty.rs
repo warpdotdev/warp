@@ -34,13 +34,16 @@ impl RenderableBlock for Empty {
         ctx: &mut warpui_core::LayoutContext,
         app: &warpui_core::AppContext,
     ) {
-        self.placeholder
-            .layout(&self.viewport_item, model, ctx, app, |_| {
-                placeholder::Options {
-                    text: paragraph_placeholder_text(model.selections().len() == 1),
-                    block_style: BufferBlockStyle::PlainText,
-                }
-            });
+        self.placeholder.layout(
+            &self.viewport_item,
+            model,
+            ctx.text_layout_cache,
+            app,
+            |_| placeholder::Options {
+                text: paragraph_placeholder_text(model.selections().len() == 1),
+                block_style: BufferBlockStyle::PlainText,
+            },
+        );
     }
 
     fn paint(

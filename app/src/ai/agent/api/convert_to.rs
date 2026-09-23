@@ -1,14 +1,17 @@
 //! Conversions from application types to MAA API types.
 
+use std::collections::HashMap;
+
 use ai::agent::convert::ConvertToAPITypeError;
 use anyhow::anyhow;
 use chrono::{DateTime, Local, Timelike};
 use warp_multi_agent_api as api;
 
+use crate::ai::agent::base_user_query::warp_client_origin;
 use crate::ai::agent::{
     AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment, AIAgentContext, AIAgentInput,
-    DriveObjectPayload, MCPContext, PassiveSuggestionResultType, PassiveSuggestionTrigger,
-    RunningCommand, StaticQueryType, Suggestions, UserQueryMode,
+    BaseUserQuery, DriveObjectPayload, MCPContext, PassiveSuggestionResultType,
+    PassiveSuggestionTrigger, RunningCommand, StaticQueryType, Suggestions, UserQueryMode,
 };
 use crate::ai::block_context::BlockContext;
 
@@ -215,6 +218,7 @@ pub(super) fn convert_input(
                         api::request::input::InvokeSkill {
                             skill: Some(skill.into()),
                             user_query: user_query.map(|user_query| {
+                                let attribution = attribution_fields(user_query.base.as_ref());
                                 api::request::input::UserQuery {
                                     query: user_query.query,
                                     referenced_attachments: user_query
@@ -224,6 +228,9 @@ pub(super) fn convert_input(
                                         .collect(),
                                     mode: None,
                                     intended_agent: Default::default(),
+                                    origin: attribution.origin,
+                                    author: attribution.author,
+                                    source_message: attribution.source_message,
                                 }
                             }),
                         },
@@ -279,6 +286,56 @@ pub(super) fn convert_input(
     })
 }
 
+/// Builds the outgoing `Request.Input.UserQuery` by writing the fields this client models over
+/// `base`, the query warp-server injected with a shared-session prompt (if any).
+///
+/// `query`, `mode`, and `intended_agent` were seeded from the base when the input was built
+/// (see `BaseUserQuery::seed_input_fields`), so writing them back wholesale drops nothing the
+/// server sent. Attachments are the one field this client does not model losslessly
+/// (`TryFrom<api::Attachment>` keeps only file path references), so the base's entries stay
+/// and the ones this client resolved locally are added alongside them.
+fn user_query_proto(
+    base: Option<&BaseUserQuery>,
+    query: String,
+    referenced_attachments: HashMap<String, api::Attachment>,
+    mode: api::UserQueryMode,
+    intended_agent: i32,
+) -> api::request::input::UserQuery {
+    let mut proto = base.map(BaseUserQuery::to_proto).unwrap_or_default();
+    proto.query = query;
+    proto.mode = Some(mode);
+    proto.intended_agent = intended_agent;
+    for (key, attachment) in referenced_attachments {
+        proto
+            .referenced_attachments
+            .entry(key)
+            .or_insert(attachment);
+    }
+    mark_fresh_local(base, &mut proto);
+    proto
+}
+
+/// Marks a query this client built from local input as freshly typed here.
+///
+/// warp-server attributes an input to the authenticated caller only when it carries a bare
+/// `WarpClient` origin. An input with no origin at all is deliberately left alone, because an
+/// older relay could have forwarded it from another participant. Without this marker, locally
+/// typed queries would be recorded with no author. A query with a base is never marked: its
+/// fields, including an absent origin, are what the server or viewer decided.
+fn mark_fresh_local(base: Option<&BaseUserQuery>, query: &mut api::request::input::UserQuery) {
+    if base.is_none() && query.origin.is_none() {
+        query.origin = Some(warp_client_origin());
+    }
+}
+
+/// The attribution fields for a query built outside `user_query_proto` (skill invocations): the
+/// base metadata when there is any, otherwise the fresh-local marker.
+fn attribution_fields(base: Option<&BaseUserQuery>) -> api::request::input::UserQuery {
+    let mut fields = base.map(BaseUserQuery::to_proto).unwrap_or_default();
+    mark_fresh_local(base, &mut fields);
+    fields
+}
+
 fn convert_input_to_user_input(
     input: AIAgentInput,
 ) -> Result<api::request::input::user_inputs::user_input::Input, ConvertToAPITypeError> {
@@ -290,22 +347,24 @@ fn convert_input_to_user_input(
             user_query_mode,
             running_command: None,
             intended_agent,
+            base,
             ..
         } => Ok(
-            api::request::input::user_inputs::user_input::Input::UserQuery(
-                api::request::input::UserQuery {
-                    query,
-                    referenced_attachments: referenced_attachments.into_iter().map(|(k, attachment)| (k, attachment.into())).collect(),
-                    mode: Some(user_query_mode.into()),
-                    intended_agent: intended_agent.map(|agent| agent.into()).unwrap_or_default(),
-                },
-            ),
+            api::request::input::user_inputs::user_input::Input::UserQuery(user_query_proto(
+                base.as_ref(),
+                query,
+                referenced_attachments.into_iter().map(|(k, attachment)| (k, attachment.into())).collect(),
+                user_query_mode.into(),
+                intended_agent.map(|agent| agent.into()).unwrap_or_default(),
+            )),
         ),
         AIAgentInput::UserQuery {
             query,
             static_query_type: None,
             referenced_attachments,
             user_query_mode,
+            intended_agent,
+            base,
             running_command: Some(RunningCommand{
                 command,
                 block_id,
@@ -318,12 +377,14 @@ fn convert_input_to_user_input(
         } => {
             Ok(api::request::input::user_inputs::user_input::Input::CliAgentUserQuery(
                 api::request::input::CliAgentUserQuery {
-                    user_query: Some(api::request::input::UserQuery {
-                            query,
-                            referenced_attachments: referenced_attachments.into_iter().map(|(k, attachment)| (k, attachment.into())).collect(),
-                            mode: Some(user_query_mode.into()),
-                            intended_agent: api::AgentType::Cli.into(),
-                        }),
+                    user_query: Some(user_query_proto(
+                        base.as_ref(),
+                        query,
+                        referenced_attachments.into_iter().map(|(k, attachment)| (k, attachment.into())).collect(),
+                        user_query_mode.into(),
+                        // A CLI subagent query is for the CLI agent unless the base named one.
+                        intended_agent.unwrap_or(api::AgentType::Cli).into(),
+                    )),
                     running_command: Some(api::RunningShellCommand{
                         command,
                         snapshot: Some(api::LongRunningShellCommandSnapshot {
@@ -905,13 +966,13 @@ impl From<Suggestions> for api::Suggestions {
 
 // Convert rmcp resource to proto format.
 fn convert_mcp_resource(resource: rmcp::model::Resource) -> api::request::mcp_context::McpResource {
-    let rmcp::model::RawResource {
+    let rmcp::model::Resource {
         uri,
         name,
         description,
         mime_type,
         ..
-    } = resource.raw;
+    } = resource;
     api::request::mcp_context::McpResource {
         uri,
         name,
@@ -933,6 +994,38 @@ fn convert_mcp_tool(tool: rmcp::model::Tool) -> Option<api::request::mcp_context
         name: tool.name.to_string(),
         description: tool.description.map(|d| d.to_string()).unwrap_or_default(),
         input_schema: Some(input_schema),
+    })
+}
+
+/// Builds the `MCPContext.MCPServer.identity` for a server from its `warp_id`
+/// (the `MCPServerConfig.warp_id` it was resolved from).
+///
+/// A uuid is a managed MCP server; anything else is a well-known integration
+/// id owned by warp-server. An id this build does not know yields `None`, so a
+/// newer server-side integration is simply unnamed rather than misattributed;
+/// so does an empty id (local and ad-hoc servers). `display_name` is left
+/// unset: `MCPContext.MCPServer.name` carries it, and warp-server fills it in
+/// when it copies the identity onto tool calls.
+fn mcp_server_identity(warp_id: &str) -> Option<api::McpServerIdentity> {
+    if warp_id.is_empty() {
+        return None;
+    }
+    if uuid::Uuid::parse_str(warp_id).is_ok() {
+        return Some(api::McpServerIdentity {
+            managed_server_uid: warp_id.to_string(),
+            ..Default::default()
+        });
+    }
+    let integration = match warp_id {
+        "linear" => api::McpIntegration::Linear,
+        "slack" => api::McpIntegration::Slack,
+        "jira" => api::McpIntegration::Jira,
+        "linear_agent_session" => api::McpIntegration::LinearAgentSession,
+        _ => return None,
+    };
+    Some(api::McpServerIdentity {
+        integration: integration as i32,
+        ..Default::default()
     })
 }
 
@@ -963,20 +1056,24 @@ impl From<MCPContext> for api::request::McpContext {
             let servers: Vec<_> = value
                 .servers
                 .into_iter()
-                .map(|server| api::request::mcp_context::McpServer {
-                    id: server.id,
-                    name: server.name,
-                    description: server.description,
-                    resources: server
-                        .resources
-                        .into_iter()
-                        .map(convert_mcp_resource)
-                        .collect(),
-                    tools: server
-                        .tools
-                        .into_iter()
-                        .filter_map(convert_mcp_tool)
-                        .collect(),
+                .map(|server| {
+                    let identity = mcp_server_identity(&server.warp_id);
+                    api::request::mcp_context::McpServer {
+                        id: server.id,
+                        name: server.name,
+                        description: server.description,
+                        identity,
+                        resources: server
+                            .resources
+                            .into_iter()
+                            .map(convert_mcp_resource)
+                            .collect(),
+                        tools: server
+                            .tools
+                            .into_iter()
+                            .filter_map(convert_mcp_tool)
+                            .collect(),
+                    }
                 })
                 .collect();
 

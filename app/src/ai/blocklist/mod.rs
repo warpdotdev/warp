@@ -17,6 +17,7 @@ pub(crate) mod orchestration_event_streamer;
 pub(crate) mod orchestration_events;
 pub(crate) mod orchestration_topology;
 mod passive_suggestions;
+pub(crate) mod pending_cli_harness_prompt_queue;
 pub(crate) mod queued_query;
 pub(super) use controller::RequestInput;
 pub mod history_model;
@@ -40,7 +41,7 @@ pub(crate) mod view_util;
 // Consumed by `tui_export` for the `warp_tui` frontend.
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]
 pub use action_model::AIActionStatus;
-pub(crate) use action_model::recording_controller::RecordingController;
+pub(crate) use action_model::recording_controller::{RecordingController, video_recording_enabled};
 #[cfg(not(target_family = "wasm"))]
 pub(crate) use action_model::recording_finalize::{
     FinalizeReason, finalize_recording_for_conversation,
@@ -69,7 +70,7 @@ pub use action_model::{RunAgentsExecutor, RunAgentsExecutorEvent, RunAgentsSpawn
 )]
 pub use action_model::{
     StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest,
-    StartAgentRequestId,
+    StartAgentRequestId, TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR,
 };
 #[cfg(any(test, feature = "integration_tests"))]
 pub(crate) use block::model::testing::FakeAIBlockModel;
@@ -131,7 +132,8 @@ pub(crate) use persistence::PersistedAIInputType;
 pub use persistence::maybe_build_ai_query_upsert_event;
 pub(crate) use persistence::{PersistedAIInput, SerializedBlockListItem};
 pub(crate) use queued_query::{
-    AutofireAction, QueuedQuery, QueuedQueryId, QueuedQueryOrigin, is_lrc_auto_queue_active,
+    AutofireAction, QueuedPromptDeliveryMode, QueuedQuery, QueuedQueryId, QueuedQueryOrigin,
+    is_lrc_auto_queue_active,
 };
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]
 pub use queued_query::{QueuedQueryEvent, QueuedQueryModel};

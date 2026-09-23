@@ -14,10 +14,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
+use warp_multi_agent_api::RequestCharges;
 use warp_multi_agent_api::client_action::{Action, StartNewConversation};
 use warp_multi_agent_api::message::tool_call::Tool;
 use warp_multi_agent_api::response_event::stream_finished::{
-    ConversationUsageMetadata, RequestCharges, TokenUsage,
+    ConversationUsageMetadata, TokenUsage,
 };
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
@@ -327,6 +328,8 @@ pub struct BlocklistAIHistoryModel {
 
     /// In-flight optimistic conversation rename state keyed by conversation.
     in_flight_conversation_renames: HashMap<AIConversationId, InFlightConversationRename>,
+    /// Conversations with a server metadata request in progress.
+    in_flight_server_metadata_fetches: HashSet<AIConversationId>,
 
     #[cfg(feature = "local_fs")]
     db_connection: Option<Arc<Mutex<SqliteConnection>>>,
@@ -631,9 +634,6 @@ impl BlocklistAIHistoryModel {
             true,
             ctx,
         );
-        // `start_new_child_conversation` already marked this remote above;
-        // this call is now a no-op (kept for clarity / backward compat).
-        self.mark_conversation_as_remote_child(conversation_id, ctx);
         if !fallback_title.is_empty()
             && let Some(conversation) = self.conversation_mut(&conversation_id)
         {
@@ -877,19 +877,6 @@ impl BlocklistAIHistoryModel {
             conversation_id,
             title,
         });
-    }
-    pub fn mark_conversation_as_remote_child(
-        &mut self,
-        conversation_id: AIConversationId,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        {
-            let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
-                return;
-            };
-            conversation.mark_as_remote_child();
-        }
-        self.persist_conversation_state(conversation_id, ctx);
     }
 
     /// Updates the persisted `last_event_sequence` for a conversation and
@@ -2123,6 +2110,12 @@ impl BlocklistAIHistoryModel {
                 .unwrap()
                 .as_str()
                 .to_string();
+            if !self
+                .in_flight_server_metadata_fetches
+                .insert(conversation_id)
+            {
+                return;
+            }
 
             let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
             ctx.spawn(
@@ -2131,24 +2124,28 @@ impl BlocklistAIHistoryModel {
                         .list_ai_conversation_metadata(Some(vec![server_token]))
                         .await
                 },
-                move |model, result, ctx| match result {
-                    Ok(mut metadata_list) if !metadata_list.is_empty() => {
-                        if let Some(metadata) = metadata_list.pop() {
-                            model.set_server_metadata_for_conversation(
-                                conversation_id,
-                                metadata,
-                                ctx,
+                move |model, result, ctx| {
+                    model
+                        .in_flight_server_metadata_fetches
+                        .remove(&conversation_id);
+                    match result {
+                        Ok(mut metadata_list) if !metadata_list.is_empty() => {
+                            if let Some(metadata) = metadata_list.pop() {
+                                model.set_server_metadata_for_conversation(
+                                    conversation_id,
+                                    metadata,
+                                    ctx,
+                                );
+                            }
+                        }
+                        Ok(_) => {
+                            log::warn!("No metadata returned for conversation {conversation_id}");
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "Failed to fetch metadata for conversation {conversation_id}: {e:#}"
                             );
                         }
-                    }
-                    Ok(_) => {
-                        log::warn!("No metadata returned for conversation {}", conversation_id);
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "Failed to fetch metadata for conversation {}: {e:#}",
-                            conversation_id
-                        );
                     }
                 },
             );
@@ -2246,6 +2243,26 @@ impl BlocklistAIHistoryModel {
                 cleared_conversation_ids,
             },
         );
+    }
+
+    /// Clears a closed surface without notifying a controller whose conversations moved elsewhere.
+    pub(crate) fn clear_conversations_for_closed_terminal_surface(
+        &mut self,
+        terminal_surface_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self
+            .live_conversation_ids_for_terminal_surface
+            .get(&terminal_surface_id)
+            .is_none_or(Vec::is_empty)
+        {
+            self.active_conversation_for_terminal_surface
+                .remove(&terminal_surface_id);
+            self.live_conversation_ids_for_terminal_surface
+                .remove(&terminal_surface_id);
+            return;
+        }
+        self.clear_conversations_for_terminal_surface(terminal_surface_id, ctx);
     }
 
     /// Handle removing a conversation from the history model, blocklist and in-memory.
@@ -2899,9 +2916,8 @@ impl BlocklistAIHistoryModel {
     /// authoritative. Cloud supplies the transcript and server-side metadata.
     ///
     /// Narrowly scoped to the remote-child placeholder hydration path
-    /// (`pane_group::hydrate_remote_child_transcript_in_place`). Returns
-    /// `Err` when the placeholder isn't loaded so the caller can fall back
-    /// instead of silently producing a detached conversation.
+    /// (`PaneGroup::hydrate_child_transcript`). Returns `Err` when the placeholder isn't loaded,
+    /// so the caller can stop instead of silently producing a detached conversation.
     pub fn hydrate_remote_child_placeholder_with_cloud_transcript(
         &mut self,
         local_placeholder_id: AIConversationId,
@@ -3142,6 +3158,7 @@ pub enum BlocklistAIHistoryEvent {
 
     UpdatedTodoList {
         terminal_surface_id: EntityId,
+        conversation_id: AIConversationId,
     },
 
     UpdatedAutoexecuteOverride {

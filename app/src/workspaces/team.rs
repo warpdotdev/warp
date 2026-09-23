@@ -2,7 +2,9 @@ use std::cmp::Ordering;
 
 use serde::{Deserialize, Serialize};
 
-use super::workspace::{BillingMetadata, EmailInvite, InviteLinkDomainRestriction, TeamSettings};
+use super::workspace::{
+    BillingMetadata, EmailInvite, InviteLinkDomainRestriction, TeamSettings, WorkspaceUid,
+};
 use crate::ai::llms::ModelsByFeature;
 use crate::auth::UserUid;
 use crate::server::ids::ServerId;
@@ -67,6 +69,20 @@ pub struct DiscoverableTeam {
     pub num_members: i64,
     pub name: String,
     pub team_accepting_invites: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct DiscoverableWorkspace {
+    pub workspace_uid: WorkspaceUid,
+    pub name: String,
+    pub open_teams: Vec<DiscoverableTeam>,
+    pub member_count: i64,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct DiscoveryOptions {
+    pub workspaces: Vec<DiscoverableWorkspace>,
+    pub legacy_teams: Vec<DiscoverableTeam>,
 }
 
 #[derive(PartialEq, Eq, Clone)]

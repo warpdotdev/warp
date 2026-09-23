@@ -28,6 +28,7 @@ session-sharing-protocol.workspace = true
 settings.workspace = true
 settings_value = { workspace = true, features = ["derive"] }
 uuid.workspace = true
+url.workspace = true
 warp-workflows.workspace = true
 warp_cli.workspace = true
 warp_core.workspace = true

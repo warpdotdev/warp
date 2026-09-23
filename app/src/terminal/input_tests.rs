@@ -38,6 +38,7 @@ use crate::ai::agent::{
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::{AIQueryHistory, BlocklistAIPermissions, ResponseStreamId};
+use crate::ai::cloud_agent_settings::{AuthSecretPreference, CloudAgentSettings};
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
@@ -109,9 +110,11 @@ use crate::test_util::settings::initialize_settings_for_tests;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
 use crate::workspace::{ActiveSession, OneTimeModalModel, ToastStack, WorkspaceRegistry};
+use crate::workspaces::team::Team;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
+use crate::workspaces::workspace::Workspace;
 use crate::{
     AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider,
     ReferralThemeStatus, experiments,
@@ -1672,9 +1675,175 @@ fn attach_ambient_view_model_skips_composer_selectors_for_actual_shared_session_
 }
 
 #[test]
-fn cloud_mode_host_selector_shown_when_connected_workers_present() {
-    // Regression: connected self-hosted workers must surface the host dropdown even
-    // with no default host set.
+fn auth_secret_selectors_follow_their_own_window_team() {
+    App::test((), |mut app| async move {
+        let _cloud_mode_input_v2 = FeatureFlag::CloudModeInputV2.override_enabled(true);
+        initialize_app(&mut app);
+
+        let team_a = Team::from_local_cache(1.into(), "Team A".to_string(), None, None, None, None);
+        let team_b = Team::from_local_cache(2.into(), "Team B".to_string(), None, None, None, None);
+        let workspace = Workspace::from_local_cache(
+            "workspace_uid123456789".to_string().into(),
+            "Workspace".to_string(),
+            Some(vec![team_a.clone(), team_b.clone()]),
+            None,
+        );
+        let workspace_uid = workspace.uid;
+        app.update(|ctx| {
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+                workspaces.update_workspaces(vec![workspace], ctx);
+                workspaces.set_current_workspace_uid(workspace_uid, ctx);
+            });
+            CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings.persist_auth_secret_preference(
+                    &TeamContextForOperation::new_for_test(team_a.uid),
+                    Harness::Claude,
+                    Some(AuthSecretPreference::Named("team-a-key".to_string())),
+                    ctx,
+                );
+                settings.persist_auth_secret_preference(
+                    &TeamContextForOperation::new_for_test(team_b.uid),
+                    Harness::Claude,
+                    Some(AuthSecretPreference::Named("team-b-key".to_string())),
+                    ctx,
+                );
+            });
+        });
+
+        let tips_a = app.add_model(|_| TipsCompleted::default());
+        let (window_a, terminal_a) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_a, None, ctx)
+        });
+        let tips_b = app.add_model(|_| TipsCompleted::default());
+        let (window_b, terminal_b) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_b, None, ctx)
+        });
+        terminal_a.update(&mut app, |view, _| {
+            view.model.lock().set_is_dummy_cloud_mode_session(true);
+        });
+        terminal_b.update(&mut app, |view, _| {
+            view.model.lock().set_is_dummy_cloud_mode_session(true);
+        });
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.switch_window_to_team(window_a, team_a.uid, ctx);
+            workspaces.switch_window_to_team(window_b, team_a.uid, ctx);
+        });
+
+        let input_a = terminal_a.read(&app, |view, _| view.input().clone());
+        let terminal_a_id = terminal_a.read(&app, |view, _| view.id());
+        let weak_terminal_a = terminal_a.downgrade();
+        let view_model_a = input_a.update(&mut app, |input, ctx| {
+            let view_model = ctx
+                .add_model(|ctx| AmbientAgentViewModel::new(terminal_a_id, weak_terminal_a, ctx));
+            view_model.update(ctx, |model, ctx| model.set_harness(Harness::Claude, ctx));
+            input.attach_ambient_agent_view_model(view_model.clone(), ctx);
+            view_model
+        });
+
+        let input_b = terminal_b.read(&app, |view, _| view.input().clone());
+        let terminal_b_id = terminal_b.read(&app, |view, _| view.id());
+        let weak_terminal_b = terminal_b.downgrade();
+        let view_model_b = input_b.update(&mut app, |input, ctx| {
+            let view_model = ctx
+                .add_model(|ctx| AmbientAgentViewModel::new(terminal_b_id, weak_terminal_b, ctx));
+            view_model.update(ctx, |model, ctx| model.set_harness(Harness::Claude, ctx));
+            input.attach_ambient_agent_view_model(view_model.clone(), ctx);
+            view_model
+        });
+
+        assert_eq!(
+            view_model_a.read(&app, |model, _| {
+                model.selected_harness_auth_secret_name().map(str::to_owned)
+            }),
+            Some("team-a-key".to_string())
+        );
+        assert_eq!(
+            view_model_b.read(&app, |model, _| {
+                model.selected_harness_auth_secret_name().map(str::to_owned)
+            }),
+            Some("team-a-key".to_string())
+        );
+        let ftux_a = input_a.read(&app, |input, _| {
+            input
+                .auth_secret_ftux_view()
+                .cloned()
+                .expect("cloud composer should have an auth-secret FTUX view")
+        });
+        ftux_a.update(&mut app, |_, ctx| {
+            ctx.emit(AuthSecretFtuxViewEvent::SecretSelected {
+                harness: Harness::Claude,
+                name: "team-a-ftux-key".to_string(),
+            });
+        });
+        assert_eq!(
+            view_model_a.read(&app, |model, _| {
+                model.selected_harness_auth_secret_name().map(str::to_owned)
+            }),
+            Some("team-a-ftux-key".to_string())
+        );
+        app.read(|ctx| {
+            let settings = CloudAgentSettings::as_ref(ctx);
+            assert_eq!(
+                settings.auth_secret_preference(
+                    &TeamContextForOperation::new_for_test(team_a.uid),
+                    Harness::Claude,
+                ),
+                Some(AuthSecretPreference::Named("team-a-ftux-key".to_string()))
+            );
+            assert_eq!(
+                settings.auth_secret_preference(
+                    &TeamContextForOperation::new_for_test(team_b.uid),
+                    Harness::Claude,
+                ),
+                Some(AuthSecretPreference::Named("team-b-key".to_string()))
+            );
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.switch_window_to_team(window_a, team_b.uid, ctx);
+        });
+
+        assert_eq!(
+            view_model_a.read(&app, |model, _| {
+                model.selected_harness_auth_secret_name().map(str::to_owned)
+            }),
+            Some("team-b-key".to_string())
+        );
+        assert_eq!(
+            view_model_b.read(&app, |model, _| {
+                model.selected_harness_auth_secret_name().map(str::to_owned)
+            }),
+            Some("team-a-key".to_string())
+        );
+
+        ftux_a.update(&mut app, |_, ctx| {
+            ctx.emit(AuthSecretFtuxViewEvent::Skipped {
+                harness: Harness::Claude,
+            });
+        });
+        app.read(|ctx| {
+            let settings = CloudAgentSettings::as_ref(ctx);
+            assert_eq!(
+                settings.auth_secret_preference(
+                    &TeamContextForOperation::new_for_test(team_a.uid),
+                    Harness::Claude,
+                ),
+                Some(AuthSecretPreference::Named("team-a-ftux-key".to_string()))
+            );
+            assert_eq!(
+                settings.auth_secret_preference(
+                    &TeamContextForOperation::new_for_test(team_b.uid),
+                    Harness::Claude,
+                ),
+                Some(AuthSecretPreference::Inherit)
+            );
+        });
+    });
+}
+
+#[test]
+fn teamless_cloud_mode_host_selector_ignores_team_worker_cache() {
+    // A personal/teamless window must not surface connected workers cached for a team.
     App::test((), |mut app| async move {
         let _cloud_mode_input_v2 = FeatureFlag::CloudModeInputV2.override_enabled(true);
         initialize_app(&mut app);
@@ -1712,15 +1881,16 @@ fn cloud_mode_host_selector_shown_when_connected_workers_present() {
             );
         });
 
-        // A self-hosted worker connects -> the dropdown becomes visible.
+        // A worker connected under an unrelated team must not leak into this teamless window.
+        let team_scope = TeamContextForOperation::new_for_test(123_i64.into());
         ConnectedSelfHostedWorkersModel::handle(&app).update(&mut app, |model, ctx| {
-            model.set_workers_for_test(&["oz-k8s-worker"], ctx);
+            model.set_workers_for_test(&team_scope, &["oz-k8s-worker"], ctx);
         });
 
         input.read(&app, |input, ctx| {
             assert!(
-                input.visible_host_selector(ctx).is_some(),
-                "host selector must be shown once a self-hosted worker is connected"
+                input.visible_host_selector(ctx).is_none(),
+                "a teamless window must not show another team's connected worker"
             );
         });
     });
@@ -2229,25 +2399,6 @@ fn ctrl_t_apply_mode_forks_between_splice_and_replace_for_the_same_draft() {
     });
 }
 
-#[test]
-fn ctrl_t_binding_is_ineligible_when_shell_widget_handoff_flag_is_disabled() {
-    App::test((), |mut app| async move {
-        initialize_app(&mut app);
-
-        assert!(
-            !FeatureFlag::ShellWidgetHandoff.is_enabled(),
-            "this test assumes the flag defaults to disabled in the test harness"
-        );
-        app.read(|ctx| {
-            assert!(
-                ctx.get_binding_by_name("workspace:trigger_external_ctrl_t_file_search")
-                    .is_none(),
-                "the ctrl-t binding must be ineligible while ShellWidgetHandoff is disabled"
-            );
-        });
-    });
-}
-
 /// Verifies deleting a queued row does not overwrite an existing draft.
 #[test]
 fn row_deleted_event_preserves_existing_draft() {
@@ -2465,6 +2616,7 @@ fn seed_in_progress_conversation(
                 user_query_mode: UserQueryMode::Normal,
                 running_command: None,
                 intended_agent: None,
+                base: None,
             }],
             output_status: AIAgentOutputStatus::Streaming { output: None },
             added_message_ids: HashSet::new(),
@@ -4972,6 +5124,40 @@ fn test_shell_lock_respected_when_slash_command_typed() {
     });
 }
 
+#[test]
+fn model_selector_keybinding_ignores_closed_selector_window() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (closed_window_id, closed_terminal) =
+            add_window_with_bootstrapped_terminal_and_window_id(&mut app, None, None).await;
+        let closed_selector = closed_terminal.read(&app, |terminal, ctx| {
+            terminal
+                .input()
+                .as_ref(ctx)
+                .inline_model_selector_view
+                .clone()
+        });
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        input.update(&mut app, |input, _| {
+            input.inline_model_selector_view = closed_selector;
+        });
+        app.update(|ctx| ctx.simulate_window_closed(closed_window_id));
+
+        input.update(&mut app, |input, ctx| {
+            input.handle_action(
+                &InputAction::TriggerSlashCommandFromKeybinding(commands::MODEL.name),
+                ctx,
+            );
+        });
+
+        input.read(&app, |input, ctx| {
+            assert!(input.suggestions_mode_model.as_ref(ctx).is_closed());
+        });
+    });
+}
 #[test]
 fn test_new_conversation_keybinding_requires_double_press_in_non_empty_agent_view() {
     App::test((), |mut app| async move {
