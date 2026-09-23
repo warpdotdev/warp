@@ -81,7 +81,7 @@ use crate::server::server_api::managed_secrets::AppManagedSecretManager as Manag
 use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::workflows::workflow::Workflow;
-use crate::workspaces::user_workspaces::TeamScopeForCli;
+use crate::workspaces::user_workspaces::{TeamScope, TeamScopeForCli};
 
 mod admin;
 mod agent_config;
@@ -801,6 +801,11 @@ impl AgentDriverRunner {
             let resume_conversation_id = resume_conversation_id.or(task_conversation_id);
 
             let bedrock_task_id = driver_options.task_id.map(|id| id.to_string());
+            let bedrock_team_uid = driver_options
+                .team_scope
+                .as_ref()
+                .and_then(TeamScope::team_uid)
+                .map(|uid| uid.to_string());
 
             #[cfg(not(target_family = "wasm"))]
             if let Some(role_arn) = bedrock_inference_role {
@@ -825,6 +830,7 @@ impl AgentDriverRunner {
                                     task_id: bedrock_task_id,
                                     role_arn,
                                     region: role_region,
+                                    team_uid: bedrock_team_uid,
                                 },
                             );
                             refresh_aws_credentials(manager, ctx)

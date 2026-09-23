@@ -139,7 +139,7 @@ async fn with_credential_refreshes<F, T>(
     run_future: F,
     git_task_id: Option<String>,
     ai_client: Arc<dyn AIClient>,
-    oidc_strategy: Option<(String, String, String)>,
+    oidc_strategy: Option<AwsCredentialsRefreshStrategy>,
     foreground: &ModelSpawner<AgentDriver>,
 ) -> T
 where
@@ -155,10 +155,18 @@ where
 
     let bedrock_refresh = async move {
         match oidc_strategy {
-            Some((task_id, role_arn, region)) => {
-                bedrock_credentials::refresh_loop(task_id, role_arn, region, foreground).await
+            Some(AwsCredentialsRefreshStrategy::OidcManaged {
+                task_id: Some(task_id),
+                role_arn,
+                region,
+                team_uid,
+            }) => {
+                bedrock_credentials::refresh_loop(task_id, role_arn, region, team_uid, foreground)
+                    .await
             }
-            None => future::pending::<()>().await,
+            Some(AwsCredentialsRefreshStrategy::OidcManaged { task_id: None, .. })
+            | Some(AwsCredentialsRefreshStrategy::LocalChain)
+            | None => future::pending::<()>().await,
         }
     }
     .fuse();
@@ -2364,19 +2372,17 @@ impl AgentDriver {
                             let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client().clone();
                             // Capture OidcManaged strategy parameters for the proactive Bedrock credential
                             // refresh loop. Only populated when Bedrock OIDC inference is configured.
-                            let oidc_strategy = match ApiKeyManager::handle(ctx)
+                            let strategy = ApiKeyManager::handle(ctx)
                                 .as_ref(ctx)
-                                .aws_credentials_refresh_strategy()
-                            {
+                                .aws_credentials_refresh_strategy();
+                            let oidc_strategy = matches!(
+                                &strategy,
                                 AwsCredentialsRefreshStrategy::OidcManaged {
-                                    task_id,
-                                    role_arn,
-                                    region,
-                                } => task_id
-                                    .as_ref()
-                                    .map(|tid| (tid.clone(), role_arn.clone(), region.clone())),
-                                AwsCredentialsRefreshStrategy::LocalChain => None,
-                            };
+                                    task_id: Some(_),
+                                    ..
+                                }
+                            )
+                            .then_some(strategy);
                             (task_id, ai_client, oidc_strategy)
                         })
                         .await?;

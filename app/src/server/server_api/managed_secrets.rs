@@ -43,6 +43,10 @@ use crate::server::team_scope::RequestTeamScope;
 pub(crate) type AppManagedSecretManager =
     warp_managed_secrets::ManagedSecretManager<RequestTeamScope>;
 pub(crate) type AppManagedSecretsClient = dyn ManagedSecretsClient<RequestScope = RequestTeamScope>;
+/// A server-sanitized error suitable for displaying when identity-token issuance fails.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub(crate) struct IdentityTokenUserFacingError(pub String);
 
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
@@ -319,6 +323,7 @@ impl ManagedSecretsClient for ServerApi {
 
     async fn issue_task_identity_token(
         &self,
+        request_scope: Option<&Self::RequestScope>,
         options: warp_managed_secrets::client::IdentityTokenOptions,
     ) -> Result<TaskIdentityToken> {
         let requested_duration_seconds = options
@@ -335,7 +340,13 @@ impl ManagedSecretsClient for ServerApi {
             request_context: get_request_context(),
         };
         let operation = IssueTaskIdentityToken::build(variables);
-        let response = self.send_graphql_request(operation, None).await?;
+        let response = match request_scope {
+            Some(request_scope) => {
+                self.send_graphql_request_for_team(operation, *request_scope)
+                    .await?
+            }
+            None => self.send_graphql_request(operation, None).await?,
+        };
 
         match response.issue_task_identity_token {
             IssueTaskIdentityTokenResult::IssueTaskIdentityTokenOutput(output) => {
@@ -346,7 +357,7 @@ impl ManagedSecretsClient for ServerApi {
                 })
             }
             IssueTaskIdentityTokenResult::UserFacingError(error) => {
-                Err(anyhow!(get_user_facing_error_message(error)))
+                Err(IdentityTokenUserFacingError(get_user_facing_error_message(error)).into())
             }
             IssueTaskIdentityTokenResult::Unknown => {
                 Err(anyhow!("Unknown error while issuing task identity token"))

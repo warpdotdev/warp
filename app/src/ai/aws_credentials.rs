@@ -15,12 +15,16 @@ use warp_errors::report_error;
 use warp_managed_secrets::client::IdentityTokenOptions;
 use warpui::{ModelContext, ModelHandle, SingletonEntity};
 
-use crate::server::server_api::managed_secrets::AppManagedSecretManager as ManagedSecretManager;
+use crate::server::ids::ServerId;
+use crate::server::server_api::managed_secrets::{
+    AppManagedSecretManager as ManagedSecretManager, IdentityTokenUserFacingError,
+};
+use crate::server::team_scope::RequestTeamScope;
 use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::terminal::event::{AfterBlockCompletedEvent, BlockType};
 use crate::terminal::model::terminal_model::TerminalModel;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{TeamScopeForCli, UserWorkspaces, UserWorkspacesEvent};
 
 /// Errors that can occur when loading AWS credentials.
 #[derive(Debug, Clone)]
@@ -90,6 +94,25 @@ impl std::error::Error for LoadAwsCredentialsError {}
 
 pub(crate) const AWS_BEDROCK_STS_AUDIENCE: &str = "sts.amazonaws.com";
 pub(crate) const BEDROCK_IDENTITY_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60);
+pub(crate) fn bedrock_request_scope(
+    team_uid: Option<&str>,
+) -> anyhow::Result<Option<RequestTeamScope>> {
+    team_uid
+        .map(|uid| {
+            let scope = TeamScopeForCli::Team(ServerId::try_from(uid)?);
+            Ok(RequestTeamScope::from_scope(&scope))
+        })
+        .transpose()
+}
+
+pub(crate) fn bedrock_identity_token_error(error: anyhow::Error) -> anyhow::Error {
+    const MESSAGE: &str = "Failed to mint AWS Bedrock task identity token";
+    let message = match error.downcast_ref::<IdentityTokenUserFacingError>() {
+        Some(detail) => format!("{MESSAGE}: {detail}"),
+        None => MESSAGE.to_string(),
+    };
+    error.context(message)
+}
 
 pub(crate) fn aws_role_session_name(run_id: &str) -> String {
     format!("Oz_Run_{run_id}")
@@ -266,7 +289,8 @@ pub(crate) fn refresh_aws_credentials(
             task_id,
             role_arn,
             region,
-        } => refresh_aws_credentials_oidc(task_id, role_arn, region, manager, ctx),
+            team_uid,
+        } => refresh_aws_credentials_oidc(task_id, role_arn, region, team_uid, manager, ctx),
     }
 }
 
@@ -324,6 +348,7 @@ fn refresh_aws_credentials_oidc(
     task_id: Option<String>,
     role_arn: String,
     region: String,
+    team_uid: Option<String>,
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) -> BoxFuture<'static, Result<(), String>> {
@@ -354,20 +379,23 @@ fn refresh_aws_credentials_oidc(
 
     log::info!("Bedrock OIDC: preparing token mint for task {task_id:?}");
     manager.set_aws_credentials_state(AwsCredentialsState::Refreshing, ctx);
-    let token_future = ManagedSecretManager::handle(ctx)
-        .as_ref(ctx)
-        .issue_task_identity_token(IdentityTokenOptions {
-            audience: AWS_BEDROCK_STS_AUDIENCE.to_string(),
-            requested_duration: BEDROCK_IDENTITY_TOKEN_DURATION,
-            subject_template: vec1!["scoped_principal".to_string()],
-        });
+    let token_future = bedrock_request_scope(team_uid.as_deref()).map(|request_scope| {
+        ManagedSecretManager::handle(ctx)
+            .as_ref(ctx)
+            .issue_task_identity_token(
+                request_scope,
+                IdentityTokenOptions {
+                    audience: AWS_BEDROCK_STS_AUDIENCE.to_string(),
+                    requested_duration: BEDROCK_IDENTITY_TOKEN_DURATION,
+                    subject_template: vec1!["scoped_principal".to_string()],
+                },
+            )
+    });
 
     let (tx, rx) = channel();
     let _ = ctx.spawn(
         async move {
-            let token = token_future
-                .await
-                .context("Failed to mint AWS Bedrock task identity token")?;
+            let token = token_future?.await.map_err(bedrock_identity_token_error)?;
 
             let client = sts_client(&region).await;
             let session_name = aws_role_session_name(&task_id);

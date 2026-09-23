@@ -32,11 +32,14 @@ impl IapIdentityTokenMinter for ManagedSecretsIapMinter {
         let client = self.client.clone();
         async move {
             let token = client
-                .issue_task_identity_token(IdentityTokenOptions {
-                    audience,
-                    requested_duration,
-                    subject_template: vec1!["principal".to_string()],
-                })
+                .issue_task_identity_token(
+                    None,
+                    IdentityTokenOptions {
+                        audience,
+                        requested_duration,
+                        subject_template: vec1!["principal".to_string()],
+                    },
+                )
                 .await?;
             Ok(token.token)
         }

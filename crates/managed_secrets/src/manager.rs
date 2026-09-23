@@ -257,10 +257,15 @@ where
     /// Issue a short-lived OIDC identity token for the current task.
     pub fn issue_task_identity_token(
         &self,
+        request_scope: Option<RequestScope>,
         options: IdentityTokenOptions,
     ) -> impl Future<Output = anyhow::Result<TaskIdentityToken>> + use<RequestScope> {
         let client = self.client.clone();
-        async move { client.issue_task_identity_token(options).await }
+        async move {
+            client
+                .issue_task_identity_token(request_scope.as_ref(), options)
+                .await
+        }
     }
 
     /// Issue a short-lived OIDC identity token in the JSON shape expected by
@@ -285,11 +290,14 @@ where
             }
 
             match client
-                .issue_task_identity_token(IdentityTokenOptions {
-                    audience,
-                    requested_duration,
-                    subject_template: vec1!["principal".to_owned()],
-                })
+                .issue_task_identity_token(
+                    None,
+                    IdentityTokenOptions {
+                        audience,
+                        requested_duration,
+                        subject_template: vec1!["principal".to_owned()],
+                    },
+                )
                 .await
             {
                 Ok(token) => Ok(GcpWorkloadIdentityFederationToken::new(token, token_type)),
