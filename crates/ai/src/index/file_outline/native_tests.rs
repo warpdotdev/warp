@@ -29,11 +29,12 @@ fn create_outline_files(dir: &TempDir) -> Vec<PathBuf> {
 
 #[cfg(feature = "local_fs")]
 fn assert_symbol_is_indexed(outline: &Outline, expected: &str) {
-    assert!(outline.file_id_to_outline.values().any(|file_outline| {
-        file_outline
-            .symbols()
-            .is_some_and(|symbols| symbols.iter().any(|symbol| symbol.name == expected))
-    }));
+    assert!(
+        outline
+            .to_file_symbols(None)
+            .iter()
+            .any(|file| file.symbols.contains(expected))
+    );
 }
 
 #[cfg(feature = "local_fs")]
