@@ -4323,11 +4323,10 @@ fn write_plain_text_to_clipboard(app: &mut App, text: &str) {
 }
 
 /// warpdotdev/warp#14782: a model name selected on a web page on Windows lands on the
-/// clipboard as `glm-5.1:cloud\r\n`. Pasting it into a single-line field used to leave
-/// `glm-5.1:cloud\r ` in the buffer (only the `\n` was converted to a space). The winit
-/// text layout draws the `\r` as a line break, so deleting that visible break removed
-/// the space and kept the `\r`, and the field looked correct while holding a value the
-/// provider rejected.
+/// clipboard as `glm-5.1:cloud\r\n`. Pasting it into a single-line field must not leave
+/// a `\r` in the buffer: the winit text layout draws a `\r` as a line break, so deleting
+/// that visible break would keep the `\r`, and the field would look correct while
+/// holding a value the provider rejects.
 #[test]
 fn test_single_line_editor_pasted_crlf_leaves_no_carriage_return() {
     App::test((), |mut app| async move {

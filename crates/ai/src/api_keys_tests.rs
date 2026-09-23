@@ -767,8 +767,8 @@ fn assert_definitions_are_sanitized(definitions: &CustomEndpointDefinitions) {
 
 #[test]
 fn custom_endpoint_definitions_heal_control_characters_on_deserialize() {
-    // Definitions written (or cloud-synced) before sanitizing existed must heal when
-    // they are read back, without the user having to re-enter them.
+    // Persisted or cloud-synced definitions holding control characters heal when they
+    // are read back, without the user having to re-enter them.
     let definitions: CustomEndpointDefinitions =
         serde_json::from_value(definitions_json_with_control_characters()).unwrap();
     assert_definitions_are_sanitized(&definitions);

@@ -288,10 +288,8 @@ impl CustomEndpointDefinitions {
 
     /// Sanitizes and then validates a set of definitions.
     ///
-    /// Every way a definition enters this collection (settings file, cloud sync,
-    /// `insert` from the GUI or TUI, legacy migration) passes through here, so
-    /// sanitizing here both keeps new control characters from being persisted and
-    /// heals definitions that were written before sanitizing existed.
+    /// Normalizing before validation heals previously persisted control characters and
+    /// prevents newly inserted definitions from retaining invisible characters.
     fn validated(
         mut definitions: IndexMap<CustomEndpointId, CustomEndpointDefinition>,
     ) -> Option<Self> {
@@ -413,21 +411,14 @@ impl CustomEndpointModel {
         }
     }
 
-    /// The model identifier sent to the provider as the request's model slug.
-    ///
-    /// `normalize` deliberately keeps a name that would sanitize to `""` (see
-    /// [`sanitize_custom_endpoint_name_field`]) rather than emptying it, so this is
-    /// the last guard before a stray control character reaches the provider: strip
-    /// it again here. Case is preserved: provider slugs are case-sensitive.
+    /// The model name with control characters stripped, as sent to the provider for the
+    /// request's model slug. Case is preserved: provider slugs are case-sensitive.
     fn request_slug(&self) -> String {
         sanitize_custom_endpoint_field(&self.name)
     }
 
     /// Sanitizes the user-entered name and alias. An alias that sanitizes to empty is
-    /// dropped so [`Self::display_label`] falls back to the model name. The name never
-    /// sanitizes to empty (see [`sanitize_custom_endpoint_name_field`]): unlike the
-    /// alias, it has no "drop it" fallback, and an empty name fails
-    /// `CustomEndpointDefinition::is_valid`.
+    /// dropped so [`Self::display_label`] falls back to the model name.
     fn normalize(&mut self) {
         self.name = sanitize_custom_endpoint_name_field(&self.name);
         self.alias = self
@@ -1210,10 +1201,9 @@ impl ApiKeyManager {
 
         match serde_json::from_str::<ApiKeys>(&key_json) {
             Ok(mut keys) => {
-                // Legacy endpoints persisted before the settings form sanitized its
-                // inputs can hold invisible control characters in a model name, so heal
-                // them on the way in. Only model fields are touched: the endpoint name
-                // and URL feed the legacy endpoint id (`CustomEndpointId::from_legacy`).
+                // A persisted legacy model name can hold invisible control characters.
+                // Only model fields are sanitized: the endpoint name and URL feed the
+                // legacy endpoint id (`CustomEndpointId::from_legacy`).
                 for endpoint in &mut keys.custom_endpoints {
                     for model in &mut endpoint.models {
                         model.normalize();

@@ -4874,13 +4874,10 @@ impl EditorView {
 
     /// Removes line breaks from user text about to be inserted into a single-line editor.
     ///
-    /// Line breaks reach an editor as inserted *text*, not only through the newline
-    /// action: a clipboard payload copied on Windows carries `\r\n`, and the winit
-    /// backend dispatches `"\r"` as the typed characters of an Enter press that no
-    /// keybinding handled. A single-line buffer can never legitimately hold one, and a
-    /// `\r` is especially harmful there: the buffer treats the row as one line while the
-    /// winit text layout starts a new visual line at the `\r` (it is a Unicode paragraph
-    /// separator), so the field shows a value that is not what the buffer holds.
+    /// Line breaks can arrive as inserted text (a Windows clipboard payload ending in
+    /// `\r\n`, or an unhandled Enter dispatched as the typed text `"\r"`). A `\r` left in
+    /// the buffer renders as a line break on Windows and Linux even though the buffer
+    /// holds a single row.
     fn text_without_line_breaks_if_single_line<'a>(&self, text: &'a str) -> Cow<'a, str> {
         if self.single_line && text.contains(['\r', '\n']) {
             Cow::Owned(text.replace(['\r', '\n'], ""))
