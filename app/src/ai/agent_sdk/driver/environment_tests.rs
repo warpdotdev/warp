@@ -4,15 +4,17 @@ use std::path::{Path, PathBuf};
 use cloud_object_models::CodeForge;
 use command::blocking::Command;
 use tempfile::TempDir;
-use warp_cli::agent::{RepositoryForge, RepositoryHeadOverride, RepositoryHeadRef};
+use warp_cli::agent::{
+    RepositoryForge, RepositoryHeadRef, RepositoryIdentity, RepositoryPreparationOverride,
+};
 use warp_core::command::ExitCode;
 
 use super::{
     PrepareEnvironmentError, RepositoryCloneRequest, build_parallel_clone_command,
     build_remove_repository_origins_command, build_resolved_head_command, checkout_command_for,
     checkout_result, environment_snapshot, is_valid_git_object_id, merge_repos_deduped,
-    parse_resolved_head_sha, parse_resolved_head_shas, repository_clone_requests, single_repo_name,
-    validate_repository_head_overrides,
+    parse_resolved_head_sha, parse_resolved_head_shas, read_failed_repo_names,
+    repository_clone_requests, single_repo_name, validate_repository_preparation_overrides,
 };
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::terminal::shell::ShellType;
@@ -22,12 +24,14 @@ fn commit_head_override(
     owner: &str,
     repo: &str,
     sha: &str,
-) -> RepositoryHeadOverride {
-    RepositoryHeadOverride {
+) -> RepositoryPreparationOverride {
+    RepositoryPreparationOverride {
         code_forge,
         repo_owner: owner.to_string(),
         repo_name: repo.to_string(),
         head: RepositoryHeadRef::CommitSha(sha.to_string()),
+        clone_from: None,
+        preserve_origin: false,
     }
 }
 
@@ -170,17 +174,46 @@ fn branch_head_override(
     owner: &str,
     repo: &str,
     branch: &str,
-) -> RepositoryHeadOverride {
-    RepositoryHeadOverride {
+) -> RepositoryPreparationOverride {
+    RepositoryPreparationOverride {
         code_forge,
         repo_owner: owner.to_string(),
         repo_name: repo.to_string(),
         head: RepositoryHeadRef::Branch(branch.to_string()),
+        clone_from: None,
+        preserve_origin: false,
+    }
+}
+
+fn substitution_override(
+    owner: &str,
+    repo: &str,
+    sha: &str,
+    target_owner: &str,
+    target_repo: &str,
+) -> RepositoryPreparationOverride {
+    RepositoryPreparationOverride {
+        code_forge: RepositoryForge::GitHub,
+        repo_owner: owner.to_string(),
+        repo_name: repo.to_string(),
+        head: RepositoryHeadRef::CommitSha(sha.to_string()),
+        clone_from: Some(RepositoryIdentity {
+            code_forge: RepositoryForge::GitHub,
+            repo_owner: target_owner.to_string(),
+            repo_name: target_repo.to_string(),
+        }),
+        preserve_origin: true,
     }
 }
 
 fn clone_request(repo: SourceRepo, checkout: Option<RepositoryHeadRef>) -> RepositoryCloneRequest {
-    RepositoryCloneRequest { repo, checkout }
+    let checkout_name = repo.repo.clone();
+    RepositoryCloneRequest {
+        remote: repo,
+        checkout_name,
+        checkout,
+        remove_origin: false,
+    }
 }
 
 fn named_checkout_request(repo: SourceRepo) -> RepositoryCloneRequest {
@@ -313,6 +346,7 @@ fn parallel_clone_command_runs_repos_in_background_and_waits() {
             .map(|repo| clone_request(repo, None))
             .collect::<Vec<_>>(),
         ShellType::Bash,
+        Path::new("/tmp/.warp-clone-failed-test"),
     );
 
     assert!(command.starts_with("sh -c '"));
@@ -329,13 +363,57 @@ fn parallel_clone_command_runs_repos_in_background_and_waits() {
     assert!(command.contains("repo-1.log"));
     assert!(command.contains(">\"$log_file_0\" 2>&1 &"));
     assert!(command.contains(">\"$log_file_1\" 2>&1 &"));
-    assert!(command.contains("pids=\"$pids $!\""));
-    assert!(command.contains("wait \"$pid\""));
+    assert!(command.contains("pid_0=\"$!\""));
+    assert!(command.contains("pid_1=\"$!\""));
+    assert!(command.contains("wait \"$pid_0\""));
+    assert!(command.contains("wait \"$pid_1\""));
+    assert!(command.contains(".warp-clone-failed-test"));
     assert!(command.contains("===== warpdotdev/warp ====="));
     assert!(command.contains("cat \"$log_file_0\""));
     assert!(command.contains("===== platform/backend/api ====="));
     assert!(!command.contains("repository revision results"));
     assert!(command.contains("exit \"$failed\""));
+}
+
+#[test]
+fn parallel_clone_command_records_only_the_failing_repo_name_on_partial_failure() {
+    let repos = vec![
+        SourceRepo::new(
+            CodeForge::GitHub,
+            "warpdotdev".to_string(),
+            "good".to_string(),
+        ),
+        SourceRepo::new(
+            CodeForge::GitHub,
+            "warpdotdev".to_string(),
+            "bad".to_string(),
+        ),
+    ];
+    let marker_dir = tempfile::tempdir().unwrap();
+    let marker = marker_dir.path().join("clone-failed-repos");
+    let script = unwrap_sh_c_script(&build_parallel_clone_command(
+        &repos
+            .into_iter()
+            .map(|repo| clone_request(repo, None))
+            .collect::<Vec<_>>(),
+        ShellType::Bash,
+        &marker,
+    ));
+
+    // Redefine clone_repo with a stub where only "bad" fails, inserted right
+    // before the first invocation, so we drive the real wait/bookkeeping
+    // logic end to end without touching the network. sh uses the latest
+    // definition of a function, so this cleanly shadows the real one.
+    let stub = "clone_repo() {\n  [ \"$1\" = 'warpdotdev/bad' ] && return 1\n  return 0\n}\n";
+    let script = script.replacen("log_file_0=", &format!("{stub}log_file_0="), 1);
+    let output = run_command_output(&script);
+
+    assert!(!output.status.success());
+    assert_eq!(
+        read_failed_repo_names(&marker),
+        Some(vec!["warpdotdev/bad".to_string()])
+    );
+    assert!(!marker.exists());
 }
 
 #[test]
@@ -364,6 +442,7 @@ fn parallel_clone_command_threads_checkout_ref_and_pins_after_clone() {
             })
             .collect::<Vec<_>>(),
         ShellType::Bash,
+        Path::new("/tmp/.warp-clone-failed-test"),
     );
 
     assert!(command.contains("checkout_ref=\"$4\""));
@@ -401,6 +480,7 @@ fn parallel_clone_command_fetches_commit_shas_without_cloning_later_history() {
             ),
         ],
         ShellType::Bash,
+        Path::new("/tmp/.warp-clone-failed-test"),
     );
 
     assert!(command.contains("is_commit_sha=\"$5\""));
@@ -456,7 +536,97 @@ fn checkout_command_absent_when_no_ref() {
 }
 
 #[test]
-fn head_overrides_replace_checkout_ref_only_for_matching_repos() {
+fn sparse_substitution_uses_target_remote_and_preserves_source_checkout_name() {
+    let source_sha = "0123456789abcdef0123456789abcdef01234567";
+    let repos = vec![
+        repo(CodeForge::GitHub, "WarpDotDev", "Warp")
+            .with_checkout_ref(Some("source-default".to_string())),
+        repo(CodeForge::GitHub, "warpdotdev", "common-skills")
+            .with_checkout_ref(Some("main".to_string())),
+    ];
+    let overrides = vec![substitution_override(
+        "warpdotdev",
+        "warp",
+        source_sha,
+        "warpdotdev",
+        "warp-for-benchmarks",
+    )];
+
+    let prepared = repository_clone_requests(&repos, &overrides, true).unwrap();
+
+    assert_eq!(prepared[0].remote.owner, "warpdotdev");
+    assert_eq!(prepared[0].remote.repo, "warp-for-benchmarks");
+    assert_eq!(prepared[0].checkout_name, "Warp");
+    assert_eq!(
+        prepared[0].checkout,
+        Some(RepositoryHeadRef::CommitSha(source_sha.to_string()))
+    );
+    assert!(!prepared[0].remove_origin);
+    assert_eq!(prepared[1].remote.repo, "common-skills");
+    assert_eq!(prepared[1].checkout_name, "common-skills");
+    assert_eq!(
+        prepared[1].checkout,
+        Some(RepositoryHeadRef::Branch("main".to_string()))
+    );
+    assert!(prepared[1].remove_origin);
+}
+
+#[test]
+fn substituted_request_uses_target_identity_and_source_checkout_path() {
+    let source_sha = "0123456789abcdef0123456789abcdef01234567";
+    let repos = vec![repo(CodeForge::GitHub, "warpdotdev", "warp")];
+    let overrides = vec![substitution_override(
+        "warpdotdev",
+        "warp",
+        source_sha,
+        "warpdotdev",
+        "warp-for-benchmarks",
+    )];
+    let requests = repository_clone_requests(&repos, &overrides, true).unwrap();
+    let command = build_parallel_clone_command(
+        &requests,
+        ShellType::Bash,
+        Path::new("/tmp/.warp-clone-failed-test"),
+    );
+
+    assert!(command.contains("https://github.com/warpdotdev/warp-for-benchmarks.git"));
+    assert!(command.contains("'warp'"));
+    let snapshot = environment_snapshot(
+        &requests,
+        Path::new("/workspace"),
+        &[Some(source_sha.to_string())],
+    );
+    assert_eq!(snapshot.repositories[0].repo_name, "warp-for-benchmarks");
+    assert_eq!(snapshot.repositories[0].checkout_path, "warp");
+}
+
+#[test]
+fn sparse_substitution_origin_removal_excludes_preserved_target() {
+    let repos = vec![
+        repo(CodeForge::GitHub, "warpdotdev", "warp"),
+        repo(CodeForge::GitHub, "warpdotdev", "common-skills"),
+    ];
+    let overrides = vec![substitution_override(
+        "warpdotdev",
+        "warp",
+        "0123456789abcdef0123456789abcdef01234567",
+        "warpdotdev",
+        "warp-for-benchmarks",
+    )];
+    let requests = repository_clone_requests(&repos, &overrides, true).unwrap();
+    let workspace = Path::new("/workspace");
+    let command = build_remove_repository_origins_command(&requests, workspace, ShellType::Bash);
+    let preserved_target = workspace.join("warp").to_string_lossy().into_owned();
+    let removed_source = workspace
+        .join("common-skills")
+        .to_string_lossy()
+        .into_owned();
+    assert!(!command.contains(&preserved_target));
+    assert!(command.contains(&removed_source));
+}
+
+#[test]
+fn preparation_overrides_replace_checkout_ref_only_for_matching_repos() {
     let repos = vec![
         SourceRepo::new(
             CodeForge::GitHub,
@@ -471,17 +641,14 @@ fn head_overrides_replace_checkout_ref_only_for_matching_repos() {
         )
         .with_checkout_ref(Some("old-pin".to_string())),
     ];
-    let overrides = vec![
-        commit_head_override(
-            RepositoryForge::GitHub,
-            "warpdotdev",
-            "warp",
-            "0123456789abcdef0123456789abcdef01234567",
-        ),
-        branch_head_override(RepositoryForge::GitHub, "warpdotdev", "unused", "develop"),
-    ];
+    let overrides = vec![commit_head_override(
+        RepositoryForge::GitHub,
+        "warpdotdev",
+        "warp",
+        "0123456789abcdef0123456789abcdef01234567",
+    )];
 
-    let prepared = repository_clone_requests(&repos, &overrides).unwrap();
+    let prepared = repository_clone_requests(&repos, &overrides, false).unwrap();
 
     assert_eq!(
         prepared[0].checkout,
@@ -510,19 +677,45 @@ fn clone_requests_use_each_repository_host() {
         ),
     ];
 
-    let prepared = repository_clone_requests(&repos, &[]).unwrap();
-    let command = build_parallel_clone_command(&prepared, ShellType::Bash);
+    let prepared = repository_clone_requests(&repos, &[], false).unwrap();
+    let command = build_parallel_clone_command(
+        &prepared,
+        ShellType::Bash,
+        Path::new("/tmp/.warp-clone-failed-test"),
+    );
 
     assert_eq!(
-        prepared[0].repo.https_clone_url(),
+        prepared[0].remote.https_clone_url(),
         "https://github.com/warpdotdev/warp.git"
     );
     assert_eq!(
-        prepared[1].repo.https_clone_url(),
+        prepared[1].remote.https_clone_url(),
         "https://gitlab.com/platform/backend/api.git"
     );
     assert!(command.contains("https://github.com/warpdotdev/warp.git"));
     assert!(command.contains("https://gitlab.com/platform/backend/api.git"));
+}
+
+#[test]
+fn clone_requests_accept_azure_devops_repositories() {
+    let repos = vec![SourceRepo::new(
+        CodeForge::AzureDevOps,
+        "warpdotdev/test-project".to_string(),
+        "test-project".to_string(),
+    )];
+
+    let prepared = repository_clone_requests(&repos, &[], false).unwrap();
+    let command = build_parallel_clone_command(
+        &prepared,
+        ShellType::Bash,
+        Path::new("/tmp/.warp-clone-failed-test"),
+    );
+
+    assert_eq!(
+        prepared[0].remote.https_clone_url(),
+        "https://dev.azure.com/warpdotdev/test-project/_git/test-project"
+    );
+    assert!(command.contains("https://dev.azure.com/warpdotdev/test-project/_git/test-project"));
 }
 
 #[test]
@@ -554,7 +747,7 @@ fn clone_requests_reject_a_mixed_repository_missing_forge() {
     }
     .effective_repos();
 
-    let error = repository_clone_requests(&repos, &[]).unwrap_err();
+    let error = repository_clone_requests(&repos, &[], false).unwrap_err();
 
     assert!(matches!(
         error,
@@ -593,7 +786,7 @@ fn clone_requests_reject_an_omitted_forge_when_github_is_paired_with_an_unknown_
     .effective_repos();
 
     assert_eq!(repos[1].code_forge, None);
-    let error = repository_clone_requests(&repos, &[]).unwrap_err();
+    let error = repository_clone_requests(&repos, &[], false).unwrap_err();
 
     assert!(matches!(
         error,
@@ -614,7 +807,7 @@ fn clone_requests_reject_a_repository_with_an_unrecognized_forge() {
         "warp".to_string(),
     )];
 
-    let error = repository_clone_requests(&repos, &[]).unwrap_err();
+    let error = repository_clone_requests(&repos, &[], false).unwrap_err();
 
     assert!(matches!(
         error,
@@ -647,7 +840,7 @@ fn clone_requests_reject_an_unrecognized_forge_repository_even_with_unrelated_ov
         "0123456789abcdef0123456789abcdef01234567",
     )];
 
-    let error = repository_clone_requests(&repos, &overrides).unwrap_err();
+    let error = repository_clone_requests(&repos, &overrides, false).unwrap_err();
 
     assert!(matches!(
         error,
@@ -674,10 +867,12 @@ fn head_override_validation_treats_an_unrecognized_forge_repository_as_never_mat
         "0123456789abcdef0123456789abcdef01234567",
     );
 
-    let error =
-        validate_repository_head_overrides(&environment.effective_repos(), &[override_for_it])
-            .expect_err("an unrecognized-forge repository can never match an override");
-    assert!(error.to_string().contains("not declared"));
+    let error = validate_repository_preparation_overrides(
+        &environment.effective_repos(),
+        &[override_for_it],
+    )
+    .expect_err("an unrecognized-forge repository can never match an override");
+    assert!(error.to_string().contains("support"));
 }
 
 #[test]
@@ -694,7 +889,7 @@ fn repository_head_override_validation_rejects_duplicates_and_mismatches() {
         "0123456789abcdef0123456789abcdef01234567",
     );
 
-    let duplicate_error = validate_repository_head_overrides(
+    let duplicate_error = validate_repository_preparation_overrides(
         &environment.effective_repos(),
         &[github.clone(), github.clone()],
     )
@@ -707,9 +902,11 @@ fn repository_head_override_validation_rejects_duplicates_and_mismatches() {
         "warp",
         "0123456789abcdef0123456789abcdef01234567",
     );
-    let mismatch_error =
-        validate_repository_head_overrides(&environment.effective_repos(), &[forge_mismatch])
-            .expect_err("forge mismatch must fail");
+    let mismatch_error = validate_repository_preparation_overrides(
+        &environment.effective_repos(),
+        &[forge_mismatch],
+    )
+    .expect_err("forge mismatch must fail");
     assert!(mismatch_error.to_string().contains("not declared"));
 }
 
@@ -734,12 +931,12 @@ fn repository_head_override_validation_accepts_partial_multi_repo_sets() {
         "0123456789abcdef0123456789abcdef01234567",
     )];
 
-    validate_repository_head_overrides(&environment.effective_repos(), &partial_overrides)
+    validate_repository_preparation_overrides(&environment.effective_repos(), &partial_overrides)
         .expect("repositories without overrides should use their default branches");
 }
 
 #[test]
-fn applied_head_overrides_are_threaded_through_the_existing_clone_command() {
+fn applied_preparation_overrides_are_threaded_through_the_existing_clone_command() {
     let repos = vec![
         SourceRepo::new(
             CodeForge::GitHub,
@@ -761,8 +958,9 @@ fn applied_head_overrides_are_threaded_through_the_existing_clone_command() {
         "develop",
     )];
     let command = build_parallel_clone_command(
-        &repository_clone_requests(&repos, &overrides).unwrap(),
+        &repository_clone_requests(&repos, &overrides, false).unwrap(),
         ShellType::Bash,
+        Path::new("/tmp/.warp-clone-failed-test"),
     );
 
     assert!(command.contains("'develop'"));
@@ -789,8 +987,9 @@ fn applied_commit_override_uses_sha_only_fetch() {
         "0123456789abcdef0123456789abcdef01234567",
     )];
     let command = build_parallel_clone_command(
-        &repository_clone_requests(&repos, &overrides).unwrap(),
+        &repository_clone_requests(&repos, &overrides, false).unwrap(),
         ShellType::Bash,
+        Path::new("/tmp/.warp-clone-failed-test"),
     );
 
     assert!(command.contains("'0123456789abcdef0123456789abcdef01234567'"));
@@ -815,14 +1014,15 @@ fn repository_origin_removal_targets_all_environment_repositories() {
     ];
 
     let workspace = Path::new("/workspace");
-    let command = build_remove_repository_origins_command(&repos, workspace, ShellType::Bash);
+    let requests = repository_clone_requests(&repos, &[], true).unwrap();
+    let command = build_remove_repository_origins_command(&requests, workspace, ShellType::Bash);
 
     let warp_dir = workspace.join("warp").to_string_lossy().into_owned();
     let warp_server_dir = workspace.join("warp-server").to_string_lossy().into_owned();
     assert!(command.contains(&warp_dir));
     assert!(command.contains(&warp_server_dir));
     assert!(command.contains("remote get-url origin"));
-    assert!(command.contains("remote remove origin"));
+    assert!(command.contains("config --remove-section remote.origin"));
 }
 
 #[test]
@@ -1010,7 +1210,11 @@ fn run_parallel_clone_repo_helper(
             None,
         ),
     ];
-    let script = unwrap_sh_c_script(&build_parallel_clone_command(&repos, ShellType::Bash));
+    let script = unwrap_sh_c_script(&build_parallel_clone_command(
+        &repos,
+        ShellType::Bash,
+        Path::new("/tmp/.warp-clone-failed-test"),
+    ));
 
     // Keep only the clone_repo function definition; drop background clones /
     // waits / logs. Locate by name so we don't grab cleanup_clone_logs instead.

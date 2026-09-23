@@ -1685,11 +1685,13 @@ impl TuiTerminalSessionView {
         ctx.subscribe_to_model(&api_keys_menu, |_, _, _: &TuiApiKeysMenuEvent, ctx| {
             ctx.notify();
         });
+        let conversation_menu_team_context = UserWorkspaces::team_context_resolver(ctx.handle());
         let conversation_menu = ctx.add_model(|ctx| {
             TuiConversationMenuModel::new(
                 input_editor_model.clone(),
                 suggestions_mode.clone(),
                 conversation_selection.clone(),
+                conversation_menu_team_context,
                 window_id,
                 ctx,
             )
@@ -2091,6 +2093,8 @@ impl TuiTerminalSessionView {
                 }
                 QueuedQueryEvent::DefaultModeChanged => ctx.notify(),
                 QueuedQueryEvent::Appended { .. }
+                | QueuedQueryEvent::PromptReady { .. }
+                | QueuedQueryEvent::DispatchStateChanged { .. }
                 | QueuedQueryEvent::RowUnlocked { .. }
                 | QueuedQueryEvent::Removed { .. }
                 | QueuedQueryEvent::Reordered { .. }

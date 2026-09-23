@@ -4,8 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
+use chrono::Utc;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -15,21 +16,29 @@ use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_core::safe_info;
 use warp_errors::report_error;
+use warp_harness_usage::{CaptureDiagnostics, JsonlReadStatus, extract_codex};
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
 use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
-use super::claude_transcript::read_jsonl;
 use super::codex_transcript::{
     CodexResumeInfo, CodexTranscriptEnvelope, codex_sessions_root, find_session_file,
     parse_session_meta, rehydrate_codex_transcript,
 };
+use super::harness_persistence::{
+    HarnessPersistence, PersistenceOutcome, save_transcript_and_block,
+};
 use super::json_utils::read_json_file_or_default;
+use super::transcript_persistence::{
+    CapturedTranscript, UploadedTranscriptUsage, capture_transcript_with_retry,
+    needs_capture_retry, read_jsonl_capture, upload_captured_transcript,
+};
+use super::usage_reporting::CaptureIdentity;
 use super::{
     HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness, write_temp_file,
 };
-use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::setup_observability::{
     OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
 };
@@ -37,7 +46,7 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::mcp::JSONTransportType;
 use crate::server::server_api::ServerApi;
-use crate::server::server_api::harness_support::{HarnessSupportClient, upload_to_target};
+use crate::server::server_api::harness_support::HarnessSupportClient;
 use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::model::block::BlockId;
@@ -102,7 +111,7 @@ impl ThirdPartyHarness for CodexHarness {
     /// [`ResumePayload::Codex`].
     async fn fetch_resume_payload(
         &self,
-        conversation_id: &AIConversationId,
+        conversation_id: &ServerConversationToken,
         harness_support_client: Arc<dyn HarnessSupportClient>,
     ) -> Result<Option<ResumePayload>, AgentDriverError> {
         let envelope: CodexTranscriptEnvelope =
@@ -110,7 +119,7 @@ impl ThirdPartyHarness for CodexHarness {
                 .await?;
         let session_id = envelope.session_id;
         Ok(Some(ResumePayload::Codex(CodexResumeInfo {
-            conversation_id: *conversation_id,
+            conversation_id: conversation_id.clone(),
             session_id,
             envelope,
         })))
@@ -122,7 +131,8 @@ impl ThirdPartyHarness for CodexHarness {
         system_prompt: Option<&str>,
         resumption_prompt: Option<&str>,
         context: Option<&str>,
-        working_dir: &Path,
+        workspace_root: &Path,
+        harness_working_dir: &Path,
         _task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
@@ -134,7 +144,8 @@ impl ThirdPartyHarness for CodexHarness {
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
         // Prepare the environment config files.
         prepare_codex_environment_config(
-            working_dir,
+            workspace_root,
+            harness_working_dir,
             system_prompt,
             resolved_env_vars,
             resolved_secrets,
@@ -170,7 +181,7 @@ impl ThirdPartyHarness for CodexHarness {
             self.cli_agent().command_prefix(),
             &owned_prompt,
             system_prompt,
-            working_dir,
+            harness_working_dir,
             client,
             terminal_driver,
             codex_resume,
@@ -204,7 +215,7 @@ fn codex_command(cli_name: &str, session_id: Option<&Uuid>, prompt_path: &str) -
 enum CodexRunnerState {
     Preexec,
     Running {
-        conversation_id: AIConversationId,
+        conversation_id: ServerConversationToken,
         block_id: BlockId,
     },
 }
@@ -217,6 +228,7 @@ struct CodexHarnessRunner {
     client: Arc<dyn HarnessSupportClient>,
     terminal_driver: ModelHandle<TerminalDriver>,
     state: Mutex<CodexRunnerState>,
+    persistence: HarnessPersistence,
     /// Codex session UUID. Populated lazily by [`HarnessRunner::handle_session_update`]
     /// once the codex hooks emit `SessionStart`. Set once (using `OnceLock`).
     session_id: OnceLock<Uuid>,
@@ -225,7 +237,7 @@ struct CodexHarnessRunner {
     /// directory walk and read the JSONL file directly.
     transcript_path: OnceLock<PathBuf>,
     /// Optionally supply an existing conversation ID.
-    preexisting_conversation_id: Option<AIConversationId>,
+    preexisting_conversation_id: Option<ServerConversationToken>,
 }
 
 impl CodexHarnessRunner {
@@ -234,7 +246,7 @@ impl CodexHarnessRunner {
         cli_command: &str,
         prompt: &str,
         _system_prompt: Option<&str>,
-        _working_dir: &Path,
+        harness_working_dir: &Path,
         client: Arc<dyn HarnessSupportClient>,
         terminal_driver: ModelHandle<TerminalDriver>,
         resume: Option<CodexResumeInfo>,
@@ -248,7 +260,7 @@ impl CodexHarnessRunner {
                 session_id,
                 mut envelope,
             }) => {
-                let continuation = rehydrate_codex_transcript(&mut envelope, _working_dir)
+                let continuation = rehydrate_codex_transcript(&mut envelope, harness_working_dir)
                     .map_err(AgentDriverError::ConfigBuildFailed)?;
                 (
                     Some(session_id),
@@ -277,28 +289,70 @@ impl CodexHarnessRunner {
             client,
             terminal_driver,
             state: Mutex::new(CodexRunnerState::Preexec),
+            persistence: HarnessPersistence::default(),
             session_id: session_id_cell,
             transcript_path: transcript_path_cell,
             preexisting_conversation_id,
         })
     }
 
-    /// Return the filepath for the session transcript, walking the codex sessions tree to find it on the
-    /// first save call.
-    async fn resolve_transcript_path(&self) -> Option<PathBuf> {
+    /// Resolve and cache the current rollout path when Codex has created it.
+    async fn resolve_transcript_path(&self) -> Result<Option<PathBuf>> {
         if let Some(cached) = self.transcript_path.get() {
-            return Some(cached.clone());
+            return Ok(Some(cached.clone()));
         }
-        let session_id = self.session_id.get().copied()?;
-        let resolved = tokio::task::spawn_blocking(move || -> Option<PathBuf> {
-            let root = codex_sessions_root().ok()?;
-            find_session_file(&root, session_id)
-        })
-        .await
-        .ok()
-        .flatten()?;
-        let _ = self.transcript_path.set(resolved.clone());
-        Some(resolved)
+        let Some(session_id) = self.session_id.get().copied() else {
+            return Ok(None);
+        };
+        let root = codex_sessions_root().context("Failed to resolve Codex sessions root")?;
+        let resolved = tokio::task::spawn_blocking(move || find_session_file(&root, session_id))
+            .await
+            .context("Codex transcript discovery task failed")?;
+        if let Some(resolved) = &resolved {
+            let _ = self.transcript_path.set(resolved.clone());
+        }
+        Ok(resolved)
+    }
+
+    /// Capture and persist the Codex rollout when its session and path are available.
+    async fn capture_and_upload_transcript(
+        &self,
+        client: &dyn HarnessSupportClient,
+        conversation_id: &ServerConversationToken,
+        is_final: bool,
+        foreground: &ModelSpawner<AgentDriver>,
+    ) -> Result<UploadedTranscriptUsage> {
+        let capture =
+            capture_transcript_with_retry(self.persistence.is_reporting_enabled(), || async {
+                self.handle_session_update(foreground).await?;
+                let Some(session_id) = self.session_id.get().copied() else {
+                    return Ok(None);
+                };
+                let Some(transcript_path) = self.resolve_transcript_path().await? else {
+                    return Ok(None);
+                };
+                let identity = self.persistence.begin_capture();
+                tokio::task::spawn_blocking(move || {
+                    capture_transcript_with_usage(session_id, &transcript_path, is_final, identity)
+                })
+                .await
+                .context("Native transcript capture task failed")?
+                .map(Some)
+            })
+            .await?;
+        let Some(capture) = capture else {
+            if is_final {
+                log::warn!(
+                    "Codex session or rollout still unavailable at final save; \
+                     transcript was never uploaded"
+                );
+            } else {
+                log::debug!("Codex session or rollout not yet available");
+            }
+            return Ok(UploadedTranscriptUsage::empty());
+        };
+        log::info!("Uploading Codex transcript to conversation {conversation_id}");
+        upload_captured_transcript(client, conversation_id, capture).await
     }
 }
 
@@ -315,10 +369,10 @@ impl HarnessRunner for CodexHarnessRunner {
         setup_events: &SetupClientEventReporter,
     ) -> Result<CommandHandle, AgentDriverError> {
         // Resume runs reuse the prior server conversation id; fresh runs mint a new one.
-        let conversation_id = match self.preexisting_conversation_id {
+        let conversation_id = match &self.preexisting_conversation_id {
             Some(id) => {
                 log::info!("Resuming external conversation {id}");
-                id
+                id.clone()
             }
             None => {
                 let id = setup_events
@@ -421,94 +475,92 @@ impl HarnessRunner for CodexHarnessRunner {
         Ok(())
     }
 
+    fn persistence(&self) -> &HarnessPersistence {
+        &self.persistence
+    }
+
     async fn save_conversation(
         &self,
         save_point: SavePoint,
         foreground: &ModelSpawner<AgentDriver>,
-    ) -> Result<()> {
+    ) -> PersistenceOutcome {
         if matches!(save_point, SavePoint::Periodic)
             && !super::has_running_cli_agent(&self.terminal_driver, foreground).await
         {
             log::debug!("Will not save conversation, Codex not in progress");
-            return Ok(());
+            return PersistenceOutcome::skipped();
         }
 
         let (conversation_id, block_id) = match &*self.state.lock() {
             CodexRunnerState::Preexec => {
                 log::warn!("save_conversation called before start");
-                return Ok(());
+                return if matches!(save_point, SavePoint::Final) {
+                    PersistenceOutcome::failed(anyhow!(
+                        "Cannot finalize Codex persistence before the harness starts"
+                    ))
+                } else {
+                    PersistenceOutcome::skipped()
+                };
             }
             CodexRunnerState::Running {
                 conversation_id,
                 block_id,
-            } => (*conversation_id, block_id.clone()),
+            } => (conversation_id.clone(), block_id.clone()),
         };
 
-        let session_id = self.session_id.get().copied();
-        let rollout_path = self.resolve_transcript_path().await;
         let client = self.client.as_ref();
 
         let is_final = matches!(save_point, SavePoint::Final);
-        futures::try_join!(
+        save_transcript_and_block(
+            self.capture_and_upload_transcript(client, &conversation_id, is_final, foreground),
             super::upload_current_block_snapshot(
                 foreground,
                 &self.terminal_driver,
                 client,
-                conversation_id,
+                &conversation_id,
                 block_id,
             ),
-            upload_transcript(client, conversation_id, session_id, rollout_path, is_final),
-        )?;
-        Ok(())
+        )
+        .await
     }
 }
 
-/// Upload the codex session transcript to the server. No-ops if the session UUID hasn't
-/// been captured yet or no rollout file is on disk yet.
-async fn upload_transcript(
-    client: &dyn HarnessSupportClient,
-    conversation_id: AIConversationId,
-    session_id: Option<Uuid>,
-    transcript_path: Option<PathBuf>,
+fn capture_transcript_with_usage(
+    session_id: Uuid,
+    transcript_path: &Path,
     is_final: bool,
-) -> Result<()> {
-    let Some(session_id) = session_id else {
-        if is_final {
-            log::warn!(
-                "Codex session id still unknown at final save; transcript was never uploaded"
-            );
-        } else {
-            log::debug!("Codex session id not yet known; skipping transcript upload");
-        }
-        return Ok(());
+    identity: Option<CaptureIdentity>,
+) -> Result<CapturedTranscript> {
+    let captured_at = Utc::now();
+    let capture = read_jsonl_capture(transcript_path)?;
+    if (is_final || identity.is_some()) && capture.diagnostics.status == JsonlReadStatus::Missing {
+        anyhow::bail!("Codex transcript disappeared before final save");
+    }
+    if capture.diagnostics.status == JsonlReadStatus::Unreadable && capture.entries.is_empty() {
+        anyhow::bail!("Codex transcript could not be read");
+    }
+    if identity.is_some() && capture.entries.is_empty() && !capture.diagnostics.is_complete() {
+        anyhow::bail!("Codex transcript has no complete readable records");
+    }
+    let metadata = parse_session_meta(capture.entries.first()).unwrap_or_default();
+    let envelope = CodexTranscriptEnvelope::new(session_id, metadata, capture.entries);
+    let transcript_body =
+        serde_json::to_vec(&envelope).context("Failed to serialize codex transcript")?;
+    let diagnostics = CaptureDiagnostics {
+        root: capture.diagnostics,
+        ..Default::default()
     };
-    let Some(transcript_path) = transcript_path else {
-        if is_final {
-            log::warn!(
-                "No codex rollout file found at final save for session {session_id}; transcript was never uploaded"
-            );
-        } else {
-            log::debug!("No codex rollout file yet for session {session_id}");
-        }
-        return Ok(());
-    };
-    log::info!("Uploading codex transcript to conversation {conversation_id}");
-
-    let body = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
-        let entries = read_jsonl(&transcript_path)?;
-        let metadata = parse_session_meta(entries.first()).unwrap_or_default();
-        let envelope = CodexTranscriptEnvelope::new(session_id, metadata, entries);
-        serde_json::to_vec(&envelope).context("Failed to serialize codex transcript")
+    let usage_request = identity.and_then(|identity| {
+        identity.build_usage_request(
+            captured_at,
+            extract_codex(&session_id.to_string(), &envelope.entries, &diagnostics),
+        )
+    });
+    Ok(CapturedTranscript {
+        transcript_body,
+        usage_request,
+        needs_retry: needs_capture_retry(&diagnostics),
     })
-    .await
-    .context("read_envelope task panicked")??;
-
-    let target = client
-        .get_transcript_upload_target(&conversation_id)
-        .await
-        .with_context(|| format!("Failed to get transcript upload target for {conversation_id}"))?;
-    upload_to_target(client.http_client(), &target, body).await?;
-    Ok(())
 }
 
 const CODEX_CONFIG_DIR: &str = ".codex";
@@ -536,7 +588,8 @@ const CODEX_MODEL_REASONING_EFFORT_KEY: &str = "model_reasoning_effort";
 /// release to change this.
 const CODEX_MODEL_MIGRATIONS_TARGET: &str = "gpt-5.4";
 fn prepare_codex_environment_config(
-    working_dir: &Path,
+    workspace_root: &Path,
+    harness_working_dir: &Path,
     system_prompt: Option<&str>,
     resolved_env_vars: &HashMap<OsString, OsString>,
     resolved_secrets: &HashMap<String, ManagedSecretValue>,
@@ -561,45 +614,47 @@ fn prepare_codex_environment_config(
 
     prepare_codex_config_toml(
         &codex_dir.join(CODEX_CONFIG_TOML_FILE_NAME),
-        working_dir,
+        harness_working_dir,
         resolved_mcp_servers,
         third_party_harness_model_config,
         openai_base_url.as_deref(),
     )?;
-    publish_warp_skill_dirs_for_codex(working_dir);
+    publish_skills_for_codex(workspace_root, harness_working_dir);
     Ok(())
 }
 
-/// Publish the skills listed in `WARP_SKILL_DIRS`, under their own names, as
-/// symlinks under `<working_dir>/.agents/skills`, so an agent running on
-/// Codex sees the same skills the Oz harness loads from `WARP_SKILL_DIRS`.
+/// Publish configured and eligible bundled skills under
+/// `<harness_working_dir>/.agents/skills`, so Codex sees the same skills
+/// available to the Warp driver.
 ///
-/// Published into the task's own working directory rather than `$HOME` or
-/// `CODEX_HOME`: Codex discovers `.agents/skills` as a REPO-scoped root by
-/// walking up from its starting directory to the repository root (falling
-/// back to just the starting directory itself when no repository is found),
-/// so a task's own working directory is a skill root Codex already searches
-/// on its own. This keeps concurrent tasks (e.g. on a self-hosted
-/// direct-backend worker sharing one host) from publishing into the same
-/// shared home directory. A published skill overrides any existing entry
-/// with the same name (see `skill_dirs_publish::publish_skill`), with the
-/// conflict-resolution behavior depending on whether this run is sandboxed
-/// (see `warp_isolation_platform::detect`). A no-op when `WARP_SKILL_DIRS`
-/// is not configured for this run.
-fn publish_warp_skill_dirs_for_codex(working_dir: &Path) {
-    let source_dirs = super::skill_dirs_publish::warp_skill_source_dirs(working_dir);
-    if source_dirs.is_empty() {
-        return;
-    }
-    let skill_root = working_dir.join(".agents").join("skills");
+/// Relative source directories are resolved from the workspace root, matching
+/// Oz. The links are published into the harness working directory because
+/// Codex discovers `.agents/skills` by walking up from its starting directory
+/// to the repository root (falling back to just the starting directory itself
+/// when no repository is found). This also keeps concurrent tasks from
+/// publishing into a shared home directory. A published skill overrides any
+/// existing entry with the same name (see
+/// `skill_dirs_publish::publish_skill`), with the conflict-resolution behavior
+/// depending on whether this run is sandboxed (see
+/// `warp_isolation_platform::detect`).
+fn publish_skills_for_codex(workspace_root: &Path, harness_working_dir: &Path) {
+    let skill_root = harness_working_dir.join(".agents").join("skills");
     let is_sandbox = warp_isolation_platform::detect().is_some();
-    let published =
-        super::skill_dirs_publish::publish_skill_dirs(&skill_root, &source_dirs, is_sandbox);
-    if published > 0 {
+    let published = super::skill_dirs_publish::publish_skills_for_harness(
+        &skill_root,
+        workspace_root,
+        is_sandbox,
+    );
+    super::skill_dirs_publish::exclude_published_skill_paths_from_git(
+        harness_working_dir,
+        &published,
+    );
+    if !published.is_empty() {
+        let published = published.len();
         safe_info!(
-            safe: ("Published {published} WARP_SKILL_DIRS skill(s) to the Codex skill root"),
+            safe: ("Published {published} skill(s) to the Codex skill root"),
             full: (
-                "Published {published} WARP_SKILL_DIRS skill(s) to Codex skill root {}",
+                "Published {published} skill(s) to Codex skill root {}",
                 skill_root.display()
             )
         );

@@ -93,6 +93,14 @@ impl HandoffComposeState {
             self.set_environment_id(Some(environment_id), false, ctx);
         }
     }
+
+    pub(crate) fn clear_environment_for_scope_change(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.selected_environment_id.take().is_none() {
+            return;
+        }
+        self.has_explicit_environment_selection = false;
+        ctx.emit(HandoffComposeStateEvent::EnvironmentSelected);
+    }
 }
 
 impl Entity for HandoffComposeState {

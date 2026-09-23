@@ -153,6 +153,66 @@ fn none_and_unknown_forges_have_no_clonable_host() {
 }
 
 #[test]
+fn deserialize_azure_devops_environment_builds_git_segment_clone_urls() {
+    let json = serde_json::json!({
+        "name": "azure-env",
+        "code_forge": "AZURE_DEVOPS",
+        "github_repos": [],
+        "source_repos": [{
+            "owner": "warpdotdev/test-project",
+            "repo": "test-project"
+        }],
+        "docker_image": "ubuntu:latest"
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+
+    assert_eq!(env.effective_code_forge(), CodeForge::AzureDevOps);
+    assert_eq!(env.effective_code_forges(), vec![CodeForge::AzureDevOps]);
+    assert_eq!(
+        env.effective_repos(),
+        vec![SourceRepo::new(
+            CodeForge::AzureDevOps,
+            "warpdotdev/test-project".into(),
+            "test-project".into()
+        )]
+    );
+    // Azure Repos clone URLs carry a `_git` segment and no `.git` suffix.
+    assert_eq!(
+        env.effective_repos()[0].https_clone_url(),
+        "https://dev.azure.com/warpdotdev/test-project/_git/test-project"
+    );
+}
+
+#[test]
+fn azure_devops_clone_url_encodes_owner_segments() {
+    let repo = SourceRepo::new(
+        CodeForge::AzureDevOps,
+        "Warp Organization/Test Project".into(),
+        "warp".into(),
+    );
+
+    assert_eq!(
+        repo.https_clone_url(),
+        "https://dev.azure.com/Warp%20Organization/Test%20Project/_git/warp"
+    );
+}
+
+#[test]
+fn azure_devops_clone_url_encodes_repository_segment() {
+    let repo = SourceRepo::new(
+        CodeForge::AzureDevOps,
+        "warpdotdev/test-project".into(),
+        "Warp Repo".into(),
+    );
+
+    assert_eq!(
+        repo.https_clone_url(),
+        "https://dev.azure.com/warpdotdev/test-project/_git/Warp%20Repo"
+    );
+}
+
+#[test]
 fn deserialize_gitlab_environment_uses_authoritative_source_repos() {
     let json = serde_json::json!({
         "name": "gitlab-env",

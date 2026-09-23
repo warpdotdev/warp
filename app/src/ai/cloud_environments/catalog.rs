@@ -85,6 +85,24 @@ impl CloudEnvironmentCatalog {
             .or(self.orchestration_default_environment_id)
     }
 
+    /// Returns the saved environment or first orchestration fallback accepted by `matches`.
+    pub(crate) fn orchestration_default_environment_id_matching(
+        &self,
+        ctx: &AppContext,
+        mut matches: impl FnMut(&CloudAmbientAgentEnvironment) -> bool,
+    ) -> Option<SyncId> {
+        self.saved_environment_id(ctx)
+            .filter(|id| CloudAmbientAgentEnvironment::get_by_id(id, ctx).is_some_and(&mut matches))
+            .or_else(|| {
+                let mut environments = CloudAmbientAgentEnvironment::get_all(ctx);
+                sort_environments_for_orchestration_default(&mut environments);
+                environments
+                    .into_iter()
+                    .find(|environment| matches(environment))
+                    .map(|environment| environment.id)
+            })
+    }
+
     /// Persists a valid environment selection for future default resolution.
     pub fn persist_selection(&self, environment_id: SyncId, ctx: &mut ModelContext<Self>) {
         if self.environment(environment_id).is_none() {

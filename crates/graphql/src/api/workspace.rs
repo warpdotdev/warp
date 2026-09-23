@@ -1,5 +1,6 @@
 use super::billing::{BillingCycleUsageHistory, BillingMetadata, BonusGrantsInfo};
 use crate::schema;
+use crate::user::DiscoverableTeamData;
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct Workspace {
@@ -8,6 +9,7 @@ pub struct Workspace {
     pub stripe_customer_id: Option<cynic::Id>,
     pub members: Vec<WorkspaceMember>,
     pub teams: Vec<Team>,
+    pub open_teams: Vec<DiscoverableTeamData>,
     pub billing_metadata: BillingMetadata,
     pub bonus_grants_info: BonusGrantsInfo,
     pub billing_cycle_usage_history: Option<BillingCycleUsageHistory>,

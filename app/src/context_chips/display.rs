@@ -128,6 +128,7 @@ impl PromptDisplay {
             |me, _, event, ctx| {
                 if let BlocklistAIHistoryEvent::UpdatedTodoList {
                     terminal_surface_id,
+                    ..
                 } = event
                 {
                     if *terminal_surface_id != me.terminal_view_id {

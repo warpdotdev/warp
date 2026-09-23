@@ -492,10 +492,22 @@ pub enum MCPServerUpdate {
     },
 }
 
+/// The home directory that global (non-Warp) provider configs are resolved against. Tests
+/// redirect it through `HOME`; `dirs::home_dir()` ignores that variable on Windows.
+pub(crate) fn home_dir() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(home) = std::env::var_os("HOME")
+        && !home.is_empty()
+    {
+        return Some(PathBuf::from(home));
+    }
+    dirs::home_dir()
+}
+
 pub(crate) fn home_config_file_path(provider: MCPProvider) -> Option<PathBuf> {
     match provider {
         MCPProvider::Warp => warp_core::paths::warp_home_mcp_config_file_path(),
-        _ => dirs::home_dir().map(|home_dir| home_dir.join(provider.home_config_path())),
+        _ => home_dir().map(|home_dir| home_dir.join(provider.home_config_path())),
     }
 }
 

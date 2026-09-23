@@ -214,8 +214,8 @@ impl platform::Delegate for AppDelegate {
         }
     }
 
-    fn is_headless(&self) -> bool {
-        true
+    fn is_gui(&self) -> bool {
+        false
     }
 }
 

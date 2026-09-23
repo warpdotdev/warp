@@ -275,6 +275,105 @@ fn test_app_web_link_rewrites_to_new_cloud_agent_conversation() {
     );
 }
 
+// `resolve_browser_url` is what both browser-URL write paths
+// (`PaneGroup::focus` and the `JoinedSession` handler) delegate to, so
+// testing it here covers both.
+
+#[test]
+fn resolve_browser_url_keeps_parent_conversation_view_when_child_pane_has_its_own_link() {
+    let parent_url = Url::parse(&format!(
+        "{}/conversation/parent-token",
+        ChannelState::server_root_url()
+    ))
+    .unwrap();
+    let child_session_url = Url::parse(&format!(
+        "{}/session/317d0686-7a0b-4b67-806b-aaa3e9df501b",
+        ChannelState::server_root_url()
+    ))
+    .unwrap();
+
+    let resolved = browser_url_resolution::resolve_browser_url(
+        Some(parent_url.clone()),
+        Some(child_session_url),
+        false,
+    );
+
+    assert_eq!(resolved, Some(parent_url));
+}
+
+#[test]
+fn resolve_browser_url_keeps_parent_conversation_view_when_focused_pane_has_no_link() {
+    let parent_url = Url::parse(&format!(
+        "{}/conversation/parent-token",
+        ChannelState::server_root_url()
+    ))
+    .unwrap();
+
+    let resolved =
+        browser_url_resolution::resolve_browser_url(Some(parent_url.clone()), None, false);
+
+    assert_eq!(resolved, Some(parent_url));
+}
+
+#[test]
+fn resolve_browser_url_uses_requested_url_outside_the_viewer() {
+    let base_app_url = Url::parse(&format!("{}/app", ChannelState::server_root_url())).unwrap();
+    let requested_url = Url::parse(&format!(
+        "{}/session/317d0686-7a0b-4b67-806b-aaa3e9df501b",
+        ChannelState::server_root_url()
+    ))
+    .unwrap();
+
+    let resolved = browser_url_resolution::resolve_browser_url(
+        Some(base_app_url),
+        Some(requested_url.clone()),
+        false,
+    );
+
+    assert_eq!(resolved, Some(requested_url));
+}
+
+#[test]
+fn resolve_browser_url_falls_back_to_base_app_url_outside_the_viewer() {
+    let current_url = Url::parse(&format!(
+        "{}/drive/notebook/some-notebook?focused_folder_id=abc",
+        ChannelState::server_root_url()
+    ))
+    .unwrap();
+
+    let resolved = browser_url_resolution::resolve_browser_url(Some(current_url), None, false);
+
+    assert_eq!(
+        resolved,
+        Some(Url::parse(&format!("{}/app", ChannelState::server_root_url())).unwrap())
+    );
+}
+
+#[test]
+fn resolve_browser_url_bypasses_the_guard_when_force_redirect_is_set() {
+    let parent_url = Url::parse(&format!(
+        "{}/conversation/parent-token",
+        ChannelState::server_root_url()
+    ))
+    .unwrap();
+    let login_url = Url::parse(&format!("{}/login", ChannelState::server_root_url())).unwrap();
+
+    let resolved = browser_url_resolution::resolve_browser_url(
+        Some(parent_url),
+        Some(login_url.clone()),
+        true,
+    );
+
+    assert_eq!(resolved, Some(login_url));
+}
+
+#[test]
+fn resolve_browser_url_returns_none_when_neither_url_is_known() {
+    let resolved = browser_url_resolution::resolve_browser_url(None, None, false);
+
+    assert_eq!(resolved, None);
+}
+
 #[test]
 fn test_action_create_environment_parse() {
     let url = Url::parse(&format!(

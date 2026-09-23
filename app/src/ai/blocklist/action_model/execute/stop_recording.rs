@@ -8,6 +8,7 @@ use warpui::{Entity, ModelContext};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::AIAgentActionType;
+use crate::ai::blocklist::action_model::recording_controller::video_recording_enabled;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::{
     agent::AIAgentActionResultType,
@@ -38,7 +39,7 @@ impl StopRecordingExecutor {
     ) -> bool {
         let ExecuteActionInput { action, .. } = input;
         matches!(action.action, AIAgentActionType::StopRecording { .. })
-            && warp_core::features::FeatureFlag::VideoRecording.is_enabled()
+            && video_recording_enabled()
     }
 
     #[cfg_attr(target_family = "wasm", allow(unused_variables))]

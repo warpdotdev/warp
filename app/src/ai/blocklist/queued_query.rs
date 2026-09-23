@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
+use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 use uuid::Uuid;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::{AIAgentAttachment, BaseUserQuery};
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PendingAttachment};
 use crate::features::FeatureFlag;
 use crate::settings::{
@@ -28,6 +30,8 @@ impl QueuedQueryId {
 pub enum QueuedQueryOrigin {
     /// Filed while the initial Cloud Mode prompt waits to be handed off.
     InitialCloudMode,
+    /// Received through session sharing while a native run was starting.
+    SharedSessionInjection,
     /// Filed via the `/queue <prompt>` slash command.
     QueueSlashCommand,
     /// Filed via the auto-queue toggle in the warping indicator.
@@ -45,13 +49,21 @@ pub enum QueuedQueryOrigin {
     ForkAndCompactSlashCommand,
 }
 
-/// Whether a queued row is an agent prompt or a shell command. Attachments live inside the
-/// `Prompt` variant so a `Command` structurally cannot carry any.
+/// Whether a queued row is a local prompt, an attributed shared-session prompt, or a command.
 #[derive(Debug, Clone)]
 enum QueuedQueryKind {
     /// An agent prompt, with any image/file attachments captured from the input when it was
     /// queued. The attachments fire with the prompt and are dropped when the row is removed.
     Prompt { attachments: Vec<PendingAttachment> },
+    SharedSessionPrompt {
+        participant_id: ParticipantId,
+        attachments: Vec<AgentAttachment>,
+        /// None while downloading; Some also represents a settled partial or failed download.
+        prepared_files: Option<HashMap<String, AIAgentAttachment>>,
+        /// The `Request.Input.UserQuery` warp-server injected with the prompt, when it sent one.
+        /// It seeds the input and is the base of the request once the row dispatches.
+        base: Option<BaseUserQuery>,
+    },
     /// A shell command run in the terminal (or via the shared session for cloud panes).
     Command,
 }
@@ -66,6 +78,48 @@ pub struct QueuedQuery {
 }
 
 impl QueuedQuery {
+    pub(crate) fn new_shared_session_prompt(
+        text: String,
+        participant_id: ParticipantId,
+        attachments: Vec<AgentAttachment>,
+        base: Option<BaseUserQuery>,
+    ) -> Self {
+        let prepared_files = (!attachments
+            .iter()
+            .any(|attachment| matches!(attachment, AgentAttachment::FileReference { .. })))
+        .then(HashMap::new);
+        Self {
+            id: QueuedQueryId::new(),
+            text,
+            origin: QueuedQueryOrigin::SharedSessionInjection,
+            kind: QueuedQueryKind::SharedSessionPrompt {
+                participant_id,
+                attachments,
+                prepared_files,
+                base,
+            },
+        }
+    }
+
+    pub(crate) fn shared_session_prompt(&self) -> Option<(&ParticipantId, &[AgentAttachment])> {
+        match &self.kind {
+            QueuedQueryKind::SharedSessionPrompt {
+                participant_id,
+                attachments,
+                ..
+            } => Some((participant_id, attachments)),
+            QueuedQueryKind::Prompt { .. } | QueuedQueryKind::Command => None,
+        }
+    }
+
+    /// The base user query warp-server injected with a shared-session prompt row, if any.
+    pub(crate) fn base_user_query(&self) -> Option<&BaseUserQuery> {
+        match &self.kind {
+            QueuedQueryKind::SharedSessionPrompt { base, .. } => base.as_ref(),
+            QueuedQueryKind::Prompt { .. } | QueuedQueryKind::Command => None,
+        }
+    }
+
     pub fn new(text: String, origin: QueuedQueryOrigin) -> Self {
         Self::new_with_attachments(text, origin, Vec::new())
     }
@@ -97,6 +151,21 @@ impl QueuedQuery {
         self.id
     }
 
+    /// Whether all asynchronous preparation for this row has settled.
+    pub fn is_ready(&self) -> bool {
+        match &self.kind {
+            QueuedQueryKind::SharedSessionPrompt { prepared_files, .. } => prepared_files.is_some(),
+            QueuedQueryKind::Prompt { .. } | QueuedQueryKind::Command => true,
+        }
+    }
+
+    pub(crate) fn prepared_files(&self) -> Option<&HashMap<String, AIAgentAttachment>> {
+        match &self.kind {
+            QueuedQueryKind::SharedSessionPrompt { prepared_files, .. } => prepared_files.as_ref(),
+            QueuedQueryKind::Prompt { .. } | QueuedQueryKind::Command => None,
+        }
+    }
+
     pub fn text(&self) -> &str {
         &self.text
     }
@@ -113,7 +182,7 @@ impl QueuedQuery {
     pub fn attachments(&self) -> &[PendingAttachment] {
         match &self.kind {
             QueuedQueryKind::Prompt { attachments } => attachments,
-            QueuedQueryKind::Command => &[],
+            QueuedQueryKind::Command | QueuedQueryKind::SharedSessionPrompt { .. } => &[],
         }
     }
 
@@ -158,6 +227,25 @@ pub enum AutofireAction {
     },
 }
 
+/// How queued prompts for a conversation are delivered to the agent. Selected per-conversation;
+/// not user-facing yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum QueuedPromptDeliveryMode {
+    /// The next queued row is sent only once the conversation fully finishes on its own
+    /// (`FinishedReceivingOutput` with a genuine finish reason). Used for local queueing
+    /// surfaces (`/queue`, the auto-queue toggle, LRC auto-queue).
+    #[default]
+    Queueing,
+    /// A queued row is sent on the next request made for the conversation -- a natural
+    /// continuation (e.g. a tool-result follow-up or an orchestration-event injection) if one
+    /// occurs first, otherwise the conversation going fully idle -- rather than always waiting
+    /// for the whole turn to finish. Each row is still sent as its own individual
+    /// request/exchange, never combined with another queued row. Set automatically for
+    /// conversations bound to an ambient/Oz-driven native run
+    /// (`BlocklistAIController::bind_native_prompt_conversation`).
+    Steering,
+}
+
 /// Per-conversation queue / edit / toggle state.
 /// Lives inside [`QueuedQueryModel::queues`]; a missing key means empty queue, no edit in
 /// progress, and no explicit auto-queue override (so the cached default from
@@ -165,6 +253,13 @@ pub enum AutofireAction {
 #[derive(Default)]
 struct ConversationQueueState {
     queue: Vec<QueuedQuery>,
+    /// True from when this conversation is bound for native startup injections until its
+    /// initial prompt is actually sent. Sharing can deliver startup follow-ups during this
+    /// window; they are held in `queue` until setup finishes, at which point normal dispatch
+    /// (steering or idle-drain, depending on `delivery_mode`) takes over.
+    native_setup_pending: bool,
+    /// How queued rows for this conversation are delivered. See [`QueuedPromptDeliveryMode`].
+    delivery_mode: QueuedPromptDeliveryMode,
     editing: Option<QueuedQueryId>,
     /// Explicit per-conversation override. `None` defers to the model's cached
     /// `default_mode`; `Some` means the user has toggled this conversation
@@ -197,6 +292,13 @@ pub struct QueuedQueryModel {
 /// to so subscribers can filter to the conversation they care about.
 #[derive(Debug, Clone)]
 pub enum QueuedQueryEvent {
+    PromptReady {
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+    },
+    DispatchStateChanged {
+        conversation_id: AIConversationId,
+    },
     Appended {
         conversation_id: AIConversationId,
         query_id: QueuedQueryId,
@@ -246,6 +348,190 @@ impl Entity for QueuedQueryModel {
 impl SingletonEntity for QueuedQueryModel {}
 
 impl QueuedQueryModel {
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub(crate) fn begin_native_setup(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.queues
+            .entry(conversation_id)
+            .or_default()
+            .native_setup_pending = true;
+        ctx.emit(QueuedQueryEvent::DispatchStateChanged { conversation_id });
+    }
+
+    /// Clears the native setup barrier once the initial prompt has actually been sent. Does
+    /// *not* dispatch any prompt that arrived in the meantime -- the caller
+    /// (`BlocklistAIController::dispatch_queued_warp_agent_prompt`) does that immediately
+    /// afterward, once it's safe to do so (see that method's doc comment for why the two can't
+    /// be combined into one step here).
+    pub(crate) fn finish_native_setup(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Some(state) = self.queues.get_mut(&conversation_id)
+            && state.native_setup_pending
+        {
+            state.native_setup_pending = false;
+            log::info!(
+                "event=setup_released conversation_id={conversation_id} queue_len={}",
+                state.queue.len(),
+            );
+            ctx.emit(QueuedQueryEvent::DispatchStateChanged { conversation_id });
+        }
+    }
+
+    /// True while native startup follow-ups for `conversation_id` must be held rather than
+    /// dispatched (auto-fire, "Send now", and Enter-to-send all consult this).
+    pub(crate) fn is_dispatch_blocked(&self, conversation_id: AIConversationId) -> bool {
+        self.queues
+            .get(&conversation_id)
+            .is_some_and(|state| state.native_setup_pending)
+    }
+
+    /// Sets the delivery mode for `conversation_id`'s queue. See [`QueuedPromptDeliveryMode`].
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub(crate) fn set_delivery_mode(
+        &mut self,
+        conversation_id: AIConversationId,
+        mode: QueuedPromptDeliveryMode,
+    ) {
+        self.queues
+            .entry(conversation_id)
+            .or_default()
+            .delivery_mode = mode;
+    }
+
+    /// Returns the delivery mode for `conversation_id`'s queue, defaulting to `Queueing` when no
+    /// mode has been explicitly set. See [`QueuedPromptDeliveryMode`].
+    pub(crate) fn delivery_mode(
+        &self,
+        conversation_id: AIConversationId,
+    ) -> QueuedPromptDeliveryMode {
+        self.queues
+            .get(&conversation_id)
+            .map(|state| state.delivery_mode)
+            .unwrap_or_default()
+    }
+
+    /// True when `conversation_id`'s queue is in `Steering` mode.
+    pub(crate) fn is_steering(&self, conversation_id: AIConversationId) -> bool {
+        self.delivery_mode(conversation_id) == QueuedPromptDeliveryMode::Steering
+    }
+
+    /// Whether setup or queued injections still need to finish, including attachment preparation.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub(crate) fn has_pending_native_injections(&self, conversation_id: AIConversationId) -> bool {
+        self.queues
+            .get(&conversation_id)
+            .is_some_and(|state| state.native_setup_pending || !state.queue.is_empty())
+    }
+
+    /// Returns a prepared, unlocked row without removing it.
+    pub(crate) fn ready_query(
+        &self,
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+    ) -> Option<&QueuedQuery> {
+        if self.is_dispatch_blocked(conversation_id) {
+            return None;
+        }
+        self.queue(conversation_id)
+            .iter()
+            .find(|row| row.id == query_id && row.is_ready() && !row.is_locked())
+    }
+
+    /// Returns the ready FIFO head, without bypassing an unprepared or edited row.
+    pub(crate) fn ready_head(&self, conversation_id: AIConversationId) -> Option<&QueuedQuery> {
+        let first = self.queue(conversation_id).first()?;
+        if self.editing_row(conversation_id) == Some(first.id) {
+            return None;
+        }
+        self.ready_query(conversation_id, first.id)
+    }
+
+    /// Settles attachment preparation once; stale completions never recreate removed rows.
+    pub(crate) fn complete_preparation(
+        &mut self,
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+        files: HashMap<String, AIAgentAttachment>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(row) = self
+            .queues
+            .get_mut(&conversation_id)
+            .and_then(|state| state.queue.iter_mut().find(|row| row.id == query_id))
+        else {
+            return;
+        };
+        let QueuedQueryKind::SharedSessionPrompt {
+            attachments,
+            prepared_files,
+            ..
+        } = &mut row.kind
+        else {
+            return;
+        };
+        if prepared_files.is_some() {
+            return;
+        }
+        let missing: Vec<_> = attachments
+            .iter()
+            .filter_map(|attachment| {
+                let AgentAttachment::FileReference {
+                    attachment_id,
+                    file_name,
+                } = attachment
+                else {
+                    return None;
+                };
+                (!files.values().any(|file| matches!(file,
+                AIAgentAttachment::FilePathReference { file_id, .. } if file_id == attachment_id
+            ))).then_some(file_name.as_str())
+            })
+            .collect();
+        if !missing.is_empty() {
+            row.text
+                .push_str("\nThe following attachments could not be downloaded: ");
+            row.text.push_str(&missing.join(", "));
+            row.text
+                .push_str(". Do not assume their contents are available.\n");
+        }
+        *prepared_files = Some(files);
+        ctx.emit(QueuedQueryEvent::PromptReady {
+            conversation_id,
+            query_id,
+        });
+    }
+
+    /// Removes and returns every row queued for `conversation_id`, in FIFO order, emitting a
+    /// `Removed` event for each. Used by
+    /// `BlocklistAIController::unbind_native_prompt_conversation` to drop any prompts that never
+    /// made it out when the run ends, regardless of whether they were queued locally or via a
+    /// shared-session injection.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub(crate) fn clear_queue(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Vec<QueuedQuery> {
+        let Some(state) = self.queues.get_mut(&conversation_id) else {
+            return Vec::new();
+        };
+        let cleared = std::mem::take(&mut state.queue);
+        state.editing = None;
+        for row in &cleared {
+            ctx.emit(QueuedQueryEvent::Removed {
+                conversation_id,
+                query_id: row.id,
+            });
+        }
+        cleared
+    }
+
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         // Drop queue/toggle state for any conversation that is removed, deleted, or cleared
         // from its owning terminal view. Agent-view exit is intentionally NOT subscribed to:
@@ -285,6 +571,14 @@ impl QueuedQueryModel {
         ctx: &mut ModelContext<Self>,
     ) {
         match event {
+            BlocklistAIHistoryEvent::UpdatedConversationStatus { .. } => {
+                // Steering-mode conversations don't rely on this event to deliver queued rows:
+                // they're dispatched one at a time as soon as a natural request boundary occurs
+                // (see `BlocklistAIController::steer_head_prompt_for_request` and
+                // `dispatch_queued_warp_agent_prompt`). `TerminalView`'s own turn-completion
+                // drain (`drain_queued_prompts`) remains the fallback for both modes once a
+                // turn genuinely finishes.
+            }
             BlocklistAIHistoryEvent::RemoveConversation {
                 conversation_id, ..
             }
@@ -310,7 +604,13 @@ impl QueuedQueryModel {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
-        if self.queues.remove(&conversation_id).is_some() {
+        if let Some(state) = self.queues.remove(&conversation_id) {
+            if !state.queue.is_empty() {
+                log::warn!(
+                    "event=queue_discarded conversation_id={conversation_id} reason=conversation_removed queue_len={}",
+                    state.queue.len(),
+                );
+            }
             ctx.emit(QueuedQueryEvent::Cleared { conversation_id });
         }
     }
@@ -334,10 +634,12 @@ impl QueuedQueryModel {
     /// conversation finishes successfully. Mirrors [`Self::peek_autofire`]'s gating: false for an
     /// empty queue or a locked head row (which never auto-fires).
     pub fn has_autofireable_prompt(&self, conversation_id: AIConversationId) -> bool {
-        self.queues
-            .get(&conversation_id)
-            .and_then(|state| state.queue.first())
-            .is_some_and(|first| !first.is_locked())
+        !self.is_dispatch_blocked(conversation_id)
+            && self
+                .queues
+                .get(&conversation_id)
+                .and_then(|state| state.queue.first())
+                .is_some_and(|first| !first.is_locked() && first.is_ready())
     }
 
     /// Marks that a dispatched queued command is running for `conversation_id`. While set, the
@@ -537,6 +839,15 @@ impl QueuedQueryModel {
     ) -> QueuedQueryId {
         let query_id = query.id;
         let state = self.queues.entry(conversation_id).or_default();
+        log::info!(
+            "event=queued_prompt_appended conversation_id={conversation_id} query_id={query_id:?} origin={:?} participant_id={:?} queue_len={} setup_pending={}",
+            query.origin,
+            query
+                .shared_session_prompt()
+                .map(|(participant_id, _)| participant_id),
+            state.queue.len() + 1,
+            state.native_setup_pending,
+        );
         state.queue.push(query);
         ctx.emit(QueuedQueryEvent::Appended {
             conversation_id,
@@ -555,8 +866,13 @@ impl QueuedQueryModel {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) -> Option<QueuedQuery> {
+        if self.is_dispatch_blocked(conversation_id) {
+            return None;
+        }
         let state = self.queues.get_mut(&conversation_id)?;
-        if state.queue.first()?.is_locked() {
+        if state.queue.first()?.is_locked()
+            || state.queue.first()?.shared_session_prompt().is_some()
+        {
             return None;
         }
         let popped = state.queue.remove(0);
@@ -575,9 +891,24 @@ impl QueuedQueryModel {
     /// empty queue or a locked head ([`QueuedQuery::is_locked`]). The caller removes the row via
     /// [`Self::remove_fired_row`] once it has been dispatched or restored to the input.
     pub fn peek_autofire(&self, conversation_id: AIConversationId) -> Option<AutofireAction> {
+        if let Some(state) = self.queues.get(&conversation_id)
+            && !state.queue.is_empty()
+            && (self.is_dispatch_blocked(conversation_id) || state.queue[0].is_locked())
+        {
+            log::info!(
+                "event=queue_drain_blocked conversation_id={conversation_id} queue_len={} head_id={:?} setup_pending={} head_locked={}",
+                state.queue.len(),
+                state.queue[0].id,
+                state.native_setup_pending,
+                state.queue[0].is_locked(),
+            );
+        }
+        if self.is_dispatch_blocked(conversation_id) {
+            return None;
+        }
         let state = self.queues.get(&conversation_id)?;
         let first = state.queue.first()?;
-        if first.is_locked() {
+        if first.is_locked() || !first.is_ready() {
             return None;
         }
         let first_in_edit_mode = state.editing == Some(first.id);
@@ -616,6 +947,12 @@ impl QueuedQueryModel {
         let Some(idx) = state.queue.iter().position(|q| q.id == query_id) else {
             return;
         };
+        if state.queue[idx].shared_session_prompt().is_none() {
+            log::info!(
+                "event=queued_prompt_removed conversation_id={conversation_id} query_id={query_id:?} reason=dispatched_or_restored queue_len_after={}",
+                state.queue.len() - 1,
+            );
+        }
         state.queue.remove(idx);
         if state.editing == Some(query_id) {
             state.editing = None;
@@ -640,6 +977,10 @@ impl QueuedQueryModel {
             return;
         }
         let insert_index = insert_index.min(state.queue.len());
+        log::warn!(
+            "event=restored_after_failed_send conversation_id={conversation_id} query_id={query_id:?} index={insert_index} queue_len_after={}",
+            state.queue.len() + 1,
+        );
         state.queue.insert(insert_index, query);
         ctx.emit(QueuedQueryEvent::Appended {
             conversation_id,
@@ -677,6 +1018,10 @@ impl QueuedQueryModel {
         if state.queue[idx].is_locked() {
             return None;
         }
+        log::info!(
+            "event=deleted conversation_id={conversation_id} query_id={query_id:?} queue_len_after={}",
+            state.queue.len() - 1,
+        );
         let removed = state.queue.remove(idx);
         if state.editing == Some(query_id) {
             state.editing = None;
@@ -757,7 +1102,7 @@ impl QueuedQueryModel {
         if !state
             .queue
             .iter()
-            .any(|q| q.id == query_id && !q.is_locked())
+            .any(|q| q.id == query_id && !q.is_locked() && q.shared_session_prompt().is_none())
         {
             return;
         }

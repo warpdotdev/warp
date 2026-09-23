@@ -1,7 +1,9 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use cloud_objects::ids::ServerId;
 use futures::executor::block_on;
+use warp_core::channel::ChannelState;
 use warp_server_auth::auth_state::AuthState;
 
 use super::{
@@ -9,6 +11,7 @@ use super::{
     AuthenticatedGraphqlConfig, BaseClient, CLOUD_AGENT_ID_HEADER, GraphqlRoutingConfig,
     HeaderOverride, TEAM_UID_HEADER,
 };
+use crate::auth::{AuthClient, AuthClientImpl};
 
 struct StaticIapTokenProvider;
 
@@ -111,6 +114,41 @@ fn ambient_policy_supports_inherit_override_and_omit() {
 }
 
 #[test]
+fn pinned_workload_token_is_withheld_unless_it_outlives_the_deadline() {
+    let client = client();
+    let deadline = chrono::Utc::now() + chrono::Duration::hours(6);
+
+    client.set_ambient_workload_token_for_test(
+        "long-lived".to_string(),
+        Some(deadline + chrono::Duration::hours(1)),
+    );
+    assert_eq!(
+        block_on(client.get_ambient_workload_token_valid_until(deadline)).unwrap(),
+        Some("long-lived".to_string()),
+    );
+
+    // A token that expires mid-run must never be handed out for pinning, even though it is
+    // valid right now. Asserted as an inequality rather than `None` because a
+    // `WARP_WORKLOAD_TOKEN` in the ambient environment legitimately yields a non-expiring
+    // replacement here.
+    client.set_ambient_workload_token_for_test(
+        "expires-mid-run".to_string(),
+        Some(deadline - chrono::Duration::hours(1)),
+    );
+    assert_ne!(
+        block_on(client.get_ambient_workload_token_valid_until(deadline)).unwrap(),
+        Some("expires-mid-run".to_string()),
+    );
+
+    // Platforms that issue non-expiring tokens outlive every deadline.
+    client.set_ambient_workload_token_for_test("never-expires".to_string(), None);
+    assert_eq!(
+        block_on(client.get_ambient_workload_token_valid_until(deadline)).unwrap(),
+        Some("never-expires".to_string()),
+    );
+}
+
+#[test]
 fn authenticated_graphql_options_include_configured_and_ambient_headers() {
     let client = client();
     client.set_ambient_agent_task_id(Some("ambient-task".to_string()));
@@ -136,29 +174,6 @@ fn authenticated_graphql_options_include_configured_and_ambient_headers() {
         options.headers.get(AGENT_SOURCE_HEADER).map(String::as_str),
         Some("cloud_mode")
     );
-}
-
-#[test]
-fn team_scoped_graphql_options_attach_team_header_when_scope_is_supplied() {
-    let client = client();
-
-    let options =
-        block_on(client.graphql_request_options_with_team(None, Some("team-123".to_string())))
-            .unwrap();
-
-    assert_eq!(
-        options.headers.get(TEAM_UID_HEADER).map(String::as_str),
-        Some("team-123")
-    );
-}
-
-#[test]
-fn team_scoped_graphql_options_omit_team_header_when_scope_is_absent() {
-    let client = client();
-
-    let options = block_on(client.graphql_request_options_with_team(None, None)).unwrap();
-
-    assert!(!options.headers.contains_key(TEAM_UID_HEADER));
 }
 
 #[test]
@@ -206,4 +221,80 @@ fn authenticated_graphql_configuration_cannot_override_base_client_owned_headers
         options.headers.get("x-eval-user-id").map(String::as_str),
         Some("1234")
     );
+}
+
+fn api_key_client(path_prefix: &str) -> (AuthClientImpl, Arc<Mutex<Option<String>>>) {
+    let observed_team_uid = Arc::new(Mutex::new(None));
+    let observed_team_uid_for_request = observed_team_uid.clone();
+    let mut http_client = http_client::Client::new();
+    http_client.set_before_request_fn(Box::new(move |request, _| {
+        *observed_team_uid_for_request.lock().unwrap() = request
+            .headers()
+            .get(TEAM_UID_HEADER)
+            .map(|value| value.to_str().unwrap().to_string());
+    }));
+    let auth_state = AuthState::new_logged_out_for_test();
+    auth_state.set_remote_server_bearer_token("test-token".to_string());
+    let (event_sender, _) = async_channel::unbounded();
+    let base_client = BaseClient::new(
+        Arc::new(http_client),
+        Arc::new(auth_state),
+        event_sender,
+        None,
+        GraphqlRoutingConfig {
+            path_prefix: Some(path_prefix.to_string()),
+        },
+        AuthenticatedGraphqlConfig::default(),
+        None,
+    );
+    *base_client.ambient_workload_token.lock() = Some(warp_isolation_platform::WorkloadToken {
+        token: "test-workload-token".to_string(),
+        expires_at: None,
+    });
+
+    (
+        AuthClientImpl::new(Arc::new(base_client)),
+        observed_team_uid,
+    )
+}
+
+fn mock_api_key_list(path_prefix: &str) -> mockito::Mock {
+    let mut server = ChannelState::mock_server();
+    server
+        .mock(
+            "POST",
+            mockito::Matcher::Regex(format!("^{path_prefix}/graphql/v2")),
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{"data":{"apiKeys":{"__typename":"APIKeyPropertiesOutput","apiKeys":[],"responseContext":{"serverVersion":null}}}}"#,
+        )
+        .create()
+}
+
+#[test]
+fn list_api_keys_sends_selected_team_header() {
+    let team_uid = "abcdefghijklmnopqrstuv";
+    let request = mock_api_key_list("/api-key-selected");
+    let (auth_client, observed_team_uid) = api_key_client("/api-key-selected");
+
+    let keys =
+        block_on(auth_client.list_api_keys(Some(ServerId::try_from(team_uid).unwrap()))).unwrap();
+
+    assert!(keys.is_empty());
+    assert_eq!(observed_team_uid.lock().unwrap().as_deref(), Some(team_uid));
+    request.assert();
+}
+
+#[test]
+fn list_api_keys_omits_team_header_when_unscoped() {
+    let request = mock_api_key_list("/api-key-unscoped");
+    let (auth_client, observed_team_uid) = api_key_client("/api-key-unscoped");
+
+    let keys = block_on(auth_client.list_api_keys(None)).unwrap();
+
+    assert!(keys.is_empty());
+    assert_eq!(observed_team_uid.lock().unwrap().as_deref(), None);
+    request.assert();
 }

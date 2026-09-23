@@ -46,8 +46,7 @@ pub struct OrchestrationConfigState {
     /// Per-call value hidden from the orchestration editors. Kept outside
     /// `execution_mode` so a temporary switch to Local does not discard it.
     remote_computer_use_enabled: bool,
-    /// Drives the picker display and Accept gate. Persisted as
-    /// `Named(_)` only via `CloudAgentSettings.last_selected_auth_secret`.
+    /// Drives the picker display and Accept gate. Persisted as a scoped harness preference.
     pub auth_secret_selection: AuthSecretSelection,
 }
 

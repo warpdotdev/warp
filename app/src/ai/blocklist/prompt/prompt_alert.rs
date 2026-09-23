@@ -16,10 +16,12 @@ use crate::ai::credit_availability::{AICreditAvailability, AICreditDenialReason}
 use crate::auth::AuthStateProvider;
 use crate::network::NetworkStatus;
 use crate::server::ids::ServerId;
-use crate::settings_view::SettingsSection;
+use crate::settings_view::{AdminActions, SettingsSection};
 use crate::ui_components::icons::Icon;
 use crate::workspace::WorkspaceAction;
+use crate::workspaces::team::Team;
 use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
+use crate::workspaces::workspace::Workspace;
 
 const ANONYMOUS_USER_REQUEST_LIMIT_SOFT_GATE_PERCENTAGE: f32 = 0.5;
 
@@ -28,18 +30,97 @@ const ANONYMOUS_USER_REQUEST_LIMIT_SOFT_GATE_PRIMARY_TEXT: &str = "";
 const ANONYMOUS_USER_REQUEST_LIMIT_HARD_GATE_PRIMARY_TEXT: &str = "At Limit -";
 const DELINQUENT_DUE_TO_PAYMENT_ISSUE_PRIMARY_TEXT: &str = "Restricted due to payment issue";
 const OUT_OF_REQUESTS_PRIMARY_TEXT: &str = "Out of credits";
+const MONTHLY_SPEND_LIMIT_PRIMARY_TEXT: &str = "You've reached your monthly spend limit";
+const TEAM_SPEND_LIMIT_PRIMARY_TEXT: &str = "You've reached your team's spend limit";
+const INDIVIDUAL_SPEND_LIMIT_PRIMARY_TEXT: &str = "You've reached the spend limit set for you";
+const UNASSIGNED_USER_SPEND_LIMIT_PRIMARY_TEXT: &str =
+    "Spend limit reached for members without a team";
+const WORKSPACE_SPEND_LIMIT_PRIMARY_TEXT: &str = "You've reached this workspace's spend limit";
 
 const ANONYMOUS_USER_REQUEST_LIMIT_ACTION_TEXT: &str = "Sign up for more AI credits";
 const DELINQUENT_DUE_TO_PAYMENT_ISSUE_ACTION_TEXT: &str = "Manage billing";
 const OVERAGES_TOGGLEABLE_BUT_NOT_ENABLED_ACTION_TEXT: &str = "Enable premium overages";
 const MONTHLY_OVERAGES_SPEND_LIMIT_REACHED_ACTION_TEXT: &str = "Increase monthly spend limit";
+const MANAGE_LIMIT_TEXT: &str = "Manage limit";
+const JOIN_A_TEAM_TEXT: &str = "join a team";
 const UPGRADE_TEXT: &str = "Upgrade";
 const COMPARE_PLANS_TEXT: &str = "Compare plans";
 const CONTACT_SUPPORT_TEXT: &str = "Contact support";
 const NON_ADMIN_CONTACT_ADMIN_TEXT: &str = ", contact a team admin";
+const NON_ADMIN_CONTACT_WORKSPACE_ADMIN_TEXT: &str = ", contact a workspace admin";
+const NON_ADMIN_ASK_WORKSPACE_ADMIN_TO_INCREASE_LIMIT_TEXT: &str =
+    "  Ask a workspace admin to increase it";
 const NON_ADMIN_ASK_ADMIN_TO_ENABLE_OVERAGES_TEXT: &str = ", ask a team admin to enable overages";
 const NON_ADMIN_ASK_ADMIN_TO_INCREASE_OVERAGES_TEXT: &str =
     ", ask a team admin to increase overages";
+
+fn enterprise_limit_cta(
+    state: &PromptAlertState,
+    workspace: Option<&Workspace>,
+    team: Option<&Team>,
+    user_email: Option<&str>,
+) -> Option<Vec<FormattedTextFragment>> {
+    let user_email = user_email.unwrap_or_default();
+    let (admin_panel_link, non_admin_text, can_join_team) = match state {
+        PromptAlertState::EnterpriseTeamSpendLimitReached
+        | PromptAlertState::EnterpriseIndividualSpendLimitReached => (
+            team.filter(|team| {
+                team.has_admin_permissions(user_email)
+                    || workspace
+                        .is_some_and(|workspace| workspace.is_native_workspaces_admin(user_email))
+            })
+            .map(|team| AdminActions::admin_panel_link_for_team(team.uid)),
+            NON_ADMIN_CONTACT_ADMIN_TEXT,
+            false,
+        ),
+        PromptAlertState::EnterpriseUnassignedUserSpendLimitReached => (
+            workspace
+                .filter(|workspace| workspace.is_native_workspaces_admin(user_email))
+                .map(|_| AdminActions::admin_panel_link_for_workspace()),
+            NON_ADMIN_ASK_WORKSPACE_ADMIN_TO_INCREASE_LIMIT_TEXT,
+            true,
+        ),
+        PromptAlertState::EnterpriseWorkspaceSpendLimitReached => (
+            workspace
+                .filter(|workspace| workspace.is_native_workspaces_admin(user_email))
+                .map(|_| AdminActions::admin_panel_link_for_workspace()),
+            NON_ADMIN_CONTACT_WORKSPACE_ADMIN_TEXT,
+            false,
+        ),
+        PromptAlertState::NoConnection
+        | PromptAlertState::AnonymousUserRequestLimitSoftGate
+        | PromptAlertState::AnonymousUserRequestLimitHardGate
+        | PromptAlertState::DelinquentDueToPaymentIssue
+        | PromptAlertState::OveragesToggleableButNotEnabled
+        | PromptAlertState::MonthlyOveragesSpendLimitReached
+        | PromptAlertState::RequestLimitReached
+        | PromptAlertState::NoAlert => return None,
+    };
+    let has_joinable_team = can_join_team
+        && !cfg!(target_family = "wasm")
+        && workspace.is_some_and(|workspace| workspace.joinable_teams().next().is_some());
+    if let Some(link) = admin_panel_link {
+        let mut fragments = vec![
+            FormattedTextFragment::plain_text("  "),
+            FormattedTextFragment::hyperlink(MANAGE_LIMIT_TEXT, link),
+        ];
+        if has_joinable_team {
+            fragments.push(FormattedTextFragment::plain_text(" or "));
+            fragments.push(FormattedTextFragment::hyperlink_action(
+                JOIN_A_TEAM_TEXT,
+                WorkspaceAction::BrowseTeams,
+            ));
+        }
+        return Some(fragments);
+    }
+    if has_joinable_team {
+        return Some(vec![
+            FormattedTextFragment::plain_text(format!("{non_admin_text}, or ")),
+            FormattedTextFragment::hyperlink_action(JOIN_A_TEAM_TEXT, WorkspaceAction::BrowseTeams),
+        ]);
+    }
+    Some(vec![FormattedTextFragment::plain_text(non_admin_text)])
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PromptAlertAction {
@@ -71,10 +152,56 @@ pub enum PromptAlertState {
     OveragesToggleableButNotEnabled,
     /// Overages are on, but the spend limit is too low.
     MonthlyOveragesSpendLimitReached,
+    EnterpriseTeamSpendLimitReached,
+    EnterpriseIndividualSpendLimitReached,
+    EnterpriseUnassignedUserSpendLimitReached,
+    EnterpriseWorkspaceSpendLimitReached,
     /// The user has reached the request limit.
     RequestLimitReached,
     /// No alert should be displayed.
     NoAlert,
+}
+
+impl PromptAlertState {
+    fn primary_text(&self) -> &'static str {
+        match self {
+            Self::NoConnection => NO_CONNECTION_PRIMARY_TEXT,
+            Self::AnonymousUserRequestLimitSoftGate => {
+                ANONYMOUS_USER_REQUEST_LIMIT_SOFT_GATE_PRIMARY_TEXT
+            }
+            Self::AnonymousUserRequestLimitHardGate => {
+                ANONYMOUS_USER_REQUEST_LIMIT_HARD_GATE_PRIMARY_TEXT
+            }
+            Self::DelinquentDueToPaymentIssue => DELINQUENT_DUE_TO_PAYMENT_ISSUE_PRIMARY_TEXT,
+            Self::OveragesToggleableButNotEnabled | Self::RequestLimitReached => {
+                OUT_OF_REQUESTS_PRIMARY_TEXT
+            }
+            Self::MonthlyOveragesSpendLimitReached => MONTHLY_SPEND_LIMIT_PRIMARY_TEXT,
+            Self::EnterpriseTeamSpendLimitReached => TEAM_SPEND_LIMIT_PRIMARY_TEXT,
+            Self::EnterpriseIndividualSpendLimitReached => INDIVIDUAL_SPEND_LIMIT_PRIMARY_TEXT,
+            Self::EnterpriseUnassignedUserSpendLimitReached => {
+                UNASSIGNED_USER_SPEND_LIMIT_PRIMARY_TEXT
+            }
+            Self::EnterpriseWorkspaceSpendLimitReached => WORKSPACE_SPEND_LIMIT_PRIMARY_TEXT,
+            Self::NoAlert => "",
+        }
+    }
+
+    pub(crate) fn tooltip_text(&self) -> Option<&'static str> {
+        match self {
+            Self::DelinquentDueToPaymentIssue
+            | Self::AnonymousUserRequestLimitHardGate
+            | Self::AnonymousUserRequestLimitSoftGate
+            | Self::OveragesToggleableButNotEnabled
+            | Self::MonthlyOveragesSpendLimitReached
+            | Self::EnterpriseTeamSpendLimitReached
+            | Self::EnterpriseIndividualSpendLimitReached
+            | Self::EnterpriseUnassignedUserSpendLimitReached
+            | Self::EnterpriseWorkspaceSpendLimitReached
+            | Self::RequestLimitReached => Some(self.primary_text()),
+            Self::NoConnection | Self::NoAlert => None,
+        }
+    }
 }
 
 pub struct PromptAlertView {
@@ -194,10 +321,17 @@ impl PromptAlertView {
 
         match availability.denial_reason {
             AICreditDenialReason::Delinquent => PromptAlertState::DelinquentDueToPaymentIssue,
-            AICreditDenialReason::EnterpriseTeamSpendLimitHit
-            | AICreditDenialReason::EnterprisePerUserSpendLimitHit
-            | AICreditDenialReason::EnterpriseWorkspaceSpendLimitHit => {
-                PromptAlertState::MonthlyOveragesSpendLimitReached
+            AICreditDenialReason::EnterpriseTeamSpendLimitHit => {
+                PromptAlertState::EnterpriseTeamSpendLimitReached
+            }
+            AICreditDenialReason::EnterprisePerUserSpendLimitHit => {
+                PromptAlertState::EnterpriseIndividualSpendLimitReached
+            }
+            AICreditDenialReason::EnterprisePerUnassignedUserSpendLimitHit => {
+                PromptAlertState::EnterpriseUnassignedUserSpendLimitReached
+            }
+            AICreditDenialReason::EnterpriseWorkspaceSpendLimitHit => {
+                PromptAlertState::EnterpriseWorkspaceSpendLimitReached
             }
             AICreditDenialReason::None
             | AICreditDenialReason::OutOfCredits
@@ -260,36 +394,7 @@ impl PromptAlertView {
         // Use this instead of hardcoded margin so it scales with font size and is consistent
         // with the space between this primary fragment and the option hyperlink fragment.
         text_fragments.push(FormattedTextFragment::plain_text("  "));
-        match state {
-            PromptAlertState::NoConnection => {
-                text_fragments.push(FormattedTextFragment::plain_text(
-                    NO_CONNECTION_PRIMARY_TEXT,
-                ));
-            }
-            PromptAlertState::AnonymousUserRequestLimitSoftGate => {
-                text_fragments.push(FormattedTextFragment::plain_text(
-                    ANONYMOUS_USER_REQUEST_LIMIT_SOFT_GATE_PRIMARY_TEXT,
-                ));
-            }
-            PromptAlertState::AnonymousUserRequestLimitHardGate => {
-                text_fragments.push(FormattedTextFragment::plain_text(
-                    ANONYMOUS_USER_REQUEST_LIMIT_HARD_GATE_PRIMARY_TEXT,
-                ));
-            }
-            PromptAlertState::DelinquentDueToPaymentIssue => {
-                text_fragments.push(FormattedTextFragment::plain_text(
-                    DELINQUENT_DUE_TO_PAYMENT_ISSUE_PRIMARY_TEXT,
-                ));
-            }
-            PromptAlertState::OveragesToggleableButNotEnabled
-            | PromptAlertState::MonthlyOveragesSpendLimitReached
-            | PromptAlertState::RequestLimitReached => {
-                text_fragments.push(FormattedTextFragment::plain_text(
-                    OUT_OF_REQUESTS_PRIMARY_TEXT,
-                ));
-            }
-            PromptAlertState::NoAlert => {}
-        }
+        text_fragments.push(FormattedTextFragment::plain_text(state.primary_text()));
     }
 
     fn action_hyperlink(
@@ -299,10 +404,12 @@ impl PromptAlertView {
         app: &AppContext,
     ) {
         let auth_state = AuthStateProvider::as_ref(app).get();
+        let user_email = auth_state.user_email();
         let current_team = UserWorkspaces::as_ref(app).team_for_view_handle(&self.view_handle, app);
         let has_admin_permissions = current_team.is_some_and(|team| {
-            team.has_admin_permissions(&auth_state.user_email().unwrap_or_default())
+            team.has_admin_permissions(user_email.as_deref().unwrap_or_default())
         });
+        let current_workspace = UserWorkspaces::as_ref(app).current_workspace();
 
         match state {
             PromptAlertState::NoConnection => {}
@@ -359,9 +466,22 @@ impl PromptAlertView {
                     ));
                 }
             }
+            PromptAlertState::EnterpriseTeamSpendLimitReached
+            | PromptAlertState::EnterpriseIndividualSpendLimitReached
+            | PromptAlertState::EnterpriseUnassignedUserSpendLimitReached
+            | PromptAlertState::EnterpriseWorkspaceSpendLimitReached => {
+                if let Some(cta) = enterprise_limit_cta(
+                    state,
+                    current_workspace,
+                    current_team,
+                    user_email.as_deref(),
+                ) {
+                    text_fragments.extend(cta);
+                }
+            }
             PromptAlertState::RequestLimitReached => {
-                text_fragments.push(FormattedTextFragment::plain_text("  "));
                 if let Some(team) = current_team {
+                    text_fragments.push(FormattedTextFragment::plain_text("  "));
                     if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
                         let upgrade_url = UserWorkspaces::upgrade_link_for_team(team.uid);
                         let upgrade_text = if !has_admin_permissions {
@@ -381,6 +501,7 @@ impl PromptAlertView {
                         ));
                     }
                 } else {
+                    text_fragments.push(FormattedTextFragment::plain_text("  "));
                     let user_id = auth_state.user_id().unwrap_or_default();
                     let upgrade_url = UserWorkspaces::upgrade_link(user_id);
                     let label =
@@ -419,6 +540,10 @@ fn does_alert_block_ai_requests(state: &PromptAlertState) -> bool {
         | PromptAlertState::DelinquentDueToPaymentIssue
         | PromptAlertState::OveragesToggleableButNotEnabled
         | PromptAlertState::MonthlyOveragesSpendLimitReached
+        | PromptAlertState::EnterpriseTeamSpendLimitReached
+        | PromptAlertState::EnterpriseIndividualSpendLimitReached
+        | PromptAlertState::EnterpriseUnassignedUserSpendLimitReached
+        | PromptAlertState::EnterpriseWorkspaceSpendLimitReached
         | PromptAlertState::RequestLimitReached => true,
     }
 }

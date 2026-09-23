@@ -20,11 +20,14 @@ use warpui::{
 use crate::ai::blocklist::inline_action::orchestration_controls::ORCHESTRATION_WARP_WORKER_HOST;
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
+use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
+use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, TooltipAlignment,
 };
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const HEADER_FONT_SIZE: f32 = 12.;
 
@@ -138,6 +141,21 @@ impl HostSelector {
                 me.refresh_menu(ctx);
             },
         );
+        ctx.subscribe_to_model(&NetworkStatus::handle(ctx), |me, _, event, ctx| {
+            if matches!(
+                event,
+                NetworkStatusEvent::NetworkStatusChanged {
+                    new_status: NetworkStatusKind::Online,
+                }
+            ) {
+                me.refresh_connected_hosts(ctx);
+            }
+        });
+        ctx.subscribe_to_model(&AuthManager::handle(ctx), |me, _, event, ctx| {
+            if matches!(event, AuthManagerEvent::AuthComplete) {
+                me.refresh_connected_hosts(ctx);
+            }
+        });
 
         let mut me = Self {
             button,
@@ -166,6 +184,7 @@ impl HostSelector {
                 button.set_label(label, ctx);
             });
         }
+        me.refresh_connected_hosts(ctx);
         me.refresh_menu(ctx);
         me
     }
@@ -250,15 +269,20 @@ impl HostSelector {
         });
     }
 
+    fn refresh_connected_hosts(&mut self, ctx: &mut ViewContext<Self>) {
+        let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
+            model.refresh(&scope, ctx);
+        });
+    }
+
     fn set_menu_visibility(&mut self, is_open: bool, ctx: &mut ViewContext<Self>) {
         if self.is_menu_open == is_open {
             return;
         }
         self.is_menu_open = is_open;
         if is_open {
-            ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
-                model.refresh(ctx);
-            });
+            self.refresh_connected_hosts(ctx);
             ctx.focus(&self.menu);
             self.highlight_selected_host(ctx);
         }
@@ -319,6 +343,7 @@ fn build_menu_items(
         clickable: false,
         right_side_fields: None,
     };
+    let scope = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
 
     let item_for = |host: Host, badge: Option<&str>| {
         let label = host.display_name().to_string();
@@ -351,7 +376,7 @@ fn build_menu_items(
         Some(Host::Warp) | None => None,
     };
     let mut connected_hosts = ConnectedSelfHostedWorkersModel::as_ref(ctx)
-        .worker_hosts_excluding(default_slug)
+        .worker_hosts_excluding(&scope, default_slug)
         .into_iter()
         .collect::<Vec<_>>();
     connected_hosts.sort();

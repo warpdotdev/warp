@@ -21,7 +21,7 @@ use crate::ai::blocklist::{
 use crate::pane_group::{PaneGroup, PaneId};
 use crate::terminal::TerminalView;
 use crate::terminal::shared_session::IsSharedSessionCreator;
-use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 pub(crate) struct HiddenChildAgentConversation {
     pub terminal_view: ViewHandle<TerminalView>,
@@ -99,6 +99,7 @@ fn start_new_child_conversation(
 pub(crate) fn create_hidden_child_agent_conversation(
     group: &mut PaneGroup,
     request: HiddenChildAgentConversationRequest,
+    settings_inheritance_scope: &impl TeamScope,
     ctx: &mut ViewContext<PaneGroup>,
 ) -> Option<HiddenChildAgentConversation> {
     let HiddenChildAgentConversationRequest {
@@ -125,10 +126,12 @@ pub(crate) fn create_hidden_child_agent_conversation(
     let terminal_view_id = new_terminal_view.id();
     match group.terminal_view_from_pane_id(parent_pane_id, ctx) {
         Some(parent_terminal_view) => {
-            let scope = ResolvedTeamScope::from_scope(
-                &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+            inherit_child_agent_settings(
+                settings_inheritance_scope,
+                parent_terminal_view.id(),
+                terminal_view_id,
+                ctx,
             );
-            inherit_child_agent_settings(&scope, parent_terminal_view.id(), terminal_view_id, ctx);
         }
         _ => {
             log::warn!(
@@ -167,6 +170,7 @@ fn create_error_child_agent_conversation_context(
     orchestration_harness: Option<Harness>,
     ctx: &mut ViewContext<PaneGroup>,
 ) -> Option<(Option<ViewHandle<TerminalView>>, EntityId, AIConversationId)> {
+    let settings_inheritance_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
     if let Some(HiddenChildAgentConversation {
         terminal_view,
         terminal_view_id,
@@ -183,6 +187,7 @@ fn create_error_child_agent_conversation_context(
             task_context: None,
             is_shared_session_creator: IsSharedSessionCreator::No,
         },
+        &settings_inheritance_scope,
         ctx,
     ) {
         return Some((Some(terminal_view), terminal_view_id, conversation_id));

@@ -34,7 +34,7 @@ use crate::terminal::view::ambient_agent::auth_secret_ftux_dropdown::{
 use crate::ui_components::icons::Icon as UiIcon;
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 const DESCRIPTION_FONT_SIZE: f32 = 14.;
 
@@ -157,8 +157,9 @@ impl AuthSecretFtuxView {
         ctx.subscribe_to_view(&ftux_dropdown, |me, _, event, ctx| {
             if matches!(event, FtuxDropdownEvent::Opened) {
                 let harness = me.harness;
+                let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.ensure_auth_secrets_fetched(harness, ctx);
+                    model.ensure_auth_secrets_fetched(&team_scope, harness, ctx);
                 });
             }
         });
@@ -235,12 +236,23 @@ impl AuthSecretFtuxView {
                     }
                 }
                 HarnessAvailabilityEvent::Changed
-                | HarnessAvailabilityEvent::AuthSecretsLoaded
-                | HarnessAvailabilityEvent::AuthSecretsFetchFailed
+                | HarnessAvailabilityEvent::AuthSecretsChanged
                 | HarnessAvailabilityEvent::AuthSecretDeleted { .. }
                 | HarnessAvailabilityEvent::AuthSecretDeletionFailed { .. } => {}
             },
         );
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            let affects_window = matches!(event, UserWorkspacesEvent::TeamsChanged)
+                || matches!(
+                    event,
+                    UserWorkspacesEvent::WindowTeamChanged { window_id }
+                        if *window_id == ctx.window_id()
+                );
+            if affects_window {
+                me.clear_creation_state(ctx);
+                ctx.notify();
+            }
+        });
 
         Self {
             view_handle: ctx.handle(),
@@ -679,12 +691,12 @@ impl AuthSecretFtuxView {
         }
         ctx.notify();
 
+        let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
         let owner = self.resolve_secret_owner(ctx);
         HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
-            model.create_auth_secret(harness, name, value, owner, ctx);
+            model.create_auth_secret(&team_scope, harness, name, value, owner, ctx);
         });
     }
-
     fn resolve_secret_owner(&self, ctx: &ViewContext<Self>) -> SecretOwner {
         if self.share_with_team
             && let Some(team) = UserWorkspaces::as_ref(ctx).team_for_view(ctx)

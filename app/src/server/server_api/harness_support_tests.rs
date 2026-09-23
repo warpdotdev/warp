@@ -75,6 +75,28 @@ fn pull_request_artifact_serializes_to_expected_wire_format() {
     );
 }
 
+#[test]
+fn report_shutdown_abnormal_serializes_exit_code() {
+    use super::ReportShutdownRequest;
+
+    let request = ReportShutdownRequest::abnormal(
+        "process_exit".to_string(),
+        "agent exited with status 143".to_string(),
+        Some(143),
+    );
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "error": {
+                "category": "process_exit",
+                "message": "agent exited with status 143",
+                "exit_code": 143
+            }
+        })
+    );
+}
+
 /// An `EXTERNAL_REFERENCE` artifact with only the required fields omits `title`
 /// and `metadata` from the wire format, matching the server's
 /// `ExternalReferenceArtifactData` schema.
@@ -151,7 +173,8 @@ fn report_shutdown_clean_serializes_without_error() {
 fn report_shutdown_abnormal_serializes_with_error() {
     use super::ReportShutdownRequest;
 
-    let request = ReportShutdownRequest::abnormal("oom".to_string(), "out of memory".to_string());
+    let request =
+        ReportShutdownRequest::abnormal("oom".to_string(), "out of memory".to_string(), None);
     let json = serde_json::to_value(&request).unwrap();
     assert_eq!(
         json,
