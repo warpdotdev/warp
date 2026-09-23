@@ -54,6 +54,27 @@ impl LocalRepoMetadataModel {
         }
     }
 }
+#[cfg(feature = "local_fs")]
+async fn await_watcher_updates_for_repo(
+    app: &mut App,
+    model_handle: &ModelHandle<LocalRepoMetadataModel>,
+    repo_path: &StandardizedPath,
+) {
+    loop {
+        let future_id = model_handle.read(&*app, |model, _ctx| {
+            model
+                .watcher_update_tasks
+                .get(repo_path)
+                .and_then(|queue| queue.in_flight.as_ref().map(|handle| handle.future_id()))
+        });
+        let Some(future_id) = future_id else {
+            break;
+        };
+        model_handle
+            .update(app, |_, ctx| ctx.await_spawned_future(future_id))
+            .await;
+    }
+}
 
 #[test]
 #[should_panic(expected = "force-included paths must be repository-relative")]
@@ -377,44 +398,41 @@ fn remove_repository_aborts_and_drops_watcher_update_tasks() {
 
     App::test((), |mut app| async move {
         let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
-        let (_first_release_tx, first_release_rx) = oneshot::channel::<()>();
-        let (_second_release_tx, second_release_rx) = oneshot::channel::<()>();
-        let (first_future_id, second_future_id) = model_handle.update(&mut app, |model, ctx| {
+        let (_release_tx, release_rx) = oneshot::channel::<()>();
+        let future_id = model_handle.update(&mut app, |model, ctx| {
             model.repositories.insert(
                 repo_path.clone(),
                 IndexedRepoState::Indexed(empty_repo_state(&repo_path)),
             );
-
-            let first_handle = ctx.spawn(
+            let handle = ctx.spawn(
                 async move {
-                    let _ = first_release_rx.await;
+                    let _ = release_rx.await;
                 },
                 |_, _, _| {},
             );
-            let first_future_id = first_handle.future_id();
-            model.track_watcher_update_task(repo_path.clone(), first_handle);
-
-            let second_handle = ctx.spawn(
-                async move {
-                    let _ = second_release_rx.await;
+            let future_id = handle.future_id();
+            model.track_watcher_update_task(repo_path.clone(), handle);
+            model.enqueue_watcher_update(
+                repo_path.clone(),
+                RepoUpdate {
+                    added: vec![PathBuf::from("/watcher_update_removed_repo/pending")],
+                    ..Default::default()
                 },
-                |_, _, _| {},
+                ctx,
             );
-            let second_future_id = second_handle.future_id();
-            model.track_watcher_update_task(repo_path.clone(), second_handle);
-
-            (first_future_id, second_future_id)
+            future_id
         });
 
         model_handle.read(&app, |model, _ctx| {
+            let queue = model
+                .watcher_update_tasks
+                .get(&repo_path)
+                .expect("watcher work should be tracked");
             assert_eq!(
-                model
-                    .watcher_update_tasks
-                    .get(&repo_path)
-                    .expect("watcher tasks should be tracked")
-                    .len(),
-                2
+                queue.in_flight.as_ref().map(|handle| handle.future_id()),
+                Some(future_id)
             );
+            assert!(queue.pending.is_some());
         });
 
         model_handle.update(&mut app, |model, ctx| {
@@ -424,12 +442,7 @@ fn remove_repository_aborts_and_drops_watcher_update_tasks() {
         });
 
         model_handle
-            .update(&mut app, |_, ctx| ctx.await_spawned_future(first_future_id))
-            .await;
-        model_handle
-            .update(&mut app, |_, ctx| {
-                ctx.await_spawned_future(second_future_id)
-            })
+            .update(&mut app, |_, ctx| ctx.await_spawned_future(future_id))
             .await;
 
         model_handle.read(&app, |model, _ctx| {
@@ -472,13 +485,12 @@ fn remove_repository_keeps_nested_repo_watcher_update_tasks() {
 
         let nested_handle = model_handle.update(&mut app, |model, _ctx| {
             assert!(model.repository_state(&parent_repo_path).is_none());
-            let tasks = model
+            let queue = model
                 .watcher_update_tasks
                 .remove(&nested_repo_path)
                 .expect("nested repo watcher task should not be aborted by parent teardown");
-            tasks
-                .into_values()
-                .next()
+            queue
+                .in_flight
                 .expect("nested repo watcher task should still be tracked")
         });
 
@@ -491,6 +503,91 @@ fn remove_repository_keeps_nested_repo_watcher_update_tasks() {
     });
 }
 
+#[cfg(feature = "local_fs")]
+#[test]
+fn watcher_updates_are_serialized_and_coalesced_per_repository() {
+    VirtualFS::test(
+        "watcher_updates_serialized_and_coalesced",
+        |dirs, mut vfs| {
+            vfs.mkdir("repo")
+                .with_files(vec![
+                    Stub::FileWithContent("repo/first.txt", "first"),
+                    Stub::FileWithContent("repo/second.txt", "second"),
+                    Stub::FileWithContent("repo/third.txt", "third"),
+                ]);
+            let repo = dirs.tests().join("repo");
+            let repo_path = StandardizedPath::from_local_canonicalized(&repo).unwrap();
+            let first = repo.join("first.txt");
+            let second = repo.join("second.txt");
+            let third = repo.join("third.txt");
+
+            App::test((), |mut app| async move {
+                let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+                model_handle.update(&mut app, |model, _ctx| {
+                    model.repositories.insert(
+                        repo_path.clone(),
+                        IndexedRepoState::Indexed(empty_repo_state(&repo_path)),
+                    );
+                });
+
+                model_handle.update(&mut app, |model, ctx| {
+                    model.handle_watcher_event(
+                        &BulkFilesystemWatcherEvent {
+                            added: std::collections::HashSet::from([first.clone()]),
+                            ..Default::default()
+                        },
+                        ctx,
+                    );
+                    model.handle_watcher_event(
+                        &BulkFilesystemWatcherEvent {
+                            added: std::collections::HashSet::from([second.clone()]),
+                            ..Default::default()
+                        },
+                        ctx,
+                    );
+                    model.handle_watcher_event(
+                        &BulkFilesystemWatcherEvent {
+                            added: std::collections::HashSet::from([second.clone(), third.clone()]),
+                            ..Default::default()
+                        },
+                        ctx,
+                    );
+
+                    let queue = model
+                        .watcher_update_tasks
+                        .get(&repo_path)
+                        .expect("watcher work should be tracked");
+                    assert!(queue.in_flight.is_some());
+                    let pending = queue
+                        .pending
+                        .as_ref()
+                        .expect("later watcher events should be pending");
+                    assert_eq!(pending.added.len(), 2);
+                    assert!(pending.added.contains(&second));
+                    assert!(pending.added.contains(&third));
+                });
+
+                await_watcher_updates_for_repo(&mut app, &model_handle, &repo_path).await;
+
+                model_handle.read(&app, |model, _ctx| {
+                    assert!(!model.watcher_update_tasks.contains_key(&repo_path));
+                    let Some(IndexedRepoState::Indexed(state)) =
+                        model.repository_state(&repo_path)
+                    else {
+                        panic!("repository should remain indexed");
+                    };
+                    for path in [first, second, third] {
+                        let path = StandardizedPath::try_from_local(&path).unwrap();
+                        assert!(
+                            matches!(state.entry.get(&path), Some(FileTreeEntryState::File(_))),
+                            "{path} should be visible after coalesced watcher updates"
+                        );
+                    }
+                });
+            });
+        },
+    );
+}
 #[test]
 fn stale_build_future_id_does_not_finish_newer_task() {
     let repo_path = StandardizedPath::try_new("/repo_with_replaced_build").unwrap();

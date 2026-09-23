@@ -258,9 +258,9 @@ pub struct LocalRepoMetadataModel {
     lazy_loaded_paths: HashMap<StandardizedPath, usize>,
     /// Spawned filesystem tree build tasks keyed by owning repo and target directory.
     build_tasks: HashMap<BuildTaskKey, BuildTask>,
-    /// Spawned watcher update tasks keyed by repository root, then spawned future.
+    /// Watcher update work keyed by repository root.
     #[cfg(feature = "local_fs")]
-    watcher_update_tasks: HashMap<StandardizedPath, HashMap<FutureId, SpawnedFutureHandle>>,
+    watcher_update_tasks: HashMap<StandardizedPath, WatcherUpdateQueue>,
     /// File system watcher for monitoring changes.
     #[cfg(feature = "local_fs")]
     watcher: Option<ModelHandle<BulkFilesystemWatcher>>,
@@ -293,6 +293,30 @@ struct RepoUpdate {
     added: Vec<PathBuf>,
     deleted: Vec<PathBuf>,
     moved: HashMap<PathBuf, PathBuf>,
+}
+
+#[cfg(feature = "local_fs")]
+impl RepoUpdate {
+    fn merge(&mut self, other: Self) {
+        for path in other.added {
+            if !self.added.contains(&path) {
+                self.added.push(path);
+            }
+        }
+        for path in other.deleted {
+            if !self.deleted.contains(&path) {
+                self.deleted.push(path);
+            }
+        }
+        self.moved.extend(other.moved);
+    }
+}
+
+#[cfg(feature = "local_fs")]
+#[derive(Default)]
+struct WatcherUpdateQueue {
+    in_flight: Option<SpawnedFutureHandle>,
+    pending: Option<RepoUpdate>,
 }
 #[cfg(feature = "local_fs")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -622,98 +646,147 @@ impl LocalRepoMetadataModel {
         ctx.emit(RepositoryMetadataEvent::FileTreeUpdated {
             paths: repo_updates.keys().cloned().collect(),
         });
-        // Apply updates to each affected repository asynchronously.
+        for (repo_path, repo_scoped_update) in repo_updates {
+            self.enqueue_watcher_update(repo_path, repo_scoped_update, ctx);
+        }
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn enqueue_watcher_update(
+        &mut self,
+        repo_path: StandardizedPath,
+        update: RepoUpdate,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let queue = self
+            .watcher_update_tasks
+            .entry(repo_path.clone())
+            .or_default();
+        if queue.in_flight.is_some() {
+            queue
+                .pending
+                .get_or_insert_with(RepoUpdate::default)
+                .merge(update);
+            return;
+        }
+
+        self.spawn_watcher_update(repo_path, update, ctx);
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn dispatch_pending_watcher_update(
+        &mut self,
+        repo_path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(queue) = self.watcher_update_tasks.get_mut(repo_path) else {
+            return;
+        };
+        debug_assert!(queue.in_flight.is_none());
+        match queue.pending.take() {
+            Some(update) => self.spawn_watcher_update(repo_path.clone(), update, ctx),
+            None => {
+                self.watcher_update_tasks.remove(repo_path);
+            }
+        }
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn spawn_watcher_update(
+        &mut self,
+        repo_path: StandardizedPath,
+        repo_scoped_update: RepoUpdate,
+        ctx: &mut ModelContext<Self>,
+    ) {
         // Phase 1 (background thread): compute lightweight mutations via filesystem I/O.
         // Phase 2 (main thread callback): apply mutations directly to the tree — no clone needed.
-        for (repo_path, repo_scoped_update) in repo_updates {
-            if let Some(IndexedRepoState::Indexed(state)) = self.repositories.get(&repo_path) {
-                let repo_path_clone = repo_path.clone();
-                let gitignores_clone = state.gitignores.clone();
-                let force_included_paths = self.force_included_paths.clone();
-                let standing_query_definitions = self.standing_query_definitions.clone();
-                let lazy_load = self.lazy_loaded_paths.contains_key(&repo_path);
-                let task_repo_path = repo_path.clone();
-                let task_future_id = Rc::new(Cell::new(None));
-                let task_future_id_for_completion = task_future_id.clone();
-                let update_handle = ctx.spawn(
-                    async move {
-                        let (mutations, standing_results, removed_roots) =
-                            Self::compute_file_tree_mutations(
-                                &repo_scoped_update,
-                                &gitignores_clone,
-                                &force_included_paths,
-                                &standing_query_definitions,
-                                lazy_load,
-                            )
-                            .await;
-                        (
-                            mutations,
-                            standing_results,
-                            removed_roots,
-                            repo_path_clone,
+        if let Some(IndexedRepoState::Indexed(state)) = self.repositories.get(&repo_path) {
+            let repo_path_clone = repo_path.clone();
+            let gitignores_clone = state.gitignores.clone();
+            let force_included_paths = self.force_included_paths.clone();
+            let standing_query_definitions = self.standing_query_definitions.clone();
+            let lazy_load = self.lazy_loaded_paths.contains_key(&repo_path);
+            let task_repo_path = repo_path.clone();
+            let task_future_id = Rc::new(Cell::new(None));
+            let task_future_id_for_completion = task_future_id.clone();
+            let update_handle = ctx.spawn(
+                async move {
+                    let (mutations, standing_results, removed_roots) =
+                        Self::compute_file_tree_mutations(
+                            &repo_scoped_update,
+                            &gitignores_clone,
+                            &force_included_paths,
+                            &standing_query_definitions,
                             lazy_load,
                         )
-                    },
-                    move |model,
-                          (mutations, discovered_results, removed_roots, repo_path, lazy_load),
-                          ctx| {
-                        if model
-                            .finish_watcher_update_task(
-                                &repo_path,
-                                task_future_id_for_completion.get(),
-                            )
-                            .is_none()
-                        {
-                            return;
-                        }
+                        .await;
+                    (
+                        mutations,
+                        standing_results,
+                        removed_roots,
+                        repo_path_clone,
+                        lazy_load,
+                    )
+                },
+                move |model,
+                      (mutations, discovered_results, removed_roots, repo_path, lazy_load),
+                      ctx| {
+                    if model
+                        .finish_watcher_update_task(
+                            &repo_path,
+                            task_future_id_for_completion.get(),
+                        )
+                        .is_none()
+                    {
+                        return;
+                    }
 
-                        if let Some(IndexedRepoState::Indexed(state)) =
-                            model.repositories.get_mut(&repo_path)
-                        {
-                            let mut update = Self::apply_file_tree_mutations(
-                                &mut state.entry,
-                                mutations,
-                                lazy_load,
-                                true,
-                            )
-                            .expect("update tracking was enabled");
-                            let standing_delta = model
-                                .standing_results
-                                .entry(repo_path.clone())
-                                .or_default()
-                                .replace_subtrees(&removed_roots, discovered_results);
-                            model.refresh_symlink_targets(&repo_path, ctx);
-                            update.standing_results_delta = standing_delta.clone();
-                            ctx.emit(RepositoryMetadataEvent::FileTreeEntryUpdated {
+                    if let Some(IndexedRepoState::Indexed(state)) =
+                        model.repositories.get_mut(&repo_path)
+                    {
+                        let mut update = Self::apply_file_tree_mutations(
+                            &mut state.entry,
+                            mutations,
+                            lazy_load,
+                            true,
+                        )
+                        .expect("update tracking was enabled");
+                        let standing_delta = model
+                            .standing_results
+                            .entry(repo_path.clone())
+                            .or_default()
+                            .replace_subtrees(&removed_roots, discovered_results);
+                        model.refresh_symlink_targets(&repo_path, ctx);
+                        update.standing_results_delta = standing_delta.clone();
+                        ctx.emit(RepositoryMetadataEvent::FileTreeEntryUpdated {
+                            path: repo_path.clone(),
+                            update_type: MetadataUpdateType::IncrementalUpdate(update.clone()),
+                        });
+                        if !standing_delta.is_empty() {
+                            ctx.emit(RepositoryMetadataEvent::StandingQueryResultsUpdated {
                                 path: repo_path.clone(),
-                                update_type: MetadataUpdateType::IncrementalUpdate(update.clone()),
+                                delta: standing_delta,
                             });
-                            if !standing_delta.is_empty() {
-                                ctx.emit(RepositoryMetadataEvent::StandingQueryResultsUpdated {
-                                    path: repo_path.clone(),
-                                    delta: standing_delta,
-                                });
-                            }
-                            if model.emit_incremental_updates {
-                                ctx.emit(RepositoryMetadataEvent::IncrementalUpdateReady {
-                                    update,
-                                });
-                            }
                         }
+                        if model.emit_incremental_updates {
+                            ctx.emit(RepositoryMetadataEvent::IncrementalUpdateReady { update });
+                        }
+                    }
 
-                        // Drop per-directory watches for any directory that was
-                        // deleted or moved away (along with their tracked
-                        // descendants). Without this their stale `extra_dirs`
-                        // entries would make `watch_subdir` skip re-watching if a
-                        // directory is later recreated at the same path.
-                        for removed in &removed_roots {
-                            model.unwatch_removed_subtree(&repo_path, removed, ctx);
-                        }
-                    },
-                );
-                task_future_id.set(Some(update_handle.future_id()));
-                self.track_watcher_update_task(task_repo_path, update_handle);
-            }
+                    // Drop per-directory watches for any directory that was
+                    // deleted or moved away (along with their tracked
+                    // descendants). Without this their stale `extra_dirs`
+                    // entries would make `watch_subdir` skip re-watching if a
+                    // directory is later recreated at the same path.
+                    for removed in &removed_roots {
+                        model.unwatch_removed_subtree(&repo_path, removed, ctx);
+                    }
+
+                    model.dispatch_pending_watcher_update(&repo_path, ctx);
+                },
+            );
+            task_future_id.set(Some(update_handle.future_id()));
+            self.track_watcher_update_task(task_repo_path, update_handle);
         }
     }
 
@@ -838,13 +911,9 @@ impl LocalRepoMetadataModel {
         repo_path: StandardizedPath,
         handle: SpawnedFutureHandle,
     ) {
-        let future_id = handle.future_id();
-        if let Some(existing_task) = self
-            .watcher_update_tasks
-            .entry(repo_path)
-            .or_default()
-            .insert(future_id, handle)
-        {
+        let queue = self.watcher_update_tasks.entry(repo_path).or_default();
+        debug_assert!(queue.in_flight.is_none());
+        if let Some(existing_task) = queue.in_flight.replace(handle) {
             existing_task.abort();
         }
     }
@@ -856,21 +925,17 @@ impl LocalRepoMetadataModel {
         future_id: Option<FutureId>,
     ) -> Option<SpawnedFutureHandle> {
         let future_id = future_id?;
-        let (handle, remove_repo_entry) = {
-            let tasks = self.watcher_update_tasks.get_mut(repo_path)?;
-            let handle = tasks.remove(&future_id)?;
-            (handle, tasks.is_empty())
-        };
-        if remove_repo_entry {
-            self.watcher_update_tasks.remove(repo_path);
+        let queue = self.watcher_update_tasks.get_mut(repo_path)?;
+        match &queue.in_flight {
+            Some(handle) if handle.future_id() == future_id => queue.in_flight.take(),
+            _ => None,
         }
-        Some(handle)
     }
 
     #[cfg(feature = "local_fs")]
     fn abort_watcher_update_tasks_for_repo(&mut self, repo_path: &StandardizedPath) {
-        if let Some(tasks) = self.watcher_update_tasks.remove(repo_path) {
-            for handle in tasks.into_values() {
+        if let Some(queue) = self.watcher_update_tasks.remove(repo_path) {
+            if let Some(handle) = queue.in_flight {
                 handle.abort();
             }
         }
