@@ -102,7 +102,8 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::units::IntoPixels;
 use warpui::{
     AppContext, Entity, EntityId, FocusContext, ModelAsRef, ModelHandle, SingletonEntity,
-    TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle, end_trace, start_trace,
+    TypedActionView, View, ViewContext, ViewHandle, ViewUpdateError, WeakViewHandle, end_trace,
+    start_trace,
 };
 
 use self::decorations::InputBackgroundJobOptions;
@@ -5702,13 +5703,19 @@ impl Input {
         let has_input = !self.editor.as_ref(ctx).buffer_text(ctx).is_empty();
         let should_clear_prompt_for_search =
             has_input && FeatureFlag::RestorePromptOnInlineModelSelectorSearch.is_enabled();
-        self.inline_model_selector_view.update(ctx, |view, ctx| {
-            if has_input && !should_clear_prompt_for_search {
-                view.set_filter_results_by_input(false);
-            }
-            view.set_prompt_parked_for_search(should_clear_prompt_for_search);
-            view.set_active_tab(initial_tab, ctx);
-        });
+        match self
+            .inline_model_selector_view
+            .try_update(ctx, |view, ctx| {
+                if has_input && !should_clear_prompt_for_search {
+                    view.set_filter_results_by_input(false);
+                }
+                view.set_prompt_parked_for_search(should_clear_prompt_for_search);
+                view.set_active_tab(initial_tab, ctx);
+            }) {
+            Ok(()) => {}
+            Err(ViewUpdateError::WindowClosed) => return,
+            Err(ViewUpdateError::CircularUpdate) => panic!("Circular view update"),
+        }
         self.suggestions_mode_model.update(ctx, |model, ctx| {
             model.set_mode(InputSuggestionsMode::ModelSelector, ctx);
         });

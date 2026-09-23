@@ -966,13 +966,13 @@ impl From<Suggestions> for api::Suggestions {
 
 // Convert rmcp resource to proto format.
 fn convert_mcp_resource(resource: rmcp::model::Resource) -> api::request::mcp_context::McpResource {
-    let rmcp::model::RawResource {
+    let rmcp::model::Resource {
         uri,
         name,
         description,
         mime_type,
         ..
-    } = resource.raw;
+    } = resource;
     api::request::mcp_context::McpResource {
         uri,
         name,
@@ -994,6 +994,38 @@ fn convert_mcp_tool(tool: rmcp::model::Tool) -> Option<api::request::mcp_context
         name: tool.name.to_string(),
         description: tool.description.map(|d| d.to_string()).unwrap_or_default(),
         input_schema: Some(input_schema),
+    })
+}
+
+/// Builds the `MCPContext.MCPServer.identity` for a server from its `warp_id`
+/// (the `MCPServerConfig.warp_id` it was resolved from).
+///
+/// A uuid is a managed MCP server; anything else is a well-known integration
+/// id owned by warp-server. An id this build does not know yields `None`, so a
+/// newer server-side integration is simply unnamed rather than misattributed;
+/// so does an empty id (local and ad-hoc servers). `display_name` is left
+/// unset: `MCPContext.MCPServer.name` carries it, and warp-server fills it in
+/// when it copies the identity onto tool calls.
+fn mcp_server_identity(warp_id: &str) -> Option<api::McpServerIdentity> {
+    if warp_id.is_empty() {
+        return None;
+    }
+    if uuid::Uuid::parse_str(warp_id).is_ok() {
+        return Some(api::McpServerIdentity {
+            managed_server_uid: warp_id.to_string(),
+            ..Default::default()
+        });
+    }
+    let integration = match warp_id {
+        "linear" => api::McpIntegration::Linear,
+        "slack" => api::McpIntegration::Slack,
+        "jira" => api::McpIntegration::Jira,
+        "linear_agent_session" => api::McpIntegration::LinearAgentSession,
+        _ => return None,
+    };
+    Some(api::McpServerIdentity {
+        integration: integration as i32,
+        ..Default::default()
     })
 }
 
@@ -1024,21 +1056,24 @@ impl From<MCPContext> for api::request::McpContext {
             let servers: Vec<_> = value
                 .servers
                 .into_iter()
-                .map(|server| api::request::mcp_context::McpServer {
-                    id: server.id,
-                    name: server.name,
-                    description: server.description,
-                    identity: None,
-                    resources: server
-                        .resources
-                        .into_iter()
-                        .map(convert_mcp_resource)
-                        .collect(),
-                    tools: server
-                        .tools
-                        .into_iter()
-                        .filter_map(convert_mcp_tool)
-                        .collect(),
+                .map(|server| {
+                    let identity = mcp_server_identity(&server.warp_id);
+                    api::request::mcp_context::McpServer {
+                        id: server.id,
+                        name: server.name,
+                        description: server.description,
+                        identity,
+                        resources: server
+                            .resources
+                            .into_iter()
+                            .map(convert_mcp_resource)
+                            .collect(),
+                        tools: server
+                            .tools
+                            .into_iter()
+                            .filter_map(convert_mcp_tool)
+                            .collect(),
+                    }
                 })
                 .collect();
 

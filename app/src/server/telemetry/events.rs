@@ -2762,6 +2762,13 @@ pub enum TelemetryEvent {
         server_conversation_id: Option<String>,
         ambient_agent_task_id: Option<AmbientAgentTaskId>,
     },
+    /// Emitted when computer use is enabled for a cloud agent run but the host cannot provide it
+    /// (e.g. no display), so the run's requests omit the computer-use tools. At most once per run.
+    ComputerUseUnavailable {
+        ambient_agent_task_id: AmbientAgentTaskId,
+        /// Whether the client is running inside a sandbox (a Warp-hosted cloud agent).
+        sandboxed: bool,
+    },
     /// Emitted when a warp://linear deeplink is opened.
     LinearIssueLinkOpened,
     /// Emitted when the remote server binary check completes.
@@ -4658,6 +4665,14 @@ impl TelemetryEvent {
                 "server_conversation_id": server_conversation_id,
                 "ambient_agent_task_id": ambient_agent_task_id.map(|id| id.to_string()),
             })),
+            TelemetryEvent::ComputerUseUnavailable {
+                ambient_agent_task_id,
+                sandboxed,
+            } => Some(json!({
+                "ambient_agent_task_id": ambient_agent_task_id.to_string(),
+                "sandboxed": sandboxed,
+                "os": std::env::consts::OS,
+            })),
             TelemetryEvent::LoginButtonClicked { source }
             | TelemetryEvent::LoginLaterButtonClicked { source }
             | TelemetryEvent::LoginLaterConfirmationButtonClicked { source }
@@ -5124,6 +5139,7 @@ impl TelemetryEvent {
             | TelemetryEvent::CloudAgentCapacityModalUpgradeClicked
             | TelemetryEvent::ComputerUseApproved { .. }
             | TelemetryEvent::ComputerUseCancelled { .. }
+            | TelemetryEvent::ComputerUseUnavailable { .. }
             | TelemetryEvent::RemoteServerBinaryCheck { .. }
             | TelemetryEvent::RemoteServerInstallation { .. }
             | TelemetryEvent::RemoteServerInitialization { .. }
@@ -5667,7 +5683,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             | Self::CloudAgentCapacityModalUpgradeClicked => {
                 EnablementState::Flag(FeatureFlag::CloudMode)
             }
-            Self::ComputerUseApproved | Self::ComputerUseCancelled => {
+            Self::ComputerUseApproved
+            | Self::ComputerUseCancelled
+            | Self::ComputerUseUnavailable => {
                 EnablementState::Flag(FeatureFlag::AgentModeComputerUse)
             }
             Self::RemoteServerBinaryCheck
@@ -6219,6 +6237,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::ComputerUseApproved => "ComputerUse.Approved",
             Self::ComputerUseCancelled => "ComputerUse.Cancelled",
+            Self::ComputerUseUnavailable => "ComputerUse.Unavailable",
         }
     }
 
@@ -7047,6 +7066,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 "A RequestComputerUse action was approved (manually or auto-executed)"
             }
             Self::ComputerUseCancelled => "A RequestComputerUse action was cancelled/rejected",
+            Self::ComputerUseUnavailable => {
+                "Computer use was enabled for a cloud agent run but unavailable on the host"
+            }
             Self::RemoteServerBinaryCheck => {
                 "Remote server binary check completed (found, not found, or error)"
             }

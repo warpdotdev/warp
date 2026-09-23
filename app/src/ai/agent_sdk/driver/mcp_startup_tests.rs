@@ -464,6 +464,31 @@ fn well_known_spec_is_skipped_when_flag_disabled() {
 }
 
 #[test]
+fn managed_config_installations_carry_the_spec_token_as_warp_id() {
+    // The spec token is the run config's `warp_id` (a well-known integration id
+    // or a managed server uid). It is hashed into the opaque installation id and
+    // must also survive as-is, so the request's MCPContext can name the server.
+    let well_known = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"mcpServers":{"linear":{"url":"https://app.warp.dev/mcp/integration-proxy/linear"}}}"#,
+        None,
+        "linear",
+    )
+    .unwrap();
+    assert_eq!(well_known.len(), 1);
+    assert_eq!(well_known[0].warp_id(), Some("linear"));
+
+    let managed_uid = "db4d553f-8172-4cad-8f48-bc53ba6f736a";
+    let managed = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"mcpServers":{"GitHub MCP":{"command":"npx"}}}"#,
+        None,
+        managed_uid,
+    )
+    .unwrap();
+    assert_eq!(managed.len(), 1);
+    assert_eq!(managed[0].warp_id(), Some(managed_uid));
+}
+
+#[test]
 fn managed_command_config_env_placeholder_uses_local_secret() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"API_TOKEN":"{{API_TOKEN}}"}}}}"#,
