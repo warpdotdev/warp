@@ -620,7 +620,6 @@ default = [
     "oz_platform_skills",
     "oz_identity_federation",
     "sync_ambient_plans",
-    "conversation_artifacts",
     "agent_view",
     "agent_view_block_context",
     "agent_view_conversation_list_view",
@@ -915,7 +914,6 @@ send_telemetry_to_file = []
 multi_profile = []
 pr_comments_v2 = []
 pr_comments_skill = []
-conversation_artifacts = []
 conversations_as_context = []
 conversation_api = []
 sync_ambient_plans = []
