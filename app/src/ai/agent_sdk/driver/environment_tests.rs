@@ -14,10 +14,10 @@ use super::{
     build_parallel_clone_command, build_remove_repository_origins_command,
     build_resolved_head_command, checkout_command_for, checkout_result, environment_snapshot,
     is_valid_git_object_id, merge_repos_deduped, parse_resolved_head_sha, parse_resolved_head_shas,
-    prepare_clone_failure_output, read_failed_repo_names, repository_clone_requests,
-    single_repo_name, validate_repository_preparation_overrides,
+    read_failed_repo_names, repository_clone_requests, single_repo_name,
+    validate_repository_preparation_overrides,
 };
-use crate::ai::agent_sdk::driver::failure_output::FAILURE_OUTPUT_MAX_BYTES;
+use crate::ai::agent_sdk::driver::failure_output::prepare_failure_output;
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::terminal::shell::ShellType;
 
@@ -25,7 +25,7 @@ use crate::terminal::shell::ShellType;
 fn clone_error_omits_empty_output() {
     let error = PrepareEnvironmentError::CloneRepo {
         repo_name: "warpdotdev/warp".to_string(),
-        output: Some(prepare_clone_failure_output(" \n ")),
+        output: Some(String::new()),
     };
 
     assert_eq!(error.to_string(), "Failed to clone warpdotdev/warp");
@@ -33,10 +33,9 @@ fn clone_error_omits_empty_output() {
 
 #[test]
 fn clone_error_includes_short_output() {
-    let output = prepare_clone_failure_output(" fatal: repository not found \n");
     let error = PrepareEnvironmentError::CloneRepo {
         repo_name: "warpdotdev/warp".to_string(),
-        output: Some(output),
+        output: Some("fatal: repository not found".to_string()),
     };
 
     assert_eq!(
@@ -46,27 +45,11 @@ fn clone_error_includes_short_output() {
 }
 
 #[test]
-fn clone_failure_output_redacts_secrets() {
-    let secret = "AKIAIOSFODNN7EXAMPLE";
+fn clone_failure_output_uses_clone_truncation_marker() {
+    let output = format!("START{}END", "x".repeat(4_096));
 
-    let output = prepare_clone_failure_output(&format!("fatal: credential {secret} rejected"));
+    let truncated = prepare_failure_output(&output, CLONE_FAILURE_OUTPUT_TRUNCATION_MARKER);
 
-    assert!(!output.contains(secret));
-    assert_eq!(
-        output,
-        format!("fatal: credential {} rejected", "*".repeat(secret.len()))
-    );
-}
-
-#[test]
-fn clone_failure_output_truncation_retains_start_and_end() {
-    let output = format!("START{}END", "🙂".repeat(FAILURE_OUTPUT_MAX_BYTES));
-
-    let truncated = prepare_clone_failure_output(&output);
-
-    assert!(truncated.len() <= FAILURE_OUTPUT_MAX_BYTES);
-    assert!(truncated.starts_with("START"));
-    assert!(truncated.ends_with("END"));
     assert!(truncated.contains(CLONE_FAILURE_OUTPUT_TRUNCATION_MARKER));
 }
 

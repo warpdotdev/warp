@@ -58,13 +58,7 @@ use gemini::GeminiHarness;
 use save_coordinator::{SaveCoordinator, final_save_budget};
 pub(crate) use telemetry::ThirdPartyHarnessTelemetryEvent;
 
-#[cfg(test)]
-const HARNESS_FAILURE_OUTPUT_MAX_BYTES: usize = super::failure_output::FAILURE_OUTPUT_MAX_BYTES;
 const HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER: &str = "\n… harness output truncated …\n";
-#[cfg(test)]
-fn truncate_harness_failure_output(output: &str) -> String {
-    super::failure_output::truncate_failure_output(output, HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER)
-}
 
 pub(super) fn prepare_harness_failure_output(output: &str) -> String {
     super::failure_output::prepare_failure_output(output, HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER)

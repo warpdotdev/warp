@@ -1,8 +1,8 @@
 use crate::server::telemetry::secret_redaction::redact_secrets_in_string;
 
-pub(super) const FAILURE_OUTPUT_MAX_BYTES: usize = 4 * 1024;
+const FAILURE_OUTPUT_MAX_BYTES: usize = 4 * 1024;
 
-pub(super) fn truncate_failure_output(output: &str, truncation_marker: &str) -> String {
+fn truncate_failure_output(output: &str, truncation_marker: &str) -> String {
     if output.len() <= FAILURE_OUTPUT_MAX_BYTES {
         return output.to_owned();
     }
@@ -35,3 +35,7 @@ pub(super) fn prepare_failure_output(output: &str, truncation_marker: &str) -> S
     redact_secrets_in_string(&mut output);
     truncate_failure_output(&output, truncation_marker)
 }
+
+#[cfg(test)]
+#[path = "failure_output_tests.rs"]
+mod tests;

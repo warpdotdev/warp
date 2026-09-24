@@ -78,15 +78,12 @@ pub enum PrepareEnvironmentError {
     #[error("Terminal driver error while preparing environment: {source}")]
     TerminalDriver { source: AgentDriverError },
 }
+
 fn clone_failure_output_suffix(output: Option<&str>) -> String {
     output
         .filter(|output| !output.is_empty())
         .map(|output| format!(": {output}"))
         .unwrap_or_default()
-}
-
-fn prepare_clone_failure_output(output: &str) -> String {
-    failure_output::prepare_failure_output(output, CLONE_FAILURE_OUTPUT_TRUNCATION_MARKER)
 }
 
 fn parse_resolved_head_sha(line: &str) -> Option<String> {
@@ -1378,7 +1375,9 @@ async fn fetch_clone_failure_output(
         .await
         .ok()
         .flatten()
-        .map(|output| prepare_clone_failure_output(&output))
+        .map(|output| {
+            failure_output::prepare_failure_output(&output, CLONE_FAILURE_OUTPUT_TRUNCATION_MARKER)
+        })
         .filter(|output| !output.is_empty())
 }
 
