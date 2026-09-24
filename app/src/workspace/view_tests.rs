@@ -2490,7 +2490,7 @@ fn test_closing_tab_context_menu_restores_active_tab_focus() {
         });
 
         assert_ne!(app.focused_view_id(window_id), Some(menu_id));
-        workspace.read(&app, |workspace, ctx| {
+        workspace.update(&mut app, |workspace, ctx| {
             assert!(
                 workspace
                     .active_tab_pane_group()
