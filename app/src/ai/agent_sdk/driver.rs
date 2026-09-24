@@ -2125,24 +2125,8 @@ impl AgentDriver {
                     )
                     .await?;
 
-                // For the Oz harness only: set up MCP servers, model overrides, and profile information.
+                // For the Oz harness only: set up model overrides and profile information.
                 if matches!(&task.harness, HarnessKind::Oz) {
-                    let mcp_specs = task.mcp_specs.clone();
-                    let managed_mcp_client = foreground
-                        .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_managed_mcp_client())
-                        .await?;
-
-                    let mcp_startup_result = setup_events
-                        .record_result(
-                            SetupStep::McpServerStartup,
-                            Self::start_task_mcp_servers(
-                                &mcp_specs,
-                                managed_mcp_client,
-                                &foreground,
-                            ),
-                        )
-                        .await;
-                    Self::handle_mcp_startup_result(mcp_startup_result, &foreground).await?;
                     let profile = task.profile.clone();
                     setup_events
                         .record_result(SetupStep::AgentProfileConfiguration, async {
@@ -2158,17 +2142,6 @@ impl AgentDriver {
                             .spawn(move |me, ctx| me.set_base_model_override(model_id, ctx))
                             .await??;
                     }
-
-                    let profile_mcp_startup_result = setup_events
-                        .record_result(SetupStep::ProfileMcpServerStartup, async {
-                            foreground
-                                .spawn(|me, ctx| me.start_profile_mcp_servers(ctx))
-                                .await?
-                                .await
-                        })
-                        .await;
-                    Self::handle_mcp_startup_result(profile_mcp_startup_result, &foreground)
-                        .await?;
                 }
 
                 // For all harnesses: wait for the shared session and prepare the environment.
@@ -2319,6 +2292,33 @@ impl AgentDriver {
                     }
                 } else {
                     environment_snapshot_reporter.report(EnvironmentSnapshot::empty());
+                }
+                if matches!(&task.harness, HarnessKind::Oz) {
+                    let managed_mcp_client = foreground
+                        .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_managed_mcp_client())
+                        .await?;
+                    let mcp_startup_result = setup_events
+                        .record_result(
+                            SetupStep::McpServerStartup,
+                            Self::start_task_mcp_servers(
+                                &task.mcp_specs,
+                                managed_mcp_client,
+                                &foreground,
+                            ),
+                        )
+                        .await;
+                    Self::handle_mcp_startup_result(mcp_startup_result, &foreground).await?;
+
+                    let profile_mcp_startup_result = setup_events
+                        .record_result(SetupStep::ProfileMcpServerStartup, async {
+                            foreground
+                                .spawn(|me, ctx| me.start_profile_mcp_servers(ctx))
+                                .await?
+                                .await
+                        })
+                        .await;
+                    Self::handle_mcp_startup_result(profile_mcp_startup_result, &foreground)
+                        .await?;
                 }
 
                 // Skill loading is Oz-only; third-party harnesses have their own skill systems.
