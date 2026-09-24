@@ -2465,6 +2465,41 @@ fn test_save_current_tab_as_new_config_ignores_stale_tab_index() {
 }
 
 #[test]
+fn test_closing_tab_context_menu_restores_active_tab_focus() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let (window_id, menu_id) = workspace.update(&mut app, |workspace, ctx| {
+            workspace.show_tab_right_click_menu =
+                Some((0, TabContextMenuAnchor::Pointer(Vector2F::zero())));
+            ctx.focus(&workspace.tab_right_click_menu);
+            assert_eq!(
+                ctx.focused_view_id(ctx.window_id()),
+                Some(workspace.tab_right_click_menu.id())
+            );
+
+            workspace.handle_tab_right_click_menu_event(
+                &MenuEvent::Close {
+                    via_select_item: true,
+                },
+                ctx,
+            );
+
+            (ctx.window_id(), workspace.tab_right_click_menu.id())
+        });
+
+        assert_ne!(app.focused_view_id(window_id), Some(menu_id));
+        workspace.read(&app, |workspace, ctx| {
+            assert!(
+                workspace
+                    .active_tab_pane_group()
+                    .is_self_or_child_focused(ctx)
+            );
+        });
+    });
+}
+#[test]
 fn test_close_tabs_right_confirmation_dialog() {
     let _guard = FeatureFlag::CreatingSharedSessions.override_enabled(true);
     App::test((), |mut app| async move {
