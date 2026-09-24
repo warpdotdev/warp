@@ -2474,19 +2474,17 @@ fn test_closing_tab_context_menu_restores_active_tab_focus() {
             workspace.show_tab_right_click_menu =
                 Some((0, TabContextMenuAnchor::Pointer(Vector2F::zero())));
             ctx.focus(&workspace.tab_right_click_menu);
-            assert_eq!(
-                ctx.focused_view_id(ctx.window_id()),
-                Some(workspace.tab_right_click_menu.id())
-            );
+            (ctx.window_id(), workspace.tab_right_click_menu.id())
+        });
+        assert_eq!(app.focused_view_id(window_id), Some(menu_id));
 
+        workspace.update(&mut app, |workspace, ctx| {
             workspace.handle_tab_right_click_menu_event(
                 &MenuEvent::Close {
                     via_select_item: true,
                 },
                 ctx,
             );
-
-            (ctx.window_id(), workspace.tab_right_click_menu.id())
         });
 
         assert_ne!(app.focused_view_id(window_id), Some(menu_id));
