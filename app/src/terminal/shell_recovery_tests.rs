@@ -136,3 +136,10 @@ fn shell_recovery_output_reports_unknown_status_without_success_code() {
     assert!(output.ends_with("partial"));
     assert!(!output.contains("exit code 0"));
 }
+
+#[test]
+fn shell_recovery_output_reports_observed_zero_explicitly() {
+    let output = recovered_command_output("", ObservedExitStatus::Code(0), "/home/agent", false);
+
+    assert!(output.contains("Observed status: exit code 0"));
+}

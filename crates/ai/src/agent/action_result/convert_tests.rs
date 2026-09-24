@@ -1,3 +1,4 @@
+use prost::Message as _;
 use warp_terminal::event::ObservedExitStatus;
 
 use super::*;
@@ -65,38 +66,106 @@ fn ask_user_question_skipped_by_auto_approve_converts_to_skipped_answers() {
     ));
 }
 
+fn converted_recovered_command(
+    status: ObservedExitStatus,
+    output: &str,
+) -> api::ShellCommandFinished {
+    let converted = api::request::input::tool_call_result::Result::try_from(
+        RequestCommandOutputResult::ShellRecovered {
+            block_id: BlockId::new(),
+            command: "exit".to_owned(),
+            output: output.to_owned(),
+            status,
+            restored_working_directory: "/home/agent".to_owned(),
+            used_fallback_directory: false,
+            start_ts: None,
+            completed_ts: None,
+        },
+    )
+    .expect("recovered result should convert");
+    let api::request::input::tool_call_result::Result::RunShellCommand(result) = converted else {
+        panic!("expected run shell command result");
+    };
+    let Some(api::run_shell_command_result::Result::CommandFinished(result)) = result.result else {
+        panic!("expected completed shell command");
+    };
+    result
+}
+fn converted_read_recovered_command(
+    status: ObservedExitStatus,
+    output: &str,
+) -> api::ShellCommandFinished {
+    let converted = api::request::input::tool_call_result::Result::try_from(
+        ReadShellCommandOutputResult::ShellRecovered {
+            block_id: BlockId::new(),
+            command: "exit".to_owned(),
+            output: output.to_owned(),
+            status,
+            start_ts: None,
+            completed_ts: None,
+        },
+    )
+    .expect("recovered read result should convert");
+    let api::request::input::tool_call_result::Result::ReadShellCommandOutput(result) = converted
+    else {
+        panic!("expected read shell command result");
+    };
+    let Some(api::read_shell_command_output_result::Result::CommandFinished(result)) =
+        result.result
+    else {
+        panic!("expected completed shell command");
+    };
+    result
+}
+
 #[test]
-fn recovered_shell_status_only_populates_observed_exit_codes() {
-    let cases = [
-        (ObservedExitStatus::Code(42), 42),
-        (ObservedExitStatus::Code(0), 0),
-        (ObservedExitStatus::Signal(9), 0),
-        (ObservedExitStatus::Unavailable, 0),
-    ];
-
-    for (status, expected_exit_code) in cases {
-        let converted = api::request::input::tool_call_result::Result::try_from(
-            RequestCommandOutputResult::ShellRecovered {
-                block_id: BlockId::new(),
-                command: "exit".to_owned(),
-                output: "recovered".to_owned(),
-                status,
-                restored_working_directory: "/home/agent".to_owned(),
-                used_fallback_directory: false,
-                start_ts: None,
-                completed_ts: None,
-            },
-        )
-        .expect("recovered result should convert");
-        let api::request::input::tool_call_result::Result::RunShellCommand(result) = converted
-        else {
-            panic!("expected run shell command result");
-        };
-        let Some(api::run_shell_command_result::Result::CommandFinished(result)) = result.result
-        else {
-            panic!("expected completed shell command");
-        };
-
-        assert_eq!(result.exit_code, expected_exit_code);
+fn recovered_signal_and_unavailable_omit_wire_exit_code() {
+    for status in [
+        ObservedExitStatus::Signal(9),
+        ObservedExitStatus::Unavailable,
+    ] {
+        for result in [
+            converted_recovered_command(status, ""),
+            converted_read_recovered_command(status, ""),
+        ] {
+            assert!(!result.encode_to_vec().contains(&0x10));
+        }
     }
+}
+
+#[test]
+fn recovered_observed_zero_is_explicit_in_stable_output() {
+    let result =
+        converted_recovered_command(ObservedExitStatus::Code(0), "Observed status: exit code 0");
+
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.output, "Observed status: exit code 0");
+    assert!(!result.encode_to_vec().contains(&0x10));
+    let read_result = converted_read_recovered_command(
+        ObservedExitStatus::Code(0),
+        "Observed status: exit code 0",
+    );
+    assert_eq!(read_result.output, "Observed status: exit code 0");
+    assert!(!read_result.encode_to_vec().contains(&0x10));
+}
+
+#[test]
+fn recovered_nonzero_exit_code_is_serialized() {
+    let result = converted_recovered_command(ObservedExitStatus::Code(42), "");
+
+    assert_eq!(result.exit_code, 42);
+    assert!(
+        result
+            .encode_to_vec()
+            .windows(2)
+            .any(|bytes| bytes == [0x10, 42])
+    );
+    let read_result = converted_read_recovered_command(ObservedExitStatus::Code(42), "");
+    assert_eq!(read_result.exit_code, 42);
+    assert!(
+        read_result
+            .encode_to_vec()
+            .windows(2)
+            .any(|bytes| bytes == [0x10, 42])
+    );
 }

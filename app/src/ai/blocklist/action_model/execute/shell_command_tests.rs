@@ -6,10 +6,15 @@ use warp_terminal::event::ObservedExitStatus;
 use warpui::{App, EntityId, ModelHandle};
 
 use super::{
-    ActionResult, BlockSelector, BlockWaitEvent, ShellCommandExecutor, ShellRecoveryResult,
-    action_result_for_read_shell_command_output,
+    ActionResult, AnyActionExecution, BlockSelector, BlockWaitEvent, ExecuteActionInput,
+    ShellCommandExecutor, ShellRecoveryResult, action_result_for_read_shell_command_output,
 };
-use crate::ai::agent::{AIAgentActionId, AIAgentActionResultType, ReadShellCommandOutputResult};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType,
+    ReadShellCommandOutputResult, ShellCommandDelay,
+};
 use crate::terminal::event::{BlockMetadataReceivedEvent, BlockWorkingDirectoryUpdatedEvent};
 use crate::terminal::model::block::{BlockId, BlockMetadata};
 use crate::terminal::model::session::Sessions;
@@ -34,6 +39,77 @@ fn shell_command_executor(app: &mut App) -> ModelHandle<ShellCommandExecutor> {
             ctx,
         )
     })
+}
+
+fn read_shell_command_output(
+    executor: &ModelHandle<ShellCommandExecutor>,
+    block_id: &BlockId,
+    app: &mut App,
+) -> AIAgentActionResultType {
+    let action = AIAgentAction {
+        id: AIAgentActionId::from(format!("read-{block_id}")),
+        task_id: TaskId::new("read-recovered-shell".to_owned()),
+        action: AIAgentActionType::ReadShellCommandOutput {
+            block_id: block_id.clone(),
+            delay: Some(ShellCommandDelay::OnCompletion),
+        },
+        requires_result: true,
+    };
+    let execution: AnyActionExecution = executor.update(app, |executor, ctx| {
+        executor
+            .execute(
+                ExecuteActionInput {
+                    action: &action,
+                    conversation_id: AIConversationId::new(),
+                },
+                ctx,
+            )
+            .into()
+    });
+    let AnyActionExecution::Sync(result) = execution else {
+        panic!("expected synchronous recovered shell read");
+    };
+    result
+}
+#[test]
+fn shell_recovery_persists_result_until_later_read_and_consumes_it_once() {
+    App::test((), |mut app| async move {
+        let executor = shell_command_executor(&mut app);
+        let action_id: AIAgentActionId = "recover-after-snapshot".to_owned().into();
+        let block_id = BlockId::new();
+
+        assert!(executor.update(&mut app, |executor, _| {
+            executor.begin_shell_recovery(&action_id, &block_id)
+        }));
+        executor.update(&mut app, |executor, _| {
+            executor.finish_shell_recovery(ShellRecoveryResult {
+                block_id: block_id.clone(),
+                output: "replacement ready".to_owned(),
+                status: ObservedExitStatus::Unavailable,
+                restored_working_directory: "/home/agent".to_owned(),
+                used_fallback_directory: false,
+                start_ts: None,
+                completed_ts: None,
+            });
+        });
+
+        let first = read_shell_command_output(&executor, &block_id, &mut app);
+        assert!(matches!(
+            first,
+            AIAgentActionResultType::ReadShellCommandOutput(
+                ReadShellCommandOutputResult::ShellRecovered {
+                    status: ObservedExitStatus::Unavailable,
+                    ..
+                }
+            )
+        ));
+        assert!(matches!(
+            read_shell_command_output(&executor, &block_id, &mut app),
+            AIAgentActionResultType::ReadShellCommandOutput(ReadShellCommandOutputResult::Error(
+                crate::ai::agent::ShellCommandError::BlockNotFound
+            ))
+        ));
+    });
 }
 
 /// Locks in the contract that `ShellCommandExecutor`'s requested-command finish

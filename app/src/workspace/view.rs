@@ -417,7 +417,9 @@ use crate::terminal::session_settings::{
     SessionSettingsChangedEvent, WorkingDirectoryMode,
 };
 use crate::terminal::settings::{SpacingMode, TerminalSettings};
-use crate::terminal::shared_session::SharedSessionActionSource;
+#[cfg(feature = "integration_tests")]
+use crate::terminal::shared_session::SharedSessionSource;
+use crate::terminal::shared_session::{IsSharedSessionCreator, SharedSessionActionSource};
 use crate::terminal::shell::ShellType;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::terminal::view::ambient_agent::AmbientAgentViewModel as HandoffAmbientAgentViewModel;
@@ -12778,6 +12780,29 @@ impl Workspace {
     }
 
     fn add_docker_sandbox_tab(&mut self, ctx: &mut ViewContext<Self>) {
+        self.add_docker_sandbox_tab_with_shared_session_creator(IsSharedSessionCreator::No, ctx);
+    }
+
+    #[cfg(feature = "integration_tests")]
+    pub fn add_shared_ambient_docker_sandbox_tab_for_integration_test(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.add_docker_sandbox_tab_with_shared_session_creator(
+            IsSharedSessionCreator::Yes {
+                source: SharedSessionSource::ambient_agent(Some(
+                    "123e4567-e89b-12d3-a456-426614174000".to_owned(),
+                )),
+            },
+            ctx,
+        );
+    }
+
+    fn add_docker_sandbox_tab_with_shared_session_creator(
+        &mut self,
+        is_shared_session_creator: IsSharedSessionCreator,
+        ctx: &mut ViewContext<Self>,
+    ) {
         if !FeatureFlag::LocalDockerSandbox.is_enabled() {
             log::warn!("Local docker sandbox feature flag is disabled");
             return;
@@ -12803,21 +12828,41 @@ impl Workspace {
                     sbx_path,
                     DEFAULT_DOCKER_SANDBOX_BASE_IMAGE.map(str::to_owned),
                 );
-                me.add_new_session_tab_internal_with_default_session_mode_behavior(
+                let startup_directory = me.get_new_tab_startup_directory(
                     NewSessionSource::Tab,
                     Some(window_id),
-                    Some(shell),
-                    None,
-                    true, /* hide_homepage */
-                    DefaultSessionModeBehavior::Ignore,
+                    Some(&shell),
                     ctx,
                 );
+                me.add_tab_with_pane_layout(
+                    PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                        shell: Some(shell),
+                        initial_directory: startup_directory,
+                        hide_homepage: true,
+                        is_shared_session_creator,
+                        ..Default::default()
+                    })),
+                    Arc::new(HashMap::new()),
+                    None,
+                    ctx,
+                );
+                if let Some(terminal_view) = me
+                    .active_tab_pane_group()
+                    .as_ref(ctx)
+                    .active_session_view(ctx)
+                {
+                    TerminalView::initialize_docker_sandbox_environment(&terminal_view, ctx);
+                } else {
+                    log::warn!(
+                        "Could not find docker sandbox terminal view after creating new tab"
+                    );
+                }
                 ctx.notify();
             });
         }
         #[cfg(not(feature = "local_tty"))]
         {
-            let _ = ctx;
+            let _ = (is_shared_session_creator, ctx);
             log::warn!("Docker sandbox requires the `local_tty` feature; ignoring request");
         }
     }

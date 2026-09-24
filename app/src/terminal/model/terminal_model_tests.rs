@@ -2037,6 +2037,31 @@ fn shell_recovery_finishes_interrupted_block_and_starts_fresh_input() {
     assert_ne!(terminal.active_block_id(), &interrupted_block_id);
     assert!(!terminal.is_read_only());
 }
+
+#[test]
+fn shell_recovery_without_exit_code_does_not_fabricate_success() {
+    let mut terminal = TerminalModel::mock(None, None);
+    terminal.simulate_long_running_block("kill $$", "");
+    let interrupted_block_id = terminal.active_block_id().clone();
+    let replacement_session_id = 456.into();
+
+    terminal.prepare_shell_recovery(ObservedExitStatus::Signal(9));
+    terminal.register_session_id(replacement_session_id);
+    terminal.init_shell(InitShellValue {
+        session_id: replacement_session_id,
+        shell: "bash".to_owned(),
+        hostname: "cloud-agent".to_owned(),
+        ..Default::default()
+    });
+
+    let interrupted_block = terminal
+        .block_list()
+        .block_with_id(&interrupted_block_id)
+        .expect("interrupted block should remain addressable");
+    assert!(!interrupted_block.finished());
+    assert!(interrupted_block.is_hidden());
+    assert_ne!(terminal.active_block_id(), &interrupted_block_id);
+}
 #[test]
 fn test_alt_screen_selection_tracks_scroll() {
     let mut terminal: TerminalModel = TerminalModel::mock(None, None);

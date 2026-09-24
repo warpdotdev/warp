@@ -474,7 +474,7 @@ pub struct TerminalModel {
 
     /// Whether or not the underlying shell process has terminated.
     handled_exit: bool,
-    pending_shell_recovery_exit_code: Option<i32>,
+    pending_shell_recovery_status: Option<ObservedExitStatus>,
 
     /// The shell type of the login shell for this session.
     shell_launch_state: ShellLaunchState,
@@ -1110,7 +1110,7 @@ impl TerminalModel {
             is_receiving_kitty_image_data: IsReceivingKittyActionData::No,
             did_receive_rc_file_dcs: None,
             handled_exit: false,
-            pending_shell_recovery_exit_code: None,
+            pending_shell_recovery_status: None,
             env_var_collection_name: None,
             shell_launch_state: shell_state,
             obfuscate_secrets,
@@ -1505,7 +1505,7 @@ impl TerminalModel {
 
     pub fn exit(&mut self, reason: ExitReason) {
         if let ExitReason::ShellProcessExited { .. } = reason {
-            if self.pending_shell_recovery_exit_code.is_some() || self.handled_exit {
+            if self.pending_shell_recovery_status.is_some() || self.handled_exit {
                 return;
             }
             self.shell_process_info = None;
@@ -1516,7 +1516,7 @@ impl TerminalModel {
     }
 
     pub fn prepare_shell_recovery(&mut self, status: ObservedExitStatus) {
-        self.pending_shell_recovery_exit_code = Some(status.code().unwrap_or(1));
+        self.pending_shell_recovery_status = Some(status);
         self.exit_alt_screen(true);
     }
 
@@ -1530,7 +1530,7 @@ impl TerminalModel {
         let transition = self.plan_lifecycle_transition(LifecycleInput::Exit, None, None, None);
 
         self.handled_exit = true;
-        self.pending_shell_recovery_exit_code = None;
+        self.pending_shell_recovery_status = None;
         // The pty is going away, so its descriptor must not be read again: the
         // OS is free to hand the same number to an unrelated file.
         self.shell_process_info = None;
@@ -3207,8 +3207,8 @@ impl ansi::Handler for TerminalModel {
             self.pending_session_info = Some(pending_session_info.clone());
 
             if self.block_list().is_bootstrapped() {
-                let interrupted_exit_code = self.pending_shell_recovery_exit_code.take();
-                self.block_list_mut().reinit_shell(interrupted_exit_code);
+                let interrupted_status = self.pending_shell_recovery_status.take();
+                self.block_list_mut().reinit_shell(interrupted_status);
             }
 
             self.emit_handler_event(HandlerEvent::InitShell {

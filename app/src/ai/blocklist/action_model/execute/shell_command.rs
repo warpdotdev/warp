@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -56,6 +56,9 @@ pub struct ShellCommandExecutor {
     /// Shared with the snapshot futures, which have no `ModelContext`.
     activity_monitor: Arc<LrcActivityMonitor>,
     shell_recovery_waiter: Option<BlockSelector>,
+    pending_shell_recovery_block_id: Option<BlockId>,
+    completed_shell_recoveries: HashMap<BlockId, ShellRecoveryResult>,
+    recovered_shell_blocks: HashSet<BlockId>,
 }
 
 impl ShellCommandExecutor {
@@ -83,6 +86,9 @@ impl ShellCommandExecutor {
             control_handback_sender: None,
             activity_monitor: Arc::new(LrcActivityMonitor::new()),
             shell_recovery_waiter: None,
+            pending_shell_recovery_block_id: None,
+            completed_shell_recoveries: HashMap::new(),
+            recovered_shell_blocks: HashSet::new(),
         }
     }
 
@@ -267,6 +273,12 @@ impl ShellCommandExecutor {
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
     ) -> impl Into<AnyActionExecution> + use<> {
+        let durable_recovery = match &input.action.action {
+            AIAgentActionType::ReadShellCommandOutput { block_id, .. } => {
+                self.take_completed_shell_recovery(block_id)
+            }
+            _ => None,
+        };
         let model = self.terminal_model.lock();
 
         // Determine the action we want to take based on the input.
@@ -435,6 +447,24 @@ impl ShellCommandExecutor {
                 )
             }
             AIAgentActionType::ReadShellCommandOutput { block_id, delay } => {
+                if let Some(result) = durable_recovery {
+                    let command = model
+                        .block_list()
+                        .block_with_id(block_id)
+                        .map(|block| block.command_with_secrets_unobfuscated(false))
+                        .unwrap_or_default();
+                    return ActionExecution::Sync(action_result_for_read_shell_command_output(
+                        command,
+                        ActionResult::ShellRecovered(result),
+                    ));
+                }
+                if self.recovered_shell_blocks.contains(block_id)
+                    && self.pending_shell_recovery_block_id.as_ref() != Some(block_id)
+                {
+                    return ActionExecution::Sync(AIAgentActionResultType::ReadShellCommandOutput(
+                        ReadShellCommandOutputResult::Error(ShellCommandError::BlockNotFound),
+                    ));
+                }
                 let Some(block) = model.block_list().block_with_id(block_id) else {
                     return ActionExecution::Sync(AIAgentActionResultType::ReadShellCommandOutput(
                         ReadShellCommandOutputResult::Error(ShellCommandError::BlockNotFound),
@@ -627,9 +657,11 @@ impl ShellCommandExecutor {
         action_id: &AIAgentActionId,
         block_id: &BlockId,
     ) -> bool {
-        if self.shell_recovery_waiter.is_some() {
+        if self.pending_shell_recovery_block_id.is_some() {
             return false;
         }
+        self.pending_shell_recovery_block_id = Some(block_id.clone());
+        self.recovered_shell_blocks.insert(block_id.clone());
         let candidates = [
             BlockSelector::RequestedCommandId(action_id.clone()),
             BlockSelector::Id(block_id.clone()),
@@ -641,19 +673,37 @@ impl ShellCommandExecutor {
                 .is_some_and(|sender| sender.try_send(BlockWaitEvent::RecoveryStarted).is_ok())
             {
                 self.shell_recovery_waiter = Some(selector);
-                return true;
+                break;
             }
         }
-        false
+        true
     }
 
     pub fn finish_shell_recovery(&mut self, result: ShellRecoveryResult) {
-        if let Some(selector) = self.shell_recovery_waiter.take()
-            && let Some(sender) = self.block_finished_senders.get(&selector)
-            && let Err(error) = sender.try_send(BlockWaitEvent::Recovered(result))
-        {
-            log::warn!("Failed to deliver recovered shell command result: {error:?}");
+        if self.pending_shell_recovery_block_id.as_ref() != Some(&result.block_id) {
+            return;
         }
+        self.pending_shell_recovery_block_id = None;
+        let selector = self
+            .shell_recovery_waiter
+            .take()
+            .unwrap_or_else(|| BlockSelector::Id(result.block_id.clone()));
+        let delivered = self
+            .block_finished_senders
+            .get(&selector)
+            .is_some_and(|sender| {
+                sender
+                    .try_send(BlockWaitEvent::Recovered(result.clone()))
+                    .is_ok()
+            });
+        if !delivered {
+            self.completed_shell_recoveries
+                .insert(result.block_id.clone(), result);
+        }
+    }
+
+    fn take_completed_shell_recovery(&mut self, block_id: &BlockId) -> Option<ShellRecoveryResult> {
+        self.completed_shell_recoveries.remove(block_id)
     }
 
     /// Produces a future which resolves when the action is complete and
