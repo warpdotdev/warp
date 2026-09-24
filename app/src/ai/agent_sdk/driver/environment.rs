@@ -22,9 +22,8 @@ use warpui::{ModelContext, ModelSpawner, SingletonEntity};
 
 #[cfg(feature = "local_fs")]
 use super::cache_setup;
-use super::failure_output;
 use super::terminal::TerminalDriver;
-use super::{AgentDriverError, Harness, git_credentials};
+use super::{AgentDriverError, Harness, failure_output, git_credentials};
 use crate::ai::agent_sdk::environment_snapshot::{
     EnvironmentSnapshot, EnvironmentSnapshotReporter, RepositoryRevision,
 };
