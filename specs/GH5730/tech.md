@@ -39,7 +39,7 @@ User rc loading needs care: Elvish has no `source` that injects into the interac
 - `from_markdown_language_spec`: `"elvish" | "elv"`.
 - `history_files`: empty vec (bbolt db is not a text file; see non-goals).
 - `rc_file_paths`: `~/.config/elvish/rc.elv` (Elvish ≥0.17 default; `$XDG_CONFIG_HOME` is resolved on the shell side).
-- `and_combiner`: `"; "` (Elvish aborts the chunk on the first exception, so `;` already short-circuits). `or_combiner` is documented as "run regardless" and returns `" ; "` for bash/zsh/pwsh; Elvish returns the same, but since a failing first command throws, the one caller that relies on it (`app/src/autoupdate/linux.rs:352` `PackageManager::update_command`) gets an Elvish arm that wraps the whole generated command in `sh -c '…'` instead of composing it natively.
+- Combiners: `and_combiner` / `or_combiner` return a separator string that is spliced between two commands, and Elvish has no infix operator for either contract. `;` gives "and" semantics (a throwing command aborts the rest of the chunk), but "run regardless" needs the left command wrapped (`try { A } catch { }; B`, verified to continue after `sh -c 'exit 3'`), which a separator cannot express. Rather than return a separator with the wrong semantics, change both to take the two commands: `and_combine(a, b)` / `or_combine(a, b)` returning the combined string. Existing arms keep their current output (`format!("{a}{sep}{b}")`); Elvish returns `"{a}; {b}"` and `"try {{ {a} }} catch {{ }}; {b}"`. The only caller is `PackageManager::update_command` (`app/src/autoupdate/linux.rs:352-419`); it builds multi-line sequences with `\\\n` continuations, which are POSIX-only, so its Elvish arm instead generates the POSIX command and wraps it once as `sh -c '<cmd>'` (quoted with the Elvish `''` escape below), and its `warp_handle_dist_upgrade` / `warp_finish_update` calls are Elvish functions defined in the bootstrap. Linux autoupdate is not part of the local-session scope in the product spec, but it is reachable from an Elvish session, so this keeps it correct instead of leaving a broken combiner behind.
 - `aliases`: Elvish has no alias concept; return empty. Functions come through `function_names`.
 - `abbreviations`: parse `$edit:abbr` / `$edit:small-word-abbr` emitted as `key\tvalue` lines by the bootstrap.
 - `ShellFamily` mapping: `Posix` (path escaping and separators are POSIX-like; quoting differences are handled in `escape` below).
@@ -66,7 +66,13 @@ Add `shell_type == ShellType::Elvish` to `should_use_rc_file_bootstrap_method`. 
 Driven by the compiler. Known sites and intended behavior:
 
 - `app/src/terminal/available_shells.rs:126,699`: display name "Elvish", add `(ShellType::Elvish, "elvish")` to the non-Windows list only.
-- `app/src/env_vars/mod.rs:52,186`: env var export as `set-env FOO bar` and inline prefix as `env FOO=bar cmd`.
+- Env var serialization (`app/src/env_vars/mod.rs`, `crates/cloud_object_models/src/env_vars.rs`): values are serialized per `ShellFamily` today, and command/secret values become POSIX `$(…)`. `ShellFamily` (`crates/warp_util/src/path.rs:212`) stays two-valued, because an Elvish family would touch 22 files whose path escaping is already POSIX-correct. Instead, `get_init_command_for_env_var` and `serialize_variables_internal` take the `ShellType`, and Elvish gets an arm for every `EnvVarValue`:
+  - `Constant`: single-quoted with `'` doubled, e.g. `it's $x` → `'it''s $x'`. Elvish single quotes do no interpolation (verified).
+  - `Command`: `(e:sh -c '<wrapped>' | slurp)`, where `<wrapped>` is `printf %s "$(<cmd>)"` quoted the same way. Env var commands are user-authored POSIX shell today, so they keep running under `sh`, and the `printf %s "$(…)"` wrapper strips trailing newlines exactly like bash/zsh `$(…)`, so the value is byte-identical across shells (verified: output `a b\n\n` → `a b`).
+  - `Secret`: same as `Command`, with `get_secret_extraction_command(ShellFamily::Posix)` as the inner command, since `op read` / `lpass show` and the `\` alias-bypass prefix are POSIX and run inside `sh -c`.
+  - Names are validated identifiers and are emitted bare.
+  - Session and subshell env (`get_initialization_string`): `set-env NAME <value>;`.
+  - "Run with env vars" (`serialize_variables_for_shell` and `Input::env_vars_command_prefix`, `app/src/terminal/input.rs:8741`): Elvish takes the same branch as fish and prepends `set-env NAME <value>; ` to the command. Like fish's `set -x`, this persists in the session rather than being scoped to the one command. `tmp E:NAME = …` would scope it but is only valid inside a function (verified), so matching fish is the smaller, consistent choice. The non-fish branch (`export_variables(" ", family)`, POSIX `NAME=value cmd`) must not be reached for Elvish.
 - `app/src/context_chips/builtins.rs`: Elvish arms reuse the POSIX `SH_COMMAND` wrapped in `sh -c`, same as fish does today.
 - `app/src/terminal/local_shell/mod.rs:112,272,302`: PATH capture via `print $E:PATH`, flags `-c` (no `-i -l`; `elvish -c` does not read `rc.elv`, so use `elvish -c 'eval (slurp < ~/.config/elvish/rc.elv); print …'`).
 - `app/src/terminal/model/session.rs:805,1025`: env var names newline-separated; POSIX path separators.
@@ -87,7 +93,9 @@ Unit tests (next to existing `*_tests.rs`):
 - `shell/mod_tests.rs`: `from_name` for `elvish`, `-elvish`, `/opt/homebrew/bin/elvish`; negative `/bin/elvish/foo`. `rc_file_paths` for Elvish. Elvish quote escaping (`it's` → `'it''s'`). Abbreviation parsing.
 - `bootstrap_tests.rs`: `script_for_shell(Elvish)` loads, contains no `#include` leftovers; `init_shell_script_for_shell(Elvish)` substitutes the session id placeholder.
 - `app/src/terminal/bootstrap.rs` tests: `should_use_rc_file_bootstrap_method(Elvish, Local)` is true.
-- `env_vars` tests: Elvish export strings.
+- `env_vars` tests: Elvish export and inline-prefix strings for each `EnvVarValue` kind: `Constant` with a `'` and a `$` in it, `Command` with a single quote and trailing newlines in the output, `Secret` for 1Password and LastPass references. A PTY test with `elvish -norc` evaluates each generated string and asserts `$E:NAME` equals what bash produces for the same value.
+- `shell/mod_tests.rs`: `and_combine` / `or_combine` for every shell. For Elvish, a PTY test runs `or_combine("sh -c 'exit 3'", "echo reached")` and asserts `reached` is printed, and `and_combine` with the same inputs asserts it is not.
+- Version gate: the version probe is a function of the `elvish -version` output, tested with `0.16.3` (rejected, `UnsupportedShell` emitted, fallback starter chosen), `0.17.0` and `0.21.0` (accepted), and unparseable output (rejected).
 
 Integration (`crates/integration`, GUI framework, gated on `elvish` being on `PATH` in CI; add `elvish` to the macOS and Linux CI images):
 
@@ -101,6 +109,7 @@ Integration (`crates/integration`, GUI framework, gated on `elvish` being on `PA
 Manual:
 
 - macOS and Linux, Elvish 0.21: run through behaviors 1–13 with a real `rc.elv` that sets a custom prompt, uses `use` on a module, and defines `edit:after-command` hooks of its own (to confirm Warp's hooks append rather than replace).
+- Version fallback (12): put a shim named `elvish` first on `PATH` that prints `0.16.0` for `-version` and otherwise execs the real binary. Set it as the startup shell and confirm Warp opens the fallback shell and logs `UnsupportedShell` with the version. Repeat with a real Elvish 0.16 build from the release archive.
 - Regression pass on zsh, bash, fish (14).
 
 ## Risks
