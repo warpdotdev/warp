@@ -718,7 +718,11 @@ pub mod json {
     #[derive(Serialize)]
     #[serde(tag = "status", rename_all = "snake_case")]
     enum JsonRunCommandResult<'a> {
-        Complete { exit_code: i32, output: &'a str },
+        Complete {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            exit_code: Option<i32>,
+            output: &'a str,
+        },
         Running,
     }
 
@@ -856,14 +860,14 @@ pub mod json {
                         output, exit_code, ..
                     } => Some(JsonMessage::ToolResult(JsonToolResult::RunCommand(
                         JsonRunCommandResult::Complete {
-                            exit_code: exit_code.value(),
+                            exit_code: Some(exit_code.value()),
                             output,
                         },
                     ))),
                     RequestCommandOutputResult::ShellRecovered { output, status, .. } => {
                         Some(JsonMessage::ToolResult(JsonToolResult::RunCommand(
                             JsonRunCommandResult::Complete {
-                                exit_code: status.failure_exit_code(),
+                                exit_code: status.code(),
                                 output,
                             },
                         )))
@@ -894,7 +898,7 @@ pub mod json {
                         ..
                     } => Some(JsonMessage::ToolResult(JsonToolResult::RunCommand(
                         JsonRunCommandResult::Complete {
-                            exit_code: exit_code.value(),
+                            exit_code: Some(exit_code.value()),
                             output,
                         },
                     ))),

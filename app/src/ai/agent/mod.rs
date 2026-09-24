@@ -1385,7 +1385,8 @@ impl<'a> std::fmt::Display for MarkdownActionResult<'a> {
                 CreateDocumentsResult::Cancelled => write!(f, "\n_Create documents cancelled_"),
             },
             AIAgentActionResultType::ReadShellCommandOutput(result) => match result {
-                ReadShellCommandOutputResult::CommandFinished { output, .. } => {
+                ReadShellCommandOutputResult::CommandFinished { output, .. }
+                | ReadShellCommandOutputResult::ShellRecovered { output, .. } => {
                     write!(f, "\n```\n{output}\n```")
                 }
                 ReadShellCommandOutputResult::LongRunningCommandSnapshot {

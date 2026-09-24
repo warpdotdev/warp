@@ -40,7 +40,9 @@ use crate::context_chips::prompt::Prompt;
 use crate::features::FeatureFlag;
 use crate::persistence::ModelEvent;
 use crate::send_telemetry_on_executor;
-use crate::server::telemetry::{PtySpawnMode as TelemetryPtySpawnMode, TelemetryEvent};
+use crate::server::telemetry::{
+    CloudAgentShellRecoveryFailureClass, PtySpawnMode as TelemetryPtySpawnMode, TelemetryEvent,
+};
 use crate::settings::{DebugSettings, PrivacySettings, SshSettings};
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
 use crate::terminal::color::List as ColorList;
@@ -679,6 +681,7 @@ impl<S> TerminalManager<S> {
     fn fail_pending_shell_recovery(
         &mut self,
         request: CloudShellRecoveryRequest,
+        failure_class: CloudAgentShellRecoveryFailureClass,
         error: anyhow::Error,
         ctx: &mut ModelContext<Box<dyn TerminalManagerTrait>>,
     ) where
@@ -688,7 +691,7 @@ impl<S> TerminalManager<S> {
         self.pending_shell_recovery = None;
         self.event_loop_tx.replace(None);
         self.view.update(ctx, |surface, ctx| {
-            surface.on_cloud_shell_recovery_failed(request, error, ctx);
+            surface.on_cloud_shell_recovery_failed(request, failure_class, error, ctx);
         });
     }
 
@@ -714,6 +717,7 @@ impl<S> TerminalManager<S> {
         {
             self.fail_pending_shell_recovery(
                 request,
+                CloudAgentShellRecoveryFailureClass::EventLoopJoin,
                 anyhow::anyhow!("failed to join exited PTY event loop: {error:?}"),
                 ctx,
             );
@@ -756,7 +760,12 @@ impl<S> TerminalManager<S> {
         ) {
             Ok(pty) => pty,
             Err(error) => {
-                self.fail_pending_shell_recovery(request, error, ctx);
+                self.fail_pending_shell_recovery(
+                    request,
+                    CloudAgentShellRecoveryFailureClass::PtySpawn,
+                    error,
+                    ctx,
+                );
                 return true;
             }
         };
@@ -816,6 +825,7 @@ impl<S> TerminalManager<S> {
                 manager.view.update(ctx, |surface, ctx| {
                     surface.on_cloud_shell_recovery_failed(
                         pending.request,
+                        CloudAgentShellRecoveryFailureClass::BootstrapTimeout,
                         anyhow::anyhow!("replacement shell did not bootstrap before timeout"),
                         ctx,
                     );

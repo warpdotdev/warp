@@ -152,6 +152,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_block_based_snackbar_appears_for_running_command_waterfall_mode);
     register_test!(test_block_based_snackbar_not_visible_pager_command_waterfall_mode);
     register_test!(test_shell_reinitializing);
+    register_test!(test_cloud_agent_shell_respawn);
     register_test!(test_exit_multiple_tabs);
     register_test!(test_open_context_menu_and_execute_command);
     register_test!(test_open_and_close_context_menu_with_keybinding);

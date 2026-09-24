@@ -431,6 +431,16 @@ impl BlocklistAIActionModel {
         });
     }
 
+    #[cfg(feature = "integration_tests")]
+    pub fn queue_action_for_integration_test(
+        &mut self,
+        action: AIAgentAction,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.queue_actions(vec![action], conversation_id, ctx);
+    }
+
     fn blocked_action_for_conversation(
         &self,
         conversation_id: &AIConversationId,

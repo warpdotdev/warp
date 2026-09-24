@@ -56,6 +56,7 @@ use crate::persistence::{BlockCompleted, ModelEvent};
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::ServerApiProvider;
 use crate::server::team_scope::RequestTeamScope;
+use crate::server::telemetry::CloudAgentShellRecoveryFailureClass;
 use crate::session_management::SessionNavigationData;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::general_settings::GeneralSettings;
@@ -954,6 +955,7 @@ fn handle_terminal_view_event(
                     terminal_view.update(ctx, |view, ctx| {
                         view.fail_cloud_shell_recovery(
                             request,
+                            CloudAgentShellRecoveryFailureClass::ManagerUnsupported,
                             anyhow::anyhow!("terminal manager does not support shell recovery"),
                             ctx,
                         );

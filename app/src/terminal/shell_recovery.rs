@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 
 use chrono::{DateTime, Local};
+use instant::Instant;
 use warp_terminal::event::ObservedExitStatus;
 
 use crate::ai::agent::AIAgentActionId;
@@ -64,6 +65,8 @@ pub struct CloudShellRecoveryRequest {
     pub session_id: Option<SessionId>,
     pub start_ts: Option<DateTime<Local>>,
     pub attempt: u8,
+    pub recovery_started_at: Instant,
+    pub dynamic_session_environment_available: bool,
 }
 
 pub(crate) fn sanitized_recovery_environment(

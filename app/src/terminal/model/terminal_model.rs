@@ -1516,7 +1516,7 @@ impl TerminalModel {
     }
 
     pub fn prepare_shell_recovery(&mut self, status: ObservedExitStatus) {
-        self.pending_shell_recovery_exit_code = Some(status.failure_exit_code());
+        self.pending_shell_recovery_exit_code = Some(status.code().unwrap_or(1));
         self.exit_alt_screen(true);
     }
 

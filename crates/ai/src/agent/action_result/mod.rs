@@ -142,6 +142,9 @@ impl AIAgentActionResultType {
                 ReadShellCommandOutputResult::CommandFinished { command, .. },
             )
             | AIAgentActionResultType::ReadShellCommandOutput(
+                ReadShellCommandOutputResult::ShellRecovered { command, .. },
+            )
+            | AIAgentActionResultType::ReadShellCommandOutput(
                 ReadShellCommandOutputResult::LongRunningCommandSnapshot { command, .. },
             ) => Some(command.as_str()),
             _ => None,
@@ -672,6 +675,14 @@ pub enum ReadShellCommandOutputResult {
         is_preempted: bool,
         activity: Option<LrcActivity>,
     },
+    ShellRecovered {
+        command: String,
+        block_id: BlockId,
+        output: String,
+        status: ObservedExitStatus,
+        start_ts: Option<DateTime<Local>>,
+        completed_ts: Option<DateTime<Local>>,
+    },
     Cancelled,
     Error(ShellCommandError),
 }
@@ -690,6 +701,12 @@ impl Display for ReadShellCommandOutputResult {
             }
             ReadShellCommandOutputResult::LongRunningCommandSnapshot { .. } => {
                 write!(f, "Sent snapshot of long-running shell command to agent")
+            }
+            ReadShellCommandOutputResult::ShellRecovered { output, status, .. } => {
+                write!(
+                    f,
+                    "Shell command terminated the persistent shell ({status}):\n{output}"
+                )
             }
             ReadShellCommandOutputResult::Cancelled => {
                 write!(f, "Read shell command output cancelled")
@@ -941,6 +958,9 @@ impl AIAgentActionResultType {
             | Self::ReadDocuments(ReadDocumentsResult::Error(_))
             | Self::EditDocuments(EditDocumentsResult::Error(_))
             | Self::CreateDocuments(CreateDocumentsResult::Error(_))
+            | Self::ReadShellCommandOutput(ReadShellCommandOutputResult::ShellRecovered {
+                ..
+            })
             | Self::UseComputer(UseComputerResult::Error(_))
             | Self::InsertReviewComments(InsertReviewCommentsResult::Error { .. })
             | Self::RequestComputerUse(RequestComputerUseResult::Error(_))

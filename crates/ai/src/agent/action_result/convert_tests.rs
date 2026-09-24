@@ -66,12 +66,12 @@ fn ask_user_question_skipped_by_auto_approve_converts_to_skipped_answers() {
 }
 
 #[test]
-fn recovered_shell_status_never_converts_to_a_successful_exit() {
+fn recovered_shell_status_only_populates_observed_exit_codes() {
     let cases = [
         (ObservedExitStatus::Code(42), 42),
-        (ObservedExitStatus::Code(0), 1),
-        (ObservedExitStatus::Signal(9), 137),
-        (ObservedExitStatus::Unavailable, 1),
+        (ObservedExitStatus::Code(0), 0),
+        (ObservedExitStatus::Signal(9), 0),
+        (ObservedExitStatus::Unavailable, 0),
     ];
 
     for (status, expected_exit_code) in cases {

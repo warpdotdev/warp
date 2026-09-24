@@ -7,6 +7,7 @@ use warpui::AppContext;
 use warpui::{Entity, ViewContext};
 
 use crate::ai::agent::AIAgentPtyWriteMode;
+use crate::server::telemetry::CloudAgentShellRecoveryFailureClass;
 #[cfg(unix)]
 use crate::terminal::event::AfterBlockCompletedEvent;
 use crate::terminal::model::completions::ShellCompletion;
@@ -75,6 +76,7 @@ where
     fn on_cloud_shell_recovery_failed(
         &mut self,
         _request: CloudShellRecoveryRequest,
+        _failure_class: CloudAgentShellRecoveryFailureClass,
         _error: anyhow::Error,
         _ctx: &mut ViewContext<Self>,
     ) {

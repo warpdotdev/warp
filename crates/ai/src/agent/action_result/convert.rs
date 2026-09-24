@@ -182,7 +182,7 @@ impl TryFrom<RequestCommandOutputResult> for api::request::input::tool_call_resu
                             api::ShellCommandFinished {
                                 command_id: block_id.to_string(),
                                 output,
-                                exit_code: status.failure_exit_code(),
+                                exit_code: status.code().unwrap_or_default(),
                                 start_ts: start_ts.map(local_datetime_to_timestamp),
                                 finish_ts: completed_ts.map(local_datetime_to_timestamp),
                             },
@@ -830,6 +830,31 @@ impl TryFrom<ReadShellCommandOutputResult> for api::request::input::tool_call_re
                                     is_alt_screen_active,
                                     is_preempted,
                                     activity: activity.map(Into::into),
+                                },
+                            ),
+                        ),
+                    },
+                ),
+            ),
+            ReadShellCommandOutputResult::ShellRecovered {
+                command,
+                block_id,
+                output,
+                status,
+                start_ts,
+                completed_ts,
+            } => Ok(
+                api::request::input::tool_call_result::Result::ReadShellCommandOutput(
+                    api::ReadShellCommandOutputResult {
+                        command,
+                        result: Some(
+                            api::read_shell_command_output_result::Result::CommandFinished(
+                                api::ShellCommandFinished {
+                                    command_id: block_id.to_string(),
+                                    output,
+                                    exit_code: status.code().unwrap_or_default(),
+                                    start_ts: start_ts.map(local_datetime_to_timestamp),
+                                    finish_ts: completed_ts.map(local_datetime_to_timestamp),
                                 },
                             ),
                         ),

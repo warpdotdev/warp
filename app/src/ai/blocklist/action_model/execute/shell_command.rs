@@ -55,6 +55,7 @@ pub struct ShellCommandExecutor {
     /// Liveness signals for the long-running commands this agent is monitoring.
     /// Shared with the snapshot futures, which have no `ModelContext`.
     activity_monitor: Arc<LrcActivityMonitor>,
+    shell_recovery_waiter: Option<BlockSelector>,
 }
 
 impl ShellCommandExecutor {
@@ -81,6 +82,7 @@ impl ShellCommandExecutor {
             terminal_view_id,
             control_handback_sender: None,
             activity_monitor: Arc::new(LrcActivityMonitor::new()),
+            shell_recovery_waiter: None,
         }
     }
 
@@ -620,20 +622,34 @@ impl ShellCommandExecutor {
         }
     }
 
-    pub fn begin_shell_recovery(&mut self, action_id: &AIAgentActionId) -> bool {
-        self.block_finished_senders
-            .get(&BlockSelector::RequestedCommandId(action_id.clone()))
-            .is_some_and(|sender| sender.try_send(BlockWaitEvent::RecoveryStarted).is_ok())
-    }
-
-    pub fn finish_shell_recovery(
+    pub fn begin_shell_recovery(
         &mut self,
         action_id: &AIAgentActionId,
-        result: ShellRecoveryResult,
-    ) {
-        if let Some(sender) = self
-            .block_finished_senders
-            .get(&BlockSelector::RequestedCommandId(action_id.clone()))
+        block_id: &BlockId,
+    ) -> bool {
+        if self.shell_recovery_waiter.is_some() {
+            return false;
+        }
+        let candidates = [
+            BlockSelector::RequestedCommandId(action_id.clone()),
+            BlockSelector::Id(block_id.clone()),
+        ];
+        for selector in candidates {
+            if self
+                .block_finished_senders
+                .get(&selector)
+                .is_some_and(|sender| sender.try_send(BlockWaitEvent::RecoveryStarted).is_ok())
+            {
+                self.shell_recovery_waiter = Some(selector);
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn finish_shell_recovery(&mut self, result: ShellRecoveryResult) {
+        if let Some(selector) = self.shell_recovery_waiter.take()
+            && let Some(sender) = self.block_finished_senders.get(&selector)
             && let Err(error) = sender.try_send(BlockWaitEvent::Recovered(result))
         {
             log::warn!("Failed to deliver recovered shell command result: {error:?}");
@@ -1002,8 +1018,15 @@ fn action_result_for_read_shell_command_output(
                 activity,
             },
         ),
-        ActionResult::ShellRecovered(_) => AIAgentActionResultType::ReadShellCommandOutput(
-            ReadShellCommandOutputResult::Error(ShellCommandError::BlockNotFound),
+        ActionResult::ShellRecovered(result) => AIAgentActionResultType::ReadShellCommandOutput(
+            ReadShellCommandOutputResult::ShellRecovered {
+                command,
+                block_id: result.block_id,
+                output: result.output,
+                status: result.status,
+                start_ts: result.start_ts,
+                completed_ts: result.completed_ts,
+            },
         ),
         ActionResult::Cancelled => {
             AIAgentActionResultType::ReadShellCommandOutput(ReadShellCommandOutputResult::Cancelled)

@@ -96,17 +96,10 @@ pub enum ObservedExitStatus {
 }
 
 impl ObservedExitStatus {
-    pub fn failure_exit_code(self) -> i32 {
+    pub fn code(self) -> Option<i32> {
         match self {
-            Self::Code(code) => {
-                if code == 0 {
-                    1
-                } else {
-                    code
-                }
-            }
-            Self::Signal(signal) => 128 + signal,
-            Self::Unavailable => 1,
+            Self::Code(code) => Some(code),
+            Self::Signal(_) | Self::Unavailable => None,
         }
     }
 }
