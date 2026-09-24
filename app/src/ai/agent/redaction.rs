@@ -95,11 +95,19 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
             AIAgentInput::ActionResult { result, context } => {
                 redact_context(Arc::make_mut(context));
                 match &mut result.result {
-                    AIAgentActionResultType::RequestCommandOutput(output) => {
-                        if let RequestCommandOutputResult::Completed { output, .. } = output {
+                    AIAgentActionResultType::RequestCommandOutput(output) => match output {
+                        RequestCommandOutputResult::Completed { output, .. }
+                        | RequestCommandOutputResult::ShellRecovered { output, .. } => {
                             redact_secrets(output);
                         }
-                    }
+                        RequestCommandOutputResult::LongRunningCommandSnapshot {
+                            grid_contents,
+                            ..
+                        } => redact_secrets(grid_contents),
+                        RequestCommandOutputResult::CancelledBeforeExecution
+                        | RequestCommandOutputResult::Denylisted { .. }
+                        | RequestCommandOutputResult::TerminalBusy { .. } => {}
+                    },
                     AIAgentActionResultType::WriteToLongRunningShellCommand(result) => {
                         use crate::ai::agent::WriteToLongRunningShellCommandResult::*;
                         match result {
@@ -111,7 +119,9 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                     AIAgentActionResultType::ReadShellCommandOutput(result) => {
                         use crate::ai::agent::ReadShellCommandOutputResult::*;
                         match result {
-                            CommandFinished { output, .. } => redact_secrets(output),
+                            CommandFinished { output, .. } | ShellRecovered { output, .. } => {
+                                redact_secrets(output)
+                            }
                             LongRunningCommandSnapshot { grid_contents, .. } => {
                                 redact_secrets(grid_contents)
                             }

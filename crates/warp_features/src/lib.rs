@@ -916,6 +916,9 @@ pub enum FeatureFlag {
     /// Enables state-mutating recovery for abnormal terminal lifecycle sequences.
     TerminalLifecycleRecovery,
 
+    /// Recovers native cloud agent commands that terminate their persistent shell.
+    CloudAgentShellRespawn,
+
     /// Shows a warning in the agent view when the active conversation's
     /// provider-side prompt cache has expired.
     PromptCacheExpiryWarning,
@@ -1016,6 +1019,7 @@ pub const DEBUG_FLAGS: &[FeatureFlag] = &[FeatureFlag::DebugMode, FeatureFlag::R
 pub const LOCAL_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::LocalClaudeCodexChildHarnesses,
     FeatureFlag::AcpHarness,
+    FeatureFlag::CloudAgentShellRespawn,
 ];
 
 /// Features enabled for the development team.  The expectation is that, over
@@ -1064,6 +1068,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::WarpControlCli,
     FeatureFlag::TerminalLifecycleRecovery,
+    FeatureFlag::CloudAgentShellRespawn,
     FeatureFlag::PromptCacheExpiryWarning,
     FeatureFlag::JupyterNotebookRendering,
     FeatureFlag::MultiLevelOrchestration,

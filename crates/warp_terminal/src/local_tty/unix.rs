@@ -35,7 +35,9 @@ use super::spawner::{PtyHandle, PtySpawnHooks, PtySpawnInfo, PtySpawner};
 use super::{ChildEvent, EventedPty, EventedReadWrite, PtyOptions, SizeInfo};
 use crate::ASSETS;
 use crate::bootstrap::raw_init_shell_script_for_shell;
-use crate::local_tty::docker_sandbox::{DOCKER_SANDBOX_HOME_DIR, DockerSandboxShellStarter};
+use crate::local_tty::docker_sandbox::{
+    DOCKER_SANDBOX_HOME_DIR, DockerSandboxLaunchMode, DockerSandboxShellStarter,
+};
 use crate::local_tty::shell::{
     DirectShellStarter, ShellStarter, extra_path_entries, ssh_socket_dir,
 };
@@ -95,6 +97,39 @@ fn docker_sandbox_run_args(starter: &DockerSandboxShellStarter) -> Vec<std::ffi:
         std::ffi::OsString::from("-c"),
         std::ffi::OsString::from(bash_cmd),
     ]);
+    args
+}
+
+fn docker_sandbox_exec_args(
+    starter: &DockerSandboxShellStarter,
+    start_dir: Option<&Path>,
+    env_vars: &HashMap<OsString, OsString>,
+) -> Vec<std::ffi::OsString> {
+    let init_path = starter.init_path();
+    let init_path_quoted = format!(
+        "'{}'",
+        shell_escape_single_quotes(&init_path.to_string_lossy(), ShellType::Bash)
+    );
+    let start_dir = start_dir.unwrap_or_else(|| Path::new(DOCKER_SANDBOX_HOME_DIR));
+    let start_dir_quoted = format!(
+        "'{}'",
+        shell_escape_single_quotes(&start_dir.to_string_lossy(), ShellType::Bash)
+    );
+    let bash_cmd =
+        format!("cd -- {start_dir_quoted} && exec bash --rcfile {init_path_quoted} --noprofile");
+    let mut args = vec![
+        "exec".into(),
+        "-it".into(),
+        starter.sandbox_name().into(),
+        "env".into(),
+    ];
+    args.extend(env_vars.iter().map(|(key, value)| {
+        let mut assignment = key.clone();
+        assignment.push("=");
+        assignment.push(value);
+        assignment
+    }));
+    args.extend(["bash".into(), "-c".into(), bash_cmd.into()]);
     args
 }
 
@@ -698,9 +733,9 @@ impl EventedPty for Pty {
                 return None;
             }
 
-            match self.pty_handle.has_process_terminated() {
-                Ok(true) => Some(ChildEvent::Exited),
-                Ok(false) => None,
+            match self.pty_handle.process_termination_status() {
+                Ok(Some(status)) => Some(ChildEvent::Exited(status)),
+                Ok(None) => None,
                 Err(e) => {
                     log::warn!("Error checking child process termination: {e:#}");
                     None
@@ -785,7 +820,7 @@ fn spawn_docker_sandbox(
         size,
         window_id,
         shell_starter: _,
-        start_dir: _,
+        start_dir,
         env_vars,
         enable_ssh_wrapper,
         reuse_ssh_control_master,
@@ -798,6 +833,7 @@ fn spawn_docker_sandbox(
     let command = build_docker_sandbox_command(
         &docker_starter,
         window_id,
+        start_dir,
         env_vars,
         enable_ssh_wrapper,
         reuse_ssh_control_master,
@@ -819,6 +855,7 @@ fn spawn_docker_sandbox(
 fn build_docker_sandbox_command(
     docker_starter: &DockerSandboxShellStarter,
     window_id: Option<usize>,
+    start_dir: Option<PathBuf>,
     env_vars: HashMap<OsString, OsString>,
     enable_ssh_wrapper: bool,
     reuse_ssh_control_master: bool,
@@ -834,7 +871,13 @@ fn build_docker_sandbox_command(
     );
 
     let mut builder = Command::new(docker_starter.logical_shell_path());
-    for arg in docker_sandbox_run_args(docker_starter) {
+    let args = match docker_starter.launch_mode {
+        DockerSandboxLaunchMode::Create => docker_sandbox_run_args(docker_starter),
+        DockerSandboxLaunchMode::Reattach => {
+            docker_sandbox_exec_args(docker_starter, start_dir.as_deref(), &env_vars)
+        }
+    };
+    for arg in args {
         builder.arg(arg);
     }
 

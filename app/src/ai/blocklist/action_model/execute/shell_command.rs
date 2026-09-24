@@ -13,6 +13,7 @@ use parking_lot::FairMutex;
 use warp_core::command::ExitCode;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
+use warp_terminal::event::ObservedExitStatus;
 use warp_util::path::ShellFamily;
 use warpui::r#async::{Spawnable, Timer};
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
@@ -43,7 +44,7 @@ use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 pub struct ShellCommandExecutor {
     active_session: ModelHandle<ActiveSession>,
-    block_finished_senders: HashMap<BlockSelector, oneshot::Sender<()>>,
+    block_finished_senders: HashMap<BlockSelector, async_channel::Sender<BlockWaitEvent>>,
     /// Senders used by the `Check now` affordance to force a long-running shell command's
     /// pending poll future to resolve immediately with a fresh snapshot, bypassing the
     /// agent-set timeout.
@@ -55,6 +56,13 @@ pub struct ShellCommandExecutor {
     /// Liveness signals for the long-running commands this agent is monitoring.
     /// Shared with the snapshot futures, which have no `ModelContext`.
     activity_monitor: Arc<LrcActivityMonitor>,
+    shell_recoveries: HashMap<BlockId, ShellRecoveryState>,
+}
+enum ShellRecoveryState {
+    Recovering(Option<async_channel::Sender<BlockWaitEvent>>),
+    /// Keep the entry after delivery: an unknown exit status leaves the old block unfinished.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    Completed(Option<ShellRecoveryResult>),
 }
 
 impl ShellCommandExecutor {
@@ -81,6 +89,7 @@ impl ShellCommandExecutor {
             terminal_view_id,
             control_handback_sender: None,
             activity_monitor: Arc::new(LrcActivityMonitor::new()),
+            shell_recoveries: HashMap::new(),
         }
     }
 
@@ -154,7 +163,7 @@ impl ShellCommandExecutor {
             for (block_selector, block_finished_tx) in block_finished_senders.into_iter() {
                 if let Some(block) = block_selector.get_block(&model) {
                     if block.is_command_finished() {
-                        if let Err(e) = block_finished_tx.send(()) {
+                        if let Err(e) = block_finished_tx.try_send(BlockWaitEvent::Finished) {
                             log::warn!(
                                 "Failed to notify block completion for running requested command: {e:?}"
                             )
@@ -365,6 +374,9 @@ impl ShellCommandExecutor {
                                     ActionResult::CommandFinished { .. } => {
                                         controller.commit_action_group_now(conversation_id);
                                     }
+                                    ActionResult::ShellRecovered(_) => {
+                                        controller.commit_action_group_now(conversation_id);
+                                    }
                                     ActionResult::Cancelled | ActionResult::BlockNotFound => {
                                         controller.discard_action_group(conversation_id);
                                     }
@@ -445,12 +457,30 @@ impl ShellCommandExecutor {
                 )
             }
             AIAgentActionType::ReadShellCommandOutput { block_id, delay } => {
+                let recovering = match self.shell_recoveries.get_mut(block_id) {
+                    Some(ShellRecoveryState::Completed(result)) => {
+                        let result = result
+                            .take()
+                            .map(ActionResult::ShellRecovered)
+                            .unwrap_or(ActionResult::BlockNotFound);
+                        let command = model
+                            .block_list()
+                            .block_with_id(block_id)
+                            .map(|block| block.command_with_secrets_unobfuscated(false))
+                            .unwrap_or_default();
+                        return ActionExecution::Sync(action_result_for_read_shell_command_output(
+                            command, result,
+                        ));
+                    }
+                    Some(ShellRecoveryState::Recovering(_)) => true,
+                    None => false,
+                };
                 let Some(block) = model.block_list().block_with_id(block_id) else {
                     return ActionExecution::Sync(AIAgentActionResultType::ReadShellCommandOutput(
                         ReadShellCommandOutputResult::Error(ShellCommandError::BlockNotFound),
                     ));
                 };
-                if block.finished() {
+                if block.finished() && !recovering {
                     let command = block.command_with_secrets_unobfuscated(false);
                     let output: String = block.output_with_secrets_unobfuscated();
                     let exit_code = block.exit_code();
@@ -496,6 +526,7 @@ impl ShellCommandExecutor {
                                 });
                             }
                             ActionResult::LongRunningCommandSnapshot { .. }
+                            | ActionResult::ShellRecovered(_)
                             | ActionResult::Cancelled
                             | ActionResult::BlockNotFound => {}
                         }
@@ -532,7 +563,7 @@ impl ShellCommandExecutor {
                 let block_selector = BlockSelector::Id(block_id.clone());
 
                 // Set up a future to also wait for block completion.
-                let (block_finished_tx, block_finished_rx) = oneshot::channel();
+                let (block_finished_tx, block_finished_rx) = async_channel::bounded(1);
                 self.block_finished_senders
                     .insert(block_selector.clone(), block_finished_tx);
 
@@ -545,7 +576,6 @@ impl ShellCommandExecutor {
                     async move {
                         let _monitoring = monitoring;
                         pin!(handback_rx);
-                        pin!(block_finished_rx);
 
                         // Wait for either control handback or block completion.
                         let transfer_result = select! {
@@ -553,8 +583,10 @@ impl ShellCommandExecutor {
                                 Ok(_) => TransferControlResult::ControlHandedBack,
                                 Err(_) => TransferControlResult::Cancelled,
                             },
-                            val = block_finished_rx => match val {
-                                Ok(_) => TransferControlResult::BlockFinished,
+                            val = block_finished_rx.recv().fuse() => match val {
+                                Ok(BlockWaitEvent::Finished) => TransferControlResult::BlockFinished,
+                                Ok(BlockWaitEvent::RecoveryStarted)
+                                | Ok(BlockWaitEvent::Recovered(_)) => TransferControlResult::Cancelled,
                                 Err(_) => TransferControlResult::Cancelled,
                             },
                         };
@@ -641,6 +673,37 @@ impl ShellCommandExecutor {
         }
     }
 
+    pub(crate) fn begin_shell_recovery(&mut self, action_id: &AIAgentActionId, block_id: &BlockId) {
+        let candidates = [
+            BlockSelector::RequestedCommandId(action_id.clone()),
+            BlockSelector::Id(block_id.clone()),
+        ];
+        // Bootstrap metadata must not resolve the interrupted command before recovery is complete.
+        let waiter = candidates.into_iter().find_map(|selector| {
+            self.block_finished_senders
+                .remove(&selector)
+                .filter(|sender| sender.try_send(BlockWaitEvent::RecoveryStarted).is_ok())
+        });
+        self.shell_recoveries
+            .insert(block_id.clone(), ShellRecoveryState::Recovering(waiter));
+    }
+
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub(crate) fn finish_shell_recovery(&mut self, result: ShellRecoveryResult) {
+        let Some(state) = self.shell_recoveries.get_mut(&result.block_id) else {
+            return;
+        };
+        let ShellRecoveryState::Recovering(waiter) = state else {
+            return;
+        };
+        let delivered = waiter.as_ref().is_some_and(|sender| {
+            sender
+                .try_send(BlockWaitEvent::Recovered(result.clone()))
+                .is_ok()
+        });
+        *state = ShellRecoveryState::Completed((!delivered).then_some(result));
+    }
+
     /// Produces a future which resolves when the action is complete and
     /// we have a result to send to the agent.
     fn action_result_future(
@@ -655,9 +718,17 @@ impl ShellCommandExecutor {
         let monitor = self.activity_monitor.clone();
 
         // Create a channel to notify us when we receive block metadata.
-        let (block_metadata_received_tx, block_metadata_received_rx) = oneshot::channel();
-        self.block_finished_senders
-            .insert(block_selector.clone(), block_metadata_received_tx);
+        let (block_metadata_received_tx, block_metadata_received_rx) = async_channel::bounded(2);
+        if let BlockSelector::Id(block_id) = &block_selector
+            && let Some(ShellRecoveryState::Recovering(waiter)) =
+                self.shell_recoveries.get_mut(block_id)
+        {
+            let _ = block_metadata_received_tx.try_send(BlockWaitEvent::RecoveryStarted);
+            *waiter = Some(block_metadata_received_tx);
+        } else {
+            self.block_finished_senders
+                .insert(block_selector.clone(), block_metadata_received_tx);
+        }
 
         // Create a channel so the `Check now` affordance can short-circuit the timeout
         // and deliver the agent a fresh snapshot immediately.
@@ -698,12 +769,25 @@ impl ShellCommandExecutor {
             }
             .fuse();
 
-            pin!(block_metadata_received_rx);
             pin!(force_refresh_rx);
 
             let wake_reason = select! {
-                val = block_metadata_received_rx => match val {
-                    Ok(_) => WakeReason::BlockFinished,
+                val = block_metadata_received_rx.recv().fuse() => match val {
+                    Ok(BlockWaitEvent::Finished) => WakeReason::BlockFinished,
+                    Ok(BlockWaitEvent::Recovered(result)) => {
+                        return ActionResult::ShellRecovered(result);
+                    }
+                    Ok(BlockWaitEvent::RecoveryStarted) => {
+                        match block_metadata_received_rx.recv().await {
+                            Ok(BlockWaitEvent::Recovered(result)) => {
+                                return ActionResult::ShellRecovered(result);
+                            }
+                            Ok(BlockWaitEvent::Finished) => WakeReason::BlockFinished,
+                            Ok(BlockWaitEvent::RecoveryStarted) | Err(_) => {
+                                return ActionResult::Cancelled;
+                            }
+                        }
+                    }
                     Err(_) => return ActionResult::Cancelled,
                 },
                 val = force_refresh_rx => match val {
@@ -893,6 +977,18 @@ fn action_result_for_requested_command(
                 activity,
             },
         ),
+        ActionResult::ShellRecovered(result) => AIAgentActionResultType::RequestCommandOutput(
+            RequestCommandOutputResult::ShellRecovered {
+                block_id: result.block_id,
+                command,
+                output: result.output,
+                status: result.status,
+                restored_working_directory: result.restored_working_directory,
+                used_fallback_directory: result.used_fallback_directory,
+                start_ts: result.start_ts,
+                completed_ts: result.completed_ts,
+            },
+        ),
         ActionResult::BlockNotFound | ActionResult::Cancelled => {
             AIAgentActionResultType::RequestCommandOutput(
                 RequestCommandOutputResult::CancelledBeforeExecution,
@@ -937,6 +1033,9 @@ fn action_result_for_write_to_long_running_shell_command(
                 is_preempted,
                 activity,
             },
+        ),
+        ActionResult::ShellRecovered(_) => AIAgentActionResultType::WriteToLongRunningShellCommand(
+            WriteToLongRunningShellCommandResult::Error(ShellCommandError::BlockNotFound),
         ),
         ActionResult::Cancelled => AIAgentActionResultType::WriteToLongRunningShellCommand(
             WriteToLongRunningShellCommandResult::Cancelled,
@@ -987,6 +1086,16 @@ fn action_result_for_read_shell_command_output(
                 activity,
             },
         ),
+        ActionResult::ShellRecovered(result) => AIAgentActionResultType::ReadShellCommandOutput(
+            ReadShellCommandOutputResult::ShellRecovered {
+                command,
+                block_id: result.block_id,
+                output: result.output,
+                status: result.status,
+                start_ts: result.start_ts,
+                completed_ts: result.completed_ts,
+            },
+        ),
         ActionResult::Cancelled => {
             AIAgentActionResultType::ReadShellCommandOutput(ReadShellCommandOutputResult::Cancelled)
         }
@@ -1033,6 +1142,11 @@ fn action_result_for_transfer_shell_command_control_to_user(
                 activity,
             },
         ),
+        ActionResult::ShellRecovered(_) => {
+            AIAgentActionResultType::TransferShellCommandControlToUser(
+                TransferShellCommandControlToUserResult::Error(ShellCommandError::BlockNotFound),
+            )
+        }
         ActionResult::Cancelled => AIAgentActionResultType::TransferShellCommandControlToUser(
             TransferShellCommandControlToUserResult::Cancelled,
         ),
@@ -1096,8 +1210,28 @@ enum ActionResult {
         /// the grid alone cannot distinguish silence from a hang.
         activity: Option<LrcActivity>,
     },
+    ShellRecovered(ShellRecoveryResult),
     Cancelled,
     BlockNotFound,
+}
+
+#[derive(Debug, Clone)]
+pub struct ShellRecoveryResult {
+    pub block_id: BlockId,
+    pub output: String,
+    pub status: ObservedExitStatus,
+    pub restored_working_directory: String,
+    pub used_fallback_directory: bool,
+    pub start_ts: Option<DateTime<Local>>,
+    pub completed_ts: Option<DateTime<Local>>,
+}
+
+#[derive(Debug, Clone)]
+enum BlockWaitEvent {
+    Finished,
+    RecoveryStarted,
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    Recovered(ShellRecoveryResult),
 }
 
 /// Whether liveness signals are trustworthy enough to collect on this platform.

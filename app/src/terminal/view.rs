@@ -141,6 +141,7 @@ use warp_core::context_flag::ContextFlag;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warp_errors::{report_error, report_if_error};
+use warp_terminal::event::{ExitReason, ObservedExitStatus};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 #[cfg(feature = "local_fs")]
 use warp_util::path::LineAndColumnArg;
@@ -272,8 +273,8 @@ use crate::ai::blocklist::{
     MaaPassiveSuggestionsEvent, MaaPassiveSuggestionsModel, PRE_REWIND_PREFIX,
     PassiveSuggestionsModels, PendingAttachment, PendingQueryState, QueuedQuery, QueuedQueryId,
     QueuedQueryModel, QueuedQueryOrigin, RequestFileEditsFormatKind, ShellCommandExecutor,
-    ShellCommandExecutorEvent, SlashCommandRequest, StartAgentExecutor, StartAgentExecutorEvent,
-    StartAgentRequest, ai_brand_color, block_context_from_terminal_model,
+    ShellCommandExecutorEvent, ShellRecoveryResult, SlashCommandRequest, StartAgentExecutor,
+    StartAgentExecutorEvent, StartAgentRequest, ai_brand_color, block_context_from_terminal_model,
     get_ai_block_overflow_menu_element_position_id, get_attached_blocks_chip_element_position_id,
     is_lrc_auto_queue_active,
 };
@@ -357,8 +358,9 @@ use crate::server::ids::{ObjectUid, SyncId};
 use crate::server::server_api::ServerApi;
 use crate::server::telemetry::{
     self, AgentModeAttachContextMethod, AgentModeEntrypoint, AgentModeRewindEntrypoint,
-    AnonymousUserSignupEntrypoint, BootstrappingInfo, InteractionSource, NotificationAgentVariant,
-    NotificationsTurnedOnSource, PaletteSource, PromptSuggestionViewType,
+    AnonymousUserSignupEntrypoint, BootstrappingInfo, CloudAgentShellExitDetection,
+    CloudAgentShellRecoveryFailureClass, CloudAgentShellRecoveryOutcome, InteractionSource,
+    NotificationAgentVariant, NotificationsTurnedOnSource, PaletteSource, PromptSuggestionViewType,
     SaveAsWorkflowModalSource, SecretInteraction, SharingDialogSource, SlowBootstrapInfo,
     TelemetryEvent, ToggleBlockFilterSource, WorkflowTelemetryMetadata,
 };
@@ -474,6 +476,9 @@ use crate::terminal::shared_session::role_change_modal::{
 use crate::terminal::shared_session::{
     SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
     SharedSessionStatus,
+};
+use crate::terminal::shell_recovery::{
+    CloudShellRecoveryRequest, MAX_CLOUD_SHELL_RECOVERIES, recovered_command_output,
 };
 use crate::terminal::view::block_onboarding::onboarding_prompt_block::OnboardingPromptBlock;
 use crate::terminal::view::init_environment::mode_selector::{
@@ -1781,6 +1786,7 @@ pub enum Event {
         size_update: SizeUpdate,
     },
     ExecuteCommand(ExecuteCommandEvent),
+    RecoverCloudShell(CloudShellRecoveryRequest),
     BlockStarted {
         is_for_in_band_command: bool,
     },
@@ -2974,6 +2980,8 @@ pub struct TerminalView {
     /// suppresses `AgentExitedShellProcess` telemetry so manual shutdown paths
     /// (tab close, update relaunch, etc.) are not attributed to agent commands.
     manual_pty_shutdown_requested: bool,
+    cloud_shell_recovery_count: u8,
+    pending_cloud_shell_recovery: Option<CloudShellRecoveryRequest>,
 
     ephemeral_message_model: ModelHandle<EphemeralMessageModel>,
 
@@ -4525,6 +4533,8 @@ impl TerminalView {
             active_init_project_model: None,
             is_pending_aws_login: false,
             manual_pty_shutdown_requested: false,
+            cloud_shell_recovery_count: 0,
+            pending_cloud_shell_recovery: None,
             first_time_cloud_agent_setup_view,
             cloud_agent_team_required_view,
             environment_setup_mode_selector,
@@ -7867,9 +7877,13 @@ impl TerminalView {
                 };
 
                 let history_model = BlocklistAIHistoryModel::as_ref(ctx);
-                let Some(conversation) = history_model
-                    .conversation_id_for_action(action_id, ctx.view_id())
-                    .and_then(|id| history_model.conversation(&id))
+                let conversation_id =
+                    history_model.conversation_id_for_action(action_id, ctx.view_id());
+                #[cfg(feature = "integration_tests")]
+                let conversation_id =
+                    conversation_id.or_else(|| history_model.active_conversation_id(ctx.view_id()));
+                let Some(conversation) =
+                    conversation_id.and_then(|id| history_model.conversation(&id))
                 else {
                     safe_error!(
                         safe: ("No conversation ID found for command with ID: {:?}", action_id),
@@ -9119,6 +9133,14 @@ impl TerminalView {
             Some(&block_id),
             ctx,
         );
+    }
+
+    fn cloud_shell_recovery_duration_ms(request: &CloudShellRecoveryRequest) -> u32 {
+        request
+            .recovery_started_at
+            .elapsed()
+            .as_millis()
+            .min(u128::from(u32::MAX)) as u32
     }
     /// Shows or hides the CLI agent footer from a shared session update.
     pub fn apply_cli_agent_footer_visibility(&mut self, show: bool, ctx: &mut ViewContext<Self>) {
@@ -11909,6 +11931,200 @@ impl TerminalView {
         ctx.notify();
     }
 
+    fn cloud_shell_recovery_request(
+        &self,
+        status: ObservedExitStatus,
+        attempt: u8,
+        ctx: &AppContext,
+    ) -> Option<CloudShellRecoveryRequest> {
+        let model = self.model.lock();
+        let block_list = model.block_list();
+        let active_block_index = block_list.active_block_index().0;
+        let block = block_list
+            .blocks()
+            .get(active_block_index)
+            .filter(|block| block.requested_command_action_id().is_some())
+            .or_else(|| {
+                active_block_index.checked_sub(1).and_then(|index| {
+                    block_list
+                        .blocks()
+                        .get(index)
+                        .filter(|block| block.requested_command_action_id().is_some())
+                })
+            })?;
+        let action_id = block.requested_command_action_id()?.clone();
+        let requested_working_directory = self
+            .active_block_metadata
+            .as_ref()
+            .and_then(BlockMetadata::current_working_directory)
+            .map(str::to_owned)
+            .or_else(|| block.pwd().cloned());
+
+        let session_id = block.session_id();
+        let dynamic_session_environment_available = session_id.is_some_and(|session_id| {
+            self.sessions
+                .as_ref(ctx)
+                .get_env_vars_for_session(session_id)
+                .is_some()
+        });
+
+        Some(CloudShellRecoveryRequest {
+            action_id,
+            block_id: block.id().clone(),
+            partial_output: block.output_with_secrets_unobfuscated(),
+            status,
+            requested_working_directory,
+            session_id,
+            start_ts: block.start_ts().cloned(),
+            attempt,
+            recovery_started_at: Instant::now(),
+            dynamic_session_environment_available,
+        })
+    }
+
+    fn try_begin_cloud_shell_recovery(
+        &mut self,
+        status: ObservedExitStatus,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if !FeatureFlag::CloudAgentShellRespawn.is_enabled()
+            || self.manual_pty_shutdown_requested
+            || self.pending_cloud_shell_recovery.is_some()
+            || !self.is_login_shell_bootstrapped
+            || self
+                .ambient_agent_view_model
+                .as_ref()
+                .is_some_and(|ambient| ambient.as_ref(ctx).is_third_party_harness())
+        {
+            return false;
+        }
+        {
+            let model = self.model.lock();
+            if model.is_read_only()
+                || !model.is_shared_ambient_agent_session()
+                || !model.shared_session_status().is_active_sharer()
+                || model
+                    .block_list()
+                    .is_executing_oz_environment_startup_commands()
+            {
+                return false;
+            }
+        }
+        let attempt = self.cloud_shell_recovery_count + 1;
+        let Some(request) = self.cloud_shell_recovery_request(status, attempt, ctx) else {
+            return false;
+        };
+        Self::send_cloud_shell_recovery_telemetry(
+            CloudAgentShellRecoveryOutcome::Detected,
+            &request,
+            None,
+            None,
+            None,
+            ctx,
+        );
+        if attempt > MAX_CLOUD_SHELL_RECOVERIES {
+            Self::send_cloud_shell_recovery_telemetry(
+                CloudAgentShellRecoveryOutcome::Exhausted,
+                &request,
+                Some(0),
+                None,
+                None,
+                ctx,
+            );
+            return false;
+        }
+        self.ai_action_model
+            .as_ref(ctx)
+            .shell_command_executor(ctx)
+            .update(ctx, |executor, _| {
+                executor.begin_shell_recovery(&request.action_id, &request.block_id);
+            });
+        self.cloud_shell_recovery_count = attempt;
+        self.pending_cloud_shell_recovery = Some(request.clone());
+        Self::send_cloud_shell_recovery_telemetry(
+            CloudAgentShellRecoveryOutcome::Started,
+            &request,
+            None,
+            None,
+            None,
+            ctx,
+        );
+        self.model.lock().prepare_shell_recovery(status);
+        self.input.update(ctx, |input, ctx| {
+            input.editor().update(ctx, |editor, ctx| {
+                editor.set_interaction_state(crate::editor::InteractionState::Disabled, ctx);
+            });
+        });
+        ctx.emit(Event::RecoverCloudShell(request));
+        true
+    }
+
+    pub(crate) fn fail_cloud_shell_recovery(
+        &mut self,
+        request: CloudShellRecoveryRequest,
+        failure_class: CloudAgentShellRecoveryFailureClass,
+        error: anyhow::Error,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.pending_cloud_shell_recovery.take().is_none() {
+            return;
+        }
+        log::warn!(
+            "Cloud shell recovery attempt {} failed: {error:#}",
+            request.attempt
+        );
+        Self::send_cloud_shell_recovery_telemetry(
+            CloudAgentShellRecoveryOutcome::Failed,
+            &request,
+            Some(Self::cloud_shell_recovery_duration_ms(&request)),
+            None,
+            Some(failure_class),
+            ctx,
+        );
+        self.model
+            .lock()
+            .finalize_exit(ExitReason::ShellProcessExited {
+                status: request.status,
+            });
+    }
+
+    fn send_cloud_shell_recovery_telemetry(
+        outcome: CloudAgentShellRecoveryOutcome,
+        request: &CloudShellRecoveryRequest,
+        duration_ms: Option<u32>,
+        used_fallback_directory: Option<bool>,
+        failure_class: Option<CloudAgentShellRecoveryFailureClass>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let (detection, exit_code, signal) = match request.status {
+            ObservedExitStatus::Code(code) => {
+                (CloudAgentShellExitDetection::ExitCode, Some(code), None)
+            }
+            ObservedExitStatus::Signal(signal) => {
+                (CloudAgentShellExitDetection::Signal, None, Some(signal))
+            }
+            ObservedExitStatus::Unavailable => {
+                (CloudAgentShellExitDetection::Unavailable, None, None)
+            }
+        };
+        send_telemetry_from_ctx!(
+            TelemetryEvent::CloudAgentShellRecovery {
+                outcome,
+                attempt: request.attempt,
+                detection,
+                status_available: !matches!(request.status, ObservedExitStatus::Unavailable),
+                exit_code,
+                signal,
+                duration_ms,
+                dynamic_session_environment_available: request
+                    .dynamic_session_environment_available,
+                used_fallback_directory,
+                failure_class,
+            },
+            ctx
+        );
+    }
+
     /// Sends telemetry if an AI-requested command caused the shell to exit, and
     /// returns the conversation that issued that command along with the
     /// (secret-redacted) command text so the caller can finalize it as a
@@ -12340,6 +12556,22 @@ impl TerminalView {
                 ctx.request_user_attention();
             }
             ModelEvent::Exit { reason } => {
+                if let ExitReason::ShellProcessExited { status } = reason {
+                    if let Some(request) = self.pending_cloud_shell_recovery.clone() {
+                        self.fail_cloud_shell_recovery(
+                            request,
+                            CloudAgentShellRecoveryFailureClass::ReplacementShellExit,
+                            anyhow::anyhow!("replacement shell exited before bootstrap"),
+                            ctx,
+                        );
+                        return;
+                    } else if self.try_begin_cloud_shell_recovery(*status, ctx) {
+                        return;
+                    }
+                }
+                if self.model.lock().finalize_exit(*reason) {
+                    return;
+                }
                 if !self.manual_pty_shutdown_requested
                     && let Some((conversation_id, command)) =
                         self.maybe_send_agent_exited_shell_telemetry(ctx)
@@ -27081,6 +27313,72 @@ impl PtyIntentEvent for Event {
 }
 
 impl TerminalSurface for TerminalView {
+    fn on_cloud_shell_recovered(
+        &mut self,
+        request: CloudShellRecoveryRequest,
+        restored_working_directory: String,
+        used_fallback_directory: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.pending_cloud_shell_recovery.take().is_none() {
+            return;
+        }
+        if !self.model.lock().shared_session_status().is_active_sharer() {
+            self.pending_cloud_shell_recovery = Some(request.clone());
+            self.fail_cloud_shell_recovery(
+                request,
+                CloudAgentShellRecoveryFailureClass::SharedSessionRebind,
+                anyhow::anyhow!("shared session was no longer active after shell recovery"),
+                ctx,
+            );
+            return;
+        }
+        let output = recovered_command_output(
+            &request.partial_output,
+            request.status,
+            &restored_working_directory,
+            used_fallback_directory,
+        );
+        Self::send_cloud_shell_recovery_telemetry(
+            CloudAgentShellRecoveryOutcome::Succeeded,
+            &request,
+            Some(Self::cloud_shell_recovery_duration_ms(&request)),
+            Some(used_fallback_directory),
+            None,
+            ctx,
+        );
+        let result = ShellRecoveryResult {
+            block_id: request.block_id,
+            output,
+            status: request.status,
+            restored_working_directory,
+            used_fallback_directory,
+            start_ts: request.start_ts,
+            completed_ts: Some(Local::now()),
+        };
+        self.ai_action_model
+            .as_ref(ctx)
+            .shell_command_executor(ctx)
+            .update(ctx, |executor, _| {
+                executor.finish_shell_recovery(result);
+            });
+        self.input.update(ctx, |input, ctx| {
+            input.editor().update(ctx, |editor, ctx| {
+                editor.set_interaction_state(crate::editor::InteractionState::Editable, ctx);
+            });
+        });
+        ctx.notify();
+    }
+
+    fn on_cloud_shell_recovery_failed(
+        &mut self,
+        request: CloudShellRecoveryRequest,
+        failure_class: CloudAgentShellRecoveryFailureClass,
+        error: anyhow::Error,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.fail_cloud_shell_recovery(request, failure_class, error, ctx);
+    }
     #[cfg(feature = "local_tty")]
     fn on_shell_determined(&mut self, ctx: &mut ViewContext<Self>) {
         if !self.model.lock().shared_session_status().is_viewer() {

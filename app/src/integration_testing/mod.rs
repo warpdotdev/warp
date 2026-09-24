@@ -9,6 +9,7 @@ pub mod block;
 pub mod block_filtering;
 pub mod clipboard;
 pub mod cloud_object;
+pub mod cloud_shell_recovery;
 pub mod code_review;
 pub mod codebase_context;
 pub mod command_palette;
