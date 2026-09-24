@@ -44,8 +44,8 @@ The following events remain terminal:
 - Manual PTY shutdown or run cancellation.
 - A shell exit with no attributable in-flight agent shell action.
 
-### 2. Carry a typed termination outcome
-Replace the boolean-only child-exit notification with a typed outcome:
+### 2. Carry typed termination and recovery outcomes inside Warp
+Replace the boolean-only child-exit notification with a typed internal outcome:
 
 ```rust
 enum ObservedExitStatus {
@@ -55,11 +55,13 @@ enum ObservedExitStatus {
 }
 ```
 
-The direct child path must retain the `ExitStatus` returned by `try_wait`. The terminal-server path must include the status in its child-termination protocol. If the OS, terminal server, or sandbox launcher does not provide a status, use `Unavailable`.
+The direct child path must retain the `ExitStatus` returned by `try_wait`. Other Warp PTY paths must retain a status when their existing internal interfaces provide one. If the OS, terminal server, or sandbox launcher does not provide a status, use `Unavailable`.
 
 Propagate the terminal reason and observed status through the PTY event loop, `TerminalModel`, `TerminalView`, and the agent shell action. Do not convert shell death to a successful block with exit code `0`.
 
 The observed status is the status of the PTY child (`sbx run`), not a guaranteed parse of the command text. Return it when the sandbox launcher propagates it. Otherwise return `Unavailable`; never infer a status from `exit N`.
+
+Use a typed Warp-internal recovery result until the action-result conversion boundary. It must carry the partial output, observed status, restored working directory, fallback-directory state, and stable interruption reason. Do not add or change a cross-repository API type for this result.
 
 ### 3. Reuse state the terminal already owns
 Do not add a recovery checkpoint service, background probes, or a new shell-state serializer.
@@ -99,19 +101,25 @@ Do not replay the interrupted command or any setup command. The command can have
 Keep the existing shared-session link and conversation. Viewers can see the interrupted block and later replacement-shell blocks. If the shared-session surface cannot bind to the replacement PTY, fail recovery instead of continuing invisibly.
 
 ### 5. Return a recovery result to the agent
-Add a backward-compatible `RunShellCommandResult` variant in `warp-proto-apis`, then map it through the Warp action result and warp-server formatter. The result contains:
+Map the typed Warp-internal recovery result to the existing `RunShellCommandResult.command_finished` result in [`action_result/convert.rs`](https://github.com/warpdotdev/warp/blob/df5cacf89120ae782b9f6996f122531d3d7f8967/crates/ai/src/agent/action_result/convert.rs#L121-L145). Do not add a `RunShellCommandResult` variant or change `warp-proto-apis` or `warp-server`.
 
-- Partial command output.
-- `observed_exit_status`: code, signal, or unavailable.
-- `shell_recovered`.
+Append a stable recovery section to the existing command output after any partial command output. The section must report:
+
+- That the persistent cloud shell terminated and Warp started a replacement shell.
+- The observed status as `exit code N`, `signal N`, or `unavailable`.
 - The restored working directory and whether Warp used the fallback directory.
-- A stable interruption reason.
+- That Warp did not replay the command.
+- That partial side effects can remain and shell state can be lost.
+- The remediation guidance below.
 
 The model-facing text must state:
 
 > This command terminated the persistent cloud shell. Warp started a replacement shell and did not replay the command. Some shell state might be lost. Do not use `exit`, `logout`, `exec`, `kill $$`, or source a script that exits. Run risky exit logic in a subshell, and use the tool result to inspect its exit code. Check the reported restored state and partial side effects before retrying.
+Populate `command_finished.exit_code` only for `ObservedExitStatus::Code`. For `Signal` and `Unavailable`, leave the existing field unpopulated and report the signal or `Exit status unavailable` in the output. Never use `0` as a fallback status.
 
-When status is unavailable, the text must say `Exit status unavailable`; it must not show `0`. Emit the tool result only after recovery succeeds. If recovery fails, use the existing terminal task-failure path with a recovery-specific cause.
+Emit the tool result only after recovery succeeds. If recovery fails, use the existing terminal task-failure path with a recovery-specific cause.
+
+This v1 mapping deliberately does not expose recovery status, cwd restoration, or shell-state loss as separately structured or queryable downstream metadata. Downstream consumers receive the existing command-finished shape and the stable output text. A structured protocol extension can be considered later if consumers need to query recovery events independently of the output.
 
 ### 6. Bound recovery and failure
 Allow one respawn attempt for each detected shell death and three respawn attempts per run. Each detected death consumes one attempt. A respawn timeout or bootstrap failure ends the run immediately. A fourth shell death uses the existing `AgentExitedShell` failure path and states that the recovery limit was reached.
@@ -131,13 +139,14 @@ Do not include command text, paths, or environment values in new events.
 
 Add `CloudAgentShellRespawn` to `LOCAL_FLAGS` and `DOGFOOD_FLAGS` only. Dogfood cloud runs use staging. Do not add the flag to `PREVIEW_FLAGS`, `RELEASE_FLAGS`, or production server experiments in v1. Production remains off until staging data shows successful follow-up commands, no repeated recovery loops, and no increase in sandbox or shared-session failures.
 
-Rollback is to disable the flag. The flag-off path keeps the current terminal failure behavior. Protocol readers must treat the new result as an additive variant so rollback does not require data migration.
+Rollback is to disable the flag. The flag-off path keeps the current terminal failure behavior. The wire result shape does not change, so rollback does not require a protocol or data migration.
 
 ## Decisions
 
 - **Respawn the PTY and shell.** This keeps every normal command on the existing execution path and isolates new behavior to shell death.
 - **Reject an inner-shell supervisor.** A supervisor adds a process boundary to every command and can change shell state, signals, job control, hooks, and terminal integration.
 - **Use an explicit unavailable status.** Capturing the child status is more accurate than the current `0`, but the sandbox launcher might not expose the command's intended status.
+- **Keep the existing command-finished protocol.** A Warp-only change is smaller and safer for v1. Stable output text communicates recovery details without coordinating `warp-proto-apis` and `warp-server` changes. The trade-off is that downstream consumers cannot query recovery metadata separately.
 - **Reuse only state Warp already owns.** A separate checkpoint mechanism adds complexity and another source of truth. Missing dynamic state is acceptable when the agent receives an explicit warning.
 - **Do not change server shell-exit validation in v1.** The existing reprompt remains a prevention layer. Making validation fail closed is separate because it changes command acceptance semantics.
 
@@ -155,15 +164,17 @@ Rollback is to disable the flag. The flag-off path keeps the current terminal fa
 - A new recovery checkpoint or shell-state serialization subsystem.
 - Command replay.
 - Changes to `validateNoShellExit`, command parsing, or prompt-only prevention.
-- Changes in `oz-agent-worker` or `warp-agent-docker`.
+- Changes in `warp-proto-apis`, `warp-server`, `oz-agent-worker`, or `warp-agent-docker`.
+- Separately structured or queryable downstream recovery metadata.
 
 ## Testing and validation
 
 Unit tests must cover:
 
-- Exit code, signal, and unavailable status propagation through direct and terminal-server PTY paths.
+- Exit code, signal, and unavailable status propagation through Warp PTY paths.
 - The recovery classification table, including setup and `PtyDisconnected`.
 - Removal of the fabricated exit code `0`.
+- Mapping the internal recovery result to the existing `command_finished` result, including stable output text and omitted exit code for signal and unavailable outcomes.
 - At-exit state collection, new-session overrides, cwd fallback, and secret-free telemetry.
 - Exactly-once tool-result delivery, write blocking during recovery, and the three-attempt cap.
 - Feature-flag and native-cloud-agent-only gating.
@@ -182,13 +193,12 @@ Integration tests must run a native cloud agent session and verify:
 
 Run:
 
-- `cargo nextest run -p warp_terminal` for direct and terminal-server exit-status propagation.
+- `cargo nextest run -p warp_terminal` for PTY exit-status propagation.
 - `cargo nextest run -p ai -p warp shell_recovery` for at-exit state, classification, action-result, and driver tests added under a shared `shell_recovery` test-name prefix.
 - `cargo run --bin integration -- test_cloud_agent_shell_respawn` for the new PTY respawn integration case.
-- Generated-binding and formatter tests in `warp-proto-apis` and `warp-server` when the result variant is added.
 - One local cloud run and one staging cloud run for each status class before any production rollout.
 
 No visual proof is required. The change has no intended UI behavior.
 
 ## Parallelization
-Implement the Warp PTY lifecycle and action routing sequentially because they share one state machine. After the result shape is fixed, protocol generation and warp-server formatting can proceed in parallel on separate repository branches. Land protocol support before a Warp implementation that emits the new variant.
+Implement the Warp PTY lifecycle and action routing sequentially because they share one state machine. After the internal result shape is fixed, the Warp action-result conversion and its tests can proceed independently. No cross-repository sequencing is required.
