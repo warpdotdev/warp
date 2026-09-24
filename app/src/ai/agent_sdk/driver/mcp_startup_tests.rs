@@ -1,10 +1,10 @@
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+#[cfg(not(windows))]
+use std::{cell::RefCell, rc::Rc};
 
 use futures::FutureExt as _;
 use futures::channel::oneshot;
@@ -24,17 +24,22 @@ use warpui::r#async::{FutureExt as _, Timer};
 use warpui::{App, ModelContext, ModelHandle, SingletonEntity as _};
 
 use super::{AgentDriver, AgentDriverError, MANAGED_MCP_RESOLVE_MAX_ATTEMPTS};
+#[cfg(not(windows))]
 use crate::ai::agent_sdk::driver::harness::HarnessKind;
 use crate::ai::agent_sdk::driver::terminal::TerminalDriver;
+#[cfg(not(windows))]
 use crate::ai::agent_sdk::driver::{AgentRunPrompt, Task};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+#[cfg(not(windows))]
 use crate::ai::cloud_environments::AmbientAgentEnvironment;
+#[cfg(not(windows))]
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::mcp::builtin::{FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_NAME};
 use crate::ai::mcp::file_based_manager::{FileBasedMCPManager, FileBasedMCPManagerEvent};
 use crate::ai::mcp::file_mcp_watcher::PendingScan;
 use crate::ai::mcp::parsing::normalize_mcp_json;
+#[cfg(not(windows))]
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManagerEvent;
 use crate::ai::mcp::{
     FileMCPWatcher, FileMCPWatcherEvent, JSONMCPServer, JSONTransportType, MCPProvider,
@@ -46,6 +51,7 @@ use crate::auth::credentials::Credentials;
 use crate::server::graphql::GraphQLError;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::managed_mcp::MockManagedMcpClient;
+#[cfg(not(windows))]
 use crate::terminal::model::session::SessionInfo;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use crate::warp_managed_paths_watcher::warp_managed_mcp_config_path;
@@ -913,6 +919,7 @@ fn managed_resolution_retries_transient_error_then_succeeds() {
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 #[test]
+#[cfg(not(windows))]
 #[serial_test::serial]
 fn configured_and_profile_mcp_servers_wait_for_environment_setup() {
     let _factory_mcp_flag = FeatureFlag::FactoryMcp.override_enabled(false);
