@@ -1,3 +1,5 @@
+use warp_terminal::event::ObservedExitStatus;
+
 use super::*;
 
 #[test]
@@ -61,4 +63,40 @@ fn ask_user_question_skipped_by_auto_approve_converts_to_skipped_answers() {
         success.answers[1].answer,
         Some(AskUserQuestionAnswer::Skipped(()))
     ));
+}
+
+#[test]
+fn recovered_shell_status_never_converts_to_a_successful_exit() {
+    let cases = [
+        (ObservedExitStatus::Code(42), 42),
+        (ObservedExitStatus::Code(0), 1),
+        (ObservedExitStatus::Signal(9), 137),
+        (ObservedExitStatus::Unavailable, 1),
+    ];
+
+    for (status, expected_exit_code) in cases {
+        let converted = api::request::input::tool_call_result::Result::try_from(
+            RequestCommandOutputResult::ShellRecovered {
+                block_id: BlockId::new(),
+                command: "exit".to_owned(),
+                output: "recovered".to_owned(),
+                status,
+                restored_working_directory: "/home/agent".to_owned(),
+                used_fallback_directory: false,
+                start_ts: None,
+                completed_ts: None,
+            },
+        )
+        .expect("recovered result should convert");
+        let api::request::input::tool_call_result::Result::RunShellCommand(result) = converted
+        else {
+            panic!("expected run shell command result");
+        };
+        let Some(api::run_shell_command_result::Result::CommandFinished(result)) = result.result
+        else {
+            panic!("expected completed shell command");
+        };
+
+        assert_eq!(result.exit_code, expected_exit_code);
+    }
 }

@@ -3032,9 +3032,9 @@ impl BlockList {
         }
     }
 
-    pub fn reinit_shell(&mut self) {
+    pub fn reinit_shell(&mut self, interrupted_exit_code: Option<i32>) {
         let active_block = self.active_block_mut();
-        active_block.finish(0);
+        active_block.finish(interrupted_exit_code.unwrap_or(0));
         self.update_active_block_height();
 
         self.create_warp_input_block();

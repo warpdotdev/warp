@@ -2140,6 +2140,11 @@ impl TuiTerminalSessionView {
                 view.reconcile_focus(ctx);
                 ctx.notify();
             }
+            ModelEvent::Exit { reason } => {
+                view.terminal_model.lock().finalize_exit(*reason);
+                view.refresh_exit_summary(ctx);
+                ctx.notify();
+            }
             ModelEvent::Typeahead => view.handle_typeahead_event(ctx),
             ModelEvent::BlockMetadataReceived(_)
             | ModelEvent::BlockWorkingDirectoryUpdated(_)

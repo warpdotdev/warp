@@ -82,6 +82,10 @@ use crate::{
 };
 
 pub type TerminalPaneView = PaneView<TerminalView>;
+type ManagedTerminalSession = (
+    ModelHandle<Box<dyn TerminalManager>>,
+    ViewHandle<TerminalView>,
+);
 
 /// Data kept for terminal panes.
 pub struct TerminalPane {
@@ -194,6 +198,21 @@ impl TerminalPane {
         ctx: &AppContext,
     ) -> ModelHandle<Box<dyn TerminalManager>> {
         self.view.as_ref(ctx).child_data(ctx).clone()
+    }
+
+    fn terminal_session_for_view(
+        &self,
+        terminal_view_id: EntityId,
+        ctx: &AppContext,
+    ) -> Option<ManagedTerminalSession> {
+        self.view
+            .as_ref(ctx)
+            .pane_stack()
+            .as_ref(ctx)
+            .entries()
+            .iter()
+            .find(|(_, view)| view.id() == terminal_view_id)
+            .cloned()
     }
 
     /// Instructs the SQLite thread to delete blocks for this session.
@@ -873,10 +892,11 @@ fn attach_terminal_view(
     terminal_pane_id: TerminalPaneId,
     ctx: &mut ViewContext<PaneGroup>,
 ) {
+    let terminal_view_id = terminal_view.id();
     ctx.subscribe_to_view(
         terminal_view,
         move |group: &mut PaneGroup, _, event, ctx| {
-            handle_terminal_view_event(group, terminal_pane_id, event, ctx);
+            handle_terminal_view_event(group, terminal_pane_id, terminal_view_id, event, ctx);
         },
     );
 }
@@ -907,6 +927,7 @@ fn handle_pane_stack_event(
 fn handle_terminal_view_event(
     group: &mut PaneGroup,
     terminal_pane_id: TerminalPaneId,
+    terminal_view_id: EntityId,
     event: &Event,
     ctx: &mut ViewContext<PaneGroup>,
 ) {
@@ -917,6 +938,27 @@ fn handle_terminal_view_event(
             Event::Escape => ctx.emit(pane_group::Event::Escape),
             Event::ExecuteCommand(event) => {
                 ctx.emit(pane_group::Event::ExecuteCommand(event.clone()));
+            }
+            Event::RecoverCloudShell(request) => {
+                let Some((terminal_manager, terminal_view)) = group
+                    .terminal_session_by_id(pane_id)
+                    .and_then(|pane| pane.terminal_session_for_view(terminal_view_id, ctx))
+                else {
+                    return;
+                };
+                let request = request.clone();
+                let accepted = terminal_manager.update(ctx, |manager, ctx| {
+                    manager.recover_cloud_shell(request.clone(), ctx)
+                });
+                if !accepted {
+                    terminal_view.update(ctx, |view, ctx| {
+                        view.fail_cloud_shell_recovery(
+                            request,
+                            anyhow::anyhow!("terminal manager does not support shell recovery"),
+                            ctx,
+                        );
+                    });
+                }
             }
             Event::Exited => {
                 // If the shell process exited before it successfully bootstrapped,

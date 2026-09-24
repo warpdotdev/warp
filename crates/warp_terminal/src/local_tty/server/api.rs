@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::event::ObservedExitStatus;
 use crate::local_tty::{PtyOptions, PtySpawnResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,5 +56,7 @@ pub(super) enum Message {
     /// more child processes have terminated.  This has no matching response
     /// message - these requests are fire-and-forget from the server to the
     /// host application.
-    ChildrenTerminatedRequest { pids: Vec<u32> },
+    ChildrenTerminatedRequest {
+        children: Vec<(u32, ObservedExitStatus)>,
+    },
 }

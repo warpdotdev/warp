@@ -19,7 +19,9 @@ use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_errors::report_error;
 pub use warp_terminal::event::ExitReason;
-use warp_terminal::event::validate_and_decode_in_band_command_output_to_bytes;
+use warp_terminal::event::{
+    ObservedExitStatus, validate_and_decode_in_band_command_output_to_bytes,
+};
 pub use warp_terminal::model::{BlockIndex, RangeInModel};
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::AppContext;
@@ -472,6 +474,7 @@ pub struct TerminalModel {
 
     /// Whether or not the underlying shell process has terminated.
     handled_exit: bool,
+    pending_shell_recovery_exit_code: Option<i32>,
 
     /// The shell type of the login shell for this session.
     shell_launch_state: ShellLaunchState,
@@ -1107,6 +1110,7 @@ impl TerminalModel {
             is_receiving_kitty_image_data: IsReceivingKittyActionData::No,
             did_receive_rc_file_dcs: None,
             handled_exit: false,
+            pending_shell_recovery_exit_code: None,
             env_var_collection_name: None,
             shell_launch_state: shell_state,
             obfuscate_secrets,
@@ -1500,15 +1504,33 @@ impl TerminalModel {
     }
 
     pub fn exit(&mut self, reason: ExitReason) {
+        if let ExitReason::ShellProcessExited { .. } = reason {
+            if self.pending_shell_recovery_exit_code.is_some() || self.handled_exit {
+                return;
+            }
+            self.shell_process_info = None;
+            self.event_proxy.send_app_event(Event::Exit { reason });
+            return;
+        }
+        self.finalize_exit(reason);
+    }
+
+    pub fn prepare_shell_recovery(&mut self, status: ObservedExitStatus) {
+        self.pending_shell_recovery_exit_code = Some(status.failure_exit_code());
+        self.exit_alt_screen(true);
+    }
+
+    pub fn finalize_exit(&mut self, reason: ExitReason) -> bool {
         // If we've already responded to the shell/event loop exiting, there's
         // nothing more to do.
         if self.handled_exit {
-            return;
+            return false;
         }
         log::debug!("Terminal model exiting: reason={reason:?}");
         let transition = self.plan_lifecycle_transition(LifecycleInput::Exit, None, None, None);
 
         self.handled_exit = true;
+        self.pending_shell_recovery_exit_code = None;
         // The pty is going away, so its descriptor must not be read again: the
         // OS is free to hand the same number to an unrelated file.
         self.shell_process_info = None;
@@ -1520,6 +1542,7 @@ impl TerminalModel {
         self.block_list.active_block_mut().finish(0);
         self.event_proxy.send_app_event(Event::Exit { reason });
         self.commit_lifecycle_transition(&transition);
+        true
     }
 
     pub fn is_read_only(&self) -> bool {
@@ -3184,7 +3207,8 @@ impl ansi::Handler for TerminalModel {
             self.pending_session_info = Some(pending_session_info.clone());
 
             if self.block_list().is_bootstrapped() {
-                self.block_list_mut().reinit_shell();
+                let interrupted_exit_code = self.pending_shell_recovery_exit_code.take();
+                self.block_list_mut().reinit_shell(interrupted_exit_code);
             }
 
             self.emit_handler_event(HandlerEvent::InitShell {

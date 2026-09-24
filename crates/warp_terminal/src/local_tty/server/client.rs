@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::os::unix::prelude::*;
 use std::sync::Arc;
 
@@ -6,6 +6,7 @@ use anyhow::{Result, bail};
 use parking_lot::Mutex;
 
 use super::{api, protocol};
+use crate::event::ObservedExitStatus;
 use crate::local_tty::{PtyOptions, PtySpawnResult};
 
 /// A client for communicating with the terminal server.
@@ -24,14 +25,17 @@ pub struct TerminalServerClient {
     socket_fd: Mutex<OwnedFd>,
     /// The set of process IDs of terminated children which have not yet been
     /// processed by the pty event loops.
-    terminated_children: Arc<Mutex<HashSet<u32>>>,
+    terminated_children: Arc<Mutex<HashMap<u32, ObservedExitStatus>>>,
 }
 
 impl TerminalServerClient {
     /// Constructs a new terminal server client which communicates with the
     /// server via the provided Unix domain socket file descriptor and holds
     /// onto a list of terminated child process IDs.
-    pub fn new(client_fd: OwnedFd, terminated_children: Arc<Mutex<HashSet<u32>>>) -> Self {
+    pub fn new(
+        client_fd: OwnedFd,
+        terminated_children: Arc<Mutex<HashMap<u32, ObservedExitStatus>>>,
+    ) -> Self {
         Self {
             socket_fd: Mutex::new(client_fd),
             terminated_children,
@@ -75,7 +79,7 @@ impl TerminalServerClient {
     /// Asks the server to terminate and clean up its child process with the
     /// given process ID.
     pub fn kill_child(&self, pid: u32) -> Result<()> {
-        if self.has_child_terminated(pid) {
+        if self.child_termination_status(pid).is_some() {
             return Ok(());
         }
 
@@ -115,9 +119,8 @@ impl TerminalServerClient {
         }
     }
 
-    /// Returns whether or not the child process with the given process ID has
-    /// terminated.  This will only return true once for each process ID.
-    pub fn has_child_terminated(&self, pid: u32) -> bool {
+    /// Returns and consumes the recorded exit status for the given process ID.
+    pub fn child_termination_status(&self, pid: u32) -> Option<ObservedExitStatus> {
         self.terminated_children.lock().remove(&pid)
     }
 }

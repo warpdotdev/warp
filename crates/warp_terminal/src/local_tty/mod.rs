@@ -32,6 +32,7 @@ pub use self::unix::*;
 #[cfg(windows)]
 pub use self::windows::*;
 use crate::SizeInfo;
+use crate::event::ObservedExitStatus;
 
 /// This trait defines the behaviour needed to read and/or write to a stream.
 /// It defines an abstraction over mio's interface in order to allow either one
@@ -54,7 +55,7 @@ pub trait EventedReadWrite {
 #[derive(Debug, PartialEq, Eq)]
 pub enum ChildEvent {
     /// Indicates the child has exited.
-    Exited,
+    Exited(ObservedExitStatus),
 }
 
 /// A pseudoterminal (or PTY).
