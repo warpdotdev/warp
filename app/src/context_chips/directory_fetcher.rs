@@ -86,13 +86,11 @@ impl DirectoryFetcher {
         session_context: &SessionContext,
         dir_path: &str,
     ) -> Vec<DirectoryItem> {
-        // Convert the directory path to TypedPathBuf, expanding ~ if needed
-        let expanded_path = shellexpand::tilde(dir_path).into_owned();
-        let typed_path = if expanded_path != dir_path {
-            TypedPathBuf::from(expanded_path)
-        } else {
-            TypedPathBuf::from(dir_path)
-        };
+        let typed_path = expand_session_home(
+            dir_path,
+            session_context.session.home_dir(),
+            session_context.session.path_separators().all,
+        );
 
         // Force re-read the directory from disk so the chip reflects its current contents rather
         // than serving the possibly-stale entry from the shared `SessionContext` cache.
@@ -159,6 +157,29 @@ impl Drop for DirectoryFetcher {
         if let Some(handle) = self.fetch_handle.take() {
             handle.abort();
         }
+    }
+}
+
+fn expand_session_home(
+    dir_path: &str,
+    home_dir: Option<&str>,
+    path_separators: &[char],
+) -> TypedPathBuf {
+    let Some(home_dir) = home_dir else {
+        return TypedPathBuf::from(dir_path);
+    };
+    let Some(suffix) = dir_path.strip_prefix('~') else {
+        return TypedPathBuf::from(dir_path);
+    };
+    if suffix.is_empty()
+        || suffix
+            .chars()
+            .next()
+            .is_some_and(|separator| path_separators.contains(&separator))
+    {
+        TypedPathBuf::from(format!("{home_dir}{suffix}"))
+    } else {
+        TypedPathBuf::from(dir_path)
     }
 }
 
