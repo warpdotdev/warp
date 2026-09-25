@@ -17,6 +17,7 @@ use bounded_vec_deque::BoundedVecDeque;
 use pathfinder_geometry::vector::Vector2F;
 use rand::Rng;
 use tab_stops::TabStops;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
@@ -30,7 +31,7 @@ use crate::model::ansi::{
     self, Attr, CharsetIndex, Color, CursorStyle, Handler as _, NamedColor, PrecmdValue,
     PreexecValue,
 };
-use crate::model::cell::{Cell, Flags};
+use crate::model::cell::{Cell, Flags, MAX_GRAPHEME_BYTES};
 use crate::model::char_or_str::CharOrStr;
 use crate::model::grid::indexing::IndexRegion as _;
 use crate::model::grid::{Dimensions as _, cell, grapheme_cursor};
@@ -192,28 +193,34 @@ impl ansi::Handler for GridHandler {
             );
         }
         // Number of cells the char will occupy.
-        let Some(width) = c.width() else {
-            return;
+        let width = match c.width() {
+            // A character that continues the previous cell's grapheme cluster takes
+            // no cells of its own, so its width is 0 and the zero-width path below
+            // appends it to that cell so the cluster renders as one glyph, e.g. the
+            // rest of an emoji ZWJ sequence such as U+1F926 U+1F3FB U+200D U+2640 U+FE0F
+            // (FACE PALM + EMOJI MODIFIER FITZPATRICK TYPE-1-2 + ZERO WIDTH JOINER +
+            // FEMALE SIGN + VARIATION SELECTOR-16 = 🤦🏻‍♀️).
+            Some(width) if width > 0 && self.char_continues_previous_grapheme(c) => 0,
+            // Otherwise use the width `unicode-width` reports: one column for narrow
+            // text, two for wide (CJK, most emoji), or zero for a combining mark that
+            // joins the previous cell.
+            Some(width) => width,
+            // Control characters have no width and are never written to the grid.
+            None => return,
         };
 
         let num_cols = self.columns();
 
         // Handle zero-width characters.
         if width == 0 {
-            // Get previous column.
-            let mut col = self.grid.cursor().point.col;
-            if !self.grid.cursor().input_needs_wrap {
-                col = col.saturating_sub(1);
-            }
-
-            // Put zerowidth characters over first fullwidth character cell.
-            let row = self.grid.cursor_point().row;
-            if self.grid[row][col].flags.contains(Flags::WIDE_CHAR_SPACER) {
-                col = col.saturating_sub(1);
-            }
+            // At the start of a row there is no previous cell, so the zero-width
+            // character lands in the cursor cell itself.
+            let Point { row, col } = self
+                .cell_before_cursor()
+                .unwrap_or_else(|| self.grid.cursor_point());
 
             let old_cell_content_width = match self.grid[row][col].raw_content() {
-                CharOrStr::Str(s) => s.width(),
+                CharOrStr::Str(s) => grapheme_width(s),
                 CharOrStr::Char(c) => match c.width() {
                     Some(width) => width,
                     None => {
@@ -228,7 +235,7 @@ impl ansi::Handler for GridHandler {
             }
 
             let cell_content_width = match self.grid[row][col].raw_content() {
-                CharOrStr::Str(s) => s.width(),
+                CharOrStr::Str(s) => grapheme_width(s),
                 // Note that we should never reach here since we are pushing a zerowidth character,
                 // which should always make the cell content a string. However, we cover these cases
                 // exhaustively as a safeguard (to avoid panics).
@@ -241,8 +248,13 @@ impl ansi::Handler for GridHandler {
             };
 
             // Bash and Fish support emoji variation selectors, but Zsh does not in bracketed paste
-            // mode. Specifically, this references sequences such as \0x2601\0xFE0F (☁️),
-            // which are commonly used in prompts e.g. GCloud prompt chip in Starship.
+            // mode. Specifically, this references sequences such as U+2601 U+FE0F (CLOUD +
+            // VARIATION SELECTOR-16 = ☁️), which are commonly used in prompts e.g. GCloud prompt
+            // chip in Starship.  The same gating applies to other sequences that widen a narrow
+            // base character: a skin tone modifier after a narrow base, U+261D U+1F3FD (WHITE UP
+            // POINTING INDEX + EMOJI MODIFIER FITZPATRICK TYPE-4 = ☝🏽), or the regional
+            // indicators for the Japanese flag, U+1F1EF U+1F1F5 (REGIONAL INDICATOR SYMBOL
+            // LETTER J + REGIONAL INDICATOR SYMBOL LETTER P = 🇯🇵).
             if old_cell_content_width != cell_content_width
                 && cell_content_width == 2
                 && self.ansi_handler_state.supports_emoji_presentation_selector
@@ -1474,6 +1486,63 @@ impl ansi::Handler for GridHandler {
 
 /// Helper functions for the [`ansi::Handler`] implementation.
 impl GridHandler {
+    /// Returns the position of the cell holding the grapheme before the cursor:
+    /// the cell written most recently, stepping over a wide character's spacer
+    /// to its base.  Returns `None` when nothing precedes the cursor on its row.
+    fn cell_before_cursor(&self) -> Option<Point> {
+        let cursor = self.grid.cursor();
+        let row = self.grid.cursor_point().row;
+        let mut col = cursor.point.col;
+        // Unless a wrap is pending, the cursor sits on the cell that will be
+        // written next, so the previous grapheme is in the cell before it.
+        if !cursor.input_needs_wrap {
+            col = col.checked_sub(1)?;
+        }
+        if self.grid[row][col].flags.contains(Flags::WIDE_CHAR_SPACER) {
+            col = col.checked_sub(1)?;
+        }
+        Some(Point::new(row, col))
+    }
+
+    /// Returns whether the printable character `c` extends the grapheme cluster
+    /// placed in the cell before the cursor, and should be appended to it.
+    ///
+    /// Joining is only done when it cannot make the cluster narrower than the
+    /// cells it already occupies: the previous cell is already wide, or the
+    /// grid is allowed to promote a narrow base to a wide cell (see
+    /// [`State::supports_emoji_presentation_selector`]).  Otherwise a shell
+    /// that sizes each scalar independently would end up with a cursor
+    /// position that disagrees with the grid.
+    fn char_continues_previous_grapheme(&self, c: char) -> bool {
+        // Fast path: an ASCII character never extends a grapheme cluster, and a
+        // modifier after an ASCII letter is not a meaningful emoji sequence, so it
+        // should be shown as two separate characters.
+        if c.is_ascii() {
+            return false;
+        }
+
+        let Some(Point { row, col }) = self.cell_before_cursor() else {
+            return false;
+        };
+        let previous = &self.grid[row][col];
+        if previous.c.is_ascii() {
+            return false;
+        }
+        if !previous.flags.contains(Flags::WIDE_CHAR)
+            && !self.ansi_handler_state.supports_emoji_presentation_selector
+        {
+            return false;
+        }
+
+        match previous.raw_content() {
+            CharOrStr::Char(previous_char) => {
+                let mut buf = [0; 4];
+                is_single_grapheme(previous_char.encode_utf8(&mut buf), c)
+            }
+            CharOrStr::Str(previous_content) => is_single_grapheme(previous_content, c),
+        }
+    }
+
     /// Advances the cursor by one cell, handling wrapping appropriately.
     fn advance_cursor_by_one_cell(&mut self) {
         let num_cols = self.columns();
@@ -2024,4 +2093,37 @@ impl GridHandler {
 
         Ok(())
     }
+}
+
+/// Returns the number of columns a single grapheme cluster occupies.
+///
+/// `unicode-width` sums the width of every scalar in a string, which is wrong
+/// for clusters that render as a single glyph: an emoji ZWJ sequence such as
+/// U+1F468 U+200D U+1F469 U+200D U+1F467 (MAN + ZERO WIDTH JOINER + WOMAN + ZERO
+/// WIDTH JOINER + GIRL = 👨‍👩‍👧), an emoji modifier sequence such as U+1F44D U+1F3FD
+/// (THUMBS UP SIGN + EMOJI MODIFIER FITZPATRICK TYPE-4 = 👍🏽), or a conjoining
+/// Hangul jamo sequence would be counted as four or six columns even though
+/// they draw as one wide glyph.  A grapheme cluster never occupies more than
+/// two cells, so clamp the sum.  This keeps the emoji presentation selector
+/// handling that `unicode-width` already provides, e.g. U+2601 U+FE0F (CLOUD +
+/// VARIATION SELECTOR-16 = ☁️) is two columns.
+fn grapheme_width(grapheme: &str) -> usize {
+    grapheme.width().min(2)
+}
+
+/// Returns whether `next` extends the grapheme cluster in `previous`, i.e. the
+/// two together form a single user-perceived character that fits in a cell.
+/// A cell already at `MAX_GRAPHEME_BYTES` cannot take `next`, so this returns
+/// false and `next` starts a new cell rather than being dropped by
+/// `push_zerowidth`.
+fn is_single_grapheme(previous: &str, next: char) -> bool {
+    let len = previous.len() + next.len_utf8();
+    if len > MAX_GRAPHEME_BYTES {
+        return false;
+    }
+    // The cap keeps the pair on the stack, so this path never allocates.
+    let mut combined = [0; MAX_GRAPHEME_BYTES];
+    combined[..previous.len()].copy_from_slice(previous.as_bytes());
+    next.encode_utf8(&mut combined[previous.len()..]);
+    str::from_utf8(&combined[..len]).is_ok_and(|combined| combined.graphemes(true).nth(1).is_none())
 }
