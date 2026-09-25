@@ -1,11 +1,16 @@
 use ai::LLMProvider;
 use ai::api_keys::ApiKeyManager;
-use warp::tui_export::{UserWorkspaces, register_tui_session_view_test_singletons};
+use warp::editor::CodeEditorModel;
+use warp::tui_export::{
+    UserWorkspaces, register_tui_session_view_test_singletons,
+    set_tui_model_menu_host_fixture_for_test, set_tui_model_menu_host_toggle_for_test,
+};
 use warp_core::features::FeatureFlag;
 use warpui::SingletonEntity as _;
-use warpui_core::App;
+use warpui_core::{App, EntityId};
 
 use super::*;
+use crate::input_suggestions_mode::TuiInputSuggestionsModeModel;
 
 fn row(
     id: &str,
@@ -121,5 +126,46 @@ fn provider_key_controls_key_connected_callout() {
             model_menu_row(choice, &LLMId::from("profile-default"), &scope, ctx)
         });
         assert_eq!(snapshot_row(&disconnected_row).state_suffix, None);
+    });
+}
+
+#[test]
+fn open_menu_refreshes_when_respected_host_toggle_changes() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        app.update(set_tui_model_menu_host_fixture_for_test);
+        let menu = app.update(|ctx| {
+            let input = ctx.add_model(|ctx| CodeEditorModel::new_tui(80, ctx));
+            let mode = ctx.add_model(|_| TuiInputSuggestionsModeModel::new());
+            let menu = ctx.add_model(|ctx| {
+                TuiModelMenuModel::new(
+                    input,
+                    mode,
+                    EntityId::new(),
+                    UserWorkspaces::teamless_context_resolver_for_test(),
+                    ctx,
+                )
+            });
+            menu.update(ctx, |menu, ctx| menu.open(ctx));
+            menu
+        });
+        let titles = |app: &App| {
+            app.read(|ctx| {
+                menu.as_ref(ctx)
+                    .snapshot(ctx)
+                    .expect("menu should remain open")
+                    .rows
+                    .into_iter()
+                    .map(|row| row.title)
+                    .collect::<Vec<_>>()
+            })
+        };
+        assert!(!titles(&app).contains(&"Bedrock only".to_owned()));
+
+        app.update(|ctx| set_tui_model_menu_host_toggle_for_test(true, ctx));
+        assert!(titles(&app).contains(&"Bedrock only".to_owned()));
+
+        app.update(|ctx| set_tui_model_menu_host_toggle_for_test(false, ctx));
+        assert!(!titles(&app).contains(&"Bedrock only".to_owned()));
     });
 }

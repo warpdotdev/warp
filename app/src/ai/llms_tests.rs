@@ -740,11 +740,16 @@ fn cloud_host_opt_out_filters_picker_and_rejects_saved_models_without_blocking_o
             },
         );
     }
+    let coding = available(
+        "auto",
+        vec![server_llm("auto", None), bedrock.clone(), direct.clone()],
+    );
     let models = ModelsByFeature {
         agent_mode: available(
             "auto",
             vec![server_llm("auto", None), bedrock, gemini, direct],
         ),
+        coding,
         ..Default::default()
     };
     let mut team = Team::from_local_cache(123.into(), "respect".into(), None, None, None, None);
@@ -812,6 +817,7 @@ fn cloud_host_opt_out_filters_picker_and_rejects_saved_models_without_blocking_o
                 let error = crate::ai::agent::api::validate_model_hosts_for_request(
                     &models,
                     &blocked.into(),
+                    &"auto".into(),
                     &"cli-agent-auto".into(),
                     &"computer-use-agent-auto".into(),
                     &respect_scope,
@@ -823,6 +829,7 @@ fn cloud_host_opt_out_filters_picker_and_rejects_saved_models_without_blocking_o
             assert!(
                 crate::ai::agent::api::validate_model_hosts_for_request(
                     &models,
+                    &"direct-alternative".into(),
                     &"direct-alternative".into(),
                     &"cli-agent-auto".into(),
                     &"computer-use-agent-auto".into(),
@@ -838,6 +845,43 @@ fn cloud_host_opt_out_filters_picker_and_rejects_saved_models_without_blocking_o
                     .collect();
             assert!(enforced_ids.contains(&"bedrock-only".into()));
             assert!(enforced_ids.contains(&"gemini-only".into()));
+            assert!(
+                crate::ai::agent::api::validate_model_hosts_for_request(
+                    &models,
+                    &"auto".into(),
+                    &"bedrock-only".into(),
+                    &"cli-agent-auto".into(),
+                    &"computer-use-agent-auto".into(),
+                    &enforced_scope,
+                    ctx,
+                )
+                .is_ok()
+            );
+        });
+        app.read(|ctx| {
+            let blocked = crate::ai::agent::api::validate_model_hosts_for_request(
+                &models,
+                &"auto".into(),
+                &"bedrock-only".into(),
+                &"cli-agent-auto".into(),
+                &"computer-use-agent-auto".into(),
+                &respect_scope,
+                ctx,
+            )
+            .expect_err("saved coding model must not be sent");
+            assert!(blocked.to_string().contains("bedrock-only"));
+            assert!(
+                crate::ai::agent::api::validate_model_hosts_for_request(
+                    &models,
+                    &"auto".into(),
+                    &"direct-alternative".into(),
+                    &"cli-agent-auto".into(),
+                    &"computer-use-agent-auto".into(),
+                    &respect_scope,
+                    ctx,
+                )
+                .is_ok()
+            );
         });
         ApiKeyManager::handle(&app).update(&mut app, |manager, _| {
             manager.set_aws_credentials_refresh_strategy(
@@ -854,6 +898,7 @@ fn cloud_host_opt_out_filters_picker_and_rejects_saved_models_without_blocking_o
                 crate::ai::agent::api::validate_model_hosts_for_request(
                     &models,
                     &"bedrock-only".into(),
+                    &"auto".into(),
                     &"cli-agent-auto".into(),
                     &"computer-use-agent-auto".into(),
                     &respect_scope,
@@ -925,6 +970,7 @@ fn oidc_managed_cloud_request_can_use_bedrock_without_a_desktop_setting() {
                 crate::ai::agent::api::validate_model_hosts_for_request(
                     &models,
                     &"bedrock-only".into(),
+                    &"auto".into(),
                     &"cli-agent-auto".into(),
                     &"computer-use-agent-auto".into(),
                     &scope,

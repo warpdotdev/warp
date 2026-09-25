@@ -260,6 +260,7 @@ impl RequestParams {
         validate_model_hosts_for_request(
             models,
             &request_input.model_id,
+            &request_input.coding_model_id,
             &request_input.cli_agent_model_id,
             &request_input.computer_use_model_id,
             scope,
@@ -471,6 +472,7 @@ impl RequestParams {
 pub(crate) fn validate_model_hosts_for_request(
     models: &ModelsByFeature,
     base: &LLMId,
+    coding: &LLMId,
     cli_agent: &LLMId,
     computer_use: &LLMId,
     scope: &dyn TeamScope,
@@ -478,6 +480,7 @@ pub(crate) fn validate_model_hosts_for_request(
 ) -> anyhow::Result<()> {
     for (id, info) in [
         (base, models.agent_mode.info_for_id(base)),
+        (coding, models.coding.info_for_id(coding)),
         (
             cli_agent,
             models
