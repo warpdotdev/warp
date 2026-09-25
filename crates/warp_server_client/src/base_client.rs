@@ -1,12 +1,15 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
 use futures::StreamExt as _;
+use futures::lock::Mutex as AsyncMutex;
 use instant::Duration;
 use parking_lot::{Mutex, RwLock};
 use warp_graphql::client::RequestOptions;
+use warp_isolation_platform::{IsolationPlatformError, WorkloadToken, issue_workload_token};
 use warp_server_auth::auth_state::AuthState;
 use warp_server_auth::credentials::AuthToken;
 #[cfg(feature = "agent_mode_evals")]
@@ -122,7 +125,8 @@ pub struct BaseClient {
     auth_state: Arc<AuthState>,
     event_sender: async_channel::Sender<AuthEvent>,
     auth_session: Arc<AuthSession>,
-    ambient_workload_token: Arc<Mutex<Option<warp_isolation_platform::WorkloadToken>>>,
+    ambient_workload_token: Arc<Mutex<Option<WorkloadToken>>>,
+    ambient_workload_token_refresh: AsyncMutex<()>,
     ambient_agent_task_id: Arc<RwLock<Option<String>>>,
     agent_source: Option<String>,
     graphql_routing: GraphqlRoutingConfig,
@@ -179,6 +183,7 @@ impl BaseClient {
             event_sender,
             auth_session,
             ambient_workload_token: Arc::new(Mutex::new(None)),
+            ambient_workload_token_refresh: AsyncMutex::new(()),
             ambient_agent_task_id: Arc::new(RwLock::new(None)),
             agent_source,
             graphql_routing,
@@ -268,8 +273,7 @@ impl BaseClient {
         token: String,
         expires_at: Option<DateTime<Utc>>,
     ) {
-        *self.ambient_workload_token.lock() =
-            Some(warp_isolation_platform::WorkloadToken { token, expires_at });
+        *self.ambient_workload_token.lock() = Some(WorkloadToken { token, expires_at });
     }
 
     /// Returns an ambient agent workload token when the current runtime can issue one.
@@ -330,32 +334,53 @@ impl BaseClient {
         &self,
         valid_until: DateTime<Utc>,
         requested_duration: Duration,
-    ) -> Result<Option<warp_isolation_platform::WorkloadToken>> {
+    ) -> Result<Option<WorkloadToken>> {
+        self.workload_token_valid_until_with(valid_until, requested_duration, issue_workload_token)
+            .await
+    }
+
+    async fn workload_token_valid_until_with<F>(
+        &self,
+        valid_until: DateTime<Utc>,
+        requested_duration: Duration,
+        issue_token: impl FnOnce(Option<Duration>) -> F,
+    ) -> Result<Option<WorkloadToken>>
+    where
+        F: Future<Output = Result<WorkloadToken, IsolationPlatformError>>,
+    {
         if cfg!(target_family = "wasm") {
             return Ok(None);
         }
-        {
-            let cached = self.ambient_workload_token.lock();
-            if let Some(token) = cached.as_ref()
-                && token
-                    .expires_at
-                    .is_none_or(|expires_at| valid_until < expires_at)
-            {
-                return Ok(Some(token.clone()));
-            }
+        if let Some(token) = self.cached_workload_token_valid_until(valid_until) {
+            return Ok(Some(token));
         }
-        let workload_token =
-            match warp_isolation_platform::issue_workload_token(Some(requested_duration)).await {
-                Ok(token) => token,
-                Err(
-                    warp_isolation_platform::IsolationPlatformError::NoIsolationPlatformDetected,
-                ) => {
-                    return Ok(None);
-                }
-                Err(error) => return Err(error.into()),
-            };
+
+        // Concurrent NSC processes can read its first-run config before initialization finishes.
+        let _refresh_guard = self.ambient_workload_token_refresh.lock().await;
+        if let Some(token) = self.cached_workload_token_valid_until(valid_until) {
+            return Ok(Some(token));
+        }
+        let workload_token = match issue_token(Some(requested_duration)).await {
+            Ok(token) => token,
+            Err(IsolationPlatformError::NoIsolationPlatformDetected) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
         *self.ambient_workload_token.lock() = Some(workload_token.clone());
         Ok(Some(workload_token))
+    }
+    fn cached_workload_token_valid_until(
+        &self,
+        valid_until: DateTime<Utc>,
+    ) -> Option<WorkloadToken> {
+        self.ambient_workload_token
+            .lock()
+            .as_ref()
+            .filter(|token| {
+                token
+                    .expires_at
+                    .is_none_or(|expires_at| valid_until < expires_at)
+            })
+            .cloned()
     }
 
     /// Resolves request-local ambient agent policy into wire headers.

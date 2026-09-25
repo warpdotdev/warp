@@ -1,15 +1,21 @@
 use std::collections::HashMap;
+use std::pin::pin;
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 
+use chrono::{Duration, Utc};
 use cloud_objects::ids::ServerId;
+use futures::channel::oneshot;
 use futures::executor::block_on;
+use futures::{join, poll};
 use warp_core::channel::ChannelState;
+use warp_isolation_platform::{IsolationPlatformError, WorkloadToken};
 use warp_server_auth::auth_state::AuthState;
 
 use super::{
-    AGENT_SOURCE_HEADER, AMBIENT_WORKLOAD_TOKEN_HEADER, AmbientHeaderPolicy,
-    AuthenticatedGraphqlConfig, BaseClient, CLOUD_AGENT_ID_HEADER, GraphqlRoutingConfig,
-    HeaderOverride, TEAM_UID_HEADER,
+    AGENT_SOURCE_HEADER, AMBIENT_WORKLOAD_TOKEN_DURATION, AMBIENT_WORKLOAD_TOKEN_HEADER,
+    AmbientHeaderPolicy, AuthenticatedGraphqlConfig, BaseClient, CLOUD_AGENT_ID_HEADER,
+    GraphqlRoutingConfig, HeaderOverride, TEAM_UID_HEADER,
 };
 use crate::auth::{AuthClient, AuthClientImpl};
 
@@ -146,6 +152,98 @@ fn pinned_workload_token_is_withheld_unless_it_outlives_the_deadline() {
         block_on(client.get_ambient_workload_token_valid_until(deadline)).unwrap(),
         Some("never-expires".to_string()),
     );
+}
+
+#[test]
+fn concurrent_workload_token_requests_share_a_refresh() {
+    for expired_cache in [false, true] {
+        block_on(async {
+            let client = client();
+            let valid_until = Utc::now() + Duration::minutes(5);
+            if expired_cache {
+                client.set_ambient_workload_token_for_test(
+                    "expired".to_string(),
+                    Some(Utc::now() - Duration::seconds(1)),
+                );
+            }
+            let (release, wait) = oneshot::channel();
+            let mut first = pin!(client.workload_token_valid_until_with(
+                valid_until,
+                AMBIENT_WORKLOAD_TOKEN_DURATION,
+                |duration| async move {
+                    assert_eq!(duration, Some(AMBIENT_WORKLOAD_TOKEN_DURATION));
+                    wait.await.unwrap();
+                    Ok(WorkloadToken {
+                        token: "refreshed".to_string(),
+                        expires_at: Some(valid_until + Duration::hours(1)),
+                    })
+                },
+            ));
+            let mut second = pin!(client.workload_token_valid_until_with(
+                valid_until,
+                AMBIENT_WORKLOAD_TOKEN_DURATION,
+                |_| async { panic!("a concurrent caller must reuse the refreshed token") },
+            ));
+
+            assert!(poll!(&mut first).is_pending());
+            assert!(poll!(&mut second).is_pending());
+            release.send(()).unwrap();
+
+            let (first, second) = join!(first, second);
+            assert_eq!(first.unwrap().unwrap().token, "refreshed");
+            assert_eq!(second.unwrap().unwrap().token, "refreshed");
+        });
+    }
+}
+
+#[test]
+fn workload_token_refresh_failure_releases_waiting_caller() {
+    block_on(async {
+        let client = client();
+        let valid_until = Utc::now() + Duration::minutes(5);
+        let (release, wait) = oneshot::channel();
+        let mut first = pin!(client.workload_token_valid_until_with(
+            valid_until,
+            AMBIENT_WORKLOAD_TOKEN_DURATION,
+            |_| async {
+                wait.await.unwrap();
+                Err(IsolationPlatformError::GenericWorkloadTokenMissing)
+            },
+        ));
+        let mut second = pin!(client.workload_token_valid_until_with(
+            valid_until,
+            AMBIENT_WORKLOAD_TOKEN_DURATION,
+            |_| async {
+                Ok(WorkloadToken {
+                    token: "next-attempt".to_string(),
+                    expires_at: None,
+                })
+            },
+        ));
+
+        assert!(poll!(&mut first).is_pending());
+        assert!(poll!(&mut second).is_pending());
+        release.send(()).unwrap();
+
+        let (first, second) = join!(first, second);
+        assert!(first.is_err());
+        assert_eq!(second.unwrap().unwrap().token, "next-attempt");
+    });
+}
+
+#[test]
+fn cached_workload_token_does_not_wait_for_refresh() {
+    block_on(async {
+        let client = client();
+        let _refresh_guard = client.ambient_workload_token_refresh.lock().await;
+        client.set_ambient_workload_token_for_test("cached".to_string(), None);
+        let mut request = pin!(client.get_or_create_ambient_workload_token());
+
+        assert_eq!(
+            poll!(&mut request).map(Result::unwrap),
+            Poll::Ready(Some("cached".to_string())),
+        );
+    });
 }
 
 #[test]
