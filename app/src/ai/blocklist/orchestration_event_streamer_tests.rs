@@ -3443,7 +3443,8 @@ fn report_echoed_message(
     message_id: &'static str,
     updates: usize,
 ) -> std::sync::mpsc::Receiver<String> {
-    let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+    let history_model =
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
     let exchange = exchange_echoing_message(message_id);
     let exchange_id = exchange.id;
     conversation.append_root_exchange_for_test(exchange);
@@ -3454,11 +3455,10 @@ fn report_echoed_message(
 
     let (sender, receiver) = std::sync::mpsc::channel::<String>();
     let mut mock = MockAIClient::new();
-    mock.expect_mark_message_delivered()
-        .returning(move |id| {
-            sender.send(id.to_string()).unwrap();
-            Ok(())
-        });
+    mock.expect_mark_message_delivered().returning(move |id| {
+        sender.send(id.to_string()).unwrap();
+        Ok(())
+    });
     let ai_client: Arc<dyn AIClient> = Arc::new(mock);
     let server_api = ServerApiProvider::new_for_test().get();
     let streamer = app.add_singleton_model(|ctx| {

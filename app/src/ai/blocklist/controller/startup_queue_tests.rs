@@ -442,7 +442,10 @@ fn agent_message_wake_origin_is_recognized_when_steered_into_a_follow_up() {
             assert_wake_sent_as_input_not_query(history, id);
         });
         QueuedQueryModel::handle(&app).read(&app, |queue, _| {
-            assert!(!queue.has_queue(id), "the steered wake row must leave the queue");
+            assert!(
+                !queue.has_queue(id),
+                "the steered wake row must leave the queue"
+            );
         });
     });
 }
@@ -499,7 +502,10 @@ fn wake_text_without_the_wake_origin_stays_a_user_query() {
                         .any(|input| matches!(input, AIAgentInput::AgentMessageWake)),
                     "no AgentMessageWake input expected among: {inputs:?}"
                 );
-                assert_eq!(user_queries_in_order(history, id), vec!["prompt1", WAKE_PROMPT]);
+                assert_eq!(
+                    user_queries_in_order(history, id),
+                    vec!["prompt1", WAKE_PROMPT]
+                );
             });
         });
     }

@@ -1269,7 +1269,10 @@ impl BlocklistAIController {
         // for clients that cannot read the origin. Answer it directly so it neither attaches
         // pending context nor gets routed to a running command's subagent like a typed
         // follow-up would.
-        if base.as_ref().is_some_and(BaseUserQuery::is_agent_message_wake) {
+        if base
+            .as_ref()
+            .is_some_and(BaseUserQuery::is_agent_message_wake)
+        {
             return self.send_agent_message_wake(conversation_id, participant_id, ctx);
         }
 

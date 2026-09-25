@@ -133,7 +133,10 @@ impl BaseUserQuery {
     /// waiting for the run.
     pub(crate) fn is_agent_message_wake(&self) -> bool {
         matches!(
-            self.0.origin.as_ref().and_then(|origin| origin.variant.as_ref()),
+            self.0
+                .origin
+                .as_ref()
+                .and_then(|origin| origin.variant.as_ref()),
             Some(api::user_query_origin::Variant::AgentMessageWake(_))
         )
     }
