@@ -1193,21 +1193,6 @@ impl BlocklistAIController {
         );
     }
 
-    /// Marker text `wake_driver.go` injects into a reachable shared session when there may be
-    /// new agent messages waiting. Recognized in `send_user_query_in_conversation_internal` so
-    /// this client asks the server to resolve real, current content (`send_agent_message_wake`)
-    /// instead of relaying it as literal query text -- which is deliberately still a coherent,
-    /// standalone instruction on its own, so an older client that doesn't recognize it degrades
-    /// gracefully rather than confusing the agent.
-    const AGENT_MESSAGE_WAKE_CHECK_MARKER: &str = "You have received new agent messages. Read all unread agent messages, treat the newest agent messages as authoritative, continue from the current task state, and reply when appropriate.";
-
-    /// Returns whether `query` is the shared-session-injected agent-message wake-check marker.
-    /// Gated on `participant_id` since the marker is only ever injected via a shared session; an
-    /// ordinary local query can never carry one.
-    fn is_agent_message_wake(participant_id: &Option<ParticipantId>, query: &str) -> bool {
-        participant_id.is_some() && query == Self::AGENT_MESSAGE_WAKE_CHECK_MARKER
-    }
-
     /// Sends the given user query to the AI model, with additional referenced attachments.
     pub fn send_user_query_in_conversation_with_attachments(
         &mut self,
@@ -1280,12 +1265,11 @@ impl BlocklistAIController {
             report_error!("Viewers should never attempt to send queries directly");
         }
 
-        // A shared-session-injected follow-up matching this exact marker means
-        // `wake_driver.go` is nudging this reachable session that it may have new agent
-        // messages, rather than relaying an actual human/integration follow-up. Ask the
-        // server to resolve real, current content instead of treating the marker as
-        // literal query text.
-        if Self::is_agent_message_wake(&participant_id, &query) {
+        // The server's wake only says that agent messages may be waiting; its text is a fallback
+        // for clients that cannot read the origin. Answer it directly so it neither attaches
+        // pending context nor gets routed to a running command's subagent like a typed
+        // follow-up would.
+        if base.as_ref().is_some_and(BaseUserQuery::is_agent_message_wake) {
             return self.send_agent_message_wake(conversation_id, participant_id, ctx);
         }
 
@@ -1402,10 +1386,8 @@ impl BlocklistAIController {
         true
     }
 
-    /// Sends an `AIAgentInput::AgentMessageWake` for `conversation_id`, in response to
-    /// `AGENT_MESSAGE_WAKE_CHECK_MARKER` arriving via shared-session injection. The server
-    /// resolves real, currently-pending message content when it handles this input, rather
-    /// than the possibly-stale claim the marker text itself carries.
+    /// Sends an `AIAgentInput::AgentMessageWake` against `conversation_id`'s root task, so the
+    /// server resolves whatever agent messages are pending at the moment it handles the input.
     fn send_agent_message_wake(
         &mut self,
         conversation_id: AIConversationId,
@@ -1416,7 +1398,7 @@ impl BlocklistAIController {
             BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
         else {
             report_error!(
-                "Tried to send an agent-message wake check for a non-existent conversation",
+                "Tried to send an agent-message wake for a non-existent conversation",
                 extra: { "conversation_id" => ?conversation_id }
             );
             return false;
@@ -1771,20 +1753,27 @@ impl BlocklistAIController {
             self.set_current_response_initiator(participant_id);
         }
 
-        let input = input_for_query(
-            row.text().to_owned(),
-            task_id,
-            conversation_id,
-            None,
-            UserQueryMode::Normal,
-            None,
-            row.base_user_query().cloned(),
-            row.prepared_files().cloned().unwrap_or_default(),
-            prompt_attachments,
-            self.context_model.as_ref(ctx),
-            self.active_session.as_ref(ctx),
-            ctx,
-        );
+        let input = if row
+            .base_user_query()
+            .is_some_and(BaseUserQuery::is_agent_message_wake)
+        {
+            AIAgentInput::AgentMessageWake
+        } else {
+            input_for_query(
+                row.text().to_owned(),
+                task_id,
+                conversation_id,
+                None,
+                UserQueryMode::Normal,
+                None,
+                row.base_user_query().cloned(),
+                row.prepared_files().cloned().unwrap_or_default(),
+                prompt_attachments,
+                self.context_model.as_ref(ctx),
+                self.active_session.as_ref(ctx),
+                ctx,
+            )
+        };
 
         QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
             queue.remove_fired_row(conversation_id, query_id, ctx);
@@ -2685,30 +2674,12 @@ impl BlocklistAIController {
     /// flow that handles existing conversations properly.
     fn send_request_input(
         &mut self,
-        mut request_input: RequestInput,
+        request_input: RequestInput,
         query_metadata: Option<RequestMetadata>,
         recovery: RecoveryBudget,
         is_queued_prompt: bool,
         ctx: &mut ModelContext<Self>,
     ) -> anyhow::Result<(AIConversationId, ResponseStreamId)> {
-        // A shared-session-injected wake-check marker can reach this convergence point as a
-        // literal `UserQuery` when it was queued and later piggybacked onto another request by
-        // `steer_head_prompt_for_request`, bypassing the marker check in
-        // `send_user_query_in_conversation_internal`. Every route that builds a `RequestInput`
-        // funnels through here before the request is wired, so catching it again at this single
-        // point covers that gap regardless of which route produced the request.
-        if request_input.shared_session_response_initiator.is_some() {
-            for inputs in request_input.input_messages.values_mut() {
-                for input in inputs.iter_mut() {
-                    if let AIAgentInput::UserQuery { query, .. } = input
-                        && query.as_str() == Self::AGENT_MESSAGE_WAKE_CHECK_MARKER
-                    {
-                        *input = AIAgentInput::AgentMessageWake;
-                    }
-                }
-            }
-        }
-
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         let (
             conversation_id,
