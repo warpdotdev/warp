@@ -3398,6 +3398,7 @@ fn report_shutdown_clean_parses() {
 
     assert!(shutdown_args.error_category.is_none());
     assert!(shutdown_args.error_message.is_none());
+    assert!(shutdown_args.pid.is_none());
     assert!(shutdown_args.exit_code.is_none());
 }
 
@@ -3505,6 +3506,8 @@ fn report_shutdown_abnormal_parses() {
         "oom",
         "--error-message",
         "out of memory",
+        "--pid",
+        "1234",
         "--exit-code",
         "143",
     ])
@@ -3525,27 +3528,46 @@ fn report_shutdown_abnormal_parses() {
         shutdown_args.error_message.as_deref(),
         Some("out of memory")
     );
+    assert_eq!(shutdown_args.pid, Some(1234));
     assert_eq!(shutdown_args.exit_code, Some(143));
 }
 
 #[test]
-fn report_shutdown_rejects_exit_code_outside_api_range() {
-    for exit_code in ["0", "256"] {
-        let result = Args::try_parse_from([
-            "warp",
-            "harness-support",
-            "--run-id",
-            "run-1",
-            "report-shutdown",
-            "--error-category",
-            "process_exit",
-            "--error-message",
-            "agent exited",
-            "--exit-code",
-            exit_code,
-        ]);
-        assert!(result.is_err(), "accepted exit code {exit_code}");
-    }
+fn report_shutdown_rejects_zero_exit_code() {
+    let result = Args::try_parse_from([
+        "warp",
+        "harness-support",
+        "--run-id",
+        "run-1",
+        "report-shutdown",
+        "--error-category",
+        "process_exit",
+        "--error-message",
+        "agent exited",
+        "--exit-code",
+        "0",
+    ]);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn report_shutdown_rejects_exit_code_above_api_range() {
+    let result = Args::try_parse_from([
+        "warp",
+        "harness-support",
+        "--run-id",
+        "run-1",
+        "report-shutdown",
+        "--error-category",
+        "process_exit",
+        "--error-message",
+        "agent exited",
+        "--exit-code",
+        "256",
+    ]);
+
+    assert!(result.is_err());
 }
 
 #[test]
