@@ -9,17 +9,17 @@ use warpui::elements::PositionedElementOffsetBounds;
 use super::{
     AgentTabTextPreference, SummaryPaneKind, SummaryPaneKindIcons, TerminalAgentText,
     TerminalPrimaryLineData, TerminalPrimaryLineFont, VerticalTabsDetailTarget,
-    VerticalTabsDetailTargetKind, VerticalTabsSummaryBranchEntry, VerticalTabsSummaryData,
-    VerticalTabsSummaryPrimaryLabel, branch_label_display, coalesce_summary_branch_entries,
-    code_detail_kind_label, compact_branch_subtitle_display, detail_sidecar_width_and_bounds,
-    detail_target_for_hovered_row, non_terminal_search_text_fragments,
-    pane_ids_for_display_granularity, pane_search_text_fragments, preferred_agent_tab_titles,
-    push_normalized_unique_summary_label, search_fragments_contain_query,
-    select_summary_pane_kind_icons, should_keep_detail_sidecar_visible_for_mouse_position,
-    should_show_tab_group_header, shows_synced_inputs_indicator,
-    sort_summary_primary_labels_status_first, summary_overflow_count,
-    summary_search_text_fragments, terminal_kind_badge_label, terminal_primary_line_data,
-    terminal_pull_request_badge_label, terminal_search_text_fragments,
+    VerticalTabsDetailTargetKind, VerticalTabsPanelState, VerticalTabsSummaryBranchEntry,
+    VerticalTabsSummaryData, VerticalTabsSummaryPrimaryLabel, branch_label_display,
+    coalesce_summary_branch_entries, code_detail_kind_label, compact_branch_subtitle_display,
+    custom_tab_title_matches_query, detail_sidecar_width_and_bounds, detail_target_for_hovered_row,
+    non_terminal_search_text_fragments, pane_ids_for_display_granularity,
+    pane_search_text_fragments, preferred_agent_tab_titles, push_normalized_unique_summary_label,
+    search_fragments_contain_query, select_summary_pane_kind_icons,
+    should_keep_detail_sidecar_visible_for_mouse_position, should_show_tab_group_header,
+    shows_synced_inputs_indicator, sort_summary_primary_labels_status_first,
+    summary_overflow_count, summary_search_text_fragments, terminal_kind_badge_label,
+    terminal_primary_line_data, terminal_pull_request_badge_label, terminal_search_text_fragments,
     terminal_title_fallback_font, uses_outer_group_container, visible_pane_ids_for_detail_target,
     vtab_diff_stats_text,
 };
@@ -30,7 +30,10 @@ use crate::pane_group::{PaneId, TerminalPaneId};
 use crate::safe_triangle::SafeTriangle;
 use crate::tab::{ShortcutModifierKind, reveals_shortcut_hints};
 use crate::terminal::CLIAgent;
-use crate::workspace::tab_settings::VerticalTabsDisplayGranularity;
+use crate::workspace::tab_settings::{TabSettings, VerticalTabsDisplayGranularity};
+use crate::workspace::view::tests::{initialize_app, mock_workspace};
+use settings::Setting;
+use warpui::{App, SingletonEntity};
 
 fn label(text: &str) -> VerticalTabsSummaryPrimaryLabel {
     VerticalTabsSummaryPrimaryLabel {
@@ -1241,4 +1244,126 @@ fn summary_search_fragments_include_hidden_overflow_values() {
     assert!(search_fragments_contain_query(&fragments, "#789"));
     assert!(search_fragments_contain_query(&fragments, "+2"));
     assert!(search_fragments_contain_query(&fragments, "-3"));
+}
+
+// Regression coverage for #9666: in Panes display mode the tab's custom title
+// is rendered as the group header — never on a pane row — so the sidebar
+// search matches it separately from the per-pane fragments (see
+// `custom_tab_title_matches_query`) rather than routing it through
+// `display_title_override`, which would *replace* the pane-row fragments and
+// break pane-name matching.
+#[test]
+fn custom_tab_title_matches_query_matches_panes_mode_header_text() {
+    // Callers pass an already-lowercased query (`query_lower`), matching the
+    // `search_fragments_contain_query` convention; only the title's case is
+    // normalized here.
+    assert!(custom_tab_title_matches_query(
+        Some("A100-terminal"),
+        true,
+        "a100"
+    ));
+    assert!(custom_tab_title_matches_query(
+        Some("Deploy"),
+        true,
+        "deploy"
+    ));
+}
+
+#[test]
+fn custom_tab_title_matches_query_is_inert_in_tabs_granularity() {
+    // `Tabs`-granularity modes already search the custom title through
+    // `display_title_override`; admitting it here too would be redundant.
+    assert!(!custom_tab_title_matches_query(
+        Some("deploy"),
+        false,
+        "deploy"
+    ));
+}
+
+#[test]
+fn custom_tab_title_matches_query_requires_the_title_to_contain_the_query() {
+    assert!(!custom_tab_title_matches_query(
+        Some("deploy"),
+        true,
+        "a100"
+    ));
+    assert!(!custom_tab_title_matches_query(None, true, "deploy"));
+    assert!(!custom_tab_title_matches_query(Some(""), true, "deploy"));
+    assert!(!custom_tab_title_matches_query(Some("   "), true, "deploy"));
+}
+
+#[test]
+fn panes_granularity_search_matches_custom_tab_title_and_keeps_pane_matches() {
+    // End-to-end regression for #9666 through the keyboard-navigation filter
+    // (`matching_tab_indices`), which must admit exactly the tabs the rendered
+    // sidebar list shows: a renamed tab (custom title `deploy`) is found by
+    // its visible group-header name, and its pane is still found by the
+    // pane's own custom name (`exp`).
+    fn panel_state_with_query(query: &str) -> VerticalTabsPanelState {
+        VerticalTabsPanelState {
+            search_query: query.to_string(),
+            ..Default::default()
+        }
+    }
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.update(|ctx| {
+            TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .vertical_tabs_display_granularity
+                    .set_value(VerticalTabsDisplayGranularity::Panes, ctx)
+                    .unwrap();
+            });
+        });
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+        });
+
+        // Tab 0: custom tab title `deploy` (the group header) with a pane
+        // whose own custom name is `exp`. Tab 1 stays untouched.
+        let renamed_pane_group =
+            workspace.read(&app, |workspace, _| workspace.tabs[0].pane_group.clone());
+        renamed_pane_group.update(&mut app, |group, ctx| group.set_title("deploy", ctx));
+        let pane_configuration = renamed_pane_group.read(&app, |group, _| {
+            let pane_id = group.visible_pane_ids()[0];
+            group
+                .pane_by_id(pane_id)
+                .expect("first pane of the renamed tab exists")
+                .pane_configuration()
+        });
+        pane_configuration.update(&mut app, |configuration, ctx| {
+            configuration.set_custom_vertical_tabs_title("exp", ctx)
+        });
+
+        let (tabs, active_tab_index) = workspace.read(&app, |workspace, _| {
+            (workspace.tabs.clone(), workspace.active_tab_index)
+        });
+
+        // Searching the tab's custom title finds the renamed tab (#9666).
+        let panel_state = panel_state_with_query("deploy");
+        assert_eq!(
+            app.read(|ctx| panel_state.matching_tab_indices(&tabs, active_tab_index, ctx)),
+            vec![0]
+        );
+
+        // Searching the pane's custom name still finds the same tab: the
+        // tab-title match is additive, not a replacement for the pane's own
+        // searchable text.
+        let panel_state = panel_state_with_query("exp");
+        assert_eq!(
+            app.read(|ctx| panel_state.matching_tab_indices(&tabs, active_tab_index, ctx)),
+            vec![0]
+        );
+
+        // A query that matches neither the header nor any pane row still
+        // filters everything out.
+        let panel_state = panel_state_with_query("no-such-text");
+        assert!(
+            app.read(|ctx| panel_state.matching_tab_indices(&tabs, active_tab_index, ctx))
+                .is_empty()
+        );
+    });
 }
