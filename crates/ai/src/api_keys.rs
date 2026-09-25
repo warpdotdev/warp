@@ -1058,14 +1058,7 @@ impl ApiKeyManager {
             .flatten()
             .unwrap_or_default();
 
-        // Also include credentials when running with OIDC-managed Bedrock inference, regardless
-        // of the per-user setting flag (which only applies to the local credential chain path).
-        let include_aws = include_aws_bedrock_credentials
-            || matches!(
-                self.aws_credentials_refresh_strategy,
-                AwsCredentialsRefreshStrategy::OidcManaged { .. }
-            );
-        let aws_credentials = include_aws
+        let aws_credentials = include_aws_bedrock_credentials
             .then(|| match self.aws_credentials_state {
                 AwsCredentialsState::Loaded {
                     ref credentials, ..

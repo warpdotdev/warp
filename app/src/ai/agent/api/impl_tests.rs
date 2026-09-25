@@ -35,6 +35,8 @@ fn request_params_with_ask_user_question_enabled(ask_user_question_enabled: bool
         should_redact_secrets: false,
         member_byo_credentials_allowed: false,
         api_keys: None,
+        #[cfg(not(target_family = "wasm"))]
+        geap_mint_binding: None,
         custom_model_providers: None,
         custom_model_routers: None,
         allow_use_of_warp_credits: false,

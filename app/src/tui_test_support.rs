@@ -6,6 +6,7 @@ use std::sync::Arc;
 use ai::api_keys::ApiKeyManager;
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use chrono::{Duration, Local};
+use settings::Setting;
 use warp_cli::agent::Harness;
 use warp_core::SessionId;
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
@@ -30,7 +31,7 @@ use crate::ai::cloud_environments::CloudEnvironmentCatalog;
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
-use crate::ai::llms::{LLMId, LLMPreferences};
+use crate::ai::llms::{LLMId, LLMModelHost, LLMPreferences, ModelsByFeature, RoutingHostConfig};
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
 use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
@@ -68,7 +69,7 @@ use crate::user_config::WarpConfig;
 use crate::voice::transcriber::VoiceTranscriber;
 use crate::workspaces::team::{MembershipRole, Team, TeamMember};
 use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
-use crate::workspaces::workspace::Workspace;
+use crate::workspaces::workspace::{HostEnablementSetting, LlmHostSettings, Workspace};
 
 /// Builds a history model with persisted AI queries for TUI tests.
 pub fn blocklist_ai_history_model_with_queries(queries: Vec<String>) -> BlocklistAIHistoryModel {
@@ -314,6 +315,54 @@ pub fn set_tui_workspace_teams_for_test(teams: Vec<(ServerId, String)>, ctx: &mu
         workspaces.set_current_workspace_uid(workspace_uid, ctx);
     });
 }
+pub fn set_tui_model_menu_host_fixture_for_test(ctx: &mut AppContext) {
+    let mut bedrock_model = LLMPreferences::as_ref(ctx)
+        .get_active_base_model_for_team_uid(None, ctx, None)
+        .clone();
+    bedrock_model.id = "bedrock-only".into();
+    bedrock_model.display_name = "Bedrock only".into();
+    bedrock_model.base_model_name = "Bedrock only".into();
+    bedrock_model.host_configs.insert(
+        LLMModelHost::AwsBedrock,
+        RoutingHostConfig {
+            enabled: true,
+            model_routing_host: LLMModelHost::AwsBedrock,
+        },
+    );
+
+    let mut models = ModelsByFeature::default();
+    models.agent_mode.push_choice_for_test(bedrock_model);
+    let mut workspace = Workspace::from_local_cache(
+        "workspace_uid123456789".to_owned().into(),
+        "test workspace".to_owned(),
+        None,
+        Some(models),
+    );
+    workspace.settings.llm_settings.enabled = true;
+    workspace.settings.llm_settings.host_configs.insert(
+        LLMModelHost::AwsBedrock,
+        LlmHostSettings {
+            enabled: true,
+            enablement_setting: HostEnablementSetting::RespectUserSetting,
+            ..Default::default()
+        },
+    );
+    let uid = workspace.uid;
+    UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+        workspaces.update_workspaces(vec![workspace], ctx);
+        workspaces.set_current_workspace_uid(uid, ctx);
+    });
+}
+
+pub fn set_tui_model_menu_host_toggle_for_test(enabled: bool, ctx: &mut AppContext) {
+    AISettings::handle(ctx).update(ctx, |settings, ctx| {
+        settings
+            .aws_bedrock_credentials_enabled
+            .set_value(enabled, ctx)
+            .expect("Bedrock setting should be writable");
+    });
+}
+
 pub fn set_tui_auth_secret_preference_for_test<S: TeamScope + ?Sized>(
     team_scope: &S,
     harness: Harness,

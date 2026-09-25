@@ -674,6 +674,27 @@ fn api_keys_for_request_none_when_empty() {
 }
 
 #[test]
+fn oidc_managed_aws_credentials_follow_request_host_policy() {
+    let mut mgr = make_manager(ApiKeys::default());
+    mgr.aws_credentials_refresh_strategy = AwsCredentialsRefreshStrategy::OidcManaged {
+        task_id: None,
+        role_arn: "arn:aws:iam::123:role/test".into(),
+        region: "us-east-1".into(),
+    };
+    mgr.aws_credentials_state = AwsCredentialsState::Loaded {
+        credentials: AwsCredentials::new("access".into(), "secret".into(), None, None),
+        loaded_at: SystemTime::now(),
+    };
+    assert!(mgr.api_keys_for_request(false, false, None).is_none());
+    assert!(
+        mgr.api_keys_for_request(false, true, None)
+            .unwrap()
+            .aws_credentials
+            .is_some()
+    );
+}
+
+#[test]
 fn api_keys_for_request_populates_provider_keys() {
     let mgr = make_manager(ApiKeys {
         openai: Some("sk-o".into()),

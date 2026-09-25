@@ -1,10 +1,14 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
-use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, CustomEndpoint, CustomEndpointModel};
+use ai::api_keys::{
+    ApiKeyManager, ApiKeyManagerEvent, AwsCredentialsRefreshStrategy, CustomEndpoint,
+    CustomEndpointModel,
+};
 pub use ai::{LLMId, LLMProvider};
 use parking_lot::FairMutex;
 use serde::{Deserialize, Serialize, de};
+use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::Icon;
 use warp_errors::report_error;
@@ -38,6 +42,16 @@ pub fn is_using_api_key_for_provider(provider: &LLMProvider, app: &AppContext) -
         LLMProvider::Xai => manager.grok_tokens().is_some(),
         LLMProvider::Unknown => false,
     }
+}
+
+/// Cloud OIDC runners have no desktop host toggle; interactive requests follow team policy.
+pub fn should_attach_aws_bedrock_credentials(scope: &dyn TeamScope, app: &AppContext) -> bool {
+    UserWorkspaces::as_ref(app).is_aws_bedrock_credentials_enabled(scope, app)
+        || (AppExecutionMode::as_ref(app).is_autonomous()
+            && matches!(
+                ApiKeyManager::as_ref(app).aws_credentials_refresh_strategy(),
+                AwsCredentialsRefreshStrategy::OidcManaged { .. }
+            ))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,6 +131,30 @@ pub fn is_model_allowed_for_scope(
 ) -> bool {
     prefs.custom_llm_info_for_id(&llm.id).is_none()
         || UserWorkspaces::as_ref(app).are_member_byo_endpoints_allowed(scope)
+}
+
+/// Whether a model has a usable admin-enabled host for the current team.
+pub fn is_model_host_usable_for_scope(
+    llm: &LLMInfo,
+    scope: &dyn TeamScope,
+    app: &AppContext,
+) -> bool {
+    if llm.host_configs.is_empty() {
+        return true;
+    }
+    let workspaces = UserWorkspaces::as_ref(app);
+    llm.host_configs.iter().any(|(host, config)| {
+        config.enabled
+            && match host {
+                LLMModelHost::AwsBedrock => should_attach_aws_bedrock_credentials(scope, app),
+                LLMModelHost::GeminiEnterprise => {
+                    workspaces.is_gemini_enterprise_credentials_enabled(scope, app)
+                }
+                LLMModelHost::DirectApi | LLMModelHost::CustomEndpoint | LLMModelHost::Unknown => {
+                    true
+                }
+            }
+    })
 }
 
 fn should_show_host_icon_for_model(

@@ -2,11 +2,10 @@
 
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::AISettings;
-#[cfg(test)]
-use warp::tui_export::UserWorkspaces;
 use warp::tui_export::{
     AISettingsChangedEvent, LLMId, LLMPreferences, LLMPreferencesEvent, ModelPickerChoice,
-    TeamContextResolver, TeamScope, query_model_picker_choices, should_show_bedrock_icon_for_model,
+    TeamContextResolver, TeamScope, UserWorkspaces, UserWorkspacesEvent,
+    query_model_picker_choices, should_show_bedrock_icon_for_model,
     should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
 };
 use warp_editor::model::CoreEditorModel;
@@ -63,6 +62,17 @@ impl TuiModelMenuModel {
                 model.refresh_rows(ctx);
             }
         });
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |model, _, event, ctx| {
+            if model.is_open(ctx)
+                && matches!(
+                    event,
+                    UserWorkspacesEvent::TeamsChanged
+                        | UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess
+                )
+            {
+                model.refresh_rows(ctx);
+            }
+        });
         ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |model, _, event, ctx| {
             if model.is_open(ctx)
                 && matches!(
@@ -76,7 +86,12 @@ impl TuiModelMenuModel {
         });
         ctx.subscribe_to_model(&AISettings::handle(ctx), |model, _, event, ctx| {
             if model.is_open(ctx)
-                && matches!(event, AISettingsChangedEvent::ExecutionProfiles { .. })
+                && matches!(
+                    event,
+                    AISettingsChangedEvent::ExecutionProfiles { .. }
+                        | AISettingsChangedEvent::AwsBedrockCredentialsEnabled { .. }
+                        | AISettingsChangedEvent::GeminiEnterpriseCredentialsEnabled { .. }
+                )
             {
                 model.refresh_rows(ctx);
             }

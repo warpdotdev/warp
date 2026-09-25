@@ -1,5 +1,14 @@
 #[cfg(not(target_family = "wasm"))]
+use std::sync::Arc;
+#[cfg(not(target_family = "wasm"))]
 use std::time::Duration;
+
+#[cfg(not(target_family = "wasm"))]
+use ai::api_keys::{GeapFederation, GeapMintBinding};
+#[cfg(not(target_family = "wasm"))]
+use warp_core::features::FeatureFlag;
+#[cfg(not(target_family = "wasm"))]
+use warpui::App;
 
 #[cfg(not(target_family = "wasm"))]
 use super::apply_geap_refresh_to_params;
@@ -12,7 +21,25 @@ use crate::ai::agent::api::RequestParams;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::driver::AUTO_RESUME_TIMEOUT;
 #[cfg(not(target_family = "wasm"))]
+use crate::ai::geap_credentials::{current_geap_policy, current_geap_policy_for_any_team};
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::llms::{LLMInfo, LLMModelHost, RoutingHostConfig, is_model_host_usable_for_scope};
+#[cfg(not(target_family = "wasm"))]
+use crate::auth::AuthStateProvider;
+#[cfg(not(target_family = "wasm"))]
 use crate::server::retry_strategies::backoff_after_attempts;
+#[cfg(not(target_family = "wasm"))]
+use crate::server::server_api::team::MockTeamClient;
+#[cfg(not(target_family = "wasm"))]
+use crate::server::server_api::workspace::MockWorkspaceClient;
+#[cfg(not(target_family = "wasm"))]
+use crate::test_util::settings::initialize_settings_for_tests;
+#[cfg(not(target_family = "wasm"))]
+use crate::workspaces::team::Team;
+#[cfg(not(target_family = "wasm"))]
+use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
+#[cfg(not(target_family = "wasm"))]
+use crate::workspaces::workspace::{HostEnablementSetting, LlmHostSettings, Workspace};
 
 // Argument order: has_received_client_actions, is_recoverable, recovery, is_online.
 
@@ -247,6 +274,11 @@ fn the_recovery_backoff_fits_inside_the_cloud_run_recovery_window() {
 #[cfg(not(target_family = "wasm"))]
 fn params_with_geap_token(access_token: &str) -> RequestParams {
     let mut params = RequestParams::new_for_test();
+    params.geap_mint_binding = Some(GeapMintBinding {
+        user_uid: "test-user".into(),
+        audience: "test-audience".into(),
+        federation: GeapFederation::DirectWif,
+    });
     params.api_keys = Some(Default::default());
     params.api_keys.as_mut().unwrap().google_cloud_credentials = Some(
         warp_multi_agent_api::request::settings::api_keys::GoogleCloudCredentials {
@@ -305,6 +337,11 @@ fn geap_refresh_does_not_add_credentials_to_a_keyless_request() {
     // A request that carries no API keys at all is left alone, so the refresh
     // path can never introduce credentials the snapshot did not already gate.
     let mut params = RequestParams::new_for_test();
+    params.geap_mint_binding = Some(GeapMintBinding {
+        user_uid: "test-user".into(),
+        audience: "test-audience".into(),
+        federation: GeapFederation::DirectWif,
+    });
     params.api_keys = None;
 
     apply_geap_refresh_to_params(
@@ -317,4 +354,93 @@ fn geap_refresh_does_not_add_credentials_to_a_keyless_request() {
     );
 
     assert!(params.api_keys.is_none());
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn geap_refresh_cannot_attach_for_disabled_request_team_with_other_keys() {
+    let _geap = FeatureFlag::GeminiEnterprise.override_enabled(true);
+    let mut llm = LLMInfo::new_for_test("dual-host");
+    for host in [LLMModelHost::DirectApi, LLMModelHost::GeminiEnterprise] {
+        llm.host_configs.insert(
+            host.clone(),
+            RoutingHostConfig {
+                enabled: true,
+                model_routing_host: host,
+            },
+        );
+    }
+    let mut disabled_team =
+        Team::from_local_cache(123.into(), "disabled".into(), None, None, None, None);
+    disabled_team.settings.llm_settings.enabled = true;
+    disabled_team.settings.llm_settings.host_configs.insert(
+        LLMModelHost::GeminiEnterprise,
+        LlmHostSettings {
+            enabled: true,
+            enablement_setting: HostEnablementSetting::RespectUserSetting,
+            gcp_audience: Some("test-audience".into()),
+            ..Default::default()
+        },
+    );
+    disabled_team
+        .feature_model_choice
+        .agent_mode
+        .push_choice_for_test(llm.clone());
+    let mut enabled_team = disabled_team.clone();
+    enabled_team.uid = 456.into();
+    enabled_team
+        .settings
+        .llm_settings
+        .host_configs
+        .get_mut(&LLMModelHost::GeminiEnterprise)
+        .unwrap()
+        .enablement_setting = HostEnablementSetting::Enforce;
+    let workspace = Workspace::from_local_cache(
+        "workspace_uid123456789".to_string().into(),
+        "test".into(),
+        Some(vec![disabled_team.clone(), enabled_team]),
+        None,
+    );
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(MockTeamClient::new()),
+                Arc::new(MockWorkspaceClient::new()),
+                vec![workspace],
+                ctx,
+            )
+        });
+        let scope = TeamContextForOperation::new_for_test(disabled_team.uid);
+        let request_binding = app.read(|ctx| {
+            assert!(is_model_host_usable_for_scope(&llm, &scope, ctx));
+            assert!(
+                current_geap_policy_for_any_team(ctx)
+                    .mint_binding()
+                    .is_some()
+            );
+            current_geap_policy(&scope, ctx).mint_binding()
+        });
+        assert!(request_binding.is_none());
+        let mut params = RequestParams::new_for_test();
+        params.model = llm.id;
+        params.geap_mint_binding = request_binding;
+        params.api_keys = Some(Default::default());
+        params.api_keys.as_mut().unwrap().openai = "unrelated-key".into();
+
+        apply_geap_refresh_to_params(
+            &mut params,
+            Some(
+                warp_multi_agent_api::request::settings::api_keys::GoogleCloudCredentials {
+                    access_token: "other-team-token".into(),
+                },
+            ),
+        );
+
+        let keys = params.api_keys.as_ref().unwrap();
+        assert_eq!(keys.google_cloud_credentials, None);
+        assert_eq!(keys.openai, "unrelated-key");
+    });
 }
