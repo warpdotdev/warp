@@ -55,10 +55,10 @@ use crate::ai::agent_sdk::setup_observability::{
     OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::ambient_agents::task::{HarnessConfig, TaskScope};
+use crate::ai::ambient_agents::task::HarnessConfig;
 use crate::ai::attachment_utils::attachments_download_dir;
 #[cfg(not(target_family = "wasm"))]
-use crate::ai::aws_credentials::refresh_aws_credentials;
+use crate::ai::aws_credentials::{BedrockOidcCredentialsConfig, refresh_aws_credentials_oidc};
 use crate::ai::cloud_environments::{
     AmbientAgentEnvironment, CloudAmbientAgentEnvironment, SourceRepo,
 };
@@ -81,7 +81,7 @@ use crate::server::server_api::managed_secrets::AppManagedSecretManager as Manag
 use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::workflows::workflow::Workflow;
-use crate::workspaces::user_workspaces::{TeamScope, TeamScopeForCli};
+use crate::workspaces::user_workspaces::{AgentRunTeamScope, TeamScopeForCli};
 
 mod admin;
 mod agent_config;
@@ -149,6 +149,24 @@ fn validated_driver_repositories_for_preparation(
         &options.repository_preparation_overrides,
     )?;
     Ok(source_repos)
+}
+
+fn bedrock_oidc_credentials_config(
+    options: &AgentDriverOptions,
+    role_arn: String,
+    region: String,
+) -> Result<BedrockOidcCredentialsConfig, AgentDriverError> {
+    let task_id = options.task_id.ok_or_else(|| {
+        AgentDriverError::AwsBedrockCredentialsFailed(
+            "AWS Bedrock inference requires an ambient task ID before credentials can be minted"
+                .to_string(),
+        )
+    })?;
+    Ok(BedrockOidcCredentialsConfig {
+        task_id: task_id.to_string(),
+        role_arn,
+        region,
+    })
 }
 
 /// Run a Warp CLI command.
@@ -670,30 +688,6 @@ fn resolve_agent_driver_team_scope(
     Ok(Some(scope))
 }
 
-/// Converts a server-reported [`TaskScope`] into the [`TeamScopeForCli`] the driver's headless
-/// window should be registered under.
-///
-/// This is the task's *actual* ownership, as recorded on the server, and takes precedence over
-/// any scope resolved from CLI args or the caller's team memberships: a service-account worker
-/// resuming an existing `--task-id` run may belong to zero, one, or many teams that have nothing
-/// to do with the specific task it was asked to continue, so only the task's own scope can say
-/// which team (if any) actually owns it.
-fn team_scope_for_task_scope(scope: &TaskScope) -> TeamScopeForCli {
-    if !scope.is_team() {
-        return TeamScopeForCli::Personal;
-    }
-    match ServerId::try_from(scope.uid.as_str()) {
-        Ok(team_uid) => TeamScopeForCli::Team(team_uid),
-        Err(err) => {
-            log::warn!(
-                "Task reported an invalid team scope uid '{}': {err}",
-                scope.uid
-            );
-            TeamScopeForCli::Personal
-        }
-    }
-}
-
 impl AgentDriverRunner {
     #[tracing::instrument(skip_all, err, fields(
         tags.cloud_agent = true,
@@ -800,12 +794,6 @@ impl AgentDriverRunner {
             // needed here. Just merge the task's linked conversation id into the resume target.
             let resume_conversation_id = resume_conversation_id.or(task_conversation_id);
 
-            let bedrock_task_id = driver_options.task_id.map(|id| id.to_string());
-            let bedrock_team_uid = driver_options
-                .team_scope
-                .as_ref()
-                .and_then(TeamScope::team_uid)
-                .map(|uid| uid.to_string());
 
             #[cfg(not(target_family = "wasm"))]
             if let Some(role_arn) = bedrock_inference_role {
@@ -819,6 +807,13 @@ impl AgentDriverRunner {
                             .to_string(),
                     )
                 })?;
+                let config =
+                    bedrock_oidc_credentials_config(&driver_options, role_arn, role_region)?;
+                let request_scope = driver_options
+                    .team_scope
+                    .as_ref()
+                    .map(RequestTeamScope::from_scope);
+                driver_options.bedrock_oidc_credentials = Some(config.clone());
                 // Set the OIDC strategy on the UI thread and kick off the refresh; the
                 // returned future resolves when credentials are committed to the model.
                 let refresh_future = foreground
@@ -826,14 +821,9 @@ impl AgentDriverRunner {
                         ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
                             // From here on, refresh credentials via OIDC federation only.
                             manager.set_aws_credentials_refresh_strategy(
-                                AwsCredentialsRefreshStrategy::OidcManaged {
-                                    task_id: bedrock_task_id,
-                                    role_arn,
-                                    region: role_region,
-                                    team_uid: bedrock_team_uid,
-                                },
+                                AwsCredentialsRefreshStrategy::OidcManaged,
                             );
-                            refresh_aws_credentials(manager, ctx)
+                            refresh_aws_credentials_oidc(config, request_scope, manager, ctx)
                         })
                     })
                     .await?;
@@ -1200,6 +1190,7 @@ impl AgentDriverRunner {
                     selected_harness: args.harness,
                     third_party_harness_model_config,
                     team_scope: None,
+                    bedrock_oidc_credentials: None,
                     snapshot_disabled: args.snapshot.no_snapshot.then_some(true),
                     snapshot_upload_timeout: args
                         .snapshot
@@ -1226,7 +1217,9 @@ impl AgentDriverRunner {
         // The existing-task branch also surfaces the task's `conversation_id` (if any) so
         // the caller can wire up resume without a separate `--conversation` arg.
         let task_conversation_id = if let Some(task_id_str) = task_id_str {
-            driver_options.team_scope = agent_driver_team_scope;
+            driver_options.team_scope = agent_driver_team_scope
+                .as_ref()
+                .map(AgentRunTeamScope::from_scope);
             setup_events
                 .record_result(
                     SetupStep::TaskDataFetch,
@@ -1286,7 +1279,7 @@ impl AgentDriverRunner {
         driver_options: &mut AgentDriverOptions,
     ) -> Result<(), AgentDriverError> {
         let request_team_scope = RequestTeamScope::from_scope(&team_scope);
-        driver_options.team_scope = Some(team_scope);
+        driver_options.team_scope = Some(AgentRunTeamScope::from_scope(&team_scope));
         let environment = merged_config.environment_id.clone();
         let task_config = if merged_config.is_empty() {
             None
@@ -1469,7 +1462,10 @@ impl AgentDriverRunner {
                 let additional_source_repos = agent_config_snapshot
                     .and_then(|config| config.additional_source_repos)
                     .unwrap_or_default();
-                let task_team_scope = task_metadata.scope.as_ref().map(team_scope_for_task_scope);
+                let task_team_scope = task_metadata
+                    .scope
+                    .as_ref()
+                    .map(AgentRunTeamScope::from_task_scope);
                 (
                     task_metadata.parent_run_id,
                     task_metadata.conversation_id,
@@ -1500,7 +1496,7 @@ impl AgentDriverRunner {
         driver_options.additional_source_repos = additional_source_repos;
         driver_options.secrets = secrets;
         // The server-reported task scope is authoritative for the headless window this run
-        // creates (see `team_scope_for_task_scope`); it supersedes whatever scope was resolved
+        // creates; it supersedes whatever scope was resolved
         // from CLI args before the task was fetched. Older servers that don't send `scope` fall
         // back to that earlier resolution.
         if let Some(task_team_scope) = task_team_scope {

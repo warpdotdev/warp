@@ -9,7 +9,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
-use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy};
 use ai::skills::{
     ParsedSkill, SKILL_PROVIDER_DEFINITIONS, parse_skills_dirs_env, read_skills_for_skills_dirs,
     resolve_skills_dirs,
@@ -63,6 +62,7 @@ use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::{
     AmbientAgentTaskId, AmbientConversationStatus, conversation_output_status_from_conversation,
 };
+use crate::ai::aws_credentials::BedrockOidcCredentialsConfig;
 use crate::ai::bedrock_credentials;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::block::FinishReason;
@@ -95,6 +95,7 @@ use crate::server::server_api::ai::{AIClient, TaskGitCredentialsError, TaskStatu
 use crate::server::server_api::harness_support::{
     HarnessSupportClient, ResolvePromptAttachedSkill, ResolvePromptRequest,
 };
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::cli_agent_sessions::plugin_manager::{
     CliAgentPluginManager, plugin_manager_for,
 };
@@ -103,7 +104,7 @@ use crate::terminal::cli_agent_sessions::{
 };
 use crate::terminal::model::BlockId;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
-use crate::workspaces::user_workspaces::{ResolvedTeamScope, TeamScopeForCli, UserWorkspaces};
+use crate::workspaces::user_workspaces::{AgentRunTeamScope, ResolvedTeamScope, UserWorkspaces};
 use crate::workspaces::workspace::BillingMetadata;
 
 pub(crate) mod attachments;
@@ -139,7 +140,7 @@ async fn with_credential_refreshes<F, T>(
     run_future: F,
     git_task_id: Option<String>,
     ai_client: Arc<dyn AIClient>,
-    oidc_strategy: Option<AwsCredentialsRefreshStrategy>,
+    bedrock_oidc_credentials: Option<(BedrockOidcCredentialsConfig, Option<RequestTeamScope>)>,
     foreground: &ModelSpawner<AgentDriver>,
 ) -> T
 where
@@ -154,19 +155,11 @@ where
     .fuse();
 
     let bedrock_refresh = async move {
-        match oidc_strategy {
-            Some(AwsCredentialsRefreshStrategy::OidcManaged {
-                task_id: Some(task_id),
-                role_arn,
-                region,
-                team_uid,
-            }) => {
-                bedrock_credentials::refresh_loop(task_id, role_arn, region, team_uid, foreground)
-                    .await
+        match bedrock_oidc_credentials {
+            Some((config, request_scope)) => {
+                bedrock_credentials::refresh_loop(config, request_scope, foreground).await
             }
-            Some(AwsCredentialsRefreshStrategy::OidcManaged { task_id: None, .. })
-            | Some(AwsCredentialsRefreshStrategy::LocalChain)
-            | None => future::pending::<()>().await,
+            None => future::pending::<()>().await,
         }
     }
     .fuse();
@@ -629,8 +622,9 @@ pub struct AgentDriverOptions {
     pub selected_harness: Harness,
     /// Model config for the selected harness. Only used for non-Oz harnesses.
     pub third_party_harness_model_config: Option<HarnessModelConfig>,
-    /// Team scope assigned to a newly created local run's headless window.
-    pub team_scope: Option<TeamScopeForCli>,
+    /// Stable team scope assigned to this run and its headless window.
+    pub team_scope: Option<AgentRunTeamScope>,
+    pub(crate) bedrock_oidc_credentials: Option<BedrockOidcCredentialsConfig>,
     /// Whether to skip end-of-run snapshot upload.
     pub snapshot_disabled: Option<bool>,
     /// End-of-run snapshot upload timeout override.
@@ -676,6 +670,8 @@ pub struct AgentDriver {
 
     // The associated task ID for this agent run, if any.
     task_id: Option<AmbientAgentTaskId>,
+    team_scope: Option<AgentRunTeamScope>,
+    bedrock_oidc_credentials: Option<BedrockOidcCredentialsConfig>,
 
     /// Harness adapter for the running agent. This is only set if:
     /// - The harness has started successfully.
@@ -1067,6 +1063,7 @@ impl AgentDriver {
             selected_harness,
             third_party_harness_model_config,
             team_scope,
+            bedrock_oidc_credentials,
             snapshot_disabled,
             snapshot_upload_timeout,
             snapshot_script_timeout,
@@ -1150,7 +1147,7 @@ impl AgentDriver {
                 should_share,
                 task_id,
                 conversation_restoration,
-                team_scope,
+                team_scope: team_scope.as_ref(),
             },
             ctx,
         )?;
@@ -1237,6 +1234,8 @@ impl AgentDriver {
             resolved_env_vars,
             output_format: OutputFormat::default(),
             task_id,
+            team_scope,
+            bedrock_oidc_credentials,
             harness: None,
             idle_on_complete,
             idle_on_fail,
@@ -1289,6 +1288,8 @@ impl AgentDriver {
             resolved_env_vars: Arc::new(HashMap::new()),
             output_format: OutputFormat::default(),
             task_id: None,
+            team_scope: None,
+            bedrock_oidc_credentials: None,
             harness: None,
             idle_on_complete: None,
             idle_on_fail: None,
@@ -2067,7 +2068,7 @@ impl AgentDriver {
         );
 
         let setup_span = tracing::info_span!("agent_run_setup", tags.cloud_agent = true);
-        let (setup_events, task_id_for_refresh, ai_client_for_refresh, oidc_strategy_for_refresh) =
+        let (setup_events, task_id_for_refresh, ai_client_for_refresh, bedrock_config_for_refresh) =
             async {
                 let (setup_events, environment_snapshot_reporter) = foreground
                     .spawn(|me, ctx| {
@@ -2361,7 +2362,7 @@ impl AgentDriver {
                         .await;
                 }
 
-                let (task_id_for_refresh, ai_client_for_refresh, oidc_strategy_for_refresh) =
+                let (task_id_for_refresh, ai_client_for_refresh, bedrock_config_for_refresh) =
                     foreground
                         .spawn(|me, ctx| {
                             let task_id = if FeatureFlag::GitCredentialRefresh.is_enabled() {
@@ -2370,20 +2371,13 @@ impl AgentDriver {
                                 None
                             };
                             let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client().clone();
-                            // Capture OidcManaged strategy parameters for the proactive Bedrock credential
-                            // refresh loop. Only populated when Bedrock OIDC inference is configured.
-                            let strategy = ApiKeyManager::handle(ctx)
-                                .as_ref(ctx)
-                                .aws_credentials_refresh_strategy();
-                            let oidc_strategy = matches!(
-                                &strategy,
-                                AwsCredentialsRefreshStrategy::OidcManaged {
-                                    task_id: Some(_),
-                                    ..
-                                }
-                            )
-                            .then_some(strategy);
-                            (task_id, ai_client, oidc_strategy)
+                            let bedrock_config =
+                                me.bedrock_oidc_credentials.clone().map(|config| {
+                                    let request_scope =
+                                        me.team_scope.as_ref().map(RequestTeamScope::from_scope);
+                                    (config, request_scope)
+                                });
+                            (task_id, ai_client, bedrock_config)
                         })
                         .await?;
 
@@ -2391,7 +2385,7 @@ impl AgentDriver {
                     setup_events,
                     task_id_for_refresh,
                     ai_client_for_refresh,
-                    oidc_strategy_for_refresh,
+                    bedrock_config_for_refresh,
                 ))
             }
             .instrument(setup_span)
@@ -2436,7 +2430,7 @@ impl AgentDriver {
                     },
                     task_id_for_refresh,
                     ai_client_for_refresh,
-                    oidc_strategy_for_refresh,
+                    bedrock_config_for_refresh,
                     &foreground,
                 )
                 .await?;
@@ -2489,7 +2483,7 @@ impl AgentDriver {
                     ),
                     task_id_for_refresh,
                     ai_client_for_refresh,
-                    oidc_strategy_for_refresh,
+                    bedrock_config_for_refresh,
                     &foreground,
                 )
                 .await

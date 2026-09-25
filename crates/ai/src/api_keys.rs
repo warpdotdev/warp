@@ -495,15 +495,7 @@ pub enum AwsCredentialsRefreshStrategy {
     #[default]
     LocalChain,
     /// Credentials are managed externally via OIDC/STS.
-    /// The task ID is used to scope the STS AssumeRoleWithWebIdentity session.
-    /// The role ARN + region are the info used to assume the IAM role via STS.
-    OidcManaged {
-        task_id: Option<String>,
-        role_arn: String,
-        region: String,
-        /// The task's resolved team, pinned across credential refreshes.
-        team_uid: Option<String>,
-    },
+    OidcManaged,
 }
 
 struct CustomEndpointState {
@@ -1065,7 +1057,7 @@ impl ApiKeyManager {
         let include_aws = include_aws_bedrock_credentials
             || matches!(
                 self.aws_credentials_refresh_strategy,
-                AwsCredentialsRefreshStrategy::OidcManaged { .. }
+                AwsCredentialsRefreshStrategy::OidcManaged
             );
         let aws_credentials = include_aws
             .then(|| match self.aws_credentials_state {

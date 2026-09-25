@@ -25,6 +25,8 @@ use warpui::{AppContext, Entity, SingletonEntity, ViewContext, WeakViewHandle, W
 #[cfg(not(target_family = "wasm"))]
 use super::SoleTeamError;
 use super::UserWorkspaces;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::ambient_agents::task::TaskScope;
 #[cfg(any(test, feature = "test-util"))]
 use crate::ai::llms::LLMInfo;
 use crate::ai::llms::{LLMId, LLMModelHost, LLMProvider, ModelsByFeature};
@@ -111,6 +113,43 @@ impl TeamScope for TeamScopeForCli {
             TeamScopeForCli::Personal => None,
             TeamScopeForCli::Team(team_uid) => Some(*team_uid),
         }
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+/// The stable team scope assigned to one agent run.
+pub struct AgentRunTeamScope(Option<ServerId>);
+
+#[cfg(not(target_family = "wasm"))]
+impl AgentRunTeamScope {
+    pub fn from_scope(scope: &(impl TeamScope + ?Sized)) -> Self {
+        Self(scope.team_uid())
+    }
+
+    pub(crate) fn from_task_scope(scope: &TaskScope) -> Self {
+        if !scope.is_team() {
+            return Self(None);
+        }
+        match ServerId::try_from(scope.uid.as_str()) {
+            Ok(team_uid) => Self(Some(team_uid)),
+            Err(err) => {
+                log::warn!(
+                    "Task reported an invalid team scope uid '{}': {err}",
+                    scope.uid
+                );
+                Self(None)
+            }
+        }
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl sealed::Sealed for AgentRunTeamScope {}
+
+#[cfg(not(target_family = "wasm"))]
+impl TeamScope for AgentRunTeamScope {
+    fn team_uid(&self) -> Option<ServerId> {
+        self.0
     }
 }
 

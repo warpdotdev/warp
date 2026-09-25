@@ -15,7 +15,6 @@ use warp_errors::report_error;
 use warp_managed_secrets::client::IdentityTokenOptions;
 use warpui::{ModelContext, ModelHandle, SingletonEntity};
 
-use crate::server::ids::ServerId;
 use crate::server::server_api::managed_secrets::{
     AppManagedSecretManager as ManagedSecretManager, IdentityTokenUserFacingError,
 };
@@ -24,7 +23,7 @@ use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::terminal::event::{AfterBlockCompletedEvent, BlockType};
 use crate::terminal::model::terminal_model::TerminalModel;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
-use crate::workspaces::user_workspaces::{TeamScopeForCli, UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 /// Errors that can occur when loading AWS credentials.
 #[derive(Debug, Clone)]
@@ -94,15 +93,12 @@ impl std::error::Error for LoadAwsCredentialsError {}
 
 pub(crate) const AWS_BEDROCK_STS_AUDIENCE: &str = "sts.amazonaws.com";
 pub(crate) const BEDROCK_IDENTITY_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60);
-pub(crate) fn bedrock_request_scope(
-    team_uid: Option<&str>,
-) -> anyhow::Result<Option<RequestTeamScope>> {
-    team_uid
-        .map(|uid| {
-            let scope = TeamScopeForCli::Team(ServerId::try_from(uid)?);
-            Ok(RequestTeamScope::from_scope(&scope))
-        })
-        .transpose()
+
+#[derive(Clone)]
+pub(crate) struct BedrockOidcCredentialsConfig {
+    pub task_id: String,
+    pub role_arn: String,
+    pub region: String,
 }
 
 pub(crate) fn bedrock_identity_token_error(error: anyhow::Error) -> anyhow::Error {
@@ -272,7 +268,7 @@ impl AwsCredentialRefresher for ApiKeyManager {
         });
     }
 }
-/// Refreshes AWS credentials, dispatching to the appropriate strategy.
+/// Refreshes local-chain AWS credentials. OIDC refresh is owned by the agent driver.
 ///
 /// Returns a future that resolves when the refresh completes. Subscription-triggered
 /// callers that don't need to wait should drop the returned future — the underlying
@@ -285,12 +281,7 @@ pub(crate) fn refresh_aws_credentials(
         AwsCredentialsRefreshStrategy::LocalChain => {
             refresh_aws_credentials_local_chain(manager, ctx)
         }
-        AwsCredentialsRefreshStrategy::OidcManaged {
-            task_id,
-            role_arn,
-            region,
-            team_uid,
-        } => refresh_aws_credentials_oidc(task_id, role_arn, region, team_uid, manager, ctx),
+        AwsCredentialsRefreshStrategy::OidcManaged => Box::pin(async { Ok(()) }),
     }
 }
 
@@ -344,11 +335,9 @@ fn refresh_aws_credentials_local_chain(
 }
 
 /// Refreshes credentials via OIDC identity token + STS AssumeRoleWithWebIdentity.
-fn refresh_aws_credentials_oidc(
-    task_id: Option<String>,
-    role_arn: String,
-    region: String,
-    team_uid: Option<String>,
+pub(crate) fn refresh_aws_credentials_oidc(
+    config: BedrockOidcCredentialsConfig,
+    request_scope: Option<RequestTeamScope>,
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) -> BoxFuture<'static, Result<(), String>> {
@@ -364,44 +353,32 @@ fn refresh_aws_credentials_oidc(
         }
     }
 
-    let Some(task_id) = task_id else {
-        let message = "AWS Bedrock inference requires an ambient task ID before credentials \
-                       can be minted"
-            .to_string();
-        manager.set_aws_credentials_state(
-            AwsCredentialsState::Failed {
-                message: message.clone(),
-            },
-            ctx,
-        );
-        return Box::pin(async move { Err(message) });
-    };
-
-    log::info!("Bedrock OIDC: preparing token mint for task {task_id:?}");
+    log::info!(
+        "Bedrock OIDC: preparing token mint for task {:?}",
+        config.task_id
+    );
     manager.set_aws_credentials_state(AwsCredentialsState::Refreshing, ctx);
-    let token_future = bedrock_request_scope(team_uid.as_deref()).map(|request_scope| {
-        ManagedSecretManager::handle(ctx)
-            .as_ref(ctx)
-            .issue_task_identity_token(
-                request_scope,
-                IdentityTokenOptions {
-                    audience: AWS_BEDROCK_STS_AUDIENCE.to_string(),
-                    requested_duration: BEDROCK_IDENTITY_TOKEN_DURATION,
-                    subject_template: vec1!["scoped_principal".to_string()],
-                },
-            )
-    });
+    let token_future = ManagedSecretManager::handle(ctx)
+        .as_ref(ctx)
+        .issue_task_identity_token(
+            request_scope,
+            IdentityTokenOptions {
+                audience: AWS_BEDROCK_STS_AUDIENCE.to_string(),
+                requested_duration: BEDROCK_IDENTITY_TOKEN_DURATION,
+                subject_template: vec1!["scoped_principal".to_string()],
+            },
+        );
 
     let (tx, rx) = channel();
     let _ = ctx.spawn(
         async move {
-            let token = token_future?.await.map_err(bedrock_identity_token_error)?;
+            let token = token_future.await.map_err(bedrock_identity_token_error)?;
 
-            let client = sts_client(&region).await;
-            let session_name = aws_role_session_name(&task_id);
+            let client = sts_client(&config.region).await;
+            let session_name = aws_role_session_name(&config.task_id);
             let credentials = client
                 .assume_role_with_web_identity()
-                .role_arn(&role_arn)
+                .role_arn(&config.role_arn)
                 .role_session_name(session_name)
                 .web_identity_token(token.token)
                 .send()
