@@ -999,7 +999,7 @@ pub enum AIAgentInput {
     EventsFromAgents { event_count: usize },
     PassiveSuggestionResult,
     OrchestrationConfigUpdate,
-    AgentMessageWakeCheck,
+    AgentMessageWake,
 }
 
 impl From<FullAIAgentInput> for AIAgentInput {
@@ -1040,7 +1040,7 @@ impl From<FullAIAgentInput> for AIAgentInput {
             },
             FullAIAgentInput::PassiveSuggestionResult { .. } => Self::PassiveSuggestionResult,
             FullAIAgentInput::OrchestrationConfigUpdate { .. } => Self::OrchestrationConfigUpdate,
-            FullAIAgentInput::AgentMessageWakeCheck => Self::AgentMessageWakeCheck,
+            FullAIAgentInput::AgentMessageWake => Self::AgentMessageWake,
         }
     }
 }

@@ -1195,7 +1195,7 @@ impl BlocklistAIController {
 
     /// Marker text `wake_driver.go` injects into a reachable shared session when there may be
     /// new agent messages waiting. Recognized in `send_user_query_in_conversation_internal` so
-    /// this client asks the server to resolve real, current content (`send_agent_message_wake_check`)
+    /// this client asks the server to resolve real, current content (`send_agent_message_wake`)
     /// instead of relaying it as literal query text -- which is deliberately still a coherent,
     /// standalone instruction on its own, so an older client that doesn't recognize it degrades
     /// gracefully rather than confusing the agent.
@@ -1204,7 +1204,7 @@ impl BlocklistAIController {
     /// Returns whether `query` is the shared-session-injected agent-message wake-check marker.
     /// Gated on `participant_id` since the marker is only ever injected via a shared session; an
     /// ordinary local query can never carry one.
-    fn is_agent_message_wake_check(participant_id: &Option<ParticipantId>, query: &str) -> bool {
+    fn is_agent_message_wake(participant_id: &Option<ParticipantId>, query: &str) -> bool {
         participant_id.is_some() && query == Self::AGENT_MESSAGE_WAKE_CHECK_MARKER
     }
 
@@ -1285,8 +1285,8 @@ impl BlocklistAIController {
         // messages, rather than relaying an actual human/integration follow-up. Ask the
         // server to resolve real, current content instead of treating the marker as
         // literal query text.
-        if Self::is_agent_message_wake_check(&participant_id, &query) {
-            return self.send_agent_message_wake_check(conversation_id, participant_id, ctx);
+        if Self::is_agent_message_wake(&participant_id, &query) {
+            return self.send_agent_message_wake(conversation_id, participant_id, ctx);
         }
 
         // Ensure we capture all pending context blocks before promoting and attaching them to the conversation.
@@ -1402,11 +1402,11 @@ impl BlocklistAIController {
         true
     }
 
-    /// Sends an `AIAgentInput::AgentMessageWakeCheck` for `conversation_id`, in response to
+    /// Sends an `AIAgentInput::AgentMessageWake` for `conversation_id`, in response to
     /// `AGENT_MESSAGE_WAKE_CHECK_MARKER` arriving via shared-session injection. The server
     /// resolves real, currently-pending message content when it handles this input, rather
     /// than the possibly-stale claim the marker text itself carries.
-    fn send_agent_message_wake_check(
+    fn send_agent_message_wake(
         &mut self,
         conversation_id: AIConversationId,
         participant_id: Option<ParticipantId>,
@@ -1429,7 +1429,7 @@ impl BlocklistAIController {
                     task_id,
                 },
                 input_query: InputQueryType::AIInputType {
-                    ai_input: AIAgentInput::AgentMessageWakeCheck,
+                    ai_input: AIAgentInput::AgentMessageWake,
                 },
                 additional_attachments: HashMap::new(),
                 queued_query_id: None,
@@ -2703,7 +2703,7 @@ impl BlocklistAIController {
                     if let AIAgentInput::UserQuery { query, .. } = input
                         && query.as_str() == Self::AGENT_MESSAGE_WAKE_CHECK_MARKER
                     {
-                        *input = AIAgentInput::AgentMessageWakeCheck;
+                        *input = AIAgentInput::AgentMessageWake;
                     }
                 }
             }

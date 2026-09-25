@@ -3656,7 +3656,7 @@ pub(super) fn query_prefix_highlight_len(
             | AIAgentInput::EventsFromAgents { .. }
             | AIAgentInput::PassiveSuggestionResult { .. }
             | AIAgentInput::OrchestrationConfigUpdate { .. }
-            | AIAgentInput::AgentMessageWakeCheck => None,
+            | AIAgentInput::AgentMessageWake => None,
         }
     }
 }

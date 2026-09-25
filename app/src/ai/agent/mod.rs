@@ -3010,12 +3010,10 @@ pub enum AIAgentInput {
         status: OrchestrationConfigStatus,
     },
 
-    /// Requests fresh resolution of any agent messages currently pending for this
-    /// conversation's run. Carries no content itself: the server resolves undelivered
-    /// messages at the moment it handles this input and responds with
-    /// `MessagesReceivedFromAgents` when any exist, or nothing when there are none. Sent
-    /// in reply to a server-pushed wake nudge on an already-reachable session.
-    AgentMessageWakeCheck,
+    /// Reports that this run was woken because agent messages may be waiting. Carries no
+    /// content: the server resolves any still-undelivered messages when it handles this input,
+    /// and ends the turn without a model call when there are none.
+    AgentMessageWake,
 }
 
 /// Data for a single message received by an agent from another agent.
@@ -3109,7 +3107,7 @@ impl Display for AIAgentInput {
             }
             Self::PassiveSuggestionResult { .. } => write!(f, "PassiveSuggestionResult"),
             Self::OrchestrationConfigUpdate { .. } => write!(f, "OrchestrationConfigUpdate"),
-            Self::AgentMessageWakeCheck => write!(f, "AgentMessageWakeCheck"),
+            Self::AgentMessageWake => write!(f, "AgentMessageWake"),
         }
     }
 }
@@ -3172,7 +3170,7 @@ impl AIAgentInput {
             | Self::EventsFromAgents { .. }
             | Self::PassiveSuggestionResult { .. }
             | Self::OrchestrationConfigUpdate { .. }
-            | Self::AgentMessageWakeCheck => None,
+            | Self::AgentMessageWake => None,
         }
     }
 
@@ -3278,7 +3276,7 @@ impl AIAgentInput {
             Self::MessagesReceivedFromAgents { .. }
             | Self::EventsFromAgents { .. }
             | Self::OrchestrationConfigUpdate { .. }
-            | Self::AgentMessageWakeCheck => None,
+            | Self::AgentMessageWake => None,
         }
     }
 
@@ -3310,7 +3308,7 @@ impl AIAgentInput {
             | Self::EventsFromAgents { .. }
             | Self::PassiveSuggestionResult { .. }
             | Self::OrchestrationConfigUpdate { .. }
-            | Self::AgentMessageWakeCheck => None,
+            | Self::AgentMessageWake => None,
         }
     }
 

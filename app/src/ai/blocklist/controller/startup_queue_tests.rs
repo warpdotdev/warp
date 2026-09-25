@@ -310,9 +310,9 @@ fn startup_injections_queued_before_the_initial_prompt_are_dispatched_one_at_a_t
 }
 
 #[test]
-fn agent_message_wake_check_marker_becomes_an_agent_message_wake_check_input_not_a_query() {
+fn agent_message_wake_marker_becomes_an_agent_message_wake_input_not_a_query() {
     // Regression test: the marker `wake_driver.go` injects into a reachable shared session to
-    // signal new agent messages must be converted to `AIAgentInput::AgentMessageWakeCheck`
+    // signal new agent messages must be converted to `AIAgentInput::AgentMessageWake`
     // rather than relayed as literal query text, even when it arrives through the native
     // startup-injection queue used for shared-session prompts.
     App::test((), |mut app| async move {
@@ -352,8 +352,8 @@ fn agent_message_wake_check_marker_becomes_an_agent_message_wake_check_input_not
             assert!(
                 inputs
                     .iter()
-                    .any(|input| matches!(input, AIAgentInput::AgentMessageWakeCheck)),
-                "expected an AgentMessageWakeCheck input among: {inputs:?}"
+                    .any(|input| matches!(input, AIAgentInput::AgentMessageWake)),
+                "expected an AgentMessageWake input among: {inputs:?}"
             );
             assert!(
                 user_queries_in_order(history, id)
@@ -366,7 +366,7 @@ fn agent_message_wake_check_marker_becomes_an_agent_message_wake_check_input_not
 }
 
 #[test]
-fn agent_message_wake_check_marker_is_caught_even_when_steered_into_a_follow_up() {
+fn agent_message_wake_marker_is_caught_even_when_steered_into_a_follow_up() {
     // Regression test: a queued shared-session row can be picked up by
     // `steer_head_prompt_for_request` and piggybacked directly onto a follow-up request,
     // bypassing the marker check in `send_user_query_in_conversation_internal` entirely.
@@ -428,8 +428,8 @@ fn agent_message_wake_check_marker_is_caught_even_when_steered_into_a_follow_up(
             assert!(
                 inputs
                     .iter()
-                    .any(|input| matches!(input, AIAgentInput::AgentMessageWakeCheck)),
-                "expected an AgentMessageWakeCheck input among: {inputs:?}"
+                    .any(|input| matches!(input, AIAgentInput::AgentMessageWake)),
+                "expected an AgentMessageWake input among: {inputs:?}"
             );
             assert!(
                 user_queries_in_order(history, id)

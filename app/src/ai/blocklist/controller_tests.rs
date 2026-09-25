@@ -402,24 +402,24 @@ fn input_for_query_seeds_query_mode_and_agent_from_the_base() {
 }
 
 #[test]
-fn is_agent_message_wake_check_requires_shared_session_participant_and_exact_marker_text() {
+fn is_agent_message_wake_requires_shared_session_participant_and_exact_marker_text() {
     let participant = ParticipantId::new();
     assert!(
-        BlocklistAIController::is_agent_message_wake_check(
+        BlocklistAIController::is_agent_message_wake(
             &Some(participant.clone()),
             BlocklistAIController::AGENT_MESSAGE_WAKE_CHECK_MARKER,
         ),
         "a shared-session participant sending the exact marker text must be recognized"
     );
     assert!(
-        !BlocklistAIController::is_agent_message_wake_check(
+        !BlocklistAIController::is_agent_message_wake(
             &None,
             BlocklistAIController::AGENT_MESSAGE_WAKE_CHECK_MARKER,
         ),
         "an ordinary local query can never carry the marker, even if the text happened to match"
     );
     assert!(
-        !BlocklistAIController::is_agent_message_wake_check(
+        !BlocklistAIController::is_agent_message_wake(
             &Some(participant),
             "some other shared-session follow-up",
         ),
