@@ -28,7 +28,7 @@ impl FederateCommand {
 #[command(name = "issue-token")]
 pub struct IssueTokenArgs {
     /// The run ID to issue the token for.
-    #[arg(long = "run-id")]
+    #[arg(long = "run-id", env = crate::OZ_RUN_ID_ENV)]
     pub run_id: String,
 
     /// The audience claim for the identity token.
@@ -47,9 +47,11 @@ pub struct IssueTokenArgs {
     ///
     /// Supported components are:
     /// - principal (`user:my-user-id`)
-    /// - scoped_principal (`principal:my-team-id/user:my-user-id`)
+    /// - scoped_principal (`scoped_principal:my-team-id/user:my-user-id`)
     /// - email (`email:user@warp.dev`)
     /// - teams (`teams:my-team-id`)
+    /// - factory_uid (`factory_uid:my-factory-id`)
+    /// - agent_type (`agent_type:my-agent-type`)
     /// - environment (`environment:my-environment-id`)
     /// - agent_name (`agent_name:my-agent`)
     /// - skill_spec (`skill_spec:warpdotdev/repo_path_to_skill`)

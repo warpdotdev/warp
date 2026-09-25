@@ -6,6 +6,7 @@ use super::*;
 use crate::agent::{AgentCommand, Harness, OutputFormat, RepositoryForge, RepositoryHeadRef};
 use crate::artifact::ArtifactCommand;
 use crate::environment::{EnvironmentCommand, ImageCommand};
+use crate::federate::FederateCommand;
 use crate::harness_support::{HarnessSupportCommand, TaskStatus};
 use crate::integration::IntegrationCommand;
 use crate::memory_store::{MemoryCommand, MemoryStoreCommand};
@@ -350,6 +351,130 @@ fn restore_env_var(name: &str, previous: Option<OsString>) {
     }
 }
 
+fn issue_token_args(args: Args) -> crate::federate::IssueTokenArgs {
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp federate issue-token` command");
+    };
+    let CliCommand::Federate(FederateCommand::IssueToken(args)) = *boxed_cmd else {
+        panic!("Expected `warp federate issue-token` command");
+    };
+    args
+}
+
+#[test]
+#[serial_test::serial]
+fn federate_issue_token_reads_run_id_from_env() {
+    let previous = set_env_var(OZ_RUN_ID_ENV, "run-from-env");
+
+    let parsed = Args::try_parse_from([
+        "warp",
+        "federate",
+        "issue-token",
+        "--audience",
+        "example.com",
+    ]);
+
+    restore_env_var(OZ_RUN_ID_ENV, previous);
+
+    let args = issue_token_args(parsed.expect("OZ_RUN_ID should satisfy --run-id"));
+    assert_eq!(args.run_id, "run-from-env");
+}
+
+#[test]
+#[serial_test::serial]
+fn federate_issue_token_explicit_run_id_overrides_env() {
+    let previous = set_env_var(OZ_RUN_ID_ENV, "run-from-env");
+
+    let parsed = Args::try_parse_from([
+        "warp",
+        "federate",
+        "issue-token",
+        "--run-id",
+        "run-from-flag",
+        "--audience",
+        "example.com",
+    ]);
+
+    restore_env_var(OZ_RUN_ID_ENV, previous);
+
+    let args = issue_token_args(parsed.expect("explicit --run-id should parse"));
+    assert_eq!(args.run_id, "run-from-flag");
+}
+
+#[test]
+#[serial_test::serial]
+fn federate_issue_token_requires_run_id_without_flag_or_env() {
+    let previous = std::env::var_os(OZ_RUN_ID_ENV);
+    restore_env_var(OZ_RUN_ID_ENV, None);
+
+    let error = Args::try_parse_from([
+        "warp",
+        "federate",
+        "issue-token",
+        "--audience",
+        "example.com",
+    ])
+    .expect_err("missing run ID should fail");
+
+    restore_env_var(OZ_RUN_ID_ENV, previous);
+
+    assert!(error.to_string().contains("--run-id"));
+}
+
+#[test]
+fn federate_issue_token_handles_all_supported_subject_claims() {
+    let supported_claims = [
+        "principal",
+        "scoped_principal",
+        "email",
+        "teams",
+        "factory_uid",
+        "agent_type",
+        "environment",
+        "agent_name",
+        "skill_spec",
+        "run_id",
+        "host",
+    ];
+    let mut argv = vec![
+        "warp",
+        "federate",
+        "issue-token",
+        "--run-id",
+        "run-id",
+        "--audience",
+        "example.com",
+        "--subject-template",
+    ];
+    argv.extend(supported_claims);
+
+    let args = issue_token_args(
+        Args::try_parse_from(argv).expect("all supported subject claims should parse"),
+    );
+    let parsed_claims: Vec<_> = args
+        .subject_template
+        .as_deref()
+        .expect("subject template should be populated")
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(parsed_claims, supported_claims);
+
+    let mut command = <Args as clap::CommandFactory>::command();
+    let help = command
+        .find_subcommand_mut("federate")
+        .expect("federate subcommand exists")
+        .find_subcommand_mut("issue-token")
+        .expect("issue-token subcommand exists")
+        .render_long_help()
+        .to_string();
+    for claim in supported_claims {
+        assert!(
+            help.contains(claim),
+            "help should document the supported {claim} subject claim:\n{help}"
+        );
+    }
+}
 #[test]
 fn agent_run_accepts_model() {
     let args = Args::try_parse_from([
