@@ -38,7 +38,8 @@ pub mod text {
             | AIAgentInput::MessagesReceivedFromAgents { .. }
             | AIAgentInput::PassiveSuggestionResult { .. }
             | AIAgentInput::EventsFromAgents { .. }
-            | AIAgentInput::OrchestrationConfigUpdate { .. } => {
+            | AIAgentInput::OrchestrationConfigUpdate { .. }
+            | AIAgentInput::AgentMessageWake => {
                 // Do not include the user query, since it's already provided as input to the agent.
                 Ok(())
             }
@@ -830,7 +831,8 @@ pub mod json {
                 | AIAgentInput::MessagesReceivedFromAgents { .. }
                 | AIAgentInput::EventsFromAgents { .. }
                 | AIAgentInput::PassiveSuggestionResult { .. }
-                | AIAgentInput::OrchestrationConfigUpdate { .. } => None,
+                | AIAgentInput::OrchestrationConfigUpdate { .. }
+                | AIAgentInput::AgentMessageWake => None,
                 // These input types should not occur in a SDK-run agent.
                 AIAgentInput::ResumeConversation { .. }
                 | AIAgentInput::TriggerPassiveSuggestion { .. } => None,

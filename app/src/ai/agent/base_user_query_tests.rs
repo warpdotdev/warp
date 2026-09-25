@@ -93,6 +93,29 @@ fn accessors_report_unset_fields_as_none() {
 }
 
 #[test]
+fn is_agent_message_wake_reports_only_the_agent_message_wake_origin() {
+    let wake = base(api::request::input::UserQuery {
+        origin: Some(api::UserQueryOrigin {
+            variant: Some(api::user_query_origin::Variant::AgentMessageWake(
+                api::user_query_origin::AgentMessageWake { message_count: 1 },
+            )),
+        }),
+        ..Default::default()
+    });
+    assert!(wake.is_agent_message_wake());
+
+    assert!(!base(Default::default()).is_agent_message_wake());
+    assert!(
+        !base(api::request::input::UserQuery {
+            origin: Some(super::warp_client_origin()),
+            ..Default::default()
+        })
+        .is_agent_message_wake()
+    );
+    assert!(!BaseUserQuery::unattributed("resume").is_agent_message_wake());
+}
+
+#[test]
 fn seed_uses_the_server_text_and_normalizes_a_prefix_the_server_did_not_classify() {
     let seeded = base(api::request::input::UserQuery {
         query: "/plan from the server".to_string(),

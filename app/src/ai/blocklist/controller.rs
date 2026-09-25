@@ -644,6 +644,13 @@ impl BlocklistAIController {
             {
                 me.dispatch_queued_warp_agent_prompt(*conversation_id, None, ctx);
             }
+            // Re-check held events as soon as the setup barrier lifts: a promptless run sends no
+            // initial turn whose end would otherwise trigger the check.
+            if let QueuedQueryEvent::DispatchStateChanged { conversation_id } = event
+                && !QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(*conversation_id)
+            {
+                me.handle_pending_events_ready(*conversation_id, ctx);
+            }
         });
         let streamer = OrchestrationEventStreamer::handle(ctx);
         ctx.subscribe_to_model(&streamer, move |me, _, event, ctx| match event {
@@ -1256,6 +1263,15 @@ impl BlocklistAIController {
             report_error!("Viewers should never attempt to send queries directly");
         }
 
+        // A wake's text is only a fallback for clients that cannot read its origin, so it must
+        // not be sent as a typed follow-up.
+        if base
+            .as_ref()
+            .is_some_and(BaseUserQuery::is_agent_message_wake)
+        {
+            return self.send_agent_message_wake(conversation_id, participant_id, ctx);
+        }
+
         // Ensure we capture all pending context blocks before promoting and attaching them to the conversation.
         let context_block_ids = self
             .context_model
@@ -1364,6 +1380,43 @@ impl BlocklistAIController {
             entrypoint_type,
             participant_id,
             is_queued_prompt,
+            ctx,
+        );
+        true
+    }
+
+    /// Sends an agent-message wake on the conversation's root task.
+    fn send_agent_message_wake(
+        &mut self,
+        conversation_id: AIConversationId,
+        participant_id: Option<ParticipantId>,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        let Some(conversation) =
+            BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
+        else {
+            report_error!(
+                "Tried to send an agent-message wake for a non-existent conversation",
+                extra: { "conversation_id" => ?conversation_id }
+            );
+            return false;
+        };
+        let task_id = conversation.get_root_task_id().clone();
+        self.send_query(
+            InputQuery {
+                which_task: WhichTask::Task {
+                    conversation_id,
+                    task_id,
+                },
+                input_query: InputQueryType::AIInputType {
+                    ai_input: AIAgentInput::AgentMessageWake,
+                },
+                additional_attachments: HashMap::new(),
+                queued_query_id: None,
+            },
+            EntrypointType::UserInitiated,
+            participant_id,
+            /*is_queued_prompt*/ false,
             ctx,
         );
         true
@@ -1698,20 +1751,27 @@ impl BlocklistAIController {
             self.set_current_response_initiator(participant_id);
         }
 
-        let input = input_for_query(
-            row.text().to_owned(),
-            task_id,
-            conversation_id,
-            None,
-            UserQueryMode::Normal,
-            None,
-            row.base_user_query().cloned(),
-            row.prepared_files().cloned().unwrap_or_default(),
-            prompt_attachments,
-            self.context_model.as_ref(ctx),
-            self.active_session.as_ref(ctx),
-            ctx,
-        );
+        let input = if row
+            .base_user_query()
+            .is_some_and(BaseUserQuery::is_agent_message_wake)
+        {
+            AIAgentInput::AgentMessageWake
+        } else {
+            input_for_query(
+                row.text().to_owned(),
+                task_id,
+                conversation_id,
+                None,
+                UserQueryMode::Normal,
+                None,
+                row.base_user_query().cloned(),
+                row.prepared_files().cloned().unwrap_or_default(),
+                prompt_attachments,
+                self.context_model.as_ref(ctx),
+                self.active_session.as_ref(ctx),
+                ctx,
+            )
+        };
 
         QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
             queue.remove_fired_row(conversation_id, query_id, ctx);
@@ -1857,11 +1917,15 @@ impl BlocklistAIController {
         // teardown and get cancelled, leaving the run stuck `InProgress` (QUALITY-1801).
         let is_exiting =
             OrchestrationEventService::as_ref(ctx).is_conversation_exiting(conversation_id);
+        // The server folds pending inbox messages into a run's initial turn itself, so events must
+        // not be injected ahead of that turn. Hold them behind the same barrier as startup prompts.
+        let is_dispatch_blocked =
+            QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(conversation_id);
         let Some(conversation) =
             BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
         else {
             log::info!(
-                "Pending events are not ready: conversation_id={conversation_id:?} reason=conversation_missing owns_conversation={owns} has_active_stream={has_active_stream} is_exiting={is_exiting}"
+                "Pending events are not ready: conversation_id={conversation_id:?} reason=conversation_missing owns_conversation={owns} has_active_stream={has_active_stream} is_exiting={is_exiting} is_dispatch_blocked={is_dispatch_blocked}"
             );
             return false;
         };
@@ -1872,9 +1936,9 @@ impl BlocklistAIController {
             conversation.status(),
             ConversationStatus::Success | ConversationStatus::WaitingForEvents,
         );
-        if !owns || has_active_stream || !is_ready_status || is_exiting {
+        if !owns || has_active_stream || !is_ready_status || is_exiting || is_dispatch_blocked {
             log::info!(
-                "Pending events are not ready: conversation_id={conversation_id:?} owns_conversation={owns} has_active_stream={has_active_stream} status={:?} is_exiting={is_exiting}",
+                "Pending events are not ready: conversation_id={conversation_id:?} owns_conversation={owns} has_active_stream={has_active_stream} status={:?} is_exiting={is_exiting} is_dispatch_blocked={is_dispatch_blocked}",
                 conversation.status()
             );
             return false;

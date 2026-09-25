@@ -1392,7 +1392,8 @@ impl AIAgentInput {
             | AIAgentInput::MessagesReceivedFromAgents { .. }
             | AIAgentInput::EventsFromAgents { .. }
             | AIAgentInput::PassiveSuggestionResult { .. }
-            | AIAgentInput::OrchestrationConfigUpdate { .. } => None,
+            | AIAgentInput::OrchestrationConfigUpdate { .. }
+            | AIAgentInput::AgentMessageWake => None,
         }
     }
 }

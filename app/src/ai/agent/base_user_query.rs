@@ -129,6 +129,17 @@ impl BaseUserQuery {
         }))
     }
 
+    /// Whether the server issued this query as an agent-message wake.
+    pub(crate) fn is_agent_message_wake(&self) -> bool {
+        matches!(
+            self.0
+                .origin
+                .as_ref()
+                .and_then(|origin| origin.variant.as_ref()),
+            Some(api::user_query_origin::Variant::AgentMessageWake(_))
+        )
+    }
+
     /// The query text, or `None` when the server left it empty and only duplicated it into
     /// `AgentPromptRequest::prompt`.
     pub(crate) fn query(&self) -> Option<&str> {
