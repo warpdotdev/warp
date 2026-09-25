@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -22,13 +24,18 @@ use warpui::r#async::{FutureExt as _, Timer};
 use warpui::{App, ModelContext, ModelHandle, SingletonEntity as _};
 
 use super::{AgentDriver, AgentDriverError, MANAGED_MCP_RESOLVE_MAX_ATTEMPTS};
+use crate::ai::agent_sdk::driver::harness::HarnessKind;
 use crate::ai::agent_sdk::driver::terminal::TerminalDriver;
+use crate::ai::agent_sdk::driver::{AgentRunPrompt, Task};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::cloud_environments::AmbientAgentEnvironment;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::mcp::builtin::{FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_NAME};
 use crate::ai::mcp::file_based_manager::{FileBasedMCPManager, FileBasedMCPManagerEvent};
 use crate::ai::mcp::file_mcp_watcher::PendingScan;
 use crate::ai::mcp::parsing::normalize_mcp_json;
+use crate::ai::mcp::templatable_manager::TemplatableMCPServerManagerEvent;
 use crate::ai::mcp::{
     FileMCPWatcher, FileMCPWatcherEvent, JSONMCPServer, JSONTransportType, MCPProvider,
     MCPServerState, ParsedTemplatableMCPServerResult, TemplatableMCPServerInstallation,
@@ -39,6 +46,7 @@ use crate::auth::credentials::Credentials;
 use crate::server::graphql::GraphQLError;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::managed_mcp::MockManagedMcpClient;
+use crate::terminal::model::session::SessionInfo;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use crate::warp_managed_paths_watcher::warp_managed_mcp_config_path;
 
@@ -903,6 +911,193 @@ fn managed_resolution_retries_transient_error_then_succeeds() {
 
     assert_eq!(resolved.ephemeral_installations.len(), 1);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+fn install_profile_mcp_server(app: &mut App, json: &str) -> Uuid {
+    let parsed_profile_server = ParsedTemplatableMCPServerResult::from_user_json(json)
+        .expect("profile MCP configuration should parse")
+        .into_iter()
+        .next()
+        .expect("profile MCP configuration should contain one server");
+    let profile_server = parsed_profile_server.templatable_mcp_server;
+    let profile_variables = parsed_profile_server
+        .templatable_mcp_server_installation
+        .expect("profile MCP configuration should produce an installation")
+        .variable_values()
+        .clone();
+    let profile_uuid = TemplatableMCPServerManager::handle(app).update(app, |manager, ctx| {
+        manager
+            .install_from_template(profile_server, profile_variables, false, ctx)
+            .expect("profile MCP server should install")
+            .uuid()
+    });
+    AIExecutionProfilesModel::handle(app).update(app, |profiles, ctx| {
+        profiles.add_to_mcp_allowlist(&profiles.default_profile_id(), &profile_uuid, ctx);
+    });
+    profile_uuid
+}
+#[test]
+#[serial_test::serial]
+fn configured_and_profile_mcp_servers_wait_for_environment_setup() {
+    let _factory_mcp_flag = FeatureFlag::FactoryMcp.override_enabled(false);
+    let _global_skills_flag = FeatureFlag::OzPlatformSkills.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        terminal_view.update(&mut app, |terminal, ctx| {
+            terminal.sessions_model().update(ctx, |sessions, _| {
+                sessions.register_session_for_test(SessionInfo::new_for_test().with_id(123));
+            });
+        });
+
+        let _profile_uuid = install_profile_mcp_server(
+            &mut app,
+            r#"{"profile-server":{"command":"profile-mcp-that-does-not-exist"}}"#,
+        );
+
+        let state_changes = Rc::new(RefCell::new(Vec::new()));
+        app.update(|ctx| {
+            let state_changes = Rc::clone(&state_changes);
+            ctx.subscribe_to_model(
+                &TemplatableMCPServerManager::handle(ctx),
+                move |_, event, _| {
+                    if let TemplatableMCPServerManagerEvent::StateChanged { uuid, .. } = event {
+                        state_changes.borrow_mut().push(*uuid);
+                    }
+                },
+            );
+        });
+
+        let driver_terminal_view = terminal_view.clone();
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                TerminalDriver::create_from_existing_view(driver_terminal_view, ctx);
+            let mut driver = AgentDriver::new_for_test(std::env::temp_dir(), terminal_driver, ctx);
+            driver.environment = Some(AmbientAgentEnvironment::new(
+                "test".to_string(),
+                None,
+                vec![],
+                String::new(),
+                vec!["environment-setup-is-still-running".to_string()],
+            ));
+            driver.mcp_startup_timeout = Duration::from_millis(20);
+            driver
+        });
+        let task = Task {
+            prompt: AgentRunPrompt::Local(String::new()),
+            model: None,
+            profile: None,
+            mcp_specs: vec![MCPSpec::Json(
+                r#"{"task-server":{"command":"task-mcp-that-does-not-exist"}}"#.to_string(),
+            )],
+            harness: HarnessKind::Oz,
+        };
+        driver_handle.update(&mut app, |_, ctx| {
+            let foreground = ctx.spawner();
+            ctx.spawn(
+                async move {
+                    let _ = AgentDriver::run_internal(task, foreground).await;
+                },
+                |_, _, _| {},
+            );
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let setup_command_is_pending = terminal_view.read(&app, |terminal, ctx| {
+                terminal.has_pending_command_or_awaiting_completion(ctx)
+            });
+            if setup_command_is_pending {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "environment setup command should become pending"
+            );
+            Timer::after(Duration::from_millis(10)).await;
+        }
+
+        assert!(
+            state_changes.borrow().is_empty(),
+            "task/config and profile MCP servers must remain stopped while environment setup is pending"
+        );
+    });
+}
+
+#[test]
+#[serial_test::serial]
+fn task_and_profile_mcp_servers_launch_before_either_readiness_path_settles() {
+    let _factory_mcp_flag = FeatureFlag::FactoryMcp.override_enabled(false);
+    let _file_based_mcp_flag = FeatureFlag::FileBasedMcp.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(|_| simple_logger::manager::LogManager::new());
+        let profile_uuid = install_profile_mcp_server(
+            &mut app,
+            r#"{"profile-server":{"url":"http://127.0.0.1:9/mcp"}}"#,
+        );
+        let driver_handle = setup_agent_driver(&mut app);
+        driver_handle.update(&mut app, |driver, _| {
+            driver.mcp_startup_timeout = Duration::from_millis(100);
+        });
+
+        let state_changes = Rc::new(RefCell::new(Vec::new()));
+        app.update(|ctx| {
+            let state_changes = Rc::clone(&state_changes);
+            ctx.subscribe_to_model(
+                &TemplatableMCPServerManager::handle(ctx),
+                move |_, event, _| {
+                    if let TemplatableMCPServerManagerEvent::StateChanged { uuid, state } = event {
+                        state_changes.borrow_mut().push((*uuid, *state));
+                    }
+                },
+            );
+        });
+
+        let foreground = driver_handle.update(&mut app, |_, ctx| ctx.spawner());
+        let result = AgentDriver::start_task_and_profile_mcp_servers(
+            &[MCPSpec::Json(
+                r#"{"task-server":{"url":"http://127.0.0.1:9/mcp"}}"#.to_string(),
+            )],
+            Arc::new(MockManagedMcpClient::new()),
+            &foreground,
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Ok(()) | Err(AgentDriverError::MCPStartupFailed { .. })
+        ));
+
+        let state_changes = state_changes.borrow();
+        let profile_start = state_changes
+            .iter()
+            .position(|(uuid, state)| {
+                *uuid == profile_uuid && matches!(state, &MCPServerState::Starting)
+            })
+            .expect("profile MCP server should start");
+        let task_start = state_changes
+            .iter()
+            .position(|(uuid, state)| {
+                *uuid != profile_uuid && matches!(state, &MCPServerState::Starting)
+            })
+            .expect("task MCP server should start");
+        let first_terminal_state = state_changes
+            .iter()
+            .position(|(_, state)| {
+                matches!(
+                    state,
+                    MCPServerState::Running | MCPServerState::FailedToStart
+                )
+            })
+            .unwrap_or(state_changes.len());
+
+        assert!(
+            profile_start < first_terminal_state && task_start < first_terminal_state,
+            "task and profile MCP servers must both launch before either readiness path settles"
+        );
+    });
 }
 
 #[test]
