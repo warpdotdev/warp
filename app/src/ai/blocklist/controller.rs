@@ -8,6 +8,7 @@ mod pending_response_streams;
 pub mod response_stream;
 pub(super) mod shared_session;
 mod slash_command;
+mod startup_queue;
 use std::collections::{HashMap, HashSet};
 #[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
@@ -21,7 +22,7 @@ use input_context::{input_context_for_request, parse_context_attachments};
 use itertools::Itertools;
 use parking_lot::FairMutex;
 use pending_response_streams::PendingResponseStreams;
-use session_sharing_protocol::common::ParticipantId;
+use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 pub use slash_command::*;
 use warp_core::assertions::safe_assert;
 use warp_errors::report_error;
@@ -40,7 +41,7 @@ use super::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
 };
 use super::orchestration_events::{OrchestrationEventService, OrchestrationEventServiceEvent};
-use super::queued_query::{QueuedQueryId, QueuedQueryModel};
+use super::queued_query::{QueuedQueryEvent, QueuedQueryId, QueuedQueryModel};
 use super::{BlocklistAIInputModel, ResponseStreamId};
 use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::api::{self, ServerConversationToken};
@@ -48,9 +49,9 @@ use crate::ai::agent::conversation::{AIConversation, AIConversationId, Conversat
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment, AIAgentContext,
-    AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, AIIdentifiers, CancellationOutcome,
-    CancellationReason, DocumentContentAttachmentSource, EntrypointType, FileContext,
-    FinishedAIAgentOutput, PassiveSuggestionResultType, PassiveSuggestionTrigger,
+    AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, AIIdentifiers, BaseUserQuery,
+    CancellationOutcome, CancellationReason, DocumentContentAttachmentSource, EntrypointType,
+    FileContext, FinishedAIAgentOutput, PassiveSuggestionResultType, PassiveSuggestionTrigger,
     PassiveSuggestionTriggerType, RenderableAIError, RequestCost, RequestMetadata, RunningCommand,
     StaticQueryType, TransientNetworkErrorKind, UserQueryMode, extract_user_query_mode,
 };
@@ -339,6 +340,7 @@ pub struct BlocklistAIController {
     should_refresh_available_llms_on_stream_finish: bool,
 
     shared_session_state: shared_session::SharedSessionState,
+    native_prompt_conversation_id: Option<AIConversationId>,
 
     /// Ambient agent task ID attached to this controller. This is a property of the controller, and not an individual
     /// conversation, because the ambient agent task driver owns the entire Warp window working on a task, and any
@@ -376,6 +378,10 @@ enum InputQueryType {
         query: String,
         static_query_type: Option<StaticQueryType>,
         running_command: Option<RunningCommand>,
+        /// The `Request.Input.UserQuery` warp-server injected with a shared-session prompt, when
+        /// this query came from one. `input_for_query` seeds the input's text, mode, and
+        /// intended agent from it and keeps it as the base the outgoing request is written over.
+        base: Option<BaseUserQuery>,
     },
     /// A custom [`AIInputType`].
     AIInputType { ai_input: AIAgentInput },
@@ -624,6 +630,21 @@ impl BlocklistAIController {
             let OrchestrationEventServiceEvent::EventsReady { conversation_id } = event;
             me.handle_pending_events_ready(*conversation_id, ctx);
         });
+        let queue = QueuedQueryModel::handle(ctx);
+        ctx.subscribe_to_model(&queue, |me, _, event, ctx| {
+            if let QueuedQueryEvent::PromptReady {
+                conversation_id,
+                query_id,
+            } = event
+                && me.native_prompt_conversation_id == Some(*conversation_id)
+                && QueuedQueryModel::as_ref(ctx)
+                    .ready_query(*conversation_id, *query_id)
+                    .is_some()
+                && me.can_dispatch_queued_warp_agent_prompt(*conversation_id, ctx)
+            {
+                me.dispatch_queued_warp_agent_prompt(*conversation_id, None, ctx);
+            }
+        });
         let streamer = OrchestrationEventStreamer::handle(ctx);
         ctx.subscribe_to_model(&streamer, move |me, _, event, ctx| match event {
             OrchestrationEventStreamerEvent::DormantClaudeWakeReady {
@@ -648,6 +669,7 @@ impl BlocklistAIController {
             team_context_resolver,
             should_refresh_available_llms_on_stream_finish: false,
             shared_session_state: shared_session::SharedSessionState::default(),
+            native_prompt_conversation_id: None,
             ambient_agent_task_id: None,
             attachments_download_dir: None,
             pending_auto_resume_handles: HashMap::new(),
@@ -808,6 +830,7 @@ impl BlocklistAIController {
             InputQueryType::UserSubmittedQueryFromInput {
                 static_query_type,
                 running_command,
+                base,
                 ..
             } => {
                 // Resolve the attachment set for this submission. The direct-send branch
@@ -831,6 +854,7 @@ impl BlocklistAIController {
                     static_query_type,
                     user_query_mode,
                     running_command,
+                    base,
                     additional_attachments,
                     prompt_attachments,
                     self.context_model.as_ref(ctx),
@@ -978,6 +1002,8 @@ impl BlocklistAIController {
             participant_id,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            None,
+            HashMap::new(),
             ctx,
         );
     }
@@ -1002,6 +1028,8 @@ impl BlocklistAIController {
             participant_id,
             /*is_queued_prompt*/ true,
             Some(queued_query_id),
+            None,
+            HashMap::new(),
             ctx,
         );
     }
@@ -1015,6 +1043,8 @@ impl BlocklistAIController {
         participant_id: Option<ParticipantId>,
         is_queued_prompt: bool,
         queued_query_id: Option<QueuedQueryId>,
+        base: Option<BaseUserQuery>,
+        additional_attachments: HashMap<String, AIAgentAttachment>,
         ctx: &mut ModelContext<Self>,
     ) {
         let participant_id = participant_id.or_else(|| self.get_sharer_participant_id());
@@ -1052,8 +1082,9 @@ impl BlocklistAIController {
                         query,
                         static_query_type,
                         running_command: Some(running_command),
+                        base,
                     },
-                    additional_attachments: HashMap::new(),
+                    additional_attachments,
                     queued_query_id,
                 },
                 entrypoint_type,
@@ -1069,8 +1100,9 @@ impl BlocklistAIController {
                         query,
                         static_query_type,
                         running_command: None,
+                        base,
                     },
-                    additional_attachments: HashMap::new(),
+                    additional_attachments,
                     queued_query_id,
                 },
                 entrypoint_type,
@@ -1098,6 +1130,7 @@ impl BlocklistAIController {
             EntrypointType::AgentInitiated,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            None,
             ctx,
         );
     }
@@ -1120,6 +1153,7 @@ impl BlocklistAIController {
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            None,
             ctx,
         )
     }
@@ -1145,6 +1179,7 @@ impl BlocklistAIController {
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ true,
             Some(queued_query_id),
+            None,
             ctx,
         );
     }
@@ -1156,6 +1191,7 @@ impl BlocklistAIController {
         conversation_id: AIConversationId,
         participant_id: Option<ParticipantId>,
         additional_attachments: HashMap<String, AIAgentAttachment>,
+        base: Option<BaseUserQuery>,
         ctx: &mut ModelContext<Self>,
     ) {
         self.send_user_query_in_conversation_internal(
@@ -1167,6 +1203,7 @@ impl BlocklistAIController {
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            base,
             ctx,
         );
     }
@@ -1191,6 +1228,7 @@ impl BlocklistAIController {
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            None,
             ctx,
         );
     }
@@ -1206,6 +1244,7 @@ impl BlocklistAIController {
         entrypoint_type: EntrypointType,
         is_queued_prompt: bool,
         queued_query_id: Option<QueuedQueryId>,
+        base: Option<BaseUserQuery>,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
         let is_viewer = self
@@ -1317,6 +1356,7 @@ impl BlocklistAIController {
                     query,
                     static_query_type: None,
                     running_command,
+                    base,
                 },
                 additional_attachments,
                 queued_query_id,
@@ -1343,6 +1383,7 @@ impl BlocklistAIController {
                     query: query_type.query().to_string(),
                     static_query_type: query_type.static_query_type(),
                     running_command: None,
+                    base: None,
                 },
                 additional_attachments: HashMap::new(),
                 queued_query_id: None,
@@ -1361,7 +1402,14 @@ impl BlocklistAIController {
         ctx: &mut ModelContext<Self>,
     ) {
         let participant_id = self.get_sharer_participant_id();
-        let which_task = match self.context_model.as_ref(ctx).selected_conversation_id(ctx) {
+        let target_conversation =
+            if matches!(ai_input, AIAgentInput::StartFromAmbientRunPrompt { .. }) {
+                self.native_prompt_conversation_id
+                    .or_else(|| self.context_model.as_ref(ctx).selected_conversation_id(ctx))
+            } else {
+                self.context_model.as_ref(ctx).selected_conversation_id(ctx)
+            };
+        let which_task = match target_conversation {
             Some(id) => {
                 let Some(conversation) = BlocklistAIHistoryModel::as_ref(ctx).conversation(&id)
                 else {
@@ -1591,6 +1639,90 @@ impl BlocklistAIController {
             .push((suggestion, trigger));
     }
 
+    /// Takes one ready steering prompt and updates its response attribution.
+    fn steer_head_prompt_for_request(
+        &mut self,
+        conversation_id: AIConversationId,
+        task_id: &TaskId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<AIAgentInput> {
+        if !QueuedQueryModel::as_ref(ctx).is_steering(conversation_id)
+            || QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(conversation_id)
+        {
+            return None;
+        }
+        let row = QueuedQueryModel::as_ref(ctx).ready_head(conversation_id)?;
+        if row.is_command() {
+            return None;
+        }
+        let row = row.clone();
+        let query_id = row.id();
+        let (participant_id, prompt_attachments) =
+            if let Some((participant_id, attachments)) = row.shared_session_prompt() {
+                let mut block_ids = Vec::new();
+                let mut selected_text_parts = Vec::new();
+                for attachment in attachments {
+                    match attachment {
+                        AgentAttachment::BlockReference { block_id } => {
+                            block_ids.push(BlockId::from(block_id.to_string()));
+                        }
+                        AgentAttachment::PlainText { content } => {
+                            selected_text_parts.push(content.clone());
+                        }
+                        AgentAttachment::FileReference { .. } => {}
+                    }
+                }
+                self.context_model.update(ctx, |context_model, ctx| {
+                    if !block_ids.is_empty() {
+                        context_model.set_pending_context_block_ids(block_ids, false, ctx);
+                    }
+                    if !selected_text_parts.is_empty() {
+                        context_model.set_pending_context_selected_text(
+                            Some(selected_text_parts.join("\n")),
+                            false,
+                            ctx,
+                        );
+                    }
+                });
+                (Some(participant_id.clone()), Vec::new())
+            } else {
+                (
+                    None,
+                    QueuedQueryModel::as_ref(ctx)
+                        .attachments_for(conversation_id, query_id)
+                        .to_vec(),
+                )
+            };
+
+        if let Some(participant_id) = participant_id {
+            self.set_current_response_initiator(participant_id);
+        }
+
+        let input = input_for_query(
+            row.text().to_owned(),
+            task_id,
+            conversation_id,
+            None,
+            UserQueryMode::Normal,
+            None,
+            row.base_user_query().cloned(),
+            row.prepared_files().cloned().unwrap_or_default(),
+            prompt_attachments,
+            self.context_model.as_ref(ctx),
+            self.active_session.as_ref(ctx),
+            ctx,
+        );
+
+        QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+            queue.remove_fired_row(conversation_id, query_id, ctx);
+        });
+        log::info!(
+            "event=steered_prompt_included conversation_id={conversation_id} query_id={query_id:?}"
+        );
+
+        Some(input)
+    }
+
     fn send_follow_up_for_conversation(
         &mut self,
         conversation_id: AIConversationId,
@@ -1610,7 +1742,13 @@ impl BlocklistAIController {
         let finished_results = self.action_model.update(ctx, |action_model, _| {
             action_model.drain_finished_action_results(conversation_id)
         });
-        if finished_results.is_empty() {
+        let root_task_id = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .map(|conversation| conversation.get_root_task_id().clone());
+        let steered_input = root_task_id
+            .as_ref()
+            .and_then(|task_id| self.steer_head_prompt_for_request(conversation_id, task_id, ctx));
+        if finished_results.is_empty() && steered_input.is_none() {
             return;
         }
 
@@ -1645,6 +1783,19 @@ impl BlocklistAIController {
             ctx,
         );
 
+        // A steered input is the fired head of the queue, so its presence is exactly what
+        // `send_request_input` needs to know to skip resetting the user's live draft context
+        // below -- neither `finished_results` nor a piggybacked orchestration event ever
+        // produces a `UserQuery`, so the steered input is the only possible source of one here.
+        let is_queued_prompt = steered_input.is_some();
+        if let (Some(steered_input), Some(root_task_id)) = (steered_input, root_task_id) {
+            request_input
+                .input_messages
+                .entry(root_task_id)
+                .or_default()
+                .push(steered_input);
+        }
+
         // Include any pending orchestration events in this follow-up rather
         // than waiting for a separate idle injection turn. Skip when a server
         // subagent is or will be active — events will be delivered via the idle
@@ -1677,7 +1828,7 @@ impl BlocklistAIController {
             request_input,
             None,
             RecoveryBudget::fresh(),
-            /*is_queued_prompt*/ false,
+            is_queued_prompt,
             ctx,
         );
 
@@ -1939,22 +2090,41 @@ impl BlocklistAIController {
             action_model.cancel_wait_for_events_for_conversation(conversation_id, ctx);
         });
 
+        let root_task_id = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .map(|conversation| conversation.get_root_task_id().clone());
+        let steered_input = root_task_id.as_ref().and_then(|root_task_id| {
+            self.steer_head_prompt_for_request(conversation_id, root_task_id, ctx)
+        });
+        // See the identical comment in `send_follow_up_for_conversation`: a steered input is
+        // the only possible source of a `UserQuery` here, so its presence is exactly the signal
+        // `send_request_input` needs to skip resetting the user's live draft context.
+        let is_queued_prompt = steered_input.is_some();
+
         let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
+        let mut request_input = RequestInput::for_task(
+            inputs,
+            task_id,
+            &self.active_session,
+            self.get_current_response_initiator(),
+            conversation_id,
+            self.terminal_surface_id,
+            &scope,
+            ctx,
+        );
+        if let (Some(steered_input), Some(root_task_id)) = (steered_input, root_task_id) {
+            request_input
+                .input_messages
+                .entry(root_task_id)
+                .or_default()
+                .push(steered_input);
+        }
         if self
             .send_request_input(
-                RequestInput::for_task(
-                    inputs,
-                    task_id,
-                    &self.active_session,
-                    self.get_current_response_initiator(),
-                    conversation_id,
-                    self.terminal_surface_id,
-                    &scope,
-                    ctx,
-                ),
+                request_input,
                 None,
                 RecoveryBudget::fresh(),
-                /*is_queued_prompt*/ false,
+                is_queued_prompt,
                 ctx,
             )
             .is_err()
@@ -2664,6 +2834,11 @@ impl BlocklistAIController {
             }
         }
 
+        if self.native_prompt_conversation_id == Some(conversation_id) && !is_passive_request {
+            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+                queue.finish_native_setup(conversation_id, ctx);
+            });
+        }
         ctx.emit(BlocklistAIControllerEvent::SentRequest {
             contains_user_query: input_contains_user_query,
             is_queued_prompt,
@@ -2708,6 +2883,27 @@ impl BlocklistAIController {
     ) -> bool {
         self.in_flight_response_streams
             .has_active_stream_for_conversation(conversation_id, app)
+    }
+
+    /// Whether a fresh automatic prompt can start without interrupting ongoing work.
+    pub(crate) fn can_dispatch_queued_warp_agent_prompt(
+        &self,
+        conversation_id: AIConversationId,
+        ctx: &AppContext,
+    ) -> bool {
+        !QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(conversation_id)
+            && !self.has_active_stream_for_conversation(conversation_id, ctx)
+            && !OrchestrationEventService::as_ref(ctx).is_conversation_exiting(conversation_id)
+            && BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .is_some_and(|conversation| {
+                    !conversation.has_active_subagent()
+                        && (conversation.exchange_count() == 0
+                            || matches!(
+                                conversation.status(),
+                                ConversationStatus::Success | ConversationStatus::WaitingForEvents
+                            ))
+                })
     }
 
     #[cfg(test)]
@@ -3362,11 +3558,8 @@ impl BlocklistAIController {
                 let error_message = "Response stream finished unexpectedly (with finish reason `Other`).";
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_with_error(
-                        RenderableAIError::Other {
+                        RenderableAIError::AgentStreamFailure {
                             error_message: error_message.to_owned(),
-                            will_attempt_resume: false,
-                            waiting_for_network: false,
-                            is_user_error: false,
                         },
                         /*recovery_pending*/ false,
                         stream_id,
@@ -3407,11 +3600,8 @@ impl BlocklistAIController {
                 let error_message = "The LLM is currently unavailable.";
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_with_error(
-                        RenderableAIError::Other {
+                        RenderableAIError::AgentStreamFailure {
                             error_message: error_message.to_owned(),
-                            will_attempt_resume: false,
-                            waiting_for_network: false,
-                            is_user_error: false,
                         },
                         /*recovery_pending*/ false,
                         stream_id,
@@ -3475,11 +3665,20 @@ impl BlocklistAIController {
                 );
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_with_error(
-                        RenderableAIError::Other {
-                            error_message,
-                            will_attempt_resume: false,
-                            waiting_for_network: false,
-                            is_user_error: false,
+                        RenderableAIError::AgentStreamFailure { error_message },
+                        /*recovery_pending*/ false,
+                        stream_id,
+                        conversation_id,
+                        self.terminal_surface_id,
+                        ctx,
+                    );
+                });
+            }
+            Some(warp_multi_agent_api::response_event::stream_finished::Reason::ChatgptSubscriptionError(details)) => {
+                history_model.update(ctx, |history_model, ctx| {
+                    history_model.mark_response_stream_completed_with_error(
+                        RenderableAIError::AgentStreamFailure {
+                            error_message: details.message,
                         },
                         /*recovery_pending*/ false,
                         stream_id,
@@ -3526,12 +3725,13 @@ pub struct ClientIdentifiers {
 
 #[allow(clippy::too_many_arguments)]
 fn input_for_query(
-    query: String,
+    client_query: String,
     task_id: &TaskId,
     conversation_id: AIConversationId,
     static_query_type: Option<StaticQueryType>,
-    user_query_mode: UserQueryMode,
+    client_mode: UserQueryMode,
     running_command: Option<RunningCommand>,
+    base: Option<BaseUserQuery>,
     additional_attachments: HashMap<String, AIAgentAttachment>,
     prompt_attachments: Vec<PendingAttachment>,
     context_model: &BlocklistAIContextModel,
@@ -3556,7 +3756,7 @@ fn input_for_query(
         image_context,
         app,
     );
-    let intended_agent = BlocklistAIHistoryModel::as_ref(app)
+    let task_intended_agent = BlocklistAIHistoryModel::as_ref(app)
         .conversation(&conversation_id)
         .and_then(|c| c.get_task(task_id))
         .and_then(|task| {
@@ -3568,6 +3768,12 @@ fn input_for_query(
                 None
             }
         });
+    // A base (the query warp-server injected with a shared-session prompt) is authoritative for
+    // the fields it set; the client's text, mode, and task-derived agent fill in the rest.
+    let (query, user_query_mode, intended_agent) = match base.as_ref() {
+        Some(base) => base.seed_input_fields(client_query, client_mode, task_intended_agent),
+        None => (client_query, client_mode, task_intended_agent),
+    };
     let mut referenced_attachments = parse_context_attachments(&query, context_model, app);
     referenced_attachments.extend(additional_attachments);
     add_pending_file_attachments(&mut referenced_attachments, file_attachments);
@@ -3580,6 +3786,7 @@ fn input_for_query(
         user_query_mode,
         running_command,
         intended_agent,
+        base,
     }
 }
 

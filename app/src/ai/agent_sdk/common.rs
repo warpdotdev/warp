@@ -16,7 +16,7 @@ use warpui::{AppContext, GetSingletonModelHandle, SingletonEntity as _, UpdateMo
 use crate::ai::agent::conversation::ServerAIConversationMetadata;
 use crate::ai::agent_sdk::driver::{AgentDriverError, WARP_DRIVE_SYNC_TIMEOUT};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::cloud_environments::{CloudAmbientAgentEnvironment, environment_matches_scope};
 use crate::ai::llms::{LLMId, LLMPreferences, is_model_allowed_for_scope};
 use crate::auth::UserUid;
 use crate::auth::auth_state::AuthStateProvider;
@@ -25,11 +25,12 @@ use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::AIClient;
+use crate::server::team_scope::RequestTeamScope;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::team_workspace_settings::{
     NotATeamMemberError, TeamScopeForCli, TeamScopeForCliError,
 };
-use crate::workspaces::user_workspaces::{SoleTeamError, TeamScope as _, UserWorkspaces};
+use crate::workspaces::user_workspaces::{SoleTeamError, TeamScope, UserWorkspaces};
 
 /// How long to wait for workspace metadata to refresh.
 pub const WORKSPACE_METADATA_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -148,7 +149,7 @@ fn describe_team_resolution_error(error: TeamScopeForCliError, ctx: &AppContext)
 }
 
 /// The team a CLI command's policy reads are scoped to.
-fn resolve_team_scope(
+pub(super) fn resolve_team_scope(
     team_selection: &TeamSelection,
     ctx: &AppContext,
 ) -> anyhow::Result<TeamScopeForCli> {
@@ -156,26 +157,42 @@ fn resolve_team_scope(
         .team_scope_for_cli(team_selection)
         .map_err(|err| describe_team_resolution_error(err, ctx))
 }
-
-/// [`validate_agent_mode_base_model_id`], also rejecting a model `scope`'s team does not let this
-/// member use.
-///
-/// The team is resolved only once the model turns out to be one of the member's own custom
-/// endpoints, since that is the only kind a team withholds. Resolving it eagerly would make a
-/// multi-team user pass `--team` to name a model no team governs.
-pub fn validate_agent_mode_base_model_id_for_scope(
-    model_id: &str,
+pub(super) fn request_team_scope_for_cli(
     team_selection: &TeamSelection,
     ctx: &AppContext,
+) -> anyhow::Result<RequestTeamScope> {
+    let team_scope = resolve_team_scope(team_selection, ctx)?;
+    Ok(RequestTeamScope::from_scope(&team_scope))
+}
+
+pub(super) fn resolve_object_scope(
+    object_scope: &ObjectScope,
+    ctx: &AppContext,
+) -> anyhow::Result<TeamScopeForCli> {
+    UserWorkspaces::as_ref(ctx)
+        .team_scope_for_cli_object(object_scope)
+        .map_err(|err| describe_team_resolution_error(err, ctx))
+}
+
+pub(super) fn validate_agent_mode_base_model_id_for_scope(
+    model_id: &str,
+    team_scope: &impl TeamScope,
+    ctx: &AppContext,
 ) -> anyhow::Result<LLMId> {
-    let llm_id = validate_agent_mode_base_model_id(model_id, ctx)?;
-    let prefs = LLMPreferences::as_ref(ctx);
-    let Some(llm) = prefs.custom_llm_info_for_id(&llm_id) else {
+    let llm_prefs = LLMPreferences::as_ref(ctx);
+    let valid_ids = llm_prefs
+        .get_base_llm_choices_for_agent_mode(team_scope, ctx)
+        .map(|info| info.id.clone())
+        .collect::<Vec<_>>();
+    let llm_id = classify_agent_mode_base_model_id(
+        model_id,
+        &valid_ids,
+        llm_prefs.agent_mode_models_unavailable(team_scope),
+    )?;
+    let Some(llm) = llm_prefs.custom_llm_info_for_id(&llm_id) else {
         return Ok(llm_id);
     };
-
-    let team_scope = resolve_team_scope(team_selection, ctx)?;
-    if is_model_allowed_for_scope(prefs, llm, &team_scope, ctx) {
+    if is_model_allowed_for_scope(llm_prefs, llm, team_scope, ctx) {
         return Ok(llm_id);
     }
     let scope = team_scope.team_uid().map_or_else(
@@ -213,13 +230,16 @@ pub fn resolve_owner(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<Ow
     }
 }
 
-/// Checks `--team` against the caller's memberships, for commands that leave the owner for the
-/// server to resolve.
-pub fn validate_team_scope(team_selection: &TeamSelection, ctx: &AppContext) -> anyhow::Result<()> {
-    if !team_selection.is_team() {
-        return Ok(());
+pub(super) fn resolve_owner_for_team_scope(
+    team_scope: &impl TeamScope,
+    ctx: &AppContext,
+) -> anyhow::Result<Owner> {
+    match team_scope.team_uid() {
+        Some(team_uid) => Ok(Owner::Team { team_uid }),
+        None => Ok(Owner::User {
+            user_uid: current_user_uid(ctx)?,
+        }),
     }
-    resolve_team_scope(team_selection, ctx).map(|_| ())
 }
 
 /// Refresh workspace metadata before executing an operation.
@@ -239,10 +259,10 @@ where
     });
 
     async move {
-        let _ = refresh_future
+        refresh_future
             .await
-            .map_err(|_| anyhow::anyhow!("Timed out refreshing team metadata"))?;
-        Ok(())
+            .map_err(|_| anyhow::anyhow!("Timed out refreshing team metadata"))?
+            .map_err(|_| anyhow::anyhow!("Team metadata refresh was canceled"))?
     }
 }
 
@@ -324,10 +344,11 @@ pub enum EnvironmentChoice {
 }
 
 impl EnvironmentChoice {
-    /// Resolve the environment to use when creating an agent integration.
+    /// Resolve the environment to use when creating an agent operation.
     /// Warp Drive *must* have been synced first.
     pub fn resolve_for_create(
         args: EnvironmentCreateArgs,
+        team_scope: &(impl TeamScope + ?Sized),
         ctx: &AppContext,
     ) -> Result<Self, ResolveConfigurationError> {
         if args.no_environment {
@@ -339,6 +360,7 @@ impl EnvironmentChoice {
             let mut synced_environments: Vec<(ServerId, &CloudAmbientAgentEnvironment)> =
                 all_environments
                     .iter()
+                    .filter(|env| environment_matches_scope(env, team_scope, true))
                     .filter_map(|env| {
                         if let SyncId::ServerId(server_id) = env.sync_id() {
                             Some((server_id, env))

@@ -294,7 +294,7 @@ impl VoiceInput {
         let mut has_logged_stream_error = false;
         let stream = input_device
             .build_input_stream(
-                &stream_config,
+                stream_config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     let is_empty = data.iter().all(|&x| x == 0.0);
                     log::debug!("Sending audio frame to resampling thread. is_empty: {is_empty}");

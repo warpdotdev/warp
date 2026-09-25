@@ -16,27 +16,32 @@ use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::terminal::input::conversations::AcceptConversation;
 use crate::terminal::input::conversations::search_item::ConversationSearchItem;
 use crate::terminal::model::session::active_session::ActiveSession;
+use crate::workspaces::user_workspaces::TeamContextResolver;
 
 pub struct ConversationMenuDataSource {
     conversation_selection: ConversationSelectionHandle,
     active_session: ModelHandle<ActiveSession>,
+    team_context_resolver: TeamContextResolver,
 }
 
 impl ConversationMenuDataSource {
     pub fn new(
         conversation_selection: ConversationSelectionHandle,
         active_session: ModelHandle<ActiveSession>,
+        team_context_resolver: TeamContextResolver,
     ) -> Self {
         Self {
             conversation_selection,
             active_session,
+            team_context_resolver,
         }
     }
 
     fn entries(&self, app: &AppContext) -> Vec<(AgentConversationEntry, bool)> {
         let policy = self.conversation_selection.as_ref(app);
+        let scope = (self.team_context_resolver)(app);
         AgentConversationsModel::as_ref(app)
-            .get_entries(&AgentManagementFilters::default(), app)
+            .get_entries(&AgentManagementFilters::default(), &scope, app)
             .into_iter()
             .filter_map(|entry| match policy.classify_entry(&entry, app) {
                 AgentConversationListEntryState::Available => Some((entry, false)),

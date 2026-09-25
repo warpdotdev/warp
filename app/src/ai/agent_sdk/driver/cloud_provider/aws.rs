@@ -8,13 +8,13 @@ use anyhow::Context;
 use tempfile::{Builder, NamedTempFile};
 use vec1::Vec1;
 use warp_core::safe_info;
-use warp_managed_secrets::ManagedSecretManager;
 use warpui::{ModelSpawner, SingletonEntity};
 
 use super::super::terminal::TerminalDriver;
 use super::{CloudProvider, CloudProviderSetupError, Result};
 use crate::ai::aws_credentials::aws_role_session_name;
 use crate::ai::cloud_environments::AwsProviderConfig;
+use crate::server::server_api::managed_secrets::AppManagedSecretManager as ManagedSecretManager;
 
 /// Default duration for OIDC identity tokens issued for cloud provider auth.
 /// The AWS CLI doesn't offer a mechanism for refreshing web identity tokens, so we

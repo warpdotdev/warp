@@ -1,7 +1,7 @@
 use clap::{ArgAction, ArgGroup, Args, Subcommand, ValueEnum};
 
 use crate::json_filter::JsonOutput;
-use crate::scope::ObjectScope;
+use crate::scope::{ObjectScope, TeamSelection};
 
 /// Maximum length for runner descriptions.
 const MAX_DESCRIPTION_LENGTH: usize = 240;
@@ -25,6 +25,8 @@ pub enum RunnerOsArg {
     Linux,
     #[value(name = "macos")]
     Macos,
+    #[value(name = "windows")]
+    Windows,
 }
 
 /// Target CPU architecture for a runner sandbox.
@@ -87,6 +89,8 @@ impl RunnerCommand {
 
 #[derive(Debug, Clone, Args)]
 pub struct ListRunnersArgs {
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
     /// Sort field.
     #[arg(long = "sort-by", value_enum, value_name = "FIELD")]
     pub sort_by: Option<RunnerSortByArg>,
@@ -184,6 +188,9 @@ pub struct UpdateRunnerArgs {
     /// Memory in GB for the instance shape. Can be set independently of --vcpus (the other value is preserved).
     #[arg(long = "memory-gb")]
     pub memory_gb: Option<i32>,
+
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -201,7 +208,7 @@ pub struct DeleteRunnerArgs {
 ///
 /// Mirrors the server rule: Linux config (`--docker-image`) is only valid for
 /// `--os linux`, and macOS config (`--macos-version`) is only valid for
-/// `--os macos`.
+/// `--os macos`. Windows accepts neither, since it has no OS-specific config.
 pub fn validate_os_config(
     os: RunnerOsArg,
     docker_image: Option<&str>,
@@ -216,6 +223,14 @@ pub fn validate_os_config(
         RunnerOsArg::Macos => {
             if docker_image.is_some() {
                 return Err("--docker-image can only be used with --os linux".to_string());
+            }
+        }
+        RunnerOsArg::Windows => {
+            if docker_image.is_some() {
+                return Err("--docker-image can only be used with --os linux".to_string());
+            }
+            if macos_version.is_some() {
+                return Err("--macos-version can only be used with --os macos".to_string());
             }
         }
     }

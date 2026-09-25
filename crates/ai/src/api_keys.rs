@@ -1101,6 +1101,8 @@ impl ApiKeyManager {
                 allow_use_of_warp_credits: false,
                 aws_credentials,
                 google_cloud_credentials,
+                chatgpt_delegated_access_token: String::new(),
+                skip_chatgpt_subscription: false,
             })
         }
     }

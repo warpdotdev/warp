@@ -5,7 +5,7 @@ use super::*;
 use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, LLMPreferences, ModelsByFeature};
 use crate::server::server_api::ClientError;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
-use crate::workspaces::user_workspaces::TeamlessScopeForTest;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeForTest};
 
 fn attachment() -> AttachmentInput {
     AttachmentInput {
@@ -13,6 +13,10 @@ fn attachment() -> AttachmentInput {
         mime_type: "text/plain".to_owned(),
         data: "hello".to_owned(),
     }
+}
+
+fn team_request_scope() -> RequestTeamScope {
+    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(7.into()))
 }
 
 fn add_model(app: &mut App) -> warpui::ModelHandle<AmbientAgentViewModel> {
@@ -181,7 +185,12 @@ fn duplicate_handoff_completion_is_ignored() {
 
         model.update(&mut app, |model, ctx| {
             let (cancel, _) = oneshot::channel();
-            model.begin_local_to_cloud_handoff(retry_request("initial request"), cancel, ctx);
+            model.begin_local_to_cloud_handoff(
+                retry_request("initial request"),
+                RequestTeamScope::from_scope(&TeamlessScopeForTest),
+                cancel,
+                ctx,
+            );
             model.handle_handoff_commit_failure(
                 HandoffCommitFailure {
                     issue: CloudAgentStartupIssue::Failed(CloudAgentStartupFailure::Other {
@@ -228,7 +237,12 @@ fn handoff_cancellation_is_signalled_and_late_failure_is_ignored() {
         let (cancel, mut cancellation) = oneshot::channel();
 
         model.update(&mut app, |model, ctx| {
-            model.begin_local_to_cloud_handoff(retry_request("queued prompt"), cancel, ctx);
+            model.begin_local_to_cloud_handoff(
+                retry_request("queued prompt"),
+                RequestTeamScope::from_scope(&TeamlessScopeForTest),
+                cancel,
+                ctx,
+            );
             assert_eq!(
                 model
                     .request()
@@ -381,6 +395,7 @@ fn github_auth_url_for_initial_run_includes_focus_cloud_mode_next() {
                 kind: SessionStartupKind::InitialRun,
             };
             model.request = Some(retry_request("fix tests"));
+            model.request_team_scope = Some(team_request_scope());
             model.handle_ambient_agent_stream_error(
                 anyhow::Error::new(ClientError {
                     error: "auth required".to_string(),
@@ -421,6 +436,7 @@ fn github_auth_completed_retries_stored_initial_run_request() {
                 auth_url: "https://example.com/oauth/connect/github".to_string(),
             };
             model.request = Some(retry_request("retry this"));
+            model.request_team_scope = Some(team_request_scope());
 
             model.handle_github_auth_completed(ctx);
 
@@ -432,6 +448,7 @@ fn github_auth_completed_retries_stored_initial_run_request() {
                 }
             ));
             let request = model.request().expect("retry should spawn a request");
+            assert_eq!(model.request_team_scope, Some(team_request_scope()));
             assert_eq!(request.prompt.as_deref(), Some("retry this"));
             assert_eq!(request.attachments.len(), 1);
             assert_eq!(request.interactive, Some(true));

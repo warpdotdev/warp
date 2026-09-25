@@ -10,11 +10,7 @@ use crate::server::graphql::GraphQLError;
 use crate::server::server_api::presigned_upload::HttpStatusError;
 
 fn http_err(status: u16) -> anyhow::Error {
-    HttpStatusError {
-        status,
-        body: format!("status {status} body"),
-    }
-    .into()
+    HttpStatusError::new(status, format!("status {status} body")).into()
 }
 
 fn graphql_http_err(status: StatusCode) -> anyhow::Error {

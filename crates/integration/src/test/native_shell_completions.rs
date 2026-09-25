@@ -49,7 +49,7 @@ fn enable_native_shell_completions_feature() {
 }
 
 /// Warp completions off, native on, resolving to `CompletionSources::NativeOnly`: the shell is
-/// asked unconditionally, with no bundled specs and no file-path fallback.
+/// asked before Warp considers file-path suggestions.
 fn native_only_completion_defaults() -> HashMap<String, String> {
     HashMap::from([
         (

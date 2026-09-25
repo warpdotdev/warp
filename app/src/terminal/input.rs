@@ -102,7 +102,8 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::units::IntoPixels;
 use warpui::{
     AppContext, Entity, EntityId, FocusContext, ModelAsRef, ModelHandle, SingletonEntity,
-    TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle, end_trace, start_trace,
+    TypedActionView, View, ViewContext, ViewHandle, ViewUpdateError, WeakViewHandle, end_trace,
+    start_trace,
 };
 
 use self::decorations::InputBackgroundJobOptions;
@@ -186,7 +187,7 @@ use crate::ai::blocklist::{
     QueuedQueryOrigin, SlashCommandRequest, ai_brand_color, ai_indicator_height,
     render_ai_agent_mode_icon, render_ai_follow_up_icon,
 };
-use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::cloud_agent_settings::{AuthSecretPreference, CloudAgentSettings};
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::connected_self_hosted_workers::{
     ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,
@@ -442,6 +443,7 @@ fn effective_default_host(
 
 pub const COMPLETIONS_MENU_WIDTH: f32 = 330.;
 pub const OPEN_COMPLETIONS_KEYBINDING_NAME: &str = "input:open_completion_suggestions";
+pub(crate) const EXTERNAL_ALT_C_BINDING_CONTEXT: &str = "ExternalAltCDirectorySearch";
 pub const INPUT_A11Y_LABEL: &str = "Command Input.";
 pub const INPUT_A11Y_HELPER: &str = "Input your shell command, press enter to execute. Press cmd-up to navigate to output of previously executed commands. Press cmd-l to re-focus command input.";
 pub const AI_COMMAND_SEARCH_HINT_TEXT: &str = "Type '#' for AI command suggestions";
@@ -2248,6 +2250,14 @@ pub fn init(app: &mut AppContext) {
         .with_enabled(|| FeatureFlag::ShellWidgetHandoff.is_enabled())
         .with_context_predicate(id!("Input") & !id!("VoltronActive") & !id!("LongRunningCommand"))
         .with_key_binding("ctrl-t"),
+        EditableBinding::new(
+            "workspace:trigger_external_alt_c_directory_search",
+            "External Directory Search",
+            WorkspaceAction::TriggerExternalAltCDirectorySearch,
+        )
+        .with_enabled(|| FeatureFlag::ShellWidgetHandoff.is_enabled())
+        .with_context_predicate(id!(EXTERNAL_ALT_C_BINDING_CONTEXT))
+        .with_key_binding("alt-c"),
     ]);
 
     if let Some(custom_action) = workflows::CategoriesView::custom_action() {
@@ -2570,6 +2580,10 @@ impl Input {
             if !affects_this_window {
                 return;
             }
+            let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+            ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
+                model.refresh(&scope, ctx);
+            });
             // `None` has to be applied, not skipped: it means the window's team configures no
             // self-hosted default, and leaving the previous value in place would keep the
             // selector and the run config pointed at another team's worker.
@@ -2640,8 +2654,6 @@ impl Input {
             }
         });
 
-        // Cloud-mode side effects on FTUX events: update the pane's harness auth secret, persist
-        // `last_selected_auth_secret`, mark FTUX completed.
         let vm_for_events = view_model.clone();
         ctx.subscribe_to_view(&ftux_view, move |_me, _, event, ctx| match event {
             AuthSecretFtuxViewEvent::SecretSelected { harness, name }
@@ -2651,11 +2663,15 @@ impl Input {
                 vm_for_events.update(ctx, |model, ctx| {
                     model.set_harness_auth_secret_name(Some(name.clone()), ctx);
                 });
+                let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
                     settings.mark_harness_auth_ftux_completed(harness, ctx);
-                    let mut map = settings.last_selected_auth_secret.value().clone();
-                    map.insert(harness.config_name().to_string(), name);
-                    let _ = settings.last_selected_auth_secret.set_value(map, ctx);
+                    settings.persist_auth_secret_preference(
+                        &team_scope,
+                        harness,
+                        Some(AuthSecretPreference::Named(name)),
+                        ctx,
+                    );
                 });
             }
             AuthSecretFtuxViewEvent::Cancelled => {
@@ -2665,8 +2681,15 @@ impl Input {
             }
             AuthSecretFtuxViewEvent::Skipped { harness } => {
                 let harness = *harness;
+                let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
                     settings.mark_harness_auth_ftux_completed(harness, ctx);
+                    settings.persist_auth_secret_preference(
+                        &team_scope,
+                        harness,
+                        Some(AuthSecretPreference::Inherit),
+                        ctx,
+                    );
                 });
             }
             AuthSecretFtuxViewEvent::Failed { .. } => {}
@@ -4305,6 +4328,22 @@ impl Input {
         ctx: &mut ViewContext<Self>,
     ) {
         // Read the origin before dispatch; the row is removed once it fires.
+        if QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(conversation_id) {
+            return;
+        }
+        if QueuedQueryModel::as_ref(ctx)
+            .queue(conversation_id)
+            .iter()
+            .any(|row| row.id() == query_id && row.shared_session_prompt().is_some())
+        {
+            // "Send now" targets the clicked row specifically, which may not be the queue head
+            // (e.g. after reordering) -- passing `query_id` through dispatches that exact row
+            // instead of whatever currently happens to be at the head.
+            self.ai_controller.update(ctx, |controller, ctx| {
+                controller.dispatch_queued_warp_agent_prompt(conversation_id, Some(query_id), ctx);
+            });
+            return;
+        }
         let origin = QueuedQueryModel::as_ref(ctx)
             .queue(conversation_id)
             .iter()
@@ -5664,13 +5703,19 @@ impl Input {
         let has_input = !self.editor.as_ref(ctx).buffer_text(ctx).is_empty();
         let should_clear_prompt_for_search =
             has_input && FeatureFlag::RestorePromptOnInlineModelSelectorSearch.is_enabled();
-        self.inline_model_selector_view.update(ctx, |view, ctx| {
-            if has_input && !should_clear_prompt_for_search {
-                view.set_filter_results_by_input(false);
-            }
-            view.set_prompt_parked_for_search(should_clear_prompt_for_search);
-            view.set_active_tab(initial_tab, ctx);
-        });
+        match self
+            .inline_model_selector_view
+            .try_update(ctx, |view, ctx| {
+                if has_input && !should_clear_prompt_for_search {
+                    view.set_filter_results_by_input(false);
+                }
+                view.set_prompt_parked_for_search(should_clear_prompt_for_search);
+                view.set_active_tab(initial_tab, ctx);
+            }) {
+            Ok(()) => {}
+            Err(ViewUpdateError::WindowClosed) => return,
+            Err(ViewUpdateError::CircularUpdate) => panic!("Circular view update"),
+        }
         self.suggestions_mode_model.update(ctx, |model, ctx| {
             model.set_mode(InputSuggestionsMode::ModelSelector, ctx);
         });
@@ -12775,6 +12820,38 @@ impl Input {
         let abort_handle = ctx
             .spawn_abortable(
                 async move {
+                    if comp_sources == CompletionSources::NativeOnly {
+                        let native_suggestions =
+                            native_results_fut
+                                .await
+                                .map(|(results, shell_replacement_span)| {
+                                    native_shell_suggestion_results(
+                                        results,
+                                        shell_replacement_span,
+                                        &buffer_text,
+                                        cursor_position,
+                                    )
+                                });
+                        let suggestions = match native_suggestions {
+                            Some(suggestions) if suggestions.suggestions.is_empty() => {
+                                completer::suggestions(
+                                    before_cursor_text.as_str(),
+                                    cursor_position,
+                                    session_env_vars.as_ref(),
+                                    CompleterOptions {
+                                        match_strategy: matcher,
+                                        fallback_strategy: CompletionsFallbackStrategy::FilePaths,
+                                        suggest_file_path_completions_only: true,
+                                        parse_quotes_as_literals: false,
+                                    },
+                                    &completion_context,
+                                )
+                                .await
+                            }
+                            suggestions => suggestions,
+                        };
+                        return (suggestions, completions_trigger, editor_snapshot);
+                    }
                     let suggestions = completer::suggestions(
                         before_cursor_text.as_str(),
                         cursor_position,
@@ -12790,12 +12867,7 @@ impl Input {
                     .await;
 
                     let suggestions = match suggestions {
-                        Some(s)
-                            if !s.suggestions.is_empty()
-                                && comp_sources != CompletionSources::NativeOnly =>
-                        {
-                            Some(s)
-                        }
+                        Some(s) if !s.suggestions.is_empty() => Some(s),
                         _ => native_results_fut
                             .await
                             .map(|(results, shell_replacement_span)| {
@@ -16537,6 +16609,10 @@ impl Input {
 
     pub fn should_show_universal_developer_input(&self, app: &AppContext) -> bool {
         InputSettings::as_ref(app).is_universal_developer_input_enabled(app)
+    }
+
+    pub(crate) fn is_voltron_open(&self) -> bool {
+        self.is_voltron_open
     }
 
     fn handle_prompt_suggestions_event(

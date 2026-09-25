@@ -37,6 +37,7 @@ use crate::search_bar::SearchBar;
 use crate::server::ids::ApiKeyUid;
 use crate::ui_components::icons::Icon;
 use crate::util::time_format::format_approx_duration_from_now_utc;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 const MODAL_WIDTH: f32 = 460.;
 const MODAL_HEIGHT: f32 = 320.;
@@ -127,15 +128,23 @@ impl PlatformPageView {
         // Build and send the GraphQL query
         let auth_client =
             crate::server::server_api::ServerApiProvider::as_ref(ctx).get_auth_client();
+        let team_uid = UserWorkspaces::as_ref(ctx)
+            .team_context_for_operation(ctx)
+            .team_uid();
 
         ctx.spawn(
-            async move { auth_client.list_api_keys().await },
-            |me, res, ctx| {
+            async move { auth_client.list_api_keys(team_uid).await },
+            move |me, res, ctx| {
                 me.is_loading = false;
                 match res {
                     Ok(keys) => {
                         me.api_keys = keys
                             .into_iter()
+                            .filter(|key| match (team_uid, key.owner_type) {
+                                (Some(_), OwnerType::User | OwnerType::Team)
+                                | (None, OwnerType::User) => true,
+                                (None, OwnerType::Team) => false,
+                            })
                             .map(|gql_key| {
                                 let ui_key = APIKeyProperties::from(&gql_key);
                                 me.ensure_expire_button_for_key(ctx, ui_key.uid.clone());

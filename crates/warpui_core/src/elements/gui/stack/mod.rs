@@ -340,6 +340,14 @@ impl Element for Stack {
             Some(texts.join("\n"))
         }
     }
+
+    #[cfg(any(test, feature = "test-util"))]
+    fn debug_child_view_ids(&self) -> Vec<crate::EntityId> {
+        self.children
+            .iter()
+            .flat_map(|child| child.element.debug_child_view_ids())
+            .collect()
+    }
 }
 
 impl SelectableElement for Stack {

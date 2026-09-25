@@ -1,13 +1,23 @@
+use ai::agent::action::RunAgentsExecutionMode;
 use warp_cli::agent::Harness;
+use warpui::App;
 
 use super::{
     AUTH_SECRET_INHERIT_LABEL, AuthSecretNamesInput, DEFAULT_MODEL_LABEL, HarnessEntryInput,
     ModelChoiceInput, OptionBadge, OptionFooter, OptionSourceStatus, build_api_key_snapshot,
     build_environment_snapshot, build_harness_snapshot, build_host_snapshot,
     build_non_oz_model_snapshot, build_oz_model_snapshot, build_runner_snapshot,
+    environment_snapshot,
+};
+use crate::ai::cloud_environments::{
+    AmbientAgentEnvironment, CloudAmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel,
 };
 use crate::ai::local_harness_setup::LocalHarnessSetupState;
-use crate::ai::orchestration::config_state::AuthSecretSelection;
+use crate::ai::orchestration::config_state::{AuthSecretSelection, OrchestrationConfigState};
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{CloudObjectMetadata, CloudObjectPermissions, Owner};
+use crate::server::ids::{ServerId, SyncId};
+use crate::workspaces::user_workspaces::TeamContextForOperation;
 
 fn entry(harness: Harness, display_name: &str, enabled: bool) -> HarnessEntryInput {
     HarnessEntryInput {
@@ -19,6 +29,24 @@ fn entry(harness: Harness, display_name: &str, enabled: bool) -> HarnessEntryInp
 
 fn all_ready(_harness: Harness) -> LocalHarnessSetupState {
     LocalHarnessSetupState::Ready
+}
+
+fn environment(id: SyncId, name: &str, owner: Owner) -> CloudAmbientAgentEnvironment {
+    let model = AmbientAgentEnvironment::new(
+        name.to_string(),
+        None,
+        Vec::new(),
+        "ubuntu:latest".to_string(),
+        Vec::new(),
+    );
+    let mut permissions = CloudObjectPermissions::mock_personal();
+    permissions.owner = owner;
+    CloudAmbientAgentEnvironment::new(
+        id,
+        CloudAmbientAgentEnvironmentModel::new(model),
+        CloudObjectMetadata::mock(),
+        permissions,
+    )
 }
 
 // ── Harness ─────────────────────────────────────────────────────────
@@ -276,6 +304,71 @@ fn environment_snapshot_puts_empty_option_first() {
     assert_eq!(snapshot.rows[0].id, "");
     assert_eq!(snapshot.rows[0].label, super::ORCHESTRATION_ENV_NONE_LABEL);
     assert_eq!(snapshot.selected_id.as_deref(), Some("env-b"));
+}
+
+#[test]
+fn environment_snapshot_shows_personal_and_current_team_environments() {
+    App::test((), |mut app| async move {
+        let cloud_model = app.add_singleton_model(CloudModel::mock);
+        let current_team_uid = ServerId::from(100);
+        let other_team_uid = ServerId::from(200);
+        let personal_id = SyncId::ServerId(ServerId::from(1));
+        let current_team_id = SyncId::ServerId(ServerId::from(2));
+        let other_team_id = SyncId::ServerId(ServerId::from(3));
+
+        cloud_model.update(&mut app, |model, ctx| {
+            model.create_object(
+                personal_id,
+                environment(personal_id, "Personal", Owner::mock_current_user()),
+                ctx,
+            );
+            model.create_object(
+                current_team_id,
+                environment(
+                    current_team_id,
+                    "Current team",
+                    Owner::Team {
+                        team_uid: current_team_uid,
+                    },
+                ),
+                ctx,
+            );
+            model.create_object(
+                other_team_id,
+                environment(
+                    other_team_id,
+                    "Other team",
+                    Owner::Team {
+                        team_uid: other_team_uid,
+                    },
+                ),
+                ctx,
+            );
+        });
+
+        let state = OrchestrationConfigState::from_run_agents_fields(
+            None,
+            None,
+            &RunAgentsExecutionMode::Remote {
+                environment_id: current_team_id.uid(),
+                worker_host: "warp".to_string(),
+                computer_use_enabled: false,
+                runner_id: String::new(),
+            },
+        );
+        let scope = TeamContextForOperation::new_for_test(current_team_uid);
+        let snapshot = app.update(|ctx| environment_snapshot(&state, &scope, ctx));
+
+        assert_eq!(
+            snapshot
+                .rows
+                .iter()
+                .map(|row| row.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Empty environment", "Current team", "Personal"]
+        );
+        assert_eq!(snapshot.selected_id, Some(current_team_id.uid()));
+    });
 }
 
 // ── Runner ──────────────────────────────────────────────────────
