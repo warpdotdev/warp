@@ -12,9 +12,7 @@ use anyhow::Result;
 #[cfg(windows)]
 use async_trait::async_trait;
 #[cfg(windows)]
-use warp_completer::completer::{
-    CommandExitStatus, CommandOutput, CompletionContext, PathCompletionContext,
-};
+use warp_completer::completer::{CommandExitStatus, CommandOutput, CompletionContext};
 #[cfg(windows)]
 use warp_completer::signatures::CommandRegistry;
 #[cfg(windows)]
