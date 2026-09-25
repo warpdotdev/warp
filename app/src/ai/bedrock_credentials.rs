@@ -20,8 +20,8 @@ use warpui::{ModelSpawner, SingletonEntity};
 
 use super::agent_sdk::driver::AgentDriver;
 use super::aws_credentials::{
-    AWS_BEDROCK_STS_AUDIENCE, BEDROCK_IDENTITY_TOKEN_DURATION, aws_role_session_name,
-    bedrock_identity_token_error, bedrock_request_scope, sts_client,
+    AWS_BEDROCK_STS_AUDIENCE, BEDROCK_IDENTITY_TOKEN_DURATION, BedrockOidcCredentialsConfig,
+    aws_role_session_name, bedrock_identity_token_error, sts_client,
 };
 use crate::server::server_api::managed_secrets::AppManagedSecretManager as ManagedSecretManager;
 
@@ -37,16 +37,13 @@ pub(crate) const BEDROCK_CREDENTIALS_REFRESH_INTERVAL: Duration = Duration::from
     name = "bedrock_credentials::try_refresh",
     skip_all,
     err,
-    fields(tags.cloud_agent = true, task_id)
+    fields(tags.cloud_agent = true, task_id = config.task_id.as_str())
 )]
 async fn try_refresh(
-    task_id: &str,
-    role_arn: &str,
-    region: &str,
-    team_uid: Option<&str>,
+    config: &BedrockOidcCredentialsConfig,
     foreground: &ModelSpawner<AgentDriver>,
 ) -> Result<()> {
-    let request_scope = bedrock_request_scope(team_uid)?;
+    let request_scope = config.request_scope;
     // Step 1: Mint a new OIDC identity token via the model context.
     let token_future = foreground
         .spawn(move |_, ctx| {
@@ -67,11 +64,11 @@ async fn try_refresh(
     let token = token_future.await.map_err(bedrock_identity_token_error)?;
 
     // Step 2: Exchange the OIDC token for fresh STS temporary credentials.
-    let client = sts_client(region).await;
-    let session_name = aws_role_session_name(task_id);
+    let client = sts_client(&config.region).await;
+    let session_name = aws_role_session_name(&config.task_id);
     let sts_creds = client
         .assume_role_with_web_identity()
-        .role_arn(role_arn)
+        .role_arn(&config.role_arn)
         .role_session_name(&session_name)
         .web_identity_token(&token.token)
         .send()
@@ -113,7 +110,10 @@ async fn try_refresh(
         .await
         .context("Failed to dispatch Bedrock credential update to ApiKeyManager")?;
 
-    log::info!("Bedrock OIDC: proactive credential refresh succeeded for task {task_id}");
+    log::info!(
+        "Bedrock OIDC: proactive credential refresh succeeded for task {}",
+        config.task_id
+    );
     Ok(())
 }
 
@@ -134,16 +134,16 @@ async fn try_refresh(
 /// This future never resolves — it is designed to be raced with the run execution
 /// future via `futures::select!` and dropped automatically when the run completes.
 pub(crate) async fn refresh_loop(
-    task_id: String,
-    role_arn: String,
-    region: String,
-    team_uid: Option<String>,
+    config: BedrockOidcCredentialsConfig,
     foreground: &ModelSpawner<AgentDriver>,
 ) {
     loop {
         warpui::r#async::Timer::after(BEDROCK_CREDENTIALS_REFRESH_INTERVAL).await;
 
-        log::info!("Proactively refreshing AWS Bedrock OIDC credentials for task {task_id}");
+        log::info!(
+            "Proactively refreshing AWS Bedrock OIDC credentials for task {}",
+            config.task_id
+        );
 
         let backoff_delays = [
             Duration::from_secs(60),
@@ -152,15 +152,7 @@ pub(crate) async fn refresh_loop(
         ];
         let mut attempt = 0usize;
         loop {
-            match try_refresh(
-                &task_id,
-                &role_arn,
-                &region,
-                team_uid.as_deref(),
-                foreground,
-            )
-            .await
-            {
+            match try_refresh(&config, foreground).await {
                 Ok(()) => break,
                 Err(e) if attempt < backoff_delays.len() => {
                     let delay = backoff_delays[attempt];

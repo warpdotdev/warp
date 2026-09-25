@@ -17,9 +17,10 @@ use warp_graphql::ai::AgentTaskState;
 use warpui::{App, SingletonEntity, WindowId};
 
 use super::{
-    AgentDriverRunner, CommandAuthentication, command_authentication, command_requires_auth,
-    command_to_telemetry_event, reconcile_task_harness, resolve_agent_driver_team_scope,
-    team_scope_for_task_scope, validated_driver_repositories_for_preparation,
+    AgentDriverRunner, CommandAuthentication, bedrock_oidc_credentials_config,
+    command_authentication, command_requires_auth, command_to_telemetry_event,
+    reconcile_task_harness, resolve_agent_driver_team_scope, team_scope_for_task_scope,
+    validated_driver_repositories_for_preparation,
 };
 use crate::ai::agent_sdk::driver::{AgentDriverError, AgentDriverOptions};
 use crate::ai::ambient_agents::task::TaskScope;
@@ -36,7 +37,7 @@ use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::workspaces::team::{Team, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
+use crate::workspaces::user_workspaces::{TeamScope, TeamScopeForCli, UserWorkspaces};
 use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
@@ -156,6 +157,7 @@ fn agent_driver_options() -> AgentDriverOptions {
         selected_harness: Harness::Oz,
         third_party_harness_model_config: None,
         team_scope: None,
+        bedrock_oidc_credentials: None,
         snapshot_disabled: None,
         snapshot_upload_timeout: None,
         snapshot_script_timeout: None,
@@ -164,6 +166,22 @@ fn agent_driver_options() -> AgentDriverOptions {
         strict_mcp_startup: false,
         mcp_startup_timeout: None,
     }
+}
+
+#[test]
+fn bedrock_oidc_config_keeps_the_resolved_request_scope() {
+    let team_uid = ServerId::from(17);
+    let mut options = agent_driver_options();
+    options.task_id = Some(TASK_ID.parse().unwrap());
+    options.team_scope = Some(TeamScopeForCli::Team(team_uid));
+
+    let config =
+        bedrock_oidc_credentials_config(&options, "role".to_string(), "region".to_string())
+            .unwrap();
+
+    let request_scope = config.request_scope.unwrap();
+    assert!(request_scope.matches_scope(options.team_scope.as_ref().unwrap()));
+    assert!(!request_scope.matches_scope(&TeamScopeForCli::Team(ServerId::from(18))));
 }
 
 #[test]

@@ -58,7 +58,7 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::{HarnessConfig, TaskScope};
 use crate::ai::attachment_utils::attachments_download_dir;
 #[cfg(not(target_family = "wasm"))]
-use crate::ai::aws_credentials::refresh_aws_credentials;
+use crate::ai::aws_credentials::{BedrockOidcCredentialsConfig, refresh_aws_credentials_oidc};
 use crate::ai::cloud_environments::{
     AmbientAgentEnvironment, CloudAmbientAgentEnvironment, SourceRepo,
 };
@@ -81,7 +81,7 @@ use crate::server::server_api::managed_secrets::AppManagedSecretManager as Manag
 use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::workflows::workflow::Workflow;
-use crate::workspaces::user_workspaces::{TeamScope, TeamScopeForCli};
+use crate::workspaces::user_workspaces::TeamScopeForCli;
 
 mod admin;
 mod agent_config;
@@ -149,6 +149,28 @@ fn validated_driver_repositories_for_preparation(
         &options.repository_preparation_overrides,
     )?;
     Ok(source_repos)
+}
+
+fn bedrock_oidc_credentials_config(
+    options: &AgentDriverOptions,
+    role_arn: String,
+    region: String,
+) -> Result<BedrockOidcCredentialsConfig, AgentDriverError> {
+    let task_id = options.task_id.ok_or_else(|| {
+        AgentDriverError::AwsBedrockCredentialsFailed(
+            "AWS Bedrock inference requires an ambient task ID before credentials can be minted"
+                .to_string(),
+        )
+    })?;
+    Ok(BedrockOidcCredentialsConfig {
+        task_id: task_id.to_string(),
+        role_arn,
+        region,
+        request_scope: options
+            .team_scope
+            .as_ref()
+            .map(RequestTeamScope::from_scope),
+    })
 }
 
 /// Run a Warp CLI command.
@@ -800,12 +822,6 @@ impl AgentDriverRunner {
             // needed here. Just merge the task's linked conversation id into the resume target.
             let resume_conversation_id = resume_conversation_id.or(task_conversation_id);
 
-            let bedrock_task_id = driver_options.task_id.map(|id| id.to_string());
-            let bedrock_team_uid = driver_options
-                .team_scope
-                .as_ref()
-                .and_then(TeamScope::team_uid)
-                .map(|uid| uid.to_string());
 
             #[cfg(not(target_family = "wasm"))]
             if let Some(role_arn) = bedrock_inference_role {
@@ -819,6 +835,9 @@ impl AgentDriverRunner {
                             .to_string(),
                     )
                 })?;
+                let config =
+                    bedrock_oidc_credentials_config(&driver_options, role_arn, role_region)?;
+                driver_options.bedrock_oidc_credentials = Some(config.clone());
                 // Set the OIDC strategy on the UI thread and kick off the refresh; the
                 // returned future resolves when credentials are committed to the model.
                 let refresh_future = foreground
@@ -826,14 +845,9 @@ impl AgentDriverRunner {
                         ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
                             // From here on, refresh credentials via OIDC federation only.
                             manager.set_aws_credentials_refresh_strategy(
-                                AwsCredentialsRefreshStrategy::OidcManaged {
-                                    task_id: bedrock_task_id,
-                                    role_arn,
-                                    region: role_region,
-                                    team_uid: bedrock_team_uid,
-                                },
+                                AwsCredentialsRefreshStrategy::OidcManaged,
                             );
-                            refresh_aws_credentials(manager, ctx)
+                            refresh_aws_credentials_oidc(config, manager, ctx)
                         })
                     })
                     .await?;
@@ -1200,6 +1214,7 @@ impl AgentDriverRunner {
                     selected_harness: args.harness,
                     third_party_harness_model_config,
                     team_scope: None,
+                    bedrock_oidc_credentials: None,
                     snapshot_disabled: args.snapshot.no_snapshot.then_some(true),
                     snapshot_upload_timeout: args
                         .snapshot
