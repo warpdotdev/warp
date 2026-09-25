@@ -2298,9 +2298,10 @@ impl AgentDriver {
                         .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_managed_mcp_client())
                         .await?;
                     let mcp_startup_result = setup_events
-                        .record_result(
+                        .record_shared_result(
                             SetupStep::McpServerStartup,
-                            Self::start_task_mcp_servers(
+                            SetupStep::ProfileMcpServerStartup,
+                            Self::start_task_and_profile_mcp_servers(
                                 &task.mcp_specs,
                                 managed_mcp_client,
                                 &foreground,
@@ -2308,17 +2309,6 @@ impl AgentDriver {
                         )
                         .await;
                     Self::handle_mcp_startup_result(mcp_startup_result, &foreground).await?;
-
-                    let profile_mcp_startup_result = setup_events
-                        .record_result(SetupStep::ProfileMcpServerStartup, async {
-                            foreground
-                                .spawn(|me, ctx| me.start_profile_mcp_servers(ctx))
-                                .await?
-                                .await
-                        })
-                        .await;
-                    Self::handle_mcp_startup_result(profile_mcp_startup_result, &foreground)
-                        .await?;
                 }
 
                 // Skill loading is Oz-only; third-party harnesses have their own skill systems.
