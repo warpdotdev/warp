@@ -56,7 +56,7 @@ pub struct IssueTokenArgs {
     /// - agent_name (`agent_name:my-agent`)
     /// - skill_spec (`skill_spec:warpdotdev/repo_path_to_skill`)
     /// - run_id (`run_id:abc123`)
-    /// - host (`host:my-worker-id`)
+    /// - host (`host:my-worker-host`)
     #[arg(long = "subject-template", num_args = 1..)]
     pub subject_template: Option<Vec<String>>,
 }
