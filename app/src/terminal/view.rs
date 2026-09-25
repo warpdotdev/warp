@@ -13199,6 +13199,9 @@ impl TerminalView {
                     BlockMetadataUpdateSource::Precmd,
                     ctx,
                 );
+                // Enter pressed during the CommandFinished → Precmd gap is queued as
+                // a pending command; retry once the active block has real precmd metadata.
+                self.execute_pending_command((), ctx);
             }
             ModelEvent::BlockWorkingDirectoryUpdated(block_working_directory_updated_event) => {
                 self.apply_block_metadata_update(
@@ -22362,10 +22365,13 @@ impl TerminalView {
                     active_session.cancel_active_commands();
                 }
 
-                // Don't steal focus from other parts of the app.
-                if ctx.is_self_or_child_focused() {
-                    self.focus_terminal(ctx);
-                }
+                // Keep the input focused on submit. Moving focus to the terminal here made
+                // short/failed SSH submits look like "Enter did nothing": the blinking cursor
+                // left the editor, and if a User BlockCompleted never arrived (common when
+                // remote in-band completer traffic interleaves), focus stayed on the terminal
+                // so the next Enter became TerminalAction::KeyDown instead of another submit.
+                // Long-running commands still take terminal focus via
+                // maybe_emit_terminal_view_state_changed_for_long_running_block (~50ms).
 
                 ctx.emit(Event::ExecuteCommand(event.as_ref().clone()));
 
