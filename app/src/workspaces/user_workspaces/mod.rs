@@ -60,7 +60,9 @@ const STRIPE_SUBSCRIPTION_INTERVAL_PAGE_PREFIX: &str = "/upgrade";
 
 #[derive(Debug)]
 pub enum UserWorkspacesEvent {
-    AddDomainRestrictionsSuccess,
+    AddDomainRestrictionsSuccess {
+        count: usize,
+    },
     AddDomainRestrictionsRejected(anyhow::Error),
     DeleteDomainRestrictionSuccess,
     DeleteDomainRestrictionRejected(anyhow::Error),
@@ -1014,14 +1016,14 @@ impl UserWorkspaces {
 
     fn on_add_invite_link_domain_restrictions(
         &mut self,
-        result: Result<WorkspacesMetadataWithPricing>,
+        result: Result<(WorkspacesMetadataWithPricing, usize)>,
         ctx: &mut ModelContext<Self>,
     ) {
         match result {
             Err(err) => ctx.emit(UserWorkspacesEvent::AddDomainRestrictionsRejected(err)),
-            Ok(result) => {
+            Ok((result, count)) => {
                 self.on_workspaces_updated(Ok(result), ctx);
-                ctx.emit(UserWorkspacesEvent::AddDomainRestrictionsSuccess);
+                ctx.emit(UserWorkspacesEvent::AddDomainRestrictionsSuccess { count });
             }
         };
         ctx.notify();
@@ -1033,17 +1035,34 @@ impl UserWorkspaces {
         domains: Vec<String>,
         ctx: &mut ModelContext<Self>,
     ) {
-        for domain in domains {
-            let team_client = self.team_client.clone();
-            let _ = ctx.spawn(
-                async move {
-                    team_client
-                        .add_invite_link_domain_restriction(team_uid, domain)
-                        .await
-                },
-                Self::on_add_invite_link_domain_restrictions,
-            );
-        }
+        let native_workspace_uid = self
+            .current_workspace()
+            .filter(|workspace| workspace.is_native_workspaces_enabled())
+            .map(|workspace| workspace.uid);
+        let team_client = self.team_client.clone();
+        let workspace_client = self.workspace_client.clone();
+        let _ = ctx.spawn(
+            async move {
+                let count = domains.len();
+                let mut latest_metadata = None;
+                for domain in domains {
+                    let metadata = if let Some(workspace_uid) = native_workspace_uid {
+                        workspace_client
+                            .add_invite_link_domain_restriction(workspace_uid, domain)
+                            .await?
+                    } else {
+                        team_client
+                            .add_invite_link_domain_restriction(team_uid, domain)
+                            .await?
+                    };
+                    latest_metadata = Some(metadata);
+                }
+                latest_metadata
+                    .map(|metadata| (metadata, count))
+                    .ok_or_else(|| anyhow::anyhow!("no domain restrictions to add"))
+            },
+            Self::on_add_invite_link_domain_restrictions,
+        );
     }
 
     fn on_delete_invite_link_domain_restriction(
@@ -1067,12 +1086,23 @@ impl UserWorkspaces {
         domain_uid: ServerId,
         ctx: &mut ModelContext<Self>,
     ) {
+        let native_workspace_uid = self
+            .current_workspace()
+            .filter(|workspace| workspace.is_native_workspaces_enabled())
+            .map(|workspace| workspace.uid);
         let team_client = self.team_client.clone();
+        let workspace_client = self.workspace_client.clone();
         let _ = ctx.spawn(
             async move {
-                team_client
-                    .delete_invite_link_domain_restriction(team_uid, domain_uid)
-                    .await
+                if let Some(workspace_uid) = native_workspace_uid {
+                    workspace_client
+                        .delete_invite_link_domain_restriction(workspace_uid, domain_uid)
+                        .await
+                } else {
+                    team_client
+                        .delete_invite_link_domain_restriction(team_uid, domain_uid)
+                        .await
+                }
             },
             Self::on_delete_invite_link_domain_restriction,
         );

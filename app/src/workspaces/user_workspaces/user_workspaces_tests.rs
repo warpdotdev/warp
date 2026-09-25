@@ -87,8 +87,8 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
     AdminEnablementSetting, ByoFirstPartyKey, EnforceableSetting, HostEnablementSetting,
     LinkSharingSettings, LlmHostSettings, ManagedByokByoePolicy, MultiAdminPolicy,
-    PurchaseAddOnCreditsPolicy, SandboxedAgentSettings, SplitListSetting, TeamByoSettings,
-    TeamLinkSharingSettings, Workspace, WorkspaceMember, WorkspaceMemberUsageInfo,
+    NativeWorkspacesPolicy, PurchaseAddOnCreditsPolicy, SandboxedAgentSettings, SplitListSetting,
+    TeamByoSettings, TeamLinkSharingSettings, Workspace, WorkspaceMember, WorkspaceMemberUsageInfo,
 };
 
 #[derive(Default)]
@@ -939,6 +939,171 @@ fn workspace_for_test(team: &Team) -> Workspace {
     }
 }
 
+fn metadata_for_workspace(workspace: Workspace) -> WorkspacesMetadataWithPricing {
+    WorkspacesMetadataWithPricing {
+        metadata: WorkspacesMetadataResponse {
+            workspaces: vec![workspace],
+            joinable_teams: vec![],
+            experiments: None,
+            ai_credit_availability: None,
+            user_purchase_policy: None,
+        },
+        pricing_info: None,
+    }
+}
+
+#[test]
+fn native_domain_restrictions_use_workspace_mutations_and_emit_one_add_completion() {
+    let team = team_for_test();
+    let team_uid = team.uid;
+    let mut workspace = workspace_for_test(&team);
+    workspace.billing_metadata.tier.native_workspaces_policy =
+        Some(NativeWorkspacesPolicy { enabled: true });
+    let workspace_uid = workspace.uid;
+    let returned_workspace = workspace.clone();
+
+    App::test((), |mut app| async move {
+        let mut workspace_client = MockWorkspaceClient::new();
+        workspace_client
+            .expect_add_invite_link_domain_restriction()
+            .withf(move |actual_workspace_uid, domain| {
+                *actual_workspace_uid == workspace_uid
+                    && matches!(domain.as_str(), "warp.dev" | "example.com")
+            })
+            .times(2)
+            .returning(move |_, _| Ok(metadata_for_workspace(returned_workspace.clone())));
+        let returned_workspace = workspace.clone();
+        workspace_client
+            .expect_delete_invite_link_domain_restriction()
+            .withf(move |actual_workspace_uid, domain_uid| {
+                *actual_workspace_uid == workspace_uid && *domain_uid == ServerId::from(456)
+            })
+            .times(1)
+            .returning(move |_, _| Ok(metadata_for_workspace(returned_workspace.clone())));
+
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(workspace_client),
+        );
+
+        let user_workspaces = UserWorkspaces::handle(&app);
+        let (sender, receiver) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&user_workspaces, move |_, event, _| match event {
+                UserWorkspacesEvent::AddDomainRestrictionsSuccess { count } => {
+                    let _ = sender.try_send(("add", *count));
+                }
+                UserWorkspacesEvent::DeleteDomainRestrictionSuccess => {
+                    let _ = sender.try_send(("delete", 1));
+                }
+                _ => {}
+            });
+        });
+
+        user_workspaces.update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.add_invite_link_domain_restrictions(
+                team_uid,
+                vec!["warp.dev".to_string(), "example.com".to_string()],
+                ctx,
+            );
+        });
+        assert_eq!(
+            receiver.recv().await.expect("expected add completion"),
+            ("add", 2)
+        );
+        assert!(receiver.try_recv().is_err());
+
+        user_workspaces.update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.delete_invite_link_domain_restriction(
+                team_uid,
+                ServerId::from(456),
+                ctx,
+            );
+        });
+        assert_eq!(
+            receiver.recv().await.expect("expected delete completion"),
+            ("delete", 1)
+        );
+    })
+}
+
+#[test]
+fn legacy_domain_restrictions_keep_using_team_mutations() {
+    let team = team_for_test();
+    let team_uid = team.uid;
+    let workspace = workspace_for_test(&team);
+    let returned_workspace = workspace.clone();
+
+    App::test((), |mut app| async move {
+        let mut team_client = MockTeamClient::new();
+        team_client
+            .expect_add_invite_link_domain_restriction()
+            .withf(move |actual_team_uid, domain| {
+                *actual_team_uid == team_uid && domain == "warp.dev"
+            })
+            .times(1)
+            .returning(move |_, _| Ok(metadata_for_workspace(returned_workspace.clone())));
+        let returned_workspace = workspace.clone();
+        team_client
+            .expect_delete_invite_link_domain_restriction()
+            .withf(move |actual_team_uid, domain_uid| {
+                *actual_team_uid == team_uid && *domain_uid == ServerId::from(456)
+            })
+            .times(1)
+            .returning(move |_, _| Ok(metadata_for_workspace(returned_workspace.clone())));
+
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(team_client),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        let user_workspaces = UserWorkspaces::handle(&app);
+        let (sender, receiver) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&user_workspaces, move |_, event, _| match event {
+                UserWorkspacesEvent::AddDomainRestrictionsSuccess { count } => {
+                    let _ = sender.try_send(("add", *count));
+                }
+                UserWorkspacesEvent::DeleteDomainRestrictionSuccess => {
+                    let _ = sender.try_send(("delete", 1));
+                }
+                _ => {}
+            });
+        });
+
+        user_workspaces.update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.add_invite_link_domain_restrictions(
+                team_uid,
+                vec!["warp.dev".to_string()],
+                ctx,
+            );
+        });
+        assert_eq!(
+            receiver.recv().await.expect("expected add completion"),
+            ("add", 1)
+        );
+
+        user_workspaces.update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.delete_invite_link_domain_restriction(
+                team_uid,
+                ServerId::from(456),
+                ctx,
+            );
+        });
+        assert_eq!(
+            receiver.recv().await.expect("expected delete completion"),
+            ("delete", 1)
+        );
+    })
+}
 fn workspace_for_teams(teams: Vec<Team>) -> Workspace {
     let mut workspace = workspace_for_test(&team_for_test());
     workspace.teams = teams;

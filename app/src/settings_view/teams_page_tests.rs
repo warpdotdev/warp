@@ -36,6 +36,63 @@ fn member(email: &str, role: MembershipRole) -> TeamMember {
 
 #[cfg(not(target_family = "wasm"))]
 #[test]
+fn adding_domain_restrictions_emits_only_the_mutation_result_toast() {
+    App::test((), |mut app| async move {
+        let mut team_client = MockTeamClient::new();
+        team_client
+            .expect_add_invite_link_domain_restriction()
+            .withf(|team_uid, domain| *team_uid == ServerId::from(123) && domain == "warp.dev")
+            .times(1)
+            .return_once(|_, _| Err(anyhow::anyhow!("domain mutation rejected")));
+        initialize_app_with_team_client(&mut app, Arc::new(team_client));
+        let workspace = mock_workspace(&mut app);
+        let teams_page = workspace.update(&mut app, |_, ctx| {
+            ctx.add_typed_action_view(TeamsPageView::new)
+        });
+        teams_page.update(&mut app, |teams_page, ctx| {
+            teams_page
+                .approve_domains_block_editor
+                .update(ctx, |editor, ctx| {
+                    editor.set_editor_buffer_text("warp.dev", ctx);
+                });
+        });
+
+        let (sender, receiver) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&teams_page, move |_, event, _| {
+                if let TeamsPageViewEvent::ShowToast { message, flavor } = event {
+                    let _ = sender.try_send((message.clone(), *flavor));
+                }
+            });
+        });
+
+        teams_page.update(&mut app, |teams_page, ctx| {
+            teams_page.add_domain_restrictions(ServerId::from(123), ctx);
+        });
+        assert!(
+            receiver.try_recv().is_err(),
+            "submission must not emit an eager success toast"
+        );
+
+        assert_eq!(
+            receiver
+                .recv()
+                .await
+                .expect("expected mutation result toast"),
+            (
+                "Failed to add domain restriction".to_string(),
+                ToastFlavor::Error
+            )
+        );
+        warpui::r#async::Timer::after(std::time::Duration::from_millis(10)).await;
+        assert!(
+            receiver.try_recv().is_err(),
+            "a rejected mutation must emit exactly one toast"
+        );
+    });
+}
+#[cfg(not(target_family = "wasm"))]
+#[test]
 fn joining_a_workspace_team_opens_only_a_new_scoped_window() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

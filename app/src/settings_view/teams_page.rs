@@ -1236,12 +1236,13 @@ impl TeamsPageView {
             UserWorkspacesEvent::DeleteTeamInviteRejected(err) => {
                 self.show_error("Failed to delete invite", Some(err), ctx);
             }
-            UserWorkspacesEvent::AddDomainRestrictionsSuccess => {
+            UserWorkspacesEvent::AddDomainRestrictionsSuccess { count } => {
                 self.approve_domains_block_editor
                     .update(ctx, |editor, ctx| {
                         editor.clear_list_of_words(ctx);
                     });
                 self.update_approved_domains_state(ctx);
+                self.show_success(format!("Domain restrictions added: {count}"), ctx);
             }
             UserWorkspacesEvent::AddDomainRestrictionsRejected(err) => {
                 self.show_error("Failed to add domain restriction", Some(err), ctx)
@@ -2064,10 +2065,6 @@ impl TeamsPageView {
             .into_iter()
             .collect();
 
-        self.show_success(
-            format!("Domain restrictions added: {}", unique_domains.len()),
-            ctx,
-        );
         self.user_workspaces
             .update(ctx, move |user_workspaces, ctx| {
                 user_workspaces.add_invite_link_domain_restrictions(team_uid, unique_domains, ctx);
