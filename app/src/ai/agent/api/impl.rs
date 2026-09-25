@@ -110,6 +110,10 @@ pub async fn generate_multi_agent_output(
             supports_background_computer_use: FeatureFlag::BackgroundComputerUse.is_enabled()
                 && computer_use::background_supported(),
             supports_stored_screenshots: FeatureFlag::StoredScreenshots.is_enabled(),
+            // Safe to declare unconditionally: this client confirms delivery for every agent
+            // message it sees echoed in a turn and drops its own held copies, so a server-injected
+            // message can never be redelivered as a duplicate turn.
+            supports_server_side_agent_message_injection: true,
             supports_chatgpt_subscription_error: false,
             custom_model_providers: params.custom_model_providers,
             custom_model_routers: params.custom_model_routers,

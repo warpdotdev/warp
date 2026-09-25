@@ -203,7 +203,7 @@ struct ConversationStreamState {
     /// `on_streaming_exchange_updated` for every `MessagesReceivedFromAgents`
     /// chunk observed in an exchange's output, regardless of whether the
     /// message content arrived via SSE `new_message` hydration or was
-    /// resolved directly server-side (e.g. into a wake turn's initial input).
+    /// injected directly server-side (e.g. into a wake turn's initial input).
     confirmed_message_ids: HashSet<String>,
     /// Local consumers (terminal pane id for an open agent view, driver
     /// model id for `agent_sdk`) that need events delivered to this
@@ -1725,8 +1725,8 @@ impl OrchestrationEventStreamer {
 
     /// Confirms delivery for every message surfaced by a `MessagesReceivedFromAgents`
     /// chunk in the given exchange's output, regardless of how that content arrived --
-    /// via SSE `new_message` hydration or resolved directly server-side into a wake
-    /// turn's initial input. Without this, a message resolved outside the SSE path
+    /// via SSE `new_message` hydration or injected directly server-side into a wake
+    /// turn's initial input. Without this, a message injected outside the SSE path
     /// would never be marked delivered, leaving it exposed to a still-open event
     /// stream redelivering it as a duplicate turn once the underlying `new_message`
     /// event drains through.

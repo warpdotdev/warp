@@ -329,7 +329,7 @@ fn test_lifecycle_event_type_from_proto_includes_cancelled_and_blocked() {
 
 #[test]
 fn test_server_echo_drops_matching_events_from_pending_and_awaiting_queues() {
-    // A message can reach the agent by a route other than this queue (e.g. resolved
+    // A message can reach the agent by a route other than this queue (e.g. injected
     // server-side into a fresh run's initial turn) while its SSE-delivered copy is still
     // sitting in `pending_events`. Once the server echoes that message id back, the pending
     // copy must be dropped too -- not just the already-drained awaiting copy -- or it would

@@ -3011,8 +3011,8 @@ pub enum AIAgentInput {
     },
 
     /// Reports that this run was woken because agent messages may be waiting. Carries no
-    /// content: the server resolves any still-undelivered messages when it handles this input,
-    /// and ends the turn without a model call when there are none.
+    /// content: the server injects any still-undelivered messages into the turn when it handles
+    /// this input, and ends the turn without a model call when there are none.
     AgentMessageWake,
 }
 

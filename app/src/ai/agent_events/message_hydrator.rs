@@ -109,7 +109,7 @@ impl MessageHydrator {
                 return None;
             }
         };
-        // Already delivered through another path (e.g. resolved directly into a wake
+        // Already delivered through another path (e.g. injected directly into a wake
         // turn's input server-side) -- surfacing it again here would duplicate the
         // turn the recipient already acted on.
         if message.delivered_at.is_some() {

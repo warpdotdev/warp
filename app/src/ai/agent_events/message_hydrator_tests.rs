@@ -72,7 +72,7 @@ async fn hydrator_reads_new_message_for_matching_run() {
 
 #[tokio::test]
 async fn hydrator_skips_already_delivered_message() {
-    // A message can be delivered through another path (e.g. resolved directly
+    // A message can be delivered through another path (e.g. injected directly
     // server-side into a wake turn's initial input) before the recipient's SSE
     // stream ever sees the corresponding `new_message` event. Once that's true,
     // hydrating it here would duplicate the turn the recipient already acted on.

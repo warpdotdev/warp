@@ -515,9 +515,9 @@ fn wake_text_without_the_wake_origin_stays_a_user_query() {
 fn orchestration_events_wait_for_the_native_setup_barrier_before_injecting() {
     // Regression test: a freshly started ambient run opens its event stream before it sends
     // its initial turn, so an inbox message can be ready to inject during setup. Injecting
-    // it then would make it the run's opening turn, ahead of the initial prompt that
-    // resolves pending messages itself. Events must be held behind the native setup
-    // barrier and drained only once it lifts.
+    // it then would make it the run's opening turn, ahead of the initial prompt into which
+    // the server injects pending messages itself. Events must be held behind the native
+    // setup barrier and drained only once it lifts.
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
