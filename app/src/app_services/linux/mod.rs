@@ -32,6 +32,17 @@ pub fn pass_startup_args_to_existing_instance(
     if args.finish_update {
         return Err(StartupArgsForwardingError::IgnoredAfterAutoUpdate);
     }
+    // The crash recovery watcher process is spawned by the main instance on
+    // every launch. It must not forward a new-window URL back to its parent,
+    // which would make the parent open a duplicate window. FreeBSD builds
+    // have no crash recovery process, so there is nothing to exempt there.
+    cfg_if::cfg_if! {
+        if #[cfg(enable_crash_recovery)] {
+            if crate::crash_recovery::is_crash_recovery_process(args) {
+                return Err(StartupArgsForwardingError::IgnoredForCrashRecoveryProcess);
+            }
+        }
+    }
 
     warpui::r#async::block_on(async {
         let conn = zbus::Connection::session().await?;
@@ -72,6 +83,10 @@ pub enum StartupArgsForwardingError {
     /// arguments to the old (terminating) instance.
     #[error("should not forward args after an auto-update")]
     IgnoredAfterAutoUpdate,
+    /// This instance is the crash recovery watcher process and should not
+    /// forward arguments to the instance that spawned it.
+    #[error("should not forward args from the crash recovery process")]
+    IgnoredForCrashRecoveryProcess,
     /// An unknown D-Bus error occurred.
     #[error("unknown dbus error")]
     Unknown(zbus::Error),
