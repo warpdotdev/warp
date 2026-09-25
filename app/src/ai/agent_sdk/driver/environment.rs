@@ -49,8 +49,12 @@ const PRINT_GIT_CLONE_IDENTITY_FUNCTION: &str = r#"print_git_clone_identity() {
       credential_host="${credential_host%%/*}"
       if [ "$credential_host" = "$host" ]; then
         credential_userinfo="${credential_without_scheme%%@*}"
-        credential_username="${credential_userinfo%%:*}"
-        break
+        case "$credential_userinfo" in
+          ?*:?*)
+            credential_username="${credential_userinfo%%:*}"
+            break
+            ;;
+        esac
       fi
     done < "$credentials_file"
   fi

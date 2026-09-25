@@ -439,6 +439,24 @@ fn single_clone_command_prints_identity_before_clone_without_rendering_secrets()
 
 #[cfg(unix)]
 #[test]
+fn single_clone_command_rejects_colonless_credential_userinfo() {
+    let request = clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp"), None);
+    let command =
+        build_single_repo_clone_command(&request, Path::new("/workspace"), ShellType::Bash);
+    let output = run_git_command_with_credentials(
+        &command,
+        "https://credential-token-would-leak@github.com\n",
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(output.status.success());
+    assert!(stdout.contains("Git credential: unset@github.com"));
+    assert!(!stdout.contains("credential-token-would-leak"));
+    assert!(!stdout.contains("https://"));
+}
+
+#[cfg(unix)]
+#[test]
 fn single_fetch_command_prints_identity_before_fetch_without_rendering_secrets() {
     let request = clone_request(
         repo(CodeForge::GitHub, "warpdotdev", "warp"),
@@ -1260,6 +1278,15 @@ fn run_command_output(command: &str) -> std::process::Output {
 
 #[cfg(unix)]
 fn run_git_command_with_identity_fixture(command: &str) -> std::process::Output {
+    run_git_command_with_credentials(
+        command,
+        "https://octocat:credential-secret-never-print@github.com\n\
+         https://oauth2:gitlab-secret-never-print@gitlab.com\n",
+    )
+}
+
+#[cfg(unix)]
+fn run_git_command_with_credentials(command: &str, credentials: &str) -> std::process::Output {
     use std::os::unix::fs::PermissionsExt as _;
 
     let temp_dir = tempfile::tempdir().unwrap();
@@ -1279,12 +1306,7 @@ fn run_git_command_with_identity_fixture(command: &str) -> std::process::Output 
     )
     .unwrap();
     fs::set_permissions(&git_path, fs::Permissions::from_mode(0o700)).unwrap();
-    fs::write(
-        temp_dir.path().join(".git-credentials"),
-        "https://octocat:credential-secret-never-print@github.com\n\
-         https://oauth2:gitlab-secret-never-print@gitlab.com\n",
-    )
-    .unwrap();
+    fs::write(temp_dir.path().join(".git-credentials"), credentials).unwrap();
 
     Command::new("sh")
         .arg("-c")
