@@ -1200,6 +1200,12 @@ impl<'a> std::fmt::Display for MarkdownActionResult<'a> {
                         "\n```bash\n{command}\n```\n\n**Current Output:**\n```\n{grid_contents}\n```"
                     )
                 }
+                RequestCommandOutputResult::ShellRecovered {
+                    command, output, ..
+                } => write!(
+                    f,
+                    "\n**Command Interrupted:**\n```bash\n{command}\n```\n\n**Output:**\n```\n{output}\n```"
+                ),
                 RequestCommandOutputResult::CancelledBeforeExecution => {
                     write!(f, "\n_Command cancelled_")
                 }
@@ -1379,7 +1385,8 @@ impl<'a> std::fmt::Display for MarkdownActionResult<'a> {
                 CreateDocumentsResult::Cancelled => write!(f, "\n_Create documents cancelled_"),
             },
             AIAgentActionResultType::ReadShellCommandOutput(result) => match result {
-                ReadShellCommandOutputResult::CommandFinished { output, .. } => {
+                ReadShellCommandOutputResult::CommandFinished { output, .. }
+                | ReadShellCommandOutputResult::ShellRecovered { output, .. } => {
                     write!(f, "\n```\n{output}\n```")
                 }
                 ReadShellCommandOutputResult::LongRunningCommandSnapshot {

@@ -1,4 +1,10 @@
+use serde_json::json;
 use warp_core::telemetry::TelemetryEventDesc;
+
+use super::{
+    CloudAgentShellExitDetection, CloudAgentShellRecoveryFailureClass,
+    CloudAgentShellRecoveryOutcome, TelemetryEvent,
+};
 
 #[derive(Debug)]
 enum TelemetryEventPropertyError {
@@ -25,4 +31,70 @@ fn telemetry_events_have_nonempty_name_and_description() -> Result<(), Telemetry
         }
     }
     Ok(())
+}
+
+#[test]
+fn cloud_shell_recovery_detected_payload_is_bounded_and_non_ugc() {
+    let event = TelemetryEvent::CloudAgentShellRecovery {
+        outcome: CloudAgentShellRecoveryOutcome::Detected,
+        attempt: 2,
+        detection: CloudAgentShellExitDetection::Signal,
+        status_available: true,
+        exit_code: None,
+        signal: Some(9),
+        duration_ms: None,
+        dynamic_session_environment_available: true,
+        used_fallback_directory: None,
+        failure_class: None,
+    };
+
+    assert_eq!(
+        event.payload(),
+        Some(json!({
+            "outcome": "detected",
+            "attempt": 2,
+            "detection": "signal",
+            "status_available": true,
+            "exit_code": null,
+            "signal": 9,
+            "duration_ms": null,
+            "dynamic_session_environment_available": true,
+            "used_fallback_directory": null,
+            "failure_class": null,
+        }))
+    );
+    assert!(!event.contains_ugc());
+}
+
+#[test]
+fn cloud_shell_recovery_failure_payload_has_classification_and_duration() {
+    let event = TelemetryEvent::CloudAgentShellRecovery {
+        outcome: CloudAgentShellRecoveryOutcome::Failed,
+        attempt: 3,
+        detection: CloudAgentShellExitDetection::Unavailable,
+        status_available: false,
+        exit_code: None,
+        signal: None,
+        duration_ms: Some(15_000),
+        dynamic_session_environment_available: false,
+        used_fallback_directory: Some(true),
+        failure_class: Some(CloudAgentShellRecoveryFailureClass::BootstrapTimeout),
+    };
+
+    assert_eq!(
+        event.payload(),
+        Some(json!({
+            "outcome": "failed",
+            "attempt": 3,
+            "detection": "unavailable",
+            "status_available": false,
+            "exit_code": null,
+            "signal": null,
+            "duration_ms": 15_000,
+            "dynamic_session_environment_available": false,
+            "used_fallback_directory": true,
+            "failure_class": "bootstrap_timeout",
+        }))
+    );
+    assert!(!event.contains_ugc());
 }

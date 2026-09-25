@@ -16,7 +16,7 @@ use mio::{self, Events, Interest};
 use parking_lot::{FairMutex, FairMutexGuard};
 
 use super::mio_channel::Receiver;
-use crate::event::ExitReason;
+use crate::event::{ExitReason, ObservedExitStatus};
 use crate::event_listener::ChannelEventListener;
 use crate::local_tty;
 use crate::model::ansi;
@@ -402,9 +402,11 @@ where
                                         child_exited: exited,
                                     } => {
                                         if exited {
-                                            self.terminal
-                                                .lock()
-                                                .exit(ExitReason::ShellProcessExited);
+                                            self.terminal.lock().exit(
+                                                ExitReason::ShellProcessExited {
+                                                    status: ObservedExitStatus::Unavailable,
+                                                },
+                                            );
                                             child_exited = true;
                                             self.event_listener.send_wakeup_event();
                                         }
@@ -414,10 +416,12 @@ where
                             }
 
                             token if token == self.pty.child_event_token() => {
-                                if let Some(local_tty::ChildEvent::Exited) =
+                                if let Some(local_tty::ChildEvent::Exited(status)) =
                                     self.pty.next_child_event()
                                 {
-                                    self.terminal.lock().exit(ExitReason::ShellProcessExited);
+                                    self.terminal
+                                        .lock()
+                                        .exit(ExitReason::ShellProcessExited { status });
                                     child_exited = true;
                                     self.event_listener.send_wakeup_event();
                                     break 'event_loop;
@@ -491,8 +495,9 @@ where
                         log::warn!("Failed to kill PTY process: {err:#}");
                     }
                 }
-                // Notify the terminal model that the PTY process has exited.
-                self.terminal.lock().exit(ExitReason::PtyDisconnected);
+                if !child_exited {
+                    self.terminal.lock().exit(ExitReason::PtyDisconnected);
+                }
             })
             .expect("thread spawn works")
     }

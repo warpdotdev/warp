@@ -52,7 +52,8 @@ pub use action_model::{
     AskUserQuestionExecutor, NewConversationDecision, RequestFileEditsExecutor,
 };
 pub use action_model::{
-    BlocklistAIActionEvent, BlocklistAIActionModel, ShellCommandExecutor, ShellCommandExecutorEvent,
+    BlocklistAIActionEvent, BlocklistAIActionModel, ShellCommandExecutor,
+    ShellCommandExecutorEvent, ShellRecoveryResult,
 };
 #[cfg_attr(target_family = "wasm", allow(unused_imports))]
 pub(crate) use action_model::{

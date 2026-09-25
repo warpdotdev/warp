@@ -87,6 +87,7 @@ notify-debouncer-full.workspace = true
 
 [dev-dependencies]
 filetime = "0.2.25"
+prost.workspace = true
 serial_test = "0.8.0"
 tempfile.workspace = true
 virtual-fs.workspace = true

@@ -17,7 +17,15 @@ use warp_core::SessionId;
 use warp_util::path::resolve_executable;
 
 use super::shell::DirectShellStarter;
+use crate::bootstrap::generate_session_id;
 use crate::shell::ShellType;
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DockerSandboxLaunchMode {
+    #[default]
+    Create,
+    Reattach,
+}
 
 /// Default home directory for the sandbox user inside the shell template.
 /// Lives inside the container image and is shared across all sandboxes, so it
@@ -72,6 +80,8 @@ pub struct DockerSandboxShellStarter {
     pub sandbox_id: String,
     /// The client-generated session ID injected into this sandbox's init script.
     pub session_id: SessionId,
+    #[serde(default)]
+    pub launch_mode: DockerSandboxLaunchMode,
 }
 
 impl DockerSandboxShellStarter {
@@ -86,7 +96,16 @@ impl DockerSandboxShellStarter {
             base_image,
             sandbox_id,
             session_id,
+            launch_mode: DockerSandboxLaunchMode::Create,
         }
+    }
+
+    pub fn replacement(&self) -> Self {
+        let mut replacement = self.clone();
+        replacement.session_id = generate_session_id();
+        replacement.direct.set_session_id(replacement.session_id);
+        replacement.launch_mode = DockerSandboxLaunchMode::Reattach;
+        replacement
     }
 
     pub fn shell_type(&self) -> ShellType {

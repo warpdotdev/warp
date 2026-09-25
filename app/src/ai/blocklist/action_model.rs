@@ -30,9 +30,10 @@ pub use execute::{
     EditResolvedEvent, EditStats, NewConversationDecision, PromptSuggestionExecutor,
     ReadFileContextResult, RequestFileEditsExecutor, RequestFileEditsFormatKind,
     RequestFileEditsTelemetryEvent, RunAgentsExecutor, RunAgentsExecutorEvent,
-    RunAgentsSpawningSnapshot, ShellCommandExecutor, ShellCommandExecutorEvent, StartAgentExecutor,
-    StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest, StartAgentRequestId,
-    TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR, read_local_file_context,
+    RunAgentsSpawningSnapshot, ShellCommandExecutor, ShellCommandExecutorEvent,
+    ShellRecoveryResult, StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome,
+    StartAgentRequest, StartAgentRequestId, TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR,
+    read_local_file_context,
 };
 pub(crate) use execute::{
     FileReadResult, MalformedFinalLineProxyEvent, apply_edits, coerce_integer_args,
@@ -428,6 +429,16 @@ impl BlocklistAIActionModel {
         self.executor.update(ctx, |executor, ctx| {
             executor.set_ambient_agent_task_id(id, ctx);
         });
+    }
+
+    #[cfg(feature = "integration_tests")]
+    pub fn queue_action_for_integration_test(
+        &mut self,
+        action: AIAgentAction,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.queue_actions(vec![action], conversation_id, ctx);
     }
 
     fn blocked_action_for_conversation(

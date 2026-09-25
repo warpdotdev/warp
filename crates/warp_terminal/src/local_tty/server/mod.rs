@@ -24,7 +24,7 @@ mod event_loop;
 mod logging;
 mod protocol;
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::os::unix::prelude::*;
 use std::sync::Arc;
 
@@ -69,7 +69,10 @@ pub fn run_terminal_server(
 }
 
 /// Spawns a thread to handle fire-and-forget messages sent back from the server.
-fn spawn_message_receiver_thread(socket_fd: RawFd, terminated_children: Arc<Mutex<HashSet<u32>>>) {
+fn spawn_message_receiver_thread(
+    socket_fd: RawFd,
+    terminated_children: Arc<Mutex<HashMap<u32, crate::event::ObservedExitStatus>>>,
+) {
     std::thread::spawn(move || {
         loop {
             match protocol::receive_message(socket_fd).expect("should not fail to receive") {
@@ -80,8 +83,8 @@ fn spawn_message_receiver_thread(socket_fd: RawFd, terminated_children: Arc<Mute
                 }) => {
                     logging::handle_write_log_request(level, target, message);
                 }
-                Some(api::Message::ChildrenTerminatedRequest { pids }) => {
-                    terminated_children.lock().extend(pids);
+                Some(api::Message::ChildrenTerminatedRequest { children }) => {
+                    terminated_children.lock().extend(children);
                     // Send ourselves a SIGCHLD signal to notify the event loop threads that
                     // they should check to see if their associated shell process has
                     // terminated.
@@ -154,7 +157,7 @@ impl TerminalServer {
         // Create a concurrency-safe set to track the list of terminated
         // children that the terminal server has notified us about but
         // the pty event loops haven't yet processed.
-        let terminated_children = Arc::new(Mutex::new(HashSet::new()));
+        let terminated_children = Arc::new(Mutex::new(HashMap::new()));
 
         // Spawn the message receiver background thread.
         spawn_message_receiver_thread(client_recv_fd, terminated_children.clone());
@@ -233,8 +236,8 @@ impl PtyHandle for ServerOwnedPtyHandle {
         self.pid
     }
 
-    fn has_process_terminated(&mut self) -> Result<bool> {
-        Ok(self.client.has_child_terminated(self.pid))
+    fn process_termination_status(&mut self) -> Result<Option<crate::event::ObservedExitStatus>> {
+        Ok(self.client.child_termination_status(self.pid))
     }
 
     fn kill(&mut self) -> Result<()> {

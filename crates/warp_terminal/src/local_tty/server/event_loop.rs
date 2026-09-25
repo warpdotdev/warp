@@ -11,6 +11,7 @@ use warp_cli::TerminalServerArgs;
 use warp_errors::report_error;
 
 use super::{RECV_SOCKET_FILENO, SEND_SOCKET_FILENO, api, logging, protocol};
+use crate::event::ObservedExitStatus;
 use crate::local_tty::server::protocol::NonblockingSocketFd;
 use crate::local_tty::{self};
 
@@ -40,16 +41,22 @@ impl Children {
     /// Checks all known children to see which have already terminated, returning
     /// process IDs for children that are no longer running.  Any child returned
     /// this way is removed from the list of children.
-    fn terminated_children(&mut self) -> Vec<u32> {
+    fn terminated_children(&mut self) -> Vec<(u32, ObservedExitStatus)> {
+        use std::os::unix::process::ExitStatusExt;
         let mut terminated_children = vec![];
         let keys = self.0.keys().cloned().collect_vec();
         for k in keys {
             let Some(child) = self.0.get_mut(&k) else {
                 continue;
             };
-            if matches!(child.try_wait(), Ok(Some(_))) {
+            if let Ok(Some(status)) = child.try_wait() {
                 self.0.remove(&k);
-                terminated_children.push(k);
+                let status = status
+                    .code()
+                    .map(ObservedExitStatus::Code)
+                    .or_else(|| status.signal().map(ObservedExitStatus::Signal))
+                    .unwrap_or(ObservedExitStatus::Unavailable);
+                terminated_children.push((k, status));
             }
         }
         terminated_children
@@ -194,11 +201,11 @@ impl EventLoop {
                     SIGNALS_TOKEN => {
                         for signal in signals.pending() {
                             if signal == signal_hook::consts::SIGCHLD {
-                                let terminated_children_pids = self.children.terminated_children();
+                                let terminated_children = self.children.terminated_children();
                                 if let Err(err) = protocol::send_message(
                                     *send_socket_fd.lock(),
                                     api::Message::ChildrenTerminatedRequest {
-                                        pids: terminated_children_pids,
+                                        children: terminated_children,
                                     },
                                     Option::<RawFd>::None,
                                 ) {

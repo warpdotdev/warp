@@ -11,6 +11,7 @@ use {
 #[cfg(target_os = "windows")]
 use super::PseudoConsoleChild;
 use super::{PtyOptions, PtySpawnResult};
+use crate::event::ObservedExitStatus;
 use crate::local_tty::{self};
 
 #[derive(Clone, Copy, Debug)]
@@ -30,10 +31,10 @@ pub trait PtyHandle: Send + Sync {
     /// Returns the pty's process ID.
     fn pid(&self) -> u32;
 
-    /// Returns whether or not the child process has terminated.  This may
-    /// return false for an exited child (e.g.: for a server-hosted pty), but
-    /// will never return true for a living child.
-    fn has_process_terminated(&mut self) -> Result<bool>;
+    /// Returns the observed status when the child has terminated. This may
+    /// return `None` for an exited child (e.g. before a server-hosted PTY
+    /// reports it), but never returns a status for a living child.
+    fn process_termination_status(&mut self) -> Result<Option<ObservedExitStatus>>;
 
     /// Kills the pty process and waits for its successful termination.
     fn kill(&mut self) -> Result<()>;
@@ -51,11 +52,19 @@ impl PtyHandle for DirectPtyHandle {
         self.child.id()
     }
 
-    fn has_process_terminated(&mut self) -> Result<bool> {
-        // If the child has exited, try_wait will return Ok(Some(exit_status)).
+    fn process_termination_status(&mut self) -> Result<Option<ObservedExitStatus>> {
+        use std::os::unix::process::ExitStatusExt;
         self.child
             .try_wait()
-            .map(|inner| inner.is_some())
+            .map(|status| {
+                status.map(|status| {
+                    status
+                        .code()
+                        .map(ObservedExitStatus::Code)
+                        .or_else(|| status.signal().map(ObservedExitStatus::Signal))
+                        .unwrap_or(ObservedExitStatus::Unavailable)
+                })
+            })
             .map_err(anyhow::Error::from)
     }
 
@@ -79,8 +88,11 @@ impl PtyHandle for DirectPtyHandle {
         self.child.id()
     }
 
-    fn has_process_terminated(&mut self) -> Result<bool> {
-        Ok(self.child.is_terminated())
+    fn process_termination_status(&mut self) -> Result<Option<ObservedExitStatus>> {
+        Ok(self
+            .child
+            .is_terminated()
+            .then_some(ObservedExitStatus::Unavailable))
     }
 
     fn kill(&mut self) -> Result<()> {

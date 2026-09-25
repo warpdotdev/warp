@@ -44,6 +44,39 @@ fn host_bash_command_sets_history_size_sentinels() {
 }
 
 #[test]
+fn docker_sandbox_replacement_reattaches_with_restored_state() {
+    let original = DockerSandboxShellStarter::new(shell_starter(ShellType::Bash, "sbx"), None);
+    let replacement = original.replacement();
+    let env_vars = HashMap::from([(OsString::from("EXPORTED_VALUE"), OsString::from("restored"))]);
+
+    assert_eq!(replacement.sandbox_name(), original.sandbox_name());
+    assert_ne!(replacement.session_id(), original.session_id());
+    assert_eq!(replacement.launch_mode, DockerSandboxLaunchMode::Reattach);
+
+    let args = docker_sandbox_exec_args(
+        &replacement,
+        Some(Path::new("/workspace/with spaces")),
+        &env_vars,
+    )
+    .into_iter()
+    .map(|arg| arg.to_string_lossy().into_owned())
+    .collect::<Vec<_>>();
+
+    assert_eq!(
+        &args[..4],
+        &["exec", "-it", replacement.sandbox_name().as_str(), "env"]
+    );
+    assert!(args.iter().any(|arg| arg == "EXPORTED_VALUE=restored"));
+    assert_eq!(args[args.len() - 2], "-c");
+    assert!(
+        args.last()
+            .unwrap()
+            .contains("cd -- '/workspace/with spaces'")
+    );
+    assert!(args.last().unwrap().contains("exec bash --rcfile"));
+}
+
+#[test]
 fn host_non_bash_command_does_not_set_history_size_sentinels() {
     let command = build_host_shell_command(
         shell_starter(ShellType::Zsh, "/bin/zsh"),
@@ -69,6 +102,7 @@ fn docker_sandbox_command_sets_history_size_sentinels() {
         DockerSandboxShellStarter::new(shell_starter(ShellType::Bash, "sbx"), None);
     let command = build_docker_sandbox_command(
         &docker_starter,
+        None,
         None,
         HashMap::new(),
         false,

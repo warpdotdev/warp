@@ -453,6 +453,9 @@ impl From<ShellStarterSource> for ShellStarterSourceOrWslName {
 }
 
 impl DirectShellStarter {
+    pub(crate) fn set_session_id(&mut self, session_id: SessionId) {
+        self.session_id = session_id;
+    }
     #[cfg(any(test, feature = "test-util"))]
     pub fn new_for_test(shell_type: ShellType, shell_path: PathBuf, args: Vec<OsString>) -> Self {
         Self {
