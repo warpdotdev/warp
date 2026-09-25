@@ -114,6 +114,41 @@ fn ambient_policy_supports_inherit_override_and_omit() {
 }
 
 #[test]
+fn pinned_workload_token_is_withheld_unless_it_outlives_the_deadline() {
+    let client = client();
+    let deadline = chrono::Utc::now() + chrono::Duration::hours(6);
+
+    client.set_ambient_workload_token_for_test(
+        "long-lived".to_string(),
+        Some(deadline + chrono::Duration::hours(1)),
+    );
+    assert_eq!(
+        block_on(client.get_ambient_workload_token_valid_until(deadline)).unwrap(),
+        Some("long-lived".to_string()),
+    );
+
+    // A token that expires mid-run must never be handed out for pinning, even though it is
+    // valid right now. Asserted as an inequality rather than `None` because a
+    // `WARP_WORKLOAD_TOKEN` in the ambient environment legitimately yields a non-expiring
+    // replacement here.
+    client.set_ambient_workload_token_for_test(
+        "expires-mid-run".to_string(),
+        Some(deadline - chrono::Duration::hours(1)),
+    );
+    assert_ne!(
+        block_on(client.get_ambient_workload_token_valid_until(deadline)).unwrap(),
+        Some("expires-mid-run".to_string()),
+    );
+
+    // Platforms that issue non-expiring tokens outlive every deadline.
+    client.set_ambient_workload_token_for_test("never-expires".to_string(), None);
+    assert_eq!(
+        block_on(client.get_ambient_workload_token_valid_until(deadline)).unwrap(),
+        Some("never-expires".to_string()),
+    );
+}
+
+#[test]
 fn authenticated_graphql_options_include_configured_and_ambient_headers() {
     let client = client();
     client.set_ambient_agent_task_id(Some("ambient-task".to_string()));

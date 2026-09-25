@@ -4822,8 +4822,8 @@ impl AppContext {
         self.platform_delegate.system_theme()
     }
 
-    pub fn is_headless(&self) -> bool {
-        self.platform_delegate.is_headless()
+    pub fn is_gui(&self) -> bool {
+        self.platform_delegate.is_gui()
     }
 
     pub fn microphone_access_state(&self) -> MicrophoneAccessState {

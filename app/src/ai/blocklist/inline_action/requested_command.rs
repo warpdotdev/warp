@@ -210,7 +210,7 @@ pub(crate) fn mcp_result_to_renderable(result: &CallMCPToolResult) -> McpRendera
                 .content
                 .iter()
                 .filter_map(|c| {
-                    if let rmcp::model::RawContent::Text(t) = &c.raw {
+                    if let rmcp::model::ContentBlock::Text(t) = c {
                         Some(t.text.as_str())
                     } else {
                         None

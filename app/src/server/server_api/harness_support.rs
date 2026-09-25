@@ -8,6 +8,14 @@ use async_trait::async_trait;
 #[cfg(test)]
 use mockall::automock;
 
+#[path = "harness_usage/publication.rs"]
+mod publication;
+pub use publication::HarnessUsageCapability;
+#[cfg(test)]
+use publication::parse_harness_usage_retry_after;
+#[cfg(not(target_family = "wasm"))]
+pub use publication::{HarnessUsageError, HarnessUsageErrorKind, HarnessUsagePublicationStatus};
+
 use super::ServerApi;
 #[cfg(feature = "local_fs")]
 pub use super::presigned_upload::FileUploadBody;
@@ -248,6 +256,11 @@ pub struct ResolvedHarnessPrompt {
     /// after any resumption preamble.
     #[serde(default)]
     pub context: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "publication::deserialize_harness_usage_capability"
+    )]
+    pub harness_usage: Option<HarnessUsageCapability>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -270,6 +283,8 @@ struct FinishTaskRequest {
 struct ShutdownError {
     category: String,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exit_code: Option<u8>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -285,9 +300,13 @@ impl ReportShutdownRequest {
     }
 
     /// An abnormal shutdown carrying an error category and message.
-    pub fn abnormal(category: String, message: String) -> Self {
+    pub fn abnormal(category: String, message: String, exit_code: Option<u8>) -> Self {
         Self {
-            error: Some(ShutdownError { category, message }),
+            error: Some(ShutdownError {
+                category,
+                message,
+                exit_code,
+            }),
         }
     }
 }
@@ -335,6 +354,7 @@ pub trait HarnessSupportClient: 'static + Send + Sync {
         &self,
         error_category: String,
         error_message: String,
+        exit_code: Option<u8>,
     ) -> Result<()>;
 
     /// Get presigned upload targets for a workspace state snapshot.
@@ -570,10 +590,11 @@ impl HarnessSupportClient for ServerApi {
         &self,
         error_category: String,
         error_message: String,
+        exit_code: Option<u8>,
     ) -> Result<()> {
         self.post_public_api_unit(
             "harness-support/report-shutdown",
-            &ReportShutdownRequest::abnormal(error_category, error_message),
+            &ReportShutdownRequest::abnormal(error_category, error_message, exit_code),
         )
         .await
     }
@@ -635,3 +656,7 @@ pub async fn upload_to_target(
 #[cfg(test)]
 #[path = "harness_support_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "harness_usage_tests.rs"]
+mod harness_usage_tests;

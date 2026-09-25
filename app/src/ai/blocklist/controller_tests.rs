@@ -9,17 +9,19 @@ use ai::api_keys::{
 use chrono::Local;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
-use warp_multi_agent_api::response_event;
-use warpui::{App, SingletonEntity, ViewHandle};
+use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
+use warp_multi_agent_api::{AgentType, response_event};
+use warpui::{App, ModelHandle, SingletonEntity, ViewHandle};
 
 use super::response_stream::{PendingResume, RecoveryBudget};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentAttachment, AIAgentContext, AIAgentInput, CancellationReason, ImageContext,
-    PassiveSuggestionTrigger, UserQueryMode,
+    AIAgentAttachment, AIAgentContext, AIAgentInput, BaseUserQuery, CancellationReason,
+    ImageContext, PassiveSuggestionTrigger, UserQueryMode,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::local_agent_task_sync_model::map_conversation_status_for_test;
 use crate::ai::blocklist::orchestration_events::{
     OrchestrationEventService, PendingEvent, PendingEventDetail,
 };
@@ -30,6 +32,7 @@ use crate::ai::blocklist::{
 use crate::ai::geap_credentials::{GeapPolicy, current_geap_policy_for_any_team};
 use crate::ai::llms::{LLMId, LLMModelHost, LLMProvider};
 use crate::server::ids::ServerId;
+use crate::server::server_api::AIApiError;
 use crate::terminal::TerminalView;
 use crate::test_util::terminal::{
     add_window_with_id_and_terminal, add_window_with_terminal, initialize_app_for_terminal_view,
@@ -65,6 +68,129 @@ fn file_attachment(file_name: &str) -> PendingAttachment {
         file_path: file_name.into(),
         mime_type: "text/plain".to_owned(),
     })
+}
+
+fn register_mock_response_stream(
+    terminal: &ViewHandle<TerminalView>,
+    app: &mut App,
+) -> (AIConversationId, ModelHandle<ResponseStream>) {
+    terminal.update(app, |view, ctx| {
+        let terminal_surface_id = view.id();
+        let stream_id = ResponseStreamId::new_for_test();
+        let conversation_id = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            let conversation_id =
+                history.start_new_conversation(terminal_surface_id, false, false, false, ctx);
+            let task_id = history
+                .conversation(&conversation_id)
+                .unwrap()
+                .get_root_task_id()
+                .clone();
+            history
+                .update_conversation_for_new_request_input(
+                    RequestInput {
+                        conversation_id,
+                        input_messages: HashMap::from([(task_id, vec![])]),
+                        working_directory: None,
+                        model_id: LLMId::from("test-model"),
+                        coding_model_id: LLMId::from("test-coding-model"),
+                        cli_agent_model_id: LLMId::from("test-cli-agent-model"),
+                        computer_use_model_id: LLMId::from("test-computer-use-model"),
+                        shared_session_response_initiator: None,
+                        request_start_ts: Local::now(),
+                        supported_tools_override: None,
+                    },
+                    stream_id.clone(),
+                    terminal_surface_id,
+                    ctx,
+                )
+                .unwrap();
+            conversation_id
+        });
+        let stream = ctx.add_model(|_| ResponseStream::new_for_test(stream_id.clone()));
+        view.ai_controller().update(ctx, |controller, ctx| {
+            controller.register_mock_stream_for_test(
+                stream_id,
+                conversation_id,
+                stream.clone(),
+                ctx,
+            );
+        });
+        (conversation_id, stream)
+    })
+}
+
+fn stream_init_event(request_id: &str) -> warp_multi_agent_api::ResponseEvent {
+    warp_multi_agent_api::ResponseEvent {
+        r#type: Some(response_event::Type::Init(response_event::StreamInit {
+            request_id: request_id.to_string(),
+            conversation_id: "test-server-conversation".to_string(),
+            run_id: String::new(),
+        })),
+    }
+}
+
+fn stream_client_actions_event() -> warp_multi_agent_api::ResponseEvent {
+    warp_multi_agent_api::ResponseEvent {
+        r#type: Some(response_event::Type::ClientActions(
+            response_event::ClientActions { actions: vec![] },
+        )),
+    }
+}
+
+fn assert_terminal_stream_task_update(
+    app: &App,
+    conversation_id: AIConversationId,
+    expected_code: PlatformErrorCode,
+) {
+    BlocklistAIHistoryModel::handle(app).read(app, |history, _| {
+        let conversation = history
+            .conversation(&conversation_id)
+            .expect("test conversation must exist");
+        let (state, update) = map_conversation_status_for_test(conversation);
+        assert_eq!(state, AgentTaskState::Error);
+
+        let update = update.expect("terminal stream error must include a task status update");
+        assert_eq!(update.error_code, Some(expected_code));
+        let platform_error = update
+            .platform_error
+            .expect("terminal stream error must include structured platform error data");
+        assert_eq!(platform_error.code, expected_code);
+        assert!(!platform_error.retryable);
+    });
+}
+
+#[test]
+fn transport_failure_classification_is_independent_of_stream_start() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let (started_conversation_id, started_stream) =
+            register_mock_response_stream(&terminal, &mut app);
+        started_stream.update(&mut app, |stream, ctx| {
+            stream.exhaust_recovery_budget_for_test(ctx);
+            stream.emit_response_event_for_test(stream_client_actions_event(), ctx);
+            stream.emit_error_event_for_test(Arc::new(AIApiError::UnexpectedEof), ctx);
+        });
+        assert_terminal_stream_task_update(
+            &app,
+            started_conversation_id,
+            PlatformErrorCode::AgentStreamNetworkError,
+        );
+
+        let (retried_conversation_id, retried_stream) =
+            register_mock_response_stream(&terminal, &mut app);
+        retried_stream.update(&mut app, |stream, ctx| {
+            stream.emit_response_event_for_test(stream_init_event("previous-attempt"), ctx);
+            stream.exhaust_recovery_budget_for_test(ctx);
+            stream.emit_error_event_for_test(Arc::new(AIApiError::UnexpectedEof), ctx);
+        });
+        assert_terminal_stream_task_update(
+            &app,
+            retried_conversation_id,
+            PlatformErrorCode::AgentStreamNetworkError,
+        );
+    });
 }
 
 #[test]
@@ -158,6 +284,7 @@ fn input_for_query_converts_prompt_attachments_and_ignores_live_staging() {
                 None,
                 UserQueryMode::Normal,
                 None,
+                None,
                 HashMap::new(),
                 prompt_attachments,
                 context_model.as_ref(ctx),
@@ -203,6 +330,71 @@ fn input_for_query_converts_prompt_attachments_and_ignores_live_staging() {
             assert!(referenced_attachments.contains_key("notes.txt"));
             assert!(referenced_attachments.contains_key("notes.txt (1)"));
             assert!(!referenced_attachments.contains_key("live.txt"));
+        });
+    });
+}
+
+#[test]
+fn input_for_query_seeds_query_mode_and_agent_from_the_base() {
+    // A base carried by a shared-session prompt is authoritative for what it set: the input's
+    // rendered text, mode, and agent come from it (normalized like typed text), the client's
+    // resolved attachments still ride along, and the base is kept for the outgoing request.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |terminal, ctx| {
+            let conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                    history_model.start_new_conversation(terminal.id(), false, false, false, ctx)
+                });
+            let controller = terminal.ai_controller();
+            let context_model = controller.as_ref(ctx).context_model.clone();
+            let active_session = controller.as_ref(ctx).active_session.clone();
+            let task_id = TaskId::new("test-task".to_owned());
+
+            let base = BaseUserQuery::from_proto(warp_multi_agent_api::request::input::UserQuery {
+                query: "/plan from the server".to_owned(),
+                intended_agent: AgentType::Cli.into(),
+                ..Default::default()
+            });
+            let additional_attachments = HashMap::from([(
+                "notes.md".to_owned(),
+                AIAgentAttachment::PlainText("downloaded".to_owned()),
+            )]);
+
+            let input = super::input_for_query(
+                "from the prompt".to_owned(),
+                &task_id,
+                conversation_id,
+                None,
+                UserQueryMode::Normal,
+                None,
+                Some(base.clone()),
+                additional_attachments,
+                vec![],
+                context_model.as_ref(ctx),
+                active_session.as_ref(ctx),
+                ctx,
+            );
+
+            let AIAgentInput::UserQuery {
+                query,
+                user_query_mode,
+                intended_agent,
+                referenced_attachments,
+                base: input_base,
+                ..
+            } = input
+            else {
+                panic!("expected UserQuery");
+            };
+
+            assert_eq!(query, "from the server");
+            assert_eq!(user_query_mode, UserQueryMode::Plan);
+            assert_eq!(intended_agent, Some(AgentType::Cli));
+            assert!(referenced_attachments.contains_key("notes.md"));
+            assert_eq!(input_base, Some(base));
         });
     });
 }
@@ -258,67 +450,10 @@ fn mock_response_stream_updates_history_through_controller() {
             });
         });
 
-        let (conversation_id, stream) = terminal.update(&mut app, |view, ctx| {
-            let terminal_surface_id = view.id();
-            let stream_id = ResponseStreamId::new_for_test();
-            let conversation_id =
-                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-                    let conversation_id = history.start_new_conversation(
-                        terminal_surface_id,
-                        false,
-                        false,
-                        false,
-                        ctx,
-                    );
-                    let task_id = history
-                        .conversation(&conversation_id)
-                        .unwrap()
-                        .get_root_task_id()
-                        .clone();
-                    history
-                        .update_conversation_for_new_request_input(
-                            RequestInput {
-                                conversation_id,
-                                input_messages: HashMap::from([(task_id, vec![])]),
-                                working_directory: None,
-                                model_id: LLMId::from("test-model"),
-                                coding_model_id: LLMId::from("test-coding-model"),
-                                cli_agent_model_id: LLMId::from("test-cli-agent-model"),
-                                computer_use_model_id: LLMId::from("test-computer-use-model"),
-                                shared_session_response_initiator: None,
-                                request_start_ts: Local::now(),
-                                supported_tools_override: None,
-                            },
-                            stream_id.clone(),
-                            terminal_surface_id,
-                            ctx,
-                        )
-                        .unwrap();
-                    conversation_id
-                });
-            let stream = ctx.add_model(|_| ResponseStream::new_for_test(stream_id.clone()));
-            view.ai_controller().update(ctx, |controller, ctx| {
-                controller.register_mock_stream_for_test(
-                    stream_id,
-                    conversation_id,
-                    stream.clone(),
-                    ctx,
-                );
-            });
-            (conversation_id, stream)
-        });
+        let (conversation_id, stream) = register_mock_response_stream(&terminal, &mut app);
 
         stream.update(&mut app, |stream, ctx| {
-            stream.emit_response_event_for_test(
-                warp_multi_agent_api::ResponseEvent {
-                    r#type: Some(response_event::Type::Init(response_event::StreamInit {
-                        request_id: "test-request".to_string(),
-                        conversation_id: "test-server-conversation".to_string(),
-                        run_id: String::new(),
-                    })),
-                },
-                ctx,
-            );
+            stream.emit_response_event_for_test(stream_init_event("test-request"), ctx);
             stream.emit_response_event_for_test(
                 warp_multi_agent_api::ResponseEvent {
                     r#type: Some(response_event::Type::Finished(
@@ -360,6 +495,56 @@ fn mock_response_stream_updates_history_through_controller() {
                 ..
             } if *id == conversation_id
         )));
+    });
+}
+
+#[test]
+fn explicit_stream_finished_failures_are_classified_without_init() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let reasons = [
+            response_event::stream_finished::Reason::Other(Default::default()),
+            response_event::stream_finished::Reason::LlmUnavailable(Default::default()),
+            response_event::stream_finished::Reason::ChatgptSubscriptionError(
+                response_event::stream_finished::ChatGptSubscriptionError {
+                    message: "subscription limit reached".to_owned(),
+                    ..Default::default()
+                },
+            ),
+            response_event::stream_finished::Reason::InternalError(
+                response_event::stream_finished::InternalError {
+                    message: "server stream failure".to_owned(),
+                },
+            ),
+        ];
+        for reason in reasons {
+            let (conversation_id, stream) = register_mock_response_stream(&terminal, &mut app);
+            stream.update(&mut app, |stream, ctx| {
+                stream.emit_response_event_for_test(
+                    warp_multi_agent_api::ResponseEvent {
+                        r#type: Some(response_event::Type::Finished(
+                            response_event::StreamFinished {
+                                reason: Some(reason),
+                                conversation_usage_metadata: None,
+                                token_usage: vec![],
+                                should_refresh_model_config: false,
+                                #[allow(deprecated)]
+                                request_cost: None,
+                                request_charges: None,
+                            },
+                        )),
+                    },
+                    ctx,
+                );
+            });
+            assert_terminal_stream_task_update(
+                &app,
+                conversation_id,
+                PlatformErrorCode::AgentStreamFailure,
+            );
+        }
     });
 }
 

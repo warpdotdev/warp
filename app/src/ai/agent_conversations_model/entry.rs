@@ -101,6 +101,7 @@ pub struct AgentConversationDisplayData {
     pub creator: AgentConversationPrincipal,
     pub executor: Option<AgentConversationPrincipal>,
     pub request_usage: Option<f32>,
+    pub cost_in_cents: Option<f32>,
     pub run_time: Option<String>,
     pub session_status: Option<SessionStatus>,
     pub source: Option<AgentSource>,
@@ -414,6 +415,22 @@ fn conversation_request_usage(
         })
 }
 
+fn conversation_cost_in_cents(
+    metadata: &ConversationMetadata,
+    history_model: &BlocklistAIHistoryModel,
+) -> Option<f32> {
+    history_model
+        .conversation(&metadata.nav_data.id)
+        .and_then(|conversation| conversation.usage_totals().charged_usage)
+        .map(|usage| usage.total_cost_in_cents())
+        .or_else(|| {
+            history_model
+                .get_conversation_metadata(&metadata.nav_data.id)
+                .and_then(|metadata| metadata.server_conversation_metadata.as_ref())
+                .and_then(|metadata| metadata.usage.total_charged_usage.as_ref())
+                .map(|usage| usage.total_cost_in_cents())
+        })
+}
 fn conversation_artifacts(
     metadata: &ConversationMetadata,
     history_model: &BlocklistAIHistoryModel,
@@ -535,6 +552,7 @@ pub(super) fn entry_for_task(
                     principal_type: PrincipalType::parse(&executor.creator_type),
                 }),
             request_usage: task.credits_used(),
+            cost_in_cents: task.cost_in_cents(),
             run_time: task_run_time(task),
             session_status: Some(task_session_status(task)),
             source: task.source.clone(),
@@ -643,6 +661,7 @@ fn entry_for_conversation_parts(
             creator: conversation_creator(&metadata, history_model, app),
             executor: None,
             request_usage: conversation_request_usage(&metadata, history_model),
+            cost_in_cents: conversation_cost_in_cents(&metadata, history_model),
             run_time: None,
             session_status: None,
             source: Some(AgentSource::Interactive),

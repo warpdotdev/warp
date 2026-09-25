@@ -2399,25 +2399,6 @@ fn ctrl_t_apply_mode_forks_between_splice_and_replace_for_the_same_draft() {
     });
 }
 
-#[test]
-fn ctrl_t_binding_is_ineligible_when_shell_widget_handoff_flag_is_disabled() {
-    App::test((), |mut app| async move {
-        initialize_app(&mut app);
-
-        assert!(
-            !FeatureFlag::ShellWidgetHandoff.is_enabled(),
-            "this test assumes the flag defaults to disabled in the test harness"
-        );
-        app.read(|ctx| {
-            assert!(
-                ctx.get_binding_by_name("workspace:trigger_external_ctrl_t_file_search")
-                    .is_none(),
-                "the ctrl-t binding must be ineligible while ShellWidgetHandoff is disabled"
-            );
-        });
-    });
-}
-
 /// Verifies deleting a queued row does not overwrite an existing draft.
 #[test]
 fn row_deleted_event_preserves_existing_draft() {
@@ -2635,6 +2616,7 @@ fn seed_in_progress_conversation(
                 user_query_mode: UserQueryMode::Normal,
                 running_command: None,
                 intended_agent: None,
+                base: None,
             }],
             output_status: AIAgentOutputStatus::Streaming { output: None },
             added_message_ids: HashSet::new(),
@@ -5142,6 +5124,40 @@ fn test_shell_lock_respected_when_slash_command_typed() {
     });
 }
 
+#[test]
+fn model_selector_keybinding_ignores_closed_selector_window() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (closed_window_id, closed_terminal) =
+            add_window_with_bootstrapped_terminal_and_window_id(&mut app, None, None).await;
+        let closed_selector = closed_terminal.read(&app, |terminal, ctx| {
+            terminal
+                .input()
+                .as_ref(ctx)
+                .inline_model_selector_view
+                .clone()
+        });
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        input.update(&mut app, |input, _| {
+            input.inline_model_selector_view = closed_selector;
+        });
+        app.update(|ctx| ctx.simulate_window_closed(closed_window_id));
+
+        input.update(&mut app, |input, ctx| {
+            input.handle_action(
+                &InputAction::TriggerSlashCommandFromKeybinding(commands::MODEL.name),
+                ctx,
+            );
+        });
+
+        input.read(&app, |input, ctx| {
+            assert!(input.suggestions_mode_model.as_ref(ctx).is_closed());
+        });
+    });
+}
 #[test]
 fn test_new_conversation_keybinding_requires_double_press_in_non_empty_agent_view() {
     App::test((), |mut app| async move {

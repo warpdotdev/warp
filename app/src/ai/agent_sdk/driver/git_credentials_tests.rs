@@ -3,7 +3,8 @@ use warp_graphql::error::{
     PlatformError as GraphqlPlatformError, UserFacingError, UserFacingErrorInterface,
 };
 use warp_graphql::platform_error::{
-    PlatformErrorInfo, PlatformErrorInfoResponse, PlatformErrorMetadataResponse,
+    PlatformErrorInfo, PlatformErrorInfoResponse, PlatformErrorMessage, PlatformErrorMessageFormat,
+    PlatformErrorMetadataResponse,
 };
 use warp_graphql::response_context::ResponseContext;
 
@@ -13,12 +14,20 @@ use crate::server::server_api::ai::TaskGitCredentialsResponse;
 #[test]
 fn from_user_facing_converts_platform_error_preserving_metadata_and_debug() {
     let error = TaskGitCredentialsError::from_user_facing(UserFacingError {
-        error: UserFacingErrorInterface::PlatformError(GraphqlPlatformError {
+        error: UserFacingErrorInterface::PlatformError(Box::new(GraphqlPlatformError {
             message: "GitHub is temporarily unavailable.".to_string(),
             detail: Some("Repository access could not be resolved.".to_string()),
             info: PlatformErrorInfoResponse {
+                error_message: "GitHub is temporarily unavailable.".to_string(),
                 code: PlatformErrorCode::ResourceUnavailable,
+                http_status: 503,
+                user_facing_messages: vec![PlatformErrorMessage {
+                    format: PlatformErrorMessageFormat::PlainText,
+                    message: "GitHub is temporarily unavailable.".to_string(),
+                }],
+                detail: Some("Repository access could not be resolved.".to_string()),
                 retryable: true,
+                is_user_error: false,
                 metadata: vec![
                     PlatformErrorMetadataResponse {
                         key: "provider".to_string(),
@@ -30,8 +39,10 @@ fn from_user_facing_converts_platform_error_preserving_metadata_and_debug() {
                     },
                 ],
                 debug: Some("request-id=dogfood-only".to_string()),
+                metrics_category: "dependency_unavailable".to_string(),
+                trace_id: Some("0123456789abcdef".to_string()),
             },
-        }),
+        })),
         response_context: ResponseContext {
             server_version: None,
         },
@@ -44,8 +55,22 @@ fn from_user_facing_converts_platform_error_preserving_metadata_and_debug() {
             info,
         } => {
             assert_eq!(message, "GitHub is temporarily unavailable.");
+            assert_eq!(
+                info.error_message.as_deref(),
+                Some("GitHub is temporarily unavailable.")
+            );
             assert_eq!(info.code, PlatformErrorCode::ResourceUnavailable);
+            assert_eq!(info.http_status, Some(503));
+            assert_eq!(
+                info.user_facing_messages[&PlatformErrorMessageFormat::PlainText],
+                "GitHub is temporarily unavailable."
+            );
+            assert_eq!(
+                info.detail.as_deref(),
+                Some("Repository access could not be resolved.")
+            );
             assert!(info.retryable);
+            assert_eq!(info.is_user_error, Some(false));
             assert_eq!(
                 detail.as_deref(),
                 Some("Repository access could not be resolved.")
@@ -53,6 +78,11 @@ fn from_user_facing_converts_platform_error_preserving_metadata_and_debug() {
             assert_eq!(info.metadata["provider"], "github");
             assert_eq!(info.metadata["resource"], "installation");
             assert_eq!(info.debug.as_deref(), Some("request-id=dogfood-only"));
+            assert_eq!(
+                info.metrics_category.as_deref(),
+                Some("dependency_unavailable")
+            );
+            assert_eq!(info.trace_id.as_deref(), Some("0123456789abcdef"));
         }
         error => panic!("expected structured platform error, got {error:?}"),
     }
@@ -62,15 +92,25 @@ fn dependency_error(retryable: bool) -> TaskGitCredentialsError {
     TaskGitCredentialsError::Platform {
         message: "GitHub is temporarily unavailable.".to_string(),
         detail: Some("Repository access could not be resolved.".to_string()),
-        info: PlatformErrorInfo {
+        info: Box::new(PlatformErrorInfo {
+            error_message: Some("GitHub is temporarily unavailable.".to_string()),
             code: PlatformErrorCode::ResourceUnavailable,
+            http_status: Some(503),
+            user_facing_messages: std::collections::BTreeMap::from([(
+                PlatformErrorMessageFormat::PlainText,
+                "GitHub is temporarily unavailable.".to_string(),
+            )]),
+            detail: Some("Repository access could not be resolved.".to_string()),
             retryable,
+            is_user_error: Some(false),
             metadata: std::collections::BTreeMap::from([
                 ("provider".to_string(), "github".to_string()),
                 ("resource".to_string(), "installation".to_string()),
             ]),
             debug: None,
-        },
+            metrics_category: Some("dependency_unavailable".to_string()),
+            trace_id: None,
+        }),
     }
 }
 
@@ -425,6 +465,134 @@ fn repository_identity_falls_back_to_the_primary_forge() {
     assert_eq!(matched.name, "warp-agent[bot]");
 
     assert!(select_host_identity(&[], "github.com").is_none());
+}
+
+fn init_repo(dir: &std::path::Path) {
+    BlockingCommand::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(dir)
+        .output()
+        .expect("git init should succeed");
+}
+
+#[test]
+#[serial_test::serial]
+fn global_git_identity_reads_the_actual_global_config() -> Result<()> {
+    // #[serial] because this exercises the real `git config --global`
+    // invocation, which reads/writes process-wide state (the `--global`
+    // config file resolved from HOME) rather than a repo-local temp dir.
+    let temp_home = tempfile::tempdir()?;
+    let prev_home = std::env::var_os("HOME");
+    let prev_git_config_global = std::env::var_os("GIT_CONFIG_GLOBAL");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HOME", temp_home.path()) };
+    // A `GIT_CONFIG_GLOBAL` override in the ambient environment would take
+    // priority over HOME and defeat this test's isolation.
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("GIT_CONFIG_GLOBAL") };
+
+    let attempt = || -> Result<()> {
+        assert_eq!(
+            global_git_identity(),
+            None,
+            "no global identity should be configured in the fresh temp HOME yet"
+        );
+
+        run_git_config("user.name", "Warp");
+        run_git_config("user.email", "agent@warp.dev");
+
+        // This is the regression this test guards: `global_git_identity()` must
+        // issue `git config --global --get <key>` (an option to the `config`
+        // subcommand). Building it as `git --global config --get <key>` instead
+        // (`--global` as a top-level git option, which git rejects) would make
+        // this call fail silently and always return `None`, permanently
+        // defeating the `configure_repository_git_identity_if_unset` fallback
+        // logic that depends on a real baseline.
+        assert_eq!(
+            global_git_identity(),
+            Some(("Warp".to_string(), "agent@warp.dev".to_string()))
+        );
+        Ok(())
+    };
+    let result = attempt();
+
+    match prev_home {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(home) => unsafe { std::env::set_var("HOME", home) },
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        None => unsafe { std::env::remove_var("HOME") },
+    }
+    if let Some(value) = prev_git_config_global {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", value) }
+    }
+    result
+}
+
+#[test]
+fn repository_identity_is_unchanged_when_it_matches_the_baseline() -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    init_repo(temp_dir.path());
+    run_repository_git_config(temp_dir.path(), "user.name", "Warp");
+    run_repository_git_config(temp_dir.path(), "user.email", "agent@warp.dev");
+
+    let baseline = Some(("Warp".to_string(), "agent@warp.dev".to_string()));
+    assert!(!repository_identity_changed_since(
+        temp_dir.path(),
+        baseline
+    ));
+    Ok(())
+}
+
+#[test]
+fn repository_identity_is_changed_when_a_setup_command_overrides_it() -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    init_repo(temp_dir.path());
+    run_repository_git_config(temp_dir.path(), "user.name", "Vercel Bot");
+    run_repository_git_config(temp_dir.path(), "user.email", "vercel-bot@example.com");
+
+    let baseline = Some(("Warp".to_string(), "agent@warp.dev".to_string()));
+    assert!(repository_identity_changed_since(temp_dir.path(), baseline));
+    Ok(())
+}
+
+#[test]
+fn repository_identity_is_changed_when_baseline_is_none_but_the_repo_has_one() -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    init_repo(temp_dir.path());
+    run_repository_git_config(temp_dir.path(), "user.name", "Vercel Bot");
+    run_repository_git_config(temp_dir.path(), "user.email", "vercel-bot@example.com");
+
+    assert!(repository_identity_changed_since(temp_dir.path(), None));
+    Ok(())
+}
+
+#[test]
+fn configure_repository_git_identity_if_unset_skips_a_repo_the_customer_already_configured()
+-> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    init_repo(temp_dir.path());
+    run_repository_git_config(temp_dir.path(), "user.name", "Vercel Bot");
+    run_repository_git_config(temp_dir.path(), "user.email", "vercel-bot@example.com");
+
+    // The repo's identity already differs from `baseline`, so this must return
+    // before ever consulting HOST_IDENTITIES (via recorded_identity_for_host) —
+    // exercised here with a host that has no recorded identity, to make sure a
+    // changed repo is left alone rather than falling through to some default.
+    configure_repository_git_identity_if_unset(
+        temp_dir.path(),
+        "github.com",
+        Some(("Warp".to_string(), "agent@warp.dev".to_string())),
+    );
+
+    assert_eq!(
+        repository_git_identity(temp_dir.path()),
+        Some((
+            "Vercel Bot".to_string(),
+            "vercel-bot@example.com".to_string()
+        ))
+    );
+    Ok(())
 }
 
 #[test]

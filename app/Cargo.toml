@@ -83,7 +83,6 @@ cloud_object_models.workspace = true
 cloud_objects.workspace = true
 command = { workspace = true }
 command-corrections.workspace = true
-command-signatures-v2 = { workspace = true, optional = true }
 computer_use.workspace = true
 crc.workspace = true
 content_inspector = "0.2.4"
@@ -142,6 +141,7 @@ log.workspace = true
 log-panics = { version = "2.1.0", features = ["with-backtrace"] }
 lsp.workspace = true
 warp_logging.workspace = true
+warp_harness_usage.workspace = true
 sentry = { workspace = true, optional = true }
 lz4_flex = "0.11"
 markdown_parser.workspace = true
@@ -234,7 +234,6 @@ warp_core.workspace = true
 warp_errors = { workspace = true, features = ["reqwest-errors"] }
 warp_editor.workspace = true
 warp_graphql.workspace = true
-warp_js = { workspace = true, optional = true }
 warp_search_core.workspace = true
 warp_server_auth.workspace = true
 warp_server_client.workspace = true
@@ -337,7 +336,6 @@ aws-sdk-sts = { version = "1", default-features = false, features = ["default-ht
 aws-types = "1"
 
 notify-debouncer-full.workspace = true
-rquickjs = { workspace = true, optional = true }
 rustls.workspace = true
 syntect = "5.0"
 sysinfo.workspace = true
@@ -371,7 +369,8 @@ web-sys.workspace = true
 warp_web_event_bus.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-signal-hook = "0.3.17"
+signal-hook = { version = "0.3.17", features = ["extended-siginfo"] }
+signal-hook-tokio = { version = "0.3.1", features = ["futures-v0_3"] }
 nix = { workspace = true, features = [
     "fs",
     "hostname",
@@ -486,11 +485,6 @@ clear_autosuggestion_on_escape = []
 codebase_index_speedbump = []
 cocoa_sentry = ["crash_reporting"]
 context_line_review_comments = []
-completions_v2 = [
-    "plugin_host",
-    "warp_completer/v2",
-    "dep:command-signatures-v2",
-]
 crash_reporting = [
     "dep:sentry",
     "dep:sentry-log",
@@ -706,8 +700,6 @@ default = [
     "file_backed_execution_profiles",
     "well_known_mcp_ids",
     "factory_mcp",
-    "wait_for_events_parent_registration",
-    "orchestration_unified_stack",
     "ime_marked_text",
     "ctrl_c_cancels_third_party_harness",
     "shell_widget_handoff",
@@ -821,10 +813,6 @@ resize_fix = []
 pluggable_notifications = []
 # This enables `read_files` to support images.
 read_image_files = []
-# This feature enables plugin support in Warp. Note that its typically checked
-# directly, rather than via the `FeatureFlag` enum, because its value is
-# required early in the app lifecycle prior to `FeatureFlag` initialization.
-plugin_host = ["dep:rquickjs", "dep:warp_js", "warp_cli/plugin_host"]
 # Enable this feature to automatically perform CPU profiling via pprof.  The
 # generated profile will be written to profile.pb in the current directory.
 # NOTE: This may slow down program execution.
@@ -1001,8 +989,6 @@ file_based_mcp = []
 skill_arguments = []
 active_conversation_requires_interaction = []
 incremental_auto_reload = []
-wait_for_events_parent_registration = []
-orchestration_unified_stack = []
 pending_user_query_indicator = []
 queue_slash_command = []
 queued_prompts_v2 = ["queue_slash_command"]

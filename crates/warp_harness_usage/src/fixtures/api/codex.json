@@ -1,0 +1,35 @@
+{
+  "harness": "CODEX",
+  "execution_id": 7,
+  "capture_sequence": 3,
+  "captured_at": "2026-01-01T12:00:00Z",
+  "snapshot": {
+    "coverage": {
+      "token_status": "partial",
+      "tool_status": "known"
+    },
+    "payload": {
+      "usage": {
+        "input_tokens": 10,
+        "cached_input_tokens": 0,
+        "output_tokens": 4,
+        "reasoning_output_tokens": 2,
+        "total_tokens": 14
+      },
+      "attribution": [
+        {
+          "model": "codex-test",
+          "service_tier": "priority",
+          "usage": {
+            "input_tokens": 10,
+            "output_tokens": 4
+          }
+        }
+      ],
+      "toolCalls": {
+        "total": 0,
+        "byName": {}
+      }
+    }
+  }
+}

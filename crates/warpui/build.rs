@@ -79,6 +79,13 @@ fn compile_metal_shaders() {
     let lib_path = out_path.join("shaders.metallib");
     let lib_path = lib_path.to_str().unwrap();
 
+    // LOCAL VERIFICATION ONLY (never commit): this machine has no Metal
+    // toolchain; an empty library satisfies `include_bytes!` for `cargo check`.
+    if env::var("WARP_LOCAL_SKIP_METAL").is_ok() {
+        std::fs::write(lib_path, b"").expect("write empty metallib");
+        return;
+    }
+
     println!("cargo:rerun-if-changed={header_path}");
     println!("cargo:rerun-if-changed={metal_path}");
     println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");

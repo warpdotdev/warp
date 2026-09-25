@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
+use chrono::{DateTime, Utc};
 use futures::StreamExt as _;
 use instant::Duration;
 use parking_lot::{Mutex, RwLock};
@@ -39,6 +40,10 @@ const EVAL_USER_IDS: [i32; 11] = [
 
 /// Duration for which an ambient agent workload token is valid.
 const AMBIENT_WORKLOAD_TOKEN_DURATION: Duration = Duration::from_secs(3 * 60 * 60);
+
+/// Margin by which a token must outlast the moment it is needed, so one that is
+/// nominally still valid cannot expire while a request using it is in flight.
+const AMBIENT_WORKLOAD_TOKEN_EXPIRY_MARGIN: Duration = Duration::from_secs(5 * 60);
 
 /// Selects whether a contextual header is inherited, set, or omitted for one request.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -258,43 +263,99 @@ impl BaseClient {
         *self.ambient_agent_task_id.write() = task_id;
     }
     #[cfg(any(test, feature = "test-util"))]
-    pub fn set_ambient_workload_token_for_test(&self, token: String) {
-        *self.ambient_workload_token.lock() = Some(warp_isolation_platform::WorkloadToken {
-            token,
-            expires_at: None,
-        });
+    pub fn set_ambient_workload_token_for_test(
+        &self,
+        token: String,
+        expires_at: Option<DateTime<Utc>>,
+    ) {
+        *self.ambient_workload_token.lock() =
+            Some(warp_isolation_platform::WorkloadToken { token, expires_at });
     }
 
     /// Returns an ambient agent workload token when the current runtime can issue one.
+    ///
+    /// The token is only guaranteed to be valid for the request it is attached to. Callers
+    /// that pin one for later reuse want
+    /// [`Self::get_ambient_workload_token_valid_until`] instead.
     pub async fn get_or_create_ambient_workload_token(&self) -> Result<Option<String>> {
+        let valid_until = Utc::now() + AMBIENT_WORKLOAD_TOKEN_EXPIRY_MARGIN;
+        Ok(self
+            .workload_token_valid_until(valid_until, AMBIENT_WORKLOAD_TOKEN_DURATION)
+            .await?
+            .map(|workload_token| workload_token.token))
+    }
+
+    /// Returns an ambient agent workload token that is still valid at `must_outlive`, or
+    /// `None` when the current runtime cannot issue one that long-lived.
+    ///
+    /// warp-server rejects a request carrying an expired workload token outright, but accepts
+    /// one carrying no token at all in a degraded, unverified mode. A caller that pins a token
+    /// into a long-lived transport, rather than resolving one per request, is therefore worse
+    /// off pinning a token that expires partway through than pinning none, and uses this to
+    /// distinguish the two cases up front.
+    pub async fn get_ambient_workload_token_valid_until(
+        &self,
+        must_outlive: DateTime<Utc>,
+    ) -> Result<Option<String>> {
+        let requested_duration = (must_outlive + AMBIENT_WORKLOAD_TOKEN_EXPIRY_MARGIN - Utc::now())
+            .to_std()
+            .unwrap_or_default()
+            .max(AMBIENT_WORKLOAD_TOKEN_DURATION);
+        let Some(workload_token) = self
+            .workload_token_valid_until(must_outlive, requested_duration)
+            .await?
+        else {
+            return Ok(None);
+        };
+        // The issuing platform is free to cap the requested duration, so a token that reaches
+        // `must_outlive` was asked for but not necessarily granted.
+        if let Some(expires_at) = workload_token.expires_at
+            && expires_at <= must_outlive
+        {
+            log::warn!(
+                "Not pinning an ambient workload token: the longest one this platform will \
+                 issue expires at {expires_at}, before this workload needs it to at {must_outlive}"
+            );
+            return Ok(None);
+        }
+        Ok(Some(workload_token.token))
+    }
+
+    /// Returns a cached or freshly issued workload token that is still valid at `valid_until`,
+    /// asking the isolation platform for `requested_duration` when a new one is needed.
+    ///
+    /// The platform may issue a shorter-lived token than requested, so the result is not
+    /// guaranteed to reach `valid_until`.
+    async fn workload_token_valid_until(
+        &self,
+        valid_until: DateTime<Utc>,
+        requested_duration: Duration,
+    ) -> Result<Option<warp_isolation_platform::WorkloadToken>> {
         if cfg!(target_family = "wasm") {
             return Ok(None);
         }
         {
             let cached = self.ambient_workload_token.lock();
-            if let Some(token) = cached.as_ref() {
-                let is_valid = token.expires_at.is_none_or(|expires_at| {
-                    chrono::Utc::now() + chrono::Duration::minutes(5) < expires_at
-                });
-                if is_valid {
-                    return Ok(Some(token.token.clone()));
-                }
+            if let Some(token) = cached.as_ref()
+                && token
+                    .expires_at
+                    .is_none_or(|expires_at| valid_until < expires_at)
+            {
+                return Ok(Some(token.clone()));
             }
         }
-        let workload_token = match warp_isolation_platform::issue_workload_token(Some(
-            AMBIENT_WORKLOAD_TOKEN_DURATION,
-        ))
-        .await
-        {
-            Ok(token) => token,
-            Err(warp_isolation_platform::IsolationPlatformError::NoIsolationPlatformDetected) => {
-                return Ok(None);
-            }
-            Err(error) => return Err(error.into()),
-        };
-        let token = workload_token.token.clone();
-        *self.ambient_workload_token.lock() = Some(workload_token);
-        Ok(Some(token))
+        let workload_token =
+            match warp_isolation_platform::issue_workload_token(Some(requested_duration)).await {
+                Ok(token) => token,
+                Err(
+                    warp_isolation_platform::IsolationPlatformError::NoIsolationPlatformDetected,
+                ) => {
+                    return Ok(None);
+                }
+                Err(error) => return Err(error.into()),
+            };
+        *self.ambient_workload_token.lock() = Some(workload_token.clone());
+        Ok(Some(workload_token))
     }
 
     /// Resolves request-local ambient agent policy into wire headers.

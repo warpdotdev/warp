@@ -33,3 +33,27 @@ fn validate_os_config_accepts_matching_macos() {
     )
     .expect("macos-version with macos is valid");
 }
+
+#[test]
+fn validate_os_config_rejects_docker_image_with_windows() {
+    let err = validate_os_config(RunnerOsArg::Windows, Some("ubuntu:latest"), None)
+        .expect_err("docker-image with windows is rejected");
+    assert!(err.contains("--docker-image"), "got: {err}");
+}
+
+#[test]
+fn validate_os_config_rejects_macos_version_with_windows() {
+    let err = validate_os_config(
+        RunnerOsArg::Windows,
+        None,
+        Some(RunnerMacosVersionArg::Macos14),
+    )
+    .expect_err("macos-version with windows is rejected");
+    assert!(err.contains("--macos-version"), "got: {err}");
+}
+
+#[test]
+fn validate_os_config_accepts_windows_without_os_specific_config() {
+    validate_os_config(RunnerOsArg::Windows, None, None)
+        .expect("windows without OS-specific config is valid");
+}

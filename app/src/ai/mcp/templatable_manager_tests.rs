@@ -10,7 +10,7 @@ use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
 #[test]
 fn reconnectable_installation_falls_back_to_ephemeral_state() {
     let mut manager = TemplatableMCPServerManager::default();
-    let installation = builtin::factory_mcp_installation("ephemeral-token");
+    let installation = builtin::factory_mcp_installation("ephemeral-token", &[]);
     let installation_uuid = installation.uuid();
 
     manager
@@ -29,11 +29,11 @@ fn reconnectable_installation_prefers_persisted_state() {
     let installation_uuid = builtin::FACTORY_MCP_INSTALLATION_UUID;
     manager.reconnectable_ephemeral_installations.insert(
         installation_uuid,
-        builtin::factory_mcp_installation("ephemeral-token"),
+        builtin::factory_mcp_installation("ephemeral-token", &[]),
     );
     manager.locally_installed_servers.insert(
         installation_uuid,
-        builtin::factory_mcp_installation("persisted-token"),
+        builtin::factory_mcp_installation("persisted-token", &[]),
     );
     let resolved = manager
         .reconnectable_installation(installation_uuid)
@@ -103,7 +103,7 @@ fn shutdown_ends_ephemeral_reconnect_lifecycle() {
         let global_resources = GlobalResourceHandles::mock(&mut app);
         app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resources));
 
-        let installation = builtin::factory_mcp_installation("ephemeral-token");
+        let installation = builtin::factory_mcp_installation("ephemeral-token", &[]);
         let installation_uuid = installation.uuid();
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         let manager = app.add_model(|_| {

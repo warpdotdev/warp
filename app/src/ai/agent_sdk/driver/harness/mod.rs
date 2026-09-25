@@ -33,6 +33,7 @@ use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::mcp::JSONMCPServer;
 use crate::server::server_api::ServerApi;
 use crate::server::server_api::harness_support::{HarnessSupportClient, upload_to_target};
+use crate::server::telemetry::secret_redaction::redact_secrets_in_string;
 use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::{CLIAgentSessionStatus, CLIAgentSessionsModel};
 use crate::terminal::model::block::{BlockId, SerializedBlock};
@@ -44,16 +45,59 @@ mod codex;
 pub(crate) mod codex_transcript;
 pub(crate) mod exit_escalation;
 mod gemini;
+mod harness_persistence;
 mod json_utils;
 pub(crate) mod process_control;
+mod save_coordinator;
 mod skill_dirs_publish;
 mod telemetry;
+mod transcript_persistence;
+mod usage_reporting;
 pub(crate) use claude_code::ClaudeHarness;
 use claude_transcript::ClaudeResumeInfo;
 use codex::CodexHarness;
 use codex_transcript::CodexResumeInfo;
 use gemini::GeminiHarness;
+use harness_persistence::{HarnessPersistence, PersistenceOutcome};
 pub(crate) use telemetry::ThirdPartyHarnessTelemetryEvent;
+
+const HARNESS_FAILURE_OUTPUT_MAX_BYTES: usize = 4 * 1024;
+const HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER: &str = "\n… harness output truncated …\n";
+
+fn truncate_harness_failure_output(output: &str) -> String {
+    if output.len() <= HARNESS_FAILURE_OUTPUT_MAX_BYTES {
+        return output.to_owned();
+    }
+
+    let retained_bytes =
+        HARNESS_FAILURE_OUTPUT_MAX_BYTES - HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER.len();
+    let prefix_budget = retained_bytes / 2;
+    let suffix_budget = retained_bytes - prefix_budget;
+
+    let mut prefix_end = prefix_budget;
+    while !output.is_char_boundary(prefix_end) {
+        prefix_end -= 1;
+    }
+
+    let mut suffix_start = output.len() - suffix_budget;
+    while !output.is_char_boundary(suffix_start) {
+        suffix_start += 1;
+    }
+
+    format!(
+        "{}{}{}",
+        &output[..prefix_end],
+        HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER,
+        &output[suffix_start..]
+    )
+}
+
+pub(super) fn prepare_harness_failure_output(output: &str) -> String {
+    let mut output = output.trim().to_owned();
+    // Redact before truncation so splitting a credential cannot hide it from detection.
+    redact_secrets_in_string(&mut output);
+    truncate_harness_failure_output(&output)
+}
 
 /// Harness-agnostic payload describing how to resume an existing conversation.
 ///
@@ -484,12 +528,13 @@ pub(crate) fn harness_model_env_vars(
 /// Indicates when the harness conversation is being saved.
 /// Implementations may use this to customize the saved data, such as
 /// recording additional metadata on completion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SavePoint {
     /// A periodic auto-save to minimize data loss.
     Periodic,
-    /// The final save of conversation state, after the harness has completed.
+    /// The closing save after graceful or forced harness termination.
     Final,
-    /// A save after the harness reports it finished an agent turn.
+    /// A save after session activity such as prompt submission or completed tool use.
     PostTurn,
 }
 
@@ -508,14 +553,13 @@ pub(crate) enum HarnessCleanupDisposition {
 /// Stateful per-run representation of an external harness produced
 /// by [`ThirdPartyHarness::build_runner`].
 ///
-/// All `HarnessRunner` methods take `&self` as a parameter, but may mutate internal
-/// state. There are no `&mut self` methods, as this would require that the `AgentDriver`
-/// store the runner in a mutex and lock it across `await` points.
+/// Methods share runner ownership but may mutate internal state. There are no `&mut self` methods,
+/// as this would require that the `AgentDriver` store the runner in a mutex across `await` points.
 ///
 /// The driver uses this to manage the lifecycle of a particular third-party harness.
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
-pub(crate) trait HarnessRunner: Send + Sync {
+pub(crate) trait HarnessRunner: Send + Sync + 'static {
     fn harness_name(&self) -> &str;
 
     /// Create the external conversation on the server and start the harness
@@ -535,7 +579,32 @@ pub(crate) trait HarnessRunner: Send + Sync {
         &self,
         save_point: SavePoint,
         foreground: &ModelSpawner<AgentDriver>,
-    ) -> Result<()>;
+    ) -> PersistenceOutcome;
+    fn persistence(&self) -> &HarnessPersistence;
+
+    /// Queues a save without waiting for persistence; overlapping requests are coalesced.
+    async fn enqueue_save(
+        self: Arc<Self>,
+        save_point: SavePoint,
+        foreground: &ModelSpawner<AgentDriver>,
+    ) -> Result<()> {
+        let background = foreground.spawn(|_, ctx| ctx.background_executor()).await?;
+        self.persistence().enqueue(
+            Arc::downgrade(&self),
+            save_point,
+            foreground.clone(),
+            background,
+        );
+        Ok(())
+    }
+
+    /// Finalizes persistence within one deadline; staged usage does not determine its result.
+    async fn finalize_saves(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
+        let background = foreground.spawn(|_, ctx| ctx.background_executor()).await?;
+        self.persistence()
+            .finalize(self, foreground, &background)
+            .await
+    }
 
     /// Gracefully ask the harness to exit.
     async fn exit(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()>;

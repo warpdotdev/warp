@@ -95,4 +95,4 @@ The TUI has **no** GUI-style integration harness: the real-display, synthetic-ev
 - Whole crates: `cargo nextest run -p warp_tui` and `cargo nextest run -p warpui_core`.
 - The TUI element library is behind the `tui` feature; if a test needs it explicitly, add `--features tui`.
 - A single test by substring: `cargo nextest run -p warp_tui -E 'test(<substring>)'`.
-- Before opening a PR, run `./script/format` and `cargo clippy` per repo conventions.
+- Before opening a PR, run the relevant tests to green, then the applicable Clippy check, then `./script/format` once. Do not add a full presubmit or rerun earlier checks after formatting unless explicitly required; follow `AGENTS.md`.

@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use ai::agent::action_result::{RecordingStopped, StopRecordingResult};
@@ -97,6 +97,28 @@ async fn upload_recording_thumbnail(
     Ok(())
 }
 
+async fn validated_recording_for_upload(
+    raw_path: &Path,
+    processed_path: Option<PathBuf>,
+) -> Result<(PathBuf, Duration, Option<PathBuf>), computer_use::RecordingError> {
+    if let Some(processed_path) = processed_path {
+        match computer_use::finalized_video_duration(&processed_path).await {
+            Ok(duration) => {
+                return Ok((processed_path.clone(), duration, Some(processed_path)));
+            }
+            Err(error) => {
+                log::warn!(
+                    "Recording cut/overlay output validation failed; uploading original: {error}"
+                );
+                let _ = std::fs::remove_file(processed_path);
+            }
+        }
+    }
+
+    let duration = computer_use::finalized_video_duration(raw_path).await?;
+    Ok((raw_path.to_path_buf(), duration, None))
+}
+
 /// Stops capture, uploads the finalized file, and produces the result retained
 /// by the controller for all current and future callers.
 async fn finalize_recording(
@@ -145,9 +167,7 @@ async fn finalize_recording(
     // before upload. Best-effort: on any failure the original 1x capture is
     // uploaded unannotated (a no-cut video beats no video). The cut/overlay
     // file, when produced, is a sibling of the mp4.
-    let mut upload_path = local_path.clone();
-    let mut overlay_path: Option<std::path::PathBuf> = None;
-    match computer_use::post_process_recording(
+    let processed_path = match computer_use::post_process_recording(
         &local_path,
         &actions,
         (output.width, output.height),
@@ -156,24 +176,22 @@ async fn finalize_recording(
     )
     .await
     {
-        Ok(path) if path != local_path => {
-            overlay_path = Some(path.clone());
-            upload_path = path;
-        }
-        Ok(_) => {}
+        Ok(path) if path != local_path => Some(path),
+        Ok(_) => None,
         Err(error) => {
             log::warn!("Recording cut/overlay burn-in failed; uploading original: {error}");
-        }
-    }
-    let duration = match computer_use::finalized_video_duration(&upload_path).await {
-        Ok(duration) => duration,
-        Err(error) => {
-            log::warn!(
-                "Failed to inspect finalized recording duration; using capture duration: {error}"
-            );
-            output.duration
+            None
         }
     };
+    let (upload_path, duration, overlay_path) =
+        match validated_recording_for_upload(&local_path, processed_path).await {
+            Ok(validated) => validated,
+            Err(error) => {
+                let _ = std::fs::remove_file(&local_path);
+                let _ = std::fs::remove_file(local_path.with_extension("log"));
+                return StopRecordingResult::Error(error.to_string());
+            }
+        };
 
     // Keep a handle on the finalized video path for thumbnail extraction before
     // it is moved into the upload request; the thumbnail reads this file with

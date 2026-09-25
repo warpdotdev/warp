@@ -28,6 +28,7 @@ use warpui::{AppContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle, 
 use super::terminal_manager::{TerminalManager, TerminalSurfaceInit, TerminalSurfaceResult};
 use crate::NetworkStatus;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::agent::BaseUserQuery;
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
@@ -138,6 +139,9 @@ fn accept_agent_prompt(
         .session(terminal_view_id)
         .is_some();
     if has_active_cli_agent {
+        log::info!(
+            "event=prompt_routed terminal_id={terminal_view_id:?} participant_id={participant_id} destination=live_cli",
+        );
         // Reuse the rich input submit pipeline so agent-specific
         // strategies are applied. Bypasses the rich-input-UI side effects
         // (telemetry, draft clear, editor buffer clear, pending-image consumption).
@@ -154,6 +158,9 @@ fn accept_agent_prompt(
     if let Some(task_id) =
         LocalAgentTaskSyncModel::as_ref(ctx).cli_harness_task_id_for_terminal_view(terminal_view_id)
     {
+        log::info!(
+            "event=prompt_routed terminal_id={terminal_view_id:?} participant_id={participant_id} task_id={task_id} destination=pending_cli",
+        );
         if !request.attachments.is_empty() {
             log::warn!(
                 "accept_agent_prompt: dropping {} file attachment(s) from a shared-session \
@@ -174,6 +181,24 @@ fn accept_agent_prompt(
         return;
     }
 
+    // warp-server-injected follow-ups carry the query itself. Viewer-typed prompts and older
+    // relays leave it unset; those are attributed to the viewer from presence so the server
+    // never records them as the sharer's own input. A payload that does not decode is sent
+    // with an explicit unavailable origin and falls back to `prompt` + `attachments`.
+    let base = match request.user_query_b64.as_deref() {
+        Some(encoded) => BaseUserQuery::decode_b64(encoded)
+            .unwrap_or_else(|| BaseUserQuery::unattributed("user_query_unavailable")),
+        None => {
+            let presence = terminal_view
+                .as_ref(ctx)
+                .shared_session_presence_manager()
+                .map(|manager| manager.as_ref(ctx));
+            let profile =
+                presence.and_then(|presence| presence.participant_profile(&participant_id));
+            BaseUserQuery::for_viewer(profile)
+        }
+    };
+
     // Execute the agent prompt in the Oz-harness case.
     terminal_view.update(ctx, |view, ctx| {
         // Restore the sharer's frozen visual state. The buffer is cleared by
@@ -184,11 +209,16 @@ fn accept_agent_prompt(
         });
 
         view.ai_controller().update(ctx, |ai_controller, ctx| {
+            log::info!(
+                "event=prompt_routed terminal_id={terminal_view_id:?} participant_id={participant_id} destination=native bound_conversation_id={:?}",
+                ai_controller.native_prompt_conversation_id(),
+            );
             ai_controller.execute_warp_agent_prompt_from_shared_session_injection(
                 request.prompt.clone(),
                 request.server_conversation_token,
                 request.attachments.clone(),
                 participant_id.clone(),
+                Some(base),
                 ctx,
             );
         });
@@ -1449,11 +1479,15 @@ impl TerminalManager<TerminalView> {
                 // shared-session prompt is observable for diagnosing lost or misrouted prompts.
                 log::info!(
                     "Received shared-session agent prompt request id={id:?} \
-                     participant_id={participant_id} has_server_conversation_token={}",
+                     participant_id={participant_id} terminal_id={:?} has_server_conversation_token={}",
+                    terminal_view.id(),
                     request.server_conversation_token.is_some()
                 );
 
                 if !FeatureFlag::AgentSharedSessions.is_enabled() {
+                    log::info!(
+                        "event=prompt_rejected request_id={id:?} reason=agent_shared_sessions_disabled",
+                    );
                     return;
                 }
 

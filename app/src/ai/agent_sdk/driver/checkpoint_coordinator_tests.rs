@@ -128,6 +128,7 @@ impl HarnessSupportClient for FailingUploadTargetsClient {
         &self,
         _error_category: String,
         _error_message: String,
+        _exit_code: Option<u8>,
     ) -> Result<()> {
         unimplemented!("not used by the coordinator")
     }
@@ -228,6 +229,7 @@ impl HarnessSupportClient for RecordingClient {
         &self,
         _error_category: String,
         _error_message: String,
+        _exit_code: Option<u8>,
     ) -> Result<()> {
         unimplemented!("not used by the coordinator")
     }

@@ -7,10 +7,12 @@
 )]
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context as _;
 use async_channel::Receiver;
 use byte_unit::{Byte, UnitType};
 use futures_util::stream::AbortHandle;
@@ -41,8 +43,8 @@ use session_sharing_protocol::sharer::{
 use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 use warp_server_client::iap::IapManager;
-use warpui::r#async::Timer;
-use warpui::{Entity, ModelContext, RequestState, RetryOption, SingletonEntity};
+use warpui::r#async::{FutureExt as _, Spawnable, SpawnableOutput, Timer};
+use warpui::{Entity, ModelContext, RetryOption, SingletonEntity};
 use websocket::{Message, Sink, Stream, WebSocket, WebsocketMessage as _};
 
 use crate::auth::{AuthStateProvider, UserUid};
@@ -72,8 +74,11 @@ const PTY_READS_BATCH_THRESHOLD: Duration = Duration::from_millis(250);
 const CREATE_SESSION_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
 const AMBIENT_CREATE_SESSION_MAX_ATTEMPTS: usize = 3;
-/// Exponential backoff when retrying reconnection. This configuration has us retry for ~128 seconds before giving up,
-/// where the last interval between retries is 26s.
+const RECONNECT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
+const RECONNECT_CYCLE_TIMEOUT: Duration = Duration::from_secs(128);
+const MAX_PRE_RECONNECT_MESSAGES: usize = 256;
+const MAX_PRE_RECONNECT_BYTES: usize = 1024 * 1024;
+/// Exponential backoff, bounded by the reconnect cycle timeout including connection and handshake time.
 /// We should be somewhat generous with the amount of retries allowed when a sharer wants to recover their session,
 /// since they have the choice of giving up early by closing the window/stopping sharing.
 const RECONNECT_RETRY_STRATEGY: RetryOption = RetryOption::exponential(
@@ -82,6 +87,85 @@ const RECONNECT_RETRY_STRATEGY: RetryOption = RetryOption::exponential(
     18,                          /* max retry count */
 )
 .with_jitter(0.2);
+struct ConfirmedReconnection<S, T> {
+    sink: S,
+    stream: T,
+    confirmation: Message,
+    buffered_messages: Vec<Message>,
+}
+
+async fn confirm_reconnection<S: Sink, T: Stream>(
+    mut sink: S,
+    mut stream: T,
+    payload: ReconnectPayload,
+) -> anyhow::Result<ConfirmedReconnection<S, T>> {
+    sink.send(Message::new(UpstreamMessage::Reconnect(payload).to_json()?))
+        .await?;
+    let mut buffered_messages = Vec::new();
+    let mut buffered_bytes = 0;
+    while let Some(message) = stream.next().await {
+        let message = message?;
+        let Some(text) = message.text() else {
+            continue;
+        };
+        if matches!(
+            DownstreamMessage::from_json(text),
+            Ok(DownstreamMessage::SessionReconnected { .. }
+                | DownstreamMessage::FailedToReconnect { .. }
+                | DownstreamMessage::SessionTerminated { .. })
+        ) {
+            return Ok(ConfirmedReconnection {
+                sink,
+                stream,
+                confirmation: message,
+                buffered_messages,
+            });
+        }
+        // The server can send session updates before its reconnect acknowledgement.
+        if buffered_messages.len() >= MAX_PRE_RECONNECT_MESSAGES
+            || text.len() > MAX_PRE_RECONNECT_BYTES - buffered_bytes
+        {
+            anyhow::bail!("Too many messages before shared session reconnect confirmation");
+        }
+        buffered_bytes += text.len();
+        buffered_messages.push(message);
+    }
+    anyhow::bail!("Websocket closed before shared session reconnect confirmation")
+}
+
+async fn retry_reconnection<F, Fut, T>(
+    mut attempt: F,
+    mut retry_strategy: RetryOption,
+    attempt_timeout: Duration,
+    cycle_timeout: Duration,
+) -> anyhow::Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = anyhow::Result<T>>,
+{
+    // Keep attempts and backoff in one future so cancellation also stops subsequent retries.
+    async move {
+        loop {
+            let result = attempt()
+                .with_timeout(attempt_timeout)
+                .await
+                .context("Timed out waiting for shared session reconnect confirmation")
+                .and_then(|result| result);
+            match result {
+                Ok(connection) => return Ok(connection),
+                Err(error) if retry_strategy.remaining_retries() == 0 => return Err(error),
+                Err(error) => {
+                    log::warn!("Failed to reconnect shared session, will retry: {error:#}");
+                    Timer::after(retry_strategy.duration()).await;
+                    retry_strategy.advance();
+                }
+            }
+        }
+    }
+    .with_timeout(cycle_timeout)
+    .await
+    .context("Shared session reconnect deadline exceeded")?
+}
 
 macro_rules! sharer_info {
     ($network:expr_2021, $($arg:tt)+) => {{
@@ -277,6 +361,7 @@ fn startup_max_attempts(source: &SharedSessionSource) -> usize {
 pub struct Network {
     model: Arc<FairMutex<TerminalModel>>,
     stage: Stage,
+    connection_generation: usize,
 
     /// The next event number to use when sending an event to the server.
     event_no: EventNumber,
@@ -354,6 +439,7 @@ impl Network {
             stage: Stage::BeforeStarted {
                 startup_retry: StartupRetryState::new(1),
             },
+            connection_generation: 0,
             session_id: None,
             reconnect_token: None,
             sharer_id: None,
@@ -451,6 +537,7 @@ impl Network {
                 universal_developer_input_context: Some(universal_developer_input_context.clone()),
             },
             stage: Stage::BeforeStarted { startup_retry },
+            connection_generation: 0,
             session_id: None,
             reconnect_token: None,
             sharer_id: None,
@@ -491,6 +578,7 @@ impl Network {
 
     /// Close the websocket to the session-sharing-server.
     fn close(&mut self) {
+        self.connection_generation += 1;
         if let Stage::Reconnecting { abort_handle, .. } = &self.stage {
             abort_handle.abort();
         }
@@ -947,16 +1035,23 @@ impl Network {
     /// Do not use this for one-shot startup callbacks that should only run before the
     /// session starts; use `is_active_startup_attempt_callback` for those.
     fn should_ignore_startup_attempt_websocket_callback(&self, attempt: usize) -> bool {
-        matches!(
-            &self.stage,
-            Stage::BeforeStarted { startup_retry }
-                if startup_retry.current_attempt != attempt
-        ) || matches!(
-            &self.stage,
-            Stage::StartedSuccessfully {
-                startup_attempt: Some(startup_attempt),
-            } if *startup_attempt != attempt
-        )
+        match &self.stage {
+            Stage::BeforeStarted { startup_retry } => startup_retry.current_attempt != attempt,
+            Stage::StartedSuccessfully { startup_attempt } => *startup_attempt != Some(attempt),
+            Stage::Reconnecting { .. } | Stage::Finished => true,
+        }
+    }
+
+    fn should_ignore_websocket_callback(
+        &self,
+        generation: usize,
+        startup_attempt: Option<usize>,
+    ) -> bool {
+        self.connection_generation != generation
+            || matches!(self.stage, Stage::Finished)
+            || startup_attempt.is_some_and(|attempt| {
+                self.should_ignore_startup_attempt_websocket_callback(attempt)
+            })
     }
 
     fn should_retry_startup_failure(&self, failure: &StartupFailure) -> bool {
@@ -990,6 +1085,7 @@ impl Network {
     }
 
     fn close_startup_transport(&mut self) {
+        self.connection_generation += 1;
         self.ws_proxy_tx.close();
     }
 
@@ -1084,92 +1180,134 @@ impl Network {
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
         let iap_state = IapManager::as_ref(ctx).iap_state();
-
-        let abort_handle = ctx
-            .spawn_with_retry_on_error(
-                move || {
-                    log::info!(
-                        "Attempting to reconnect shared session as sharer; session_id={session_id:?}"
-                    );
-                    let reconnect_endpoint = reconnect_endpoint.clone();
-                    let auth_state = auth_state.clone();
-                    let auth_client = auth_client.clone();
-                    let iap_state = iap_state.clone();
-                    async move {
-                        // Re-read the IAP header each attempt so a refresh that
-                        // landed since the last try is picked up (staging only).
-                        let iap_headers: Vec<(&str, String)> = iap_state
-                            .as_ref()
-                            .and_then(|state| state.proxy_auth_header())
-                            .into_iter()
-                            .collect();
-                        let socket = WebSocket::connect_with_headers(
-                            &reconnect_endpoint,
-                            None::<&str>,
-                            iap_headers,
-                        )
-                        .await?;
-                        let user_id = UserID {
-                            anonymous_id: auth_state.anonymous_id(),
-                            access_token: auth_client
-                                .get_or_refresh_access_token()
-                                .await
-                                .ok()
-                                .and_then(|token| token.bearer_token()),
-                        };
-                        anyhow::Ok((socket.split().await, user_id))
-                    }
-                },
-                RECONNECT_RETRY_STRATEGY,
-                move |network, res, ctx| match res {
-                    RequestState::RequestSucceeded(((sink, stream), user_id)) => {
-                        sharer_info!(
-                            network,
-                            "Connected to session sharing server for reconnect; waiting for server confirmation"
-                        );
-                        let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
-                        let latest_block_id =
-                            network.model.lock().block_list().active_block_id().clone();
-
-                        // Because we're going to start listening on a new receiver, we need to update the sender.
-                        network.ws_proxy_tx = ws_proxy_tx;
-                        // We don't use the `send_message_to_server` API here
-                        // because we don't want to buffer this message.
-                        let message = UpstreamMessage::Reconnect(ReconnectPayload {
-                            session_secret: Default::default(),
-                            reconnect_token: reconnect_token.clone(),
-                            user_id,
-                            latest_block_id: latest_block_id.into(),
-                            selection: network.cached_latest_state.selection.clone(),
-                            feature_support: FeatureSupport {
-                                supports_agent_view: FeatureFlag::AgentView.is_enabled(),
-                                supports_full_role: true,
-                                supports_full_role_for_real: true,
-                            },
-                        });
-                        if let Err(e) = network.ws_proxy_tx.try_send(message) {
-                            sharer_error!(network, "Sharer failed to send reconnect message: {e}");
-                            return;
+        let spawner = ctx.spawner();
+        self.start_reconnect_task(
+            move || {
+                log::info!(
+                    "Attempting to reconnect shared session as sharer; session_id={session_id:?}"
+                );
+                let reconnect_endpoint = reconnect_endpoint.clone();
+                let auth_state = auth_state.clone();
+                let auth_client = auth_client.clone();
+                let iap_state = iap_state.clone();
+                let reconnect_token = reconnect_token.clone();
+                let spawner = spawner.clone();
+                async move {
+                    // Re-read the IAP header each attempt so a refresh that
+                    // landed since the last try is picked up (staging only).
+                    let iap_headers: Vec<(&str, String)> = iap_state
+                        .as_ref()
+                        .and_then(|state| state.proxy_auth_header())
+                        .into_iter()
+                        .collect();
+                    let socket = match WebSocket::connect_with_headers(
+                        &reconnect_endpoint,
+                        None::<&str>,
+                        iap_headers,
+                    )
+                    .await
+                    {
+                        Ok(socket) => socket,
+                        Err(error) => {
+                            return Err(spawner
+                                .spawn(move |_, ctx| {
+                                    IapManager::handle(ctx).update(ctx, |manager, ctx| {
+                                        manager.check_ws_connect_error(&error, ctx);
+                                    });
+                                    error
+                                })
+                                .await?);
                         }
+                    };
+                    let user_id = UserID {
+                        anonymous_id: auth_state.anonymous_id(),
+                        access_token: auth_client
+                            .get_or_refresh_access_token()
+                            .await
+                            .ok()
+                            .and_then(|token| token.bearer_token()),
+                    };
+                    let payload = spawner
+                        .spawn(move |network, _| {
+                            let latest_block_id =
+                                network.model.lock().block_list().active_block_id().clone();
+                            ReconnectPayload {
+                                session_secret: Default::default(),
+                                reconnect_token,
+                                user_id,
+                                latest_block_id: latest_block_id.into(),
+                                selection: network.cached_latest_state.selection.clone(),
+                                feature_support: FeatureSupport {
+                                    supports_agent_view: FeatureFlag::AgentView.is_enabled(),
+                                    supports_full_role: true,
+                                    supports_full_role_for_real: true,
+                                },
+                            }
+                        })
+                        .await?;
+                    let (sink, stream) = socket.split().await;
+                    confirm_reconnection(sink, stream, payload).await
+                }
+            },
+            RECONNECT_RETRY_STRATEGY,
+            RECONNECT_ATTEMPT_TIMEOUT,
+            RECONNECT_CYCLE_TIMEOUT,
+            ctx,
+        );
+    }
 
-                        network.on_websocket_connected(None, ws_proxy_rx, sink, stream, ctx);
+    fn start_reconnect_task<F, Fut, S, T>(
+        &mut self,
+        attempt: F,
+        retry_strategy: RetryOption,
+        attempt_timeout: Duration,
+        cycle_timeout: Duration,
+        ctx: &mut ModelContext<Self>,
+    ) where
+        F: FnMut() -> Fut + SpawnableOutput + 'static,
+        Fut: Future<Output = anyhow::Result<ConfirmedReconnection<S, T>>> + Spawnable,
+        S: Sink,
+        T: Stream,
+    {
+        self.close();
+        let generation = self.connection_generation;
+        let abort_handle = ctx
+            .spawn(
+                retry_reconnection(attempt, retry_strategy, attempt_timeout, cycle_timeout),
+                move |network, result, ctx| {
+                    if network.connection_generation != generation
+                        || !matches!(network.stage, Stage::Reconnecting { .. })
+                    {
+                        return;
                     }
-                    RequestState::RequestFailedRetryPending(e) => {
-                        IapManager::handle(ctx).update(ctx, |manager, ctx| {
-                            manager.check_ws_connect_error(&e, ctx);
-                        });
-                        sharer_warn!(
-                            network,
-                            "Failed to reconnect to shared session, will retry: {e}"
-                        );
-                    }
-                    RequestState::RequestFailed(e) => {
-                        sharer_warn!(
-                            network,
-                            "Failed to reconnect to shared session, and retries exhausted: {e}"
-                        );
-                        network.close_without_reconnection();
-                        ctx.emit(NetworkEvent::FailedToReconnect);
+                    match result {
+                        Ok(connection) => {
+                            let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
+                            network.ws_proxy_tx = ws_proxy_tx;
+                            network.ws_proxy_rx = ws_proxy_rx.clone();
+                            network.process_websocket_message(connection.confirmation, ctx);
+                            if !matches!(network.stage, Stage::StartedSuccessfully { .. }) {
+                                return;
+                            }
+                            for message in connection.buffered_messages {
+                                network.process_websocket_message(message, ctx);
+                            }
+                            network.on_websocket_connected(
+                                None,
+                                ws_proxy_rx,
+                                connection.sink,
+                                connection.stream,
+                                ctx,
+                            );
+                        }
+                        Err(e) => {
+                            sharer_warn!(
+                                network,
+                                "Failed to reconnect to shared session, and retries exhausted: {e}"
+                            );
+                            network.close_without_reconnection();
+                            ctx.emit(NetworkEvent::FailedToReconnect);
+                        }
                     }
                 },
             )
@@ -1189,22 +1327,20 @@ impl Network {
         stream: impl Stream,
         ctx: &mut ModelContext<Self>,
     ) {
+        self.connection_generation += 1;
+        let generation = self.connection_generation;
         // Handle any messages we receive over the websocket.
         ctx.spawn_stream_local(
             stream,
             move |network, message, ctx| match message {
                 Ok(message) => {
-                    if startup_attempt.is_some_and(|attempt| {
-                        network.should_ignore_startup_attempt_websocket_callback(attempt)
-                    }) {
+                    if network.should_ignore_websocket_callback(generation, startup_attempt) {
                         return;
                     }
                     network.process_websocket_message(message, ctx);
                 }
                 Err(e) => {
-                    if startup_attempt.is_some_and(|attempt| {
-                        network.should_ignore_startup_attempt_websocket_callback(attempt)
-                    }) {
+                    if network.should_ignore_websocket_callback(generation, startup_attempt) {
                         return;
                     }
                     sharer_error!(
@@ -1215,13 +1351,13 @@ impl Network {
                         && matches!(network.stage, Stage::BeforeStarted { .. })
                     {
                         network.handle_startup_failure(StartupFailure::WebsocketError, ctx);
+                    } else if matches!(network.stage, Stage::StartedSuccessfully { .. }) {
+                        network.reconnect_websocket(ctx);
                     }
                 }
             },
             move |network, ctx| {
-                if startup_attempt.is_some_and(|attempt| {
-                    network.should_ignore_startup_attempt_websocket_callback(attempt)
-                }) {
+                if network.should_ignore_websocket_callback(generation, startup_attempt) {
                     return;
                 }
                 let stage = network.stage_label();
@@ -1286,9 +1422,7 @@ impl Network {
                 if !startup_send_failed {
                     return;
                 }
-                if startup_attempt.is_some_and(|attempt| {
-                    network.should_ignore_startup_attempt_websocket_callback(attempt)
-                }) {
+                if network.should_ignore_websocket_callback(generation, startup_attempt) {
                     return;
                 }
                 if startup_attempt.is_some() && matches!(network.stage, Stage::BeforeStarted { .. })
@@ -1372,6 +1506,9 @@ impl Network {
                     self,
                     "Successfully reconnected to shared session server as sharer."
                 );
+                if let Stage::Reconnecting { abort_handle } = &self.stage {
+                    abort_handle.abort();
+                }
                 self.stage = Stage::StartedSuccessfully {
                     startup_attempt: None,
                 };

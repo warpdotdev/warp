@@ -51,6 +51,12 @@ pub enum ManagedSecretValue {
         username: String,
         password: String,
     },
+    /// An AWS ECR credential backed by an IAM role. Unlike `DockerRegistry`, no password is
+    /// ever stored: the server assumes the role and mints a fresh one at dispatch time.
+    AwsEcrCredential {
+        registry_host: String,
+        role_arn: String,
+    },
 }
 
 impl ManagedSecretValue {
@@ -96,7 +102,7 @@ impl ManagedSecretValue {
         }
     }
 
-    /// Construct a container registry credential secret value.
+    /// Construct a private image credential secret value.
     pub fn docker_registry(
         registry_host: impl Into<String>,
         username: impl Into<String>,
@@ -106,6 +112,17 @@ impl ManagedSecretValue {
             registry_host: registry_host.into(),
             username: username.into(),
             password: password.into(),
+        }
+    }
+
+    /// Construct an AWS ECR credential secret value from a registry host and IAM role ARN.
+    pub fn aws_ecr_credential(
+        registry_host: impl Into<String>,
+        role_arn: impl Into<String>,
+    ) -> Self {
+        Self::AwsEcrCredential {
+            registry_host: registry_host.into(),
+            role_arn: role_arn.into(),
         }
     }
 
@@ -167,6 +184,11 @@ impl ManagedSecretValue {
                 // function exists for does not apply.
                 Ok(())
             }
+            ManagedSecretValue::AwsEcrCredential { .. } => {
+                // Same reasoning as DockerRegistry: never injected, and neither field would
+                // need size validation even if it were, since neither is a password.
+                Ok(())
+            }
         }
     }
 
@@ -182,6 +204,7 @@ impl ManagedSecretValue {
             }
             ManagedSecretValue::OpenaiApiKey { .. } => ManagedSecretType::OpenaiApiKey,
             ManagedSecretValue::DockerRegistry { .. } => ManagedSecretType::DockerRegistry,
+            ManagedSecretValue::AwsEcrCredential { .. } => ManagedSecretType::AwsEcrCredential,
         }
     }
 }
@@ -206,6 +229,9 @@ impl fmt::Debug for ManagedSecretValue {
                 .finish_non_exhaustive(),
             ManagedSecretValue::DockerRegistry { .. } => f
                 .debug_struct("ManagedSecret::DockerRegistry")
+                .finish_non_exhaustive(),
+            ManagedSecretValue::AwsEcrCredential { .. } => f
+                .debug_struct("ManagedSecret::AwsEcrCredential")
                 .finish_non_exhaustive(),
         }
     }

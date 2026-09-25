@@ -148,6 +148,8 @@ pub struct CommandCallInfo {
     pub command_name: Spanned<ParsedExpression>,
     pub positionals: Option<Vec<Spanned<ParsedExpression>>>,
     pub flags: Option<Flags>,
+    /// Whether a completed standalone `--` ended option parsing.
+    pub options_terminated: bool,
     /// Any additional whitespace at the end of the command.
     pub ending_whitespace: Option<Span>,
     pub span: Span,
@@ -159,6 +161,7 @@ impl CommandCallInfo {
             command_name: head,
             positionals: None,
             flags: None,
+            options_terminated: false,
             ending_whitespace: None,
             span,
         }

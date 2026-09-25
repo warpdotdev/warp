@@ -167,6 +167,7 @@ impl HarnessSupportClient for TestClient {
         &self,
         _error_category: String,
         _error_message: String,
+        _exit_code: Option<u8>,
     ) -> Result<()> {
         unimplemented!("not used by upload_snapshot_from_declarations_file")
     }

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use ai::project_context::model::ProjectContextModel;
@@ -59,6 +60,8 @@ use crate::server::cloud_objects::listener::Listener;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::experiments::ServerExperiments;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::team::{MockTeamClient, TeamClient};
+use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings::PrivacySettings;
@@ -91,6 +94,10 @@ use crate::{
     AgentNotificationsModel, GlobalResourceHandlesProvider, ObjectActions, experiments, workspace,
 };
 pub(crate) fn initialize_app(app: &mut App) {
+    initialize_app_with_team_client(app, Arc::new(MockTeamClient::new()));
+}
+
+pub(crate) fn initialize_app_with_team_client(app: &mut App, team_client: Arc<dyn TeamClient>) {
     initialize_settings_for_tests(app);
 
     // Add the necessary singleton models to the App
@@ -107,7 +114,14 @@ pub(crate) fn initialize_app(app: &mut App) {
     app.add_singleton_model(SyncQueue::mock);
     app.add_singleton_model(CloudModel::mock);
     app.add_singleton_model(CloudEnvironmentCatalog::new);
-    app.add_singleton_model(UserWorkspaces::default_mock);
+    app.add_singleton_model(|ctx| {
+        UserWorkspaces::mock(
+            team_client,
+            Arc::new(MockWorkspaceClient::new()),
+            vec![],
+            ctx,
+        )
+    });
     app.add_singleton_model(|_ctx| UserProfiles::new(Vec::new()));
     app.add_singleton_model(TeamTesterStatus::mock);
     app.add_singleton_model(TeamUpdateManager::mock);
@@ -2430,6 +2444,59 @@ fn test_close_other_tabs_confirmation_dialog() {
     });
 }
 
+#[test]
+fn test_save_current_tab_as_new_config_ignores_stale_tab_index() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            for _ in 1..6 {
+                workspace.add_terminal_tab(false, ctx);
+            }
+
+            workspace.close_other_tabs(5, true, ctx);
+            workspace.handle_action(&WorkspaceAction::SaveCurrentTabAsNewConfig(5), ctx);
+
+            assert_eq!(workspace.tab_count(), 1);
+        });
+    });
+}
+
+#[test]
+fn test_closing_tab_context_menu_restores_active_tab_focus() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let (window_id, menu_id) = workspace.update(&mut app, |workspace, ctx| {
+            workspace.show_tab_right_click_menu =
+                Some((0, TabContextMenuAnchor::Pointer(Vector2F::zero())));
+            ctx.focus(&workspace.tab_right_click_menu);
+            (ctx.window_id(), workspace.tab_right_click_menu.id())
+        });
+        assert_eq!(app.focused_view_id(window_id), Some(menu_id));
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_tab_right_click_menu_event(
+                &MenuEvent::Close {
+                    via_select_item: true,
+                },
+                ctx,
+            );
+        });
+
+        assert_ne!(app.focused_view_id(window_id), Some(menu_id));
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(
+                workspace
+                    .active_tab_pane_group()
+                    .is_self_or_child_focused(ctx)
+            );
+        });
+    });
+}
 #[test]
 fn test_close_tabs_right_confirmation_dialog() {
     let _guard = FeatureFlag::CreatingSharedSessions.override_enabled(true);

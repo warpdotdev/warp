@@ -15,3 +15,11 @@ pub struct DiscoverableTeamData {
     pub name: String,
     pub team_accepting_invites: bool,
 }
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct DiscoverableWorkspaceData {
+    pub workspace_uid: cynic::Id,
+    pub name: String,
+    pub open_teams: Vec<DiscoverableTeamData>,
+    pub member_count: i32,
+}

@@ -594,6 +594,11 @@ pub enum FeatureFlag {
     /// Enables video recording of computer-use sessions for cloud agents.
     VideoRecording,
 
+    /// Gates the Windows `gdigrab` recorder behind its own switch, on top of
+    /// [`FeatureFlag::VideoRecording`]. Windows capture is newer and less proven than the
+    /// macOS/Linux ffmpeg paths, so it rolls out and can be killed independently of them.
+    WindowsVideoRecording,
+
     /// Enables team API key creation in the API key management UI.
     TeamApiKeys,
 
@@ -711,23 +716,12 @@ pub enum FeatureFlag {
     /// flows while the default behavior temporarily keeps them disabled.
     LocalClaudeCodexChildHarnesses,
 
-    /// On `wait_for_events`, confirms parent status against the server and
-    /// registers an orchestrator for the owner-side ancestor stream so it
-    /// receives events for children created out-of-band (Oz CLI / web API).
-    WaitForEventsParentRegistration,
-
     /// Gates the client-side multi-level orchestration surfaces: child
     /// conversations auto-executing their own `run_agents` calls and the
     /// confirmation-card disclosure that launched agents may start
     /// children of their own. When disabled, a child's `run_agents` call
     /// fails gracefully instead of presenting a card in a hidden pane.
     MultiLevelOrchestration,
-
-    /// Gates the unified orchestration child-tracking stack: a single
-    /// `OrchestrationChildTracker` as the sole entry point for child state,
-    /// one `include_self` ancestor SSE per parent family, and a single
-    /// `is_remote_child` placeholder flavor for both owner and viewer.
-    OrchestrationUnifiedStack,
 
     /// Shows a pending user query indicator during summarization when a follow-up
     /// prompt is queued via `/fork-and-compact` or `/compact-and`.
@@ -1043,6 +1037,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::SummarizationViaMessageReplacement,
     FeatureFlag::LocalComputerUse,
     FeatureFlag::VideoRecording,
+    FeatureFlag::WindowsVideoRecording,
     FeatureFlag::OzLaunchModal,
     // These are enabled via 100% experiment on prod warp-server,
     // but we need to enable here for dogfood builds.

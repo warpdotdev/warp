@@ -13,7 +13,6 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use session_sharing_protocol::common::SessionId;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{Entity, EntityId, ModelContext, SingletonEntity, WeakViewHandle};
 
@@ -25,9 +24,7 @@ use crate::ai::blocklist::history_model::BlocklistAIHistoryEvent;
 use crate::ai::blocklist::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
 };
-use crate::features::FeatureFlag;
 use crate::pane_group::{ChildPaneMaterialization, decide_child_pane_materialization};
-use crate::server::server_api::ServerApiProvider;
 use crate::terminal::{Event as TerminalViewEvent, TerminalView};
 
 /// Refetch cadence for children whose claim-time `session_id` is not yet known.
@@ -36,12 +33,10 @@ const PENDING_SESSION_ID_POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// Per-child orchestration metadata, keyed by `AmbientAgentTaskId`.
 struct ChildAgentEntry {
     conversation_id: AIConversationId,
-    /// `None` until execution has been claimed.
-    session_id: Option<SessionId>,
     /// Cached to deduplicate status writes: we only push an update when the
     /// state actually changes.
     last_state: AmbientAgentTaskState,
-    /// True once `EnsureSharedSessionViewerChildPane` has been emitted.
+    /// True once child-pane materialization has been requested.
     pane_materialization_requested: bool,
 }
 
@@ -56,13 +51,8 @@ pub struct OrchestrationViewerModel {
     /// Secondary index keyed by stringified `run_id`, used by the streamer
     /// broadcast event handler. Kept in sync with `children`.
     children_by_run_id: HashMap<String, AmbientAgentTaskId>,
-    /// Task metadata requests in flight, tracked only while
-    /// `OrchestrationUnifiedStack` is disabled. Discovery and lifecycle can
-    /// race; only one request may create/adopt the durable run-id mapping.
-    metadata_fetches: HashSet<AmbientAgentTaskId>,
     /// Children discovered from the streamer whose task data is not cached
-    /// yet. Drained on `TasksUpdated`. Only populated while
-    /// `OrchestrationUnifiedStack` is enabled.
+    /// yet. Drained on `TasksUpdated`.
     pending_task_ids_for_discovery: HashSet<AmbientAgentTaskId>,
     /// Periodic timer fetching the claim-time `session_id` for
     /// not-yet-claimed children.
@@ -108,9 +98,7 @@ impl OrchestrationViewerModel {
                 | AgentConversationsModelEvent::NewTasksReceived
                 | AgentConversationsModelEvent::TasksUpdated => {
                     me.register_viewer_mode_consumer_if_possible(ctx);
-                    if FeatureFlag::OrchestrationUnifiedStack.is_enabled() {
-                        me.drain_pending_task_discoveries(ctx);
-                    }
+                    me.drain_pending_task_discoveries(ctx);
                 }
                 AgentConversationsModelEvent::ConversationUpdated { .. }
                 | AgentConversationsModelEvent::ConversationArtifactsUpdated { .. } => {}
@@ -123,7 +111,6 @@ impl OrchestrationViewerModel {
             terminal_view,
             children: HashMap::new(),
             children_by_run_id: HashMap::new(),
-            metadata_fetches: HashSet::new(),
             pending_task_ids_for_discovery: HashSet::new(),
             pending_session_id_poll_handle: None,
             #[cfg(test)]
@@ -247,12 +234,12 @@ impl OrchestrationViewerModel {
             // Already materialized (e.g. re-registered after reconnect).
             return;
         }
-        self.spawn_task_metadata_fetch(task_id, "ChildSpawned", ctx);
+        self.spawn_task_metadata_fetch(task_id, ctx);
     }
 
     /// Writes the new status through `BlocklistAIHistoryModel`. If the entry
-    /// has not reached a live, transcript, or legacy-session materialization
-    /// yet, also refreshes its task metadata.
+    /// has not reached a live or transcript materialization yet, also refreshes
+    /// its task metadata.
     fn handle_child_status_changed(
         &mut self,
         run_id: &str,
@@ -261,9 +248,7 @@ impl OrchestrationViewerModel {
     ) {
         let Some(task_id) = self.children_by_run_id.get(run_id).copied() else {
             // Lifecycle may arrive before (or instead of) ChildStarted.
-            if FeatureFlag::OrchestrationUnifiedStack.is_enabled() {
-                self.handle_child_spawned(run_id.to_string(), ctx);
-            }
+            self.handle_child_spawned(run_id.to_string(), ctx);
             return;
         };
         let Some(entry) = self.children.get(&task_id) else {
@@ -277,64 +262,29 @@ impl OrchestrationViewerModel {
         });
 
         if needs_metadata_refetch {
-            self.spawn_task_metadata_fetch(task_id, "ChildStatusChanged", ctx);
+            self.spawn_task_metadata_fetch(task_id, ctx);
         }
     }
 
     /// Fetches a single task's metadata and routes the response through
-    /// `register_child`. The `trigger` label is logged on failure to
-    /// distinguish the caller.
+    /// `register_child`.
     fn spawn_task_metadata_fetch(
         &mut self,
         task_id: AmbientAgentTaskId,
-        trigger: &'static str,
         ctx: &mut ModelContext<Self>,
     ) {
-        if FeatureFlag::OrchestrationUnifiedStack.is_enabled() {
-            // Route through the shared task cache so discovery reuses whatever
-            // fetch is already in flight. A hit registers the child now; a miss
-            // parks it until the cache reports fresh data.
-            let cached = AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
-                model.get_or_async_fetch_task_data(&task_id, ctx)
-            });
-            if let Some(task) = cached {
-                self.register_child(task, ctx);
-            } else {
-                self.pending_task_ids_for_discovery.insert(task_id);
-            }
-            #[cfg(test)]
-            {
-                self.metadata_fetch_dispatch_count += 1;
-            }
-            return;
-        }
-        if !self.metadata_fetches.insert(task_id) {
-            return;
+        let cached = AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
+            model.get_or_async_fetch_task_data(&task_id, ctx)
+        });
+        if let Some(task) = cached {
+            self.register_child(task, ctx);
+        } else {
+            self.pending_task_ids_for_discovery.insert(task_id);
         }
         #[cfg(test)]
         {
             self.metadata_fetch_dispatch_count += 1;
         }
-        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-        let parent_task_id = self.parent_task_id;
-        ctx.spawn(
-            async move { ai_client.get_ambient_agent_task(&task_id).await },
-            move |me, result, ctx| {
-                me.metadata_fetches.remove(&task_id);
-                let task = match result {
-                    Ok(task) => task,
-                    Err(err) => {
-                        log::warn!(
-                            "[orch-viewer] failed to fetch pill metadata for \
-                             child task_id={task_id} parent_task_id={parent_task_id} \
-                             trigger={trigger}: {err:#}"
-                        );
-                        return;
-                    }
-                };
-                me.register_child(task, ctx);
-            },
-        );
     }
 
     /// Registers every parked child whose task data has since been cached.
@@ -368,18 +318,12 @@ impl OrchestrationViewerModel {
         }
 
         let task_id = task.task_id;
-        let session_id = task
-            .session_id
-            .as_deref()
-            .and_then(|s| s.parse::<SessionId>().ok());
         let materialization_ready = Self::materialization_is_ready(&task);
         let new_state = task.state.clone();
         let conversation_status = conversation_status_from_state(&new_state);
 
         if let Some(entry) = self.children.get_mut(&task_id) {
-            // Existing child: update status if it changed and fill in
-            // session id once it becomes available. Can be called again
-            // on streamer reconnect.
+            // Existing children can be registered again on streamer reconnect.
             if entry.last_state != new_state {
                 let conversation_id = entry.conversation_id;
                 let terminal_view_id = self.terminal_view_id;
@@ -394,7 +338,6 @@ impl OrchestrationViewerModel {
                 });
                 entry.last_state = new_state;
             }
-            entry.session_id = session_id;
             let should_request_materialization =
                 materialization_ready && !entry.pane_materialization_requested;
             if should_request_materialization {
@@ -432,43 +375,17 @@ impl OrchestrationViewerModel {
         let terminal_view_id = self.terminal_view_id;
         let status_for_initial = conversation_status.clone();
 
-        let unified_stack = FeatureFlag::OrchestrationUnifiedStack.is_enabled();
         let conversation_id = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-            let conversation_id = if unified_stack {
-                history.ensure_remote_child_conversation(
-                    terminal_view_id,
-                    parent_conversation_id,
-                    task_id.to_string(),
-                    task_id,
-                    name,
-                    fallback_title,
-                    harness,
-                    ctx,
-                )
-            } else {
-                let conversation_id = history.start_new_child_conversation(
-                    terminal_view_id,
-                    name,
-                    parent_conversation_id,
-                    harness,
-                    false,
-                    ctx,
-                );
-                history.set_viewing_shared_session_for_conversation(conversation_id, true);
-                if !fallback_title.is_empty()
-                    && let Some(conversation) = history.conversation_mut(&conversation_id)
-                {
-                    conversation.set_fallback_display_title(fallback_title);
-                }
-                history.assign_run_id_for_conversation(
-                    conversation_id,
-                    task_id.to_string(),
-                    Some(task_id),
-                    terminal_view_id,
-                    ctx,
-                );
-                conversation_id
-            };
+            let conversation_id = history.ensure_remote_child_conversation(
+                terminal_view_id,
+                parent_conversation_id,
+                task_id.to_string(),
+                task_id,
+                name,
+                fallback_title,
+                harness,
+                ctx,
+            );
             history.update_conversation_status(
                 terminal_view_id,
                 conversation_id,
@@ -483,7 +400,6 @@ impl OrchestrationViewerModel {
             task_id,
             ChildAgentEntry {
                 conversation_id,
-                session_id,
                 last_state: new_state.clone(),
                 pane_materialization_requested,
             },
@@ -492,7 +408,7 @@ impl OrchestrationViewerModel {
         log::info!(
             "[orch-viewer] registered child placeholder task_id={task_id} \
              parent_task_id={} conversation_id={conversation_id:?} \
-             session_id={session_id:?} initial_state={new_state:?}",
+             initial_state={new_state:?}",
             self.parent_task_id,
         );
 
@@ -549,7 +465,7 @@ impl OrchestrationViewerModel {
         }
 
         for task_id in pending {
-            self.spawn_task_metadata_fetch(task_id, "PendingSessionIdPoll", ctx);
+            self.spawn_task_metadata_fetch(task_id, ctx);
         }
 
         self.maybe_schedule_pending_session_id_poll(ctx);
@@ -609,28 +525,19 @@ impl OrchestrationViewerModel {
     }
 
     fn materialization_is_ready(task: &AmbientAgentTask) -> bool {
-        if FeatureFlag::OrchestrationUnifiedStack.is_enabled() {
-            return !matches!(
-                decide_child_pane_materialization(task),
-                ChildPaneMaterialization::Pending
-            );
-        }
-
-        task.session_id
-            .as_deref()
-            .and_then(|session_id| session_id.parse::<SessionId>().ok())
-            .is_some()
+        !matches!(
+            decide_child_pane_materialization(task),
+            ChildPaneMaterialization::Pending
+        )
     }
 
     fn entry_needs_materialization_metadata(entry: &ChildAgentEntry) -> bool {
         !entry.pane_materialization_requested
-            || (!FeatureFlag::OrchestrationUnifiedStack.is_enabled() && entry.session_id.is_none())
     }
 
     /// Tells the parent's `TerminalView` to materialize a hidden viewer pane
-    /// for this child. Unified-stack routing carries the task snapshot so the
-    /// pane group can distinguish live, transcript, and pending state; the
-    /// legacy flag-off route preserves its raw-session-id behavior.
+    /// for this child, carrying the task snapshot so the pane group can
+    /// distinguish live, transcript, and pending state.
     fn request_child_pane_materialization(
         &self,
         conversation_id: AIConversationId,
@@ -645,21 +552,10 @@ impl OrchestrationViewerModel {
             return;
         };
         view.update(ctx, |_view, ctx| {
-            if FeatureFlag::OrchestrationUnifiedStack.is_enabled() {
-                ctx.emit(TerminalViewEvent::EnsureUnifiedViewerChildPane {
-                    conversation_id,
-                    task: Box::new(task),
-                });
-            } else if let Some(session_id) = task
-                .session_id
-                .as_deref()
-                .and_then(|session_id| session_id.parse::<SessionId>().ok())
-            {
-                ctx.emit(TerminalViewEvent::EnsureSharedSessionViewerChildPane {
-                    conversation_id,
-                    session_id,
-                });
-            }
+            ctx.emit(TerminalViewEvent::EnsureUnifiedViewerChildPane {
+                conversation_id,
+                task: Box::new(task),
+            });
         });
     }
 }
