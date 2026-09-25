@@ -145,6 +145,7 @@ pub struct UserWorkspaces {
     workspaceless_models_by_feature: Option<ModelsByFeature>,
     team_client: Arc<dyn TeamClient>,
     workspace_client: Arc<dyn WorkspaceClient>,
+    domain_restriction_mutation_in_flight: bool,
 }
 
 /// Represents the workspaces a user potentially has access to.
@@ -170,6 +171,11 @@ pub struct WorkspacesMetadataResponse {
 pub struct WorkspacesMetadataWithPricing {
     pub metadata: WorkspacesMetadataResponse,
     pub pricing_info: Option<warp_graphql::billing::PricingInfo>,
+}
+struct AddDomainRestrictionsOutcome {
+    latest_metadata: Option<WorkspacesMetadataWithPricing>,
+    submitted_count: usize,
+    error: Option<anyhow::Error>,
 }
 
 pub struct CreateTeamResponse {
@@ -205,6 +211,7 @@ impl UserWorkspaces {
             workspaceless_models_by_feature: None,
             team_client,
             workspace_client,
+            domain_restriction_mutation_in_flight: false,
         }
     }
 
@@ -256,6 +263,7 @@ impl UserWorkspaces {
             workspaceless_models_by_feature: None,
             team_client,
             workspace_client,
+            domain_restriction_mutation_in_flight: false,
         };
 
         // One-release migration: moving feature_model_choices off of `LLMPreferences` to `Workspace`.
@@ -1016,16 +1024,20 @@ impl UserWorkspaces {
 
     fn on_add_invite_link_domain_restrictions(
         &mut self,
-        result: Result<(WorkspacesMetadataWithPricing, usize)>,
+        outcome: AddDomainRestrictionsOutcome,
         ctx: &mut ModelContext<Self>,
     ) {
-        match result {
-            Err(err) => ctx.emit(UserWorkspacesEvent::AddDomainRestrictionsRejected(err)),
-            Ok((result, count)) => {
-                self.on_workspaces_updated(Ok(result), ctx);
-                ctx.emit(UserWorkspacesEvent::AddDomainRestrictionsSuccess { count });
-            }
-        };
+        self.domain_restriction_mutation_in_flight = false;
+        if let Some(metadata) = outcome.latest_metadata {
+            self.on_workspaces_updated(Ok(metadata), ctx);
+        }
+        if let Some(err) = outcome.error {
+            ctx.emit(UserWorkspacesEvent::AddDomainRestrictionsRejected(err));
+        } else {
+            ctx.emit(UserWorkspacesEvent::AddDomainRestrictionsSuccess {
+                count: outcome.submitted_count,
+            });
+        }
         ctx.notify();
     }
 
@@ -1034,7 +1046,12 @@ impl UserWorkspaces {
         team_uid: ServerId,
         domains: Vec<String>,
         ctx: &mut ModelContext<Self>,
-    ) {
+    ) -> bool {
+        if self.domain_restriction_mutation_in_flight || domains.is_empty() {
+            return false;
+        }
+        self.domain_restriction_mutation_in_flight = true;
+        ctx.notify();
         let native_workspace_uid = self
             .current_workspace()
             .filter(|workspace| workspace.is_native_workspaces_enabled())
@@ -1043,26 +1060,38 @@ impl UserWorkspaces {
         let workspace_client = self.workspace_client.clone();
         let _ = ctx.spawn(
             async move {
-                let count = domains.len();
+                let submitted_count = domains.len();
                 let mut latest_metadata = None;
                 for domain in domains {
-                    let metadata = if let Some(workspace_uid) = native_workspace_uid {
+                    let result = if let Some(workspace_uid) = native_workspace_uid {
                         workspace_client
                             .add_invite_link_domain_restriction(workspace_uid, domain)
-                            .await?
+                            .await
                     } else {
                         team_client
                             .add_invite_link_domain_restriction(team_uid, domain)
-                            .await?
+                            .await
                     };
-                    latest_metadata = Some(metadata);
+                    match result {
+                        Ok(metadata) => latest_metadata = Some(metadata),
+                        Err(error) => {
+                            return AddDomainRestrictionsOutcome {
+                                latest_metadata,
+                                submitted_count,
+                                error: Some(error),
+                            };
+                        }
+                    }
                 }
-                latest_metadata
-                    .map(|metadata| (metadata, count))
-                    .ok_or_else(|| anyhow::anyhow!("no domain restrictions to add"))
+                AddDomainRestrictionsOutcome {
+                    latest_metadata,
+                    submitted_count,
+                    error: None,
+                }
             },
             Self::on_add_invite_link_domain_restrictions,
         );
+        true
     }
 
     fn on_delete_invite_link_domain_restriction(
@@ -1070,6 +1099,7 @@ impl UserWorkspaces {
         result: Result<WorkspacesMetadataWithPricing>,
         ctx: &mut ModelContext<Self>,
     ) {
+        self.domain_restriction_mutation_in_flight = false;
         match result {
             Err(err) => ctx.emit(UserWorkspacesEvent::DeleteDomainRestrictionRejected(err)),
             Ok(result) => {
@@ -1085,7 +1115,12 @@ impl UserWorkspaces {
         team_uid: ServerId,
         domain_uid: ServerId,
         ctx: &mut ModelContext<Self>,
-    ) {
+    ) -> bool {
+        if self.domain_restriction_mutation_in_flight {
+            return false;
+        }
+        self.domain_restriction_mutation_in_flight = true;
+        ctx.notify();
         let native_workspace_uid = self
             .current_workspace()
             .filter(|workspace| workspace.is_native_workspaces_enabled())
@@ -1106,6 +1141,11 @@ impl UserWorkspaces {
             },
             Self::on_delete_invite_link_domain_restriction,
         );
+        true
+    }
+
+    pub fn is_domain_restriction_mutation_in_flight(&self) -> bool {
+        self.domain_restriction_mutation_in_flight
     }
 
     fn on_email_invite_sent(

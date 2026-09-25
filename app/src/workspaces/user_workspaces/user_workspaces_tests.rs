@@ -86,9 +86,10 @@ use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
     AdminEnablementSetting, ByoFirstPartyKey, EnforceableSetting, HostEnablementSetting,
-    LinkSharingSettings, LlmHostSettings, ManagedByokByoePolicy, MultiAdminPolicy,
-    NativeWorkspacesPolicy, PurchaseAddOnCreditsPolicy, SandboxedAgentSettings, SplitListSetting,
-    TeamByoSettings, TeamLinkSharingSettings, Workspace, WorkspaceMember, WorkspaceMemberUsageInfo,
+    InviteLinkDomainRestriction, LinkSharingSettings, LlmHostSettings, ManagedByokByoePolicy,
+    MultiAdminPolicy, NativeWorkspacesPolicy, PurchaseAddOnCreditsPolicy, SandboxedAgentSettings,
+    SplitListSetting, TeamByoSettings, TeamLinkSharingSettings, Workspace, WorkspaceMember,
+    WorkspaceMemberUsageInfo,
 };
 
 #[derive(Default)]
@@ -1102,6 +1103,211 @@ fn legacy_domain_restrictions_keep_using_team_mutations() {
             receiver.recv().await.expect("expected delete completion"),
             ("delete", 1)
         );
+    })
+}
+
+#[test]
+fn domain_restriction_batch_preserves_successful_metadata_before_failure() {
+    let team = team_for_test();
+    let team_uid = team.uid;
+    let mut workspace = workspace_for_test(&team);
+    workspace.billing_metadata.tier.native_workspaces_policy =
+        Some(NativeWorkspacesPolicy { enabled: true });
+    let workspace_uid = workspace.uid;
+
+    let restriction = InviteLinkDomainRestriction {
+        uid: ServerId::from(456),
+        domain: "warp.dev".to_string(),
+    };
+    let mut workspace_after_first_add = workspace.clone();
+    workspace_after_first_add.invite_link_domain_restrictions = vec![restriction.clone()];
+    workspace_after_first_add.teams[0].invite_link_domain_restrictions = vec![restriction];
+
+    App::test((), |mut app| async move {
+        let mut sequence = Sequence::new();
+        let mut workspace_client = MockWorkspaceClient::new();
+        workspace_client
+            .expect_add_invite_link_domain_restriction()
+            .withf(move |actual_workspace_uid, domain| {
+                *actual_workspace_uid == workspace_uid && domain == "warp.dev"
+            })
+            .times(1)
+            .in_sequence(&mut sequence)
+            .return_once(move |_, _| Ok(metadata_for_workspace(workspace_after_first_add)));
+        workspace_client
+            .expect_add_invite_link_domain_restriction()
+            .withf(move |actual_workspace_uid, domain| {
+                *actual_workspace_uid == workspace_uid && domain == "example.com"
+            })
+            .times(1)
+            .in_sequence(&mut sequence)
+            .return_once(|_, _| Err(anyhow::anyhow!("second domain rejected")));
+
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(workspace_client),
+        );
+
+        let user_workspaces = UserWorkspaces::handle(&app);
+        let (sender, receiver) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&user_workspaces, move |_, event, _| match event {
+                UserWorkspacesEvent::AddDomainRestrictionsSuccess { .. } => {
+                    let _ = sender.try_send("success");
+                }
+                UserWorkspacesEvent::AddDomainRestrictionsRejected(_) => {
+                    let _ = sender.try_send("rejected");
+                }
+                _ => {}
+            });
+        });
+
+        assert!(user_workspaces.update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.add_invite_link_domain_restrictions(
+                team_uid,
+                vec!["warp.dev".to_string(), "example.com".to_string()],
+                ctx,
+            )
+        }));
+        assert_eq!(
+            receiver.recv().await.expect("expected terminal event"),
+            "rejected"
+        );
+        assert!(
+            receiver.try_recv().is_err(),
+            "a partial failure must emit one terminal event"
+        );
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(!user_workspaces.is_domain_restriction_mutation_in_flight());
+            assert_eq!(
+                user_workspaces
+                    .team_from_uid(team_uid)
+                    .expect("team should remain available")
+                    .invite_link_domain_restrictions,
+                vec![InviteLinkDomainRestriction {
+                    uid: ServerId::from(456),
+                    domain: "warp.dev".to_string(),
+                }]
+            );
+        });
+    })
+}
+
+#[test]
+fn domain_restriction_mutations_reject_concurrent_submissions() {
+    let team = team_for_test();
+    let team_uid = team.uid;
+    let mut workspace = workspace_for_test(&team);
+    workspace.billing_metadata.tier.native_workspaces_policy =
+        Some(NativeWorkspacesPolicy { enabled: true });
+    let workspace_uid = workspace.uid;
+    let add_response = workspace.clone();
+    let delete_response = workspace.clone();
+
+    App::test((), |mut app| async move {
+        let mut workspace_client = MockWorkspaceClient::new();
+        workspace_client
+            .expect_add_invite_link_domain_restriction()
+            .withf(move |actual_workspace_uid, domain| {
+                *actual_workspace_uid == workspace_uid && domain == "warp.dev"
+            })
+            .times(1)
+            .return_once(move |_, _| Ok(metadata_for_workspace(add_response)));
+        workspace_client
+            .expect_delete_invite_link_domain_restriction()
+            .withf(move |actual_workspace_uid, domain_uid| {
+                *actual_workspace_uid == workspace_uid && *domain_uid == ServerId::from(456)
+            })
+            .times(1)
+            .return_once(move |_, _| Ok(metadata_for_workspace(delete_response)));
+
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(workspace_client),
+        );
+
+        let user_workspaces = UserWorkspaces::handle(&app);
+        let (sender, receiver) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&user_workspaces, move |_, event, _| match event {
+                UserWorkspacesEvent::AddDomainRestrictionsSuccess { .. } => {
+                    let _ = sender.try_send("add");
+                }
+                UserWorkspacesEvent::DeleteDomainRestrictionSuccess => {
+                    let _ = sender.try_send("delete");
+                }
+                _ => {}
+            });
+        });
+
+        let (first_add, repeated_add, overlapping_delete) =
+            user_workspaces.update(&mut app, |user_workspaces, ctx| {
+                (
+                    user_workspaces.add_invite_link_domain_restrictions(
+                        team_uid,
+                        vec!["warp.dev".to_string()],
+                        ctx,
+                    ),
+                    user_workspaces.add_invite_link_domain_restrictions(
+                        team_uid,
+                        vec!["example.com".to_string()],
+                        ctx,
+                    ),
+                    user_workspaces.delete_invite_link_domain_restriction(
+                        team_uid,
+                        ServerId::from(456),
+                        ctx,
+                    ),
+                )
+            });
+        assert!(first_add);
+        assert!(!repeated_add);
+        assert!(!overlapping_delete);
+        assert_eq!(
+            receiver.recv().await.expect("expected add completion"),
+            "add"
+        );
+
+        let (first_delete, repeated_delete, overlapping_add) =
+            user_workspaces.update(&mut app, |user_workspaces, ctx| {
+                (
+                    user_workspaces.delete_invite_link_domain_restriction(
+                        team_uid,
+                        ServerId::from(456),
+                        ctx,
+                    ),
+                    user_workspaces.delete_invite_link_domain_restriction(
+                        team_uid,
+                        ServerId::from(789),
+                        ctx,
+                    ),
+                    user_workspaces.add_invite_link_domain_restrictions(
+                        team_uid,
+                        vec!["example.com".to_string()],
+                        ctx,
+                    ),
+                )
+            });
+        assert!(first_delete);
+        assert!(!repeated_delete);
+        assert!(!overlapping_add);
+        assert_eq!(
+            receiver.recv().await.expect("expected delete completion"),
+            "delete"
+        );
+        assert!(receiver.try_recv().is_err());
+        app.read(|ctx| {
+            assert!(!UserWorkspaces::as_ref(ctx).is_domain_restriction_mutation_in_flight());
+        });
     })
 }
 fn workspace_for_teams(teams: Vec<Team>) -> Workspace {

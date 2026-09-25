@@ -606,6 +606,8 @@ enum DiscoveryJoinTarget {
 struct TeamInvitationPermissions {
     has_admin_permissions: bool,
     is_workspace_admin: bool,
+    can_manage_domain_restrictions: bool,
+    domain_restriction_mutation_in_flight: bool,
 }
 
 impl DiscoverableTeamState {
@@ -1774,6 +1776,23 @@ impl TeamsPageView {
     fn update_approved_domains_state(&mut self, ctx: &mut ViewContext<Self>) {
         self.update_approved_domains_mouse_state_handles(ctx);
         self.update_domains_validator(ctx);
+        self.update_domains_editor_interaction_state(ctx);
+    }
+
+    fn update_domains_editor_interaction_state(&mut self, ctx: &mut ViewContext<Self>) {
+        let state = if self
+            .user_workspaces
+            .as_ref(ctx)
+            .is_domain_restriction_mutation_in_flight()
+        {
+            InteractionState::Disabled
+        } else {
+            InteractionState::Editable
+        };
+        self.approve_domains_block_editor
+            .update(ctx, |editor, ctx| {
+                editor.set_interaction_state(state, ctx);
+            });
     }
 
     fn update_approved_domains_mouse_state_handles(&mut self, ctx: &mut ViewContext<Self>) {
@@ -2058,11 +2077,11 @@ impl TeamsPageView {
         }
 
         // Lowercase and deduplicate domains
-        let unique_domains: Vec<String> = domains
+        let mut seen = HashSet::new();
+        let unique_domains = domains
             .into_iter()
             .map(|word| word.to_ascii_lowercase())
-            .collect::<HashSet<String>>()
-            .into_iter()
+            .filter(|domain| seen.insert(domain.clone()))
             .collect();
 
         self.user_workspaces
@@ -2457,6 +2476,18 @@ impl TeamsPageView {
     fn has_admin_permissions(team: &Team, workspace: &Workspace, current_user_email: &str) -> bool {
         team.has_admin_permissions(current_user_email)
             || workspace.is_workspace_admin(current_user_email)
+    }
+
+    fn can_manage_domain_restrictions(
+        team: &Team,
+        workspace: &Workspace,
+        current_user_email: &str,
+    ) -> bool {
+        if workspace.is_native_workspaces_enabled() {
+            workspace.is_workspace_admin(current_user_email)
+        } else {
+            team.has_admin_permissions(current_user_email)
+        }
     }
 }
 
@@ -2854,6 +2885,11 @@ impl TeamsWidget {
         let current_user_email = view.auth_state.user_email().unwrap_or_default();
         let has_admin_permissions =
             TeamsPageView::has_admin_permissions(team_metadata, workspace, &current_user_email);
+        let can_manage_domain_restrictions = TeamsPageView::can_manage_domain_restrictions(
+            team_metadata,
+            workspace,
+            &current_user_email,
+        );
         let is_owner = team_metadata.has_owner_permissions(&current_user_email);
         let remaining_workspace_and_team_credits =
             ai_request_usage_model.total_current_workspace_and_team_bonus_credits_remaining(app);
@@ -2911,17 +2947,24 @@ impl TeamsWidget {
         );
 
         // 3) Team invitation flows (invite link / email invites / discovery)
-        main_content.add_child(self.render_team_invitation_section(
-            team_metadata,
-            TeamInvitationPermissions {
-                has_admin_permissions,
-                is_workspace_admin: use_workspace_admin_panel,
-            },
-            view,
-            appearance,
-            chip_editor_style,
-            app,
-        ));
+        main_content.add_child(
+            self.render_team_invitation_section(
+                team_metadata,
+                TeamInvitationPermissions {
+                    has_admin_permissions,
+                    is_workspace_admin: use_workspace_admin_panel,
+                    can_manage_domain_restrictions,
+                    domain_restriction_mutation_in_flight: view
+                        .user_workspaces
+                        .as_ref(app)
+                        .is_domain_restriction_mutation_in_flight(),
+                },
+                view,
+                appearance,
+                chip_editor_style,
+                app,
+            ),
+        );
 
         // 4) Horizontal separator between the invite flows and the team members
         // list. 32px of breathing room above and below to match the design.
@@ -3582,14 +3625,16 @@ impl TeamsWidget {
             }
 
             // Don't render restricted domains section if user is not an admin AND there are no domain restrictions
-            if permissions.has_admin_permissions || !team.invite_link_domain_restrictions.is_empty()
+            if permissions.can_manage_domain_restrictions
+                || !team.invite_link_domain_restrictions.is_empty()
             {
                 section.add_child(self.render_approved_domains_section(
                     team,
-                    permissions.has_admin_permissions,
+                    permissions.can_manage_domain_restrictions,
                     view,
                     appearance,
                     chip_editor_style,
+                    permissions.domain_restriction_mutation_in_flight,
                 ));
             }
         }
@@ -3839,15 +3884,16 @@ impl TeamsWidget {
     fn render_approved_domains_section(
         &self,
         team: &Team,
-        has_admin_permissions: bool,
+        can_manage_domain_restrictions: bool,
         view: &TeamsPageView,
         appearance: &Appearance,
         chip_editor_style: UiComponentStyles,
+        mutation_in_flight: bool,
     ) -> Box<dyn Element> {
         let mut section = Flex::column();
 
         // 1) Instruction text for domain restrictions + Domain approval mechanism (input box + button)
-        if has_admin_permissions {
+        if can_manage_domain_restrictions {
             section.add_child(
                 Container::new(self.render_sub_text(
                     INVITE_LINK_DOMAIN_RESTRICTIONS_INSTRUCTIONS.into(),
@@ -3874,7 +3920,12 @@ impl TeamsWidget {
                             )
                             .finish(),
                         )
-                        .with_child(self.render_approve_domains_button(team.uid, view, appearance))
+                        .with_child(self.render_approve_domains_button(
+                            team.uid,
+                            view,
+                            appearance,
+                            mutation_in_flight,
+                        ))
                         .finish(),
                 )
                 .with_padding_top(TEXT_FIELD_TOP_PADDING)
@@ -3900,7 +3951,7 @@ impl TeamsWidget {
             .invite_link_domain_restrictions
             .iter()
             .map(|domain_restriction| {
-                let actions = if has_admin_permissions {
+                let actions = if can_manage_domain_restrictions && !mutation_in_flight {
                     vec![ItemAction {
                         icon: Icon::X,
                         label: "Remove domain".to_string(),
@@ -3942,16 +3993,18 @@ impl TeamsWidget {
         team_uid: ServerId,
         view: &TeamsPageView,
         appearance: &Appearance,
+        mutation_in_flight: bool,
     ) -> Box<dyn Element> {
         // Only render enabled button with action if domain list is valid.
-        let (action, variant) = if view.approve_domains_block_editor_state.is_valid {
-            (
-                Some(TeamsPageAction::AddDomainRestrictions { team_uid }),
-                ButtonVariant::Accent,
-            )
-        } else {
-            (None, ButtonVariant::Basic)
-        };
+        let (action, variant) =
+            if view.approve_domains_block_editor_state.is_valid && !mutation_in_flight {
+                (
+                    Some(TeamsPageAction::AddDomainRestrictions { team_uid }),
+                    ButtonVariant::Accent,
+                )
+            } else {
+                (None, ButtonVariant::Basic)
+            };
         Container::new(self.render_button(
             APPROVE_DOMAINS_BUTTON_LABEL,
             variant,
