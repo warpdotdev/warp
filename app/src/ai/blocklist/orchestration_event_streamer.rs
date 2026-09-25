@@ -196,10 +196,15 @@ struct ConversationStreamState {
     /// Last fully handled event sequence number. 0 means "no events
     /// processed yet".
     event_cursor: i64,
-    /// Message IDs awaiting server-side `mark_delivered` confirmation,
-    /// triggered when the recipient streams a `MessagesReceivedFromAgents`
-    /// chunk through `BlocklistAIHistoryEvent::UpdatedStreamingExchange`.
-    pending_message_ids: Vec<String>,
+    /// Message IDs already confirmed delivered to the server for this
+    /// conversation's lifetime in this process, so a still-streaming exchange
+    /// (or a message that arrives redundantly via more than one path) doesn't
+    /// reissue the same `mark_delivered` call repeatedly. Populated by
+    /// `on_streaming_exchange_updated` for every `MessagesReceivedFromAgents`
+    /// chunk observed in an exchange's output, regardless of whether the
+    /// message content arrived via SSE `new_message` hydration or was
+    /// resolved directly server-side (e.g. into a wake turn's initial input).
+    confirmed_message_ids: HashSet<String>,
     /// Local consumers (terminal pane id for an open agent view, driver
     /// model id for `agent_sdk`) that need events delivered to this
     /// conversation.
@@ -1718,21 +1723,19 @@ impl OrchestrationEventStreamer {
             .insert(run_id)
     }
 
+    /// Confirms delivery for every message surfaced by a `MessagesReceivedFromAgents`
+    /// chunk in the given exchange's output, regardless of how that content arrived --
+    /// via SSE `new_message` hydration or resolved directly server-side into a wake
+    /// turn's initial input. Without this, a message resolved outside the SSE path
+    /// would never be marked delivered, leaving it exposed to a still-open event
+    /// stream redelivering it as a duplicate turn once the underlying `new_message`
+    /// event drains through.
     fn on_streaming_exchange_updated(
         &mut self,
         conversation_id: AIConversationId,
         exchange_id: AIAgentExchangeId,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Snapshot pending IDs so the immutable borrow on `self.streams`
-        // doesn't collide with the history model lookup below.
-        let pending_ids: HashSet<String> = match self.streams.get(&conversation_id) {
-            Some(s) if !s.pending_message_ids.is_empty() => {
-                s.pending_message_ids.iter().cloned().collect()
-            }
-            _ => return,
-        };
-
         let Some(conversation) =
             BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
         else {
@@ -1742,32 +1745,36 @@ impl OrchestrationEventStreamer {
             return;
         };
 
-        // Check if the exchange output contains any of the messages we're
-        // waiting to confirm.
-        let mut confirmed_ids = Vec::new();
+        let mut observed_ids = Vec::new();
         if let Some(output) = exchange.output_status.output() {
             for msg in &output.get().messages {
                 if let AIAgentOutputMessageType::MessagesReceivedFromAgents { messages } =
                     &msg.message
                 {
-                    for received in messages {
-                        if pending_ids.contains(received.message_id.as_str()) {
-                            confirmed_ids.push(received.message_id.clone());
-                        }
-                    }
+                    observed_ids
+                        .extend(messages.iter().map(|received| received.message_id.clone()));
                 }
             }
         }
-
-        if confirmed_ids.is_empty() {
+        if observed_ids.is_empty() {
             return;
         }
 
-        // Remove confirmed messages from pending.
-        if let Some(stream) = self.streams.get_mut(&conversation_id) {
-            stream
-                .pending_message_ids
-                .retain(|id| !confirmed_ids.contains(id));
+        // Only confirm IDs not already confirmed, so a still-streaming exchange
+        // doesn't reissue the same confirmation on every incremental update.
+        let newly_confirmed_ids: Vec<String> = {
+            let confirmed = &mut self
+                .streams
+                .entry(conversation_id)
+                .or_default()
+                .confirmed_message_ids;
+            observed_ids
+                .into_iter()
+                .filter(|id| confirmed.insert(id.clone()))
+                .collect()
+        };
+        if newly_confirmed_ids.is_empty() {
+            return;
         }
 
         let hydrator =
@@ -1775,7 +1782,9 @@ impl OrchestrationEventStreamer {
         ctx.spawn(
             async move {
                 hydrator
-                    .mark_messages_delivered_best_effort(confirmed_ids.iter().map(String::as_str))
+                    .mark_messages_delivered_best_effort(
+                        newly_confirmed_ids.iter().map(String::as_str),
+                    )
                     .await
             },
             |_, failures, _| {
@@ -2572,19 +2581,6 @@ impl OrchestrationEventStreamer {
                 );
             }
         }
-        // Track message IDs for server-side mark_delivered calls.
-        let message_ids: Vec<String> = messages
-            .iter()
-            .map(|message| message.message_id.clone())
-            .collect();
-        if !message_ids.is_empty() {
-            self.streams
-                .entry(conversation_id)
-                .or_default()
-                .pending_message_ids
-                .extend(message_ids);
-        }
-
         // The owner-side event service delivers lifecycle notifications to the
         // orchestrator conversation, but passive remote-child views do not run
         // their own SSE stream. Broadcast the same canonical status mapping so

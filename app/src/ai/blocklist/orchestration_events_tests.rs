@@ -328,6 +328,52 @@ fn test_lifecycle_event_type_from_proto_includes_cancelled_and_blocked() {
 }
 
 #[test]
+fn test_server_echo_drops_matching_events_from_pending_and_awaiting_queues() {
+    // A message can reach the agent by a route other than this queue (e.g. resolved
+    // server-side into a fresh run's initial turn) while its SSE-delivered copy is still
+    // sitting in `pending_events`. Once the server echoes that message id back, the pending
+    // copy must be dropped too -- not just the already-drained awaiting copy -- or it would
+    // later be injected as a duplicate turn.
+    let conversation_id = crate::ai::agent::conversation::AIConversationId::new();
+    let mut service = OrchestrationEventService::new_without_subscriptions();
+    service.pending_events.insert(
+        conversation_id,
+        vec![
+            message_pending_event("pending-delivered-elsewhere"),
+            lifecycle_pending_event(
+                "pending-lifecycle",
+                "child-a",
+                api::LifecycleEventType::InProgress,
+                0,
+            ),
+        ],
+    );
+    service.awaiting_server_echo_events.insert(
+        conversation_id,
+        vec![message_pending_event("awaiting-echo")],
+    );
+
+    // Both message events share `message-1` (see `message_pending_event`).
+    service.acknowledge_delivery_from_server_echo(conversation_id, &["message-1".to_string()], &[]);
+
+    let remaining_pending = service
+        .pending_events
+        .get(&conversation_id)
+        .expect("the unrelated lifecycle event must survive");
+    assert_eq!(remaining_pending.len(), 1);
+    assert_eq!(
+        remaining_pending[0].event_id, "pending-lifecycle",
+        "only the echoed message must be dropped from pending; unrelated events stay queued"
+    );
+    assert!(
+        !service
+            .awaiting_server_echo_events
+            .contains_key(&conversation_id),
+        "the awaiting copy must still be cleared as before"
+    );
+}
+
+#[test]
 fn test_has_pending_events_tracks_any_event_kind() {
     let conversation_id = crate::ai::agent::conversation::AIConversationId::new();
     let mut service = OrchestrationEventService::new_without_subscriptions();

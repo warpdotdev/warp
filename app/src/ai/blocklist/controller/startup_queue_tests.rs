@@ -3,8 +3,11 @@ use warpui::App;
 
 use super::*;
 use crate::ai::agent::conversation::ConversationStatus;
-use crate::ai::agent::{AIAgentContext, AIAgentInput};
+use crate::ai::agent::{AIAgentContext, AIAgentInput, CancellationReason};
 use crate::ai::blocklist::QueuedQueryOrigin;
+use crate::ai::blocklist::orchestration_events::{
+    OrchestrationEventService, PendingEvent, PendingEventDetail,
+};
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
 /// The text of every `UserQuery` input across `id`'s root-task exchanges, in the order they
@@ -301,6 +304,215 @@ fn startup_injections_queued_before_the_initial_prompt_are_dispatched_one_at_a_t
                 1,
                 "prompt2's turn should be active; prompt1's was interrupted the same way a \
                  rapid live follow-up interrupts a prior turn"
+            );
+        });
+    });
+}
+
+#[test]
+fn agent_message_wake_check_marker_becomes_an_agent_message_wake_check_input_not_a_query() {
+    // Regression test: the marker `wake_driver.go` injects into a reachable shared session to
+    // signal new agent messages must be converted to `AIAgentInput::AgentMessageWakeCheck`
+    // rather than relayed as literal query text, even when it arrives through the native
+    // startup-injection queue used for shared-session prompts.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        let participant = ParticipantId::new();
+        let id = controller.update(&mut app, |controller, ctx| {
+            let id = controller.bind_native_prompt_conversation(None, ctx);
+            controller.execute_warp_agent_prompt_from_shared_session_injection(
+                BlocklistAIController::AGENT_MESSAGE_WAKE_CHECK_MARKER.to_owned(),
+                None,
+                vec![],
+                participant,
+                None,
+                ctx,
+            );
+            id
+        });
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.enter_agent_view(None, Some(id), AgentViewEntryOrigin::Cli, ctx);
+        });
+
+        controller.update(&mut app, |controller, ctx| {
+            controller.send_user_query_in_conversation("prompt1".into(), id, None, ctx);
+            controller.dispatch_queued_warp_agent_prompt(id, None, ctx);
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let inputs: Vec<_> = history
+                .conversation(&id)
+                .unwrap()
+                .root_task_exchanges()
+                .flat_map(|exchange| exchange.input.iter())
+                .collect();
+            assert!(
+                inputs
+                    .iter()
+                    .any(|input| matches!(input, AIAgentInput::AgentMessageWakeCheck)),
+                "expected an AgentMessageWakeCheck input among: {inputs:?}"
+            );
+            assert!(
+                user_queries_in_order(history, id)
+                    .iter()
+                    .all(|query| query != BlocklistAIController::AGENT_MESSAGE_WAKE_CHECK_MARKER),
+                "the marker text must never be relayed as literal query text"
+            );
+        });
+    });
+}
+
+#[test]
+fn agent_message_wake_check_marker_is_caught_even_when_steered_into_a_follow_up() {
+    // Regression test: a queued shared-session row can be picked up by
+    // `steer_head_prompt_for_request` and piggybacked directly onto a follow-up request,
+    // bypassing the marker check in `send_user_query_in_conversation_internal` entirely.
+    // `send_request_input` is the single convergence point every route passes through, so the
+    // marker must still be caught there.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        let participant = ParticipantId::new();
+        let id = controller.update(&mut app, |controller, ctx| {
+            let id = controller.bind_native_prompt_conversation(None, ctx);
+            // Send the initial prompt first so the marker injection below is queued behind it
+            // instead of dispatched immediately (same setup as
+            // `live_injection_while_a_turn_is_active_is_queued_instead_of_interrupting_it`).
+            controller.send_user_query_in_conversation("prompt1".into(), id, None, ctx);
+            controller.execute_warp_agent_prompt_from_shared_session_injection(
+                BlocklistAIController::AGENT_MESSAGE_WAKE_CHECK_MARKER.to_owned(),
+                None,
+                vec![],
+                participant,
+                None,
+                ctx,
+            );
+            assert_eq!(
+                QueuedQueryModel::as_ref(ctx)
+                    .queue(id)
+                    .iter()
+                    .map(QueuedQuery::text)
+                    .collect::<Vec<_>>(),
+                vec![BlocklistAIController::AGENT_MESSAGE_WAKE_CHECK_MARKER],
+                "the marker should be queued behind the active prompt1 turn"
+            );
+            id
+        });
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.enter_agent_view(None, Some(id), AgentViewEntryOrigin::Cli, ctx);
+        });
+
+        // End prompt1's turn without draining the queue via `dispatch_queued_warp_agent_prompt`,
+        // then drive the marker through the steering piggyback path instead.
+        controller.update(&mut app, |controller, ctx| {
+            controller.cancel_conversation_progress(id, CancellationReason::ManuallyCancelled, ctx);
+            assert!(
+                !controller.has_active_stream_for_conversation(id, ctx),
+                "prompt1's stream must be cleared before steering can run"
+            );
+            controller.send_follow_up_for_conversation(id, ctx);
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let inputs: Vec<_> = history
+                .conversation(&id)
+                .unwrap()
+                .root_task_exchanges()
+                .flat_map(|exchange| exchange.input.iter())
+                .collect();
+            assert!(
+                inputs
+                    .iter()
+                    .any(|input| matches!(input, AIAgentInput::AgentMessageWakeCheck)),
+                "expected an AgentMessageWakeCheck input among: {inputs:?}"
+            );
+            assert!(
+                user_queries_in_order(history, id)
+                    .iter()
+                    .all(|query| query != BlocklistAIController::AGENT_MESSAGE_WAKE_CHECK_MARKER),
+                "the marker text must never be relayed as literal query text, even via steering"
+            );
+        });
+    });
+}
+
+#[test]
+fn orchestration_events_wait_for_the_native_setup_barrier_before_injecting() {
+    // Regression test: a freshly started ambient run opens its event stream before it sends
+    // its initial turn, so an inbox message can be ready to inject during setup. Injecting
+    // it then would make it the run's opening turn, ahead of the initial prompt that
+    // resolves pending messages itself. Events must be held behind the native setup
+    // barrier and drained only once it lifts.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        let id = controller.update(&mut app, |controller, ctx| {
+            controller.bind_native_prompt_conversation(None, ctx)
+        });
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.enter_agent_view(None, Some(id), AgentViewEntryOrigin::Cli, ctx);
+        });
+
+        // A message arrives while setup is still in progress (barrier up, nothing sent yet).
+        OrchestrationEventService::handle(&app).update(&mut app, |service, ctx| {
+            service.enqueue_event_batch(
+                id,
+                vec![PendingEvent {
+                    event_id: "event-1".to_string(),
+                    source_agent_id: "child".to_string(),
+                    attempt_count: 0,
+                    detail: PendingEventDetail::Message {
+                        message_id: "message-1".to_string(),
+                        addresses: vec!["parent".to_string()],
+                        subject: "subject".to_string(),
+                        message_body: "body".to_string(),
+                    },
+                }],
+                ctx,
+            );
+        });
+
+        controller.read(&app, |controller, ctx| {
+            assert!(
+                QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(id),
+                "precondition: the native setup barrier must still be up"
+            );
+            assert!(
+                !controller.has_active_stream_for_conversation(id, ctx),
+                "the event must not have been injected while the barrier is up"
+            );
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                service.has_pending_events(id),
+                "the event must still be held, waiting for the barrier to lift"
+            );
+        });
+
+        // The initial prompt goes out, lifting the barrier. The event is still not injected
+        // yet because the initial turn's stream is now active; it drains once that finishes.
+        controller.update(&mut app, |controller, ctx| {
+            controller.send_user_query_in_conversation("initial".into(), id, None, ctx);
+            assert!(!QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(id));
+        });
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                user_queries_in_order(history, id),
+                vec!["initial".to_owned()],
+                "the initial prompt must be the run's first turn"
+            );
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                service.has_pending_events(id),
+                "the event stays held behind the active initial-turn stream"
             );
         });
     });

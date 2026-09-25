@@ -427,18 +427,25 @@ impl OrchestrationEventService {
         }
     }
 
-    /// Scans the exchange output for orchestration IDs echoed back by the
-    /// server, then clears matching entries from awaiting_server_echo_events.
+    /// Scans the exchange output for orchestration IDs echoed back by the server, then
+    /// clears matching entries from both `awaiting_server_echo_events` and `pending_events`.
+    /// A still-pending match means the same message reached the agent by another route
+    /// (e.g. resolved server-side into the run's initial turn) before this queue got to
+    /// deliver it, so injecting it now would only repeat a turn the agent already took.
     fn confirm_delivery_from_exchange(
         &mut self,
         conversation_id: AIConversationId,
         exchange_id: AIAgentExchangeId,
         ctx: &ModelContext<Self>,
     ) {
-        if !self
+        let has_awaiting = self
             .awaiting_server_echo_events
-            .contains_key(&conversation_id)
-        {
+            .contains_key(&conversation_id);
+        let has_pending = self
+            .pending_events
+            .get(&conversation_id)
+            .is_some_and(|events| !events.is_empty());
+        if !has_awaiting && !has_pending {
             return;
         }
 
@@ -495,7 +502,8 @@ impl OrchestrationEventService {
         }
     }
 
-    /// Clears awaiting_server_echo_events entries that match the given IDs.
+    /// Clears entries matching the given IDs from both `awaiting_server_echo_events` and
+    /// `pending_events`.
     fn acknowledge_delivery_from_server_echo(
         &mut self,
         conversation_id: AIConversationId,
@@ -512,26 +520,34 @@ impl OrchestrationEventService {
             .iter()
             .map(String::as_str)
             .collect();
-        let should_remove_entry = {
-            let Some(awaiting_events) = self.awaiting_server_echo_events.get_mut(&conversation_id)
-            else {
-                return;
-            };
-
-            awaiting_events.retain(|pending_event| {
-                let was_echoed = did_event_round_trip_through_server(
-                    pending_event,
-                    &echoed_message_ids,
-                    &echoed_lifecycle_event_ids,
-                );
-                !was_echoed
-            });
-
-            awaiting_events.is_empty()
+        let was_echoed = |pending_event: &PendingEvent| {
+            did_event_round_trip_through_server(
+                pending_event,
+                &echoed_message_ids,
+                &echoed_lifecycle_event_ids,
+            )
         };
 
-        if should_remove_entry {
-            self.awaiting_server_echo_events.remove(&conversation_id);
+        if let Some(awaiting_events) = self.awaiting_server_echo_events.get_mut(&conversation_id) {
+            awaiting_events.retain(|event| !was_echoed(event));
+            if awaiting_events.is_empty() {
+                self.awaiting_server_echo_events.remove(&conversation_id);
+            }
+        }
+
+        if let Some(pending_events) = self.pending_events.get_mut(&conversation_id) {
+            let before = pending_events.len();
+            pending_events.retain(|event| !was_echoed(event));
+            let dropped = before - pending_events.len();
+            if dropped > 0 {
+                log::info!(
+                    "Dropped {dropped} pending orchestration event(s) for conversation \
+                     {conversation_id:?} already delivered by another route"
+                );
+            }
+            if pending_events.is_empty() {
+                self.pending_events.remove(&conversation_id);
+            }
         }
     }
 }

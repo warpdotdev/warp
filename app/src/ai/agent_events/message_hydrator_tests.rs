@@ -71,6 +71,36 @@ async fn hydrator_reads_new_message_for_matching_run() {
 }
 
 #[tokio::test]
+async fn hydrator_skips_already_delivered_message() {
+    // A message can be delivered through another path (e.g. resolved directly
+    // server-side into a wake turn's initial input) before the recipient's SSE
+    // stream ever sees the corresponding `new_message` event. Once that's true,
+    // hydrating it here would duplicate the turn the recipient already acted on.
+    let mut ai_client = MockAIClient::new();
+    ai_client
+        .expect_read_agent_message()
+        .with(eq("msg-123"))
+        .times(1)
+        .returning(|_| {
+            Ok(ReadAgentMessageResponse {
+                delivered_at: Some("2026-01-01T00:00:01Z".to_string()),
+                ..make_message_response("msg-123")
+            })
+        });
+
+    let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
+    let hydrator = MessageHydrator::new(ai_client);
+    let event = make_run_event(7, "new_message", "child-run", Some("msg-123"));
+
+    assert!(
+        hydrator
+            .hydrate_event_for_recipient(&event, "child-run")
+            .await
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn hydrator_ignores_events_for_other_runs() {
     let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
     let hydrator = MessageHydrator::new(ai_client);
