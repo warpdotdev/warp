@@ -7,19 +7,27 @@ use tempfile::TempDir;
 use warp_cli::agent::{
     RepositoryForge, RepositoryHeadRef, RepositoryIdentity, RepositoryPreparationOverride,
 };
-use warp_core::command::ExitCode;
+use warp_completer::completer::{CommandExitStatus, CommandOutput};
 
-#[cfg(unix)]
-use super::build_single_repo_clone_command;
 use super::{
-    PrepareEnvironmentError, RepositoryCloneRequest, build_parallel_clone_command,
-    build_remove_repository_origins_command, build_resolved_head_command, checkout_command_for,
-    checkout_result, environment_snapshot, is_valid_git_object_id, merge_repos_deduped,
-    parse_resolved_head_sha, parse_resolved_head_shas, read_failed_repo_names,
-    repository_clone_requests, single_repo_name, validate_repository_preparation_overrides,
+    PrepareEnvironmentError, RepositoryCloneRequest, build_git_credential_query_command,
+    build_parallel_clone_command, build_remove_repository_origins_command,
+    build_resolved_head_command, checkout_command_for, clone_failure_identity_query_commands,
+    environment_snapshot, format_clone_failure_identity_diagnostics, is_valid_git_object_id,
+    merge_repos_deduped, parse_resolved_head_sha, parse_resolved_head_shas, read_failed_repo_names,
+    repository_clone_requests, single_repo_name, unique_clone_hosts,
+    validate_repository_preparation_overrides,
 };
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::terminal::shell::ShellType;
+fn command_output(stdout: &str, stderr: &str, status: CommandExitStatus) -> CommandOutput {
+    CommandOutput {
+        stdout: stdout.as_bytes().to_vec(),
+        stderr: stderr.as_bytes().to_vec(),
+        status,
+        exit_code: None,
+    }
+}
 
 fn commit_head_override(
     code_forge: RepositoryForge,
@@ -357,6 +365,7 @@ fn parallel_clone_command_runs_repos_in_background_and_waits() {
     assert!(command.contains("platform/backend/api"));
     assert!(command.contains("https://gitlab.com/platform/backend/api.git"));
     assert_eq!(command.matches("clone_repo").count(), 3);
+    assert_eq!(command.matches("2>&1 &").count(), 2);
     assert!(command.contains("mktemp -d"));
     assert!(command.contains("warp-clone-logs"));
     assert!(command.contains("trap cleanup_clone_logs EXIT"));
@@ -374,164 +383,6 @@ fn parallel_clone_command_runs_repos_in_background_and_waits() {
     assert!(command.contains("===== platform/backend/api ====="));
     assert!(!command.contains("repository revision results"));
     assert!(command.contains("exit \"$failed\""));
-}
-
-#[cfg(unix)]
-#[test]
-fn parallel_clone_command_prints_identity_before_clone_without_rendering_secrets() {
-    let repos = vec![
-        clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp"), None),
-        clone_request(repo(CodeForge::GitLab, "platform/backend", "api"), None),
-    ];
-    let command = build_parallel_clone_command(
-        &repos,
-        ShellType::Bash,
-        Path::new("/tmp/.warp-clone-failed-test"),
-    );
-    let output = run_git_command_with_identity_fixture(&command);
-    let stdout = String::from_utf8(output.stdout).unwrap();
-
-    assert!(output.status.success());
-    assert_eq!(stdout.matches("Git author: Ada Lovelace").count(), 2);
-    assert_eq!(
-        stdout.matches("Git credential: octocat@github.com").count(),
-        1
-    );
-    for section in stdout.split("===== ").skip(1) {
-        let credential = if section.starts_with("warpdotdev/warp") {
-            "Git credential: octocat@github.com"
-        } else {
-            "Git credential: oauth2@gitlab.com"
-        };
-        assert_output_order(
-            section,
-            &["Git author: Ada Lovelace", credential, "git clone"],
-        );
-    }
-    assert!(!stdout.contains("credential-secret-never-print"));
-    assert!(!stdout.contains("gitlab-secret-never-print"));
-    assert!(!stdout.contains("https://octocat:"));
-    assert!(!stdout.contains("https://oauth2:"));
-}
-
-#[cfg(unix)]
-#[test]
-fn single_clone_command_prints_identity_before_clone_without_rendering_secrets() {
-    let request = clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp"), None);
-    let command =
-        build_single_repo_clone_command(&request, Path::new("/workspace"), ShellType::Bash);
-    let output = run_git_command_with_identity_fixture(&command);
-    let stdout = String::from_utf8(output.stdout).unwrap();
-
-    assert!(output.status.success());
-    assert_output_order(
-        &stdout,
-        &[
-            "Git author: Ada Lovelace",
-            "Git credential: octocat@github.com",
-            "git clone",
-        ],
-    );
-    assert!(!stdout.contains("credential-secret-never-print"));
-    assert!(!stdout.contains("https://octocat:"));
-}
-
-#[cfg(unix)]
-#[test]
-fn single_clone_command_falls_back_for_invalid_credential_helper_output() {
-    let request = clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp"), None);
-    let command =
-        build_single_repo_clone_command(&request, Path::new("/workspace"), ShellType::Bash);
-
-    for helper_script in [
-        "cat >/dev/null\nprintf '%s\\n' 'password=malformed-secret-never-print'",
-        "cat >/dev/null\n\
-         printf '%s\\n' \
-           'username=https://octocat:credential-url-token-never-print@github.com' \
-           'password=credential-password-never-print'",
-        "cat >/dev/null\n\
-         printf '%s\\n' 'failed-helper-diagnostic-never-print' >&2\n\
-         exit 1",
-    ] {
-        let output = run_git_command_with_credential_helper(&command, helper_script);
-        let stdout = String::from_utf8(output.stdout).unwrap();
-        let stderr = String::from_utf8(output.stderr).unwrap();
-
-        assert!(output.status.success());
-        assert!(
-            stdout.contains("Git credential: unset@github.com"),
-            "stdout: {stdout}\nstderr: {stderr}"
-        );
-        assert!(!stdout.contains("malformed-secret-never-print"));
-        assert!(!stdout.contains("credential-url-token-never-print"));
-        assert!(!stdout.contains("credential-password-never-print"));
-        assert!(!stderr.contains("credential-url-token-never-print"));
-        assert!(!stderr.contains("credential-password-never-print"));
-        assert!(!stderr.contains("failed-helper-diagnostic-never-print"));
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn single_clone_command_times_out_blocked_credential_helper() {
-    let request = clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp"), None);
-    let command =
-        build_single_repo_clone_command(&request, Path::new("/workspace"), ShellType::Bash);
-    let helper_state = tempfile::tempdir().unwrap();
-    let helper_pid_path = helper_state.path().join("helper-pid");
-    let helper_script = format!(
-        "cat >/dev/null\n\
-         printf '%s\\n' \"$$\" > '{}'\n\
-         trap '' TERM\n\
-         while :; do sleep 30; done",
-        helper_pid_path.display()
-    );
-    let started_at = instant::Instant::now();
-    let output = run_git_command_with_credential_helper(&command, &helper_script);
-    let elapsed = started_at.elapsed();
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    let helper_pid = fs::read_to_string(&helper_pid_path)
-        .unwrap()
-        .trim()
-        .parse::<u32>()
-        .unwrap();
-
-    assert!(output.status.success());
-    assert!(
-        elapsed < std::time::Duration::from_secs(15),
-        "credential helper timeout took {elapsed:?}"
-    );
-    assert_output_order(&stdout, &["Git credential: unset@github.com", "git clone"]);
-    assert!(stderr.is_empty(), "stderr: {stderr}");
-    assert!(
-        !process_is_alive(helper_pid),
-        "credential helper process {helper_pid} survived timeout"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn single_fetch_command_prints_identity_before_fetch_without_rendering_secrets() {
-    let request = clone_request(
-        repo(CodeForge::GitHub, "warpdotdev", "warp"),
-        Some(RepositoryHeadRef::Branch("feature".to_string())),
-    );
-    let command = checkout_command_for(&request, Path::new("/workspace"), ShellType::Bash).unwrap();
-    let output = run_git_command_with_identity_fixture(&command);
-    let stdout = String::from_utf8(output.stdout).unwrap();
-
-    assert!(output.status.success());
-    assert_output_order(
-        &stdout,
-        &[
-            "Git author: Ada Lovelace",
-            "Git credential: octocat@github.com",
-            "git fetch",
-        ],
-    );
-    assert!(!stdout.contains("credential-secret-never-print"));
-    assert!(!stdout.contains("https://octocat:"));
 }
 
 #[test]
@@ -613,6 +464,8 @@ fn parallel_clone_command_threads_checkout_ref_and_pins_after_clone() {
     ));
     assert!(command.contains("git clone --filter=blob:none \"$repo_url\" \"$target\""));
     assert!(!command.contains("rev-parse --verify HEAD"));
+    assert!(!command.contains("user.name"));
+    assert!(!command.contains("credential fill"));
 }
 
 #[test]
@@ -661,14 +514,12 @@ fn checkout_command_checks_out_fetch_head_not_ref_name() {
     .with_checkout_ref(Some("feature".to_string()));
 
     let workspace = Path::new("/workspace");
-    let command = unwrap_sh_c_script(
-        &checkout_command_for(
-            &clone_request(repo, Some(RepositoryHeadRef::Branch("feature".to_string()))),
-            workspace,
-            ShellType::Bash,
-        )
-        .unwrap(),
-    );
+    let command = checkout_command_for(
+        &clone_request(repo, Some(RepositoryHeadRef::Branch("feature".to_string()))),
+        workspace,
+        ShellType::Bash,
+    )
+    .unwrap();
 
     let warp_dir = workspace.join("warp");
     assert!(command.contains(&format!(
@@ -677,6 +528,8 @@ fn checkout_command_checks_out_fetch_head_not_ref_name() {
     )));
     assert!(command.contains("checkout --detach FETCH_HEAD"));
     assert!(!command.contains("checkout --detach 'feature'"));
+    assert!(!command.contains("user.name"));
+    assert!(!command.contains("credential fill"));
 }
 
 #[test]
@@ -1187,14 +1040,141 @@ fn repository_origin_removal_targets_all_environment_repositories() {
 }
 
 #[test]
-fn checkout_result_maps_nonzero_exit_to_checkout_failed() {
-    assert!(checkout_result("warpdotdev/warp", "abc123", ExitCode::from(0)).is_ok());
-    let err = checkout_result("warpdotdev/warp", "abc123", ExitCode::from(1)).unwrap_err();
-    assert!(matches!(
-        err,
-        PrepareEnvironmentError::CheckoutFailed { repo_name, checkout_ref }
-            if repo_name == "warpdotdev/warp" && checkout_ref == "abc123"
-    ));
+fn clone_failure_identity_hosts_are_deduplicated_in_request_order() {
+    let requests = [
+        clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp"), None),
+        clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp-server"), None),
+        clone_request(repo(CodeForge::GitLab, "platform", "api"), None),
+    ];
+
+    assert_eq!(
+        unique_clone_hosts(&requests),
+        vec!["github.com".to_string(), "gitlab.com".to_string()]
+    );
+}
+
+#[test]
+fn credential_query_is_noninteractive_and_contains_only_the_requested_host() {
+    let command = build_git_credential_query_command("github.com");
+
+    assert!(command.contains("GIT_TERMINAL_PROMPT=0"));
+    assert!(command.contains("GCM_INTERACTIVE=never"));
+    assert!(command.contains("git credential fill"));
+    assert!(command.contains("protocol=https"));
+    assert!(command.contains("host=github.com"));
+    assert!(!command.contains("https://"));
+    assert!(!command.contains("password"));
+}
+
+#[test]
+fn clone_failure_queries_collect_the_author_and_each_deduplicated_host() {
+    let hosts = vec!["github.com".to_string(), "gitlab.com".to_string()];
+    let commands = clone_failure_identity_query_commands(&hosts);
+
+    assert_eq!(commands.len(), 3);
+    assert_eq!(commands[0], "git config --get user.name");
+    assert!(commands[1].contains("host=github.com"));
+    assert!(commands[2].contains("host=gitlab.com"));
+}
+
+#[test]
+fn clone_failure_identity_diagnostics_keep_only_sanitized_expected_fields() {
+    let author = command_output("Ada Lovelace\n", "", CommandExitStatus::Success);
+    let github = command_output(
+        "protocol=https\nhost=github.com\nusername=octocat\npassword=github-secret-token\n",
+        "",
+        CommandExitStatus::Success,
+    );
+    let gitlab = command_output(
+        "username=gitlab-user\npassword=gitlab-secret-token\n",
+        "",
+        CommandExitStatus::Success,
+    );
+
+    let diagnostics = format_clone_failure_identity_diagnostics(
+        Some(&author),
+        [("github.com", Some(&github)), ("gitlab.com", Some(&gitlab))],
+    );
+
+    assert_eq!(
+        diagnostics,
+        "\nGit identity diagnostics:\n  Author: Ada Lovelace\n  Credential username for github.com: octocat\n  Credential username for gitlab.com: gitlab-user"
+    );
+    assert!(!diagnostics.contains("password"));
+    assert!(!diagnostics.contains("secret-token"));
+    assert!(!diagnostics.contains("protocol="));
+    assert!(!diagnostics.contains("host="));
+}
+
+#[test]
+fn clone_failure_identity_diagnostics_fall_back_on_timeout_malformed_or_failed_queries() {
+    let malformed_author = command_output(
+        "Ada\npassword=author-secret\n",
+        "",
+        CommandExitStatus::Success,
+    );
+    let malformed_username = command_output(
+        "username=https://token@github.com\npassword=credential-secret\n",
+        "",
+        CommandExitStatus::Success,
+    );
+    let helper_failure = command_output(
+        "username=ignored",
+        "helper failed with password=stderr-secret",
+        CommandExitStatus::Failure,
+    );
+    let duplicate_username = command_output(
+        "username=first\nusername=second\npassword=duplicate-secret\n",
+        "",
+        CommandExitStatus::Success,
+    );
+
+    let diagnostics = format_clone_failure_identity_diagnostics(
+        Some(&malformed_author),
+        [
+            ("github.com", Some(&malformed_username)),
+            ("gitlab.com", Some(&helper_failure)),
+            ("bitbucket.org", Some(&duplicate_username)),
+            ("dev.azure.com", None),
+        ],
+    );
+
+    assert_eq!(
+        diagnostics,
+        "\nGit identity diagnostics:\n  Author: unset\n  Credential username for github.com: unavailable\n  Credential username for gitlab.com: unavailable\n  Credential username for bitbucket.org: unavailable\n  Credential username for dev.azure.com: unavailable"
+    );
+    for secret in [
+        "author-secret",
+        "credential-secret",
+        "stderr-secret",
+        "duplicate-secret",
+        "https://token@github.com",
+    ] {
+        assert!(!diagnostics.contains(secret));
+    }
+}
+
+#[test]
+fn clone_failure_errors_preserve_the_original_failure_before_diagnostics() {
+    let diagnostics = "\nGit identity diagnostics:\n  Author: unset".to_string();
+    let clone_error = PrepareEnvironmentError::CloneRepo {
+        repo_name: "warpdotdev/warp".to_string(),
+        identity_diagnostics: diagnostics.clone(),
+    };
+    let checkout_error = PrepareEnvironmentError::CheckoutFailed {
+        repo_name: "warpdotdev/warp".to_string(),
+        checkout_ref: "deadbeef".to_string(),
+        identity_diagnostics: diagnostics,
+    };
+
+    assert_eq!(
+        clone_error.to_string(),
+        "Failed to clone warpdotdev/warp\nGit identity diagnostics:\n  Author: unset"
+    );
+    assert_eq!(
+        checkout_error.to_string(),
+        "Failed to check out deadbeef in warpdotdev/warp\nGit identity diagnostics:\n  Author: unset"
+    );
 }
 
 // --- Real-git fixture tests -------------------------------------------------
@@ -1331,115 +1311,8 @@ fn run_command_output(command: &str) -> std::process::Output {
         .expect("sh should be runnable")
 }
 
-#[cfg(unix)]
-fn run_git_command_with_identity_fixture(command: &str) -> std::process::Output {
-    run_git_command_with_credential_helper(
-        command,
-        "request=\"$(cat)\"\n\
-         case \"$request\" in\n\
-           *\"host=github.com\"*)\n\
-             printf '%s\\n' 'username=octocat' 'password=credential-secret-never-print'\n\
-             ;;\n\
-           *\"host=gitlab.com\"*)\n\
-             printf '%s\\n' 'username=oauth2' 'password=gitlab-secret-never-print'\n\
-             ;;\n\
-         esac",
-    )
-}
-
-#[cfg(unix)]
-fn run_git_command_with_credential_helper(
-    command: &str,
-    helper_script: &str,
-) -> std::process::Output {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let temp_dir = tempfile::tempdir().unwrap();
-    let bin_dir = temp_dir.path().join("bin");
-    fs::create_dir_all(&bin_dir).unwrap();
-    let real_git = Command::new("sh")
-        .args(["-c", "command -v git"])
-        .output()
-        .expect("git should be discoverable");
-    assert!(real_git.status.success());
-    let real_git = String::from_utf8(real_git.stdout).unwrap();
-    let real_git = real_git.trim();
-    let helper_path = temp_dir.path().join("credential-helper");
-    fs::write(&helper_path, format!("#!/bin/sh\n{helper_script}\n")).unwrap();
-    fs::set_permissions(&helper_path, fs::Permissions::from_mode(0o700)).unwrap();
-    fs::write(
-        temp_dir.path().join(".gitconfig"),
-        format!("[credential]\n\thelper = !{}\n", helper_path.display()),
-    )
-    .unwrap();
-    let git_path = bin_dir.join("git");
-    fs::write(
-        &git_path,
-        format!(
-            "#!/bin/sh\n\
-         if [ \"$1\" = \"config\" ]; then\n\
-           printf '%s\\n' 'Ada Lovelace'\n\
-         elif [ \"$1\" = \"credential\" ]; then\n\
-           exec '{real_git}' \"$@\"\n\
-         elif [ \"$1\" = \"-C\" ]; then\n\
-           printf 'git %s\\n' \"$3\"\n\
-         else\n\
-           printf 'git %s\\n' \"$1\"\n\
-         fi\n"
-        ),
-    )
-    .unwrap();
-    fs::set_permissions(&git_path, fs::Permissions::from_mode(0o700)).unwrap();
-
-    Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .env("HOME", temp_dir.path())
-        .env("GIT_CONFIG_GLOBAL", temp_dir.path().join(".gitconfig"))
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env(
-            "PATH",
-            format!(
-                "{}:{}",
-                bin_dir.display(),
-                std::env::var("PATH").unwrap_or_default()
-            ),
-        )
-        .output()
-        .expect("identity-prefixed git command should be runnable")
-}
-
-#[cfg(unix)]
-fn process_is_alive(pid: u32) -> bool {
-    Command::new("sh")
-        .args([
-            "-c",
-            "kill -0 \"$1\" 2>/dev/null",
-            "process-is-alive",
-            &pid.to_string(),
-        ])
-        .status()
-        .expect("process liveness probe should be runnable")
-        .success()
-}
-
-#[cfg(unix)]
-fn assert_output_order(output: &str, expected: &[&str]) {
-    let mut previous = None;
-    for item in expected {
-        let position = output
-            .find(item)
-            .unwrap_or_else(|| panic!("expected {item:?} in output: {output}"));
-        if let Some(previous) = previous {
-            assert!(
-                previous < position,
-                "expected {expected:?} in order, got: {output}"
-            );
-        }
-        previous = Some(position);
-    }
-}
-
+/// Unwrap the outer `sh -c '...'` quoting produced by `build_parallel_clone_command`
+/// so tests can execute the embedded shell script directly.
 fn unwrap_sh_c_script(command: &str) -> String {
     let prefix = "sh -c '";
     let suffix = "'";
@@ -1452,6 +1325,8 @@ fn unwrap_sh_c_script(command: &str) -> String {
     inner.replace("'\"'\"'", "'")
 }
 
+/// Extract the `clone_repo` function body from the parallel clone script and
+/// invoke it once against a local fixture origin/target.
 fn run_parallel_clone_repo_helper(
     fixture: &Fixture,
     target: &Path,
@@ -1482,15 +1357,8 @@ fn run_parallel_clone_repo_helper(
         Path::new("/tmp/.warp-clone-failed-test"),
     ));
 
-    let identity_helper_start = script
-        .find("print_git_clone_identity() {")
-        .expect("identity function definition");
-    let identity_helper_end = script[identity_helper_start..]
-        .find("\n}")
-        .expect("identity function terminator")
-        + identity_helper_start
-        + 2;
-    let identity_helper = &script[identity_helper_start..identity_helper_end];
+    // Keep only the clone_repo function definition; drop background clones /
+    // waits / logs. Locate by name so we don't grab cleanup_clone_logs instead.
     let helper_start = script
         .find("clone_repo() {")
         .expect("clone_repo function definition");
@@ -1501,7 +1369,7 @@ fn run_parallel_clone_repo_helper(
         + 2;
     let helper = &script[helper_start..helper_end];
     let invoke = format!(
-        "set -e\n{identity_helper}\n{helper}\nclone_repo 'warpdotdev/{repo}' '{origin}' '{target}' '{checkout_ref}' '{is_commit_sha}' 'github.com'\n",
+        "set -e\n{helper}\nclone_repo 'warpdotdev/{repo}' '{origin}' '{target}' '{checkout_ref}' '{is_commit_sha}'\n",
         repo = fixture.repo_name,
         origin = fixture.origin_url,
         target = target.display(),
@@ -1706,18 +1574,6 @@ fn checkout_command_fails_for_unknown_ref() {
 
     let status = run_command(&command);
     assert!(!status.success(), "unknown ref should fail");
-
-    // A non-zero exit is what the clone path maps to CheckoutFailed, rather than
-    // silently leaving the clone on the default branch.
-    let result = checkout_result(
-        "warpdotdev/fixture",
-        "deadbeef",
-        ExitCode::from(status.code().unwrap_or(1)),
-    );
-    assert!(matches!(
-        result,
-        Err(PrepareEnvironmentError::CheckoutFailed { .. })
-    ));
 
     // HEAD must remain on the default branch tip.
     assert_eq!(

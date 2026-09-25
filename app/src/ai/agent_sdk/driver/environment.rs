@@ -34,80 +34,22 @@ use crate::terminal::shell::ShellType;
 
 const CODEBASE_INDEX_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 const ENVIRONMENT_SNAPSHOT_CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
-const PRINT_GIT_CLONE_IDENTITY_FUNCTION: &str = r#"print_git_clone_identity() {
-  host="$1"
-  author_name="$(git config --get user.name 2>/dev/null)"
-  if [ -z "$author_name" ]; then
-    author_name="unset"
-  fi
-  credential_username="$(
-    {
-      terminate_credential_group() {
-        kill -TERM "-$credential_pid" 2>/dev/null || return
-        sleep 1
-        kill -KILL "-$credential_pid" 2>/dev/null
-      }
-      GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never setsid git credential fill 2>/dev/null <<EOF &
-protocol=https
-host=$host
-
-EOF
-      credential_pid="$!"
-      (
-        trap 'kill "$sleep_pid" 2>/dev/null; exit 0' TERM
-        sleep 5 &
-        sleep_pid="$!"
-        wait "$sleep_pid"
-        terminate_credential_group
-      ) </dev/null >/dev/null 2>&1 &
-      timeout_pid="$!"
-      wait "$credential_pid" 2>/dev/null
-      credential_status="$?"
-      kill "$timeout_pid" 2>/dev/null
-      wait "$timeout_pid" 2>/dev/null
-      terminate_credential_group
-      cleanup_attempt=0
-      while kill -0 "-$credential_pid" 2>/dev/null && [ "$cleanup_attempt" -lt 5 ]; do
-        sleep 1
-        cleanup_attempt=$((cleanup_attempt + 1))
-      done
-      printf '\nwarp_git_credential_status=%s\n' "$credential_status"
-    } |
-      awk '
-        /^username=/ && username == "" {
-          candidate = substr($0, 10)
-          if (candidate ~ /^[[:alnum:]_.@+-]+$/) {
-            username = candidate
-          }
-        }
-        /^warp_git_credential_status=/ {
-          status = substr($0, 28)
-        }
-        END {
-          if (status == "0" && username != "") {
-            print username
-          }
-        }
-      '
-  )"
-  if [ -z "$credential_username" ]; then
-    credential_username="unset"
-  fi
-  printf '%s\n' "Git author: $author_name"
-  printf '%s\n' "Git credential: $credential_username@$host"
-}
-"#;
+const CLONE_FAILURE_IDENTITY_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, thiserror::Error)]
 pub enum PrepareEnvironmentError {
     #[error("Invalid runtime state - please file a bug report.")]
     InvalidRuntimeState,
-    #[error("Failed to clone {repo_name}")]
-    CloneRepo { repo_name: String },
-    #[error("Failed to check out {checkout_ref} in {repo_name}")]
+    #[error("Failed to clone {repo_name}{identity_diagnostics}")]
+    CloneRepo {
+        repo_name: String,
+        identity_diagnostics: String,
+    },
+    #[error("Failed to check out {checkout_ref} in {repo_name}{identity_diagnostics}")]
     CheckoutFailed {
         repo_name: String,
         checkout_ref: String,
+        identity_diagnostics: String,
     },
     #[error("Invalid repository preparation overrides: {reason}")]
     InvalidRepositoryPreparationOverrides { reason: String },
@@ -749,6 +691,135 @@ pub(super) struct RepositoryCloneRequest {
     pub(super) checkout: Option<RepositoryHeadRef>,
     pub(super) remove_origin: bool,
 }
+fn unique_clone_hosts<'a>(
+    requests: impl IntoIterator<Item = &'a RepositoryCloneRequest>,
+) -> Vec<String> {
+    let mut seen = HashSet::new();
+    requests
+        .into_iter()
+        .filter_map(|request| request.remote.code_forge.map(CodeForge::host))
+        .filter(|host| seen.insert(*host))
+        .map(str::to_string)
+        .collect()
+}
+
+fn sanitize_git_author_name(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()
+        && value.len() <= 128
+        && value.chars().all(|character| {
+            character.is_alphanumeric()
+                || matches!(character, ' ' | '.' | '_' | '@' | '+' | '-' | '\'')
+        }))
+    .then(|| value.to_string())
+}
+
+fn sanitize_git_credential_username(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()
+        && value.len() <= 128
+        && value.chars().all(|character| {
+            character.is_alphanumeric() || matches!(character, '.' | '_' | '@' | '+' | '-')
+        }))
+    .then(|| value.to_string())
+}
+
+fn git_author_name(output: Option<&CommandOutput>) -> Option<String> {
+    let output = output.filter(|output| output.success())?;
+    let stdout = std::str::from_utf8(&output.stdout).ok()?;
+    sanitize_git_author_name(stdout)
+}
+
+fn git_credential_username(output: Option<&CommandOutput>) -> Option<String> {
+    let output = output.filter(|output| output.success())?;
+    let stdout = std::str::from_utf8(&output.stdout).ok()?;
+    let mut usernames = stdout
+        .lines()
+        .filter_map(|line| line.strip_prefix("username="));
+    let username = usernames.next()?;
+    if usernames.next().is_some() {
+        return None;
+    }
+    sanitize_git_credential_username(username)
+}
+
+fn format_clone_failure_identity_diagnostics<'a>(
+    author_output: Option<&CommandOutput>,
+    credential_outputs: impl IntoIterator<Item = (&'a str, Option<&'a CommandOutput>)>,
+) -> String {
+    let author = git_author_name(author_output).unwrap_or_else(|| "unset".to_string());
+    let mut diagnostics = format!("\nGit identity diagnostics:\n  Author: {author}");
+    for (host, output) in credential_outputs {
+        let username = git_credential_username(output).unwrap_or_else(|| "unavailable".to_string());
+        diagnostics.push_str(&format!("\n  Credential username for {host}: {username}"));
+    }
+    diagnostics
+}
+
+fn build_git_credential_query_command(host: &str) -> String {
+    let credential_input = format!("protocol=https\nhost={host}\n");
+    let escaped_input = shell_escape_single_quotes(&credential_input, ShellType::Bash);
+    let script = format!(
+        "printf '%s\\n' '{escaped_input}' | \
+         GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git credential fill"
+    );
+    let escaped_script = shell_escape_single_quotes(&script, ShellType::Bash);
+    format!("sh -c '{escaped_script}'")
+}
+fn clone_failure_identity_query_commands(hosts: &[String]) -> Vec<String> {
+    std::iter::once("git config --get user.name".to_string())
+        .chain(
+            hosts
+                .iter()
+                .map(|host| build_git_credential_query_command(host)),
+        )
+        .collect()
+}
+
+async fn run_clone_failure_identity_query(
+    command: String,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Option<CommandOutput> {
+    match execute_silent_command(command, spawner)
+        .with_timeout(CLONE_FAILURE_IDENTITY_QUERY_TIMEOUT)
+        .await
+    {
+        Ok(Ok(output)) if output.success() => Some(output),
+        Ok(Ok(_)) | Ok(Err(_)) | Err(_) => None,
+    }
+}
+
+async fn collect_clone_failure_identity_diagnostics(
+    hosts: Vec<String>,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> String {
+    let commands = clone_failure_identity_query_commands(&hosts);
+    let outputs = join_all(
+        commands
+            .into_iter()
+            .map(|command| run_clone_failure_identity_query(command, spawner)),
+    )
+    .await;
+    let author_output = outputs.first().and_then(Option::as_ref);
+    let credential_outputs = hosts
+        .iter()
+        .zip(outputs.iter().skip(1))
+        .map(|(host, output)| (host.as_str(), output.as_ref()));
+    format_clone_failure_identity_diagnostics(author_output, credential_outputs)
+}
+
+async fn clone_repo_failure(
+    request: &RepositoryCloneRequest,
+    repo_name: String,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> PrepareEnvironmentError {
+    let hosts = unique_clone_hosts(std::iter::once(request));
+    let identity_diagnostics = collect_clone_failure_identity_diagnostics(hosts, spawner).await;
+    PrepareEnvironmentError::CloneRepo {
+        repo_name,
+        identity_diagnostics,
+    }
+}
 
 fn repository_clone_requests(
     repos: &[SourceRepo],
@@ -853,10 +924,9 @@ fn build_parallel_clone_command(
 ) -> String {
     let escaped_failed_repos_path =
         shell_escape_single_quotes(&failed_repos_path.to_string_lossy(), ShellType::Bash);
-    let mut script = String::from("set +e\n");
-    script.push_str(PRINT_GIT_CLONE_IDENTITY_FUNCTION);
-    script.push_str(
-        r#"failed=0
+    let mut script = String::from(
+        r#"set +e
+failed=0
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/warp-clone-logs.XXXXXX")"
 cleanup_clone_logs() {
   rm -rf "$tmp_dir"
@@ -868,8 +938,6 @@ clone_repo() {
   target="$3"
   checkout_ref="$4"
   is_commit_sha="$5"
-  repo_host="$6"
-  print_git_clone_identity "$repo_host"
   if [ "$is_commit_sha" = "1" ]; then
     if [ -e "$target" ]; then
       printf '%s\n' "Checking out $checkout_ref in existing repository $repo_name..."
@@ -906,10 +974,6 @@ clone_repo() {
         let escaped_repo_name = shell_escape_single_quotes(&repo_name, ShellType::Bash);
         let escaped_repo_url = shell_escape_single_quotes(&repo_url, ShellType::Bash);
         let escaped_target = shell_escape_single_quotes(&request.checkout_name, ShellType::Bash);
-        let escaped_host = shell_escape_single_quotes(
-            request.remote.code_forge.map(CodeForge::host).unwrap_or(""),
-            ShellType::Bash,
-        );
         let checkout_ref = request
             .checkout
             .as_ref()
@@ -924,7 +988,7 @@ clone_repo() {
         let pid_var = format!("pid_{index}");
         script.push_str(&format!(
             "{log_var}=\"$tmp_dir/repo-{index}.log\"\n\
-             clone_repo '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' '{escaped_checkout_ref}' '{is_commit_sha}' '{escaped_host}' >\"${log_var}\" 2>&1 &\n\
+             clone_repo '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' '{escaped_checkout_ref}' '{is_commit_sha}' >\"${log_var}\" 2>&1 &\n\
              {pid_var}=\"$!\"\n"
         ));
         // Waits are unrolled per repo (rather than looping over a dynamic pid
@@ -1013,8 +1077,17 @@ async fn clone_checkout_requests(
                 // before reaching the wait loop.
                 let failed_repo_names =
                     read_failed_repo_names(&failed_repos_path).unwrap_or(repo_names);
+                let failed_repo_names_set =
+                    failed_repo_names.iter().cloned().collect::<HashSet<_>>();
+                let hosts = unique_clone_hosts(repos.iter().filter(|request| {
+                    failed_repo_names_set
+                        .contains(&format!("{}/{}", request.remote.owner, request.remote.repo))
+                }));
+                let identity_diagnostics =
+                    collect_clone_failure_identity_diagnostics(hosts, spawner).await;
                 return Err(PrepareEnvironmentError::CloneRepo {
                     repo_name: failed_repo_names.join(", "),
+                    identity_diagnostics,
                 });
             }
 
@@ -1054,6 +1127,7 @@ async fn clone_repo(
 ) -> Result<(), PrepareEnvironmentError> {
     let repo = &request.remote;
     let repo_name = format!("{}/{}", repo.owner, repo.repo);
+    let repo_url = repo.https_clone_url();
     // Get the session's shell type for proper escaping, falling back to Bash
     // when the session is not yet bootstrapped or the spawn fails.
     let shell_type = spawner
@@ -1064,6 +1138,7 @@ async fn clone_repo(
         })
         .await
         .unwrap_or(ShellType::Bash);
+    let escaped_url = shell_escape_single_quotes(&repo_url, shell_type);
     let repo_dir = working_dir.join(&request.checkout_name);
     let commit_sha = match &request.checkout {
         Some(RepositoryHeadRef::CommitSha(commit_sha)) => Some(commit_sha.as_str()),
@@ -1082,22 +1157,13 @@ async fn clone_repo(
                 safe: ("Initializing repository at commit via terminal"),
                 full: ("Initializing repository via terminal: {repo_name} at {commit_sha}")
             );
-            let escaped_url = shell_escape_single_quotes(&repo.https_clone_url(), ShellType::Bash);
-            let escaped_dir =
-                shell_escape_single_quotes(&repo_dir.to_string_lossy(), ShellType::Bash);
-            let operation = format!(
+            let escaped_dir = shell_escape_single_quotes(&repo_dir.to_string_lossy(), shell_type);
+            let init_command = format!(
                 "git init --quiet '{escaped_dir}' && git -C '{escaped_dir}' remote add origin '{escaped_url}'"
-            );
-            let init_command = build_git_operation_command(
-                repo.code_forge.map(CodeForge::host).unwrap_or(""),
-                &operation,
-                shell_type,
             );
             let exit_code = execute_command(init_command, spawner).await?;
             if exit_code != 0.into() {
-                return Err(PrepareEnvironmentError::CloneRepo {
-                    repo_name: repo_name.clone(),
-                });
+                return Err(clone_repo_failure(request, repo_name.clone(), spawner).await);
             }
         }
     } else if dir_exists {
@@ -1117,12 +1183,11 @@ async fn clone_repo(
         // time while still keeping trees local, so path-limited history and
         // blame stay fully local instead of lazily refetching from the
         // promisor remote.
-        let command = build_single_repo_clone_command(request, working_dir, shell_type);
+        let escaped_dir = shell_escape_single_quotes(&repo_dir.to_string_lossy(), shell_type);
+        let command = format!("git clone --filter=blob:none '{escaped_url}' '{escaped_dir}'");
         let exit_code = execute_command(command, spawner).await?;
         if exit_code != 0.into() {
-            return Err(PrepareEnvironmentError::CloneRepo {
-                repo_name: repo_name.clone(),
-            });
+            return Err(clone_repo_failure(request, repo_name.clone(), spawner).await);
         }
 
         safe_info!(
@@ -1147,7 +1212,16 @@ async fn clone_repo(
             full: ("Checking out {checkout_ref} for {repo_name}")
         );
         let exit_code = execute_command(command, spawner).await?;
-        checkout_result(&repo_name, checkout_ref, exit_code)?;
+        if exit_code != 0.into() {
+            let hosts = unique_clone_hosts(std::iter::once(request));
+            let identity_diagnostics =
+                collect_clone_failure_identity_diagnostics(hosts, spawner).await;
+            return Err(PrepareEnvironmentError::CheckoutFailed {
+                repo_name,
+                checkout_ref: checkout_ref.to_string(),
+                identity_diagnostics,
+            });
+        }
 
         safe_info!(
             safe: ("Successfully checked out pinned ref"),
@@ -1202,61 +1276,12 @@ fn checkout_command_for(
 ) -> Option<String> {
     let checkout_ref = request.checkout.as_ref()?.value();
     let repo_dir = working_dir.join(&request.checkout_name);
-    let escaped_dir = shell_escape_single_quotes(&repo_dir.to_string_lossy(), ShellType::Bash);
-    let escaped_ref = shell_escape_single_quotes(checkout_ref, ShellType::Bash);
-    let operation = format!(
+    let escaped_dir = shell_escape_single_quotes(&repo_dir.to_string_lossy(), shell_type);
+    let escaped_ref = shell_escape_single_quotes(checkout_ref, shell_type);
+    Some(format!(
         "git -C '{escaped_dir}' fetch --filter=blob:none origin '{escaped_ref}' && \
          git -C '{escaped_dir}' checkout --detach FETCH_HEAD"
-    );
-    Some(build_git_operation_command(
-        request.remote.code_forge.map(CodeForge::host).unwrap_or(""),
-        &operation,
-        shell_type,
     ))
-}
-
-fn build_single_repo_clone_command(
-    request: &RepositoryCloneRequest,
-    working_dir: &Path,
-    shell_type: ShellType,
-) -> String {
-    let repo_url = request.remote.https_clone_url();
-    let repo_dir = working_dir.join(&request.checkout_name);
-    let escaped_url = shell_escape_single_quotes(&repo_url, ShellType::Bash);
-    let escaped_dir = shell_escape_single_quotes(&repo_dir.to_string_lossy(), ShellType::Bash);
-    let operation = format!("git clone --filter=blob:none '{escaped_url}' '{escaped_dir}'");
-    build_git_operation_command(
-        request.remote.code_forge.map(CodeForge::host).unwrap_or(""),
-        &operation,
-        shell_type,
-    )
-}
-
-fn build_git_operation_command(host: &str, operation: &str, shell_type: ShellType) -> String {
-    let escaped_host = shell_escape_single_quotes(host, ShellType::Bash);
-    let script = format!(
-        "{PRINT_GIT_CLONE_IDENTITY_FUNCTION}print_git_clone_identity '{escaped_host}'\n{operation}\n"
-    );
-    let escaped_script = shell_escape_single_quotes(&script, shell_type);
-    format!("sh -c '{escaped_script}'")
-}
-
-/// Map a checkout command's exit code onto the environment-prep result,
-/// surfacing a non-zero exit (fetch or checkout failing) as `CheckoutFailed`
-/// rather than silently leaving the clone on the default branch.
-fn checkout_result(
-    repo_name: &str,
-    checkout_ref: &str,
-    exit_code: ExitCode,
-) -> Result<(), PrepareEnvironmentError> {
-    if exit_code == 0.into() {
-        Ok(())
-    } else {
-        Err(PrepareEnvironmentError::CheckoutFailed {
-            repo_name: repo_name.to_string(),
-            checkout_ref: checkout_ref.to_string(),
-        })
-    }
 }
 
 /// Register a cloned source repository with `DetectedRepositories` so that the
