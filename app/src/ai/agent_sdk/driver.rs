@@ -670,7 +670,7 @@ pub struct AgentDriver {
 
     // The associated task ID for this agent run, if any.
     task_id: Option<AmbientAgentTaskId>,
-    #[expect(
+    #[allow(
         dead_code,
         reason = "the driver retains server-owned experiments without interpreting them"
     )]

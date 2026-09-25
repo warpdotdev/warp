@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
+use chrono::Utc;
 use clap::Parser;
 use cloud_object_models::CodeForge;
+use command::blocking::Command as ProcessCommand;
 use serde_json::json;
 use warp_cli::agent::{
     AgentCommand, Harness, OutputFormat, RepositoryForge, RepositoryHeadRef,
@@ -12,6 +14,7 @@ use warp_cli::artifact::{
 };
 use warp_cli::task::{MessageCommand, MessageSendArgs, MessageWatchArgs, TaskCommand};
 use warp_cli::{Args, CliCommand, Command};
+use warp_core::features::FeatureFlag;
 use warp_core::telemetry::TelemetryEvent;
 use warp_graphql::ai::AgentTaskState;
 use warpui::{App, SingletonEntity, WindowId};
@@ -21,8 +24,9 @@ use super::{
     command_to_telemetry_event, reconcile_task_harness, resolve_agent_driver_team_scope,
     team_scope_for_task_scope, validated_driver_repositories_for_preparation,
 };
-use crate::ai::agent_sdk::driver::{AgentDriverError, AgentDriverOptions};
-use crate::ai::ambient_agents::task::TaskScope;
+use crate::ai::agent_sdk::driver::harness::HarnessKind;
+use crate::ai::agent_sdk::driver::{AgentDriverError, AgentDriverOptions, AgentRunPrompt, Task};
+use crate::ai::ambient_agents::task::{AmbientAgentTask, AmbientAgentTaskState, TaskScope};
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::auth::AuthStateProvider;
 use crate::auth::user::{PrincipalType, User};
@@ -31,12 +35,13 @@ use crate::root_view::NewWorkspaceSource;
 use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{AIClient, AgentConfigSnapshot, MockAIClient};
+use crate::server::server_api::managed_secrets::AppManagedSecretManager;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::workspaces::team::{Team, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
+use crate::workspaces::user_workspaces::{TeamScope, TeamScopeForCli, UserWorkspaces};
 use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
@@ -138,7 +143,7 @@ fn initialize_team_scope_test_app(app: &mut App, teams: Vec<Team>) {
     });
 }
 
-fn agent_driver_options() -> AgentDriverOptions {
+pub(crate) fn agent_driver_options() -> AgentDriverOptions {
     AgentDriverOptions {
         working_dir: std::env::current_dir().unwrap(),
         task_id: None,
@@ -165,6 +170,179 @@ fn agent_driver_options() -> AgentDriverOptions {
         strict_mcp_startup: false,
         mcp_startup_timeout: None,
     }
+}
+
+#[test]
+fn existing_task_factory_experiments_bootstrap_and_log_without_payload() {
+    for (scenario, expected_line) in [
+        (
+            "present",
+            "factory_experimental_config state=read_uninterpreted key_count=4",
+        ),
+        (
+            "absent",
+            "factory_experimental_config state=absent key_count=0",
+        ),
+        ("local", ""),
+    ] {
+        let output = ProcessCommand::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ai::agent_sdk::tests::factory_experiment_bootstrap_subprocess",
+                "--nocapture",
+            ])
+            .env("WARP_TEST_FACTORY_EXPERIMENT_SCENARIO", scenario)
+            .env("WARP_ISOLATION_PLATFORM", "docker")
+            .env_remove("WARP_WORKLOAD_TOKEN")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{scenario}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let output = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let lifecycle_lines: Vec<_> = output
+            .lines()
+            .filter(|line| line.contains("factory_experimental_config"))
+            .collect();
+        if scenario == "local" {
+            assert!(lifecycle_lines.is_empty(), "{output}");
+            continue;
+        }
+        assert_eq!(lifecycle_lines.len(), 1, "{output}");
+        assert!(lifecycle_lines[0].contains(expected_line), "{output}");
+        for private_value in ["private-uid-sentinel", "secret-value-sentinel", "183749"] {
+            assert!(!output.contains(private_value), "{output}");
+        }
+        for private_value in ["true", "null"] {
+            assert!(!lifecycle_lines[0].contains(private_value), "{output}");
+        }
+    }
+}
+
+#[test]
+fn factory_experiment_bootstrap_subprocess() {
+    let Ok(scenario) = std::env::var("WARP_TEST_FACTORY_EXPERIMENT_SCENARIO") else {
+        return;
+    };
+    App::test((), |mut app| async move {
+        let _attachments = FeatureFlag::AmbientAgentsImageUpload.override_enabled(false);
+        let _handoff = FeatureFlag::OzHandoff.override_enabled(false);
+        let provider = ServerApiProvider::new_for_test();
+        let managed_secrets_client = provider.get_managed_secrets_client();
+        app.add_singleton_model(|_| provider);
+        let auth_provider = AuthStateProvider::new_for_test();
+        let auth_state = auth_provider.get().clone();
+        app.add_singleton_model(|_| auth_provider);
+        app.add_singleton_model(|_| {
+            AppManagedSecretManager::new(managed_secrets_client, auth_state)
+        });
+
+        let runner = app.add_singleton_model(|_| AgentDriverRunner);
+        let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
+        let mut options = agent_driver_options();
+
+        if scenario == "local" {
+            let mut ai_client = MockAIClient::new();
+            ai_client
+                .expect_create_agent_task()
+                .times(1)
+                .returning(|_, _, _, _, _| Ok(TASK_ID.parse().unwrap()));
+            let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
+            AgentDriverRunner::initialize_new_task(
+                &foreground,
+                &ai_client,
+                "local prompt".to_string(),
+                AgentConfigSnapshot::default(),
+                TeamScopeForCli::Personal,
+                &mut options,
+            )
+            .await
+            .unwrap();
+            assert!(options.experimental.is_none());
+            return;
+        }
+
+        let experimental: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_value(json!({
+                "private-uid-sentinel": "secret-value-sentinel",
+                "boolean": true,
+                "numeric": 183749,
+                "nullable": null
+            }))
+            .unwrap();
+        let mut task_metadata = AmbientAgentTask {
+            task_id: TASK_ID.parse().unwrap(),
+            parent_run_id: None,
+            title: String::new(),
+            state: AmbientAgentTaskState::InProgress,
+            prompt: String::new(),
+            created_at: Utc::now(),
+            started_at: None,
+            updated_at: Utc::now(),
+            run_time: None,
+            status_message: None,
+            source: None,
+            execution_location: None,
+            session_id: None,
+            session_link: None,
+            creator: None,
+            executor: None,
+            conversation_id: None,
+            request_usage: None,
+            is_sandbox_running: false,
+            agent_config_snapshot: None,
+            artifacts: vec![],
+            last_event_sequence: None,
+            children: vec![],
+            debug_agent_available: false,
+            scope: None,
+        };
+        if scenario == "present" {
+            task_metadata.agent_config_snapshot = Some(AgentConfigSnapshot {
+                experimental: Some(experimental.clone()),
+                ..Default::default()
+            });
+        }
+        let mut ai_client = MockAIClient::new();
+        ai_client
+            .expect_get_ambient_agent_task()
+            .times(1)
+            .return_once(move |_| Ok(task_metadata));
+        let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
+        let mut task = Task {
+            prompt: AgentRunPrompt::ServerSide {
+                skill: None,
+                attachments_dir: None,
+            },
+            model: None,
+            profile: None,
+            mcp_specs: vec![],
+            harness: HarnessKind::Oz,
+        };
+        AgentDriverRunner::fetch_secrets_and_attachments(
+            &foreground,
+            &ai_client,
+            TASK_ID.to_string(),
+            &mut options,
+            &mut task,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            options.experimental,
+            if scenario == "present" {
+                Some(experimental)
+            } else {
+                None
+            }
+        );
+    });
 }
 
 #[test]

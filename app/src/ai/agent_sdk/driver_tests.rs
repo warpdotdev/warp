@@ -11,6 +11,7 @@ use cloud_object_models::CodeForge;
 use futures::channel::oneshot;
 use futures::executor::block_on;
 use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
+use serde_json::json;
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 use tempfile::TempDir;
 use warp_cli::agent::Harness;
@@ -56,8 +57,28 @@ use crate::ai::llms::LLMId;
 use crate::ai::skills::SkillManager;
 use crate::test_util::assert_eventually;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
+use crate::workspace::view::tests::initialize_app as initialize_workspace_test_app;
 
 // ── IdleTimeoutSender tests ──────────────────────────────────────────────────────
+
+#[test]
+fn driver_keeps_uninterpreted_factory_experiments() {
+    App::test((), |mut app| async move {
+        initialize_workspace_test_app(&mut app);
+        let experimental: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_value(json!({
+                "identityOnlySystemPrompt": true,
+                "private-uid-sentinel": "secret-value-sentinel"
+            }))
+            .unwrap();
+        let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
+        options.experimental = Some(experimental.clone());
+        let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
+        driver.read(&app, |driver, _| {
+            assert_eq!(driver.experimental, Some(experimental));
+        });
+    });
+}
 
 #[test]
 fn idle_timeout_sender_send_now_delivers_value() {

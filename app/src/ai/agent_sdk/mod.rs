@@ -1229,6 +1229,7 @@ impl AgentDriverRunner {
                     SetupStep::TaskDataFetch,
                     Self::fetch_secrets_and_attachments(
                         foreground,
+                        server_api,
                         task_id_str,
                         &mut driver_options,
                         &mut task,
@@ -1325,23 +1326,20 @@ impl AgentDriverRunner {
     /// transcript rehydration without a separate `--conversation` CLI arg.
     async fn fetch_secrets_and_attachments(
         foreground: &ModelSpawner<Self>,
+        ai_client: &Arc<dyn AIClient>,
         task_id_str: String,
         driver_options: &mut AgentDriverOptions,
         task: &mut Task,
     ) -> Result<Option<String>, AgentDriverError> {
-        let (task_secrets, ai_client, server_api) = foreground
+        let (task_secrets, server_api) = foreground
             .spawn({
                 let task_id_str = task_id_str.clone();
                 move |_, ctx| {
                     let task_secrets = ManagedSecretManager::handle(ctx)
                         .as_ref(ctx)
                         .get_task_secrets(task_id_str);
-                    let ai_client = ServerApiProvider::handle(ctx)
-                        .as_ref(ctx)
-                        .get_ai_client()
-                        .clone();
                     let server_api = ServerApiProvider::handle(ctx).as_ref(ctx).get();
-                    (task_secrets, ai_client, server_api)
+                    (task_secrets, server_api)
                 }
             })
             .await?;
