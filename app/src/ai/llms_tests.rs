@@ -1,9 +1,18 @@
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::time::SystemTime;
 
+use ai::api_keys::{AwsCredentials, AwsCredentialsState};
+use settings::Setting;
+use warp_core::execution_mode::ExecutionMode;
 use warpui::App;
 
 use super::*;
+use crate::ai::execution_profiles::editor::ExecutionProfileEditorViewAction;
+use crate::ai::execution_profiles::model_menu_items::{
+    CollapsedModelVariants, available_model_menu_items,
+};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::auth::AuthStateProvider;
@@ -12,11 +21,20 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::team::MockTeamClient;
+use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::sync_queue::SyncQueue;
+use crate::settings::AISettings;
 use crate::terminal::input::models::query_model_picker_choices;
-use crate::test_util::settings::initialize_settings_for_tests;
+use crate::test_util::settings::{
+    initialize_settings_for_tests, initialize_settings_for_tests_with_mode,
+};
+use crate::workspaces::team::Team;
 use crate::workspaces::team_tester::TeamTesterStatus;
-use crate::workspaces::user_workspaces::{TeamlessScopeForTest, UserWorkspaces};
+use crate::workspaces::user_workspaces::{
+    TeamContextForOperation, TeamlessScopeForTest, UserWorkspaces,
+};
+use crate::workspaces::workspace::{HostEnablementSetting, LlmHostSettings, Workspace};
 use crate::{LaunchMode, TuiEntryPoint};
 
 // -- DisableReason::should_clear_preference tests --
@@ -688,6 +706,242 @@ fn active_models_fall_back_to_usable_choice_or_custom_endpoint_when_default_disa
                     .get_active_cli_agent_model(&TeamlessScopeForTest, app, None)
                     .id,
                 custom_model_id
+            );
+        });
+    });
+}
+
+#[test]
+fn cloud_host_opt_out_filters_picker_and_rejects_saved_models_without_blocking_other_hosts() {
+    let _geap = FeatureFlag::GeminiEnterprise.override_enabled(true);
+    let mut bedrock = server_llm("bedrock-only", None);
+    bedrock.provider = LLMProvider::Anthropic;
+    let mut gemini = server_llm("gemini-only", None);
+    gemini.provider = LLMProvider::Google;
+    let mut direct = bedrock.clone();
+    direct.id = "direct-alternative".into();
+    for (model, host) in [
+        (&mut bedrock, LLMModelHost::AwsBedrock),
+        (&mut gemini, LLMModelHost::GeminiEnterprise),
+        (&mut direct, LLMModelHost::AwsBedrock),
+    ] {
+        model.host_configs.insert(
+            host.clone(),
+            RoutingHostConfig {
+                enabled: true,
+                model_routing_host: host,
+            },
+        );
+        model.host_configs.insert(
+            LLMModelHost::DirectApi,
+            RoutingHostConfig {
+                enabled: model.id == LLMId::from("direct-alternative"),
+                model_routing_host: LLMModelHost::DirectApi,
+            },
+        );
+    }
+    let models = ModelsByFeature {
+        agent_mode: available(
+            "auto",
+            vec![server_llm("auto", None), bedrock, gemini, direct],
+        ),
+        ..Default::default()
+    };
+    let mut team = Team::from_local_cache(123.into(), "respect".into(), None, None, None, None);
+    team.settings.llm_settings.enabled = true;
+    team.feature_model_choice = models.clone();
+    for host in [LLMModelHost::AwsBedrock, LLMModelHost::GeminiEnterprise] {
+        team.settings.llm_settings.host_configs.insert(
+            host,
+            LlmHostSettings {
+                enabled: true,
+                enablement_setting: HostEnablementSetting::RespectUserSetting,
+                ..Default::default()
+            },
+        );
+    }
+    let mut enforced = team.clone();
+    enforced.uid = 456.into();
+    for host in [LLMModelHost::AwsBedrock, LLMModelHost::GeminiEnterprise] {
+        enforced
+            .settings
+            .llm_settings
+            .host_configs
+            .get_mut(&host)
+            .unwrap()
+            .enablement_setting = HostEnablementSetting::Enforce;
+    }
+    let workspace = Workspace::from_local_cache(
+        "workspace_uid123456789".to_string().into(),
+        "test".into(),
+        Some(vec![team.clone(), enforced.clone()]),
+        None,
+    );
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(MockTeamClient::new()),
+                Arc::new(MockWorkspaceClient::new()),
+                vec![workspace],
+                ctx,
+            )
+        });
+        app.add_singleton_model(|_| LLMPreferences::for_test(Vec::new()));
+        let respect_scope = TeamContextForOperation::new_for_test(team.uid);
+        let enforced_scope = TeamContextForOperation::new_for_test(enforced.uid);
+        app.read(|ctx| {
+            let preferences = LLMPreferences::as_ref(ctx);
+            let choices = &models.agent_mode.choices;
+            let visible =
+                query_model_picker_choices(preferences, choices.iter(), "", &respect_scope, ctx);
+            let ids: Vec<_> = visible.iter().map(|item| item.llm.id.as_str()).collect();
+            assert_eq!(ids, ["auto", "direct-alternative"]);
+            let menu = available_model_menu_items(
+                choices.iter().collect(),
+                |llm| ExecutionProfileEditorViewAction::SetBaseModel { id: llm.id.clone() },
+                None,
+                None,
+                CollapsedModelVariants::default(),
+                &respect_scope,
+                ctx,
+            );
+            assert_eq!(menu.len(), 2);
+            for blocked in ["bedrock-only", "gemini-only"] {
+                let error = crate::ai::agent::api::validate_model_hosts_for_request(
+                    &models,
+                    &blocked.into(),
+                    &"cli-agent-auto".into(),
+                    &"computer-use-agent-auto".into(),
+                    &respect_scope,
+                    ctx,
+                )
+                .expect_err("saved host-only selection must not be sent");
+                assert!(error.to_string().contains(blocked));
+            }
+            assert!(
+                crate::ai::agent::api::validate_model_hosts_for_request(
+                    &models,
+                    &"direct-alternative".into(),
+                    &"cli-agent-auto".into(),
+                    &"computer-use-agent-auto".into(),
+                    &respect_scope,
+                    ctx,
+                )
+                .is_ok()
+            );
+            let enforced_ids: Vec<_> =
+                query_model_picker_choices(preferences, choices.iter(), "", &enforced_scope, ctx)
+                    .iter()
+                    .map(|item| item.llm.id.to_string())
+                    .collect();
+            assert!(enforced_ids.contains(&"bedrock-only".into()));
+            assert!(enforced_ids.contains(&"gemini-only".into()));
+        });
+        ApiKeyManager::handle(&app).update(&mut app, |manager, _| {
+            manager.set_aws_credentials_refresh_strategy(
+                AwsCredentialsRefreshStrategy::OidcManaged {
+                    task_id: Some("task".into()),
+                    role_arn: "arn:aws:iam::123:role/test".into(),
+                    region: "us-east-1".into(),
+                },
+            );
+        });
+        app.read(|ctx| {
+            assert!(!should_attach_aws_bedrock_credentials(&respect_scope, ctx));
+            assert!(
+                crate::ai::agent::api::validate_model_hosts_for_request(
+                    &models,
+                    &"bedrock-only".into(),
+                    &"cli-agent-auto".into(),
+                    &"computer-use-agent-auto".into(),
+                    &respect_scope,
+                    ctx,
+                )
+                .is_err()
+            );
+        });
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .aws_bedrock_credentials_enabled
+                .set_value(true, ctx)
+                .unwrap();
+            settings
+                .gemini_enterprise_credentials_enabled
+                .set_value(true, ctx)
+                .unwrap();
+        });
+        app.read(|ctx| {
+            let choices = query_model_picker_choices(
+                LLMPreferences::as_ref(ctx),
+                models.agent_mode.choices.iter(),
+                "",
+                &respect_scope,
+                ctx,
+            );
+            assert_eq!(choices.len(), 4);
+        });
+    });
+}
+
+#[test]
+fn oidc_managed_cloud_request_can_use_bedrock_without_a_desktop_setting() {
+    let mut bedrock = server_llm("bedrock-only", None);
+    bedrock.host_configs.insert(
+        LLMModelHost::AwsBedrock,
+        RoutingHostConfig {
+            enabled: true,
+            model_routing_host: LLMModelHost::AwsBedrock,
+        },
+    );
+    let models = ModelsByFeature {
+        agent_mode: available("bedrock-only", vec![bedrock]),
+        ..Default::default()
+    };
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests_with_mode(&mut app, ExecutionMode::Sdk, true);
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.set_aws_credentials_refresh_strategy(
+                AwsCredentialsRefreshStrategy::OidcManaged {
+                    task_id: Some("task".into()),
+                    role_arn: "arn:aws:iam::123:role/test".into(),
+                    region: "us-east-1".into(),
+                },
+            );
+            manager.set_aws_credentials_state(
+                AwsCredentialsState::Loaded {
+                    credentials: AwsCredentials::new("access".into(), "secret".into(), None, None),
+                    loaded_at: SystemTime::now(),
+                },
+                ctx,
+            );
+        });
+        app.read(|ctx| {
+            let scope = TeamlessScopeForTest;
+            assert!(should_attach_aws_bedrock_credentials(&scope, ctx));
+            assert!(
+                crate::ai::agent::api::validate_model_hosts_for_request(
+                    &models,
+                    &"bedrock-only".into(),
+                    &"cli-agent-auto".into(),
+                    &"computer-use-agent-auto".into(),
+                    &scope,
+                    ctx,
+                )
+                .is_ok()
+            );
+            assert!(
+                ApiKeyManager::as_ref(ctx)
+                    .api_keys_for_request(
+                        false,
+                        should_attach_aws_bedrock_credentials(&scope, ctx),
+                        None,
+                    )
+                    .unwrap()
+                    .aws_credentials
+                    .is_some()
             );
         });
     });

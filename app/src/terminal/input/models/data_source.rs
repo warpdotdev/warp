@@ -29,8 +29,8 @@ use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::execution_profiles::model_menu_items::is_auto;
 use crate::ai::llms::{
     ByoKeySource, DisableReason, LLMId, LLMInfo, LLMPreferences, LLMProvider, LLMSpec,
-    ModelIconFlags, byo_key_source_for_model, is_model_allowed_for_scope, model_leading_icon,
-    should_show_bedrock_icon_for_model,
+    ModelIconFlags, byo_key_source_for_model, is_model_allowed_for_scope,
+    is_model_host_usable_for_scope, model_leading_icon, should_show_bedrock_icon_for_model,
     should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
 };
 use crate::features::FeatureFlag;
@@ -171,6 +171,7 @@ pub fn query_model_picker_choices<'a>(
     let mut results = choices
         .into_iter()
         .filter(|llm| is_model_allowed_for_scope(llm_preferences, llm, scope, app))
+        .filter(|llm| is_model_host_usable_for_scope(llm, scope, app))
         .filter_map(|llm| {
             let name_match_result = if query_text.is_empty() {
                 None
