@@ -34,6 +34,30 @@ use crate::terminal::shell::ShellType;
 
 const CODEBASE_INDEX_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 const ENVIRONMENT_SNAPSHOT_CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
+const PRINT_GIT_CLONE_IDENTITY_FUNCTION: &str = r#"print_git_clone_identity() {
+  host="$1"
+  author_name="$(git config --get user.name 2>/dev/null)"
+  if [ -z "$author_name" ]; then
+    author_name="unset"
+  fi
+  credential_username="unset"
+  credentials_file="$HOME/.git-credentials"
+  if [ -r "$credentials_file" ]; then
+    while IFS= read -r credential; do
+      credential_without_scheme="${credential#*://}"
+      credential_host="${credential_without_scheme#*@}"
+      credential_host="${credential_host%%/*}"
+      if [ "$credential_host" = "$host" ]; then
+        credential_userinfo="${credential_without_scheme%%@*}"
+        credential_username="${credential_userinfo%%:*}"
+        break
+      fi
+    done < "$credentials_file"
+  fi
+  printf '%s\n' "Git author: $author_name"
+  printf '%s\n' "Git credential: $credential_username@$host"
+}
+"#;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PrepareEnvironmentError {
@@ -790,9 +814,10 @@ fn build_parallel_clone_command(
 ) -> String {
     let escaped_failed_repos_path =
         shell_escape_single_quotes(&failed_repos_path.to_string_lossy(), ShellType::Bash);
-    let mut script = String::from(
-        r#"set +e
-failed=0
+    let mut script = String::from("set +e\n");
+    script.push_str(PRINT_GIT_CLONE_IDENTITY_FUNCTION);
+    script.push_str(
+        r#"failed=0
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/warp-clone-logs.XXXXXX")"
 cleanup_clone_logs() {
   rm -rf "$tmp_dir"
@@ -804,6 +829,8 @@ clone_repo() {
   target="$3"
   checkout_ref="$4"
   is_commit_sha="$5"
+  repo_host="$6"
+  print_git_clone_identity "$repo_host"
   if [ "$is_commit_sha" = "1" ]; then
     if [ -e "$target" ]; then
       printf '%s\n' "Checking out $checkout_ref in existing repository $repo_name..."
@@ -840,6 +867,10 @@ clone_repo() {
         let escaped_repo_name = shell_escape_single_quotes(&repo_name, ShellType::Bash);
         let escaped_repo_url = shell_escape_single_quotes(&repo_url, ShellType::Bash);
         let escaped_target = shell_escape_single_quotes(&request.checkout_name, ShellType::Bash);
+        let escaped_host = shell_escape_single_quotes(
+            request.remote.code_forge.map(CodeForge::host).unwrap_or(""),
+            ShellType::Bash,
+        );
         let checkout_ref = request
             .checkout
             .as_ref()
@@ -854,7 +885,7 @@ clone_repo() {
         let pid_var = format!("pid_{index}");
         script.push_str(&format!(
             "{log_var}=\"$tmp_dir/repo-{index}.log\"\n\
-             clone_repo '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' '{escaped_checkout_ref}' '{is_commit_sha}' >\"${log_var}\" 2>&1 &\n\
+             clone_repo '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' '{escaped_checkout_ref}' '{is_commit_sha}' '{escaped_host}' >\"${log_var}\" 2>&1 &\n\
              {pid_var}=\"$!\"\n"
         ));
         // Waits are unrolled per repo (rather than looping over a dynamic pid
@@ -984,7 +1015,6 @@ async fn clone_repo(
 ) -> Result<(), PrepareEnvironmentError> {
     let repo = &request.remote;
     let repo_name = format!("{}/{}", repo.owner, repo.repo);
-    let repo_url = repo.https_clone_url();
     // Get the session's shell type for proper escaping, falling back to Bash
     // when the session is not yet bootstrapped or the spawn fails.
     let shell_type = spawner
@@ -995,7 +1025,6 @@ async fn clone_repo(
         })
         .await
         .unwrap_or(ShellType::Bash);
-    let escaped_url = shell_escape_single_quotes(&repo_url, shell_type);
     let repo_dir = working_dir.join(&request.checkout_name);
     let commit_sha = match &request.checkout {
         Some(RepositoryHeadRef::CommitSha(commit_sha)) => Some(commit_sha.as_str()),
@@ -1014,9 +1043,16 @@ async fn clone_repo(
                 safe: ("Initializing repository at commit via terminal"),
                 full: ("Initializing repository via terminal: {repo_name} at {commit_sha}")
             );
-            let escaped_dir = shell_escape_single_quotes(&repo_dir.to_string_lossy(), shell_type);
-            let init_command = format!(
+            let escaped_url = shell_escape_single_quotes(&repo.https_clone_url(), ShellType::Bash);
+            let escaped_dir =
+                shell_escape_single_quotes(&repo_dir.to_string_lossy(), ShellType::Bash);
+            let operation = format!(
                 "git init --quiet '{escaped_dir}' && git -C '{escaped_dir}' remote add origin '{escaped_url}'"
+            );
+            let init_command = build_git_operation_command(
+                repo.code_forge.map(CodeForge::host).unwrap_or(""),
+                &operation,
+                shell_type,
             );
             let exit_code = execute_command(init_command, spawner).await?;
             if exit_code != 0.into() {
@@ -1042,8 +1078,7 @@ async fn clone_repo(
         // time while still keeping trees local, so path-limited history and
         // blame stay fully local instead of lazily refetching from the
         // promisor remote.
-        let escaped_dir = shell_escape_single_quotes(&repo_dir.to_string_lossy(), shell_type);
-        let command = format!("git clone --filter=blob:none '{escaped_url}' '{escaped_dir}'");
+        let command = build_single_repo_clone_command(request, working_dir, shell_type);
         let exit_code = execute_command(command, spawner).await?;
         if exit_code != 0.into() {
             return Err(PrepareEnvironmentError::CloneRepo {
@@ -1128,12 +1163,43 @@ fn checkout_command_for(
 ) -> Option<String> {
     let checkout_ref = request.checkout.as_ref()?.value();
     let repo_dir = working_dir.join(&request.checkout_name);
-    let escaped_dir = shell_escape_single_quotes(&repo_dir.to_string_lossy(), shell_type);
-    let escaped_ref = shell_escape_single_quotes(checkout_ref, shell_type);
-    Some(format!(
+    let escaped_dir = shell_escape_single_quotes(&repo_dir.to_string_lossy(), ShellType::Bash);
+    let escaped_ref = shell_escape_single_quotes(checkout_ref, ShellType::Bash);
+    let operation = format!(
         "git -C '{escaped_dir}' fetch --filter=blob:none origin '{escaped_ref}' && \
          git -C '{escaped_dir}' checkout --detach FETCH_HEAD"
+    );
+    Some(build_git_operation_command(
+        request.remote.code_forge.map(CodeForge::host).unwrap_or(""),
+        &operation,
+        shell_type,
     ))
+}
+
+fn build_single_repo_clone_command(
+    request: &RepositoryCloneRequest,
+    working_dir: &Path,
+    shell_type: ShellType,
+) -> String {
+    let repo_url = request.remote.https_clone_url();
+    let repo_dir = working_dir.join(&request.checkout_name);
+    let escaped_url = shell_escape_single_quotes(&repo_url, ShellType::Bash);
+    let escaped_dir = shell_escape_single_quotes(&repo_dir.to_string_lossy(), ShellType::Bash);
+    let operation = format!("git clone --filter=blob:none '{escaped_url}' '{escaped_dir}'");
+    build_git_operation_command(
+        request.remote.code_forge.map(CodeForge::host).unwrap_or(""),
+        &operation,
+        shell_type,
+    )
+}
+
+fn build_git_operation_command(host: &str, operation: &str, shell_type: ShellType) -> String {
+    let escaped_host = shell_escape_single_quotes(host, ShellType::Bash);
+    let script = format!(
+        "{PRINT_GIT_CLONE_IDENTITY_FUNCTION}print_git_clone_identity '{escaped_host}'\n{operation}\n"
+    );
+    let escaped_script = shell_escape_single_quotes(&script, shell_type);
+    format!("sh -c '{escaped_script}'")
 }
 
 /// Map a checkout command's exit code onto the environment-prep result,

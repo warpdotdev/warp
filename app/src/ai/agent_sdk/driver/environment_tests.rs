@@ -9,6 +9,8 @@ use warp_cli::agent::{
 };
 use warp_core::command::ExitCode;
 
+#[cfg(unix)]
+use super::build_single_repo_clone_command;
 use super::{
     PrepareEnvironmentError, RepositoryCloneRequest, build_parallel_clone_command,
     build_remove_repository_origins_command, build_resolved_head_command, checkout_command_for,
@@ -375,6 +377,90 @@ fn parallel_clone_command_runs_repos_in_background_and_waits() {
     assert!(command.contains("exit \"$failed\""));
 }
 
+#[cfg(unix)]
+#[test]
+fn parallel_clone_command_prints_identity_before_clone_without_rendering_secrets() {
+    let repos = vec![
+        clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp"), None),
+        clone_request(repo(CodeForge::GitLab, "platform/backend", "api"), None),
+    ];
+    let command = build_parallel_clone_command(
+        &repos,
+        ShellType::Bash,
+        Path::new("/tmp/.warp-clone-failed-test"),
+    );
+    let output = run_git_command_with_identity_fixture(&command);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(stdout.matches("Git author: Ada Lovelace").count(), 2);
+    assert_eq!(
+        stdout.matches("Git credential: octocat@github.com").count(),
+        1
+    );
+    for section in stdout.split("===== ").skip(1) {
+        let credential = if section.starts_with("warpdotdev/warp") {
+            "Git credential: octocat@github.com"
+        } else {
+            "Git credential: oauth2@gitlab.com"
+        };
+        assert_output_order(
+            section,
+            &["Git author: Ada Lovelace", credential, "git clone"],
+        );
+    }
+    assert!(!stdout.contains("credential-secret-never-print"));
+    assert!(!stdout.contains("gitlab-secret-never-print"));
+    assert!(!stdout.contains("https://octocat:"));
+    assert!(!stdout.contains("https://oauth2:"));
+}
+
+#[cfg(unix)]
+#[test]
+fn single_clone_command_prints_identity_before_clone_without_rendering_secrets() {
+    let request = clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp"), None);
+    let command =
+        build_single_repo_clone_command(&request, Path::new("/workspace"), ShellType::Bash);
+    let output = run_git_command_with_identity_fixture(&command);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(output.status.success());
+    assert_output_order(
+        &stdout,
+        &[
+            "Git author: Ada Lovelace",
+            "Git credential: octocat@github.com",
+            "git clone",
+        ],
+    );
+    assert!(!stdout.contains("credential-secret-never-print"));
+    assert!(!stdout.contains("https://octocat:"));
+}
+
+#[cfg(unix)]
+#[test]
+fn single_fetch_command_prints_identity_before_fetch_without_rendering_secrets() {
+    let request = clone_request(
+        repo(CodeForge::GitHub, "warpdotdev", "warp"),
+        Some(RepositoryHeadRef::Branch("feature".to_string())),
+    );
+    let command = checkout_command_for(&request, Path::new("/workspace"), ShellType::Bash).unwrap();
+    let output = run_git_command_with_identity_fixture(&command);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(output.status.success());
+    assert_output_order(
+        &stdout,
+        &[
+            "Git author: Ada Lovelace",
+            "Git credential: octocat@github.com",
+            "git fetch",
+        ],
+    );
+    assert!(!stdout.contains("credential-secret-never-print"));
+    assert!(!stdout.contains("https://octocat:"));
+}
+
 #[test]
 fn parallel_clone_command_records_only_the_failing_repo_name_on_partial_failure() {
     let repos = vec![
@@ -502,12 +588,14 @@ fn checkout_command_checks_out_fetch_head_not_ref_name() {
     .with_checkout_ref(Some("feature".to_string()));
 
     let workspace = Path::new("/workspace");
-    let command = checkout_command_for(
-        &clone_request(repo, Some(RepositoryHeadRef::Branch("feature".to_string()))),
-        workspace,
-        ShellType::Bash,
-    )
-    .unwrap();
+    let command = unwrap_sh_c_script(
+        &checkout_command_for(
+            &clone_request(repo, Some(RepositoryHeadRef::Branch("feature".to_string()))),
+            workspace,
+            ShellType::Bash,
+        )
+        .unwrap(),
+    );
 
     let warp_dir = workspace.join("warp");
     assert!(command.contains(&format!(
@@ -1170,8 +1258,67 @@ fn run_command_output(command: &str) -> std::process::Output {
         .expect("sh should be runnable")
 }
 
-/// Unwrap the outer `sh -c '...'` quoting produced by `build_parallel_clone_command`
-/// so tests can execute the embedded shell script directly.
+#[cfg(unix)]
+fn run_git_command_with_identity_fixture(command: &str) -> std::process::Output {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let bin_dir = temp_dir.path().join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let git_path = bin_dir.join("git");
+    fs::write(
+        &git_path,
+        "#!/bin/sh\n\
+         if [ \"$1\" = \"config\" ]; then\n\
+           printf '%s\\n' 'Ada Lovelace'\n\
+         elif [ \"$1\" = \"-C\" ]; then\n\
+           printf 'git %s\\n' \"$3\"\n\
+         else\n\
+           printf 'git %s\\n' \"$1\"\n\
+         fi\n",
+    )
+    .unwrap();
+    fs::set_permissions(&git_path, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(
+        temp_dir.path().join(".git-credentials"),
+        "https://octocat:credential-secret-never-print@github.com\n\
+         https://oauth2:gitlab-secret-never-print@gitlab.com\n",
+    )
+    .unwrap();
+
+    Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .env("HOME", temp_dir.path())
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                bin_dir.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .output()
+        .expect("identity-prefixed git command should be runnable")
+}
+
+#[cfg(unix)]
+fn assert_output_order(output: &str, expected: &[&str]) {
+    let mut previous = None;
+    for item in expected {
+        let position = output
+            .find(item)
+            .unwrap_or_else(|| panic!("expected {item:?} in output: {output}"));
+        if let Some(previous) = previous {
+            assert!(
+                previous < position,
+                "expected {expected:?} in order, got: {output}"
+            );
+        }
+        previous = Some(position);
+    }
+}
+
 fn unwrap_sh_c_script(command: &str) -> String {
     let prefix = "sh -c '";
     let suffix = "'";
@@ -1184,8 +1331,6 @@ fn unwrap_sh_c_script(command: &str) -> String {
     inner.replace("'\"'\"'", "'")
 }
 
-/// Extract the `clone_repo` function body from the parallel clone script and
-/// invoke it once against a local fixture origin/target.
 fn run_parallel_clone_repo_helper(
     fixture: &Fixture,
     target: &Path,
@@ -1216,8 +1361,15 @@ fn run_parallel_clone_repo_helper(
         Path::new("/tmp/.warp-clone-failed-test"),
     ));
 
-    // Keep only the clone_repo function definition; drop background clones /
-    // waits / logs. Locate by name so we don't grab cleanup_clone_logs instead.
+    let identity_helper_start = script
+        .find("print_git_clone_identity() {")
+        .expect("identity function definition");
+    let identity_helper_end = script[identity_helper_start..]
+        .find("\n}")
+        .expect("identity function terminator")
+        + identity_helper_start
+        + 2;
+    let identity_helper = &script[identity_helper_start..identity_helper_end];
     let helper_start = script
         .find("clone_repo() {")
         .expect("clone_repo function definition");
@@ -1228,7 +1380,7 @@ fn run_parallel_clone_repo_helper(
         + 2;
     let helper = &script[helper_start..helper_end];
     let invoke = format!(
-        "set -e\n{helper}\nclone_repo 'warpdotdev/{repo}' '{origin}' '{target}' '{checkout_ref}' '{is_commit_sha}'\n",
+        "set -e\n{identity_helper}\n{helper}\nclone_repo 'warpdotdev/{repo}' '{origin}' '{target}' '{checkout_ref}' '{is_commit_sha}' 'github.com'\n",
         repo = fixture.repo_name,
         origin = fixture.origin_url,
         target = target.display(),
