@@ -10,6 +10,8 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 pub use ai::agent::convert::ConvertToAPITypeError;
 use ai::api_keys::ApiKeyManager;
+#[cfg(not(target_family = "wasm"))]
+use ai::api_keys::GeapMintBinding;
 pub(crate) use convert_from::convert_user_query_mode;
 pub use convert_from::{
     ConversionParams, ConvertAPIMessageToClientOutputMessage, MaybeAIAgentOutputMessage,
@@ -164,6 +166,9 @@ pub struct RequestParams {
     pub member_byo_credentials_allowed: bool,
     /// User-provided API keys for AI providers (BYO API Key).
     pub api_keys: Option<warp_multi_agent_api::request::settings::ApiKeys>,
+    /// A refresh must retain this request's team policy; unrelated keys do not grant GEAP access.
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) geap_mint_binding: Option<GeapMintBinding>,
     /// User-provided custom model providers (BYOK endpoints).
     pub custom_model_providers:
         Option<warp_multi_agent_api::request::settings::CustomModelProviders>,
@@ -231,6 +236,8 @@ impl RequestParams {
             should_redact_secrets: false,
             member_byo_credentials_allowed: false,
             api_keys: None,
+            #[cfg(not(target_family = "wasm"))]
+            geap_mint_binding: None,
             custom_model_providers: None,
             custom_model_routers: None,
             allow_use_of_warp_credits: false,
@@ -357,7 +364,7 @@ impl RequestParams {
         let api_keys = api_key_manager.api_keys_for_request(
             is_byo_enabled,
             should_attach_aws_bedrock_credentials(scope, app),
-            geap_binding,
+            geap_binding.clone(),
         );
         let is_custom_inference_enabled = user_workspaces.is_byo_endpoint_enabled(app)
             && user_workspaces.are_member_byo_endpoints_allowed(scope);
@@ -452,6 +459,8 @@ impl RequestParams {
             should_redact_secrets,
             member_byo_credentials_allowed,
             api_keys,
+            #[cfg(not(target_family = "wasm"))]
+            geap_mint_binding: geap_binding,
             custom_model_providers,
             custom_model_routers,
             allow_use_of_warp_credits,
