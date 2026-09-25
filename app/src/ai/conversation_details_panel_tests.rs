@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use chrono::{Local, Utc};
-use persistence::model::{AgentConversationData, ConversationUsageMetadata};
+use persistence::model::{AgentConversationData, ChargedUsageTotals, ConversationUsageMetadata};
 use warp_cli::agent::Harness;
 use warp_multi_agent_api as api;
 use warpui::{App, EntityId, SingletonEntity};
@@ -11,7 +11,9 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversation, AIConversationId, ServerAIConversationMetadata,
 };
-use crate::ai::ambient_agents::task::{AgentConfigSnapshot, HarnessConfig, TaskPrincipalInfo};
+use crate::ai::ambient_agents::task::{
+    AgentConfigSnapshot, HarnessConfig, RequestUsage, TaskPrincipalInfo,
+};
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::auth::UserUid;
@@ -431,6 +433,49 @@ fn test_from_conversation_populates_local_conversation_fields() {
             assert_eq!(data.title, "test query");
             assert_eq!(data.source_prompt.as_deref(), Some("test query"));
             assert!(data.credits.is_some());
+        });
+    });
+}
+
+#[test]
+fn test_from_conversation_uses_charged_usage_dollar_total() {
+    App::test((), |mut app| async move {
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_charged_usage_for_test(Some(ChargedUsageTotals {
+            input_cost_in_cents: 10.0,
+            output_cost_in_cents: 12.0,
+            platform_cost_in_cents: 8.0,
+            web_search_cost_in_cents: 6.0,
+            ..Default::default()
+        }));
+
+        app.update(|ctx| {
+            let data = ConversationDetailsData::from_conversation(&conversation, ctx);
+
+            assert_eq!(data.cost_in_cents, Some(36.0));
+        });
+    });
+}
+
+#[test]
+fn test_from_task_uses_server_reported_dollar_cost() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+
+        let mut task = create_test_task("550e8400-e29b-41d4-a716-000000004060");
+        task.request_usage = Some(RequestUsage {
+            inference_cost: Some(10.0),
+            compute_cost: Some(2.0),
+            platform_cost: Some(3.0),
+            inference_cost_usd: Some(0.18),
+            compute_cost_usd: Some(0.036),
+            platform_cost_usd: Some(0.054),
+        });
+
+        app.update(|ctx| {
+            let data = ConversationDetailsData::from_task(&task, None, None, ctx);
+
+            assert_eq!(data.cost_in_cents, Some(27.0));
         });
     });
 }

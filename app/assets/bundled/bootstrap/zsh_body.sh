@@ -715,9 +715,20 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
     local result=""
     case "$_WARP_EXTERNAL_CTRL_R_WIDGET" in
       fzf-history-widget)
+        local cursor_and_line="${1:-0:}"
+        local char_cursor="${cursor_and_line%%:*}"
+        local original_line="$(warp_hex_decode_string "${cursor_and_line#*:}")"
+        local query="${original_line[1,$char_cursor]}"
+        local fzf_default_opts
+        if (( $+functions[__fzf_defaults] )); then
+          fzf_default_opts="$(__fzf_defaults "" "${FZF_CTRL_R_OPTS-}")"
+        else
+          fzf_default_opts="--height ${FZF_TMUX_HEIGHT:-40%} ${FZF_DEFAULT_OPTS-} ${FZF_CTRL_R_OPTS-}"
+        fi
         result="$(fc -rl 1 \
           | command -p awk '{ cmd=$0; sub(/^[ \t]*[0-9]+\**[ \t]+/, "", cmd); if (!seen[cmd]++) print cmd }' \
-          | fzf --scheme=history --tiebreak=index +m)"
+          | FZF_DEFAULT_OPTS="$fzf_default_opts" \
+            FZF_DEFAULT_OPTS_FILE='' fzf --scheme=history --tiebreak=index +m --query="$query")"
         ;;
       atuin-search|atuin-search-viins|atuin-search-vicmd|_atuin_search_widget)
         # atuin writes its TUI to stdout; under plain command substitution that's a pipe, and
