@@ -294,6 +294,7 @@ fn test_programming_language_to_extension() {
         ("containerfile", "dockerfile"),
         ("markdown", "md"),
         ("md", "md"),
+        ("dart", "dart"),
     ];
     for (token, expected_extension) in cases {
         let language = ProgrammingLanguage::from((*token).to_string());
