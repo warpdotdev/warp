@@ -129,8 +129,7 @@ impl BaseUserQuery {
         }))
     }
 
-    /// Whether the server marked this query as the wake it sends when agent messages may be
-    /// waiting for the run.
+    /// Whether the server issued this query as an agent-message wake.
     pub(crate) fn is_agent_message_wake(&self) -> bool {
         matches!(
             self.0

@@ -196,14 +196,8 @@ struct ConversationStreamState {
     /// Last fully handled event sequence number. 0 means "no events
     /// processed yet".
     event_cursor: i64,
-    /// Message IDs already confirmed delivered to the server for this
-    /// conversation's lifetime in this process, so a still-streaming exchange
-    /// (or a message that arrives redundantly via more than one path) doesn't
-    /// reissue the same `mark_delivered` call repeatedly. Populated by
-    /// `on_streaming_exchange_updated` for every `MessagesReceivedFromAgents`
-    /// chunk observed in an exchange's output, regardless of whether the
-    /// message content arrived via SSE `new_message` hydration or was
-    /// injected directly server-side (e.g. into a wake turn's initial input).
+    /// Message IDs already confirmed delivered, so repeated updates of a streaming exchange do
+    /// not reissue the same confirmation.
     confirmed_message_ids: HashSet<String>,
     /// Local consumers (terminal pane id for an open agent view, driver
     /// model id for `agent_sdk`) that need events delivered to this
@@ -1723,13 +1717,8 @@ impl OrchestrationEventStreamer {
             .insert(run_id)
     }
 
-    /// Confirms delivery for every message surfaced by a `MessagesReceivedFromAgents`
-    /// chunk in the given exchange's output, regardless of how that content arrived --
-    /// via SSE `new_message` hydration or injected directly server-side into a wake
-    /// turn's initial input. Without this, a message injected outside the SSE path
-    /// would never be marked delivered, leaving it exposed to a still-open event
-    /// stream redelivering it as a duplicate turn once the underlying `new_message`
-    /// event drains through.
+    /// Confirms delivery of every agent message echoed in the exchange's output, whichever route
+    /// delivered it, so a message injected outside the event stream is not redelivered later.
     fn on_streaming_exchange_updated(
         &mut self,
         conversation_id: AIConversationId,
@@ -1741,8 +1730,7 @@ impl OrchestrationEventStreamer {
         else {
             return;
         };
-        // Passive views of a run hosted elsewhere render the same output, but only the
-        // recipient's own process confirms delivery.
+        // Only the recipient's own process confirms delivery, never a passive viewer.
         if conversation.is_viewing_shared_session() || conversation.is_remote_child() {
             return;
         }
@@ -1765,8 +1753,6 @@ impl OrchestrationEventStreamer {
             return;
         }
 
-        // Only confirm IDs not already confirmed, so a still-streaming exchange
-        // doesn't reissue the same confirmation on every incremental update.
         let newly_confirmed_ids: Vec<String> = {
             let confirmed = &mut self
                 .streams

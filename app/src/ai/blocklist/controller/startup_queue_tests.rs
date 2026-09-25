@@ -310,8 +310,7 @@ fn startup_injections_queued_before_the_initial_prompt_are_dispatched_one_at_a_t
     });
 }
 
-/// The fallback text the server sends alongside an agent-message wake, for clients that do not
-/// read the query origin.
+/// The fallback text the server sends with an agent-message wake.
 const WAKE_PROMPT: &str = "You have received new agent messages. Read all unread agent messages.";
 
 /// A base whose origin is the server's agent-message wake.
@@ -351,9 +350,7 @@ fn assert_wake_sent_as_input_not_query(history: &BlocklistAIHistoryModel, id: AI
 
 #[test]
 fn agent_message_wake_origin_becomes_an_agent_message_wake_input_not_a_query() {
-    // Regression test: a shared-session prompt whose query origin is the server's
-    // agent-message wake must be sent as `AIAgentInput::AgentMessageWake` rather than relayed
-    // as literal query text, even when it arrives through the native startup-injection queue.
+    // The wake must be recognized even when it arrives through the startup-injection queue.
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
@@ -389,9 +386,6 @@ fn agent_message_wake_origin_becomes_an_agent_message_wake_input_not_a_query() {
 
 #[test]
 fn agent_message_wake_origin_is_recognized_when_steered_into_a_follow_up() {
-    // Regression test: a queued shared-session row can be piggybacked directly onto a
-    // follow-up request instead of being dispatched on its own. The wake must be recognized on
-    // that route too.
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
@@ -400,9 +394,7 @@ fn agent_message_wake_origin_is_recognized_when_steered_into_a_follow_up() {
         let participant = ParticipantId::new();
         let id = controller.update(&mut app, |controller, ctx| {
             let id = controller.bind_native_prompt_conversation(None, ctx);
-            // Send the initial prompt first so the wake injection below is queued behind it
-            // instead of dispatched immediately (same setup as
-            // `live_injection_while_a_turn_is_active_is_queued_instead_of_interrupting_it`).
+            // Sending the initial prompt first queues the wake behind it instead of dispatching it.
             controller.send_user_query_in_conversation("prompt1".into(), id, None, ctx);
             controller.execute_warp_agent_prompt_from_shared_session_injection(
                 WAKE_PROMPT.to_owned(),
@@ -427,8 +419,7 @@ fn agent_message_wake_origin_is_recognized_when_steered_into_a_follow_up() {
             terminal.enter_agent_view(None, Some(id), AgentViewEntryOrigin::Cli, ctx);
         });
 
-        // End prompt1's turn without draining the queue via `dispatch_queued_warp_agent_prompt`,
-        // then drive the wake through the steering piggyback path instead.
+        // End prompt1's turn without draining the queue, so the follow-up steers the queued wake.
         controller.update(&mut app, |controller, ctx| {
             controller.cancel_conversation_progress(id, CancellationReason::ManuallyCancelled, ctx);
             assert!(
@@ -452,8 +443,6 @@ fn agent_message_wake_origin_is_recognized_when_steered_into_a_follow_up() {
 
 #[test]
 fn wake_text_without_the_wake_origin_stays_a_user_query() {
-    // The wake is recognized by its query origin, not its text: the same sentence typed by a
-    // person in a shared session, or relayed without a base, is an ordinary follow-up.
     for base in [
         None,
         Some(BaseUserQuery::from_proto(
@@ -513,11 +502,8 @@ fn wake_text_without_the_wake_origin_stays_a_user_query() {
 
 #[test]
 fn orchestration_events_wait_for_the_native_setup_barrier_before_injecting() {
-    // Regression test: a freshly started ambient run opens its event stream before it sends
-    // its initial turn, so an inbox message can be ready to inject during setup. Injecting
-    // it then would make it the run's opening turn, ahead of the initial prompt into which
-    // the server injects pending messages itself. Events must be held behind the native
-    // setup barrier and drained only once it lifts.
+    // The server folds pending inbox messages into the initial turn itself, so an event that
+    // arrives during setup must not become the run's opening turn.
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
@@ -530,7 +516,6 @@ fn orchestration_events_wait_for_the_native_setup_barrier_before_injecting() {
             terminal.enter_agent_view(None, Some(id), AgentViewEntryOrigin::Cli, ctx);
         });
 
-        // A message arrives while setup is still in progress (barrier up, nothing sent yet).
         OrchestrationEventService::handle(&app).update(&mut app, |service, ctx| {
             service.enqueue_event_batch(
                 id,
@@ -566,8 +551,6 @@ fn orchestration_events_wait_for_the_native_setup_barrier_before_injecting() {
             );
         });
 
-        // The initial prompt goes out, lifting the barrier. The event is still not injected
-        // yet because the initial turn's stream is now active; it drains once that finishes.
         controller.update(&mut app, |controller, ctx| {
             controller.send_user_query_in_conversation("initial".into(), id, None, ctx);
             assert!(!QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(id));

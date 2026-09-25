@@ -109,9 +109,7 @@ impl MessageHydrator {
                 return None;
             }
         };
-        // Already delivered through another path (e.g. injected directly into a wake
-        // turn's input server-side) -- surfacing it again here would duplicate the
-        // turn the recipient already acted on.
+        // Already delivered by another route; surfacing it again would repeat a turn.
         if message.delivered_at.is_some() {
             log::debug!(
                 "Skipping already-delivered agent message {} for event sequence {}",

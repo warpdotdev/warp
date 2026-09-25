@@ -3395,8 +3395,7 @@ fn register_parent_on_wait_without_self_run_id_is_noop() {
     });
 }
 
-/// A finished exchange whose output echoes one `MessagesReceivedFromAgents` chunk carrying
-/// `message_id`, as the server produces when it folds a pending message into a turn.
+/// A finished exchange whose output echoes `message_id` in a `MessagesReceivedFromAgents` chunk.
 fn exchange_echoing_message(message_id: &str) -> AIAgentExchange {
     let output = AIAgentOutput {
         messages: vec![AIAgentOutputMessage::messages_received_from_agents(
@@ -3433,10 +3432,8 @@ fn exchange_echoing_message(message_id: &str) -> AIAgentExchange {
     }
 }
 
-/// Restores `conversation` holding one exchange that echoes `message_id`, builds a streamer over
-/// a mock client that records every `mark_message_delivered` call on the returned receiver,
-/// then reports the exchange update `updates` times. The conversation has no run id, so the
-/// confirmation goes through the mock client rather than a task-scoped endpoint.
+/// Gives `conversation` one exchange that echoes `message_id`, then reports that exchange as
+/// updated `updates` times. The returned receiver sees every resulting delivery confirmation.
 fn report_echoed_message(
     app: &mut App,
     mut conversation: AIConversation,

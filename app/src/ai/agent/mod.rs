@@ -3010,9 +3010,8 @@ pub enum AIAgentInput {
         status: OrchestrationConfigStatus,
     },
 
-    /// Reports that this run was woken because agent messages may be waiting. Carries no
-    /// content: the server injects any still-undelivered messages into the turn when it handles
-    /// this input, and ends the turn without a model call when there are none.
+    /// Wakes the run because agent messages may be waiting. Carries no content: the server
+    /// supplies any pending messages itself.
     AgentMessageWake,
 }
 

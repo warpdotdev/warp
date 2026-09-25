@@ -427,11 +427,8 @@ impl OrchestrationEventService {
         }
     }
 
-    /// Scans the exchange output for orchestration IDs echoed back by the server, then
-    /// clears matching entries from both `awaiting_server_echo_events` and `pending_events`.
-    /// A still-pending match means the same message reached the agent by another route
-    /// (e.g. injected server-side into the run's initial turn) before this queue got to
-    /// deliver it, so injecting it now would only repeat a turn the agent already took.
+    /// Clears events whose IDs the server echoed back in the exchange output. An echoed event
+    /// that is still pending was delivered by another route, so injecting it would repeat a turn.
     fn confirm_delivery_from_exchange(
         &mut self,
         conversation_id: AIConversationId,
@@ -502,8 +499,7 @@ impl OrchestrationEventService {
         }
     }
 
-    /// Clears entries matching the given IDs from both `awaiting_server_echo_events` and
-    /// `pending_events`.
+    /// Clears awaiting and pending entries that match the given echoed IDs.
     fn acknowledge_delivery_from_server_echo(
         &mut self,
         conversation_id: AIConversationId,

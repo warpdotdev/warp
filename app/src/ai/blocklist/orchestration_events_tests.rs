@@ -329,11 +329,8 @@ fn test_lifecycle_event_type_from_proto_includes_cancelled_and_blocked() {
 
 #[test]
 fn test_server_echo_drops_matching_events_from_pending_and_awaiting_queues() {
-    // A message can reach the agent by a route other than this queue (e.g. injected
-    // server-side into a fresh run's initial turn) while its SSE-delivered copy is still
-    // sitting in `pending_events`. Once the server echoes that message id back, the pending
-    // copy must be dropped too -- not just the already-drained awaiting copy -- or it would
-    // later be injected as a duplicate turn.
+    // An echoed message may still be pending if another route delivered it first; it must be
+    // dropped there too, or it would later be injected as a duplicate turn.
     let conversation_id = crate::ai::agent::conversation::AIConversationId::new();
     let mut service = OrchestrationEventService::new_without_subscriptions();
     service.pending_events.insert(
@@ -353,7 +350,7 @@ fn test_server_echo_drops_matching_events_from_pending_and_awaiting_queues() {
         vec![message_pending_event("awaiting-echo")],
     );
 
-    // Both message events share `message-1` (see `message_pending_event`).
+    // Both message events carry message id `message-1`.
     service.acknowledge_delivery_from_server_echo(conversation_id, &["message-1".to_string()], &[]);
 
     let remaining_pending = service

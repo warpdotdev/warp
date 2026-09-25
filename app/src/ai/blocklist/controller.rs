@@ -644,10 +644,8 @@ impl BlocklistAIController {
             {
                 me.dispatch_queued_warp_agent_prompt(*conversation_id, None, ctx);
             }
-            // Orchestration events are held behind the native setup barrier (see
-            // `conversation_ready_for_pending_events`). Re-check them the moment it lifts: no
-            // stream necessarily finishes afterward to trigger the usual re-check, since a
-            // promptless run never sends an initial turn at all.
+            // Re-check held events as soon as the setup barrier lifts: a promptless run sends no
+            // initial turn whose end would otherwise trigger the check.
             if let QueuedQueryEvent::DispatchStateChanged { conversation_id } = event
                 && !QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(*conversation_id)
             {
@@ -1265,10 +1263,8 @@ impl BlocklistAIController {
             report_error!("Viewers should never attempt to send queries directly");
         }
 
-        // The server's wake only says that agent messages may be waiting; its text is a fallback
-        // for clients that cannot read the origin. Answer it directly so it neither attaches
-        // pending context nor gets routed to a running command's subagent like a typed
-        // follow-up would.
+        // A wake's text is only a fallback for clients that cannot read its origin, so it must
+        // not be sent as a typed follow-up.
         if base
             .as_ref()
             .is_some_and(BaseUserQuery::is_agent_message_wake)
@@ -1389,9 +1385,7 @@ impl BlocklistAIController {
         true
     }
 
-    /// Sends an `AIAgentInput::AgentMessageWake` against `conversation_id`'s root task, so the
-    /// server injects whatever agent messages are pending when it handles the input into that
-    /// turn.
+    /// Sends an agent-message wake on the conversation's root task.
     fn send_agent_message_wake(
         &mut self,
         conversation_id: AIConversationId,
@@ -1923,14 +1917,8 @@ impl BlocklistAIController {
         // teardown and get cancelled, leaving the run stuck `InProgress` (QUALITY-1801).
         let is_exiting =
             OrchestrationEventService::as_ref(ctx).is_conversation_exiting(conversation_id);
-        // A freshly started ambient run opens its event stream before it sends its initial
-        // turn, so an inbox message can be ready to inject long before that turn goes out.
-        // Injecting it first would make it the run's opening turn -- and the server injects
-        // pending inbox messages into the initial turn itself, so it would then find nothing
-        // left to say. Holding events behind the same barrier that holds queued startup
-        // prompts keeps the initial turn first and the server-side first-turn injection the
-        // authoritative delivery; the held copy is dropped once that turn echoes the same
-        // message.
+        // The server folds pending inbox messages into a run's initial turn itself, so events must
+        // not be injected ahead of that turn. Hold them behind the same barrier as startup prompts.
         let is_dispatch_blocked =
             QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(conversation_id);
         let Some(conversation) =
