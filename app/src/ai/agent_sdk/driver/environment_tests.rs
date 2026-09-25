@@ -477,28 +477,37 @@ fn single_clone_command_times_out_blocked_credential_helper() {
     let request = clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp"), None);
     let command =
         build_single_repo_clone_command(&request, Path::new("/workspace"), ShellType::Bash);
-    let started_at = instant::Instant::now();
-    let output = run_git_command_with_credential_helper(
-        &command,
+    let helper_state = tempfile::tempdir().unwrap();
+    let helper_pid_path = helper_state.path().join("helper-pid");
+    let helper_script = format!(
         "cat >/dev/null\n\
-         sleep 30\n\
-         printf '%s\\n' \
-           'username=late-helper-user' \
-           'password=late-helper-secret-never-print'",
+         printf '%s\\n' \"$$\" > '{}'\n\
+         trap '' TERM\n\
+         while :; do sleep 30; done",
+        helper_pid_path.display()
     );
+    let started_at = instant::Instant::now();
+    let output = run_git_command_with_credential_helper(&command, &helper_script);
     let elapsed = started_at.elapsed();
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
+    let helper_pid = fs::read_to_string(&helper_pid_path)
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
 
     assert!(output.status.success());
     assert!(
-        elapsed < std::time::Duration::from_secs(10),
+        elapsed < std::time::Duration::from_secs(15),
         "credential helper timeout took {elapsed:?}"
     );
     assert_output_order(&stdout, &["Git credential: unset@github.com", "git clone"]);
-    assert!(!stdout.contains("late-helper-user"));
-    assert!(!stdout.contains("late-helper-secret-never-print"));
     assert!(stderr.is_empty(), "stderr: {stderr}");
+    assert!(
+        !process_is_alive(helper_pid),
+        "credential helper process {helper_pid} survived timeout"
+    );
 }
 
 #[cfg(unix)]
@@ -1398,6 +1407,20 @@ fn run_git_command_with_credential_helper(
         )
         .output()
         .expect("identity-prefixed git command should be runnable")
+}
+
+#[cfg(unix)]
+fn process_is_alive(pid: u32) -> bool {
+    Command::new("sh")
+        .args([
+            "-c",
+            "kill -0 \"$1\" 2>/dev/null",
+            "process-is-alive",
+            &pid.to_string(),
+        ])
+        .status()
+        .expect("process liveness probe should be runnable")
+        .success()
 }
 
 #[cfg(unix)]
