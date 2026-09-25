@@ -501,6 +501,8 @@ pub enum AwsCredentialsRefreshStrategy {
         task_id: Option<String>,
         role_arn: String,
         region: String,
+        /// The task's resolved team, pinned across credential refreshes.
+        team_uid: Option<String>,
     },
 }
 

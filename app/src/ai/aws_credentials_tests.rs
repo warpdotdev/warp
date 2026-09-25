@@ -2,7 +2,49 @@ use std::time::Duration;
 
 use aws_credential_types::provider::error::CredentialsError;
 
-use super::user_facing_aws_credentials_error_message;
+use super::{
+    bedrock_identity_token_error, bedrock_request_scope, user_facing_aws_credentials_error_message,
+};
+use crate::ai::agent_sdk::driver::AgentDriverError;
+use crate::server::ids::ServerId;
+use crate::server::server_api::managed_secrets::IdentityTokenUserFacingError;
+use crate::workspaces::user_workspaces::TeamScopeForCli;
+
+#[test]
+fn bedrock_mint_error_preserves_safe_server_message_in_run_failure() {
+    let message = "Cannot issue a team-scoped identity token: you belong to multiple teams. Select a team using the X-Warp-Team-Uid request header.";
+    let error = anyhow::Error::new(IdentityTokenUserFacingError(message.to_string()));
+    let error = bedrock_identity_token_error(error);
+    let run_error = AgentDriverError::AwsBedrockCredentialsFailed(error.to_string());
+    assert_eq!(
+        run_error.to_string(),
+        format!(
+            "Failed to initialize AWS Bedrock credentials: Failed to mint AWS Bedrock task identity token: {message}"
+        )
+    );
+}
+
+#[test]
+fn bedrock_mint_error_does_not_surface_untrusted_error_details() {
+    let error = anyhow::anyhow!("untrusted response with sensitive material")
+        .context("HTTP request failed");
+    assert_eq!(
+        bedrock_identity_token_error(error).to_string(),
+        "Failed to mint AWS Bedrock task identity token"
+    );
+}
+
+#[test]
+fn bedrock_refresh_scope_is_pinned_to_the_resolved_task_team() {
+    let team_uid = ServerId::from(17);
+    let scope = bedrock_request_scope(Some(&team_uid.to_string()))
+        .unwrap()
+        .unwrap();
+    assert!(scope.matches_scope(&TeamScopeForCli::Team(team_uid)));
+    assert!(!scope.matches_scope(&TeamScopeForCli::Team(ServerId::from(18))));
+    assert!(bedrock_request_scope(None).unwrap().is_none());
+    assert!(bedrock_request_scope(Some("not-a-team-uid")).is_err());
+}
 
 #[test]
 fn maps_credentials_not_loaded_to_user_message() {

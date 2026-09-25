@@ -20,7 +20,8 @@ use warpui::{ModelSpawner, SingletonEntity};
 
 use super::agent_sdk::driver::AgentDriver;
 use super::aws_credentials::{
-    AWS_BEDROCK_STS_AUDIENCE, BEDROCK_IDENTITY_TOKEN_DURATION, aws_role_session_name, sts_client,
+    AWS_BEDROCK_STS_AUDIENCE, BEDROCK_IDENTITY_TOKEN_DURATION, aws_role_session_name,
+    bedrock_identity_token_error, bedrock_request_scope, sts_client,
 };
 use crate::server::server_api::managed_secrets::AppManagedSecretManager as ManagedSecretManager;
 
@@ -42,25 +43,28 @@ async fn try_refresh(
     task_id: &str,
     role_arn: &str,
     region: &str,
+    team_uid: Option<&str>,
     foreground: &ModelSpawner<AgentDriver>,
 ) -> Result<()> {
+    let request_scope = bedrock_request_scope(team_uid)?;
     // Step 1: Mint a new OIDC identity token via the model context.
     let token_future = foreground
-        .spawn(|_, ctx| {
+        .spawn(move |_, ctx| {
             ManagedSecretManager::handle(ctx)
                 .as_ref(ctx)
-                .issue_task_identity_token(IdentityTokenOptions {
-                    audience: AWS_BEDROCK_STS_AUDIENCE.to_string(),
-                    requested_duration: BEDROCK_IDENTITY_TOKEN_DURATION,
-                    subject_template: vec1!["scoped_principal".to_string()],
-                })
+                .issue_task_identity_token(
+                    request_scope,
+                    IdentityTokenOptions {
+                        audience: AWS_BEDROCK_STS_AUDIENCE.to_string(),
+                        requested_duration: BEDROCK_IDENTITY_TOKEN_DURATION,
+                        subject_template: vec1!["scoped_principal".to_string()],
+                    },
+                )
         })
         .await
         .context("Failed to dispatch OIDC token request for Bedrock refresh")?;
 
-    let token = token_future
-        .await
-        .context("Failed to mint OIDC identity token for Bedrock refresh")?;
+    let token = token_future.await.map_err(bedrock_identity_token_error)?;
 
     // Step 2: Exchange the OIDC token for fresh STS temporary credentials.
     let client = sts_client(region).await;
@@ -133,6 +137,7 @@ pub(crate) async fn refresh_loop(
     task_id: String,
     role_arn: String,
     region: String,
+    team_uid: Option<String>,
     foreground: &ModelSpawner<AgentDriver>,
 ) {
     loop {
@@ -147,7 +152,15 @@ pub(crate) async fn refresh_loop(
         ];
         let mut attempt = 0usize;
         loop {
-            match try_refresh(&task_id, &role_arn, &region, foreground).await {
+            match try_refresh(
+                &task_id,
+                &role_arn,
+                &region,
+                team_uid.as_deref(),
+                foreground,
+            )
+            .await
+            {
                 Ok(()) => break,
                 Err(e) if attempt < backoff_delays.len() => {
                     let delay = backoff_delays[attempt];

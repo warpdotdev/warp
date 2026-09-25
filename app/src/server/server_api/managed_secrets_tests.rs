@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use futures::executor::block_on;
 use mockito::{Matcher, Mock};
+use serde_json::json;
 use vec1::vec1;
 use warp_graphql::ai::AgentHarness;
 use warp_graphql::managed_secrets::ManagedSecretType;
@@ -10,12 +11,94 @@ use warp_managed_secrets::client::{IdentityTokenOptions, ManagedSecretsClient as
 use warp_server_client::base_client::TEAM_UID_HEADER;
 
 use super::super::ServerApi;
+use super::IdentityTokenUserFacingError;
 use crate::server::ids::ServerId;
 use crate::server::team_scope::RequestTeamScope;
 use crate::workspaces::user_workspaces::TeamContextForOperation;
 
 fn request_scope_for_team(team_uid: ServerId) -> RequestTeamScope {
     RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid))
+}
+
+#[test]
+fn identity_token_request_sends_selected_team_without_changing_subject_template() {
+    let server_api = server_api();
+    let team_uid = ServerId::from(17);
+    let request_scope = request_scope_for_team(team_uid);
+    let mut server = warp_core::channel::ChannelState::mock_server();
+    let request = server.mock("POST", "/graphql/v2")
+        .match_query(Matcher::UrlEncoded("op".to_string(), "IssueTaskIdentityToken".to_string()))
+        .match_header(TEAM_UID_HEADER, team_uid.to_string().as_str())
+        .match_body(Matcher::PartialJson(json!({
+            "variables": {
+                "input": {
+                    "audience": "sts.amazonaws.com",
+                    "requestedDurationSeconds": 3600,
+                    "subjectTemplate": ["scoped_principal"]
+                }
+            }
+        })))
+        .with_status(200)
+        .with_body(r#"{"data":{"issueTaskIdentityToken":{"__typename":"IssueTaskIdentityTokenOutput","token":"test-token","expiresAt":"2026-09-22T10:00:00Z","issuer":"test-issuer","responseContext":{"serverVersion":null}}}}"#)
+        .create();
+    drop(server);
+    let token = block_on(server_api.issue_task_identity_token(
+        Some(&request_scope),
+        IdentityTokenOptions {
+            audience: "sts.amazonaws.com".to_string(),
+            requested_duration: Duration::from_secs(3600),
+            subject_template: vec1!["scoped_principal".to_string()],
+        },
+    ))
+    .unwrap();
+    assert_eq!(token.issuer, "test-issuer");
+    request.assert();
+}
+
+#[test]
+fn identity_token_user_facing_error_is_distinct_from_transport_errors() {
+    let server_api = server_api();
+    let message = "Cannot issue a team-scoped identity token: you belong to multiple teams. Select a team using the X-Warp-Team-Uid request header.";
+    let mut server = warp_core::channel::ChannelState::mock_server();
+    let request = server
+        .mock("POST", "/graphql/v2")
+        .match_query(Matcher::UrlEncoded(
+            "op".to_string(),
+            "IssueTaskIdentityToken".to_string(),
+        ))
+        .match_header(TEAM_UID_HEADER, Matcher::Missing)
+        .with_status(200)
+        .with_body(
+            json!({
+                "data": {
+                    "issueTaskIdentityToken": {
+                        "__typename": "UserFacingError",
+                        "error": {"__typename": "InvalidInputError", "message": message},
+                        "responseContext": {"serverVersion": null}
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .create();
+    drop(server);
+    let error = block_on(server_api.issue_task_identity_token(
+        None,
+        IdentityTokenOptions {
+            audience: "sts.amazonaws.com".to_string(),
+            requested_duration: Duration::from_secs(3600),
+            subject_template: vec1!["scoped_principal".to_string()],
+        },
+    ))
+    .unwrap_err();
+    assert_eq!(
+        error
+            .downcast_ref::<IdentityTokenUserFacingError>()
+            .unwrap()
+            .to_string(),
+        message
+    );
+    request.assert();
 }
 
 fn server_api() -> ServerApi {
@@ -107,7 +190,7 @@ fn unscoped_managed_secret_list_omits_team_header() {
 }
 
 #[test]
-fn resource_authoritative_managed_secret_requests_omit_team_header() {
+fn unscoped_identity_token_and_task_secret_requests_omit_team_header() {
     let server_api = server_api();
 
     assert_request_sent(
@@ -116,10 +199,13 @@ fn resource_authoritative_managed_secret_requests_omit_team_header() {
     );
     assert_request_sent(
         mock_graphql_request("IssueTaskIdentityToken", None),
-        server_api.issue_task_identity_token(IdentityTokenOptions {
-            audience: "https://example.com".to_string(),
-            requested_duration: Duration::from_secs(300),
-            subject_template: vec1!["scoped_principal".to_string()],
-        }),
+        server_api.issue_task_identity_token(
+            None,
+            IdentityTokenOptions {
+                audience: "https://example.com".to_string(),
+                requested_duration: Duration::from_secs(300),
+                subject_template: vec1!["scoped_principal".to_string()],
+            },
+        ),
     );
 }
