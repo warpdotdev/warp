@@ -5,10 +5,15 @@ use warpui::App;
 
 use super::*;
 use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
+use crate::ai::agent::{
+    AIAgentExchange, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputStatus,
+    FinishedAIAgentOutput, MessageId, ReceivedMessageDisplay, Shared,
+};
 use crate::ai::agent_events::{
     AgentEventConsumerControlFlow, DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS,
     agent_event_backoff, agent_event_failures_exceeded_threshold,
 };
+use crate::ai::llms::LLMId;
 use crate::persistence::ModelEvent;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::MockAIClient;
@@ -3387,5 +3392,114 @@ fn register_parent_on_wait_without_self_run_id_is_noop() {
         poller.read(&app, |me, _| {
             assert!(connected_filter(me, conversation_id).is_none());
         });
+    });
+}
+
+/// A finished exchange whose output echoes one `MessagesReceivedFromAgents` chunk carrying
+/// `message_id`, as the server produces when it folds a pending message into a turn.
+fn exchange_echoing_message(message_id: &str) -> AIAgentExchange {
+    let output = AIAgentOutput {
+        messages: vec![AIAgentOutputMessage::messages_received_from_agents(
+            MessageId::new("output-message".to_string()),
+            vec![ReceivedMessageDisplay {
+                message_id: message_id.to_string(),
+                sender_agent_id: "parent-run".to_string(),
+                addresses: vec!["child-run".to_string()],
+                subject: "subject".to_string(),
+                message_body: "body".to_string(),
+            }],
+        )],
+        ..Default::default()
+    };
+    AIAgentExchange {
+        id: AIAgentExchangeId::new(),
+        input: vec![],
+        output_status: AIAgentOutputStatus::Finished {
+            finished_output: FinishedAIAgentOutput::Success {
+                output: Shared::new(output),
+            },
+        },
+        added_message_ids: Default::default(),
+        start_time: chrono::Local::now(),
+        finish_time: None,
+        time_to_first_token_ms: None,
+        working_directory: None,
+        model_id: LLMId::from("test-model"),
+        request_cost: None,
+        coding_model_id: LLMId::from("test-model"),
+        cli_agent_model_id: LLMId::from("test-model"),
+        computer_use_model_id: LLMId::from("test-model"),
+        response_initiator: None,
+    }
+}
+
+/// Restores `conversation` holding one exchange that echoes `message_id`, builds a streamer over
+/// a mock client that records every `mark_message_delivered` call on the returned receiver,
+/// then reports the exchange update `updates` times. The conversation has no run id, so the
+/// confirmation goes through the mock client rather than a task-scoped endpoint.
+fn report_echoed_message(
+    app: &mut App,
+    mut conversation: AIConversation,
+    message_id: &'static str,
+    updates: usize,
+) -> std::sync::mpsc::Receiver<String> {
+    let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+    let exchange = exchange_echoing_message(message_id);
+    let exchange_id = exchange.id;
+    conversation.append_root_exchange_for_test(exchange);
+    let conversation_id = conversation.id();
+    history_model.update(app, |model, ctx| {
+        model.restore_conversations(warpui::EntityId::new(), vec![conversation], ctx);
+    });
+
+    let (sender, receiver) = std::sync::mpsc::channel::<String>();
+    let mut mock = MockAIClient::new();
+    mock.expect_mark_message_delivered()
+        .returning(move |id| {
+            sender.send(id.to_string()).unwrap();
+            Ok(())
+        });
+    let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+    let server_api = ServerApiProvider::new_for_test().get();
+    let streamer = app.add_singleton_model(|ctx| {
+        OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+    });
+
+    streamer.update(app, |me, ctx| {
+        for _ in 0..updates {
+            me.on_streaming_exchange_updated(conversation_id, exchange_id, ctx);
+        }
+    });
+    receiver
+}
+
+#[test]
+fn echoed_message_is_confirmed_delivered_once_across_repeated_exchange_updates() {
+    App::test((), |mut app| async move {
+        let receiver =
+            report_echoed_message(&mut app, AIConversation::new(false, false), "message-1", 2);
+
+        assert_eq!(
+            receiver.recv_timeout(Duration::from_secs(5)),
+            Ok("message-1".to_string()),
+            "an echoed message must be confirmed delivered even though this streamer never hydrated it"
+        );
+        assert!(
+            receiver.recv_timeout(Duration::from_millis(200)).is_err(),
+            "a second update of the same exchange must not confirm the same id again"
+        );
+    });
+}
+
+#[test]
+fn shared_session_viewer_does_not_confirm_delivery_for_echoed_messages() {
+    App::test((), |mut app| async move {
+        let receiver =
+            report_echoed_message(&mut app, AIConversation::new(true, false), "message-1", 1);
+
+        assert!(
+            receiver.recv_timeout(Duration::from_millis(200)).is_err(),
+            "only the recipient's own process confirms delivery, never a viewer"
+        );
     });
 }

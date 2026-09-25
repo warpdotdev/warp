@@ -1741,6 +1741,11 @@ impl OrchestrationEventStreamer {
         else {
             return;
         };
+        // Passive views of a run hosted elsewhere render the same output, but only the
+        // recipient's own process confirms delivery.
+        if conversation.is_viewing_shared_session() || conversation.is_remote_child() {
+            return;
+        }
         let Some(exchange) = conversation.exchange_with_id(exchange_id) else {
             return;
         };
