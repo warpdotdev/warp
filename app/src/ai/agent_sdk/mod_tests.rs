@@ -17,9 +17,8 @@ use warp_graphql::ai::AgentTaskState;
 use warpui::{App, SingletonEntity, WindowId};
 
 use super::{
-    AgentDriverRunner, CommandAuthentication, bedrock_oidc_credentials_config,
-    command_authentication, command_requires_auth, command_to_telemetry_event,
-    reconcile_task_harness, resolve_agent_driver_team_scope, team_scope_for_task_scope,
+    AgentDriverRunner, CommandAuthentication, command_authentication, command_requires_auth,
+    command_to_telemetry_event, reconcile_task_harness, resolve_agent_driver_team_scope,
     validated_driver_repositories_for_preparation,
 };
 use crate::ai::agent_sdk::driver::{AgentDriverError, AgentDriverOptions};
@@ -37,7 +36,9 @@ use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::workspaces::team::{Team, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::{TeamScope, TeamScopeForCli, UserWorkspaces};
+use crate::workspaces::user_workspaces::{
+    AgentRunTeamScope, TeamScope, TeamScopeForCli, UserWorkspaces,
+};
 use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
@@ -169,19 +170,12 @@ fn agent_driver_options() -> AgentDriverOptions {
 }
 
 #[test]
-fn bedrock_oidc_config_keeps_the_resolved_request_scope() {
+fn agent_run_scope_keeps_the_resolved_cli_scope() {
     let team_uid = ServerId::from(17);
-    let mut options = agent_driver_options();
-    options.task_id = Some(TASK_ID.parse().unwrap());
-    options.team_scope = Some(TeamScopeForCli::Team(team_uid));
+    let cli_scope = TeamScopeForCli::Team(team_uid);
+    let run_scope = AgentRunTeamScope::from_scope(&cli_scope);
 
-    let config =
-        bedrock_oidc_credentials_config(&options, "role".to_string(), "region".to_string())
-            .unwrap();
-
-    let request_scope = config.request_scope.unwrap();
-    assert!(request_scope.matches_scope(options.team_scope.as_ref().unwrap()));
-    assert!(!request_scope.matches_scope(&TeamScopeForCli::Team(ServerId::from(18))));
+    assert_eq!(run_scope.team_uid(), Some(team_uid));
 }
 
 #[test]
@@ -367,7 +361,7 @@ fn service_account_task_id_run_uses_sole_team_for_agent_driver() {
 }
 
 #[test]
-fn team_scope_for_task_scope_resolves_a_team_scoped_task() {
+fn agent_run_scope_resolves_a_team_scoped_task() {
     let owning_team_uid = ServerId::from(7);
     let scope = TaskScope {
         scope_type: "team".to_string(),
@@ -375,29 +369,29 @@ fn team_scope_for_task_scope_resolves_a_team_scoped_task() {
     };
 
     assert_eq!(
-        team_scope_for_task_scope(&scope).team_uid(),
+        AgentRunTeamScope::from_task_scope(&scope).team_uid(),
         Some(owning_team_uid)
     );
 }
 
 #[test]
-fn team_scope_for_task_scope_resolves_a_personal_task() {
+fn agent_run_scope_resolves_a_personal_task() {
     let scope = TaskScope {
         scope_type: "user".to_string(),
         uid: "some-user-uid".to_string(),
     };
 
-    assert_eq!(team_scope_for_task_scope(&scope).team_uid(), None);
+    assert_eq!(AgentRunTeamScope::from_task_scope(&scope).team_uid(), None);
 }
 
 #[test]
-fn team_scope_for_task_scope_falls_back_to_personal_for_an_unparseable_team_uid() {
+fn agent_run_scope_falls_back_to_personal_for_an_unparseable_team_uid() {
     let scope = TaskScope {
         scope_type: "team".to_string(),
         uid: "not-a-valid-uid".to_string(),
     };
 
-    assert_eq!(team_scope_for_task_scope(&scope).team_uid(), None);
+    assert_eq!(AgentRunTeamScope::from_task_scope(&scope).team_uid(), None);
 }
 
 #[test]

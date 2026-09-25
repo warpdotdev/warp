@@ -24,6 +24,7 @@ use super::aws_credentials::{
     aws_role_session_name, bedrock_identity_token_error, sts_client,
 };
 use crate::server::server_api::managed_secrets::AppManagedSecretManager as ManagedSecretManager;
+use crate::server::team_scope::RequestTeamScope;
 
 /// How long to wait between Bedrock credential refresh attempts — well ahead of the
 /// 1-hour STS temporary credential expiry, matching the approach used for git credentials.
@@ -41,9 +42,9 @@ pub(crate) const BEDROCK_CREDENTIALS_REFRESH_INTERVAL: Duration = Duration::from
 )]
 async fn try_refresh(
     config: &BedrockOidcCredentialsConfig,
+    request_scope: Option<RequestTeamScope>,
     foreground: &ModelSpawner<AgentDriver>,
 ) -> Result<()> {
-    let request_scope = config.request_scope;
     // Step 1: Mint a new OIDC identity token via the model context.
     let token_future = foreground
         .spawn(move |_, ctx| {
@@ -135,6 +136,7 @@ async fn try_refresh(
 /// future via `futures::select!` and dropped automatically when the run completes.
 pub(crate) async fn refresh_loop(
     config: BedrockOidcCredentialsConfig,
+    request_scope: Option<RequestTeamScope>,
     foreground: &ModelSpawner<AgentDriver>,
 ) {
     loop {
@@ -152,7 +154,7 @@ pub(crate) async fn refresh_loop(
         ];
         let mut attempt = 0usize;
         loop {
-            match try_refresh(&config, foreground).await {
+            match try_refresh(&config, request_scope, foreground).await {
                 Ok(()) => break,
                 Err(e) if attempt < backoff_delays.len() => {
                     let delay = backoff_delays[attempt];

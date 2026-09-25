@@ -99,7 +99,6 @@ pub(crate) struct BedrockOidcCredentialsConfig {
     pub task_id: String,
     pub role_arn: String,
     pub region: String,
-    pub request_scope: Option<RequestTeamScope>,
 }
 
 pub(crate) fn bedrock_identity_token_error(error: anyhow::Error) -> anyhow::Error {
@@ -338,6 +337,7 @@ fn refresh_aws_credentials_local_chain(
 /// Refreshes credentials via OIDC identity token + STS AssumeRoleWithWebIdentity.
 pub(crate) fn refresh_aws_credentials_oidc(
     config: BedrockOidcCredentialsConfig,
+    request_scope: Option<RequestTeamScope>,
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) -> BoxFuture<'static, Result<(), String>> {
@@ -361,7 +361,7 @@ pub(crate) fn refresh_aws_credentials_oidc(
     let token_future = ManagedSecretManager::handle(ctx)
         .as_ref(ctx)
         .issue_task_identity_token(
-            config.request_scope,
+            request_scope,
             IdentityTokenOptions {
                 audience: AWS_BEDROCK_STS_AUDIENCE.to_string(),
                 requested_duration: BEDROCK_IDENTITY_TOKEN_DURATION,

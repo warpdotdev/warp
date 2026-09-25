@@ -38,7 +38,7 @@ use crate::terminal::model::terminal_model::ShellProcessInfo;
 use crate::terminal::shared_session::{self, IsSharedSessionCreator, SharedSessionSource};
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::{ConversationRestorationInNewPaneType, Event};
-use crate::workspaces::user_workspaces::{TeamScope, TeamScopeForCli, UserWorkspaces};
+use crate::workspaces::user_workspaces::{AgentRunTeamScope, TeamScope, UserWorkspaces};
 
 /// Describes why a terminal session bootstrap failed.
 #[derive(Debug)]
@@ -109,13 +109,13 @@ const TERMINAL_SESSION_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(60);
 const TERMINAL_SESSION_SHARE_DELAY: Duration = Duration::from_secs(20);
 
 /// Options for creating the terminal view before constructing a [`TerminalDriver`].
-pub(crate) struct TerminalDriverOptions {
+pub(crate) struct TerminalDriverOptions<'a> {
     pub working_dir: PathBuf,
     pub env_vars: HashMap<OsString, OsString>,
     pub should_share: bool,
     pub task_id: Option<AmbientAgentTaskId>,
     pub conversation_restoration: Option<ConversationRestorationInNewPaneType>,
-    pub team_scope: Option<TeamScopeForCli>,
+    pub team_scope: Option<&'a AgentRunTeamScope>,
 }
 
 /// Events emitted by [`TerminalDriver`] for [`super::AgentDriver`] to react to.
@@ -191,7 +191,7 @@ impl Entity for TerminalDriver {
 /// This is separate from [`TerminalDriver::new`] because [`AppContext::add_model`]
 /// requires an infallible constructor; the fallible window/view creation must happen first.
 fn create_terminal_view(
-    options: TerminalDriverOptions,
+    options: TerminalDriverOptions<'_>,
     ctx: &mut AppContext,
 ) -> Result<ViewHandle<TerminalView>, AgentDriverError> {
     let is_shared_session_creator = if options.should_share {
@@ -202,7 +202,7 @@ fn create_terminal_view(
         IsSharedSessionCreator::No
     };
 
-    let initial_team_uid = options.team_scope.as_ref().and_then(TeamScope::team_uid);
+    let initial_team_uid = options.team_scope.and_then(TeamScope::team_uid);
     let (_, root_view) = open_new_with_workspace_source(
         NewWorkspaceSource::Session {
             options: Box::new(NewTerminalOptions {
@@ -231,7 +231,7 @@ fn create_terminal_view(
 impl TerminalDriver {
     /// Create a terminal view from the given options and wrap it in a new `TerminalDriver` model.
     pub(crate) fn create(
-        options: TerminalDriverOptions,
+        options: TerminalDriverOptions<'_>,
         ctx: &mut AppContext,
     ) -> Result<ModelHandle<Self>, AgentDriverError> {
         let should_share = options.should_share;
