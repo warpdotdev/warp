@@ -427,8 +427,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::SkillArguments,
         #[cfg(feature = "active_conversation_requires_interaction")]
         FeatureFlag::ActiveConversationRequiresInteraction,
-        #[cfg(feature = "conversations_as_context")]
-        FeatureFlag::ConversationsAsContext,
         #[cfg(feature = "incremental_auto_reload")]
         FeatureFlag::IncrementalAutoReload,
         #[cfg(feature = "pending_user_query_indicator")]
