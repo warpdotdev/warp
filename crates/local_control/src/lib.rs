@@ -10,6 +10,8 @@ pub mod discovery;
 pub mod protocol;
 pub mod selection;
 pub mod selectors;
+#[cfg(windows)]
+pub mod windows_security;
 
 pub use auth::{AuthToken, CredentialGrant, CredentialRequest, ScopedCredential};
 pub use catalog::{ActionImplementationStatus, ActionKind, ActionMetadata, TargetScope};
