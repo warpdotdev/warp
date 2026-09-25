@@ -42,15 +42,30 @@ const PRINT_GIT_CLONE_IDENTITY_FUNCTION: &str = r#"print_git_clone_identity() {
   fi
   credential_username="$(
     {
-      printf 'protocol=https\nhost=%s\n\n' "$host" |
-        GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git credential fill 2>/dev/null
+      GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git credential fill 2>/dev/null <<EOF &
+protocol=https
+host=$host
+
+EOF
+      credential_pid="$!"
+      (
+        trap 'kill "$sleep_pid" 2>/dev/null; exit 0' TERM
+        sleep 5 &
+        sleep_pid="$!"
+        wait "$sleep_pid"
+        kill "$credential_pid" 2>/dev/null
+      ) </dev/null >/dev/null 2>&1 &
+      timeout_pid="$!"
+      wait "$credential_pid" 2>/dev/null
       credential_status="$?"
+      kill "$timeout_pid" 2>/dev/null
+      wait "$timeout_pid" 2>/dev/null
       printf '\nwarp_git_credential_status=%s\n' "$credential_status"
     } |
       awk '
         /^username=/ && username == "" {
           candidate = substr($0, 10)
-          if (candidate != "" && candidate !~ /[[:cntrl:]]/) {
+          if (candidate ~ /^[[:alnum:]_.@+-]+$/) {
             username = candidate
           }
         }

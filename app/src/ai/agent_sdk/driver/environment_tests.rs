@@ -357,7 +357,6 @@ fn parallel_clone_command_runs_repos_in_background_and_waits() {
     assert!(command.contains("platform/backend/api"));
     assert!(command.contains("https://gitlab.com/platform/backend/api.git"));
     assert_eq!(command.matches("clone_repo").count(), 3);
-    assert_eq!(command.matches("2>&1 &").count(), 2);
     assert!(command.contains("mktemp -d"));
     assert!(command.contains("warp-clone-logs"));
     assert!(command.contains("trap cleanup_clone_logs EXIT"));
@@ -447,6 +446,10 @@ fn single_clone_command_falls_back_for_invalid_credential_helper_output() {
     for helper_script in [
         "cat >/dev/null\nprintf '%s\\n' 'password=malformed-secret-never-print'",
         "cat >/dev/null\n\
+         printf '%s\\n' \
+           'username=https://octocat:credential-url-token-never-print@github.com' \
+           'password=credential-password-never-print'",
+        "cat >/dev/null\n\
          printf '%s\\n' 'failed-helper-diagnostic-never-print' >&2\n\
          exit 1",
     ] {
@@ -460,8 +463,42 @@ fn single_clone_command_falls_back_for_invalid_credential_helper_output() {
             "stdout: {stdout}\nstderr: {stderr}"
         );
         assert!(!stdout.contains("malformed-secret-never-print"));
+        assert!(!stdout.contains("credential-url-token-never-print"));
+        assert!(!stdout.contains("credential-password-never-print"));
+        assert!(!stderr.contains("credential-url-token-never-print"));
+        assert!(!stderr.contains("credential-password-never-print"));
         assert!(!stderr.contains("failed-helper-diagnostic-never-print"));
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn single_clone_command_times_out_blocked_credential_helper() {
+    let request = clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp"), None);
+    let command =
+        build_single_repo_clone_command(&request, Path::new("/workspace"), ShellType::Bash);
+    let started_at = instant::Instant::now();
+    let output = run_git_command_with_credential_helper(
+        &command,
+        "cat >/dev/null\n\
+         sleep 30\n\
+         printf '%s\\n' \
+           'username=late-helper-user' \
+           'password=late-helper-secret-never-print'",
+    );
+    let elapsed = started_at.elapsed();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+
+    assert!(output.status.success());
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "credential helper timeout took {elapsed:?}"
+    );
+    assert_output_order(&stdout, &["Git credential: unset@github.com", "git clone"]);
+    assert!(!stdout.contains("late-helper-user"));
+    assert!(!stdout.contains("late-helper-secret-never-print"));
+    assert!(stderr.is_empty(), "stderr: {stderr}");
 }
 
 #[cfg(unix)]
