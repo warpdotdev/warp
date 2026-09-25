@@ -117,6 +117,7 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
             let merged_config = super::config_file::merge_with_precedence(
                 loaded_file.as_ref(),
                 crate::ai::ambient_agents::AgentConfigSnapshot {
+                    experimental: None,
                     name: None,
                     environment_id,
                     // TODO(REMOTE-1936): support --runner for scheduled agents.

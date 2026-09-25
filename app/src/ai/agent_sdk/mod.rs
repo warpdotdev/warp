@@ -436,6 +436,7 @@ fn build_merged_config_and_task(
     };
 
     let mut merged_config = AgentConfigSnapshot {
+        experimental: None,
         // CLI name > skill name > file name
         name: args.name.clone().or(skill_name).or(file_merged.name),
         environment_id: args.environment.clone().or(file_merged.environment_id),
@@ -543,6 +544,7 @@ fn build_server_side_task(
     let environment = args.environment.clone();
 
     let config = AgentConfigSnapshot {
+        experimental: None,
         name: args.name.clone().or(skill_name),
         environment_id: environment.clone(),
         runner_id: None,
@@ -1180,6 +1182,7 @@ impl AgentDriverRunner {
                 let driver_options = driver::AgentDriverOptions {
                     working_dir: working_dir.clone(),
                     task_id,
+                    experimental: None,
                     parent_run_id: None,
                     should_share,
                     idle_on_complete: args.idle_on_complete.map(|d| d.into()),
@@ -1226,6 +1229,7 @@ impl AgentDriverRunner {
                     SetupStep::TaskDataFetch,
                     Self::fetch_secrets_and_attachments(
                         foreground,
+                        server_api,
                         task_id_str,
                         &mut driver_options,
                         &mut task,
@@ -1322,23 +1326,20 @@ impl AgentDriverRunner {
     /// transcript rehydration without a separate `--conversation` CLI arg.
     async fn fetch_secrets_and_attachments(
         foreground: &ModelSpawner<Self>,
+        ai_client: &Arc<dyn AIClient>,
         task_id_str: String,
         driver_options: &mut AgentDriverOptions,
         task: &mut Task,
     ) -> Result<Option<String>, AgentDriverError> {
-        let (task_secrets, ai_client, server_api) = foreground
+        let (task_secrets, server_api) = foreground
             .spawn({
                 let task_id_str = task_id_str.clone();
                 move |_, ctx| {
                     let task_secrets = ManagedSecretManager::handle(ctx)
                         .as_ref(ctx)
                         .get_task_secrets(task_id_str);
-                    let ai_client = ServerApiProvider::handle(ctx)
-                        .as_ref(ctx)
-                        .get_ai_client()
-                        .clone();
                     let server_api = ServerApiProvider::handle(ctx).as_ref(ctx).get();
-                    (task_secrets, ai_client, server_api)
+                    (task_secrets, server_api)
                 }
             })
             .await?;
@@ -1449,6 +1450,7 @@ impl AgentDriverRunner {
             task_harness_model_config,
             additional_source_repos,
             task_team_scope,
+            experimental,
         ) = match task_metadata_result {
             Ok(Some(task_metadata)) => {
                 // The task's harness is stored on the snapshot; if absent, it's the default Oz.
@@ -1460,6 +1462,9 @@ impl AgentDriverRunner {
                     .map(|h| h.harness_type)
                     .unwrap_or(Harness::Oz);
                 let task_harness_model_config = task_harness_config.and_then(|h| h.model_config());
+                let experimental = agent_config_snapshot
+                    .as_ref()
+                    .and_then(|config| config.experimental.clone());
                 let additional_source_repos = agent_config_snapshot
                     .and_then(|config| config.additional_source_repos)
                     .unwrap_or_default();
@@ -1471,11 +1476,22 @@ impl AgentDriverRunner {
                     task_harness_model_config,
                     additional_source_repos,
                     task_team_scope,
+                    experimental,
                 )
             }
-            Ok(None) => (None, None, None, None, Vec::new(), None),
+            Ok(None) => (None, None, None, None, Vec::new(), None, None),
             Err(err) => return Err(AgentDriverError::TaskMetadataFetchFailed(err)),
         };
+        match experimental.as_ref() {
+            Some(values) => warp_core::safe_info!(
+                safe: ("factory_experimental_config state=read_uninterpreted key_count={}", values.len()),
+                full: ("factory_experimental_config state=read_uninterpreted key_count={}", values.len())
+            ),
+            None => warp_core::safe_info!(
+                safe: ("factory_experimental_config state=absent key_count=0"),
+                full: ("factory_experimental_config state=absent key_count=0")
+            ),
+        }
 
         // Validate the requested `--harness` against the task's harness setting. This avoids the
         // extra conversation-metadata roundtrip that would otherwise be needed downstream when the
@@ -1491,6 +1507,7 @@ impl AgentDriverRunner {
 
         driver_options.task_id = parsed_task_id;
         driver_options.parent_run_id = parent_run_id;
+        driver_options.experimental = experimental;
         driver_options.additional_source_repos = additional_source_repos;
         driver_options.secrets = secrets;
         // The server-reported task scope is authoritative for the headless window this run
