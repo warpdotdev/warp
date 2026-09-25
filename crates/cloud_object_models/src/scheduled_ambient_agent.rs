@@ -18,6 +18,8 @@ use crate::{JsonModel, JsonSerializer};
 /// (e.g. `model_id` instead of `base_model_id`).
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct AgentConfigSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub experimental: Option<serde_json::Map<String, serde_json::Value>>,
     /// Config name for searchability/traceability.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -137,6 +139,7 @@ impl AgentConfigSnapshot {
     /// Returns true if this config is empty (no options are set).
     pub fn is_empty(&self) -> bool {
         let Self {
+            experimental,
             name,
             environment_id,
             runner_id,
@@ -152,7 +155,8 @@ impl AgentConfigSnapshot {
             additional_source_repos,
         } = self;
 
-        name.is_none()
+        experimental.is_none()
+            && name.is_none()
             && environment_id.is_none()
             && runner_id.is_none()
             && model_id.is_none()

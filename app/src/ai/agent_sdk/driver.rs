@@ -592,6 +592,8 @@ pub struct AgentDriverOptions {
     pub secrets: HashMap<String, ManagedSecretValue>,
     /// ID of the task being executed.
     pub task_id: Option<AmbientAgentTaskId>,
+    /// Server-owned experiments retained without client interpretation.
+    pub experimental: Option<serde_json::Map<String, serde_json::Value>>,
     /// Parent run ID for child orchestration flows, if this task was spawned by another run.
     pub parent_run_id: Option<String>,
     /// Whether the agent run should share its session.
@@ -668,6 +670,11 @@ pub struct AgentDriver {
 
     // The associated task ID for this agent run, if any.
     task_id: Option<AmbientAgentTaskId>,
+    #[expect(
+        dead_code,
+        reason = "the driver retains server-owned experiments without interpreting them"
+    )]
+    pub experimental: Option<serde_json::Map<String, serde_json::Value>>,
 
     /// Harness adapter for the running agent. This is only set if:
     /// - The harness has started successfully.
@@ -1045,6 +1052,7 @@ impl AgentDriver {
         let AgentDriverOptions {
             working_dir,
             task_id,
+            experimental,
             parent_run_id,
             should_share,
             idle_on_complete,
@@ -1229,6 +1237,7 @@ impl AgentDriver {
             resolved_env_vars,
             output_format: OutputFormat::default(),
             task_id,
+            experimental,
             harness: None,
             idle_on_complete,
             idle_on_fail,
@@ -1281,6 +1290,7 @@ impl AgentDriver {
             resolved_env_vars: Arc::new(HashMap::new()),
             output_format: OutputFormat::default(),
             task_id: None,
+            experimental: None,
             harness: None,
             idle_on_complete: None,
             idle_on_fail: None,

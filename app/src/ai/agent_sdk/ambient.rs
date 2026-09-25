@@ -493,6 +493,7 @@ impl AmbientAgentRunner {
             let merged_config = super::config_file::merge_with_precedence(
                 loaded_file.as_ref(),
                 AgentConfigSnapshot {
+                    experimental: None,
                     name: args.name,
                     environment_id,
                     runner_id: args.runner,
