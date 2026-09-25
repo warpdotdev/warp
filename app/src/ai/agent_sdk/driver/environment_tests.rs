@@ -439,20 +439,29 @@ fn single_clone_command_prints_identity_before_clone_without_rendering_secrets()
 
 #[cfg(unix)]
 #[test]
-fn single_clone_command_rejects_colonless_credential_userinfo() {
+fn single_clone_command_falls_back_for_invalid_credential_helper_output() {
     let request = clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp"), None);
     let command =
         build_single_repo_clone_command(&request, Path::new("/workspace"), ShellType::Bash);
-    let output = run_git_command_with_credentials(
-        &command,
-        "https://credential-token-would-leak@github.com\n",
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
 
-    assert!(output.status.success());
-    assert!(stdout.contains("Git credential: unset@github.com"));
-    assert!(!stdout.contains("credential-token-would-leak"));
-    assert!(!stdout.contains("https://"));
+    for helper_script in [
+        "cat >/dev/null\nprintf '%s\\n' 'password=malformed-secret-never-print'",
+        "cat >/dev/null\n\
+         printf '%s\\n' 'failed-helper-diagnostic-never-print' >&2\n\
+         exit 1",
+    ] {
+        let output = run_git_command_with_credential_helper(&command, helper_script);
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+
+        assert!(output.status.success());
+        assert!(
+            stdout.contains("Git credential: unset@github.com"),
+            "stdout: {stdout}\nstderr: {stderr}"
+        );
+        assert!(!stdout.contains("malformed-secret-never-print"));
+        assert!(!stderr.contains("failed-helper-diagnostic-never-print"));
+    }
 }
 
 #[cfg(unix)]
@@ -1278,40 +1287,70 @@ fn run_command_output(command: &str) -> std::process::Output {
 
 #[cfg(unix)]
 fn run_git_command_with_identity_fixture(command: &str) -> std::process::Output {
-    run_git_command_with_credentials(
+    run_git_command_with_credential_helper(
         command,
-        "https://octocat:credential-secret-never-print@github.com\n\
-         https://oauth2:gitlab-secret-never-print@gitlab.com\n",
+        "request=\"$(cat)\"\n\
+         case \"$request\" in\n\
+           *\"host=github.com\"*)\n\
+             printf '%s\\n' 'username=octocat' 'password=credential-secret-never-print'\n\
+             ;;\n\
+           *\"host=gitlab.com\"*)\n\
+             printf '%s\\n' 'username=oauth2' 'password=gitlab-secret-never-print'\n\
+             ;;\n\
+         esac",
     )
 }
 
 #[cfg(unix)]
-fn run_git_command_with_credentials(command: &str, credentials: &str) -> std::process::Output {
+fn run_git_command_with_credential_helper(
+    command: &str,
+    helper_script: &str,
+) -> std::process::Output {
     use std::os::unix::fs::PermissionsExt as _;
 
     let temp_dir = tempfile::tempdir().unwrap();
     let bin_dir = temp_dir.path().join("bin");
     fs::create_dir_all(&bin_dir).unwrap();
+    let real_git = Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .expect("git should be discoverable");
+    assert!(real_git.status.success());
+    let real_git = String::from_utf8(real_git.stdout).unwrap();
+    let real_git = real_git.trim();
+    let helper_path = temp_dir.path().join("credential-helper");
+    fs::write(&helper_path, format!("#!/bin/sh\n{helper_script}\n")).unwrap();
+    fs::set_permissions(&helper_path, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(
+        temp_dir.path().join(".gitconfig"),
+        format!("[credential]\n\thelper = !{}\n", helper_path.display()),
+    )
+    .unwrap();
     let git_path = bin_dir.join("git");
     fs::write(
         &git_path,
-        "#!/bin/sh\n\
+        format!(
+            "#!/bin/sh\n\
          if [ \"$1\" = \"config\" ]; then\n\
            printf '%s\\n' 'Ada Lovelace'\n\
+         elif [ \"$1\" = \"credential\" ]; then\n\
+           exec '{real_git}' \"$@\"\n\
          elif [ \"$1\" = \"-C\" ]; then\n\
            printf 'git %s\\n' \"$3\"\n\
          else\n\
            printf 'git %s\\n' \"$1\"\n\
-         fi\n",
+         fi\n"
+        ),
     )
     .unwrap();
     fs::set_permissions(&git_path, fs::Permissions::from_mode(0o700)).unwrap();
-    fs::write(temp_dir.path().join(".git-credentials"), credentials).unwrap();
 
     Command::new("sh")
         .arg("-c")
         .arg(command)
         .env("HOME", temp_dir.path())
+        .env("GIT_CONFIG_GLOBAL", temp_dir.path().join(".gitconfig"))
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .env(
             "PATH",
             format!(

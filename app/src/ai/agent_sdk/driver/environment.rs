@@ -40,23 +40,32 @@ const PRINT_GIT_CLONE_IDENTITY_FUNCTION: &str = r#"print_git_clone_identity() {
   if [ -z "$author_name" ]; then
     author_name="unset"
   fi
-  credential_username="unset"
-  credentials_file="$HOME/.git-credentials"
-  if [ -r "$credentials_file" ]; then
-    while IFS= read -r credential; do
-      credential_without_scheme="${credential#*://}"
-      credential_host="${credential_without_scheme#*@}"
-      credential_host="${credential_host%%/*}"
-      if [ "$credential_host" = "$host" ]; then
-        credential_userinfo="${credential_without_scheme%%@*}"
-        case "$credential_userinfo" in
-          ?*:?*)
-            credential_username="${credential_userinfo%%:*}"
-            break
-            ;;
-        esac
-      fi
-    done < "$credentials_file"
+  credential_username="$(
+    {
+      printf 'protocol=https\nhost=%s\n\n' "$host" |
+        GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git credential fill 2>/dev/null
+      credential_status="$?"
+      printf '\nwarp_git_credential_status=%s\n' "$credential_status"
+    } |
+      awk '
+        /^username=/ && username == "" {
+          candidate = substr($0, 10)
+          if (candidate != "" && candidate !~ /[[:cntrl:]]/) {
+            username = candidate
+          }
+        }
+        /^warp_git_credential_status=/ {
+          status = substr($0, 28)
+        }
+        END {
+          if (status == "0" && username != "") {
+            print username
+          }
+        }
+      '
+  )"
+  if [ -z "$credential_username" ]; then
+    credential_username="unset"
   fi
   printf '%s\n' "Git author: $author_name"
   printf '%s\n' "Git credential: $credential_username@$host"
