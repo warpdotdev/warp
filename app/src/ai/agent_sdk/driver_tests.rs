@@ -1058,6 +1058,26 @@ fn docker_registry_secret_never_injected_as_env_var() {
     }
 }
 
+#[test]
+fn unregister_streamer_consumer_tolerates_closed_terminal_window() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let window_id = terminal_view.read(&app, |_, ctx| terminal_view.window_id(ctx));
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx)
+        });
+
+        app.update(|ctx| ctx.simulate_window_closed(window_id));
+
+        driver.update(&mut app, |driver, ctx| {
+            driver.unregister_streamer_consumer(ctx);
+        });
+    });
+}
 // ── Skill-loading integration test ───────────────────────────────────────────
 
 /// Verifies that `load_environment_skills` loads every skill from an env repo
