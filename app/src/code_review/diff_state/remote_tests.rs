@@ -41,6 +41,7 @@ fn empty_metadata(branch: &str) -> DiffMetadata {
         against_head: DiffMetadataAgainstBase {
             aggregate_stats: DiffStats::default(),
             files: vec![],
+            files_truncated: false,
         },
         against_base_branch: None,
         has_head_commit: true,
@@ -116,6 +117,7 @@ fn test_metadata(branch: &str) -> DiffMetadata {
                 total_deletions: 2,
             },
             files: vec![],
+            files_truncated: false,
         },
         against_base_branch: None,
         has_head_commit: true,
