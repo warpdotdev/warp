@@ -4551,7 +4551,7 @@ checksum = "117240f60069e65410b3ae1bb213295bd828f707b5bec6596a1afc8793ce0cbc"
 [[package]]
 name = "dpi"
 version = "0.1.1"
-source = "git+https://github.com/warpdotdev/winit.git?rev=14db95a686387211d57cf2afd1d908b2d82a20fe#14db95a686387211d57cf2afd1d908b2d82a20fe"
+source = "git+https://github.com/warpdotdev/winit.git?rev=cb0ba31413083e5222e74fa01bc9e82441b280c6#cb0ba31413083e5222e74fa01bc9e82441b280c6"
 
 [[package]]
 name = "dsl_auto_type"
@@ -17479,7 +17479,7 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 [[package]]
 name = "winit"
 version = "0.30.13"
-source = "git+https://github.com/warpdotdev/winit.git?rev=14db95a686387211d57cf2afd1d908b2d82a20fe#14db95a686387211d57cf2afd1d908b2d82a20fe"
+source = "git+https://github.com/warpdotdev/winit.git?rev=cb0ba31413083e5222e74fa01bc9e82441b280c6#cb0ba31413083e5222e74fa01bc9e82441b280c6"
 dependencies = [
  "ahash 0.8.11",
  "android-activity",
