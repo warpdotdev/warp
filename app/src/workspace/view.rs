@@ -23979,10 +23979,7 @@ impl Workspace {
         {
             views.push(ToolPanelView::ConversationListView);
         }
-        if cfg!(feature = "local_fs")
-            && FeatureFlag::GlobalSearch.is_enabled()
-            && *CodeSettings::as_ref(ctx).show_global_search.value()
-        {
+        if cfg!(feature = "local_fs") && *CodeSettings::as_ref(ctx).show_global_search.value() {
             views.push(ToolPanelView::GlobalSearch {
                 entry_focus: GlobalSearchEntryFocus::Results,
             });
@@ -26325,9 +26322,7 @@ impl TypedActionView for Workspace {
                 }
             }
             ToggleGlobalSearch => {
-                if FeatureFlag::GlobalSearch.is_enabled()
-                    && *CodeSettings::as_ref(ctx).show_global_search
-                {
+                if *CodeSettings::as_ref(ctx).show_global_search {
                     let is_showing = matches!(
                         self.left_panel_view.as_ref(ctx).active_view(),
                         ToolPanelView::GlobalSearch { .. }
@@ -26347,9 +26342,7 @@ impl TypedActionView for Workspace {
                 });
             }
             OpenGlobalSearch => {
-                if FeatureFlag::GlobalSearch.is_enabled()
-                    && *CodeSettings::as_ref(ctx).show_global_search
-                {
+                if *CodeSettings::as_ref(ctx).show_global_search {
                     if let Some(selected_text) = self.get_selected_text_from_focused_view(ctx)
                         && let Some(global_search_view) = self
                             .left_panel_view
