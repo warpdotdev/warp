@@ -120,6 +120,7 @@ impl AcceptAutosuggestionKeybinding {
                     me.update_menu_selected_item(ctx);
                 }
             }
+            KeybindingChangedEvent::BindingsReloaded => {}
         });
 
         let mut me = Self {
