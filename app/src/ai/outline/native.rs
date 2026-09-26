@@ -36,6 +36,12 @@ struct OutlineState {
     status: OutlineStatus,
     /// Subscriber ID for repository updates (if watching).
     subscriber_id: Option<SubscriberId>,
+    /// Updates that arrived while a recomputation was already in flight (`status` was
+    /// `Pending`), coalesced via `RepositoryUpdate::merge` into a single accumulator rather
+    /// than queued individually -- so a burst of churn during one slow recomputation costs one
+    /// growing update, not one stored copy per update that arrived. Applied as one follow-up
+    /// recomputation once the in-flight one completes, so nothing is lost.
+    pending_update: RepositoryUpdate,
 }
 
 pub enum RepoOutlinesEvent {
@@ -128,6 +134,7 @@ impl RepoOutlines {
                 repository,
                 status: OutlineStatus::Pending,
                 subscriber_id: None,
+                pending_update: RepositoryUpdate::default(),
             };
             self.outlines.insert(repo_path.clone(), outline_state);
             self.outline_queue.push_back(repo_path);
@@ -379,36 +386,50 @@ impl RepoOutlines {
             return;
         }
 
-        match self.outlines.get_mut(repo_path) {
-            Some(OutlineState {
-                status: outline_status @ OutlineStatus::Complete(_),
-                ..
-            }) => {
-                let mut outline = OutlineStatus::Pending;
-                std::mem::swap(outline_status, &mut outline);
+        let Some(state) = self.outlines.get_mut(repo_path) else {
+            log::warn!("Failed to update repo outline: repo outline not found");
+            return;
+        };
+
+        match &mut state.status {
+            OutlineStatus::Complete(_) => {
+                let OutlineStatus::Complete(outline) =
+                    std::mem::replace(&mut state.status, OutlineStatus::Pending)
+                else {
+                    unreachable!("Expected status to be Complete(outline)")
+                };
                 let repo_path_clone_inner = repo_path.to_path_buf();
 
                 ctx.spawn(
                     async move {
-                        if let OutlineStatus::Complete(mut outline) = outline {
-                            outline.update(update).await;
-                            (outline, repo_path_clone_inner)
-                        } else {
-                            unreachable!("Expected status to be Complete(outline)")
-                        }
+                        let mut outline = outline;
+                        outline.update(update).await;
+                        (outline, repo_path_clone_inner)
                     },
                     move |me, (outline, repo_path), ctx| {
-                        if let Some(state) = me.outlines.get_mut(&repo_path) {
-                            state.status = OutlineStatus::Complete(outline);
-                            ctx.emit(RepoOutlinesEvent::OutlinesUpdated(repo_path));
+                        let Some(state) = me.outlines.get_mut(&repo_path) else {
+                            return;
+                        };
+                        state.status = OutlineStatus::Complete(outline);
+                        ctx.emit(RepoOutlinesEvent::OutlinesUpdated(repo_path.clone()));
+
+                        // Apply whatever coalesced in while we were recomputing, so sustained
+                        // filesystem churn under a slow recomputation never loses an update.
+                        if !state.pending_update.is_empty() {
+                            let next_update = std::mem::take(&mut state.pending_update);
+                            me.handle_repository_update(&repo_path, next_update, ctx);
                         }
                     },
                 );
             }
-            Some(_) => {
-                log::warn!("Failed to update repo outline: repo outline failed or is pending")
+            OutlineStatus::Pending => {
+                // A recomputation is already in flight; merge this update into the pending
+                // accumulator so it isn't lost, to be applied once that recomputation completes.
+                state.pending_update.merge(&update);
             }
-            None => log::warn!("Failed to update repo outline: repo outline not found"),
+            OutlineStatus::Failed => {
+                log::warn!("Failed to update repo outline: repo outline failed");
+            }
         }
     }
 }
@@ -446,3 +467,7 @@ impl RepositorySubscriber for OutlineRepositorySubscriber {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "native_tests.rs"]
+mod tests;
