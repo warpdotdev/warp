@@ -7,6 +7,7 @@ use std::ptr::NonNull;
 use std::sync::Once;
 
 use dispatch2::DispatchData;
+use instant::Instant;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
@@ -1066,12 +1067,14 @@ impl super::super::Renderer for Renderer {
             return;
         };
         let metal_device: &ProtocolObject<dyn MTLDevice> = metal_device;
+        let frame_start = Instant::now();
 
         let metal_layer = window.metal_layer();
         let presents_with_transaction = metal_layer.presentsWithTransaction();
         let drawable = metal_layer
             .nextDrawable()
             .expect("CAMetalLayer with allowsNextDrawableTimeout disabled always vends a drawable");
+        let drawable_ready_at = Instant::now();
 
         let ctx = &MetalDrawContext {
             device: metal_device,
@@ -1094,6 +1097,16 @@ impl super::super::Renderer for Renderer {
         let capture_callback = window.capture_callback.borrow_mut().take();
         let should_capture = capture_callback.is_some();
         let captured = Self::render(self, scene, ctx, should_capture, presents_with_transaction);
+        let render_done_at = Instant::now();
+        let drawable_wait_ms = drawable_ready_at.duration_since(frame_start).as_secs_f64() * 1000.;
+        let after_drawable_ms = render_done_at
+            .duration_since(drawable_ready_at)
+            .as_secs_f64()
+            * 1000.;
+        let total_ms = render_done_at.duration_since(frame_start).as_secs_f64() * 1000.;
+        println!(
+            "Metal frame: total={total_ms:.3} ms drawable_wait={drawable_wait_ms:.3} ms after_drawable={after_drawable_ms:.3} ms capture={should_capture} transactional_present={presents_with_transaction}"
+        );
         if let (Some(frame), Some(callback)) = (captured, capture_callback) {
             callback(frame);
         }
