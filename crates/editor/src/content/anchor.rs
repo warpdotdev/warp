@@ -209,6 +209,15 @@ impl Anchors {
         self.anchors.get(&anchor.id).map(|state| state.offset)
     }
 
+    /// Remove all dead (no longer live) anchors from the map.
+    ///
+    /// Call this after replacing the selection set so that anchor entries
+    /// for dropped selections are freed eagerly, rather than accumulating
+    /// until the next text edit triggers `update`.
+    pub fn gc(&mut self) {
+        self.anchors.retain(|_, state| state.is_live());
+    }
+
     /// Validates all anchors against the content they reference.
     pub fn validate(&self, content: &SumTree<BufferText>) {
         let content_length: CharOffset = content.extent();
