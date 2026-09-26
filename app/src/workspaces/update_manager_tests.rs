@@ -1,7 +1,9 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use chrono::Utc;
 use cloud_object_client::MockObjectClient;
 use itertools::Itertools;
-use settings::{PrivatePreferences, PublicPreferences};
+use settings::{PrivatePreferences, PublicPreferences, SettingsManager};
 use warpui::{AddSingletonModel, App};
 use warpui_extras::user_preferences;
 
@@ -13,18 +15,21 @@ use crate::cloud_object::model::actions::ObjectActions;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions, ServerWorkflow};
 use crate::server::cloud_objects::update_manager::InitialLoadResponse;
+use crate::server::experiments::{ServerExperiment, ServerExperiments, TestModel};
 use crate::server::ids::SyncId;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::{MockWorkspaceClient, WorkspaceClient};
 use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
-use crate::settings::{AISettings, CodeSettings, PrivacySettings};
+use crate::settings::{AISettings, CloudPreferencesSettings, CodeSettings, PrivacySettings};
 use crate::system::SystemStats;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{CloudWorkflow, CloudWorkflowModel, WorkflowId};
 use crate::workspaces::team::Team;
 use crate::workspaces::user_profiles::UserProfiles;
+use crate::workspaces::user_workspaces::UserWorkspacesEvent;
 use crate::workspaces::workspace::{PurchaseAddOnCreditsPolicy, Workspace, WorkspaceUid};
+use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
 
 fn initialize_app(
     team_client: Arc<dyn TeamClient>,
@@ -52,6 +57,59 @@ fn initialize_app(
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
     app.add_singleton_model(AuthManager::new_for_test);
+}
+
+#[test]
+fn workspace_change_events_observe_the_new_experiment_state() {
+    App::test((), |mut app| async move {
+        let team_client = Arc::new(MockTeamClient::new());
+        initialize_app(
+            team_client.clone(),
+            Arc::new(MockWorkspaceClient::new()),
+            vec![],
+            &mut app,
+        );
+        app.add_singleton_model(|_| {
+            PrivatePreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+        app.add_singleton_model(|_| SettingsManager::default());
+        CloudPreferencesSettings::register(&mut app);
+        let global_resources = GlobalResourceHandles::mock(&mut app);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resources));
+        app.add_singleton_model(|_| TestModel(0));
+        app.add_singleton_model(|ctx| ServerExperiments::new_from_cache(vec![], ctx));
+        let team_update_manager =
+            app.add_singleton_model(|ctx| TeamUpdateManager::new(team_client, None, ctx));
+
+        let observed_applied_experiment = Arc::new(AtomicBool::new(false));
+        let observed_applied_experiment_for_subscription = observed_applied_experiment.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_, event, ctx| {
+                if matches!(event, UserWorkspacesEvent::TeamsChanged) {
+                    observed_applied_experiment_for_subscription
+                        .store(TestModel::as_ref(ctx).0 == 1, Ordering::Relaxed);
+                }
+            });
+        });
+
+        team_update_manager.update(&mut app, |manager, ctx| {
+            manager.on_workspaces_updated(
+                Ok(WorkspacesMetadataResponse {
+                    workspaces: vec![],
+                    joinable_teams: vec![],
+                    experiments: Some(vec![ServerExperiment::TestExperiment]),
+                    factories_launch_modal_cta_url: None,
+                    ai_credit_availability: None,
+                    user_purchase_policy: None,
+                }),
+                ctx,
+            );
+        });
+
+        assert!(observed_applied_experiment.load(Ordering::Relaxed));
+    });
 }
 
 fn mock_workflow(id: WorkflowId, owner: Owner) -> CloudWorkflow {
@@ -99,6 +157,7 @@ fn test_leaving_team_removes_objects() {
                     workspaces: vec![],
                     joinable_teams: vec![],
                     experiments: None,
+                    factories_launch_modal_cta_url: None,
                     ai_credit_availability: None,
                     user_purchase_policy: None,
                 },
@@ -171,6 +230,7 @@ fn test_leaving_team_removes_objects() {
                         workspaces: vec![],
                         joinable_teams: vec![],
                         experiments: None,
+                        factories_launch_modal_cta_url: None,
                         ai_credit_availability: None,
                         user_purchase_policy: None,
                     },
@@ -245,6 +305,7 @@ fn test_workspace_metadata_piggyback_feeds_ai_credit_availability() {
                     workspaces: vec![],
                     joinable_teams: vec![],
                     experiments: None,
+                    factories_launch_modal_cta_url: None,
                     ai_credit_availability: Some(availability),
                     user_purchase_policy: None,
                 }),
@@ -275,6 +336,7 @@ fn test_poll_path_apply_refreshes_user_purchase_policy() {
             workspaces: vec![],
             joinable_teams: vec![],
             experiments: None,
+            factories_launch_modal_cta_url: None,
             ai_credit_availability: None,
             user_purchase_policy: Some(PurchaseAddOnCreditsPolicy {
                 enabled: false,
@@ -300,6 +362,7 @@ fn test_poll_path_apply_refreshes_user_purchase_policy() {
             workspaces: vec![],
             joinable_teams: vec![],
             experiments: None,
+            factories_launch_modal_cta_url: None,
             ai_credit_availability: None,
             user_purchase_policy: None,
         };
@@ -398,6 +461,7 @@ fn on_workspaces_updated_keeps_teams_distinct_and_prunes_a_team_the_response_omi
                     ])],
                     joinable_teams: vec![],
                     experiments: None,
+                    factories_launch_modal_cta_url: None,
                     ai_credit_availability: None,
                     user_purchase_policy: None,
                 }),
@@ -442,6 +506,7 @@ fn on_workspaces_updated_keeps_teams_distinct_and_prunes_a_team_the_response_omi
                     )])],
                     joinable_teams: vec![],
                     experiments: None,
+                    factories_launch_modal_cta_url: None,
                     ai_credit_availability: None,
                     user_purchase_policy: None,
                 }),
@@ -470,6 +535,7 @@ fn on_workspaces_updated_keeps_teams_distinct_and_prunes_a_team_the_response_omi
                     workspaces: vec![workspace_with_teams(vec![])],
                     joinable_teams: vec![],
                     experiments: None,
+                    factories_launch_modal_cta_url: None,
                     ai_credit_availability: None,
                     user_purchase_policy: None,
                 }),
