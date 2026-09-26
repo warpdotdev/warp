@@ -728,12 +728,23 @@ fn on_shell_determined<S: TerminalSurface>(
     });
 
     // Create the channel above and pass the receving side to the event loop.
-    let event_loop_handle = TerminalManager::<S>::start_pty_event_loop(
+    let event_loop_handle = match TerminalManager::<S>::start_pty_event_loop(
         pty,
         event_loop_rx,
         model.clone(),
         channel_event_proxy,
-    );
+    ) {
+        Ok(event_loop_handle) => event_loop_handle,
+        Err(err) => {
+            let err = anyhow::Error::new(err).context("Failed to create PTY event loop");
+            report_error!(&err);
+            manager.view.update(ctx, |surface, ctx| {
+                surface.on_pty_spawn_failed(err, ctx);
+            });
+            manager.model().lock().exit(ExitReason::PtySpawnFailed);
+            return;
+        }
+    };
 
     manager.event_loop_handle = Some(event_loop_handle);
     #[cfg(feature = "integration_tests")]
@@ -887,13 +898,13 @@ impl<S> TerminalManager<S> {
         rx: mio_channel::Receiver<Message>,
         model: Arc<FairMutex<TerminalModel>>,
         channel_event_proxy: ChannelEventListener,
-    ) -> JoinHandle<()> {
+    ) -> std::io::Result<JoinHandle<()>> {
         // Create the event loop and get a handle to the injector.
-        let event_loop = EventLoop::new(model, channel_event_proxy, pty, rx);
+        let event_loop = EventLoop::new(model, channel_event_proxy, pty, rx)?;
 
         // Spawn the event loop on a separate thread to interact with the PTY and write the data back
         // to the terminal.
-        event_loop.spawn()
+        Ok(event_loop.spawn())
     }
 }
 
