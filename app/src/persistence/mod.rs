@@ -431,6 +431,10 @@ pub enum ModelEvent {
         updated_tasks: Vec<api::Task>,
         conversation_data: AgentConversationData,
     },
+    UpdateMultiAgentConversationEventSequence {
+        conversation_id: String,
+        sequence: i64,
+    },
     /// Persists read-time-derived conversation summaries for rows written
     /// before the `summary` column existed.
     BackfillConversationSummaries {
