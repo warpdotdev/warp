@@ -34,6 +34,7 @@ pub mod credit_availability;
 pub(crate) mod custom_endpoints;
 pub(crate) mod custom_model_router_editor;
 pub(crate) mod custom_model_routers;
+pub(crate) mod discover_models;
 pub(crate) mod document;
 #[cfg(not(target_family = "wasm"))]
 pub mod geap_credentials;
