@@ -316,11 +316,10 @@ impl RepositorySubscriber for GitStatusRepositorySubscriber {
     fn on_files_updated(
         &mut self,
         repository: &Repository,
-        update: &RepositoryUpdate,
+        update: RepositoryUpdate,
         _ctx: &mut ModelContext<Repository>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
         let tx = self.repository_update_tx.clone();
-        let update = update.clone();
         let index_lock_path = repository.git_dir().join("index.lock");
         Box::pin(async move {
             // Suppress commit_updated events while the git index is locked to
