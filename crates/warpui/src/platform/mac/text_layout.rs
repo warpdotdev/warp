@@ -38,6 +38,7 @@ use warpui_core::text_layout::{
     TextFrame, TextStyle,
 };
 
+use super::AutoreleasePoolGuard;
 use super::fonts::FontDB;
 use super::utils::{cg_color_to_color_u, color_u_to_cg_color};
 
@@ -387,6 +388,8 @@ fn layout_line_with_offset(
             char_offset,
         )
     } else {
+        // CoreText autoreleases CF temporaries; drain them on this thread before returning.
+        let _pool = AutoreleasePoolGuard::new();
         let attributed_string =
             create_attributed_string(text, style_runs, font_db, line_style, None);
         let line = CTLine::new_with_attributed_string(attributed_string.as_concrete_TypeRef());
@@ -638,6 +641,8 @@ pub fn layout_text(
     if text.is_empty() {
         TextFrame::empty(line_style.font_size, line_style.line_height_ratio)
     } else {
+        // CoreText autoreleases CF temporaries; drain them on this thread before returning.
+        let _pool = AutoreleasePoolGuard::new();
         // Ensure the max height is finite--under certain conditions `CTFrameSetter` won't terminate
         // if the height is unbounded.
         let max_height = max_height.min(f32::MAX);
