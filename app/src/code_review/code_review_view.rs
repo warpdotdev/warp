@@ -57,7 +57,7 @@ use warpui::{
 use super::code_review_header::CodeReviewHeader;
 use super::comment_list_view::{CommentListDebugState, CommentListEvent, CommentListView};
 use super::comments::{AttachedReviewComment, CommentOrigin, attach_pending_imported_comments};
-use super::diff_size_limits::DiffSize;
+use super::diff_size_limits::{DiffSize, UnrenderableReason};
 use super::git_dialog::{GitDialog, GitDialogEvent, GitDialogKind};
 use super::{GlobalCodeReviewEvent, GlobalCodeReviewModel};
 #[cfg(feature = "local_fs")]
@@ -80,7 +80,7 @@ use crate::code::editor::{
 };
 use crate::code::editor_management::CodeEditorStatus;
 use crate::code::footer::{CodeFooterView, CodeFooterViewEvent};
-use crate::code::global_buffer_model::GlobalBufferModel;
+use crate::code::global_buffer_model::{GlobalBufferModel, editor_buffer_load_error};
 use crate::code::local_code_editor::{
     LocalCodeEditorEvent, LocalCodeEditorView, render_unsaved_circle_with_tooltip,
 };
@@ -2597,7 +2597,13 @@ impl CodeReviewView {
 
         let mut file_states = vec![];
         for file in files {
-            let editor_state = {
+            let content_exceeds_editor_limit = file
+                .content_at_head
+                .as_deref()
+                .is_some_and(|content| editor_buffer_load_error(content).is_some());
+            let editor_state = if content_exceeds_editor_limit {
+                None
+            } else {
                 // `LocalCodeEditorView::new_with_global_buffer` natively
                 // supports both `LocalOrRemotePath::Local` and `Remote`
                 // (it sets language by extension and skips local-only
@@ -2616,10 +2622,14 @@ impl CodeReviewView {
                     self.create_code_review_model(file, ctx)
                 }
             };
-            let is_expanded = self.should_auto_expand_file(&file.file_diff);
+            let mut file_diff = file.file_diff.clone();
+            if content_exceeds_editor_limit {
+                file_diff.size = DiffSize::Unrenderable(UnrenderableReason::FileTooLarge);
+            }
+            let is_expanded = self.should_auto_expand_file(&file_diff);
 
-            let file_path = file.file_diff.file_path.clone();
-            let file_line = file_line_for_open(&file.file_diff);
+            let file_path = file_diff.file_path.clone();
+            let file_line = file_line_for_open(&file_diff);
 
             let chevron_path = file_path.clone();
             let initial_icon = if is_expanded {
@@ -2700,7 +2710,7 @@ impl CodeReviewView {
             });
 
             file_states.push(FileState {
-                file_diff: file.file_diff.clone(),
+                file_diff,
                 editor_state,
                 is_expanded,
                 chevron_button,
@@ -3443,6 +3453,9 @@ impl CodeReviewView {
                 // When global buffer is enabled (and file is not deleted), we only need to set the base to the content at HEAD.
                 // For deleted files or when global buffer is disabled, we need to populate the buffer directly.
                 if is_deleted_file {
+                    if editor_buffer_load_error(file_content).is_some() {
+                        return;
+                    }
                     let line_count = file_content.lines().count();
                     range = Some(calculate_hidden_lines(
                         &diff_deltas,
