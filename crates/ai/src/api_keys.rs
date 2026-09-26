@@ -201,6 +201,15 @@ impl CustomEndpointDefinition {
         }
     }
 
+    /// Sanitizes every user-entered field (see [`sanitize_custom_endpoint_field`]).
+    fn normalize(&mut self) {
+        self.name = sanitize_custom_endpoint_name_field(&self.name);
+        self.base_url = sanitize_custom_endpoint_field(&self.base_url);
+        for model in &mut self.models {
+            model.normalize();
+        }
+    }
+
     fn is_valid(&self) -> bool {
         !self.name.trim().is_empty()
             && validate_custom_endpoint_url(&self.base_url).is_ok()
@@ -277,9 +286,16 @@ impl CustomEndpointDefinitions {
         Ok((definitions, keys))
     }
 
+    /// Sanitizes and then validates a set of definitions.
+    ///
+    /// Normalizing before validation heals previously persisted control characters and
+    /// prevents newly inserted definitions from retaining invisible characters.
     fn validated(
-        definitions: IndexMap<CustomEndpointId, CustomEndpointDefinition>,
+        mut definitions: IndexMap<CustomEndpointId, CustomEndpointDefinition>,
     ) -> Option<Self> {
+        for definition in definitions.values_mut() {
+            definition.normalize();
+        }
         let mut config_keys = HashSet::new();
         if definitions.values().all(CustomEndpointDefinition::is_valid)
             && definitions
@@ -393,6 +409,57 @@ impl CustomEndpointModel {
             Some(alias) if !alias.trim().is_empty() => alias,
             _ => &self.name,
         }
+    }
+
+    /// The model name with control characters stripped, as sent to the provider for the
+    /// request's model slug. Case is preserved: provider slugs are case-sensitive.
+    fn request_slug(&self) -> String {
+        sanitize_custom_endpoint_field(&self.name)
+    }
+
+    /// Sanitizes the user-entered name and alias. An alias that sanitizes to empty is
+    /// dropped so [`Self::display_label`] falls back to the model name.
+    fn normalize(&mut self) {
+        self.name = sanitize_custom_endpoint_name_field(&self.name);
+        self.alias = self
+            .alias
+            .as_deref()
+            .map(sanitize_custom_endpoint_field)
+            .filter(|alias| !alias.is_empty());
+    }
+}
+
+/// Strips control characters and surrounding whitespace from a value typed or pasted
+/// into a custom inference settings field. Case is never changed.
+///
+/// A control character paints as nothing (or, for `\r` on Windows and Linux, as a
+/// line break the buffer does not have), so a stray one is invisible in every UI that
+/// shows the value while still being sent verbatim. A model name carrying one goes
+/// out as the request's model slug and the provider rejects it with a "model not
+/// found" error that looks exactly like a typo (warpdotdev/warp#14782).
+fn sanitize_custom_endpoint_field(value: &str) -> String {
+    if !value.chars().any(char::is_control) {
+        return value.trim().to_owned();
+    }
+    value
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
+/// Sanitizes a `name`-style field like [`sanitize_custom_endpoint_field`], except a
+/// non-empty input that would sanitize to `""` (e.g. a lone ESC) keeps its original
+/// value instead. `validated` rejects the whole collection if any one definition is
+/// invalid, so a name has no safe empty fallback the way an alias does (which is just
+/// dropped) -- it must never become the `""` that fails `is_valid`.
+fn sanitize_custom_endpoint_name_field(value: &str) -> String {
+    let sanitized = sanitize_custom_endpoint_field(value);
+    if sanitized.is_empty() && !value.is_empty() {
+        value.to_owned()
+    } else {
+        sanitized
     }
 }
 
@@ -560,6 +627,29 @@ pub struct CustomEndpointParams {
     pub models: Vec<(String, Option<String>, Option<String>)>,
     pub schema: CustomEndpointSchema,
 }
+
+/// Builds the models for a legacy [`CustomEndpoint`] from the values entered in the
+/// settings form, sanitizing names and aliases and assigning a `config_key` to every
+/// model that doesn't already have one.
+fn custom_endpoint_models_from_params(
+    models: Vec<(String, Option<String>, Option<String>)>,
+) -> Vec<CustomEndpointModel> {
+    models
+        .into_iter()
+        .map(|(name, alias, config_key)| {
+            let mut model = CustomEndpointModel {
+                name,
+                alias,
+                config_key: config_key
+                    .filter(|k| !k.is_empty())
+                    .unwrap_or_else(|| Uuid::new_v4().to_string()),
+            };
+            model.normalize();
+            model
+        })
+        .collect()
+}
+
 fn provider_credential_action(is_present: bool) -> ProviderCredentialTelemetryAction {
     if is_present {
         ProviderCredentialTelemetryAction::Added
@@ -864,16 +954,7 @@ impl ApiKeyManager {
             url,
             api_key,
             schema,
-            models: models
-                .into_iter()
-                .map(|(name, alias, config_key)| CustomEndpointModel {
-                    name,
-                    alias,
-                    config_key: config_key
-                        .filter(|k| !k.is_empty())
-                        .unwrap_or_else(|| Uuid::new_v4().to_string()),
-                })
-                .collect(),
+            models: custom_endpoint_models_from_params(models),
         });
         if self.custom_endpoints.definitions.is_none() {
             self.custom_endpoints.resolved = self.keys.custom_endpoints.clone();
@@ -903,16 +984,7 @@ impl ApiKeyManager {
             url,
             api_key,
             schema,
-            models: models
-                .into_iter()
-                .map(|(name, alias, config_key)| CustomEndpointModel {
-                    name,
-                    alias,
-                    config_key: config_key
-                        .filter(|k| !k.is_empty())
-                        .unwrap_or_else(|| Uuid::new_v4().to_string()),
-                })
-                .collect(),
+            models: custom_endpoint_models_from_params(models),
         };
         if self.custom_endpoints.definitions.is_none() {
             self.custom_endpoints.resolved = self.keys.custom_endpoints.clone();
@@ -999,14 +1071,20 @@ impl ApiKeyManager {
                     models: endpoint
                         .models
                         .iter()
-                        .filter(|m| !m.name.trim().is_empty() && !m.config_key.is_empty())
-                        .map(
-                            |m| api::request::settings::custom_model_providers::CustomModel {
-                                slug: m.name.clone(),
-                                config_key: m.config_key.clone(),
-                                reasoning_effort: String::new(),
-                            },
-                        )
+                        .filter(|m| !m.config_key.is_empty())
+                        .filter_map(|m| {
+                            // Never forward the stored name verbatim: a control character
+                            // in it is invisible in the UI but makes the provider reject
+                            // the model as unknown.
+                            let slug = m.request_slug();
+                            (!slug.is_empty()).then(|| {
+                                api::request::settings::custom_model_providers::CustomModel {
+                                    slug,
+                                    config_key: m.config_key.clone(),
+                                    reasoning_effort: String::new(),
+                                }
+                            })
+                        })
                         .collect(),
                 },
             )
@@ -1121,8 +1199,18 @@ impl ApiKeyManager {
             }
         };
 
-        match serde_json::from_str(&key_json) {
-            Ok(keys) => keys,
+        match serde_json::from_str::<ApiKeys>(&key_json) {
+            Ok(mut keys) => {
+                // A persisted legacy model name can hold invisible control characters.
+                // Only model fields are sanitized: the endpoint name and URL feed the
+                // legacy endpoint id (`CustomEndpointId::from_legacy`).
+                for endpoint in &mut keys.custom_endpoints {
+                    for model in &mut endpoint.models {
+                        model.normalize();
+                    }
+                }
+                keys
+            }
             Err(e) => {
                 report_error!(anyhow::Error::new(e).context("Failed to deserialize API keys"));
                 ApiKeys::default()

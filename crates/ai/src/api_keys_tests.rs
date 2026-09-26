@@ -633,6 +633,310 @@ fn endpoints_with_only_empty_models_are_skipped() {
     assert!(mgr.custom_model_providers_for_request(true).is_none());
 }
 
+// ── control-character sanitization (#14782) ────────────────────
+
+/// A model name copied on Windows arrives with the line break of the line it was
+/// copied from. The `\r` is invisible in the stored value, so the settings form looks
+/// correct while the request goes out with `glm-5.1:cloud\r` and the provider answers
+/// "model not found".
+const MODEL_NAME_WITH_CARRIAGE_RETURN: &str = "glm-5.1:cloud\r";
+
+#[test]
+fn sanitize_custom_endpoint_field_strips_control_characters_and_whitespace() {
+    for raw in [
+        "glm-5.1:cloud\r",
+        "  glm-5.1:cloud\r\n",
+        "glm-5.1:cloud\r ",
+        "\tglm-5.1:cloud\t",
+        "glm-5.1\u{7f}:cloud",
+        "\u{1b}glm-5.1:cloud",
+    ] {
+        assert_eq!(
+            sanitize_custom_endpoint_field(raw),
+            "glm-5.1:cloud",
+            "unexpected result for input {raw:?}"
+        );
+    }
+}
+
+#[test]
+fn sanitize_custom_endpoint_field_preserves_case() {
+    // Provider slugs are matched byte-for-byte (Ollama has no case folding), so
+    // sanitizing must never change case.
+    assert_eq!(
+        sanitize_custom_endpoint_field("GLM-5.2:cloud\r"),
+        "GLM-5.2:cloud"
+    );
+    assert_eq!(
+        sanitize_custom_endpoint_field("glm-5.2:cloud"),
+        "glm-5.2:cloud"
+    );
+}
+
+#[test]
+fn request_slug_strips_trailing_carriage_return() {
+    let mgr = make_manager(ApiKeys {
+        custom_endpoints: vec![endpoint_with_keys(
+            "ollama",
+            "https://ollama.com/v1",
+            "ep-key",
+            &[(MODEL_NAME_WITH_CARRIAGE_RETURN, None, "uuid-1")],
+        )],
+        ..Default::default()
+    });
+
+    let providers = mgr.custom_model_providers_for_request(true).unwrap();
+    let slug = &providers.providers[0].models[0].slug;
+    assert_eq!(slug, "glm-5.1:cloud");
+    assert!(!slug.chars().any(char::is_control));
+}
+
+#[test]
+fn models_that_sanitize_to_nothing_are_not_sent() {
+    let mgr = make_manager(ApiKeys {
+        custom_endpoints: vec![endpoint_with_keys(
+            "ep",
+            "https://a.io",
+            "k",
+            &[("\u{1b}\r", None, "uuid-z")],
+        )],
+        ..Default::default()
+    });
+    assert!(mgr.custom_model_providers_for_request(true).is_none());
+}
+
+#[test]
+fn model_name_of_only_control_characters_keeps_original_and_stays_valid() {
+    // A name made only of non-whitespace control characters (e.g. a lone ESC) would
+    // sanitize to "", which fails `CustomEndpointDefinition::is_valid`'s non-empty
+    // check. Because `CustomEndpointDefinitions::validated` is all-or-nothing, that
+    // would silently invalidate every configured endpoint, not just this one. The
+    // name must be kept unchanged instead, and the collection must still validate.
+    let definitions: CustomEndpointDefinitions = serde_json::from_value(serde_json::json!({
+        "endpoint-1": {
+            "name": "Ollama",
+            "base_url": "https://ollama.com/v1",
+            "models": [
+                {
+                    "name": "\u{1b}",
+                    "config_key": "uuid-1",
+                },
+            ],
+        },
+    }))
+    .expect("a model name of only control characters must not invalidate the collection");
+
+    let (_, definition) = definitions.definitions().next().unwrap();
+    assert_eq!(definition.models[0].name, "\u{1b}");
+}
+
+fn definitions_json_with_control_characters() -> serde_json::Value {
+    serde_json::json!({
+        "endpoint-1": {
+            "name": "Ollama\r",
+            "base_url": "https://ollama.com/v1\r\n",
+            "models": [
+                {
+                    "name": MODEL_NAME_WITH_CARRIAGE_RETURN,
+                    "alias": "\r",
+                    "config_key": "uuid-1",
+                },
+                {
+                    "name": "GLM-5.2:cloud\r",
+                    "alias": "GLM 5.2\r",
+                    "config_key": "uuid-2",
+                },
+            ],
+        },
+    })
+}
+
+fn assert_definitions_are_sanitized(definitions: &CustomEndpointDefinitions) {
+    let (_, definition) = definitions.definitions().next().unwrap();
+    assert_eq!(definition.name, "Ollama");
+    assert_eq!(definition.base_url, "https://ollama.com/v1");
+    assert_eq!(definition.models[0].name, "glm-5.1:cloud");
+    // An alias that is nothing but control characters is dropped rather than kept as
+    // a blank picker label, so the picker falls back to the model name.
+    assert_eq!(definition.models[0].alias, None);
+    assert_eq!(definition.models[0].display_label(), "glm-5.1:cloud");
+    // Case is preserved.
+    assert_eq!(definition.models[1].name, "GLM-5.2:cloud");
+    assert_eq!(definition.models[1].alias.as_deref(), Some("GLM 5.2"));
+}
+
+#[test]
+fn custom_endpoint_definitions_heal_control_characters_on_deserialize() {
+    // Persisted or cloud-synced definitions holding control characters heal when they
+    // are read back, without the user having to re-enter them.
+    let definitions: CustomEndpointDefinitions =
+        serde_json::from_value(definitions_json_with_control_characters()).unwrap();
+    assert_definitions_are_sanitized(&definitions);
+}
+
+#[test]
+fn custom_endpoint_definitions_heal_control_characters_from_settings_file() {
+    use settings_value::SettingsValue as _;
+
+    let definitions =
+        CustomEndpointDefinitions::from_file_value(&definitions_json_with_control_characters())
+            .expect("definitions with control characters should heal, not be rejected");
+    assert_definitions_are_sanitized(&definitions);
+}
+
+#[test]
+fn inserted_custom_endpoint_definition_is_sanitized() {
+    // `insert` is the save path for both the GUI settings modal and the TUI menu.
+    let mut definitions = CustomEndpointDefinitions::default();
+    definitions
+        .insert(
+            CustomEndpointId::generated(),
+            CustomEndpointDefinition {
+                name: "Ollama".to_owned(),
+                base_url: "https://ollama.com/v1".to_owned(),
+                schema: CustomEndpointSchema::default(),
+                models: vec![CustomEndpointModel {
+                    // What a single-line field held after pasting a CRLF line: the
+                    // `\n` became a space and the `\r` stayed behind.
+                    name: "glm-5.1:cloud\r ".to_owned(),
+                    alias: None,
+                    config_key: "uuid-1".to_owned(),
+                }],
+            },
+        )
+        .unwrap();
+
+    let (_, definition) = definitions.definitions().next().unwrap();
+    assert_eq!(definition.models[0].name, "glm-5.1:cloud");
+
+    let mgr = make_manager(ApiKeys {
+        custom_endpoints: vec![definition.clone().into_endpoint("ep-key".to_owned())],
+        ..Default::default()
+    });
+    assert_eq!(
+        mgr.custom_model_providers_for_request(true)
+            .unwrap()
+            .providers[0]
+            .models[0]
+            .slug,
+        "glm-5.1:cloud"
+    );
+}
+
+#[test]
+fn saved_legacy_custom_endpoint_models_are_sanitized() {
+    warpui_core::App::test((), |mut app| async move {
+        app.update(|ctx| {
+            warpui_extras::secure_storage::register_noop("test", ctx);
+            warp_core::telemetry::testing::MockTelemetryContextProvider::register(ctx);
+        });
+        let manager = app.add_singleton_model(ApiKeyManager::new);
+        let params = |name: &str, alias: Option<&str>| CustomEndpointParams {
+            name: "ollama".to_owned(),
+            url: "https://ollama.com/v1".to_owned(),
+            api_key: "ep-key".to_owned(),
+            models: vec![(
+                name.to_owned(),
+                alias.map(str::to_owned),
+                Some("uuid-1".to_owned()),
+            )],
+            schema: CustomEndpointSchema::OpenaiChatCompletions,
+        };
+
+        manager.update(&mut app, |manager, ctx| {
+            manager
+                .add_custom_endpoint(params(MODEL_NAME_WITH_CARRIAGE_RETURN, Some("GLM\r")), ctx);
+        });
+        manager.read(&app, |manager, _| {
+            let model = &manager.keys().custom_endpoints[0].models[0];
+            assert_eq!(model.name, "glm-5.1:cloud");
+            assert_eq!(model.alias.as_deref(), Some("GLM"));
+        });
+
+        manager.update(&mut app, |manager, ctx| {
+            manager.save_custom_endpoint(0, params("glm-5.1:cloud\r\n", Some("\r")), ctx);
+        });
+        manager.read(&app, |manager, _| {
+            let model = &manager.keys().custom_endpoints[0].models[0];
+            assert_eq!(model.name, "glm-5.1:cloud");
+            assert_eq!(model.alias, None);
+            assert_eq!(
+                manager
+                    .custom_model_providers_for_request(true)
+                    .unwrap()
+                    .providers[0]
+                    .models[0]
+                    .slug,
+                "glm-5.1:cloud"
+            );
+        });
+    });
+}
+
+#[test]
+fn legacy_custom_endpoints_loaded_from_secure_storage_are_sanitized() {
+    warpui_core::App::test((), |mut app| async move {
+        let stored = serde_json::to_string(&ApiKeys {
+            custom_endpoints: vec![endpoint_with_keys(
+                "Ollama",
+                "https://ollama.com/v1",
+                "ep-key",
+                &[(MODEL_NAME_WITH_CARRIAGE_RETURN, None, "uuid-1")],
+            )],
+            ..Default::default()
+        })
+        .unwrap();
+        app.update(move |ctx| {
+            ctx.add_singleton_model(move |_| -> secure_storage::Model {
+                Box::new(StubSecureStorage { stored })
+            });
+            warp_core::telemetry::testing::MockTelemetryContextProvider::register(ctx);
+        });
+
+        let manager = app.add_singleton_model(ApiKeyManager::new);
+
+        manager.read(&app, |manager, _| {
+            assert_eq!(
+                manager.keys().custom_endpoints[0].models[0].name,
+                "glm-5.1:cloud"
+            );
+            assert_eq!(
+                manager
+                    .custom_model_providers_for_request(true)
+                    .unwrap()
+                    .providers[0]
+                    .models[0]
+                    .slug,
+                "glm-5.1:cloud"
+            );
+        });
+    });
+}
+
+/// Secure storage stub that returns a fixed legacy API-key payload, so the load path
+/// can be exercised against values persisted by an older build.
+struct StubSecureStorage {
+    stored: String,
+}
+
+impl secure_storage::SecureStorage for StubSecureStorage {
+    fn write_value(&self, _key: &str, _value: &str) -> Result<(), secure_storage::Error> {
+        Ok(())
+    }
+
+    fn read_value(&self, key: &str) -> Result<String, secure_storage::Error> {
+        if key == SECURE_STORAGE_KEY {
+            Ok(self.stored.clone())
+        } else {
+            Err(secure_storage::Error::NotFound)
+        }
+    }
+
+    fn remove_value(&self, _key: &str) -> Result<(), secure_storage::Error> {
+        Ok(())
+    }
+}
+
 // ── display_label fallback ─────────────────────────────────────
 
 #[test]

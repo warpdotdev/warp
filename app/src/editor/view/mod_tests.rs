@@ -4310,6 +4310,125 @@ fn test_buffer_points_to_cache() {
     });
 }
 
+fn write_plain_text_to_clipboard(app: &mut App, text: &str) {
+    let text = text.to_string();
+    app.update(move |ctx| {
+        ctx.clipboard().write(warpui::clipboard::ClipboardContent {
+            plain_text: text,
+            paths: None,
+            html: None,
+            images: None,
+        });
+    });
+}
+
+/// warpdotdev/warp#14782: a model name selected on a web page on Windows lands on the
+/// clipboard as `glm-5.1:cloud\r\n`. Pasting it into a single-line field must not leave
+/// a `\r` in the buffer: the winit text layout draws a `\r` as a line break, so deleting
+/// that visible break would keep the `\r`, and the field would look correct while
+/// holding a value the provider rejects.
+#[test]
+fn test_single_line_editor_pasted_crlf_leaves_no_carriage_return() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            EditorView::single_line(Default::default(), ctx)
+        });
+        write_plain_text_to_clipboard(&mut app, "glm-5.1:cloud\r\n");
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.paste(ctx);
+            assert_eq!(editor.buffer_text(ctx), "glm-5.1:cloud ");
+
+            // The reporter's recovery attempt: delete what looks like the line break.
+            editor.backspace(ctx);
+            assert_eq!(editor.buffer_text(ctx), "glm-5.1:cloud");
+        });
+    })
+}
+
+#[test]
+fn test_single_line_editor_converts_pasted_crlf_to_one_space() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            EditorView::single_line(Default::default(), ctx)
+        });
+        write_plain_text_to_clipboard(&mut app, "first\r\nsecond\rthird");
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.paste(ctx);
+            // A CRLF is one line break, so it becomes one space, not a space plus a `\r`.
+            assert_eq!(editor.buffer_text(ctx), "first second third");
+        });
+    })
+}
+
+#[test]
+fn test_single_line_editor_drops_pasted_line_breaks() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            EditorView::single_line(
+                SingleLineEditorOptions {
+                    convert_newline_to_space: false,
+                    ..Default::default()
+                },
+                ctx,
+            )
+        });
+        write_plain_text_to_clipboard(&mut app, "glm-5.1:cloud\r\n");
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.paste(ctx);
+            assert_eq!(editor.buffer_text(ctx), "glm-5.1:cloud");
+        });
+    })
+}
+
+#[test]
+fn test_single_line_editor_drops_typed_line_breaks() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut editor = EditorView::single_line(Default::default(), ctx);
+            editor.user_insert("glm-5.1", ctx);
+            // winit reports "\r" as the typed text for Enter; when the key event goes
+            // unhandled it is dispatched as typed characters.
+            editor.user_insert("\r", ctx);
+            editor.user_insert("\r\n", ctx);
+            editor.user_insert(":clo\rud", ctx);
+            editor
+        });
+
+        editor.read(&app, |editor, ctx| {
+            assert_eq!(editor.buffer_text(ctx), "glm-5.1:cloud");
+        });
+    })
+}
+
+#[test]
+fn test_multi_line_editor_keeps_pasted_and_typed_line_breaks() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            EditorView::new(Default::default(), ctx)
+        });
+        write_plain_text_to_clipboard(&mut app, "first\nsecond");
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.paste(ctx);
+            editor.user_insert("\nthird", ctx);
+            assert_eq!(editor.buffer_text(ctx), "first\nsecond\nthird");
+        });
+    })
+}
+
 #[test]
 fn test_paste_clipboard_with_text_only_should_paste_text_normally() {
     App::test((), |mut app| async move {
