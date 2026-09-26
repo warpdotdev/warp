@@ -1,9 +1,11 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use ::settings::ToggleableSetting;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_errors::report_error;
 use warp_graphql::mutations::create_anonymous_user::AnonymousUserType;
+use warpui::r#async::Timer;
 use warpui::windowing::WindowManager;
 use warpui::{AppContext, SingletonEntity, TypedActionView};
 
@@ -101,6 +103,41 @@ pub fn init_global_actions(app: &mut AppContext) {
     app.add_global_action("app:undo_close", undo_close);
     app.add_global_action("app:maybe_log_out", trigger_maybe_log_out);
     app.add_global_action("app:log_out", trigger_log_out);
+
+    spawn_periodic_session_save(app);
+}
+
+/// How often the open windows and tabs are written to the session snapshot
+/// even when nothing has happened to trigger a save.
+///
+/// Every other save is driven by something the user did - opening or closing a
+/// tab, moving, resizing or focusing a window. That covers a graceful exit, but
+/// a long-lived session that nobody touches has no recent snapshot to fall back
+/// on if the process dies without warning: a crash, a power cut, or an OS
+/// restart that kills us mid-teardown. This bounds how much such an exit costs.
+const PERIODIC_SESSION_SAVE_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Runs [`save_app`] on a timer for the life of the app. `save_app` is cheap
+/// when session restore is off or a tab drag is in flight - it returns before
+/// building a snapshot - so this costs nothing in those cases.
+fn spawn_periodic_session_save(app: &mut AppContext) {
+    let weak_app = app.weak_app();
+    let executor = app.foreground_executor().clone();
+
+    executor
+        .spawn(async move {
+            loop {
+                Timer::after(PERIODIC_SESSION_SAVE_INTERVAL).await;
+
+                // The app is gone; nothing left to snapshot.
+                let Some(mut app) = weak_app.upgrade() else {
+                    return;
+                };
+
+                app.update(|ctx| save_app(&(), ctx));
+            }
+        })
+        .detach();
 }
 
 fn toggle_mouse_reporting(_: &(), ctx: &mut AppContext) {
