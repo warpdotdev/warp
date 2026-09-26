@@ -465,7 +465,6 @@ embed-resource = "3.0"
 tui = ["warp_terminal/tui", "warpui_core/tui"]
 ai_resume_button = []
 autoupdate = []
-figma_detection = []
 bundled_skills = []
 supergrok = []
 gemini_enterprise = []
@@ -640,7 +639,6 @@ default = [
     "skill_arguments",
     "incremental_auto_reload",
     "active_conversation_requires_interaction",
-    "figma_detection",
     "file_based_mcp",
     "inline_repo_menu",
     "kitty_keyboard_protocol",
