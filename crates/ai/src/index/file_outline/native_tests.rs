@@ -78,10 +78,13 @@ async fn incremental_update_does_not_insert_files_after_the_byte_budget() {
 #[tokio::test]
 async fn rejected_new_file_does_not_evict_a_later_modified_file() {
     let temp_dir = TempDir::new().unwrap();
-    let modified_path = create_test_file(&temp_dir, "z.rs", "fn old_symbol() {}\n");
-    let mut outline = build_outline(temp_dir.path(), None).await.unwrap();
+    let repo_path = dunce::canonicalize(temp_dir.path()).unwrap();
+    let modified_path = repo_path.join("z.rs");
+    std::fs::write(&modified_path, "fn old_symbol() {}\n").unwrap();
+    let mut outline = build_outline(&repo_path, None).await.unwrap();
     outline.retained_outline_bytes = MAX_OUTLINE_TOTAL_BYTES;
-    let added_path = create_test_file(&temp_dir, "a.rs", "fn added_symbol() {}\n");
+    let added_path = repo_path.join("a.rs");
+    std::fs::write(&added_path, "fn added_symbol() {}\n").unwrap();
     std::fs::write(&modified_path, "fn new_symbol() {}\n").unwrap();
     let update = RepositoryUpdate {
         added: [TargetFile::new(added_path.clone(), false)].into(),
