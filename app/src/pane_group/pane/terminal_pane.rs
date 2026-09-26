@@ -1498,6 +1498,9 @@ fn handle_terminal_view_event(
                     ctx,
                 );
             }
+            Event::RetryConversationTranscriptLoad => {
+                group.retry_conversation_transcript_load(ctx);
+            }
             _ => {}
         }
     } else {
