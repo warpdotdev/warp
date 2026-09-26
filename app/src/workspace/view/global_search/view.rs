@@ -126,7 +126,7 @@ pub enum GlobalSearchEvent {
     Completed {
         search_id: u32,
         total_match_count: usize,
-        /// True when a remote source hit the server-side match cap.
+        /// True when any source omitted results because it reached a limit.
         capped: bool,
         /// Whether the local search source failed while another source
         /// completed. Results from the surviving sources remain valid.
@@ -765,30 +765,44 @@ impl GlobalSearchView {
     }
 
     fn apply_progress_item(&mut self, result: GlobalSearchMatch, ctx: &mut ViewContext<Self>) {
-        if self.total_match_count >= MAX_MATCH_COUNT {
-            return;
-        }
-
-        let location = result.location.clone();
-
-        // Find all directories that this file belongs to
-        let mut matching_directories = self.find_matching_directories(&location).peekable();
+        let mut matching_directories = self.find_matching_directories(&result.location).peekable();
         if matching_directories.peek().is_none() {
-            // File doesn't match any root directory, skip it
-            let file_path_name = location.file_name().unwrap_or("<unknown>");
+            let file_path_name = result.location.file_name().unwrap_or("<unknown>");
             log::warn!("[Global search] file {file_path_name} was not found in directories");
             return;
         }
         let matching_directories: Vec<_> = matching_directories.cloned().collect();
-
-        // Populate hierarchical data model (directory_entries)
-        let (directory_entries, directory_path_to_directory_index_entry) = (
+        let reached_capacity = Self::store_progress_item(
+            &matching_directories,
             &mut self.directory_entries,
             &mut self.directory_path_to_directory_index_entry,
+            &mut self.total_match_count,
+            result,
         );
+        if reached_capacity {
+            self.abort_search(ctx);
+        }
+    }
 
-        for directory_path in &matching_directories {
-            // Get or create the directory entry
+    fn store_progress_item(
+        matching_directories: &[LocalOrRemotePath],
+        directory_entries: &mut Vec<DirectoryEntry>,
+        directory_path_to_directory_index_entry: &mut HashMap<LocalOrRemotePath, usize>,
+        total_match_count: &mut usize,
+        result: GlobalSearchMatch,
+    ) -> bool {
+        let GlobalSearchMatch {
+            location,
+            line_number,
+            column_num,
+            line_text,
+            submatches,
+        } = result;
+
+        for directory_path in matching_directories {
+            if *total_match_count >= MAX_MATCH_COUNT {
+                return true;
+            }
             let dir_index = *directory_path_to_directory_index_entry
                 .entry(directory_path.clone())
                 .or_insert_with(|| {
@@ -796,25 +810,18 @@ impl GlobalSearchView {
                     directory_entries.push(DirectoryEntry::new(directory_path.clone()));
                     idx
                 });
-
-            // Get or create the matched path entry within this directory
             let dir_entry = &mut directory_entries[dir_index];
             let (matched_path, _path_index) = dir_entry.matched_paths.get_or_create(&location);
-
-            // Add the match
             matched_path.matches.push(Match::new(
-                result.line_text.clone(),
-                result.line_number,
-                result.column_num,
-                result.submatches.clone(),
+                line_text.clone(),
+                line_number,
+                column_num,
+                submatches.clone(),
             ));
+            *total_match_count += 1;
         }
 
-        self.total_match_count += 1;
-
-        if self.total_match_count == MAX_MATCH_COUNT {
-            self.abort_search(ctx);
-        }
+        *total_match_count >= MAX_MATCH_COUNT
     }
     fn abort_search(&mut self, ctx: &mut ViewContext<Self>) {
         self.capped_matches = true;
@@ -2364,3 +2371,7 @@ impl GlobalSearchView {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "view_tests.rs"]
+mod tests;
