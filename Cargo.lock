@@ -4551,7 +4551,7 @@ checksum = "117240f60069e65410b3ae1bb213295bd828f707b5bec6596a1afc8793ce0cbc"
 [[package]]
 name = "dpi"
 version = "0.1.1"
-source = "git+https://github.com/warpdotdev/winit.git?rev=14db95a686387211d57cf2afd1d908b2d82a20fe#14db95a686387211d57cf2afd1d908b2d82a20fe"
+source = "git+https://github.com/warpdotdev/winit.git?rev=4a8fe6ba37a651f5d59d5e7be0a06b68cdfbcce5#4a8fe6ba37a651f5d59d5e7be0a06b68cdfbcce5"
 
 [[package]]
 name = "dsl_auto_type"
@@ -9034,7 +9034,7 @@ version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77e878c846a8abae00dd069496dbe8751b16ac1c3d6bd2a7283a938e8228f90d"
 dependencies = [
- "proc-macro-crate 3.3.0",
+ "proc-macro-crate 1.3.1",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -17479,7 +17479,7 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 [[package]]
 name = "winit"
 version = "0.30.13"
-source = "git+https://github.com/warpdotdev/winit.git?rev=14db95a686387211d57cf2afd1d908b2d82a20fe#14db95a686387211d57cf2afd1d908b2d82a20fe"
+source = "git+https://github.com/warpdotdev/winit.git?rev=4a8fe6ba37a651f5d59d5e7be0a06b68cdfbcce5#4a8fe6ba37a651f5d59d5e7be0a06b68cdfbcce5"
 dependencies = [
  "ahash 0.8.11",
  "android-activity",
