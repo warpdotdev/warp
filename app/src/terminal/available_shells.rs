@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 #[cfg(feature = "local_tty")]
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 #[cfg(feature = "local_tty")]
 use std::path::Path;
 use std::path::PathBuf;
@@ -574,6 +574,14 @@ impl AvailableShells {
                     shell_type,
                 } = config
                 {
+                    // Snapshots may carry a path removed by a package-manager upgrade;
+                    // recover to the detected shell of the same type instead of a dead path.
+                    if !file_exists_and_is_executable(executable_path)
+                        && let Some(shell) =
+                            self.closest_known_shell(*shell_type, Some(executable_path))
+                    {
+                        return Some(shell);
+                    }
                     Some(AvailableShell::new_custom_shell(
                         executable_path.file_name()?.to_str()?.to_string(),
                         executable_path.clone(),
@@ -599,8 +607,79 @@ impl AvailableShells {
                 .iter()
                 .find(|shell| shell.matches_preference(&preference))
                 .cloned()
+                .or_else(|| self.recover_unmatched_executable_preference(&preference))
                 .unwrap_or_default(),
         }
+    }
+
+    /// Recovers a preference whose persisted executable path does not exactly match any
+    /// detected shell — e.g. a Homebrew Cellar path persisted by an older build, or one
+    /// removed by a formula upgrade — rather than silently resetting to the system default.
+    fn recover_unmatched_executable_preference(
+        &self,
+        preference: &NewSessionShell,
+    ) -> Option<AvailableShell> {
+        let NewSessionShell::Executable(path) = preference else {
+            return None;
+        };
+        let persisted_path = Path::new(path);
+        if file_exists_and_is_executable(persisted_path) {
+            // Older builds persisted canonicalized paths while detection now stores stable
+            // discovered paths; an existing path is honored only if it aliases a detected
+            // shell, otherwise it's an out-of-catalog choice left to launch-time fallback.
+            let target =
+                dunce::canonicalize(persisted_path).unwrap_or_else(|_| persisted_path.to_path_buf());
+            return self
+                .shells
+                .iter()
+                .find(|shell| {
+                    matches!(shell.state.as_ref(), Config::KnownLocal(LocalConfig { executable_path, .. })
+                        if dunce::canonicalize(executable_path).unwrap_or_else(|_| executable_path.clone()) == target)
+                })
+                .cloned();
+        }
+        let shell_type = persisted_path
+            .file_name()
+            .and_then(|file_name| file_name.to_str())
+            .and_then(ShellType::from_name)?;
+        self.closest_known_shell(shell_type, Some(persisted_path))
+    }
+
+    /// Finds the known shell of the given type sharing the longest path prefix with
+    /// `reference_path` (a stale Homebrew Cellar path should pick the shell under
+    /// `/opt/homebrew/bin`), ties broken by catalog order.
+    fn closest_known_shell(
+        &self,
+        shell_type: ShellType,
+        reference_path: Option<&Path>,
+    ) -> Option<AvailableShell> {
+        let mut best: Option<(&AvailableShell, usize)> = None;
+        for shell in self.shells.iter().filter_map(|shell| match shell.state.as_ref() {
+            Config::KnownLocal(LocalConfig {
+                executable_path,
+                shell_type: detected_type,
+                ..
+            }) if *detected_type == shell_type => Some((shell, executable_path)),
+            Config::Custom(_)
+            | Config::SystemDefault
+            | Config::Wsl { .. }
+            | Config::MSYS2(_)
+            | Config::DockerSandbox { .. } => None,
+        }) {
+            let shared = reference_path
+                .map(|reference| {
+                    reference
+                        .components()
+                        .zip(shell.1.components())
+                        .take_while(|(a, b)| a == b)
+                        .count()
+                })
+                .unwrap_or(0);
+            if !matches!(best, Some((_, best_shared)) if best_shared >= shared) {
+                best = Some((shell.0, shared));
+            }
+        }
+        best.map(|(shell, _)| shell.clone())
     }
 
     /// Sets the user-preferred shell for new sessions. Saves the value back to user settings.
@@ -672,17 +751,19 @@ impl AvailableShells {
             }
 
             let mut fallback_shells = fallback_shell_map.remove(command_name).unwrap_or_default();
-            for path in Self::resolve_all_executables(command_name, paths_to_search.iter()) {
-                fallback_shells.remove(&path);
+            for (canonicalized, discovered) in
+                Self::resolve_all_executables(command_name, paths_to_search.iter())
+            {
+                fallback_shells.remove(&canonicalized);
                 known_shells.push(AvailableShell::new_local_executable(
                     command_name.to_string(),
-                    path,
+                    discovered,
                     shell_type,
                 ));
             }
 
             // We append shells found in /etc/shells but not the path after the shells found on the path.
-            for path in fallback_shells.iter() {
+            for path in fallback_shells.values() {
                 if file_exists_and_is_executable(path) {
                     known_shells.push(AvailableShell::new_local_executable(
                         command_name.to_string(),
@@ -807,30 +888,37 @@ impl AvailableShells {
         paths
     }
 
-    /// Resolves all full paths to executables of the given command name in PATH.
+    /// Resolves all full paths to executables of the given command name in PATH,
+    /// returning `(canonical, discovered)` pairs per unique executable.
     ///
     /// `paths_to_search` should contain the locations in PATH along with any
     /// manually added paths that we want to search.
+    ///
+    /// The canonical path is only the dedupe key; the discovered path is what callers
+    /// store and launch, since stable symlinks like Homebrew's `/opt/homebrew/bin/<shell>`
+    /// survive formula upgrades that remove the versioned Cellar directory.
     fn resolve_all_executables<'a>(
         command: &str,
         paths_to_search: impl Iterator<Item = &'a PathBuf>,
-    ) -> Vec<PathBuf> {
+    ) -> Vec<(PathBuf, PathBuf)> {
         use itertools::Itertools as _;
 
         paths_to_search
             .filter_map(|single_path| {
-                let joined = single_path.join(command);
-                let canonicalized = dunce::canonicalize(&joined).unwrap_or(joined);
-                file_exists_and_is_executable(&canonicalized).then_some(canonicalized)
+                let discovered = single_path.join(command);
+                let canonicalized =
+                    dunce::canonicalize(&discovered).unwrap_or_else(|_| discovered.clone());
+                file_exists_and_is_executable(&canonicalized)
+                    .then_some((canonicalized, discovered))
             })
-            .unique()
+            .unique_by(|(canonicalized, _)| canonicalized.clone())
             .collect()
     }
 
     fn load_fallback_shells(
         path: &Path,
         shell_types: &[(ShellType, &str)],
-    ) -> anyhow::Result<HashMap<String, HashSet<PathBuf>>> {
+    ) -> anyhow::Result<HashMap<String, HashMap<PathBuf, PathBuf>>> {
         use std::fs::File;
         use std::io::{BufRead, BufReader};
 
@@ -839,7 +927,7 @@ impl AvailableShells {
         let file = File::open(path)?;
 
         for (_, exe) in shell_types.iter() {
-            shells.insert(exe.to_string(), HashSet::new());
+            shells.insert(exe.to_string(), HashMap::new());
         }
 
         let reader = BufReader::new(file);
@@ -850,15 +938,17 @@ impl AvailableShells {
             // - is it not empty?
             // - does the "file_name" map to a shell that we support?
             //
-            // If all of those are true, then we add it to the set of paths associated with that shell
+            // If all of those are true, then we add it to the paths associated with that
+            // shell, keyed by canonical path so aliases dedupe (last spelling wins). The
+            // stored value keeps the raw entry (see resolve_all_executables for why).
             if !line.trim_start().starts_with('#') && !line.trim().is_empty() {
-                let Ok(path) = dunce::canonicalize(line) else {
+                let Ok(canonical) = dunce::canonicalize(&line) else {
                     continue;
                 };
-                if let Some(file_name) = path.file_name().and_then(|name| name.to_str())
-                    && let Some(set) = shells.get_mut(file_name)
+                if let Some(file_name) = canonical.file_name().and_then(|name| name.to_str())
+                    && let Some(paths) = shells.get_mut(file_name)
                 {
-                    set.insert(path);
+                    paths.insert(canonical, PathBuf::from(&line));
                 }
             }
         }
