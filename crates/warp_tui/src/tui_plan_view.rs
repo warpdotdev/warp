@@ -4,7 +4,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use ai::agent::document_action_presentation::DocumentActionPresentation;
-use markdown_parser::{FormattedText, FormattedTextLine, parse_markdown_with_gfm_tables};
+use markdown_parser::{
+    FormattedText, FormattedTextLine, parse_markdown, parse_markdown_with_gfm_tables,
+};
 use warp::tui_export::{
     AIAgentAction, AIAgentActionType, BlocklistAIActionEvent, BlocklistAIActionModel,
 };
@@ -121,13 +123,22 @@ impl TuiPlanView {
             return false;
         }
 
+        // Honor the same `MarkdownTables` gate as the GUI notebook path
+        // (`Buffer::from_markdown`): enabled builds parse/render GFM tables, while
+        // disabled builds fall back to the ordinary Markdown parser's non-table
+        // rendering. This keeps the two surfaces from disagreeing for one build
+        // (APP-4917). The flag ships on by default via the `markdown_tables`
+        // Cargo feature in `app/Cargo.toml`.
+        let parse_fn = if warp_core::features::FeatureFlag::MarkdownTables.is_enabled() {
+            parse_markdown_with_gfm_tables
+        } else {
+            parse_markdown
+        };
         self.documents = resolved
             .documents
             .iter()
             .map(|document| TuiPlanDocument {
-                formatted: parse_markdown_with_gfm_tables(&document.content)
-                    .ok()
-                    .map(Arc::new),
+                formatted: parse_fn(&document.content).ok().map(Arc::new),
             })
             .collect();
         self.presentation = resolved;
