@@ -8377,10 +8377,6 @@ impl Workspace {
             return false;
         }
 
-        if !FeatureFlag::GetStartedTab.is_enabled() {
-            return false;
-        }
-
         if self.auth_state.is_onboarded().unwrap_or_default() {
             return false;
         }
