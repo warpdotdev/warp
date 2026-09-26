@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use fuzzy_match::match_indices_case_insensitive;
+use warp_core::execution_mode::AppExecutionMode;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::launch_configs::launch_config::LaunchConfig;
@@ -19,7 +20,12 @@ pub struct DataSource {
 impl DataSource {
     #[cfg(not(target_family = "wasm"))]
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        if warp_core::features::FeatureFlag::UseTantivySearch.is_enabled() {
+        if AppExecutionMode::as_ref(ctx).is_autonomous() {
+            // Autonomous execution modes (e.g. the SDK/agent driver, or the remote server
+            // daemon) have no user to present the command palette to, so there's no reason
+            // to build a full-text search index of launch configurations.
+            Self::new_no_op(ctx)
+        } else if warp_core::features::FeatureFlag::UseTantivySearch.is_enabled() {
             Self::new_full_text(ctx)
         } else {
             Self::new_fuzzy(ctx)
@@ -45,6 +51,13 @@ impl DataSource {
             ctx.background_executor(),
         ));
         searcher.refresh_search_index(ctx);
+        Self { searcher }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn new_no_op(ctx: &mut ModelContext<Self>) -> Self {
+        ctx.subscribe_to_model(&WarpConfig::handle(ctx), Self::handle_config_event);
+        let searcher = Box::new(NoOpLaunchConfigSearcher);
         Self { searcher }
     }
 
@@ -118,6 +131,22 @@ impl LaunchConfigSearcher for FuzzyLaunchConfigSearcher {
             .map(|config| (config.name.to_lowercase(), config.clone()))
             .collect();
     }
+}
+
+/// Search backend used in autonomous execution modes (e.g. the SDK/agent driver, or the
+/// remote server daemon), where there is no user to open the command palette. Indexes
+/// nothing and always reports no results, since [`DataSource::run_query`] is never reached
+/// in these modes.
+#[cfg(not(target_family = "wasm"))]
+struct NoOpLaunchConfigSearcher;
+
+#[cfg(not(target_family = "wasm"))]
+impl LaunchConfigSearcher for NoOpLaunchConfigSearcher {
+    fn search(&self, _search_term: &str) -> anyhow::Result<Vec<SearchItem>> {
+        Ok(Vec::new())
+    }
+
+    fn refresh_search_index(&mut self, _app: &AppContext) {}
 }
 
 #[cfg(not(target_family = "wasm"))]
