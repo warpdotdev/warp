@@ -185,6 +185,30 @@ fn every_hook_tag_dispatches_to_the_matching_variant() {
         ),
         ("FinishUpdate", serde_json::json!({"update_id": "update-1"})),
         ("ExitShell", serde_json::json!({"session_id": 1})),
+        (
+            "PowerShellTableBegin",
+            serde_json::json!({
+                "session_id": 1,
+                "table_id": "table-1",
+                "columns": [{
+                    "name": "Name",
+                    "property_name": "Name",
+                    "type_name": "System.String"
+                }]
+            }),
+        ),
+        (
+            "PowerShellTableRows",
+            serde_json::json!({
+                "session_id": 1,
+                "table_id": "table-1",
+                "rows": [["Warp"]]
+            }),
+        ),
+        (
+            "PowerShellTableEnd",
+            serde_json::json!({"session_id": 1, "table_id": "table-1"}),
+        ),
     ];
     let covered_variants = cases.each_ref().map(|(name, _)| *name);
     assert_eq!(covered_variants.as_slice(), DPROTO_HOOK_VARIANTS);

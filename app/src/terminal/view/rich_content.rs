@@ -272,6 +272,7 @@ pub enum RichContentMetadata {
         pending_user_query_block_handle: ViewHandle<PendingUserQueryBlock>,
     },
     HarnessSessionHeader,
+    PowerShellTable,
 }
 
 impl TerminalView {
