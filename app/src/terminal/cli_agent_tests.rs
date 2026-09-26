@@ -262,6 +262,7 @@ fn test_detect_known_agents() {
                 ("amp", CLIAgent::Amp),
                 ("droid", CLIAgent::Droid),
                 ("opencode", CLIAgent::OpenCode),
+                ("opencode2", CLIAgent::OpenCode),
                 ("copilot", CLIAgent::Copilot),
                 ("agent", CLIAgent::CursorCli),
                 ("goose", CLIAgent::Goose),
@@ -324,6 +325,48 @@ fn test_detect_vibe_acp_binary() {
             );
             // Distinct binary names should not bleed into Vibe.
             assert_eq!(CLIAgent::detect("vibe-other", None, None, ctx), None);
+        });
+    });
+}
+
+#[test]
+fn test_detect_opencode2_binary() {
+    // `opencode2` is the v2 binary (e.g. Homebrew `opencode2`, `opencode v2.x`).
+    // It must be detected as the same OpenCode agent so tabs get the OpenCode
+    // logo and the Warp notification plugin activates, like Claude/Codex tabs.
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            assert_eq!(
+                CLIAgent::detect("opencode2", None, None, ctx),
+                Some(CLIAgent::OpenCode),
+            );
+            assert_eq!(
+                CLIAgent::detect("opencode2 --prompt \"hello\"", None, None, ctx),
+                Some(CLIAgent::OpenCode),
+            );
+            // Absolute / relative paths to the binary.
+            assert_eq!(
+                CLIAgent::detect("/opt/homebrew/bin/opencode2", None, None, ctx),
+                Some(CLIAgent::OpenCode),
+            );
+            assert_eq!(
+                CLIAgent::detect("./opencode2 --continue", None, None, ctx),
+                Some(CLIAgent::OpenCode),
+            );
+            // v1 binary still works.
+            assert_eq!(
+                CLIAgent::detect("opencode", None, None, ctx),
+                Some(CLIAgent::OpenCode),
+            );
+            // Distinct binary names should not bleed into OpenCode.
+            assert_eq!(CLIAgent::detect("opencode-other", None, None, ctx), None);
+            assert_eq!(CLIAgent::detect("myopencode", None, None, ctx), None);
+            // Canonical prefix stays `opencode` for telemetry / harness launch.
+            assert_eq!(CLIAgent::OpenCode.command_prefix(), "opencode");
+            assert_eq!(
+                CLIAgent::OpenCode.command_prefixes(),
+                &["opencode", "opencode2"]
+            );
         });
     });
 }
