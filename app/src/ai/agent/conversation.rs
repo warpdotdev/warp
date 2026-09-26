@@ -3584,8 +3584,28 @@ impl AIConversation {
         }
     }
 
-    pub fn is_last_exchange_in_turn(&self, exchange_id: AIAgentExchangeId) -> bool {
-        self.turn_exchange_ids(exchange_id).last() == Some(&exchange_id)
+    pub fn is_exchange_in_latest_turn(&self, exchange_id: AIAgentExchangeId) -> bool {
+        self.root_task_exchanges()
+            .last()
+            .is_some_and(|latest| self.turn_exchange_ids(exchange_id).last() == Some(&latest.id))
+    }
+
+    pub fn is_last_visible_exchange_in_turn(&self, exchange_id: AIAgentExchangeId) -> bool {
+        if !self
+            .root_task_exchanges()
+            .any(|exchange| exchange.id == exchange_id)
+        {
+            return false;
+        }
+        self.turn_exchange_ids(exchange_id)
+            .into_iter()
+            .rev()
+            .find(|id| {
+                self.exchange_with_id(*id).is_some_and(|exchange| {
+                    !exchange.has_passive_request() && !self.is_exchange_hidden(exchange.id)
+                })
+            })
+            == Some(exchange_id)
     }
 
     pub fn request_metadata_records_for_turn(
@@ -3600,19 +3620,20 @@ impl AIConversation {
             .collect()
     }
 
-    /// Because this panel relies on `RequestMetadata` to populate its fields, and that message
-    /// does not exist for historical conversations, we fallback to `conversation_metadata` to
-    /// display what we have
+    /// Historical turns cannot safely use conversation-wide usage snapshots.
     pub fn turn_panel_data(&self, exchange_id: AIAgentExchangeId) -> Option<TurnPanelData> {
-        if !self.is_last_exchange_in_turn(exchange_id) {
+        if !self.is_last_visible_exchange_in_turn(exchange_id) {
             return None;
         }
         if let Some(records) = self.turn_panel_records(exchange_id) {
             return Some(TurnPanelData::Records(records));
         }
 
-        let turn_exchange_ids = self.turn_exchange_ids(exchange_id);
-        let mut records: Vec<RequestMetadataRecord> = turn_exchange_ids
+        if !self.is_exchange_in_latest_turn(exchange_id) {
+            return None;
+        }
+        let mut records: Vec<RequestMetadataRecord> = self
+            .turn_exchange_ids(exchange_id)
             .iter()
             .filter_map(|id| self.exchange_with_id(*id))
             .map(|exchange| RequestMetadataRecord {
@@ -3625,36 +3646,24 @@ impl AIConversation {
             })
             .collect();
 
-        let is_latest_turn = self
-            .root_task_exchanges()
-            .last()
-            .is_some_and(|latest| turn_exchange_ids.last() == Some(&latest.id));
         let context_window_usage = self
             .request_metadata_records_for_turn(exchange_id)
             .iter()
             .rev()
             .find_map(|record| record.context_window_usage)
-            .or_else(|| {
-                is_latest_turn
-                    .then(|| self.context_window_usage())
-                    .filter(|usage| *usage > 0.0)
-            });
+            .or_else(|| Some(self.context_window_usage()).filter(|usage| *usage > 0.0));
 
-        let legacy_charges = if !is_latest_turn {
-            LegacyCharges::Unknown
-        } else {
-            // The unrounded credits figure: the footer's one-decimal rounding would turn a real
-            // sub-0.1 charge into zero before the panel could label it "<0.1 credits".
-            let credits_spent_for_last_block = self
-                .conversation_usage_metadata
-                .credits_spent_for_last_block;
-            match self.charged_usage_for_last_block() {
-                Some(totals) => LegacyCharges::Breakdown(Box::new(totals)),
-                None => match credits_spent_for_last_block {
-                    Some(credits) => LegacyCharges::CreditsOnly(credits),
-                    None => LegacyCharges::Unknown,
-                },
-            }
+        // The unrounded credits figure: the footer's one-decimal rounding would turn a real
+        // sub-0.1 charge into zero before the panel could label it "<0.1 credits".
+        let credits_spent_for_last_block = self
+            .conversation_usage_metadata
+            .credits_spent_for_last_block;
+        let legacy_charges = match self.charged_usage_for_last_block() {
+            Some(totals) => LegacyCharges::Breakdown(Box::new(totals)),
+            None => match credits_spent_for_last_block {
+                Some(credits) => LegacyCharges::CreditsOnly(credits),
+                None => LegacyCharges::Unknown,
+            },
         };
 
         let (model_charges, platform_charges) = match &legacy_charges {
@@ -3715,14 +3724,11 @@ impl AIConversation {
         })
     }
 
-    /// Get all request metadata for the turn that ENDS with the provided exchange_id
-    /// If the exchange_id is not the last in its turn, this will return `None`, indicating that the
-    /// turn details panel should not be displayed for that exchange
     pub fn turn_panel_records(
         &self,
         exchange_id: AIAgentExchangeId,
     ) -> Option<Vec<RequestMetadataRecord>> {
-        if !self.is_last_exchange_in_turn(exchange_id) {
+        if !self.is_last_visible_exchange_in_turn(exchange_id) {
             return None;
         }
         let records = self.request_metadata_records_for_turn(exchange_id);

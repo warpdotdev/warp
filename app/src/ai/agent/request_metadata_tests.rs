@@ -259,44 +259,42 @@ fn legacy_turn_messages(request_id: &str, seconds: i64) -> Vec<api::Message> {
     messages
 }
 
-/// A turn the records don't cover (here: a later turn exists and holds the last-block
-/// snapshots) gets a legacy panel with no charge data — the snapshots must never be
-/// presented as an earlier turn's charges.
 #[test]
-fn historical_turn_panel_data_is_timing_only() {
-    let mut messages = legacy_turn_messages("req-1", 1_000);
-    messages.extend(legacy_turn_messages("req-2", 2_000));
-    let task = api::Task {
-        id: "root".to_string(),
-        messages,
-        ..Default::default()
-    };
-    let mut conversation = AIConversation::new_restored(AIConversationId::new(), vec![task], None)
-        .expect("restored conversation");
-    conversation.set_charged_usage_for_last_block_for_test(Some(ChargedUsageTotals {
-        input_tokens: 100,
-        input_cost_in_cents: 1.0,
-        ..Default::default()
-    }));
+fn historical_turn_with_missing_records_has_no_panel() {
+    for has_partial_records in [false, true] {
+        let mut messages = if has_partial_records {
+            turn_messages("req-1", 1_000)
+        } else {
+            legacy_turn_messages("req-1", 1_000)
+        };
+        let mut follow_up = tool_round_trip_messages("req-2", 2_000);
+        follow_up.pop();
+        messages.extend(follow_up);
+        messages.extend(legacy_turn_messages("req-3", 3_000));
+        let task = api::Task {
+            id: "root".to_string(),
+            messages,
+            ..Default::default()
+        };
+        let mut conversation =
+            AIConversation::new_restored(AIConversationId::new(), vec![task], None)
+                .expect("restored conversation");
+        conversation.set_charged_usage_for_last_block_for_test(Some(ChargedUsageTotals {
+            input_tokens: 100,
+            input_cost_in_cents: 1.0,
+            ..Default::default()
+        }));
 
-    let first_exchange_id = conversation
-        .root_task_exchanges()
-        .next()
-        .map(|e| e.id)
-        .unwrap();
-    match conversation.turn_panel_data(first_exchange_id) {
-        Some(TurnPanelData::Legacy { records, charges }) => {
-            assert!(matches!(charges, LegacyCharges::Unknown));
-            let [record] = records.as_slice() else {
-                panic!("expected one record for a single-exchange turn");
-            };
-            assert!(record.model_charges.is_empty());
-            assert!(record.platform_charges.is_empty());
-            // Timing is still derived from the exchanges.
-            assert!(record.request_started_at.is_some());
-            assert!(record.request_ended_at.is_some());
-        }
-        other => panic!("expected a legacy panel for the historical turn, got {other:?}"),
+        let exchange_ids: Vec<_> = conversation.root_task_exchanges().map(|e| e.id).collect();
+        let [_, earlier, latest] = exchange_ids[..] else {
+            panic!("expected three exchanges");
+        };
+        assert!(conversation.is_last_visible_exchange_in_turn(earlier));
+        assert!(conversation.turn_panel_data(earlier).is_none());
+        assert!(matches!(
+            conversation.turn_panel_data(latest),
+            Some(TurnPanelData::Legacy { .. })
+        ));
     }
 }
 
@@ -525,10 +523,13 @@ fn tool_round_trips_group_into_the_user_query_turn() {
     }
     assert_eq!(conversation.turn_exchange_ids(fourth), vec![fourth]);
 
-    assert!(!conversation.is_last_exchange_in_turn(first));
-    assert!(!conversation.is_last_exchange_in_turn(second));
-    assert!(conversation.is_last_exchange_in_turn(third));
-    assert!(conversation.is_last_exchange_in_turn(fourth));
+    assert!(!conversation.is_last_visible_exchange_in_turn(first));
+    assert!(!conversation.is_last_visible_exchange_in_turn(second));
+    assert!(conversation.is_last_visible_exchange_in_turn(third));
+    assert!(conversation.is_last_visible_exchange_in_turn(fourth));
+    assert!(conversation.turn_panel_data(first).is_none());
+    assert!(conversation.turn_panel_data(third).is_some());
+    assert!(conversation.turn_panel_data(fourth).is_some());
 
     let turn_a_request_ids: Vec<String> = conversation
         .request_metadata_records_for_turn(third)
@@ -556,6 +557,84 @@ fn tool_round_trips_group_into_the_user_query_turn() {
         .map(|record| record.total_cost_in_cents())
         .sum();
     assert!((total_cost_in_cents - 3.0 * 3.11).abs() < 1e-4);
+}
+
+#[test]
+fn hidden_latest_turn_does_not_make_an_earlier_turn_latest() {
+    App::test((), |mut app| async move {
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let mut messages = legacy_turn_messages("req-1", 1_000);
+        messages.extend(legacy_turn_messages("req-2", 2_000));
+        let mut conversation = AIConversation::new_restored(
+            AIConversationId::new(),
+            vec![api::Task {
+                id: "root".to_string(),
+                messages,
+                ..Default::default()
+            }],
+            None,
+        )
+        .expect("restored conversation");
+        let exchange_ids: Vec<_> = conversation.root_task_exchanges().map(|e| e.id).collect();
+        let [earlier, latest] = exchange_ids[..] else {
+            panic!("expected two exchanges");
+        };
+        history_model.update(&mut app, |_, ctx| {
+            conversation.set_is_exchange_hidden(latest, true, EntityId::new(), ctx);
+        });
+        assert_eq!(conversation.latest_visible_exchange().unwrap().id, earlier);
+        assert!(!conversation.is_exchange_in_latest_turn(earlier));
+        assert!(conversation.is_exchange_in_latest_turn(latest));
+        assert!(conversation.turn_panel_data(earlier).is_none());
+    });
+}
+
+#[test]
+fn hidden_turn_closer_hands_controls_to_the_previous_visible_block() {
+    App::test((), |mut app| async move {
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+
+        let mut messages = turn_messages("req-1", 1_000);
+        messages.extend(tool_round_trip_messages("req-2", 2_000));
+        messages.extend(turn_messages("req-3", 3_000));
+        let task = api::Task {
+            id: "root".to_string(),
+            messages,
+            ..Default::default()
+        };
+        let mut conversation =
+            AIConversation::new_restored(AIConversationId::new(), vec![task], None)
+                .expect("restored conversation");
+        let exchange_ids: Vec<_> = conversation
+            .root_task_exchanges()
+            .map(|exchange| exchange.id)
+            .collect();
+        let [first, second, third] = exchange_ids[..] else {
+            unreachable!()
+        };
+        assert!(conversation.is_last_visible_exchange_in_turn(second));
+
+        history_model.update(&mut app, |_, ctx| {
+            conversation.set_is_exchange_hidden(second, true, EntityId::new(), ctx);
+        });
+
+        assert!(conversation.is_last_visible_exchange_in_turn(first));
+        assert!(!conversation.is_last_visible_exchange_in_turn(second));
+        assert!(conversation.is_last_visible_exchange_in_turn(third));
+        assert!(conversation.turn_panel_data(second).is_none());
+        match conversation.turn_panel_data(first) {
+            Some(TurnPanelData::Records(records)) => assert_eq!(
+                records
+                    .iter()
+                    .map(|record| record.request_id.as_str())
+                    .collect::<Vec<_>>(),
+                ["req-1", "req-2"]
+            ),
+            None | Some(TurnPanelData::Legacy { .. }) => panic!("expected complete records"),
+        }
+    });
 }
 
 /// A turn whose final request was cancelled or disconnected mid-stream never receives that
@@ -782,7 +861,6 @@ fn exchange_without_any_request_messages_is_not_eligible() {
             .last()
             .expect("follow-up exchange exists")
             .id;
-        assert!(conversation.is_last_exchange_in_turn(follow_up_exchange_id));
 
         // The turn's records cover only the query request — which is exactly what the panel
         // must not present as the turn's total: the message-less follow-up exchange makes the
@@ -864,9 +942,6 @@ fn records_resolve_after_a_summarization_move() {
     });
 }
 
-/// After a restore (or fork), the moved messages live in the summary subtask and the exchange
-/// is rebuilt there rather than in the root: the non-root singleton turn fallback plus the
-/// cross-task lookup must still resolve the record.
 #[test]
 fn records_resolve_in_restored_summarized_history() {
     use crate::ai::agent::task::TaskId;
@@ -926,7 +1001,9 @@ fn records_resolve_in_restored_summarized_history() {
         .map(|record| record.request_id)
         .collect();
     assert_eq!(resolved, ["req-1".to_string()]);
-    assert!(conversation.turn_panel_records(exchange.id).is_some());
+    assert!(!conversation.is_last_visible_exchange_in_turn(exchange.id));
+    assert!(conversation.turn_panel_records(exchange.id).is_none());
+    assert!(conversation.turn_panel_data(exchange.id).is_none());
 }
 
 fn with_timing(
