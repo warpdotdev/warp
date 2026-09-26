@@ -34,10 +34,14 @@ fn agent_run_validates_substituted_branch_override() {
         parsed.head,
         RepositoryHeadRef::Branch("frozen/prepare".to_string())
     );
+    let at_branch: RepositoryPreparationOverride =
+        base.replace("frozen/prepare", "@").parse().unwrap();
+    assert_eq!(at_branch.head, RepositoryHeadRef::Branch("@".to_string()));
 
     for invalid in [
         base.replace("frozen/prepare", "../main"),
         base.replace("frozen/prepare", "main';evil"),
+        base.replace("frozen/prepare", "@{"),
         base.replace(
             ",\"clone_from\":{\"code_forge\":\"GITHUB\",\"owner\":\"target\",\"repo\":\"warp\"}",
             "",

@@ -114,9 +114,9 @@ fn valid_git_branch(branch: &str) -> bool {
         && branch
             .split('/')
             .all(|part| !part.starts_with('.') && !part.ends_with(".lock"))
-        && branch
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/'))
+        && branch.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/' | b'@')
+        })
 }
 /// Server-supplied repository preparation override.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
