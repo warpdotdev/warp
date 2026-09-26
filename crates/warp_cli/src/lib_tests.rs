@@ -27,32 +27,24 @@ fn identifies_worker_subcommands() {
 }
 
 #[test]
-fn agent_run_validates_frozen_benchmark_base_override() {
-    let base = r#"{"code_forge":"GITHUB","repo_owner":"source","repo_name":"warp","head":{"type":"COMMIT_SHA","value":"0123456789abcdef0123456789abcdef01234567"},"clone_from":{"code_forge":"GITHUB","owner":"target","repo":"warp"},"preserve_origin":true,"frozen_base_branch":"benchmark-base/0123456789abcdef0123456789abcdef01234567","default_branch":"main"}"#;
+fn agent_run_validates_substituted_branch_override() {
+    let base = r#"{"code_forge":"GITHUB","repo_owner":"source","repo_name":"warp","head":{"type":"BRANCH","value":"frozen/prepare"},"clone_from":{"code_forge":"GITHUB","owner":"target","repo":"warp"},"preserve_origin":true}"#;
     let parsed: RepositoryPreparationOverride = base.parse().unwrap();
     assert_eq!(
-        parsed.frozen_base_branch.as_deref(),
-        Some("benchmark-base/0123456789abcdef0123456789abcdef01234567")
+        parsed.head,
+        RepositoryHeadRef::Branch("frozen/prepare".to_string())
     );
-    assert_eq!(parsed.default_branch.as_deref(), Some("main"));
 
     for invalid in [
-        base.replace(
-            "\"default_branch\":\"main\"",
-            "\"default_branch\":\"../main\"",
-        ),
-        base.replace(
-            "\"default_branch\":\"main\"",
-            "\"default_branch\":\"main';evil\"",
-        ),
-        base.replace("\"default_branch\":\"main\"", "\"default_branch\":null"),
-        base.replace(
-            "benchmark-base/0123456789abcdef0123456789abcdef01234567",
-            "benchmark-base/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        ),
+        base.replace("frozen/prepare", "../main"),
+        base.replace("frozen/prepare", "main';evil"),
         base.replace(
             ",\"clone_from\":{\"code_forge\":\"GITHUB\",\"owner\":\"target\",\"repo\":\"warp\"}",
             "",
+        ),
+        base.replace(
+            "\"preserve_origin\":true",
+            "\"preserve_origin\":true,\"default_branch\":\"main\"",
         ),
     ] {
         assert!(
@@ -121,7 +113,7 @@ fn agent_run_rejects_malformed_sparse_repository_substitution_payloads() {
         r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"COMMIT_SHA","value":"0123456789abcdef0123456789abcdef01234567"},"clone_from":{"code_forge":"GITHUB","owner":"","repo":"target"},"preserve_origin":true}"#,
         r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"COMMIT_SHA","value":"0123456789abcdef0123456789abcdef01234567"},"clone_from":{"code_forge":"GITHUB","owner":"warpdotdev","repo":"target"}}"#,
         r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"COMMIT_SHA","value":"0123456789abcdef0123456789abcdef01234567"},"preserve_origin":true}"#,
-        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"BRANCH","value":"main"},"clone_from":{"code_forge":"GITHUB","owner":"warpdotdev","repo":"target"},"preserve_origin":true}"#,
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"BRANCH","value":"../main"},"clone_from":{"code_forge":"GITHUB","owner":"warpdotdev","repo":"target"},"preserve_origin":true}"#,
     ] {
         Args::try_parse_from([
             "warp",
