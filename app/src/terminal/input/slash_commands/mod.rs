@@ -921,16 +921,10 @@ impl Input {
                 ctx.dispatch_typed_action(&TerminalAction::OpenRulesPane);
             }
             SlashCommandKind::EditSkill => {
-                if !FeatureFlag::ListSkills.is_enabled() {
-                    return false;
-                }
                 // Open the skill selector menu - user will select a skill from the inline menu
                 self.open_skill_selector(ctx);
             }
             SlashCommandKind::InvokeSkill => {
-                if !FeatureFlag::ListSkills.is_enabled() {
-                    return false;
-                }
                 if self.is_cloud_mode_input_v2_composing(ctx) {
                     self.apply_v2_slash_section_filter(CloudModeV2Section::Skills, ctx);
                     return true;

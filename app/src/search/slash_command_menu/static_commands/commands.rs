@@ -1064,9 +1064,6 @@ fn all_commands_for_all_surfaces() -> Vec<StaticCommand> {
 
     if !cfg!(target_family = "wasm") {
         commands.extend([EDIT.clone(), EXPORT_TO_FILE.clone()]);
-    }
-
-    if FeatureFlag::ListSkills.is_enabled() && !cfg!(target_family = "wasm") {
         commands.push(EDIT_SKILL.clone());
         commands.push(INVOKE_SKILL.clone());
     }

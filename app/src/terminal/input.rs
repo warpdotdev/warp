@@ -794,9 +794,9 @@ impl InputSuggestionsMode {
                 | Self::UserQueryMenu { .. }
                 | Self::InlineHistoryMenu { .. }
                 | Self::PlanMenu { .. }
+                | Self::SkillMenu
         ) || (FeatureFlag::InlineProfileSelector.is_enabled()
             && matches!(self, Self::ProfileSelector))
-            || (FeatureFlag::ListSkills.is_enabled() && matches!(self, Self::SkillMenu))
             || (FeatureFlag::InlineRepoMenu.is_enabled() && matches!(self, Self::IndexedReposMenu))
     }
 
@@ -5749,10 +5749,6 @@ impl Input {
     }
 
     fn open_skill_selector(&mut self, ctx: &mut ViewContext<Self>) {
-        if !FeatureFlag::ListSkills.is_enabled() {
-            return;
-        }
-
         self.skill_selector_should_invoke = false;
         self.inline_skill_selector_view.update(ctx, |view, ctx| {
             view.set_include_bundled(false, ctx);
@@ -5765,10 +5761,6 @@ impl Input {
     }
 
     fn open_invoke_skill_selector(&mut self, ctx: &mut ViewContext<Self>) {
-        if !FeatureFlag::ListSkills.is_enabled() {
-            return;
-        }
-
         self.skill_selector_should_invoke = true;
         self.inline_skill_selector_view.update(ctx, |view, ctx| {
             view.set_include_bundled(true, ctx);
