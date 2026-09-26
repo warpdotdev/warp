@@ -1668,6 +1668,11 @@ pub struct ChargedUsageTotals {
 }
 
 impl ChargedUsageTotals {
+    /// Inference + web-search cost, in US cents.
+    pub fn inference_cost_in_cents(&self) -> f32 {
+        self.total_cost_in_cents() - self.platform_cost_in_cents
+    }
+
     /// Total inference + platform + web-search cost, in US cents.
     pub fn total_cost_in_cents(&self) -> f32 {
         self.input_cost_in_cents
