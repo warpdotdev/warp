@@ -3,10 +3,23 @@ use std::ffi::OsStr;
 use std::ffi::OsString;
 #[cfg(unix)]
 use std::fs;
+#[cfg(windows)]
+use std::path::Path;
 #[cfg(unix)]
 use std::path::PathBuf;
+#[cfg(windows)]
+use std::time::Duration;
 
+#[cfg(windows)]
+use futures_lite::future;
+#[cfg(windows)]
+use instant::Instant;
+
+#[cfg(windows)]
+use super::{BACKGROUND_COMMAND_BACKOFF, BackgroundWslCommandError, output_background_command};
 use super::{known_bare_name, resolve_binary_in_wsl_safe_path};
+#[cfg(windows)]
+use crate::r#async::{Command, OutputError};
 
 #[cfg(unix)]
 fn make_executable(path: &std::path::Path) {
@@ -170,4 +183,155 @@ fn known_bare_name_skips_unknowns() {
     assert_eq!(known_bare_name(OsStr::new("ls")), None);
     assert_eq!(known_bare_name(OsStr::new("python")), None);
     assert_eq!(known_bare_name(OsStr::new("")), None);
+}
+
+#[cfg(windows)]
+fn hanging_command(pid_file: &Path) -> Command {
+    let pid_file = pid_file.to_string_lossy().replace('\'', "''");
+    let mut command = Command::new("powershell.exe");
+    command.args([
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        &format!("Set-Content -LiteralPath '{pid_file}' -Value $PID; Start-Sleep -Seconds 300"),
+    ]);
+    command
+}
+
+#[cfg(windows)]
+fn marker_command(marker_file: &Path) -> Command {
+    let marker_file = marker_file.to_string_lossy().replace('\'', "''");
+    let mut command = Command::new("powershell.exe");
+    command.args([
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        &format!("Set-Content -LiteralPath '{marker_file}' -Value spawned"),
+    ]);
+    command
+}
+
+#[cfg(windows)]
+async fn wait_for_pid_file(pid_file: &Path) -> u32 {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(pid) = std::fs::read_to_string(pid_file)
+            && let Ok(pid) = pid.trim().parse()
+        {
+            return pid;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for helper process to record its pid"
+        );
+        async_io::Timer::after(Duration::from_millis(25)).await;
+    }
+}
+
+#[cfg(windows)]
+async fn wait_for_process_exit(process_id: u32) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut command = Command::new("tasklist.exe");
+        command.args(["/FI", &format!("PID eq {process_id}"), "/NH", "/FO", "CSV"]);
+        let output = command.output().await.expect("inspect helper process");
+        if !String::from_utf8_lossy(&output.stdout).contains(&process_id.to_string()) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "helper process {process_id} was not terminated"
+        );
+        async_io::Timer::after(Duration::from_millis(25)).await;
+    }
+}
+
+#[cfg(windows)]
+async fn assert_backoff_then_recovery(distribution: &str, temp_dir: &Path) {
+    let blocked_marker = temp_dir.join("blocked");
+    let mut blocked_command = marker_command(&blocked_marker);
+    assert!(matches!(
+        output_background_command(&mut blocked_command, distribution).await,
+        Err(BackgroundWslCommandError::BackingOff)
+    ));
+    assert!(!blocked_marker.exists());
+
+    async_io::Timer::after(BACKGROUND_COMMAND_BACKOFF + Duration::from_millis(100)).await;
+
+    let admitted_marker = temp_dir.join("admitted");
+    let mut admitted_command = marker_command(&admitted_marker);
+    let output = output_background_command(&mut admitted_command, distribution)
+        .await
+        .expect("command should be admitted after backoff");
+    assert!(output.status.success());
+    assert!(admitted_marker.exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn public_wrapper_suppresses_overlap_times_out_reaps_and_recovers() {
+    future::block_on(async {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let distribution = format!("timeout-{}", std::process::id());
+        let pid_file = temp_dir.path().join("pid");
+        let mut hanging_command = hanging_command(&pid_file);
+        let mut pending = Box::pin(output_background_command(
+            &mut hanging_command,
+            &distribution,
+        ));
+
+        let immediate = future::poll_once(&mut pending).await;
+        assert!(
+            immediate.is_none(),
+            "hanging command completed immediately: {immediate:?}"
+        );
+        let process_id = wait_for_pid_file(&pid_file).await;
+
+        let overlap_marker = temp_dir.path().join("overlap");
+        let mut overlap_command = marker_command(&overlap_marker);
+        assert!(matches!(
+            output_background_command(&mut overlap_command, &distribution).await,
+            Err(BackgroundWslCommandError::AlreadyRunning)
+        ));
+        assert!(!overlap_marker.exists());
+
+        let error = pending.await.expect_err("hanging command should time out");
+        assert!(matches!(
+            error,
+            BackgroundWslCommandError::Output(OutputError::TimedOut {
+                process_id: timed_out_process_id,
+                ..
+            }) if timed_out_process_id == process_id
+        ));
+        wait_for_process_exit(process_id).await;
+        assert_backoff_then_recovery(&distribution, temp_dir.path()).await;
+    });
+}
+
+#[cfg(windows)]
+#[test]
+fn public_wrapper_cancellation_reaps_and_backs_off() {
+    future::block_on(async {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let distribution = format!("canceled-{}", std::process::id());
+        let pid_file = temp_dir.path().join("pid");
+        let mut hanging_command = hanging_command(&pid_file);
+        let mut pending = Box::pin(output_background_command(
+            &mut hanging_command,
+            &distribution,
+        ));
+
+        let immediate = future::poll_once(&mut pending).await;
+        assert!(
+            immediate.is_none(),
+            "hanging command completed immediately: {immediate:?}"
+        );
+        let process_id = wait_for_pid_file(&pid_file).await;
+        drop(pending);
+
+        wait_for_process_exit(process_id).await;
+        assert_backoff_then_recovery(&distribution, temp_dir.path()).await;
+    });
 }

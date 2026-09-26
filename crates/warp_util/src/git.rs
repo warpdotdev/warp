@@ -31,14 +31,24 @@ pub async fn run_git_command_with_env(
         env.push(("PATH", path_env));
     }
 
+    let wsl_distribution = if cfg!(windows) {
+        crate::path::parse_wsl_unc_path(repo_path).map(|path| path.distro)
+    } else {
+        None
+    };
     let mut cmd = git_command(repo_path, &git_args, &env);
     cmd.stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let output = cmd
-        .output()
-        .await
-        .map_err(|e| anyhow!("Failed to execute git command: {}", e))?;
+    let output = match wsl_distribution {
+        Some(distribution) => command::wsl::output_background_command(&mut cmd, &distribution)
+            .await
+            .map_err(|e| anyhow!("Failed to execute git command: {e}"))?,
+        None => cmd
+            .output()
+            .await
+            .map_err(|e| anyhow!("Failed to execute git command: {e}"))?,
+    };
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr);

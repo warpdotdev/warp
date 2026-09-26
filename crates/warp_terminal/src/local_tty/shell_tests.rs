@@ -31,3 +31,14 @@ fn test_trim_wsl_err_from_output() {
         b"/bin/bash\n".to_vec()
     );
 }
+
+#[test]
+fn parses_shell_and_home_from_wsl_environment() {
+    assert_eq!(
+        parse_wsl_environment(b"/usr/bin/zsh\n/home/warp\n"),
+        (
+            UnixPathBuf::from("/usr/bin/zsh"),
+            Some(UnixPathBuf::from("/home/warp"))
+        )
+    );
+}
