@@ -1660,17 +1660,7 @@ impl PaneGroup {
                     .iter()
                     .filter(|&conversation_id| {
                         RestoredAgentConversations::handle(ctx).update(ctx, |store, _| {
-                            store
-                                .get_conversation(conversation_id)
-                                .is_some_and(|persisted_conv| {
-                                    // Filter conversations that contain no tasks.
-                                    if persisted_conv.all_tasks().next().is_none() {
-                                        return false;
-                                    }
-
-                                    // Filter conversations that are entirely passive.
-                                    !persisted_conv.is_entirely_passive()
-                                })
+                            store.should_restore_into_pane(conversation_id)
                         })
                     })
                     .copied()
