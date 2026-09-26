@@ -692,6 +692,8 @@ pub fn create_transferred_window(
             title: Some(WINDOW_TITLE.to_owned()),
             background_blur_radius_pixels: Some(*window_settings.background_blur_radius),
             background_backdrop: *window_settings.background_backdrop,
+            background_backdrop_tint_color: *window_settings.background_backdrop_tint_color,
+            background_backdrop_tint_opacity: *window_settings.background_backdrop_tint_opacity,
             on_gpu_driver_selected: on_gpu_driver_selected_callback(),
             ..Default::default()
         },
@@ -754,11 +756,18 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
     if let Some(app_state) = &arg.app_state {
         maybe_register_global_window_shortcuts(global_resource_handles.clone(), ctx);
 
-        let (background_blur_radius_pixels, background_backdrop) = {
+        let (
+            background_blur_radius_pixels,
+            background_backdrop,
+            background_backdrop_tint_color,
+            background_backdrop_tint_opacity,
+        ) = {
             let window_settings = WindowSettings::as_ref(ctx);
             (
                 Some(*window_settings.background_blur_radius),
                 *window_settings.background_backdrop,
+                *window_settings.background_backdrop_tint_color,
+                *window_settings.background_backdrop_tint_opacity,
             )
         };
 
@@ -791,6 +800,8 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
                             fullscreen_state: window.fullscreen_state,
                             background_blur_radius_pixels,
                             background_backdrop,
+                            background_backdrop_tint_color,
+                            background_backdrop_tint_opacity,
                             // Don't use the quake window for positioning new windows.
                             anchor_new_windows_from_closed_position:
                                 NextNewWindowsHasThisWindowsBoundsUponClose::No,
@@ -834,6 +845,8 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
                                 fullscreen_state: window.fullscreen_state,
                                 background_blur_radius_pixels,
                                 background_backdrop,
+                                background_backdrop_tint_color,
+                                background_backdrop_tint_opacity,
                                 on_gpu_driver_selected: on_gpu_driver_selected_callback(),
                                 ..Default::default()
                             },
@@ -886,6 +899,8 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
                         fullscreen_state: window.fullscreen_state,
                         background_blur_radius_pixels,
                         background_backdrop,
+                        background_backdrop_tint_color,
+                        background_backdrop_tint_opacity,
                         on_gpu_driver_selected: on_gpu_driver_selected_callback(),
                         ..Default::default()
                     },
@@ -1288,6 +1303,8 @@ fn default_window_options(window_settings: &WindowSettings, ctx: &AppContext) ->
         title: Some("Warp".to_owned()),
         background_blur_radius_pixels: Some(*window_settings.background_blur_radius),
         background_backdrop: *window_settings.background_backdrop,
+        background_backdrop_tint_color: *window_settings.background_backdrop_tint_color,
+        background_backdrop_tint_opacity: *window_settings.background_backdrop_tint_opacity,
         on_gpu_driver_selected: on_gpu_driver_selected_callback(),
         ..Default::default()
     }
@@ -1473,6 +1490,9 @@ fn toggle_quake_mode_window(global_resource_handles: &GlobalResourceHandles, ctx
                     title: Some("Warp".to_owned()),
                     background_blur_radius_pixels: Some(*window_settings.background_blur_radius),
                     background_backdrop: *window_settings.background_backdrop,
+                    background_backdrop_tint_color: *window_settings.background_backdrop_tint_color,
+                    background_backdrop_tint_opacity: *window_settings
+                        .background_backdrop_tint_opacity,
                     // Ignore the quake window for positioning the next window
                     anchor_new_windows_from_closed_position:
                         warpui::NextNewWindowsHasThisWindowsBoundsUponClose::No,
