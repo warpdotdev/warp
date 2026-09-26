@@ -78,7 +78,9 @@ fn wsl_directory_chip_uses_host_without_replacing_guest_completion_cache() {
                 let host_path = dirs.tests().to_string_lossy();
                 let guest_path = warp_util::path::convert_windows_path_to_wsl(&host_path);
                 let executor = Arc::new(ListingExecutor::default());
-                let mut session_info = SessionInfo::new_for_test().with_shell_type(ShellType::Bash);
+                let mut session_info = SessionInfo::new_for_test()
+                    .with_shell_type(ShellType::Bash)
+                    .with_home_dir(guest_path.clone());
                 session_info.launch_data = Some(ShellLaunchData::WSL {
                     distro: "Ubuntu".to_owned(),
                 });
@@ -94,7 +96,7 @@ fn wsl_directory_chip_uses_host_without_replacing_guest_completion_cache() {
 
                 let chip_items = warpui::r#async::block_on(DirectoryFetcher::fetch_files_async(
                     &session_context,
-                    &guest_path,
+                    "~",
                 ));
                 assert_eq!(
                     chip_items,
