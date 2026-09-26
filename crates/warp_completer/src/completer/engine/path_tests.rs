@@ -69,6 +69,29 @@ fn test_split_path() {
     );
 }
 
+#[test]
+fn split_path_keeps_escaped_leading_tilde_relative_to_pwd() {
+    let pwd = TypedPathBuf::from_unix("/work");
+    let split = SplitPath::new(pwd.to_path(), r"\~/file", Some("/home/me"), &['/']);
+
+    assert_eq!(
+        split.directory_absolute_path,
+        TypedPathBuf::from_unix("/work/~/")
+    );
+    assert_eq!(split.directory_relative_path_name, r"\~/");
+}
+
+#[test]
+fn cdpath_expands_session_home_with_unix_separators_on_any_host() {
+    let ctx = MockPathCompletionContext::new(TypedPathBuf::from_unix("/work"))
+        .with_home_directory("/home/me".to_owned());
+
+    assert_eq!(
+        resolve_cdpath_entry("~/src", &ctx),
+        TypedPathBuf::from_unix("/home/me/src")
+    );
+}
+
 fn file_entry(file_name: &str) -> EngineDirEntry {
     EngineDirEntry {
         file_name: file_name.to_owned(),

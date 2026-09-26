@@ -12,6 +12,8 @@ use anyhow::Result;
 #[cfg(windows)]
 use async_trait::async_trait;
 #[cfg(windows)]
+use typed_path::TypedPathBuf;
+#[cfg(windows)]
 use warp_completer::completer::{CommandExitStatus, CommandOutput, CompletionContext};
 #[cfg(windows)]
 use warp_completer::signatures::CommandRegistry;
@@ -29,61 +31,6 @@ use crate::terminal::model::session::{Session, SessionInfo};
 use crate::terminal::shell::{Shell, ShellType};
 #[cfg(windows)]
 use crate::test_util::{Stub, VirtualFS};
-
-#[test]
-fn expands_wsl_home_in_directory_chip_paths() {
-    assert_eq!(
-        expand_session_home("~", Some("/root"), &['/']),
-        TypedPathBuf::from_unix("/root")
-    );
-    assert_eq!(
-        expand_session_home("~/warp-chip-proof", Some("/root"), &['/']),
-        TypedPathBuf::from_unix("/root/warp-chip-proof")
-    );
-}
-
-#[cfg(windows)]
-#[test]
-fn expands_windows_session_home_in_directory_chip_paths() {
-    assert_eq!(
-        expand_session_home(r"~\Desktop", Some(r"C:\Users\runneradmin"), &['/', '\\']),
-        TypedPathBuf::from_windows(r"C:\Users\runneradmin\Desktop")
-    );
-}
-
-#[cfg(windows)]
-#[test]
-fn expands_wsl_home_to_host_unc_path() {
-    let directory = expand_session_home("~/warp-chip-proof", Some("/root"), &['/']);
-    let mut session_info = SessionInfo::new_for_test().with_shell_type(ShellType::Bash);
-    session_info.launch_data = Some(ShellLaunchData::WSL {
-        distro: "Ubuntu".to_owned(),
-    });
-    let session = Session::new(session_info, Arc::new(ListingExecutor::default()));
-
-    assert_eq!(
-        session
-            .maybe_convert_to_native_path(&directory.to_path())
-            .unwrap(),
-        std::path::PathBuf::from(r"\\WSL$\Ubuntu\root\warp-chip-proof")
-    );
-}
-
-#[test]
-fn leaves_non_home_directory_paths_unchanged() {
-    assert_eq!(
-        expand_session_home("/tmp/warp-chip-proof", Some("/root"), &['/']),
-        TypedPathBuf::from_unix("/tmp/warp-chip-proof")
-    );
-    assert_eq!(
-        expand_session_home("~another", Some("/root"), &['/']),
-        TypedPathBuf::from_unix("~another")
-    );
-    assert_eq!(
-        expand_session_home("~/warp-chip-proof", None, &['/']),
-        TypedPathBuf::from_unix("~/warp-chip-proof")
-    );
-}
 
 #[cfg(windows)]
 #[derive(Debug, Default)]

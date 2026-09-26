@@ -1,8 +1,8 @@
 use std::cmp::Ordering;
 
-use typed_path::TypedPathBuf;
 use warp_completer::completer::{EngineDirEntry, EngineFileType};
 use warp_util::file_type::is_binary_file;
+use warp_util::path::expand_session_home;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{AppContext, Entity, ModelContext};
 
@@ -157,29 +157,6 @@ impl Drop for DirectoryFetcher {
         if let Some(handle) = self.fetch_handle.take() {
             handle.abort();
         }
-    }
-}
-
-fn expand_session_home(
-    dir_path: &str,
-    home_dir: Option<&str>,
-    path_separators: &[char],
-) -> TypedPathBuf {
-    let Some(home_dir) = home_dir else {
-        return TypedPathBuf::from(dir_path);
-    };
-    let Some(suffix) = dir_path.strip_prefix('~') else {
-        return TypedPathBuf::from(dir_path);
-    };
-    if suffix.is_empty()
-        || suffix
-            .chars()
-            .next()
-            .is_some_and(|separator| path_separators.contains(&separator))
-    {
-        TypedPathBuf::from(format!("{home_dir}{suffix}"))
-    } else {
-        TypedPathBuf::from(dir_path)
     }
 }
 

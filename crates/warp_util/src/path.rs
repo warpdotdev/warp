@@ -123,6 +123,31 @@ pub fn user_friendly_path<'a>(path: &'a str, home_dir: Option<&str>) -> Cow<'a, 
         .unwrap_or(Cow::Borrowed(path))
 }
 
+/// Expands an exact `~` or `~` followed by a session path separator against the session home.
+/// Other paths, including `~user` and paths without a known home, are returned unchanged.
+pub fn expand_session_home(
+    path: &str,
+    home_dir: Option<&str>,
+    path_separators: &[char],
+) -> TypedPathBuf {
+    let Some(home_dir) = home_dir else {
+        return TypedPathBuf::from(path);
+    };
+    let Some(suffix) = path.strip_prefix('~') else {
+        return TypedPathBuf::from(path);
+    };
+    if suffix.is_empty()
+        || suffix
+            .chars()
+            .next()
+            .is_some_and(|separator| path_separators.contains(&separator))
+    {
+        TypedPathBuf::from(format!("{home_dir}{suffix}"))
+    } else {
+        TypedPathBuf::from(path)
+    }
+}
+
 /// Result after parsing a path string that mixes path and line and column numbers
 /// into each individual components.
 #[derive(Clone, Debug, PartialEq, Eq)]
