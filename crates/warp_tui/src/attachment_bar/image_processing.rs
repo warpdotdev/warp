@@ -150,19 +150,30 @@ pub(super) async fn read_clipboard_content() -> Result<ClipboardContent, String>
 }
 
 pub(super) fn process_clipboard_content(content: ClipboardContent) -> Result<ImageContext, String> {
+    let mut contexts = process_clipboard_contents(content)?;
+    contexts
+        .into_iter()
+        .next()
+        .ok_or_else(|| "The clipboard does not contain a supported image.".to_owned())
+}
+
+pub(super) fn process_clipboard_contents(
+    content: ClipboardContent,
+) -> Result<Vec<ImageContext>, String> {
     let images = content
         .images
         .ok_or_else(|| "Clipboard image data is unavailable.".to_owned())?;
-    let image = CLIPBOARD_IMAGE_MIME_TYPES
-        .iter()
-        .find_map(|mime_type| {
-            images
-                .iter()
-                .find(|image| image.mime_type == *mime_type)
-                .cloned()
-        })
-        .ok_or_else(|| "The clipboard does not contain a supported image.".to_owned())?;
-    process_clipboard_image_data(image)
+    let supported: Vec<ImageData> = images
+        .into_iter()
+        .filter(|image| CLIPBOARD_IMAGE_MIME_TYPES.contains(&image.mime_type.as_str()))
+        .collect();
+    if supported.is_empty() {
+        return Err("The clipboard does not contain a supported image.".to_owned());
+    }
+    supported
+        .into_iter()
+        .map(process_clipboard_image_data)
+        .collect()
 }
 
 fn process_clipboard_image_data(image: ImageData) -> Result<ImageContext, String> {
