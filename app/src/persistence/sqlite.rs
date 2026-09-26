@@ -26,7 +26,7 @@ use cloud_object_persistence::{
     upsert_generic_string_objects as upsert_generic_string_object_rows,
 };
 use diesel::connection::{DefaultLoadingMode, SimpleConnection};
-use diesel::result::Error;
+use diesel::result::{DatabaseErrorKind, Error};
 use diesel::sqlite::SqliteConnection;
 use diesel::{
     BelongingToDsl, BoolExpressionMethods, Connection, ExpressionMethods, GroupedBy,
@@ -42,7 +42,7 @@ use pathfinder_geometry::vector::Vector2F;
 use persistence::model::AMBIENT_AGENT_PANE_KIND;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
-use warp_errors::{report_error, report_if_error};
+use warp_errors::{ReportErrorLogMode, report_error, report_if_error};
 use warpui::platform::FullscreenState;
 use warpui::windowing::{MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH};
 use warpui::{AppContext, SingletonEntity};
@@ -882,7 +882,42 @@ fn report_db_error(err_kind: &str, err: anyhow::Error, database_path: &Path) {
     }
     log_access("Database", database_path);
 
-    report_error!(err.context(format!("SQLite {err_kind} error")));
+    // A residual dual-ownership bug can make this specific violation storm repeatedly before the
+    // underlying duplicate state is cleared. Report only the first occurrence per run; every
+    // occurrence is still logged locally, and other SQLite errors keep reporting every time.
+    let (context, log_mode) = if is_terminal_panes_unique_violation(&err) {
+        (
+            format!(
+                "SQLite {err_kind} error: duplicate terminal_panes.uuid -- two windows hold the same pane group (see APP-5285)"
+            ),
+            ReportErrorLogMode::OncePerRun,
+        )
+    } else {
+        (
+            format!("SQLite {err_kind} error"),
+            ReportErrorLogMode::EveryTime,
+        )
+    };
+    report_error!(err.context(context), log_mode);
+}
+
+/// Returns `true` if `err`'s cause chain contains a `terminal_panes.uuid` UNIQUE-constraint
+/// violation specifically, the DB-level symptom of two windows both holding ownership of the same
+/// pane group when `save_app_state` runs. Matches on the raw message rather than
+/// `DatabaseErrorInformation::table_name()`, since not every backend populates that field.
+///
+/// Deliberately checks for the exact `terminal_panes.uuid` column, not just the `terminal_panes`
+/// table: a UNIQUE violation on a different column (e.g. `terminal_panes.id`, the primary key) is a
+/// distinct corruption signal that must keep reporting every time, not get silently folded into
+/// this throttle.
+fn is_terminal_panes_unique_violation(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<Error>(),
+            Some(Error::DatabaseError(DatabaseErrorKind::UniqueViolation, info))
+                if info.message().contains("terminal_panes.uuid")
+        )
+    })
 }
 
 /// Filter a collection of model events to remove skippable events:
