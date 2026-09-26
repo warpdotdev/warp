@@ -1,8 +1,10 @@
 use std::fmt;
+use std::mem::size_of;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use super::diff_state::{DiffHunk, DiffLineType};
+use super::diff_state::{DiffHunk, DiffLine, DiffLineType};
 
 /**
  * Maximum diff size that we will attempt to render. Diffs larger than this
@@ -12,6 +14,16 @@ use super::diff_state::{DiffHunk, DiffLineType};
  * Files larger than this should not be sent over the wire and should not be rendered.
  */
 pub const MAX_DIFF_SIZE: usize = 4_375_000; // 4.375MB in decimal
+
+/// Maximum number of files whose parsed hunks and base content a local Head diff retains.
+/// This bounds per-file editor overhead that is not represented by [`MAX_TOTAL_DIFF_BYTES`].
+pub const MAX_TOTAL_DIFF_FILES: usize = 2_000;
+
+/// Maximum cumulative diff-line text and base content retained by a local Head diff.
+pub const MAX_TOTAL_DIFF_BYTES: usize = 256 * 1024 * 1024; // 256MB
+
+const _: () = assert!(MAX_TOTAL_DIFF_BYTES > MAX_DIFF_SIZE);
+const _: () = assert!(MAX_TOTAL_DIFF_FILES > 0);
 
 /**
  * Reasonable limit for diff size. Diffs bigger than this _could_ be displayed
@@ -53,9 +65,7 @@ pub enum UnrenderableReason {
     /// The diff/patch itself is too large to render performantly (computed
     /// locally from the patch via [`compute_diff_size`]).
     DiffTooLarge,
-    /// The base file content was withheld because it exceeded the per-file wire
-    /// budget ([`MAX_DIFF_SIZE`]). Only produced when serializing a diff for a
-    /// remote subscriber.
+    /// Render data was withheld because the file or aggregate diff exceeded its budget.
     FileTooLarge,
 }
 
@@ -66,6 +76,29 @@ impl fmt::Display for UnrenderableReason {
             Self::FileTooLarge => write!(f, "File is too large to render"),
         }
     }
+}
+
+/// Estimates the allocations retained for a parsed file diff and its base content.
+pub fn approx_file_diff_bytes(
+    hunks: &Arc<Vec<DiffHunk>>,
+    content_at_head: Option<&String>,
+) -> usize {
+    let hunk_bytes = hunks.capacity().saturating_mul(size_of::<DiffHunk>());
+    let line_bytes = hunks
+        .iter()
+        .map(|hunk| {
+            let line_storage = hunk.lines.capacity().saturating_mul(size_of::<DiffLine>());
+            let text_storage = hunk
+                .lines
+                .iter()
+                .map(|line| line.text.capacity())
+                .fold(0usize, usize::saturating_add);
+            line_storage.saturating_add(text_storage)
+        })
+        .fold(0usize, usize::saturating_add);
+    hunk_bytes
+        .saturating_add(line_bytes)
+        .saturating_add(content_at_head.map_or(0, String::capacity))
 }
 
 /// Determines if a diff size exceeds the maximum renderable limit
@@ -118,3 +151,7 @@ pub fn compute_diff_size(diffs: &[DiffHunk], diff_size: usize) -> DiffSize {
 
     DiffSize::Normal
 }
+
+#[cfg(test)]
+#[path = "diff_size_limits_tests.rs"]
+mod tests;
