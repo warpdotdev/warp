@@ -7,9 +7,9 @@ description: Repo-specific dedupe guidance for warp. Only the categories declare
 
 # Repo-specific dedupe guidance for `warp`
 
-## Prerequisite: install the parent skill
+## Prerequisite: the parent skill
 
-This skill specializes the core `dedupe-issue` skill (named in the `specializes` frontmatter field) and is not functional on its own. Before applying its guidance, confirm the parent skill is installed and resolvable at `.agents/skills/dedupe-issue/SKILL.md`. If it is missing, install it first by copying the skill directory from the source declared in the `specializes_source` frontmatter field (`warpdotdev/oz-for-oss:.agents/skills/dedupe-issue`). Then continue with the guidance below.
+This skill specializes the core `dedupe-issue` skill (named in the `specializes` frontmatter field). Before applying its guidance, check whether the parent skill is resolvable at `.agents/skills/dedupe-issue/SKILL.md`. If it is present, read it first and follow its duplicate-detection algorithm, similarity thresholds, and output contract; this file only overrides the categories it declares. If it is not present and its source (`warpdotdev/oz-for-oss:.agents/skills/dedupe-issue`) is not part of your current working environment, do not attempt to fetch or install a skill from a repository outside that environment; proceed directly with the guidance below alongside your own role's output contract.
 
 This file is a companion to the core `dedupe-issue` skill. It does not
 redefine the duplicate-detection algorithm, the similarity thresholds,
