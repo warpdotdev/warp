@@ -518,7 +518,7 @@ impl AuthManager {
                 }
 
                 let server_api = self.server_api.clone();
-                let user_id = self.auth_state.user_id().unwrap_or_default();
+                let user_id = self.auth_state.telemetry_user_id().unwrap_or_default();
                 let anonymous_id = self.auth_state.anonymous_id();
                 let _ = ctx.spawn(
                     // Synchronously add the identify and login event to the telemetry event queue and
@@ -529,12 +529,12 @@ impl AuthManager {
                     // that don't get flushed to Rudderstack outside of this event specifically.
                     async move {
                         warpui::telemetry::record_identify_user_event(
-                            user_id.as_string(),
+                            user_id.clone(),
                             anonymous_id.clone(),
                             warpui::time::get_current_time(),
                         );
                         warpui::telemetry::record_event(
-                            Some(user_id.as_string()),
+                            Some(user_id),
                             anonymous_id,
                             TelemetryEvent::Login.name().into(),
                             TelemetryEvent::Login.payload(),

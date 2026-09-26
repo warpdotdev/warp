@@ -973,9 +973,7 @@ impl AgentConversationsModel {
             // If we don't have a user ID, don't pull tasks
             return;
         };
-        // A service account has no personal runs to seed the view with, and its `user_id` is the
-        // `serviceAccount:`-prefixed telemetry ID rather than a principal UID the runs API's
-        // `creator` filter can resolve.
+        // A service account has no personal runs to seed the view with.
         let personal_creator_uid = (!auth_state.is_service_account()).then_some(creator_uid);
 
         let ai_settings = AISettings::as_ref(ctx);
