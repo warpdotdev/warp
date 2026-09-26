@@ -646,7 +646,6 @@ default = [
     "kitty_keyboard_protocol",
     "inline_menu_headers",
     "github_pr_prompt_chip",
-    "conversations_as_context",
     "markdown_tables",
     "blocklist_markdown_table_rendering",
     "markdown_mermaid",
@@ -916,7 +915,6 @@ multi_profile = []
 pr_comments_v2 = []
 pr_comments_skill = []
 conversation_artifacts = []
-conversations_as_context = []
 conversation_api = []
 sync_ambient_plans = []
 projects = []
