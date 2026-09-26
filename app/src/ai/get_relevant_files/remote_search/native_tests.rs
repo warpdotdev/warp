@@ -17,6 +17,7 @@ fn file_contents_from_response_keeps_only_whole_text_files() {
                 line_range_end: None,
                 last_modified_epoch_millis: None,
                 line_count: 1,
+                content_sha256: Vec::new(),
             },
             FileContextProto {
                 file_name: "/repo/src/fragment.rs".to_string(),
@@ -27,6 +28,7 @@ fn file_contents_from_response_keeps_only_whole_text_files() {
                 line_range_end: Some(2),
                 last_modified_epoch_millis: None,
                 line_count: 1,
+                content_sha256: Vec::new(),
             },
         ],
         failed_files: vec![],

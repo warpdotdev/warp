@@ -29,7 +29,11 @@ impl DiffStorage for TestSurface {
         self.files.clone()
     }
 
-    fn start_saving(&mut self, _app: &mut AppContext) -> Vec<SaveFuture> {
+    fn start_saving(
+        &mut self,
+        _expected_revisions: &HashMap<String, ExpectedFileRevision>,
+        _app: &mut AppContext,
+    ) -> Vec<SaveFuture> {
         std::mem::take(&mut self.save_results)
             .into_iter()
             .map(|result| futures::future::ready(result).boxed() as SaveFuture)
@@ -72,7 +76,9 @@ fn accept_resolves_with_computed_diffs_once_saves_complete() {
             vec![updated_file("/tmp/x.rs", "fn main() {}\n")],
             vec![Ok(())],
         );
-        let future = surface.update(&mut app, |surface, ctx| surface.accept_and_save(ctx));
+        let future = surface.update(&mut app, |surface, ctx| {
+            surface.accept_and_save(HashMap::new(), ctx)
+        });
 
         let RequestFileEditsResult::Success {
             diff,
@@ -80,7 +86,7 @@ fn accept_resolves_with_computed_diffs_once_saves_complete() {
             deleted_files,
             lines_added,
             lines_removed,
-        } = future.await
+        } = future.await.result
         else {
             panic!("expected accept to succeed");
         };
@@ -103,9 +109,11 @@ fn accept_reports_save_failure_for_the_whole_edit() {
                 "disk full".to_owned(),
             )))],
         );
-        let future = surface.update(&mut app, |surface, ctx| surface.accept_and_save(ctx));
+        let future = surface.update(&mut app, |surface, ctx| {
+            surface.accept_and_save(HashMap::new(), ctx)
+        });
 
-        let RequestFileEditsResult::DiffApplicationFailed { error } = future.await else {
+        let RequestFileEditsResult::DiffApplicationFailed { error } = future.await.result else {
             panic!("expected a failed save to fail the edit");
         };
         assert!(error.contains("disk full"));
@@ -126,14 +134,16 @@ fn deleted_paths_are_reported_as_deleted_files() {
             }],
             vec![Ok(())],
         );
-        let future = surface.update(&mut app, |surface, ctx| surface.accept_and_save(ctx));
+        let future = surface.update(&mut app, |surface, ctx| {
+            surface.accept_and_save(HashMap::new(), ctx)
+        });
 
         let RequestFileEditsResult::Success {
             updated_files,
             deleted_files,
             lines_removed,
             ..
-        } = future.await
+        } = future.await.result
         else {
             panic!("expected delete to succeed");
         };
