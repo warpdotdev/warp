@@ -509,7 +509,7 @@ fn network_with_stale_websocket(
 #[cfg(not(target_family = "wasm"))]
 async fn finish_foreground_tasks(app: &App) {
     let foreground = app.foreground_executor();
-    let Foreground::Test { executor } = foreground.as_ref() else {
+    let Foreground::Test { executor, .. } = foreground.as_ref() else {
         panic!("Expected the test foreground executor");
     };
     // The foreground stream task remains registered until both on_item and on_done return.
