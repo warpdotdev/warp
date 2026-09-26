@@ -101,6 +101,23 @@ impl RepositoryIdentity {
         Ok(())
     }
 }
+
+fn valid_git_branch(branch: &str) -> bool {
+    !branch.is_empty()
+        && !branch.starts_with('-')
+        && !branch.starts_with('/')
+        && !branch.ends_with('/')
+        && !branch.ends_with('.')
+        && !branch.ends_with(".lock")
+        && !branch.contains("..")
+        && !branch.contains("//")
+        && branch
+            .split('/')
+            .all(|part| !part.starts_with('.') && !part.ends_with(".lock"))
+        && branch
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/'))
+}
 /// Server-supplied repository preparation override.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -112,6 +129,8 @@ pub struct RepositoryPreparationOverride {
     pub clone_from: Option<RepositoryIdentity>,
     #[serde(default)]
     pub preserve_origin: bool,
+    pub frozen_base_branch: Option<String>,
+    pub default_branch: Option<String>,
 }
 
 impl RepositoryPreparationOverride {
@@ -162,6 +181,14 @@ impl RepositoryPreparationOverride {
         }
         if self.clone_from.is_some() && !matches!(self.head, RepositoryHeadRef::CommitSha(_)) {
             return Err("clone_from requires an exact COMMIT_SHA repository head".to_string());
+        }
+        match (&self.frozen_base_branch, &self.default_branch, &self.head) {
+            (None, None, _) => {}
+            (Some(frozen), Some(default), RepositoryHeadRef::CommitSha(sha))
+                if self.clone_from.is_some()
+                    && frozen == &format!("benchmark-base/{sha}")
+                    && valid_git_branch(default) => {}
+            _ => return Err("frozen base requires a substituted commit head, matching benchmark-base/<SHA>, and a valid default branch".to_string()),
         }
         Ok(())
     }

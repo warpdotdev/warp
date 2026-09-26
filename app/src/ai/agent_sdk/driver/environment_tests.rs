@@ -12,8 +12,8 @@ use warp_core::command::ExitCode;
 use super::{
     PrepareEnvironmentError, RepositoryCloneRequest, build_parallel_clone_command,
     build_remove_repository_origins_command, build_resolved_head_command, checkout_command_for,
-    checkout_result, environment_snapshot, is_valid_git_object_id, merge_repos_deduped,
-    parse_resolved_head_sha, parse_resolved_head_shas, read_failed_repo_names,
+    checkout_result, environment_snapshot, frozen_fetch_command, is_valid_git_object_id,
+    merge_repos_deduped, parse_resolved_head_sha, parse_resolved_head_shas, read_failed_repo_names,
     repository_clone_requests, single_repo_name, validate_repository_preparation_overrides,
 };
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
@@ -32,7 +32,123 @@ fn commit_head_override(
         head: RepositoryHeadRef::CommitSha(sha.to_string()),
         clone_from: None,
         preserve_origin: false,
+        frozen_base_branch: None,
+        default_branch: None,
     }
+}
+
+#[test]
+fn substituted_checkout_request_carries_frozen_fetch_without_affecting_other_repos() {
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+    let mut override_for_warp =
+        substitution_override("source", "warp", sha, "copy", "warp-for-benchmarks");
+    override_for_warp.frozen_base_branch = Some(format!("benchmark-base/{sha}"));
+    override_for_warp.default_branch = Some("main".to_string());
+    let requests = repository_clone_requests(
+        &[
+            repo(CodeForge::GitHub, "source", "warp"),
+            repo(CodeForge::GitHub, "source", "other"),
+        ],
+        &[override_for_warp],
+        true,
+    )
+    .unwrap();
+    assert_eq!(requests[0].remote.repo, "warp-for-benchmarks");
+    assert_eq!(requests[0].checkout_name, "warp");
+    assert_eq!(
+        requests[0].frozen_fetch,
+        Some((format!("benchmark-base/{sha}"), "main".to_string()))
+    );
+    assert!(!requests[0].remove_origin);
+    assert!(requests[1].frozen_fetch.is_none());
+    assert!(requests[1].remove_origin);
+}
+
+#[test]
+fn parallel_clone_passes_frozen_ref_and_default_branch() {
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+    let mut frozen = clone_request(
+        repo(CodeForge::GitHub, "source", "warp"),
+        Some(RepositoryHeadRef::CommitSha(sha.to_string())),
+    );
+    frozen.frozen_fetch = Some((format!("benchmark-base/{sha}"), "main".to_string()));
+    let command = unwrap_sh_c_script(&build_parallel_clone_command(
+        &[
+            frozen,
+            clone_request(repo(CodeForge::GitHub, "source", "other"), None),
+        ],
+        ShellType::Bash,
+        Path::new("/tmp/failed"),
+    ));
+    assert!(command.contains("'benchmark-base/0123456789abcdef0123456789abcdef01234567' 'main'"));
+    assert!(command.contains("git -C \"$target\" config --replace-all remote.origin.fetch \"+refs/heads/$frozen_branch:refs/remotes/origin/$default_branch\""));
+}
+
+#[test]
+fn frozen_benchmark_fetch_uses_starting_sha_while_live_main_moves() {
+    let fixture = build_fixture();
+    let repo_dir = fixture.working_dir.join(&fixture.repo_name);
+    let frozen = format!("benchmark-base/{}", fixture.pinned_sha);
+    let mut request = clone_request(
+        repo(CodeForge::GitHub, "source", &fixture.repo_name),
+        Some(RepositoryHeadRef::CommitSha(fixture.pinned_sha.clone())),
+    );
+    request.remote = repo(CodeForge::GitHub, "target", &fixture.repo_name);
+    request.frozen_fetch = Some((frozen.clone(), "main".to_string()));
+
+    git(
+        &[
+            "push",
+            &fixture.origin_url,
+            &format!("{}:refs/heads/{frozen}", fixture.pinned_sha),
+        ],
+        &fixture.working_dir.join("../seed"),
+    );
+    let checkout = checkout_command_for(&request, &fixture.working_dir, ShellType::Bash).unwrap();
+    let checkout = checkout.replace(&request.remote.https_clone_url(), &fixture.origin_url);
+    git(
+        &["init", "-b", "main", repo_dir.to_str().unwrap()],
+        &fixture.working_dir,
+    );
+    assert!(run_command(&checkout).success());
+
+    git(&["checkout", "-b", "live", &fixture.base_sha], &repo_dir);
+    fs::write(repo_dir.join("FIXED.md"), "live fix\n").unwrap();
+    git(&["add", "FIXED.md"], &repo_dir);
+    git(&["commit", "-m", "live fix"], &repo_dir);
+    git(&["push", "origin", "HEAD:refs/heads/main"], &repo_dir);
+    let live_sha = git_stdout(&["rev-parse", "HEAD"], &repo_dir);
+    git(&["checkout", "--detach", &fixture.pinned_sha], &repo_dir);
+
+    let (frozen, default) = request.frozen_fetch.as_ref().unwrap();
+    assert!(
+        run_command(&frozen_fetch_command(
+            &request,
+            &fixture.working_dir,
+            ShellType::Bash,
+            frozen,
+            default
+        ))
+        .success()
+    );
+    git(&["fetch", "origin"], &repo_dir);
+    assert_eq!(
+        git_stdout(&["rev-parse", "origin/main"], &repo_dir),
+        fixture.pinned_sha
+    );
+    assert_ne!(live_sha, fixture.pinned_sha);
+    assert_eq!(
+        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
+        fixture.pinned_sha
+    );
+    git(&["push", "origin", "HEAD:refs/heads/trial/test"], &repo_dir);
+    assert_eq!(
+        git_stdout(&["ls-remote", "origin", "refs/heads/trial/test"], &repo_dir)
+            .split('\t')
+            .next()
+            .unwrap(),
+        fixture.pinned_sha
+    );
 }
 
 #[test]
@@ -182,6 +298,8 @@ fn branch_head_override(
         head: RepositoryHeadRef::Branch(branch.to_string()),
         clone_from: None,
         preserve_origin: false,
+        frozen_base_branch: None,
+        default_branch: None,
     }
 }
 
@@ -203,6 +321,8 @@ fn substitution_override(
             repo_name: target_repo.to_string(),
         }),
         preserve_origin: true,
+        frozen_base_branch: None,
+        default_branch: None,
     }
 }
 
@@ -213,6 +333,7 @@ fn clone_request(repo: SourceRepo, checkout: Option<RepositoryHeadRef>) -> Repos
         checkout_name,
         checkout,
         remove_origin: false,
+        frozen_fetch: None,
     }
 }
 

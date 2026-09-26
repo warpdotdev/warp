@@ -232,6 +232,29 @@ pub(crate) fn validate_repository_preparation_overrides(
 
     Ok(())
 }
+
+fn frozen_fetch_command(
+    request: &RepositoryCloneRequest,
+    working_dir: &Path,
+    shell_type: ShellType,
+    frozen: &str,
+    default: &str,
+) -> String {
+    let dir = shell_escape_single_quotes(
+        &working_dir.join(&request.checkout_name).to_string_lossy(),
+        shell_type,
+    );
+    let sha = request
+        .checkout
+        .as_ref()
+        .map(RepositoryHeadRef::value)
+        .unwrap_or_default();
+    format!(
+        "git -C '{dir}' config --replace-all remote.origin.fetch '+refs/heads/{frozen}:refs/remotes/origin/{default}' && \
+         git -C '{dir}' fetch --filter=blob:none origin && \
+         test \"$(git -C '{dir}' rev-parse --verify 'refs/remotes/origin/{default}')\" = '{sha}'"
+    )
+}
 /// Prepare a cloud agent environment within a terminal session. This will:
 /// 1. Materialize all repositories, enforcing server-provided HEAD overrides.
 /// 2. Begin codebase indexing for all repositories (Oz harness only).
@@ -685,6 +708,7 @@ pub(super) struct RepositoryCloneRequest {
     pub(super) checkout_name: String,
     pub(super) checkout: Option<RepositoryHeadRef>,
     pub(super) remove_origin: bool,
+    pub(super) frozen_fetch: Option<(String, String)>,
 }
 
 fn repository_clone_requests(
@@ -720,6 +744,13 @@ fn repository_clone_requests(
                 checkout_name: repo.repo,
                 checkout,
                 remove_origin,
+                frozen_fetch: preparation_override.and_then(|preparation_override| {
+                    preparation_override
+                        .frozen_base_branch
+                        .as_ref()
+                        .zip(preparation_override.default_branch.as_ref())
+                        .map(|(frozen, default)| (frozen.clone(), default.clone()))
+                }),
             })
         })
         .collect()
@@ -804,15 +835,30 @@ clone_repo() {
   target="$3"
   checkout_ref="$4"
   is_commit_sha="$5"
+  frozen_branch="$6"
+  default_branch="$7"
   if [ "$is_commit_sha" = "1" ]; then
     if [ -e "$target" ]; then
       printf '%s\n' "Checking out $checkout_ref in existing repository $repo_name..."
+      if [ -n "$frozen_branch" ]; then
+        if git -C "$target" remote get-url origin >/dev/null 2>&1; then
+          git -C "$target" remote set-url origin "$repo_url" || return 1
+        else
+          git -C "$target" remote add origin "$repo_url" || return 1
+        fi
+      fi
     else
       printf '%s\n' "Initializing repository $repo_name at $checkout_ref..."
       git init --quiet "$target" || return 1
       git -C "$target" remote add origin "$repo_url" || return 1
     fi
-    git -C "$target" fetch --filter=blob:none origin "$checkout_ref" && git -C "$target" checkout --detach FETCH_HEAD
+    git -C "$target" fetch --filter=blob:none origin "$checkout_ref" &&
+      git -C "$target" checkout --detach FETCH_HEAD || return 1
+    if [ -n "$frozen_branch" ]; then
+      git -C "$target" config --replace-all remote.origin.fetch "+refs/heads/$frozen_branch:refs/remotes/origin/$default_branch" &&
+        git -C "$target" fetch --filter=blob:none origin &&
+        [ "$(git -C "$target" rev-parse --verify "refs/remotes/origin/$default_branch")" = "$checkout_ref" ] || return 1
+    fi
     return
   fi
   if [ -d "$target" ]; then
@@ -850,11 +896,16 @@ clone_repo() {
             Some(RepositoryHeadRef::CommitSha(_)) => "1",
             Some(RepositoryHeadRef::Branch(_)) | None => "0",
         };
+        let (frozen_branch, default_branch) = request
+            .frozen_fetch
+            .as_ref()
+            .map(|(frozen, default)| (frozen.as_str(), default.as_str()))
+            .unwrap_or(("", ""));
         let log_var = format!("log_file_{index}");
         let pid_var = format!("pid_{index}");
         script.push_str(&format!(
             "{log_var}=\"$tmp_dir/repo-{index}.log\"\n\
-             clone_repo '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' '{escaped_checkout_ref}' '{is_commit_sha}' >\"${log_var}\" 2>&1 &\n\
+             clone_repo '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' '{escaped_checkout_ref}' '{is_commit_sha}' '{frozen_branch}' '{default_branch}' >\"${log_var}\" 2>&1 &\n\
              {pid_var}=\"$!\"\n"
         ));
         // Waits are unrolled per repo (rather than looping over a dynamic pid
@@ -1080,6 +1131,12 @@ async fn clone_repo(
             full: ("Successfully checked out {checkout_ref} for {repo_name}")
         );
     }
+    if let Some((frozen, default)) = &request.frozen_fetch {
+        let command = frozen_fetch_command(request, working_dir, shell_type, frozen, default);
+        if execute_command(command, spawner).await? != 0.into() {
+            return Err(PrepareEnvironmentError::CloneRepo { repo_name });
+        }
+    }
 
     Ok(())
 }
@@ -1120,7 +1177,7 @@ async fn capture_environment_snapshot(
 /// or may have moved, by the time the clone ran: fetch it first, then check
 /// out the resulting `FETCH_HEAD` detached. Checking out the original ref
 /// name can prefer a stale local branch or fail when the object only landed
-/// in `FETCH_HEAD`. Detached HEAD is expected and fine — trials never merge.
+/// in `FETCH_HEAD`. Agents can create their work branch from the detached HEAD.
 fn checkout_command_for(
     request: &RepositoryCloneRequest,
     working_dir: &Path,
@@ -1130,8 +1187,18 @@ fn checkout_command_for(
     let repo_dir = working_dir.join(&request.checkout_name);
     let escaped_dir = shell_escape_single_quotes(&repo_dir.to_string_lossy(), shell_type);
     let escaped_ref = shell_escape_single_quotes(checkout_ref, shell_type);
+    let ensure_remote = if request.frozen_fetch.is_some() {
+        let url = shell_escape_single_quotes(&request.remote.https_clone_url(), shell_type);
+        format!(
+            "if git -C '{escaped_dir}' remote get-url origin >/dev/null 2>&1; then \
+             git -C '{escaped_dir}' remote set-url origin '{url}'; else \
+             git -C '{escaped_dir}' remote add origin '{url}'; fi && "
+        )
+    } else {
+        String::new()
+    };
     Some(format!(
-        "git -C '{escaped_dir}' fetch --filter=blob:none origin '{escaped_ref}' && \
+        "{ensure_remote}git -C '{escaped_dir}' fetch --filter=blob:none origin '{escaped_ref}' && \
          git -C '{escaped_dir}' checkout --detach FETCH_HEAD"
     ))
 }

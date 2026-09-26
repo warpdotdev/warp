@@ -80,6 +80,8 @@ fn driver_validation_uses_live_repository_membership() {
             repo_name: "warp-for-benchmarks".to_string(),
         }),
         preserve_origin: true,
+        frozen_base_branch: None,
+        default_branch: None,
     }];
 
     let repositories = validated_driver_repositories_for_preparation(&options).unwrap();

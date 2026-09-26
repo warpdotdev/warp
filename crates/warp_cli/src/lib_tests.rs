@@ -3,7 +3,10 @@ use std::ffi::OsString;
 use clap::Parser;
 
 use super::*;
-use crate::agent::{AgentCommand, Harness, OutputFormat, RepositoryForge, RepositoryHeadRef};
+use crate::agent::{
+    AgentCommand, Harness, OutputFormat, RepositoryForge, RepositoryHeadRef,
+    RepositoryPreparationOverride,
+};
 use crate::artifact::ArtifactCommand;
 use crate::environment::{EnvironmentCommand, ImageCommand};
 use crate::federate::FederateCommand;
@@ -21,6 +24,42 @@ fn identifies_worker_subcommands() {
     #[cfg(unix)]
     assert!(is_worker_invocation(&terminal_server_subcommand()));
     assert!(!is_worker_invocation("--prompt"));
+}
+
+#[test]
+fn agent_run_validates_frozen_benchmark_base_override() {
+    let base = r#"{"code_forge":"GITHUB","repo_owner":"source","repo_name":"warp","head":{"type":"COMMIT_SHA","value":"0123456789abcdef0123456789abcdef01234567"},"clone_from":{"code_forge":"GITHUB","owner":"target","repo":"warp"},"preserve_origin":true,"frozen_base_branch":"benchmark-base/0123456789abcdef0123456789abcdef01234567","default_branch":"main"}"#;
+    let parsed: RepositoryPreparationOverride = base.parse().unwrap();
+    assert_eq!(
+        parsed.frozen_base_branch.as_deref(),
+        Some("benchmark-base/0123456789abcdef0123456789abcdef01234567")
+    );
+    assert_eq!(parsed.default_branch.as_deref(), Some("main"));
+
+    for invalid in [
+        base.replace(
+            "\"default_branch\":\"main\"",
+            "\"default_branch\":\"../main\"",
+        ),
+        base.replace(
+            "\"default_branch\":\"main\"",
+            "\"default_branch\":\"main';evil\"",
+        ),
+        base.replace("\"default_branch\":\"main\"", "\"default_branch\":null"),
+        base.replace(
+            "benchmark-base/0123456789abcdef0123456789abcdef01234567",
+            "benchmark-base/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ),
+        base.replace(
+            ",\"clone_from\":{\"code_forge\":\"GITHUB\",\"owner\":\"target\",\"repo\":\"warp\"}",
+            "",
+        ),
+    ] {
+        assert!(
+            invalid.parse::<RepositoryPreparationOverride>().is_err(),
+            "{invalid}"
+        );
+    }
 }
 
 #[test]
