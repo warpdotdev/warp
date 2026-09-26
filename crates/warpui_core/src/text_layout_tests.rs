@@ -285,6 +285,79 @@ fn test_strip_leading_unicode_bom_with_single_style_run() {
     assert_eq!(adjusted_style_runs, Some(expected_style_runs));
 }
 
+#[test]
+fn test_truncate_text_for_layout_leaves_short_text_alone() {
+    let text = "Hello world";
+    let style_runs = vec![(
+        0..11,
+        StyleAndFont::new(FamilyId(0), Properties::default(), TextStyle::default()),
+    )];
+
+    let (truncated_text, truncated_style_runs) = truncate_text_for_layout(text, &style_runs);
+
+    assert_eq!(truncated_text, text);
+    assert_eq!(truncated_style_runs, None);
+}
+
+#[test]
+fn test_truncate_text_for_layout_caps_degenerate_lines() {
+    let char_count = MAX_LAYOUT_CHARS + 500;
+    let text = "a".repeat(char_count);
+    let style = StyleAndFont::new(FamilyId(0), Properties::default(), TextStyle::default());
+    let style_runs = vec![
+        (0..10, style),
+        // Straddles the cap, so it should be clamped to it.
+        (10..char_count - 100, style),
+        // Starts past the cap, so it should be dropped entirely.
+        (char_count - 100..char_count, style),
+    ];
+
+    let (truncated_text, truncated_style_runs) = truncate_text_for_layout(&text, &style_runs);
+
+    assert_eq!(truncated_text.chars().count(), MAX_LAYOUT_CHARS);
+    assert_eq!(
+        truncated_style_runs,
+        Some(vec![(0..10, style), (10..MAX_LAYOUT_CHARS, style)])
+    );
+}
+
+/// The cap counts characters, not bytes; slicing a multi-byte character in half would panic.
+#[test]
+fn test_truncate_text_for_layout_truncates_on_character_boundaries() {
+    let text = "é".repeat(MAX_LAYOUT_CHARS + 1);
+
+    let (truncated_text, _) = truncate_text_for_layout(&text, &[]);
+
+    assert_eq!(truncated_text.chars().count(), MAX_LAYOUT_CHARS);
+    assert_eq!(truncated_text.len(), MAX_LAYOUT_CHARS * 'é'.len_utf8());
+}
+
+/// Cutting at a character boundary is not enough: landing inside a grapheme cluster would strip
+/// the combining marks off the last visible character.
+#[test]
+fn test_truncate_text_for_layout_does_not_split_grapheme_clusters() {
+    // "e" plus a combining acute accent - two characters, one cluster. The leading "x" offsets
+    // the clusters so that the cap lands in the middle of one.
+    let cluster = "e\u{0301}";
+    let text = format!("x{}", cluster.repeat(MAX_LAYOUT_CHARS));
+    let style = StyleAndFont::new(FamilyId(0), Properties::default(), TextStyle::default());
+
+    let (truncated_text, truncated_style_runs) =
+        truncate_text_for_layout(&text, &[(0..text.chars().count(), style)]);
+
+    let truncated_char_count = truncated_text.chars().count();
+    assert!(truncated_char_count <= MAX_LAYOUT_CHARS);
+    assert!(
+        truncated_text.ends_with(cluster),
+        "truncation split a grapheme cluster"
+    );
+    // The style run follows the text to wherever the cluster boundary put it, not to the cap.
+    assert_eq!(
+        truncated_style_runs,
+        Some(vec![(0..truncated_char_count, style)])
+    );
+}
+
 /// Build a synthetic `Line` for paint tests. The platform test `FontDB` stubs
 /// out real text layout so we cannot exercise the paint path through
 /// `layout_line`; instead we hand-roll a single run of fixed-width glyphs.
