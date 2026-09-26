@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::cell::Cell;
 use std::sync::Arc;
 
@@ -11,22 +12,27 @@ use warpui_core::color::ColorU;
 use warpui_core::elements::ListIndentLevel;
 use warpui_core::fonts::FamilyId;
 use warpui_core::geometry::rect::RectF;
-use warpui_core::geometry::vector::vec2f;
+use warpui_core::geometry::vector::{Vector2F, vec2f};
 use warpui_core::text_layout::TextFrame;
 use warpui_core::units::{IntoPixels, Pixels};
 
 use super::debug::Describe;
 use super::test_utils::{layout_paragraph, layout_paragraphs};
+use super::viewport::ViewportItem;
 use super::{
-    BlockItem, BlockLocation, COMMAND_SPACING, CellLayout, DEFAULT_BLOCK_SPACINGS,
-    HiddenBlockConfig, ImageBlockConfig, LaidOutTable, ParagraphBlock, RenderState,
-    TableBlockConfig, TableStyle, table_offset_map,
+    BlockItem, BlockLocation, BlockSpacing, BrokenBlockEmbedding, COMMAND_SPACING, CellLayout,
+    DEFAULT_BLOCK_SPACINGS, HiddenBlockConfig, ImageBlockConfig, LaidOutEmbeddedItem, LaidOutTable,
+    ParagraphBlock, RenderState, TableBlockConfig, TableStyle, table_offset_map,
 };
 use crate::content::edit::ParsedUrl;
 use crate::content::text::{
     BufferBlockStyle, CodeBlockType, FormattedTable, FormattedTextFragment, table_cell_offset_maps,
 };
-use crate::render::model::test_utils::{TEST_STYLES, laid_out_paragraph, mock_paragraph};
+use crate::editor::EmbeddedItemModel;
+use crate::render::element::RenderableBlock;
+use crate::render::model::test_utils::{
+    TEST_STYLES, laid_out_paragraph, mock_paragraph, mock_paragraph_with_missing_glyphs,
+};
 use crate::render::model::{
     ColumnUnit, Height, LayoutSummary, LineCount, RenderedSelection, SoftWrapPoint, TEXT_SPACING,
 };
@@ -72,6 +78,91 @@ fn test_height() {
             item_count: 4,
         }
     );
+}
+
+#[test]
+fn test_content_has_missing_glyphs_false_when_no_block_reports_one() {
+    let mut render_state =
+        RenderState::new_for_test(TEST_STYLES, 10.0.into_pixels(), 10.0.into_pixels());
+    let mut content = SumTree::new();
+    content.push(mock_paragraph(24., 1., 1));
+    content.push(mock_paragraph(24., 1., 2));
+    render_state.set_content(content);
+
+    assert!(!render_state.content().has_missing_glyphs());
+}
+
+#[test]
+fn test_content_has_missing_glyphs_true_when_a_block_reports_one() {
+    let mut render_state =
+        RenderState::new_for_test(TEST_STYLES, 10.0.into_pixels(), 10.0.into_pixels());
+    let mut content = SumTree::new();
+    content.push(mock_paragraph(24., 1., 1));
+    content.push(mock_paragraph_with_missing_glyphs(24., 1., 2));
+    render_state.set_content(content);
+
+    assert!(render_state.content().has_missing_glyphs());
+}
+
+/// A minimal [`LaidOutEmbeddedItem`] that doesn't override `has_missing_glyphs`, to pin the
+/// trait's conservative default.
+#[derive(Debug)]
+struct MinimalEmbeddedItem;
+
+impl LaidOutEmbeddedItem for MinimalEmbeddedItem {
+    fn height(&self) -> Pixels {
+        0.0.into_pixels()
+    }
+
+    fn size(&self) -> Vector2F {
+        vec2f(0., 0.)
+    }
+
+    fn first_line_bound(&self) -> Vector2F {
+        vec2f(0., 0.)
+    }
+
+    fn element(
+        &self,
+        _state: &RenderState,
+        _viewport_item: ViewportItem,
+        _model: Option<&dyn EmbeddedItemModel>,
+        _ctx: &warpui_core::AppContext,
+    ) -> Box<dyn RenderableBlock> {
+        unimplemented!("not exercised by this test")
+    }
+
+    fn spacing(&self) -> BlockSpacing {
+        BlockSpacing::default()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+#[test]
+fn test_laid_out_embedded_item_has_missing_glyphs_defaults_to_true() {
+    assert!(MinimalEmbeddedItem.has_missing_glyphs());
+}
+
+#[test]
+fn test_broken_block_embedding_has_missing_glyphs_is_false() {
+    // A broken-embed placeholder's "Embed not found" label is fixed ASCII text, which the
+    // app's fallback font mapping never routes to an external family for.
+    assert!(!BrokenBlockEmbedding::new(100.0.into_pixels(), 12.).has_missing_glyphs());
+}
+
+#[test]
+fn test_block_item_embedded_delegates_to_laid_out_embedded_item() {
+    let embedded = BlockItem::Embedded(Arc::new(MinimalEmbeddedItem));
+    assert!(embedded.has_missing_glyphs());
+
+    let broken = BlockItem::Embedded(Arc::new(BrokenBlockEmbedding::new(
+        100.0.into_pixels(),
+        12.,
+    )));
+    assert!(!broken.has_missing_glyphs());
 }
 
 #[test]
