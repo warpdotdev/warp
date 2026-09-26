@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
-use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
 use warpui::assets::asset_cache::AssetSource;
@@ -101,7 +100,6 @@ pub struct AgentMessageBar {
     terminal_model: Arc<FairMutex<TerminalModel>>,
     mouse_states: AgentMessageBarMouseStates,
     /// Whether the word "figma" has been detected in the current input buffer or attached images.
-    /// Only meaningful when `FeatureFlag::FigmaDetection` is enabled.
     figma_detected: bool,
 }
 
@@ -228,21 +226,18 @@ impl AgentMessageBar {
             }
         });
 
-        if FeatureFlag::FigmaDetection.is_enabled() {
-            // When the state of the Figma MCP changes, re-render to update the Figma CTA button.
-            ctx.subscribe_to_model(
-                &TemplatableMCPServerManager::handle(ctx),
-                |_, model, event, ctx| {
-                    if let TemplatableMCPServerManagerEvent::StateChanged { uuid, .. } = event
-                        && let Some(figma_mcp_uuid) =
-                            model.as_ref(ctx).get_figma_installation_uuid()
-                        && uuid == &figma_mcp_uuid
-                    {
-                        ctx.notify();
-                    }
-                },
-            );
-        }
+        // When the state of the Figma MCP changes, re-render to update the Figma CTA button.
+        ctx.subscribe_to_model(
+            &TemplatableMCPServerManager::handle(ctx),
+            |_, model, event, ctx| {
+                if let TemplatableMCPServerManagerEvent::StateChanged { uuid, .. } = event
+                    && let Some(figma_mcp_uuid) = model.as_ref(ctx).get_figma_installation_uuid()
+                    && uuid == &figma_mcp_uuid
+                {
+                    ctx.notify();
+                }
+            },
+        );
 
         ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |_, _, event, ctx| {
             if matches!(
@@ -279,9 +274,6 @@ impl AgentMessageBar {
     /// `figma_detected` is `true` when either the text contains "figma" (case-insensitive)
     /// or any attached image was exported from Figma.
     fn update_figma_detected(&mut self, ctx: &mut ViewContext<Self>) {
-        if !FeatureFlag::FigmaDetection.is_enabled() {
-            return;
-        }
         let text_has_figma = self
             .input_buffer_model
             .as_ref(ctx)
@@ -302,9 +294,9 @@ impl AgentMessageBar {
     }
 
     /// Returns the Figma MCP status if the contextual button area should be rendered
-    /// (i.e. when `FeatureFlag::FigmaDetection` is enabled and "figma" is detected in the input).
+    /// (i.e. when "figma" is detected in the input).
     fn figma_button_status(&self, app: &AppContext) -> Option<FigmaMcpStatus> {
-        if FeatureFlag::FigmaDetection.is_enabled() && self.figma_detected {
+        if self.figma_detected {
             Some(TemplatableMCPServerManager::as_ref(app).get_figma_mcp_status())
         } else {
             None
