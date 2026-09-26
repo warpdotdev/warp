@@ -583,6 +583,63 @@ fn test_layout_text_first_line_indent_large_bidirectional() -> Result<()> {
     Ok(())
 }
 
+/// A single-line layout must produce finite, positive geometry and non-empty
+/// glyph runs for a complex (RTL) script, both with and without spaces, and
+/// regardless of whether the line is wider than the available paint width.
+#[test]
+fn test_layout_line_arabic_produces_finite_positive_geometry() -> Result<()> {
+    let (font_db, roboto) = init_fonts();
+
+    let with_spaces = "التعرف على خط اليد في المخطوطات العربية التاريخية";
+    let without_spaces = "التعرفعلىخطاليدفيالمخطوطاتالعربيةالتاريخية";
+
+    let line_style = LineStyle {
+        font_size: FONT_SIZE,
+        line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
+        baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+        fixed_width_tab_size: None,
+    };
+
+    for text in [with_spaces, without_spaces] {
+        for max_width in [f32::MAX, 80.] {
+            let line = font_db.text_layout_system().layout_line(
+                text,
+                line_style,
+                &[(
+                    0..text.encode_utf16().count(),
+                    StyleAndFont::new(roboto, Properties::default(), TextStyle::new()),
+                )],
+                max_width,
+                crate::text_layout::ClipConfig::default(),
+            );
+
+            assert!(
+                line.width.is_finite() && line.width > 0.,
+                "expected finite, positive width for {text:?} at max_width={max_width}, got \
+                 {}",
+                line.width
+            );
+            let glyph_count: usize = line.runs.iter().map(|run| run.glyphs.len()).sum();
+            assert!(
+                glyph_count > 0,
+                "expected non-empty glyph runs for {text:?} at max_width={max_width}"
+            );
+            for run in &line.runs {
+                for glyph in &run.glyphs {
+                    let position = glyph.position_along_baseline;
+                    assert!(
+                        position.x().is_finite() && position.y().is_finite(),
+                        "expected finite glyph position for {text:?} at max_width={max_width}, \
+                         got {position:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Combining marks must be placed with the shaper's GPOS offsets, not with the pen position.
 ///
 /// [`cosmic_text::LayoutGlyph`] reports the shaped placement of a glyph in `x_offset` / `y_offset`
