@@ -51,35 +51,41 @@ pub struct SessionContext {
 }
 
 impl SessionContext {
-    /// Lists `directory` fresh from disk and caches the results.
+    /// Lists `directory` afresh, without caching host-only WSL listings for guest completions.
     pub(crate) async fn refresh_directory_entries(
         &self,
         directory: TypedPathBuf,
     ) -> Arc<Vec<EngineDirEntry>> {
         let result = Arc::new(
-            self.list_directory_entries_internal(&directory.to_path())
+            self.list_directory_entries_internal(&directory.to_path(), false)
                 .await,
         );
-        self.cached_directory_entries
-            .insert(directory, result.clone());
+        if !(self.session.is_wsl() && matches!(self.session.session_type(), SessionType::Local)) {
+            self.cached_directory_entries
+                .insert(directory, result.clone());
+        }
         result
     }
 
     async fn list_directory_entries_internal(
         &self,
         directory: &TypedPath<'_>,
+        use_wsl_guest_listing: bool,
     ) -> Vec<EngineDirEntry> {
+        #[cfg(not(windows))]
+        let _ = use_wsl_guest_listing;
         match self.session.session_type() {
             SessionType::Local => {
                 // The host cannot resolve an `IO_REPARSE_TAG_LX_SYMLINK` over `\\wsl$`
                 // (APP-3993): it can't classify a symlink-to-directory correctly, and it can't
-                // traverse *through* a symlinked directory to list its contents at all. So a WSL
-                // session asks the guest for the listing directly, following symlinks (`-L`) so
-                // both problems are avoided at the source, rather than patching up a host listing
-                // afterwards. A slow or failing guest falls back to the plain host listing below
-                // rather than emptying the completion list.
+                // traverse *through* a symlinked directory to list its contents at all. For
+                // completions, a WSL session asks the guest for the listing directly, following
+                // symlinks (`-L`) so both problems are avoided at the source, rather than patching
+                // up a host listing afterwards. A slow or failing guest falls back to the plain
+                // host listing below rather than emptying the completion list.
                 #[cfg(windows)]
-                if self.session.is_wsl()
+                if use_wsl_guest_listing
+                    && self.session.is_wsl()
                     && let Some(entries) = wsl_guest_listing::list_entries(self, directory).await
                 {
                     return entries;
@@ -188,7 +194,7 @@ impl PathCompletionContext for SessionContext {
         }
 
         let result = self
-            .list_directory_entries_internal(&directory.to_path())
+            .list_directory_entries_internal(&directory.to_path(), true)
             .await;
 
         let result = Arc::new(result);

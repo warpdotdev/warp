@@ -1,4 +1,130 @@
+#[cfg(windows)]
+use std::any::Any;
+#[cfg(windows)]
+use std::collections::HashMap;
+#[cfg(windows)]
+use std::sync::Arc;
+#[cfg(windows)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+#[cfg(windows)]
+use anyhow::Result;
+#[cfg(windows)]
+use async_trait::async_trait;
+#[cfg(windows)]
+use typed_path::TypedPathBuf;
+#[cfg(windows)]
+use warp_completer::completer::{CommandExitStatus, CommandOutput, CompletionContext};
+#[cfg(windows)]
+use warp_completer::signatures::CommandRegistry;
+#[cfg(windows)]
+use warpui::App;
+
 use super::*;
+#[cfg(windows)]
+use crate::terminal::ShellLaunchData;
+#[cfg(windows)]
+use crate::terminal::model::session::command_executor::{CommandExecutor, ExecuteCommandOptions};
+#[cfg(windows)]
+use crate::terminal::model::session::{Session, SessionInfo};
+#[cfg(windows)]
+use crate::terminal::shell::{Shell, ShellType};
+#[cfg(windows)]
+use crate::test_util::{Stub, VirtualFS};
+
+#[cfg(windows)]
+#[derive(Debug, Default)]
+struct ListingExecutor {
+    commands_executed: AtomicUsize,
+}
+
+#[cfg(windows)]
+#[async_trait]
+impl CommandExecutor for ListingExecutor {
+    async fn execute_command(
+        &self,
+        _command: &str,
+        _shell: &Shell,
+        _current_directory_path: Option<&str>,
+        _environment_variables: Option<HashMap<String, String>>,
+        _options: ExecuteCommandOptions,
+    ) -> Result<CommandOutput> {
+        self.commands_executed.fetch_add(1, Ordering::SeqCst);
+        Ok(CommandOutput {
+            stdout: b"./guest-only/\0\0".to_vec(),
+            stderr: Vec::new(),
+            status: CommandExitStatus::Success,
+            exit_code: None,
+        })
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn supports_parallel_command_execution(&self) -> bool {
+        true
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn wsl_directory_chip_uses_host_without_replacing_guest_completion_cache() {
+    App::test((), |app| async move {
+        VirtualFS::test(
+            "wsl_directory_chip_uses_host_without_replacing_guest_completion_cache",
+            |dirs, mut sandbox| {
+                sandbox.touch(vec![Stub::EmptyFile("host-only.txt")]);
+                let host_path = dirs.tests().to_string_lossy();
+                let guest_path = warp_util::path::convert_windows_path_to_wsl(&host_path);
+                let executor = Arc::new(ListingExecutor::default());
+                let mut session_info = SessionInfo::new_for_test()
+                    .with_shell_type(ShellType::Bash)
+                    .with_home_dir(guest_path.clone());
+                session_info.launch_data = Some(ShellLaunchData::WSL {
+                    distro: "Ubuntu".to_owned(),
+                });
+                let session = Session::new(session_info, executor.clone());
+                let session_context = app.read(|ctx| {
+                    SessionContext::new(
+                        session,
+                        CommandRegistry::default().into(),
+                        TypedPathBuf::from_unix(&guest_path),
+                        ctx,
+                    )
+                });
+
+                let chip_items = warpui::r#async::block_on(DirectoryFetcher::fetch_files_async(
+                    &session_context,
+                    "~",
+                ));
+                assert_eq!(
+                    chip_items,
+                    vec![create_directory_item(
+                        "host-only.txt",
+                        DirectoryType::TextFile
+                    )]
+                );
+                assert_eq!(executor.commands_executed.load(Ordering::SeqCst), 0);
+
+                let completions = warpui::r#async::block_on(
+                    session_context
+                        .path_completion_context()
+                        .unwrap()
+                        .list_directory_entries(TypedPathBuf::from_unix(&guest_path)),
+                );
+                assert_eq!(
+                    completions.as_ref(),
+                    &[EngineDirEntry {
+                        file_name: "guest-only".to_owned(),
+                        file_type: EngineFileType::Directory,
+                    }]
+                );
+                assert_eq!(executor.commands_executed.load(Ordering::SeqCst), 1);
+            },
+        );
+    });
+}
 
 fn create_directory_item(name: &str, directory_type: DirectoryType) -> DirectoryItem {
     DirectoryItem {

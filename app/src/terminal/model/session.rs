@@ -1029,7 +1029,11 @@ impl Session {
 
     pub fn home_dir(&self) -> Option<&str> {
         if cfg!(test) {
-            return warp_util::path::TEST_SESSION_HOME_DIR.as_deref();
+            return self
+                .info
+                .home_dir
+                .as_deref()
+                .or(warp_util::path::TEST_SESSION_HOME_DIR.as_deref());
         }
 
         self.info.home_dir.as_deref()

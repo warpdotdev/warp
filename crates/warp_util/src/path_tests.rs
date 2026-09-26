@@ -1,6 +1,46 @@
 use super::*;
 
 #[test]
+fn expands_unix_session_home_only_for_home_prefixes() {
+    assert_eq!(
+        expand_session_home("~", Some("/root"), &['/']),
+        TypedPathBuf::from_unix("/root")
+    );
+    assert_eq!(
+        expand_session_home("~/project/src", Some("/root"), &['/']),
+        TypedPathBuf::from_unix("/root/project/src")
+    );
+    assert_eq!(
+        expand_session_home("~user/project", Some("/root"), &['/']),
+        TypedPathBuf::from_unix("~user/project")
+    );
+    assert_eq!(
+        expand_session_home("~\\project", Some("/root"), &['/']),
+        TypedPathBuf::from_unix("~\\project")
+    );
+}
+
+#[test]
+fn leaves_paths_without_session_home_unchanged() {
+    assert_eq!(
+        expand_session_home("~/project", None, &['/']),
+        TypedPathBuf::from_unix("~/project")
+    );
+    assert_eq!(
+        expand_session_home("/tmp/project", Some("/root"), &['/']),
+        TypedPathBuf::from_unix("/tmp/project")
+    );
+}
+
+#[test]
+fn expands_windows_session_home_with_windows_separators() {
+    assert_eq!(
+        expand_session_home(r"~\Desktop", Some(r"C:\Users\user"), &['/', '\\']),
+        TypedPathBuf::from_windows(r"C:\Users\user\Desktop")
+    );
+}
+
+#[test]
 fn test_user_friendly_path_with_home() {
     let home = "/Users/blue";
     assert_eq!(
