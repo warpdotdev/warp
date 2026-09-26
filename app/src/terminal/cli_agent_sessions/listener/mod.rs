@@ -49,6 +49,7 @@ pub fn is_agent_supported(agent: &CLIAgent) -> bool {
             | CLIAgent::OhMyPi
             | CLIAgent::Grok
             | CLIAgent::WarpTui
+            | CLIAgent::CursorCli
     )
 }
 
@@ -59,8 +60,9 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
         // (https://github.com/augmentmoogi/auggie-warp,
         // https://github.com/badlogic/pi-mono). OhMyPi emits these structured
         // OSC 777 events natively. Droid can be supported by user-configured
-        // hooks or future integrations that emit the same events. We don't ship
-        // install flows for these agents here — we just listen.
+        // hooks or future integrations that emit the same events. Cursor CLI
+        // events come from community hooks (https://github.com/enesccinar/cursor-warp).
+        // We don't ship install flows for these agents here — we just listen.
         // WarpTui emits OSC 777 events directly (no external plugin needed).
         CLIAgent::Claude
         | CLIAgent::OpenCode
@@ -69,14 +71,14 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
         | CLIAgent::Droid
         | CLIAgent::Pi
         | CLIAgent::OhMyPi
-        | CLIAgent::WarpTui => Some(Box::new(DefaultSessionListener)),
+        | CLIAgent::WarpTui
+        | CLIAgent::CursorCli => Some(Box::new(DefaultSessionListener)),
         CLIAgent::Codex | CLIAgent::Grok => {
             Some(Box::new(Osc9FallbackSessionHandler { agent: *agent }))
         }
         CLIAgent::Hermes
         | CLIAgent::Amp
         | CLIAgent::Copilot
-        | CLIAgent::CursorCli
         | CLIAgent::Goose
         | CLIAgent::Vibe
         | CLIAgent::Antigravity
