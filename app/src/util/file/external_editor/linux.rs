@@ -348,15 +348,18 @@ pub fn open_file_path_with_line_and_col(
     ctx.open_file_path(full_path);
 }
 
-/// Attempt to match a file with an existing editor based on Mime type
+/// Whether the xdg default handler for `path` is a Warp desktop entry.
+pub(super) fn system_default_handler_is_warp(path: &Path) -> bool {
+    default_desktop_app_id(path).is_some_and(|app_id| super::is_warp_app_id(&app_id))
+}
+
+/// The id of the application xdg would use to open `path`: the name of its
+/// `.desktop` entry, without the extension.
 ///
-/// Calls xdg-mime to first find the mime type of a file, and then find
-/// the xdg default app for that file. We then check against existing
-/// loaded editors to see if we have support for that file.
-///
-/// Used so that if xdg-open will work on a file we already know about,
-/// we can use line and col numbers.
-fn get_app_for_file_from_mime(path: &Path) -> Option<Editor> {
+/// Calls xdg-mime to first find the mime type of a file, and then find the xdg
+/// default app for that mime type. `query default` can list several entries in
+/// preference order; only the first one is the default.
+fn default_desktop_app_id(path: &Path) -> Option<String> {
     let mime_type = String::from_utf8(
         Command::new("xdg-mime")
             .arg("query")
@@ -377,7 +380,24 @@ fn get_app_for_file_from_mime(path: &Path) -> Option<Editor> {
     )
     .ok()?;
 
-    let app_id = default_app.trim().replace(".desktop", "");
+    let default_app = default_app.lines().next()?.trim();
+    Some(
+        default_app
+            .strip_suffix(".desktop")
+            .unwrap_or(default_app)
+            .to_owned(),
+    )
+}
+
+/// Attempt to match a file with an existing editor based on Mime type
+///
+/// Looks up the xdg default app for the file, then checks against existing
+/// loaded editors to see if we have support for that file.
+///
+/// Used so that if xdg-open will work on a file we already know about,
+/// we can use line and col numbers.
+fn get_app_for_file_from_mime(path: &Path) -> Option<Editor> {
+    let app_id = default_desktop_app_id(path)?;
 
     get_editor_by_app_id(compute_editors_by_id(), app_id.as_str())
 }
