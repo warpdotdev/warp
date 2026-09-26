@@ -19,6 +19,7 @@ use super::PrivacySettings;
 use super::ai::{CustomEndpoints, ExecutionProfiles};
 use super::cloud_preferences::{CloudPreferencesSettings, CloudPreferencesSettingsChangedEvent};
 use super::manager::SettingsEvent;
+use crate::auth::AuthStateProvider;
 use crate::auth::auth_state::AuthState;
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -216,7 +217,7 @@ impl CloudPreferencesSyncer {
         me.force_local_wins_on_startup = force_local_wins_on_startup;
         // Only poll to retry failed cloud syncs when cloud sync is active.
         if sync_enabled {
-            me.retry_failed_settings(ctx);
+            let _ = me.retry_failed_settings(ctx);
         }
         me
     }
@@ -224,6 +225,10 @@ impl CloudPreferencesSyncer {
     /// Returns whether initial cloud/local preference reconciliation has completed.
     pub(crate) fn has_completed_initial_load(&self) -> bool {
         self.has_completed_initial_load
+    }
+
+    fn should_sync(&self, ctx: &ModelContext<Self>) -> bool {
+        self.sync_enabled && !AuthStateProvider::as_ref(ctx).get().is_service_account()
     }
 
     fn new_internal(
@@ -326,6 +331,9 @@ impl CloudPreferencesSyncer {
         event: &SyncQueueEvent,
         ctx: &mut ModelContext<Self>,
     ) {
+        if !self.should_sync(ctx) {
+            return;
+        }
         let server_id = match event {
             SyncQueueEvent::ObjectCreationSuccessful {
                 server_creation_info,
@@ -370,7 +378,10 @@ impl CloudPreferencesSyncer {
     }
 
     #[cfg(not(test))]
-    fn handle_local_preference_updated(&mut self, storage_key: &str, _: &mut ModelContext<Self>) {
+    fn handle_local_preference_updated(&mut self, storage_key: &str, ctx: &mut ModelContext<Self>) {
+        if !self.should_sync(ctx) {
+            return;
+        }
         self.dirty_local_prefs.insert(storage_key.to_string());
         let _ = self.update_tx.try_send(());
     }
@@ -383,48 +394,62 @@ impl CloudPreferencesSyncer {
 
     /// This method recursively calls itself after a delay. Call it once and only once to start the
     /// loop. It ensures failed preferences are retried until they are successfully synced.
-    fn retry_failed_settings(&mut self, ctx: &mut ModelContext<Self>) {
+    fn retry_failed_settings(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        if !self.should_sync(ctx) {
+            return false;
+        }
         ctx.spawn(
             async {
                 Timer::after(Self::RETRY_POLL).await;
             },
             |me, _, ctx| {
-                let ids_to_retry = CloudModel::handle(ctx).update(ctx, |cloud_model, _ctx| {
-                    cloud_model
-                        .cloud_objects()
-                        .filter_map(move |object| {
-                            if !object.metadata().is_errored() {
-                                return None;
-                            }
-
-                            let settings_object: Option<&CloudPreference> = object.into();
-                            settings_object.map(|object| object.id)
-                        })
-                        .collect::<Vec<_>>()
-                });
-                if !ids_to_retry.is_empty() {
-                    log::info!(
-                        "Retrying {} failed preference objects...",
-                        ids_to_retry.len()
-                    );
-                }
-                for sync_id in ids_to_retry {
-                    log::debug!("Retrying failed preference object with sync_id {sync_id:?}");
-                    UpdateManager::handle(ctx).update(ctx, |update_manager, ctx| {
-                        update_manager.resync_object(
-                            &CloudObjectTypeAndId::GenericStringObject {
-                                object_type: GenericStringObjectFormat::Json(
-                                    JsonObjectType::Preference,
-                                ),
-                                id: sync_id,
-                            },
-                            ctx,
-                        );
-                    });
-                }
-                me.retry_failed_settings(ctx);
+                let _ = me.handle_retry_timer(ctx);
             },
         );
+        true
+    }
+
+    fn handle_retry_timer(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        self.retry_failed_settings_once(ctx);
+        self.retry_failed_settings(ctx)
+    }
+
+    fn retry_failed_settings_once(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.should_sync(ctx) {
+            return;
+        }
+
+        let ids_to_retry = CloudModel::handle(ctx).update(ctx, |cloud_model, _ctx| {
+            cloud_model
+                .cloud_objects()
+                .filter_map(move |object| {
+                    if !object.metadata().is_errored() {
+                        return None;
+                    }
+
+                    let settings_object: Option<&CloudPreference> = object.into();
+                    settings_object.map(|object| object.id)
+                })
+                .collect::<Vec<_>>()
+        });
+        if !ids_to_retry.is_empty() {
+            log::info!(
+                "Retrying {} failed preference objects...",
+                ids_to_retry.len()
+            );
+        }
+        for sync_id in ids_to_retry {
+            log::debug!("Retrying failed preference object with sync_id {sync_id:?}");
+            UpdateManager::handle(ctx).update(ctx, |update_manager, ctx| {
+                update_manager.resync_object(
+                    &CloudObjectTypeAndId::GenericStringObject {
+                        object_type: GenericStringObjectFormat::Json(JsonObjectType::Preference),
+                        id: sync_id,
+                    },
+                    ctx,
+                );
+            });
+        }
     }
 
     /// Handler for when the user has been fetched. Potentially kicks off a sync.
@@ -434,7 +459,7 @@ impl CloudPreferencesSyncer {
         ctx: &mut ModelContext<Self>,
     ) {
         // Inert when cloud sync is disabled for this surface (e.g. the TUI).
-        if !self.sync_enabled {
+        if !self.sync_enabled || auth_state.is_service_account() {
             return;
         }
 
@@ -486,7 +511,7 @@ impl CloudPreferencesSyncer {
         ctx: &mut ModelContext<Self>,
     ) {
         // Inert when cloud sync is disabled for this surface (e.g. the TUI).
-        if !self.sync_enabled {
+        if !self.should_sync(ctx) {
             return;
         }
 
@@ -585,6 +610,9 @@ impl CloudPreferencesSyncer {
         force_cloud_to_match_local: ForceCloudToMatchLocal,
         ctx: &mut ModelContext<Self>,
     ) {
+        if !self.should_sync(ctx) {
+            return;
+        }
         self.ensure_no_duplicate_cloud_prefs(ctx);
 
         // First-load override: if the startup hash check detected
@@ -682,7 +710,7 @@ impl CloudPreferencesSyncer {
         ctx: &mut ModelContext<Self>,
     ) {
         // Inert when cloud sync is disabled for this surface (e.g. the TUI).
-        if !self.sync_enabled {
+        if !self.should_sync(ctx) {
             return;
         }
 
@@ -887,6 +915,9 @@ impl CloudPreferencesSyncer {
     // Syncs the given cloud pref to local, if cloud syncing is enabled for the pref on this client.
     // Returns early if the pref with the given storage key isn't actually synced to the cloud.
     fn maybe_sync_cloud_pref_to_local(&self, storage_key: &str, ctx: &mut ModelContext<Self>) {
+        if !self.should_sync(ctx) {
+            return;
+        }
         let Some(model) = CloudModel::as_ref(ctx)
             .get_all_cloud_preferences_by_storage_key()
             .get(storage_key)

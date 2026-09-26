@@ -37,7 +37,7 @@ impl SettingsInitializer {
         /// Windows terminal.
         const DEFAULT_WINDOWS_MONOSPACE_FONT_SIZE: f32 = 16.;
 
-        if auth_state.is_onboarded() == Some(false) {
+        if !auth_state.is_service_account() && auth_state.is_onboarded() == Some(false) {
             PrivacySettings::handle(ctx).update(ctx, |settings, ctx| {
                 // Previously, secret redaction had a built-in default set of regexes that users couldn't change.
                 // We want to add that default list to all existing users' lists, so we don't regress their current secret redaction experience.
@@ -186,3 +186,7 @@ impl Entity for SettingsInitializer {
 
 /// Mark CloudPreferencesSyncer as global application state.
 impl SingletonEntity for SettingsInitializer {}
+
+#[cfg(test)]
+#[path = "initializer_tests.rs"]
+mod tests;
