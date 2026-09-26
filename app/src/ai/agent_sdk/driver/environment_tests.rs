@@ -36,6 +36,278 @@ fn commit_head_override(
 }
 
 #[test]
+fn substituted_branch_request_preserves_origin_without_affecting_other_repos() {
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+    let mut override_for_warp =
+        substitution_override("source", "warp", sha, "copy", "warp-for-benchmarks");
+    override_for_warp.head = RepositoryHeadRef::Branch(format!("benchmark-base/{sha}"));
+    let requests = repository_clone_requests(
+        &[
+            repo(CodeForge::GitHub, "source", "warp"),
+            repo(CodeForge::GitHub, "source", "other"),
+        ],
+        &[override_for_warp],
+        true,
+    )
+    .unwrap();
+    assert_eq!(requests[0].remote.repo, "warp-for-benchmarks");
+    assert_eq!(requests[0].checkout_name, "warp");
+    assert!(requests[0].fetch_branch_only);
+    assert!(!requests[0].remove_origin);
+    assert!(!requests[1].fetch_branch_only);
+    assert!(requests[1].remove_origin);
+}
+
+#[test]
+fn parallel_clone_threads_substituted_branch_without_default_name() {
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+    let mut frozen = clone_request(
+        repo(CodeForge::GitHub, "source", "warp"),
+        Some(RepositoryHeadRef::Branch(format!("benchmark-base/{sha}"))),
+    );
+    frozen.fetch_branch_only = true;
+    let command = unwrap_sh_c_script(&build_parallel_clone_command(
+        &[
+            frozen,
+            clone_request(repo(CodeForge::GitHub, "source", "other"), None),
+        ],
+        ShellType::Bash,
+        Path::new("/tmp/failed"),
+    ));
+    assert!(command.contains("'benchmark-base/0123456789abcdef0123456789abcdef01234567' '0' '1'"));
+    assert!(command.contains("git -C \"$target\" config --replace-all remote.origin.fetch \"+refs/heads/$checkout_ref:refs/remotes/origin/$default_branch\""));
+}
+
+#[test]
+fn frozen_benchmark_fetch_uses_starting_sha_while_live_main_moves() {
+    let fixture = build_fixture();
+    let repo_dir = fixture.working_dir.join(&fixture.repo_name);
+    let frozen = format!("benchmark-base/{}", fixture.pinned_sha);
+    let mut request = clone_request(
+        repo(CodeForge::GitHub, "source", &fixture.repo_name),
+        Some(RepositoryHeadRef::Branch(frozen.clone())),
+    );
+    request.remote = repo(CodeForge::GitHub, "target", &fixture.repo_name);
+    request.fetch_branch_only = true;
+
+    git(
+        &[
+            "push",
+            &fixture.origin_url,
+            &format!("{}:refs/heads/{frozen}", fixture.pinned_sha),
+        ],
+        &fixture.working_dir.join("../seed"),
+    );
+    let checkout = checkout_command_for(&request, &fixture.working_dir, ShellType::Bash).unwrap();
+    let checkout = checkout.replace(&request.remote.https_clone_url(), &fixture.origin_url);
+    let seed = fixture.working_dir.join("../seed");
+    git(&["checkout", "-b", "live", &fixture.base_sha], &seed);
+    fs::write(seed.join("FIXED.md"), "live fix\n").unwrap();
+    git(&["add", "FIXED.md"], &seed);
+    git(&["commit", "-m", "live fix"], &seed);
+    git(&["push", "origin", "HEAD:refs/heads/main"], &seed);
+    let initial_live_sha = git_stdout(&["rev-parse", "HEAD"], &seed);
+    assert!(run_command(&checkout).success());
+    assert_eq!(
+        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
+        fixture.pinned_sha
+    );
+    assert_eq!(
+        git_stdout(&["symbolic-ref", "refs/remotes/origin/HEAD"], &repo_dir),
+        "refs/remotes/origin/main"
+    );
+    assert_eq!(
+        git_stdout(&["config", "--get", "remote.origin.fetch"], &repo_dir),
+        format!("+refs/heads/{frozen}:refs/remotes/origin/main")
+    );
+    assert!(
+        !Command::new("git")
+            .args(["cat-file", "-e", &initial_live_sha])
+            .env("GIT_NO_LAZY_FETCH", "1")
+            .current_dir(&repo_dir)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+
+    fs::write(seed.join("FIXED.md"), "new live fix\n").unwrap();
+    git(&["add", "FIXED.md"], &seed);
+    git(&["commit", "-m", "advance live main"], &seed);
+    git(&["push", "origin", "HEAD:refs/heads/main"], &seed);
+    let live_sha = git_stdout(&["rev-parse", "HEAD"], &seed);
+    git(&["fetch", "origin"], &repo_dir);
+    assert_eq!(
+        git_stdout(&["rev-parse", "origin/main"], &repo_dir),
+        fixture.pinned_sha
+    );
+    assert!(
+        !Command::new("git")
+            .args(["cat-file", "-e", &live_sha])
+            .env("GIT_NO_LAZY_FETCH", "1")
+            .current_dir(&repo_dir)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    assert_eq!(
+        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
+        fixture.pinned_sha
+    );
+    git(&["push", "origin", "HEAD:refs/heads/trial/test"], &repo_dir);
+    assert_eq!(
+        git_stdout(&["ls-remote", "origin", "refs/heads/trial/test"], &repo_dir)
+            .split('\t')
+            .next()
+            .unwrap(),
+        fixture.pinned_sha
+    );
+}
+
+#[test]
+fn substituted_branch_checkout_uses_renamed_remote_default() {
+    let fixture = build_fixture();
+    let seed = fixture.working_dir.join("../seed");
+    let origin = fixture.working_dir.join("../origin.git");
+    let branch = format!("frozen/{}", fixture.pinned_sha);
+    git(
+        &[
+            "push",
+            "origin",
+            &format!("{}:refs/heads/{branch}", fixture.pinned_sha),
+        ],
+        &seed,
+    );
+    git(&["push", "origin", "main:refs/heads/trunk"], &seed);
+    git(&["symbolic-ref", "HEAD", "refs/heads/trunk"], &origin);
+    let mut request = clone_request(
+        repo(CodeForge::GitHub, "copy", &fixture.repo_name),
+        Some(RepositoryHeadRef::Branch(branch.clone())),
+    );
+    request.fetch_branch_only = true;
+    let command = checkout_command_for(&request, &fixture.working_dir, ShellType::Bash)
+        .unwrap()
+        .replace(&request.remote.https_clone_url(), &fixture.origin_url);
+
+    assert!(run_command(&command).success());
+    let repo_dir = fixture.working_dir.join(&fixture.repo_name);
+    assert_eq!(
+        git_stdout(&["rev-parse", "origin/trunk"], &repo_dir),
+        fixture.pinned_sha
+    );
+    assert_eq!(
+        git_stdout(&["symbolic-ref", "refs/remotes/origin/HEAD"], &repo_dir),
+        "refs/remotes/origin/trunk"
+    );
+    assert_eq!(
+        git_stdout(&["config", "--get", "remote.origin.fetch"], &repo_dir),
+        format!("+refs/heads/{branch}:refs/remotes/origin/trunk")
+    );
+    assert!(
+        !Command::new("git")
+            .args(["show-ref", "--verify", "refs/remotes/origin/main"])
+            .current_dir(&repo_dir)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+}
+
+#[test]
+fn substituted_branch_checkout_rejects_missing_remote_head() {
+    let fixture = build_fixture();
+    let seed = fixture.working_dir.join("../seed");
+    let origin = fixture.working_dir.join("../origin.git");
+    let branch = format!("frozen/{}", fixture.pinned_sha);
+    git(
+        &[
+            "push",
+            "origin",
+            &format!("{}:refs/heads/{branch}", fixture.pinned_sha),
+        ],
+        &seed,
+    );
+    git(&["symbolic-ref", "HEAD", "refs/heads/missing"], &origin);
+    let mut request = clone_request(
+        repo(CodeForge::GitHub, "copy", &fixture.repo_name),
+        Some(RepositoryHeadRef::Branch(branch)),
+    );
+    request.fetch_branch_only = true;
+    let command = checkout_command_for(&request, &fixture.working_dir, ShellType::Bash)
+        .unwrap()
+        .replace(&request.remote.https_clone_url(), &fixture.origin_url);
+
+    assert!(!run_command(&command).success());
+    let repo_dir = fixture.working_dir.join(&fixture.repo_name);
+    assert!(
+        !Command::new("git")
+            .args(["show-ref"])
+            .current_dir(&repo_dir)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+}
+
+#[test]
+fn parallel_substituted_branch_checkout_fetches_only_named_ref() {
+    let fixture = build_fixture();
+    let seed = fixture.working_dir.join("../seed");
+    let branch = format!("frozen/{}", fixture.pinned_sha);
+    git(
+        &[
+            "push",
+            "origin",
+            &format!("{}:refs/heads/{branch}", fixture.pinned_sha),
+        ],
+        &seed,
+    );
+    let mut frozen = clone_request(
+        repo(CodeForge::GitHub, "copy", &fixture.repo_name),
+        Some(RepositoryHeadRef::Branch(branch)),
+    );
+    frozen.fetch_branch_only = true;
+    let mut legacy = clone_request(
+        repo(CodeForge::GitHub, "copy", &fixture.repo_name),
+        Some(RepositoryHeadRef::CommitSha(fixture.base_sha.clone())),
+    );
+    legacy.checkout_name = "legacy".to_string();
+    let command = build_parallel_clone_command(
+        &[frozen, legacy],
+        ShellType::Bash,
+        &fixture.working_dir.join("failed"),
+    );
+    let command = unwrap_sh_c_script(&command)
+        .replace("https://github.com/copy/fixture.git", &fixture.origin_url);
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(&command)
+        .current_dir(&fixture.working_dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let repo_dir = fixture.working_dir.join(&fixture.repo_name);
+    assert_eq!(
+        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
+        fixture.pinned_sha
+    );
+    assert_eq!(
+        git_stdout(&["rev-parse", "origin/main"], &repo_dir),
+        fixture.pinned_sha
+    );
+    assert_eq!(
+        git_stdout(&["rev-parse", "HEAD"], &fixture.working_dir.join("legacy")),
+        fixture.base_sha
+    );
+}
+#[test]
 fn git_object_id_validation_accepts_lowercase_sha1_and_sha256() {
     assert!(is_valid_git_object_id(
         "0123456789abcdef0123456789abcdef01234567"
@@ -213,6 +485,7 @@ fn clone_request(repo: SourceRepo, checkout: Option<RepositoryHeadRef>) -> Repos
         checkout_name,
         checkout,
         remove_origin: false,
+        fetch_branch_only: false,
     }
 }
 
@@ -1228,7 +1501,7 @@ fn run_parallel_clone_repo_helper(
         + 2;
     let helper = &script[helper_start..helper_end];
     let invoke = format!(
-        "set -e\n{helper}\nclone_repo 'warpdotdev/{repo}' '{origin}' '{target}' '{checkout_ref}' '{is_commit_sha}'\n",
+        "set -e\n{helper}\nclone_repo 'warpdotdev/{repo}' '{origin}' '{target}' '{checkout_ref}' '{is_commit_sha}' '0'\n",
         repo = fixture.repo_name,
         origin = fixture.origin_url,
         target = target.display(),

@@ -101,6 +101,23 @@ impl RepositoryIdentity {
         Ok(())
     }
 }
+
+fn valid_git_branch(branch: &str) -> bool {
+    !branch.is_empty()
+        && !branch.starts_with('-')
+        && !branch.starts_with('/')
+        && !branch.ends_with('/')
+        && !branch.ends_with('.')
+        && !branch.ends_with(".lock")
+        && !branch.contains("..")
+        && !branch.contains("//")
+        && branch
+            .split('/')
+            .all(|part| !part.starts_with('.') && !part.ends_with(".lock"))
+        && branch.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/' | b'@')
+        })
+}
 /// Server-supplied repository preparation override.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -147,9 +164,13 @@ impl RepositoryPreparationOverride {
                 }
             }
             RepositoryHeadRef::Branch(branch) => {
-                if branch.is_empty() || branch.trim() != branch {
+                if branch.is_empty()
+                    || branch.trim() != branch
+                    || (self.clone_from.is_some() && !valid_git_branch(branch))
+                {
                     return Err(
-                        "branch must not be empty or contain surrounding whitespace".to_string()
+                        "branch must be a valid checkout ref without surrounding whitespace"
+                            .to_string(),
                     );
                 }
             }
@@ -159,9 +180,6 @@ impl RepositoryPreparationOverride {
         }
         if self.preserve_origin && self.clone_from.is_none() {
             return Err("preserve_origin requires clone_from".to_string());
-        }
-        if self.clone_from.is_some() && !matches!(self.head, RepositoryHeadRef::CommitSha(_)) {
-            return Err("clone_from requires an exact COMMIT_SHA repository head".to_string());
         }
         Ok(())
     }
