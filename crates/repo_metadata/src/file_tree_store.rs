@@ -176,9 +176,30 @@ impl FileTreeEntry {
             .take_while(|ancestor| *ancestor != *root_directory.path.as_ref())
             .collect();
 
-        // Create directories from root to target parent using find_or_insert_directory
+        // Create directories from root to target parent, but avoid a
+        // copy-on-write clone of the whole store for ancestors that already
+        // exist. `find_or_insert_directory` calls `Arc::make_mut`, which
+        // deep-clones the entire `FileTreeMapStore` (both maps) whenever the
+        // store is shared with a reader snapshot. For large repositories that
+        // copies multiple GB, and in the common case every ancestor is already
+        // present, so a read-only lookup avoids the clone entirely.
         let mut current_parent = root_directory;
         for ancestor in ancestors.iter().rev() {
+            // Read-only fast path: ancestor already present as a directory.
+            match self.get(ancestor) {
+                Some(FileTreeEntryState::Directory(dir)) => {
+                    current_parent = dir.clone();
+                    continue;
+                }
+                Some(FileTreeEntryState::File(_)) => {
+                    log::warn!("Found file where directory expected: {ancestor:?}");
+                    return;
+                }
+                None => {}
+            }
+
+            // Ancestor is missing: this genuinely inserts, so the copy-on-write
+            // inside `find_or_insert_directory` is unavoidable here.
             match self.find_or_insert_directory(&current_parent.path, ancestor) {
                 Some(FileTreeEntryState::Directory(dir)) => {
                     current_parent = dir.clone();
