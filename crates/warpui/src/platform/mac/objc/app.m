@@ -97,6 +97,66 @@ NSUInteger activeScreenId() {
         unsignedIntegerValue];
 }
 
+// Frame of the frontmost window of the frontmost application, in `[NSScreen screens]` coordinates,
+// or `NSZeroRect` when that application has no ordinary window on screen.
+//
+// `[NSScreen mainScreen]` cannot be used to locate the active application: whenever the frontmost
+// window occupies a fullscreen Space on a secondary display, AppKit reports the primary display
+// instead. The window server's on-screen window list stays accurate across Spaces.
+NSRect frontmostAppWindowFrame() {
+    NSRunningApplication *frontmostApp = [[NSWorkspace sharedWorkspace] frontmostApplication];
+    if (!frontmostApp) {
+        return NSZeroRect;
+    }
+
+    CFArrayRef windowList = CGWindowListCopyWindowInfo(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
+    if (!windowList) {
+        return NSZeroRect;
+    }
+
+    // `kCGWindowBounds` is top-left origin relative to the top of the primary display, while
+    // `[NSScreen screens]` frames are bottom-left origin.
+    CGFloat primaryScreenMaxY = NSMaxY([[[NSScreen screens] firstObject] frame]);
+    pid_t frontmostPid = frontmostApp.processIdentifier;
+    NSRect frame = NSZeroRect;
+
+    // Windows are ordered front to back. Layer 0 is the ordinary window layer, which excludes the
+    // menu bar, status items and our own floating hotkey panel. Fully transparent windows are
+    // placeholders that do not indicate where the user is working.
+    for (NSDictionary *window in (NSArray *)windowList) {
+        if ([window[(id)kCGWindowLayer] intValue] != 0 ||
+            [window[(id)kCGWindowOwnerPID] intValue] != frontmostPid ||
+            [window[(id)kCGWindowAlpha] doubleValue] <= 0.0) {
+            continue;
+        }
+
+        CGRect bounds;
+        if (!CGRectMakeWithDictionaryRepresentation((CFDictionaryRef)window[(id)kCGWindowBounds],
+                                                    &bounds)) {
+            continue;
+        }
+
+        frame = NSMakeRect(CGRectGetMinX(bounds), primaryScreenMaxY - CGRectGetMaxY(bounds),
+                           CGRectGetWidth(bounds), CGRectGetHeight(bounds));
+        break;
+    }
+
+    CFRelease(windowList);
+    return frame;
+}
+
+// Screen number of the display at `index` in `[NSScreen screens]`, or 0 when out of range.
+NSUInteger screenIdAtIndex(NSUInteger index) {
+    NSArray<NSScreen *> *screens = [NSScreen screens];
+    if (index >= screens.count) {
+        return 0;
+    }
+
+    return
+        [[[screens[index] deviceDescription] objectForKey:@"NSScreenNumber"] unsignedIntegerValue];
+}
+
 @interface WarpMenuItemDelegate : NSObject <NSMenuDelegate> {
     // Rust expects an ivar with this name.
     void *rustWrapper;
