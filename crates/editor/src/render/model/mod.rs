@@ -3493,10 +3493,12 @@ impl RenderState {
 
     /// Push a pending edit to the queue.
     pub fn add_pending_edit(&mut self, pending_edit: EditDelta, buffer_version: BufferVersion) {
-        self.submit_layout_action(LayoutAction::BufferEdit {
-            delta: pending_edit,
-            buffer_version,
-        });
+        for delta in pending_edit.into_render_deltas() {
+            self.submit_layout_action(LayoutAction::BufferEdit {
+                delta,
+                buffer_version,
+            });
+        }
     }
 
     pub fn add_temporary_blocks(&mut self, temporary_blocks: Vec<TemporaryBlock>) {
