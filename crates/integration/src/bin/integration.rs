@@ -305,6 +305,10 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_inline_model_selector_restores_prompt_on_dismissal);
     register_test!(test_inline_model_selector_restores_prompt_on_model_selection);
     register_test!(test_inline_model_selector_restores_prompt_on_chip_toggle_close);
+    register_test!(test_profile_selector_preserves_prompt_on_dismissal);
+    register_test!(test_profile_selector_preserves_prompt_on_selection);
+    register_test!(test_profile_selector_restores_prompt_when_interrupting_model_selector);
+    register_test!(test_ctrl_c_does_not_restore_non_model_inline_menu_snapshot);
     register_test!(test_paste_and_type_characters_before_bootstrap);
     register_test!(test_code_review_scroll_anchor_preserved_when_inserting_above);
     register_test!(test_code_review_scroll_anchor_unchanged_when_inserting_below);
