@@ -7,7 +7,7 @@ use ai::skills::SkillPathOrigin;
 pub use ai_types::TaskId;
 use anyhow::Context as _;
 use field_mask::{FieldMaskError, FieldMaskOperation};
-use helper::{MessageExt, SubagentExt, ToolCallExt};
+use helper::{MessageExt, SubagentExt, ToolCallExt, ToolExt};
 use itertools::Itertools;
 use prost_types::FieldMask;
 use uuid::Uuid;
@@ -684,6 +684,7 @@ impl Task {
                 .map(|message| (exchange_id, message))
                 .ok_or(UpdateTaskError::MessageNotFound);
         };
+        let field_mask_paths = mask.paths.join(",");
         let updated_message =
             FieldMaskOperation::update(&api::MESSAGE_DESCRIPTOR, existing_message, &message, mask)
                 .apply()
@@ -709,6 +710,8 @@ impl Task {
                 active_code_review: message_context.active_code_review,
                 skill_path_origin: message_context.skill_path_origin,
             },
+            "update",
+            &field_mask_paths,
         )?;
 
         // Task message updates can carry tool call result updates with them,
@@ -764,6 +767,7 @@ impl Task {
             report_error!("Message not found for append client action.");
             return Err(UpdateTaskError::MessageNotFound);
         };
+        let field_mask_paths = mask.paths.join(",");
         let updated_message =
             FieldMaskOperation::append(&api::MESSAGE_DESCRIPTOR, existing_message, &message, mask)
                 .apply()
@@ -781,6 +785,8 @@ impl Task {
                 active_code_review: message_context.active_code_review,
                 skill_path_origin: message_context.skill_path_origin,
             },
+            "append",
+            &field_mask_paths,
         )?;
 
         let source = self.try_get_source_mut()?;
@@ -985,6 +991,8 @@ impl AIAgentExchange {
         &self,
         task_message: &api::Message,
         conversion_params: super::api::ConversionParams<'_>,
+        operation: &'static str,
+        field_mask_paths: &str,
     ) -> Result<(), UpdateTaskError> {
         // Applies to finished outputs as well as streaming ones: updates can target
         // messages owned by exchanges whose output already completed (e.g. a stored-ref
@@ -995,6 +1003,13 @@ impl AIAgentExchange {
                 .messages
                 .iter()
                 .position(|m| m.id.0 == task_message.id);
+            let task_id = conversion_params.task_id.clone();
+            let message_type = task_message.type_name();
+            let tool_type = task_message
+                .tool_call()
+                .and_then(|tool_call| tool_call.tool.as_ref())
+                .map(ToolExt::name)
+                .unwrap_or("none");
 
             match task_message
                 .clone()
@@ -1012,7 +1027,10 @@ impl AIAgentExchange {
                 }
                 MaybeAIAgentOutputMessage::NoClientRepresentation => {
                     log::warn!(
-                        "Tried to update output for message which no longer has a client representation"
+                        "[agent-output-update] Updated message has no client representation: operation={operation} task_id={task_id:?} exchange_id={:?} message_id={} message_type={message_type} tool_type={tool_type} had_existing_client_output={} field_mask_paths={field_mask_paths}",
+                        self.id,
+                        task_message.id,
+                        message_idx.is_some()
                     );
                 }
             }
