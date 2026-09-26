@@ -1,3 +1,6 @@
+use std::sync::Arc;
+use std::time::Duration;
+
 use futures::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use warp_core::SessionId;
@@ -422,6 +425,58 @@ async fn run_command_round_trip() {
 }
 
 #[tokio::test]
+async fn timed_out_run_command_removes_pending_request_and_sends_abort() {
+    let (client_stream, server_stream) = tokio::io::duplex(4096);
+    let (server_read, _server_write) = tokio::io::split(server_stream);
+    let (client_read, client_write) = tokio::io::split(client_stream);
+    let executor = executor::Background::default();
+    let (client, _event_rx, _failure_rx, _host_rx) =
+        RemoteServerClient::new(client_read.compat(), client_write.compat_write(), &executor);
+    let client = Arc::new(client);
+
+    let command_client = Arc::clone(&client);
+    let command_task = tokio::spawn(async move {
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            command_client.run_command(
+                SessionId::from(42u64),
+                "sleep 60".to_string(),
+                None,
+                Default::default(),
+            ),
+        )
+        .await
+    });
+
+    let mut server_read = server_read.compat();
+    let request = protocol::read_client_message(&mut server_read)
+        .await
+        .expect("read RunCommand request");
+    assert!(matches!(
+        unwrap_session_scoped(&request),
+        session_scoped_request::Message::RunCommand(_)
+    ));
+    assert_eq!(client.pending_requests.len(), 1);
+
+    assert!(
+        command_task
+            .await
+            .expect("command task should complete")
+            .is_err(),
+        "command should time out"
+    );
+
+    let abort = protocol::read_client_message(&mut server_read)
+        .await
+        .expect("read Abort notification");
+    let notification::Message::Abort(abort) = unwrap_notification(&abort) else {
+        panic!("Expected Abort");
+    };
+    assert_eq!(abort.request_id_to_abort, request.request_id);
+    assert!(client.pending_requests.is_empty());
+}
+
+#[tokio::test]
 async fn concurrent_in_flight_requests() {
     let (client, _disconnect_rx, _executor) = setup_mock_client(|_| {
         server_message::Message::InitializeResponse(InitializeResponse {
@@ -429,11 +484,11 @@ async fn concurrent_in_flight_requests() {
             host_id: "test-host-id".to_string(),
         })
     });
-    let client = std::sync::Arc::new(client);
+    let client = Arc::new(client);
 
     let mut handles = Vec::new();
     for _ in 0..10 {
-        let c = std::sync::Arc::clone(&client);
+        let c = Arc::clone(&client);
         handles.push(tokio::spawn(async move {
             c.initialize(
                 None,

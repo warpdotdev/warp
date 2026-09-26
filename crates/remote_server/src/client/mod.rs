@@ -223,6 +223,23 @@ pub struct RemoteServerClient {
     #[expect(dead_code)]
     host_response_tx: async_channel::Sender<ServerMessage>,
 }
+struct PendingRequestGuard<'a> {
+    client: &'a RemoteServerClient,
+    request_id: RequestId,
+}
+
+impl Drop for PendingRequestGuard<'_> {
+    fn drop(&mut self) {
+        if self
+            .client
+            .pending_requests
+            .remove(&self.request_id)
+            .is_some()
+        {
+            self.client.send_abort(&self.request_id);
+        }
+    }
+}
 
 impl fmt::Debug for RemoteServerClient {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -859,6 +876,10 @@ impl RemoteServerClient {
     ) -> Result<ServerMessage, ClientError> {
         let (tx, rx) = oneshot::channel();
         self.pending_requests.insert(request_id.clone(), tx);
+        let _pending_request_guard = PendingRequestGuard {
+            client: self,
+            request_id: request_id.clone(),
+        };
 
         // Check if the reader task has already marked the connection as dead.
         // The DashMap lock from `insert` above synchronizes with the lock from
@@ -878,9 +899,6 @@ impl RemoteServerClient {
             Ok(Ok(inner)) => inner,
             Ok(Err(_)) => return Err(ClientError::ResponseChannelClosed),
             Err(_) => {
-                // Timed out — clean up and send abort.
-                self.pending_requests.remove(&request_id);
-                self.send_abort(&request_id);
                 return Err(ClientError::Timeout(REQUEST_TIMEOUT));
             }
         };
