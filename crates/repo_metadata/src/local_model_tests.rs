@@ -1,5 +1,7 @@
 //! Tests for the LocalRepoMetadataModel.
 
+#[cfg(feature = "local_fs")]
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -18,8 +20,6 @@ use warpui_core::{App, ModelHandle};
 #[cfg(feature = "local_fs")]
 use watcher::BulkFilesystemWatcherEvent;
 
-#[cfg(all(unix, feature = "local_fs"))]
-use crate::StandingQueryResults;
 use crate::entry::{
     BudgetExceededBehavior, BuildTreeOptions, DirectoryEntry, Entry, FileMetadata,
     IgnoredPathStrategy,
@@ -29,9 +29,13 @@ use crate::local_model::{
     BuildTaskKey, BuildTaskKind, FileTreeMutation, GetContentsArgs, IndexedRepoState,
     LocalRepoMetadataModel, RepoUpdate, RepositoryMetadataEvent, RootWatchMode,
 };
+#[cfg(feature = "local_fs")]
+use crate::local_model::{MAX_FILES_PER_REPO, MAX_PENDING_WATCHER_PATHS};
 use crate::repositories::DetectedRepositories;
 use crate::watcher::DirectoryWatcher;
-use crate::{RepoMetadataError, StandingQueryContent, StandingQueryDefinitions};
+use crate::{
+    RepoMetadataError, StandingQueryContent, StandingQueryDefinitions, StandingQueryResults,
+};
 
 impl LocalRepoMetadataModel {
     fn new_for_test() -> Self {
@@ -42,6 +46,12 @@ impl LocalRepoMetadataModel {
             build_tasks: Default::default(),
             #[cfg(feature = "local_fs")]
             watcher_update_tasks: Default::default(),
+            #[cfg(feature = "local_fs")]
+            pending_directory_loads: Default::default(),
+            #[cfg(feature = "local_fs")]
+            pending_directory_load_order: Default::default(),
+            #[cfg(feature = "local_fs")]
+            next_repository_walk_sequence: 0,
             #[cfg(feature = "local_fs")]
             watcher: Default::default(),
             emit_incremental_updates: false,
@@ -54,7 +64,51 @@ impl LocalRepoMetadataModel {
         }
     }
 }
+#[cfg(feature = "local_fs")]
+async fn await_watcher_updates_for_repo(
+    app: &mut App,
+    model_handle: &ModelHandle<LocalRepoMetadataModel>,
+    repo_path: &StandardizedPath,
+) {
+    loop {
+        let future_id = model_handle.read(&*app, |model, _ctx| {
+            model
+                .watcher_update_tasks
+                .get(repo_path)
+                .and_then(|queue| queue.in_flight.as_ref().map(|handle| handle.future_id()))
+        });
+        let Some(future_id) = future_id else {
+            break;
+        };
+        model_handle
+            .update(app, |_, ctx| ctx.await_spawned_future(future_id))
+            .await;
+    }
+}
 
+#[cfg(feature = "local_fs")]
+fn create_hard_links(directory: &std::path::Path, count: usize, sources: &[PathBuf]) {
+    std::fs::create_dir_all(directory).unwrap();
+    for index in 0..count {
+        std::fs::hard_link(
+            &sources[index % sources.len()],
+            directory.join(format!("file-{index:06}.txt")),
+        )
+        .unwrap();
+    }
+}
+
+#[cfg(feature = "local_fs")]
+fn file_count(entry: &FileTreeEntry, path: &StandardizedPath) -> usize {
+    match entry.get(path) {
+        Some(FileTreeEntryState::File(_)) => 1,
+        Some(FileTreeEntryState::Directory(_)) => entry
+            .child_paths(path)
+            .map(|child| file_count(entry, child))
+            .sum(),
+        None => 0,
+    }
+}
 #[test]
 #[should_panic(expected = "force-included paths must be repository-relative")]
 fn force_included_paths_must_be_relative() {
@@ -65,6 +119,21 @@ fn empty_repo_state(repo_path: &StandardizedPath) -> FileTreeState {
     let root = Entry::Directory(DirectoryEntry {
         path: repo_path.clone(),
         children: Vec::new(),
+        ignored: false,
+        loaded: true,
+    });
+    FileTreeState::new(root, Vec::new(), None)
+}
+fn repo_state_with_files(
+    repo_path: &StandardizedPath,
+    files: impl IntoIterator<Item = PathBuf>,
+) -> FileTreeState {
+    let root = Entry::Directory(DirectoryEntry {
+        path: repo_path.clone(),
+        children: files
+            .into_iter()
+            .map(|path| Entry::File(FileMetadata::new(path, false)))
+            .collect(),
         ignored: false,
         loaded: true,
     });
@@ -132,6 +201,121 @@ fn repository_indexed_resolves_immediately_for_indexed_repo() {
     });
 }
 
+#[cfg(feature = "local_fs")]
+#[test]
+fn watcher_added_directories_share_one_eager_file_budget() {
+    VirtualFS::test("watcher_cumulative_file_budget", |dirs, mut vfs| {
+        vfs.mkdir("repo/first/eager/lazy")
+            .mkdir("repo/second/eager/lazy");
+        let repo = dirs.tests().join("repo");
+        let first = repo.join("first");
+        let second = repo.join("second");
+        let first_eager = first.join("eager");
+        let second_eager = second.join("eager");
+        let first_lazy = first_eager.join("lazy");
+        let second_lazy = second_eager.join("lazy");
+        let templates = (0..4)
+            .map(|index| {
+                let path = repo.join(format!("template-{index}.txt"));
+                std::fs::write(&path, "template").unwrap();
+                path
+            })
+            .collect::<Vec<_>>();
+        create_hard_links(&first_eager, MAX_FILES_PER_REPO / 2, &templates[..2]);
+        create_hard_links(&second_eager, MAX_FILES_PER_REPO / 2, &templates[2..]);
+        create_hard_links(&first_lazy, 1, &templates[..1]);
+        create_hard_links(&second_lazy, 1, &templates[2..3]);
+
+        let repo = StandardizedPath::from_local_canonicalized(&repo).unwrap();
+        let first_lazy = StandardizedPath::from_local_canonicalized(&first_lazy).unwrap();
+        let second_lazy = StandardizedPath::from_local_canonicalized(&second_lazy).unwrap();
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            model_handle.update(&mut app, |model, ctx| {
+                model.repositories.insert(
+                    repo.clone(),
+                    IndexedRepoState::Indexed(empty_repo_state(&repo)),
+                );
+                model.handle_watcher_event(
+                    &BulkFilesystemWatcherEvent {
+                        added: std::collections::HashSet::from([first, second]),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+            });
+            await_watcher_updates_for_repo(&mut app, &model_handle, &repo).await;
+
+            model_handle.read(&app, |model, _ctx| {
+                let state = model
+                    .get_repository(&repo)
+                    .expect("repository should remain indexed");
+                assert_eq!(file_count(&state.entry, &repo), MAX_FILES_PER_REPO);
+                assert!(
+                    [&first_lazy, &second_lazy]
+                        .iter()
+                        .any(|path| { state.entry.get(path).is_some_and(|entry| !entry.loaded()) }),
+                    "a directory beyond the shared batch budget should remain lazy"
+                );
+            });
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn watcher_added_directory_enforces_file_budget_and_preserves_force_included_file() {
+    VirtualFS::test("watcher_single_directory_file_budget", |dirs, mut vfs| {
+        vfs.mkdir("repo/oversized/.agents/skills/example");
+        let repo = dirs.tests().join("repo");
+        let oversized = repo.join("oversized");
+        let skill = oversized.join(".agents/skills/example/SKILL.md");
+        std::fs::write(&skill, "name: example").unwrap();
+        let templates = (0..4)
+            .map(|index| {
+                let path = repo.join(format!("template-{index}.txt"));
+                std::fs::write(&path, "template").unwrap();
+                path
+            })
+            .collect::<Vec<_>>();
+        create_hard_links(&oversized, MAX_FILES_PER_REPO + 1, &templates);
+
+        let repo = StandardizedPath::from_local_canonicalized(&repo).unwrap();
+        let oversized = StandardizedPath::from_local_canonicalized(&oversized).unwrap();
+        let skill = StandardizedPath::from_local_canonicalized(&skill).unwrap();
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| {
+                let mut model = LocalRepoMetadataModel::new_for_test();
+                model.register_force_included_paths([PathBuf::from(".agents/skills")]);
+                model
+            });
+            model_handle.update(&mut app, |model, ctx| {
+                model.repositories.insert(
+                    repo.clone(),
+                    IndexedRepoState::Indexed(empty_repo_state(&repo)),
+                );
+                model.handle_watcher_event(
+                    &BulkFilesystemWatcherEvent {
+                        added: std::collections::HashSet::from([oversized
+                            .to_local_path()
+                            .unwrap()]),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+            });
+            await_watcher_updates_for_repo(&mut app, &model_handle, &repo).await;
+
+            model_handle.read(&app, |model, _ctx| {
+                let state = model
+                    .get_repository(&repo)
+                    .expect("repository should remain indexed");
+                assert_eq!(file_count(&state.entry, &oversized), MAX_FILES_PER_REPO + 1);
+                assert!(state.entry.contains(&skill));
+            });
+        });
+    });
+}
 #[test]
 fn repository_indexed_waits_for_pending_repo() {
     VirtualFS::test("repository_indexed_pending", |dirs, mut vfs| {
@@ -377,44 +561,46 @@ fn remove_repository_aborts_and_drops_watcher_update_tasks() {
 
     App::test((), |mut app| async move {
         let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
-        let (_first_release_tx, first_release_rx) = oneshot::channel::<()>();
-        let (_second_release_tx, second_release_rx) = oneshot::channel::<()>();
-        let (first_future_id, second_future_id) = model_handle.update(&mut app, |model, ctx| {
+        let (_release_tx, release_rx) = oneshot::channel::<()>();
+        let future_id = model_handle.update(&mut app, |model, ctx| {
             model.repositories.insert(
                 repo_path.clone(),
                 IndexedRepoState::Indexed(empty_repo_state(&repo_path)),
             );
-
-            let first_handle = ctx.spawn(
+            let handle = ctx.spawn(
                 async move {
-                    let _ = first_release_rx.await;
+                    let _ = release_rx.await;
                 },
                 |_, _, _| {},
             );
-            let first_future_id = first_handle.future_id();
-            model.track_watcher_update_task(repo_path.clone(), first_handle);
-
-            let second_handle = ctx.spawn(
-                async move {
-                    let _ = second_release_rx.await;
+            let future_id = handle.future_id();
+            model.track_watcher_update_task(repo_path.clone(), handle);
+            model.enqueue_watcher_update(
+                repo_path.clone(),
+                RepoUpdate {
+                    added: vec![PathBuf::from("/watcher_update_removed_repo/pending")],
+                    ..Default::default()
                 },
-                |_, _, _| {},
+                ctx,
             );
-            let second_future_id = second_handle.future_id();
-            model.track_watcher_update_task(repo_path.clone(), second_handle);
-
-            (first_future_id, second_future_id)
+            future_id
         });
 
         model_handle.read(&app, |model, _ctx| {
+            let queue = model
+                .watcher_update_tasks
+                .get(&repo_path)
+                .expect("watcher work should be tracked");
             assert_eq!(
-                model
-                    .watcher_update_tasks
-                    .get(&repo_path)
-                    .expect("watcher tasks should be tracked")
-                    .len(),
-                2
+                queue.in_flight.as_ref().map(|handle| handle.future_id()),
+                Some(future_id)
             );
+            assert!(queue.pending.iter().any(|pending| {
+                pending.refresh
+                    || !pending.added.is_empty()
+                    || !pending.deleted.is_empty()
+                    || !pending.moved.is_empty()
+            }));
         });
 
         model_handle.update(&mut app, |model, ctx| {
@@ -424,12 +610,7 @@ fn remove_repository_aborts_and_drops_watcher_update_tasks() {
         });
 
         model_handle
-            .update(&mut app, |_, ctx| ctx.await_spawned_future(first_future_id))
-            .await;
-        model_handle
-            .update(&mut app, |_, ctx| {
-                ctx.await_spawned_future(second_future_id)
-            })
+            .update(&mut app, |_, ctx| ctx.await_spawned_future(future_id))
             .await;
 
         model_handle.read(&app, |model, _ctx| {
@@ -472,13 +653,12 @@ fn remove_repository_keeps_nested_repo_watcher_update_tasks() {
 
         let nested_handle = model_handle.update(&mut app, |model, _ctx| {
             assert!(model.repository_state(&parent_repo_path).is_none());
-            let tasks = model
+            let queue = model
                 .watcher_update_tasks
                 .remove(&nested_repo_path)
                 .expect("nested repo watcher task should not be aborted by parent teardown");
-            tasks
-                .into_values()
-                .next()
+            queue
+                .in_flight
                 .expect("nested repo watcher task should still be tracked")
         });
 
@@ -488,6 +668,836 @@ fn remove_repository_keeps_nested_repo_watcher_update_tasks() {
                 ctx.await_spawned_future(nested_future_id)
             })
             .await;
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn watcher_updates_are_serialized_and_coalesced_per_repository() {
+    VirtualFS::test(
+        "watcher_updates_serialized_and_coalesced",
+        |dirs, mut vfs| {
+            vfs.mkdir("repo").with_files(vec![
+                Stub::FileWithContent("repo/first.txt", "first"),
+                Stub::FileWithContent("repo/second.txt", "second"),
+                Stub::FileWithContent("repo/third.txt", "third"),
+            ]);
+            let repo = dirs.tests().join("repo");
+            let repo_path = StandardizedPath::from_local_canonicalized(&repo).unwrap();
+            let first = repo.join("first.txt");
+            let second = repo.join("second.txt");
+            let third = repo.join("third.txt");
+
+            App::test((), |mut app| async move {
+                let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+                model_handle.update(&mut app, |model, _ctx| {
+                    model.repositories.insert(
+                        repo_path.clone(),
+                        IndexedRepoState::Indexed(empty_repo_state(&repo_path)),
+                    );
+                });
+
+                model_handle.update(&mut app, |model, ctx| {
+                    model.handle_watcher_event(
+                        &BulkFilesystemWatcherEvent {
+                            added: std::collections::HashSet::from([first.clone()]),
+                            ..Default::default()
+                        },
+                        ctx,
+                    );
+                    model.handle_watcher_event(
+                        &BulkFilesystemWatcherEvent {
+                            added: std::collections::HashSet::from([second.clone()]),
+                            ..Default::default()
+                        },
+                        ctx,
+                    );
+                    model.handle_watcher_event(
+                        &BulkFilesystemWatcherEvent {
+                            added: std::collections::HashSet::from([second.clone(), third.clone()]),
+                            ..Default::default()
+                        },
+                        ctx,
+                    );
+
+                    let queue = model
+                        .watcher_update_tasks
+                        .get(&repo_path)
+                        .expect("watcher work should be tracked");
+                    assert!(queue.in_flight.is_some());
+                    assert_eq!(queue.pending.len(), 1);
+                    let pending = queue.pending.front().unwrap();
+                    assert_eq!(pending.added.len(), 2);
+                    assert!(pending.added.contains(&second));
+                    assert!(pending.added.contains(&third));
+                });
+
+                await_watcher_updates_for_repo(&mut app, &model_handle, &repo_path).await;
+
+                model_handle.read(&app, |model, _ctx| {
+                    assert!(!model.watcher_update_tasks.contains_key(&repo_path));
+                    let Some(IndexedRepoState::Indexed(state)) = model.repository_state(&repo_path)
+                    else {
+                        panic!("repository should remain indexed");
+                    };
+                    for path in [first, second, third] {
+                        let path = StandardizedPath::try_from_local(&path).unwrap();
+                        assert!(
+                            matches!(state.entry.get(&path), Some(FileTreeEntryState::File(_))),
+                            "{path} should be visible after coalesced watcher updates"
+                        );
+                    }
+                });
+            });
+        },
+    );
+}
+#[cfg(feature = "local_fs")]
+#[test]
+fn conflicting_queued_moves_preserve_all_sources_in_public_state_and_delta() {
+    VirtualFS::test("watcher_conflicting_moves", |dirs, mut vfs| {
+        vfs.mkdir("repo").with_files(vec![
+            Stub::FileWithContent("repo/current.txt", "current"),
+            Stub::FileWithContent("repo/trigger.txt", "trigger"),
+        ]);
+        let repo = dirs.tests().join("repo");
+        let repo_path = StandardizedPath::from_local_canonicalized(&repo).unwrap();
+        let first_source = repo.join("first.txt");
+        let second_source = repo.join("second.txt");
+        let destination = repo.join("current.txt");
+        let trigger = repo.join("trigger.txt");
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            model_handle.update(&mut app, |model, _ctx| {
+                model.set_emit_incremental_updates(true);
+                model.repositories.insert(
+                    repo_path.clone(),
+                    IndexedRepoState::Indexed(repo_state_with_files(
+                        &repo_path,
+                        [first_source.clone(), second_source.clone(), trigger.clone()],
+                    )),
+                );
+            });
+
+            let removed_paths = Rc::new(RefCell::new(Vec::new()));
+            let removed_paths_for_event = removed_paths.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                    if let RepositoryMetadataEvent::IncrementalUpdateReady { update } = event {
+                        removed_paths_for_event
+                            .borrow_mut()
+                            .extend(update.remove_entries.iter().cloned());
+                    }
+                });
+            });
+
+            model_handle.update(&mut app, |model, ctx| {
+                model.handle_watcher_event(
+                    &BulkFilesystemWatcherEvent {
+                        modified: std::collections::HashSet::from([trigger]),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+                model.handle_watcher_event(
+                    &BulkFilesystemWatcherEvent {
+                        moved: HashMap::from([(destination.clone(), first_source.clone())]),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+                model.handle_watcher_event(
+                    &BulkFilesystemWatcherEvent {
+                        moved: HashMap::from([(destination.clone(), second_source.clone())]),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+            });
+            await_watcher_updates_for_repo(&mut app, &model_handle, &repo_path).await;
+
+            let first_source = StandardizedPath::try_from_local(&first_source).unwrap();
+            let second_source = StandardizedPath::try_from_local(&second_source).unwrap();
+            let destination = StandardizedPath::try_from_local(&destination).unwrap();
+            model_handle.read(&app, |model, _ctx| {
+                let state = model
+                    .get_repository(&repo_path)
+                    .expect("repository should remain indexed");
+                assert!(state.entry.get(&first_source).is_none());
+                assert!(state.entry.get(&second_source).is_none());
+                assert!(state.entry.get(&destination).is_some());
+            });
+            let removed_paths = removed_paths.borrow();
+            assert!(removed_paths.contains(&first_source));
+            assert!(removed_paths.contains(&second_source));
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn pending_path_overflow_refreshes_public_tree_and_standing_queries() {
+    VirtualFS::test("watcher_pending_overflow", |dirs, mut vfs| {
+        vfs.mkdir("repo")
+            .with_files(vec![Stub::FileWithContent("repo/AGENTS.md", "rules")]);
+        let repo = dirs.tests().join("repo");
+        let repo_path = StandardizedPath::from_local_canonicalized(&repo).unwrap();
+        let agents_path = repo.join("AGENTS.md");
+        let agents_std = StandardizedPath::try_from_local(&agents_path).unwrap();
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            model_handle.update(&mut app, |model, _ctx| {
+                model.set_emit_incremental_updates(true);
+                model.repositories.insert(
+                    repo_path.clone(),
+                    IndexedRepoState::Indexed(empty_repo_state(&repo_path)),
+                );
+                model
+                    .standing_results
+                    .insert(repo_path.clone(), StandingQueryResults::default());
+            });
+
+            let saw_full_replace = Rc::new(Cell::new(false));
+            let saw_full_replace_for_event = saw_full_replace.clone();
+            let saw_snapshot_update = Rc::new(Cell::new(false));
+            let saw_snapshot_update_for_event = saw_snapshot_update.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                    if matches!(
+                        event,
+                        RepositoryMetadataEvent::FileTreeEntryUpdated {
+                            update_type: crate::MetadataUpdateType::FullReplace,
+                            ..
+                        }
+                    ) {
+                        saw_full_replace_for_event.set(true);
+                    }
+                    if matches!(event, RepositoryMetadataEvent::RepositoryUpdated { .. }) {
+                        saw_snapshot_update_for_event.set(true);
+                    }
+                });
+            });
+
+            model_handle.update(&mut app, |model, ctx| {
+                model.handle_watcher_event(
+                    &BulkFilesystemWatcherEvent {
+                        added: std::collections::HashSet::from([agents_path]),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+                model.enqueue_watcher_update(
+                    repo_path.clone(),
+                    RepoUpdate {
+                        added: (0..=MAX_PENDING_WATCHER_PATHS)
+                            .map(|index| repo.join(format!("missing-{index}")))
+                            .collect(),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+            });
+            await_watcher_updates_for_repo(&mut app, &model_handle, &repo_path).await;
+
+            assert!(saw_full_replace.get());
+            assert!(saw_snapshot_update.get());
+            model_handle.read(&app, |model, _ctx| {
+                let state = model
+                    .get_repository(&repo_path)
+                    .expect("repository should remain indexed");
+                assert!(state.entry.get(&agents_std).is_some());
+                assert!(
+                    model
+                        .standing_query_results(&repo_path)
+                        .expect("standing results should stay available")
+                        .project_rules()
+                        .any(|content| content == &StandingQueryContent::file(agents_std.clone()))
+                );
+            });
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn overflow_refresh_preserves_expanded_lazy_subtrees_and_watches() {
+    VirtualFS::test("watcher_lazy_overflow_refresh", |dirs, mut vfs| {
+        vfs.mkdir("workspace/sub/inner").with_files(vec![
+            Stub::FileWithContent("workspace/marker.txt", "marker"),
+            Stub::FileWithContent("workspace/sub/inner/original.txt", "original"),
+        ]);
+        let root =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace")).unwrap();
+        let sub = StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace/sub"))
+            .unwrap();
+        let inner =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace/sub/inner"))
+                .unwrap();
+        let original = StandardizedPath::from_local_canonicalized(
+            &dirs.tests().join("workspace/sub/inner/original.txt"),
+        )
+        .unwrap();
+        let warp_local = dirs.tests().join("workspace/sub/inner/WARP.md");
+        let warp = StandardizedPath::try_from_local(&warp_local).unwrap();
+        let agents_local = dirs.tests().join("workspace/sub/inner/AGENTS.md");
+        let agents = StandardizedPath::try_from_local(&agents_local).unwrap();
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .index_lazy_loaded_path(&root, ctx)
+                    .expect("lazy root should index");
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+            for directory in [&sub, &inner] {
+                let completion = model_handle.update(&mut app, |model, ctx| {
+                    model
+                        .load_directory_with_completion(&root, directory, ctx)
+                        .expect("expanded directory should load")
+                });
+                completion.await.expect("directory load should complete");
+            }
+            std::fs::write(&warp_local, "warp rules").unwrap();
+            model_handle.update(&mut app, |model, ctx| {
+                model.handle_watcher_event(
+                    &BulkFilesystemWatcherEvent {
+                        added: std::collections::HashSet::from([warp_local]),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+            });
+            await_watcher_updates_for_repo(&mut app, &model_handle, &root).await;
+            model_handle.read(&app, |model, _ctx| {
+                assert!(
+                    model
+                        .standing_query_results(&root)
+                        .expect("standing results should exist")
+                        .project_rules()
+                        .any(|content| content == &StandingQueryContent::file(warp.clone()))
+                );
+            });
+
+            std::fs::write(&agents_local, "agent rules").unwrap();
+            let standing_deltas = Rc::new(RefCell::new(Vec::new()));
+            let standing_deltas_for_subscription = standing_deltas.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                    if let RepositoryMetadataEvent::StandingQueryResultsUpdated { delta, .. } =
+                        event
+                    {
+                        standing_deltas_for_subscription
+                            .borrow_mut()
+                            .push(delta.clone());
+                    }
+                });
+            });
+
+            model_handle.update(&mut app, |model, ctx| {
+                model.enqueue_watcher_update(
+                    root.clone(),
+                    RepoUpdate {
+                        added: (0..=MAX_PENDING_WATCHER_PATHS)
+                            .map(|index| {
+                                dirs.tests()
+                                    .join("workspace")
+                                    .join(format!("missing-{index}"))
+                            })
+                            .collect(),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+            });
+            await_watcher_updates_for_repo(&mut app, &model_handle, &root).await;
+            model_handle.read(&app, |model, _ctx| {
+                let state = model
+                    .get_repository(&root)
+                    .expect("lazy root should remain indexed");
+                assert!(state.entry.get(&sub).is_some_and(|entry| entry.loaded()));
+                assert!(state.entry.get(&inner).is_some_and(|entry| entry.loaded()));
+                assert!(state.entry.get(&original).is_some());
+                let standing_results = model
+                    .standing_query_results(&root)
+                    .expect("standing results should survive refresh");
+                for path in [&warp, &agents] {
+                    assert!(
+                        standing_results
+                            .project_rules()
+                            .any(|content| content == &StandingQueryContent::file(path.clone()))
+                    );
+                }
+                if cfg!(target_os = "linux") {
+                    let repo_watch = model.repo_watches.get(&root).expect("watch recorded");
+                    assert!(repo_watch.extra_dirs.contains(&sub));
+                    assert!(repo_watch.extra_dirs.contains(&inner));
+                }
+            });
+            assert!(standing_deltas.borrow().iter().any(|delta| {
+                delta
+                    .upserted_project_rules
+                    .iter()
+                    .any(|content| content == &StandingQueryContent::file(agents.clone()))
+            }));
+
+            let added_local = dirs.tests().join("workspace/sub/inner/after-refresh.txt");
+            std::fs::write(&added_local, "after refresh").unwrap();
+            let added = StandardizedPath::try_from_local(&added_local).unwrap();
+            model_handle.update(&mut app, |model, ctx| {
+                model.handle_watcher_event(
+                    &BulkFilesystemWatcherEvent {
+                        added: std::collections::HashSet::from([added_local]),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+            });
+            await_watcher_updates_for_repo(&mut app, &model_handle, &root).await;
+            model_handle.read(&app, |model, _ctx| {
+                assert!(
+                    model
+                        .get_repository(&root)
+                        .expect("lazy root should remain indexed")
+                        .entry
+                        .get(&added)
+                        .is_some()
+                );
+            });
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn repository_walk_scheduler_preserves_watcher_directory_watcher_order() {
+    VirtualFS::test("watcher_directory_watcher_fifo", |dirs, mut vfs| {
+        vfs.mkdir("workspace/first/child").with_files(vec![
+            Stub::FileWithContent("workspace/first-marker.txt", "first"),
+            Stub::FileWithContent("workspace/second-marker.txt", "second"),
+        ]);
+        let root =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace")).unwrap();
+        let first =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace/first"))
+                .unwrap();
+        let first_marker = dirs.tests().join("workspace/first-marker.txt");
+        let second_marker = dirs.tests().join("workspace/second-marker.txt");
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .index_lazy_loaded_path(&root, ctx)
+                    .expect("lazy root should index");
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+
+            let event_order = Rc::new(RefCell::new(Vec::new()));
+            let event_order_for_subscription = event_order.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                    if let RepositoryMetadataEvent::FileTreeEntryUpdated { update_type, .. } = event
+                    {
+                        event_order_for_subscription.borrow_mut().push(matches!(
+                            update_type,
+                            crate::MetadataUpdateType::IncrementalUpdate(_)
+                        ));
+                    }
+                });
+            });
+
+            let (release, blocked) = oneshot::channel::<()>();
+            let (blocker_future_id, directory_completion) =
+                model_handle.update(&mut app, |model, ctx| {
+                    let blocker = ctx.spawn(
+                        async move {
+                            let _ = blocked.await;
+                        },
+                        |_, _, _| {},
+                    );
+                    let blocker_future_id = blocker.future_id();
+                    model.track_watcher_update_task(root.clone(), blocker);
+                    model.handle_watcher_event(
+                        &BulkFilesystemWatcherEvent {
+                            modified: std::collections::HashSet::from([first_marker]),
+                            ..Default::default()
+                        },
+                        ctx,
+                    );
+                    let directory_completion = model
+                        .load_directory_with_completion(&root, &first, ctx)
+                        .expect("directory load should queue");
+                    model.handle_watcher_event(
+                        &BulkFilesystemWatcherEvent {
+                            modified: std::collections::HashSet::from([second_marker]),
+                            ..Default::default()
+                        },
+                        ctx,
+                    );
+                    (blocker_future_id, directory_completion)
+                });
+
+            let _ = release.send(());
+            model_handle
+                .update(&mut app, |_, ctx| {
+                    ctx.await_spawned_future(blocker_future_id)
+                })
+                .await;
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .finish_watcher_update_task(&root, Some(blocker_future_id))
+                    .expect("completed watcher blocker should still be tracked");
+                model.dispatch_next_repository_walk(&root, ctx);
+            });
+            directory_completion.await.expect("directory should load");
+            await_watcher_updates_for_repo(&mut app, &model_handle, &root).await;
+
+            assert_eq!(event_order.borrow().as_slice(), [true, false, true]);
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn overflow_refresh_retries_after_transient_build_failure() {
+    VirtualFS::test("watcher_overflow_retry", |dirs, mut vfs| {
+        vfs.mkdir("repo").with_files(vec![Stub::FileWithContent(
+            "repo/recovered.txt",
+            "recovered",
+        )]);
+        let repo = dirs.tests().join("repo");
+        let backup = dirs.tests().join("repo-backup");
+        let repo_path = StandardizedPath::from_local_canonicalized(&repo).unwrap();
+        let recovered = StandardizedPath::try_from_local(&repo.join("recovered.txt")).unwrap();
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            let (release, blocked) = oneshot::channel::<()>();
+            let blocker_future_id = model_handle.update(&mut app, |model, ctx| {
+                model.repositories.insert(
+                    repo_path.clone(),
+                    IndexedRepoState::Indexed(empty_repo_state(&repo_path)),
+                );
+                let blocker = ctx.spawn(
+                    async move {
+                        let _ = blocked.await;
+                    },
+                    |_, _, _| {},
+                );
+                let blocker_future_id = blocker.future_id();
+                model.track_watcher_update_task(repo_path.clone(), blocker);
+                model.enqueue_watcher_update(
+                    repo_path.clone(),
+                    RepoUpdate {
+                        added: (0..=MAX_PENDING_WATCHER_PATHS)
+                            .map(|index| repo.join(format!("missing-{index}")))
+                            .collect(),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+                blocker_future_id
+            });
+
+            std::fs::rename(&repo, &backup).unwrap();
+            let _ = release.send(());
+            model_handle
+                .update(&mut app, |_, ctx| {
+                    ctx.await_spawned_future(blocker_future_id)
+                })
+                .await;
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .finish_watcher_update_task(&repo_path, Some(blocker_future_id))
+                    .expect("completed watcher blocker should still be tracked");
+                model.dispatch_next_repository_walk(&repo_path, ctx);
+            });
+
+            warpui_core::r#async::Timer::after(Duration::from_millis(250)).await;
+            model_handle.read(&app, |model, _ctx| {
+                assert!(
+                    model
+                        .watcher_update_tasks
+                        .get(&repo_path)
+                        .is_some_and(|queue| queue.in_flight.is_some()),
+                    "refresh should still be retrying after the missing-root failure"
+                );
+            });
+            std::fs::rename(&backup, &repo).unwrap();
+            await_watcher_updates_for_repo(&mut app, &model_handle, &repo_path).await;
+
+            model_handle.read(&app, |model, _ctx| {
+                assert!(
+                    model
+                        .get_repository(&repo_path)
+                        .expect("repository should recover without another watcher event")
+                        .entry
+                        .get(&recovered)
+                        .is_some()
+                );
+            });
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn aborted_watcher_work_is_retried_without_a_later_event() {
+    VirtualFS::test("watcher_abort_recovery", |dirs, mut vfs| {
+        vfs.mkdir("repo").with_files(vec![Stub::FileWithContent(
+            "repo/recovered.txt",
+            "recovered",
+        )]);
+        let repo = dirs.tests().join("repo");
+        let repo_path = StandardizedPath::from_local_canonicalized(&repo).unwrap();
+        let recovered = repo.join("recovered.txt");
+        let recovered_std = StandardizedPath::try_from_local(&recovered).unwrap();
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            let aborted_future_id = model_handle.update(&mut app, |model, ctx| {
+                model.repositories.insert(
+                    repo_path.clone(),
+                    IndexedRepoState::Indexed(empty_repo_state(&repo_path)),
+                );
+                model.handle_watcher_event(
+                    &BulkFilesystemWatcherEvent {
+                        added: std::collections::HashSet::from([recovered]),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+                let handle = model
+                    .watcher_update_tasks
+                    .get(&repo_path)
+                    .and_then(|queue| queue.in_flight.as_ref())
+                    .expect("watcher task should be in flight");
+                let future_id = handle.future_id();
+                handle.abort();
+                future_id
+            });
+            model_handle
+                .update(&mut app, |_, ctx| {
+                    ctx.await_spawned_future(aborted_future_id)
+                })
+                .await;
+            await_watcher_updates_for_repo(&mut app, &model_handle, &repo_path).await;
+
+            model_handle.read(&app, |model, _ctx| {
+                let state = model
+                    .get_repository(&repo_path)
+                    .expect("repository should remain indexed");
+                assert!(state.entry.get(&recovered_std).is_some());
+            });
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn removing_repository_during_watcher_work_does_not_resurrect_it() {
+    VirtualFS::test("watcher_remove_no_resurrection", |dirs, mut vfs| {
+        vfs.mkdir("repo")
+            .with_files(vec![Stub::FileWithContent("repo/late.txt", "late")]);
+        let repo = dirs.tests().join("repo");
+        let repo_path = StandardizedPath::from_local_canonicalized(&repo).unwrap();
+        let late_file = repo.join("late.txt");
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            let entry_update_count = Rc::new(Cell::new(0));
+            let entry_update_count_for_event = entry_update_count.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                    if matches!(event, RepositoryMetadataEvent::FileTreeEntryUpdated { .. }) {
+                        entry_update_count_for_event.set(entry_update_count_for_event.get() + 1);
+                    }
+                });
+            });
+
+            let aborted_future_id = model_handle.update(&mut app, |model, ctx| {
+                model.repositories.insert(
+                    repo_path.clone(),
+                    IndexedRepoState::Indexed(empty_repo_state(&repo_path)),
+                );
+                model.handle_watcher_event(
+                    &BulkFilesystemWatcherEvent {
+                        added: std::collections::HashSet::from([late_file]),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+                let future_id = model
+                    .watcher_update_tasks
+                    .get(&repo_path)
+                    .and_then(|queue| queue.in_flight.as_ref())
+                    .expect("watcher task should be in flight")
+                    .future_id();
+                model
+                    .remove_repository(&repo_path, ctx)
+                    .expect("repository should be removed");
+                future_id
+            });
+            model_handle
+                .update(&mut app, |_, ctx| {
+                    ctx.await_spawned_future(aborted_future_id)
+                })
+                .await;
+
+            assert_eq!(entry_update_count.get(), 0);
+            model_handle.read(&app, |model, _ctx| {
+                assert!(model.repository_state(&repo_path).is_none());
+                assert!(!model.watcher_update_tasks.contains_key(&repo_path));
+            });
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn directory_load_waits_for_watcher_walk_on_the_same_repository() {
+    VirtualFS::test("directory_load_waits_for_watcher", |dirs, mut vfs| {
+        vfs.mkdir("workspace/sub/inner")
+            .with_files(vec![Stub::FileWithContent(
+                "workspace/sub/inner/file.txt",
+                "file",
+            )]);
+        let root =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace")).unwrap();
+        let sub = StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace/sub"))
+            .unwrap();
+        let inner =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace/sub/inner"))
+                .unwrap();
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .index_lazy_loaded_path(&root, ctx)
+                    .expect("lazy root should index");
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+
+            let (release, blocked) = oneshot::channel::<()>();
+            let (completion, blocker_future_id) = model_handle.update(&mut app, |model, ctx| {
+                let blocker = ctx.spawn(
+                    async move {
+                        let _ = blocked.await;
+                    },
+                    |_, _, _| {},
+                );
+                let blocker_future_id = blocker.future_id();
+                model.track_watcher_update_task(root.clone(), blocker);
+                let completion = model
+                    .load_directory_with_completion(&root, &sub, ctx)
+                    .expect("directory load should queue");
+                (completion, blocker_future_id)
+            });
+
+            completion
+                .with_timeout(Duration::from_millis(50))
+                .await
+                .expect_err("directory load must not complete while watcher work is blocked");
+            model_handle.read(&app, |model, _ctx| {
+                let state = model
+                    .get_repository(&root)
+                    .expect("lazy root should remain indexed");
+                assert!(state.entry.get(&sub).is_some_and(|entry| !entry.loaded()));
+                assert!(state.entry.get(&inner).is_none());
+            });
+
+            let _ = release.send(());
+            model_handle
+                .update(&mut app, |_, ctx| {
+                    ctx.await_spawned_future(blocker_future_id)
+                })
+                .await;
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .finish_watcher_update_task(&root, Some(blocker_future_id))
+                    .expect("completed watcher blocker should still be tracked");
+                model.dispatch_next_repository_walk(&root, ctx);
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+            model_handle.read(&app, |model, _ctx| {
+                let state = model
+                    .get_repository(&root)
+                    .expect("lazy root should remain indexed");
+                assert!(state.entry.get(&inner).is_some());
+            });
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn blocked_repository_does_not_delay_watcher_updates_for_another_repository() {
+    VirtualFS::test("watcher_distinct_repo_fairness", |dirs, mut vfs| {
+        vfs.mkdir("repo-a").mkdir("repo-b").with_files(vec![
+            Stub::FileWithContent("repo-a/a.txt", "a"),
+            Stub::FileWithContent("repo-b/b.txt", "b"),
+        ]);
+        let repo_a = dirs.tests().join("repo-a");
+        let repo_b = dirs.tests().join("repo-b");
+        let repo_a_path = StandardizedPath::from_local_canonicalized(&repo_a).unwrap();
+        let repo_b_path = StandardizedPath::from_local_canonicalized(&repo_b).unwrap();
+        let file_a = repo_a.join("a.txt");
+        let file_b = repo_b.join("b.txt");
+        let file_b_std = StandardizedPath::try_from_local(&file_b).unwrap();
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            let (_release, blocked) = oneshot::channel::<()>();
+            let blocked_future_id = model_handle.update(&mut app, |model, ctx| {
+                model.repositories.insert(
+                    repo_a_path.clone(),
+                    IndexedRepoState::Indexed(empty_repo_state(&repo_a_path)),
+                );
+                model.repositories.insert(
+                    repo_b_path.clone(),
+                    IndexedRepoState::Indexed(empty_repo_state(&repo_b_path)),
+                );
+                let handle = ctx.spawn(
+                    async move {
+                        let _ = blocked.await;
+                    },
+                    |_, _, _| {},
+                );
+                let future_id = handle.future_id();
+                model.track_watcher_update_task(repo_a_path.clone(), handle);
+                model.handle_watcher_event(
+                    &BulkFilesystemWatcherEvent {
+                        added: std::collections::HashSet::from([file_a, file_b]),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+                future_id
+            });
+
+            await_watcher_updates_for_repo(&mut app, &model_handle, &repo_b_path).await;
+            model_handle.read(&app, |model, _ctx| {
+                let state = model
+                    .get_repository(&repo_b_path)
+                    .expect("second repository should remain indexed");
+                assert!(state.entry.get(&file_b_std).is_some());
+            });
+
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .remove_repository(&repo_a_path, ctx)
+                    .expect("blocked repository should be removable");
+            });
+            model_handle
+                .update(&mut app, |_, ctx| {
+                    ctx.await_spawned_future(blocked_future_id)
+                })
+                .await;
+        });
     });
 }
 

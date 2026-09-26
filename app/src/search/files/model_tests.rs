@@ -23,6 +23,139 @@ mod file_search_model_tests {
         });
     }
 
+    #[cfg(feature = "local_fs")]
+    #[test]
+    fn file_tree_completion_invalidates_cache_repopulated_during_update() {
+        use std::sync::Arc;
+
+        use repo_metadata::file_tree_store::FileTreeState;
+        use repo_metadata::{
+            DirectoryEntry, Entry, FileMetadata, MetadataUpdateType, RepoMetadataEvent,
+            RepositoryIdentifier,
+        };
+        use tempfile::tempdir;
+        use warp_util::standardized_path::StandardizedPath;
+        use warpui::elements::Empty;
+        use warpui::platform::WindowStyle;
+        use warpui::windowing::WindowManager;
+        use warpui::{AppContext, Element, Entity, TypedActionView, View};
+
+        use crate::terminal::model::session::Session;
+        use crate::workspace::ActiveSession;
+
+        struct TestView;
+
+        impl Entity for TestView {
+            type Event = ();
+        }
+
+        impl View for TestView {
+            fn ui_name() -> &'static str {
+                "FileSearchModelTestView"
+            }
+
+            fn render(&self, _app: &AppContext) -> Box<dyn Element> {
+                Empty::new().finish()
+            }
+        }
+
+        impl TypedActionView for TestView {
+            type Action = ();
+        }
+
+        fn state_with_file(root: &StandardizedPath, filename: &str) -> FileTreeState {
+            FileTreeState::new(
+                Entry::Directory(DirectoryEntry {
+                    path: root.clone(),
+                    children: vec![Entry::File(FileMetadata::new(
+                        root.to_local_path_lossy().join(filename),
+                        false,
+                    ))],
+                    ignored: false,
+                    loaded: true,
+                }),
+                Vec::new(),
+                None,
+            )
+        }
+
+        App::test((), |mut app| async move {
+            app.add_singleton_model(|_| DetectedRepositories::default());
+            app.add_singleton_model(RepoMetadataModel::new);
+            app.add_singleton_model(FileSearchModel::new);
+            app.add_singleton_model(|_| ActiveSession::default());
+
+            let temp = tempdir().expect("temporary repository should be created");
+            let repo_path = dunce::canonicalize(temp.path()).unwrap();
+            let repo = StandardizedPath::from_local_canonicalized(&repo_path).unwrap();
+            let repo_id = RepositoryIdentifier::local(repo.clone());
+            let (window_id, _view) = app.add_window(WindowStyle::NotStealFocus, |_ctx| TestView);
+            WindowManager::handle(&app).update(&mut app, |windowing_state, _ctx| {
+                windowing_state.overwrite_for_test(windowing_state.stage(), Some(window_id));
+            });
+            ActiveSession::handle(&app).update(&mut app, |active_session, ctx| {
+                active_session.set_session_for_test(
+                    window_id,
+                    Arc::new(Session::test()),
+                    Some(repo_path),
+                    None,
+                    ctx,
+                );
+            });
+            DetectedRepositories::handle(&app).update(&mut app, |repositories, _ctx| {
+                repositories.insert_test_repo_root(repo.clone());
+            });
+            RepoMetadataModel::handle(&app).update(&mut app, |model, ctx| {
+                model.insert_test_state(
+                    repo.clone(),
+                    state_with_file(&repo, "before-update.txt"),
+                    ctx,
+                );
+            });
+
+            let initial = app.read(|ctx| FileSearchModel::as_ref(ctx).get_repo_contents("", ctx));
+            assert!(
+                initial
+                    .iter()
+                    .any(|result| result.path == "before-update.txt")
+            );
+
+            RepoMetadataModel::handle(&app).update(&mut app, |_, ctx| {
+                ctx.emit(RepoMetadataEvent::FileTreeUpdated {
+                    ids: vec![repo_id.clone()],
+                });
+            });
+            let stale = app.read(|ctx| FileSearchModel::as_ref(ctx).get_repo_contents("", ctx));
+            assert!(
+                stale
+                    .iter()
+                    .any(|result| result.path == "before-update.txt")
+            );
+
+            RepoMetadataModel::handle(&app).update(&mut app, |model, ctx| {
+                model.insert_test_state(
+                    repo.clone(),
+                    state_with_file(&repo, "after-update.txt"),
+                    ctx,
+                );
+                ctx.emit(RepoMetadataEvent::FileTreeEntryUpdated {
+                    id: repo_id,
+                    update_type: MetadataUpdateType::FullReplace,
+                });
+            });
+            let current = app.read(|ctx| FileSearchModel::as_ref(ctx).get_repo_contents("", ctx));
+            assert!(
+                current
+                    .iter()
+                    .any(|result| result.path == "after-update.txt")
+            );
+            assert!(
+                current
+                    .iter()
+                    .all(|result| result.path != "before-update.txt")
+            );
+        });
+    }
     #[test]
     fn test_fuzzy_match_path_empty_query() {
         let result = FileSearchModel::fuzzy_match_path("src/main.rs", "");
