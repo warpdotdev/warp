@@ -33,6 +33,19 @@ impl<'s> RowIterator<'s> {
             template: Cell::default(),
         }
     }
+
+    /// Takes ownership of the next materialized row without cloning its cell buffer.
+    ///
+    /// [`Iterator::next`] keeps a live [`Rc`] in the iterator, so `Rc::unwrap_or_clone`
+    /// on a yielded value always deep-clones [`Row`]. This method drops that extra
+    /// reference and moves the filled row out.
+    pub(super) fn next_owned(&mut self) -> Option<Row> {
+        self.next()?;
+        debug_assert_eq!(Rc::strong_count(&self.row), 1);
+        let columns = self.storage.columns;
+        let filled = std::mem::replace(&mut self.row, Row::new(columns).into());
+        Some(Rc::unwrap_or_clone(filled))
+    }
 }
 
 impl Iterator for RowIterator<'_> {
@@ -170,3 +183,7 @@ fn next_attribute<T>(iter: &mut impl Iterator<Item = T>, grapheme: &Grapheme) ->
     iter.nth(grapheme.len().as_usize() - 1)
         .expect("should never fail to provide value")
 }
+
+#[cfg(test)]
+#[path = "row_iterator_tests.rs"]
+mod tests;
