@@ -654,6 +654,14 @@ impl TuiAIBlock {
         let mut materialized_active_blocker = false;
         let status = self.block_model.status(ctx);
         let output_streaming = status.is_streaming();
+        // A `RunAgents` tool call that never entered the action queue never
+        // gets a synthesized result, so its card must detect this itself
+        // once the backing exchange output finishes unsuccessfully (see
+        // `crate::orchestration_block::render::is_orphaned_by_finished_output`).
+        let block_finished_unsuccessfully = matches!(
+            status,
+            AIBlockOutputStatus::Cancelled { .. } | AIBlockOutputStatus::Failed { .. }
+        );
         let mut ask_question_actions = Vec::new();
         let mut file_edit_actions = Vec::new();
         let mut generic_actions = Vec::new();
@@ -882,7 +890,9 @@ impl TuiAIBlock {
                 self.action_views.get(&action.id)
             {
                 let request = request.clone();
-                view.update(ctx, |view, ctx| view.update_request(&request, ctx));
+                view.update(ctx, |view, ctx| {
+                    view.update_request(&request, block_finished_unsuccessfully, ctx)
+                });
                 continue;
             }
             // Read the active orchestration config for plan-inherited
@@ -917,6 +927,7 @@ impl TuiAIBlock {
                     run_agents_executor,
                     fallback_base_model_id,
                     is_restored,
+                    block_finished_unsuccessfully,
                     ctx,
                 )
             });
