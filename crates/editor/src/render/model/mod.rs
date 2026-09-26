@@ -1,7 +1,7 @@
 use core::slice;
 use std::any::Any;
 use std::cell::{Cell, Ref, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::num::NonZeroU8;
 use std::ops::{Add, AddAssign, Range, Sub, SubAssign};
 use std::sync::Arc;
@@ -1320,6 +1320,7 @@ pub struct LayoutSummary {
     width: Pixels,
     lines: LineCount,
     item_count: usize,
+    has_temporary_block: bool,
 }
 
 /// Rich text height, in pixels. This wrapper makes the dimension clear (height,
@@ -1342,6 +1343,9 @@ impl LineCount {
         self.0 as u32
     }
 }
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct ItemCount(usize);
 
 /// The unit used for the horizontal column component of a [`SoftWrapPoint`].
 ///
@@ -3504,32 +3508,42 @@ impl RenderState {
     }
 
     /// Replace all temporary blocks in the BlockItem cache with a new set of temporary
-    fn reset_temporary_block(&self, mut blocks: HashMap<LineCount, Vec<BlockItem>>) {
+    fn reset_temporary_block(&self, blocks: HashMap<LineCount, Vec<BlockItem>>) {
         let mut new_tree = SumTree::new();
         {
             let content = self.content.borrow();
-            let mut cursor = content.cursor::<LineCount, CharOffset>();
+            let mut replacements = BTreeMap::<ItemCount, Vec<BlockItem>>::new();
 
-            if let Some(items) = blocks.remove(&LineCount::zero()) {
-                for item in items {
-                    new_tree.push(item);
-                }
-            }
-
-            cursor.descend_to_first_item(&content, |_| true);
-            while let Some(item) = cursor.item() {
-                if !matches!(item, BlockItem::TemporaryBlock { .. }) {
-                    new_tree.push(item.clone());
-                }
-
-                if let Some(items) = blocks.remove(&cursor.end_seek_position()) {
-                    for item in items {
-                        new_tree.push(item);
+            for (line, items) in blocks {
+                let item_count = if line == LineCount::zero() {
+                    ItemCount::default()
+                } else {
+                    let mut cursor = content.cursor::<LineCount, ItemCount>();
+                    if !cursor.seek(&line, SeekBias::Left) {
+                        continue;
                     }
-                }
-
-                cursor.next();
+                    cursor.end()
+                };
+                replacements.entry(item_count).or_default().extend(items);
             }
+
+            let mut temporary_blocks =
+                content.filter::<_, ItemCount>(|summary| summary.has_temporary_block);
+            while temporary_blocks.item().is_some() {
+                replacements.entry(*temporary_blocks.start()).or_default();
+                temporary_blocks.next();
+            }
+
+            let mut cursor = content.cursor::<ItemCount, ItemCount>();
+            for (item_count, items) in replacements {
+                new_tree.push_tree(cursor.slice(&item_count, SeekBias::Right));
+                new_tree.extend(items);
+
+                if matches!(cursor.item(), Some(BlockItem::TemporaryBlock { .. })) {
+                    cursor.next();
+                }
+            }
+            new_tree.push_tree(cursor.suffix());
         }
         self.has_final_trailing_newline
             .set(Self::tree_ends_with_trailing_newline(&new_tree));
@@ -4419,6 +4433,7 @@ impl AddAssign<&LayoutSummary> for LayoutSummary {
         self.width = self.width.max(rhs.width);
         self.lines += rhs.lines;
         self.item_count += rhs.item_count;
+        self.has_temporary_block |= rhs.has_temporary_block;
     }
 }
 
@@ -4908,6 +4923,7 @@ impl sum_tree::Item for BlockItem {
             width: self.width(),
             lines: self.lines(),
             item_count: 1,
+            has_temporary_block: matches!(self, BlockItem::TemporaryBlock { .. }),
         }
     }
 }
@@ -5484,6 +5500,12 @@ impl<'a> sum_tree::Dimension<'a, LayoutSummary> for LayoutSummary {
 impl<'a> sum_tree::Dimension<'a, LayoutSummary> for LineCount {
     fn add_summary(&mut self, summary: &'a LayoutSummary) {
         *self += summary.lines;
+    }
+}
+
+impl<'a> sum_tree::Dimension<'a, LayoutSummary> for ItemCount {
+    fn add_summary(&mut self, summary: &'a LayoutSummary) {
+        self.0 += summary.item_count;
     }
 }
 
