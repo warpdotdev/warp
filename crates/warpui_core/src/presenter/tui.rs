@@ -37,6 +37,7 @@
 //! records the embedded view as a child of its parent.
 //!
 //! [`TuiChildView`]: crate::elements::tui::TuiChildView
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use instant::Instant;
@@ -62,15 +63,20 @@ pub struct TuiFrame {
     /// paint ([`TuiPaintContext::repaint_after`]), if any. The runtime
     /// schedules a redraw at this instant.
     pub repaint_at: Option<Instant>,
+    /// URLs to render as OSC 8 hyperlinks, keyed by absolute buffer cell.
+    /// Ratatui's `Cell` has no hyperlink attribute of its own, so this side
+    /// table is how paint communicates link placement to the renderer.
+    pub hyperlinks: HashMap<(u16, u16), Rc<str>>,
 }
 
 impl TuiFrame {
-    /// A blank frame sized to cover `area`, with no cursor.
+    /// A blank frame sized to cover `area`, with no cursor or hyperlinks.
     fn blank(area: TuiRect) -> Self {
         Self {
             buffer: TuiBuffer::empty(buffer_rect_for(area)),
             cursor: None,
             repaint_at: None,
+            hyperlinks: HashMap::new(),
         }
     }
 }
@@ -278,7 +284,7 @@ fn paint(
         );
     }
 
-    let (scene, repaint_at, terminal_cursor) = ctx.finish();
+    let (scene, repaint_at, terminal_cursor, hyperlinks) = ctx.finish();
     let cursor = terminal_cursor.and_then(|point| {
         let visible = scene.visible_rect(point, TuiSize::new(1, 1)).is_some();
         if !visible || scene.is_covered(point) {
@@ -292,6 +298,7 @@ fn paint(
             buffer,
             cursor,
             repaint_at,
+            hyperlinks,
         },
         scene,
     )

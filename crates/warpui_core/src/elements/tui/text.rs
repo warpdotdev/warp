@@ -28,6 +28,7 @@
 //! string occupies no rows.
 
 use std::mem;
+use std::rc::Rc;
 
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::Rect;
@@ -36,8 +37,8 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::{
-    TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiScreenPoint,
-    TuiScreenPosition, TuiSize, TuiStyle, text_width,
+    Color, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiPaintSurface,
+    TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle, text_width,
 };
 use crate::AppContext;
 
@@ -64,6 +65,11 @@ pub struct TuiText {
     cached_measurement: Option<TuiTextMeasurement>,
     size: Option<TuiSize>,
     origin: Option<TuiScreenPoint>,
+    /// URLs referenced by hyperlink spans, indexed by the sentinel each such
+    /// span's style carries in `underline_color` (see `record_hyperlinks`).
+    /// Populated by callers that need clickable links, such as
+    /// `tui_markdown`'s inline rendering; empty otherwise.
+    hyperlinks: Vec<Rc<str>>,
 }
 
 impl TuiText {
@@ -84,11 +90,20 @@ impl TuiText {
             cached_measurement: None,
             size: None,
             origin: None,
+            hyperlinks: Vec::new(),
         }
     }
 
     pub fn with_style(mut self, style: TuiStyle) -> Self {
         self.style = style;
+        self
+    }
+
+    /// Attaches the URLs a hyperlink-sentinel-tagged span's `underline_color`
+    /// indexes into (see `record_hyperlinks`), making the corresponding
+    /// painted cells clickable OSC 8 hyperlinks.
+    pub fn with_hyperlinks(mut self, hyperlinks: Vec<Rc<str>>) -> Self {
+        self.hyperlinks = hyperlinks;
         self
     }
 
@@ -262,6 +277,38 @@ impl TuiText {
             paragraph
         }
     }
+
+    /// Recovers which cells `Paragraph::render` painted for each hyperlink
+    /// span, using the sentinel `underline_color` `tui_markdown` encodes on
+    /// those spans' styles: `Paragraph` owns wrapping, so this is the only
+    /// point that knows where a link landed once wrapped. Clears the
+    /// sentinel afterward so no color is actually rendered.
+    fn record_hyperlinks(
+        &self,
+        origin: TuiScreenPosition,
+        size: TuiSize,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        for row in 0..size.height {
+            for column in 0..size.width {
+                let position = origin.offset(i32::from(column), i32::from(row));
+                let Some(buffer_point) = surface.buffer_point(position) else {
+                    continue;
+                };
+                let Some(cell) = surface.cell_mut(position) else {
+                    continue;
+                };
+                let Color::Indexed(index) = cell.underline_color else {
+                    continue;
+                };
+                cell.underline_color = Color::Reset;
+                if let Some(url) = self.hyperlinks.get(usize::from(index)) {
+                    ctx.record_hyperlink(buffer_point, url.clone());
+                }
+            }
+        }
+    }
 }
 
 impl TuiElement for TuiText {
@@ -313,6 +360,9 @@ impl TuiElement for TuiText {
             return;
         }
         surface.render_widget(origin, size, self.paragraph(size.width));
+        if !self.hyperlinks.is_empty() {
+            self.record_hyperlinks(origin, size, surface, ctx);
+        }
     }
 
     fn size(&self) -> Option<TuiSize> {
