@@ -82,9 +82,16 @@ No. Contributing by hand or with your own agent is free. Oz runs on Warp's credi
 
 Yes. The same Oz + SME review, the same tests, and the same `./script/format` / `cargo clippy` / presubmit checks apply regardless of who (or what) wrote the code. Whether a PR is hand-written or agent-written doesn't change the quality bar — it changes how quickly you can iterate to meet it.
 
+### What is OpenAI's role in this project?
+
+OpenAI is the founding sponsor of this open-source repository. In practice, that means OpenAI provides the inference credits that power the Oz-driven automations running on this repo — issue triage, PR review, and Oz-implemented PRs for approved requests. The Warp client itself is unchanged by the partnership: it works with models from any provider you connect (Anthropic, OpenAI, Google, your own local models, and others), and OpenAI does not get special access to your code, your prompts, or your usage of Warp.
+
 ### Will my issues, comments, or code be used to train models?
 
-No. Warp does not use contributions to this repository, or the discussion around them, for model training.
+No. Specifically:
+
+- **OpenAI models used by Oz on this repo** run under zero-data-retention (ZDR). OpenAI does not store, log, or train on the prompts or completions from those calls.
+- **Contributions themselves** (issues, comments, PRs, code) are not used by Warp to train any model.
 
 ## What's open source and what isn't
 
