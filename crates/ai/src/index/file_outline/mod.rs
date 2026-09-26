@@ -31,6 +31,8 @@ pub struct Outline {
 
     /// Mapping the leaf file nodes to their outline.
     file_id_to_outline: HashMap<FileId, FileOutline>,
+    retained_outline_bytes: usize,
+    remaining_file_quota: Option<usize>,
 
     /// List of gitignore patterns.
     gitignores: Vec<Arc<Gitignore>>,
@@ -146,6 +148,26 @@ pub struct Symbol {
     /// The starting line number of the symbol (1-indexed).
     pub line_number: usize,
 }
+impl Symbol {
+    fn retained_string_bytes(&self) -> usize {
+        let comment_bytes = self.comment.as_ref().map_or(0, |comment| {
+            comment
+                .capacity()
+                .saturating_mul(std::mem::size_of::<String>())
+                .saturating_add(
+                    comment
+                        .iter()
+                        .map(String::capacity)
+                        .fold(0usize, usize::saturating_add),
+                )
+        });
+
+        self.name
+            .capacity()
+            .saturating_add(self.type_prefix.as_ref().map_or(0, String::capacity))
+            .saturating_add(comment_bytes)
+    }
+}
 
 /// Represents the "outline" of a file with all the identifier symbols of interest.
 #[derive(Debug, Clone, Default)]
@@ -154,6 +176,19 @@ pub struct FileOutline {
 }
 
 impl FileOutline {
+    fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>().saturating_add(self.symbols.as_ref().map_or(0, |symbols| {
+            symbols
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Symbol>())
+                .saturating_add(
+                    symbols
+                        .iter()
+                        .map(Symbol::retained_string_bytes)
+                        .fold(0usize, usize::saturating_add),
+                )
+        }))
+    }
     /// Get the symbols from the outline.
     pub fn symbols(&self) -> Option<&Vec<Symbol>> {
         self.symbols.as_ref()
