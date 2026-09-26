@@ -23,17 +23,70 @@ pub enum TextFileReadResult {
     NotText,
 }
 
+pub(crate) struct BoundedLineBuffer {
+    bytes: Vec<u8>,
+    max_bytes: usize,
+    exceeded_byte_budget: bool,
+}
+
+impl BoundedLineBuffer {
+    pub(crate) fn new(max_bytes: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            max_bytes,
+            exceeded_byte_budget: false,
+        }
+    }
+
+    pub(crate) fn extend_from_slice(&mut self, bytes: &[u8]) {
+        if self.exceeded_byte_budget {
+            return;
+        }
+
+        let Some(required_len) = self.bytes.len().checked_add(bytes.len()) else {
+            self.exceeded_byte_budget = true;
+            self.bytes.clear();
+            return;
+        };
+        if required_len > self.max_bytes {
+            self.exceeded_byte_budget = true;
+            self.bytes.clear();
+            return;
+        }
+
+        if required_len > self.bytes.capacity() {
+            self.bytes.reserve_exact(required_len - self.bytes.len());
+        }
+        self.bytes.extend_from_slice(bytes);
+    }
+
+    pub(crate) fn exceeded_byte_budget(&self) -> bool {
+        self.exceeded_byte_budget
+    }
+
+    pub(crate) fn last(&self) -> Option<u8> {
+        self.bytes.last().copied()
+    }
+
+    pub(crate) fn pop(&mut self) {
+        self.bytes.pop();
+    }
+
+    pub(crate) fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
 /// Accumulates lines into [`TextFileSegment`]s for a set of (possibly empty)
 /// line ranges, enforcing a byte budget and tracking the total line count.
 ///
 /// **Line ending normalization**: `\n` and `\r\n` line endings are normalized
 /// to `\n` (LF) in the emitted [`TextFileSegment::content`]. Classic Mac
-/// `\r`-only line endings are **not** recognized as line separators (matching
-/// the behavior of `read_line()`, which only splits on `\n`). Lines are
-/// expected to be pushed with their terminators already stripped (as produced
-/// by `read_line()` + manual stripping). The trailing newline of the file, if
-/// present, is preserved via the `has_trailing_newline` flag passed to
-/// [`Self::push_line`].
+/// `\r`-only line endings are **not** recognized as line separators because
+/// only `\n` separates lines. Lines are expected to be pushed with their
+/// terminators already stripped. The trailing newline of the file, if present
+/// and within the byte budget, is preserved via the `has_trailing_newline` flag
+/// passed to [`Self::push_line`].
 pub(crate) struct TextFileAccumulator {
     file_name: String,
     last_modified: Option<SystemTime>,
@@ -95,6 +148,19 @@ impl TextFileAccumulator {
     /// newline in the original file. For every line except possibly the last
     /// one in a file, this will be `true`.
     pub(crate) fn push_line(&mut self, line: String, has_trailing_newline: bool) {
+        self.push_line_inner(line, has_trailing_newline, false);
+    }
+
+    pub(crate) fn push_truncated_line(&mut self, has_trailing_newline: bool) {
+        self.push_line_inner(String::new(), has_trailing_newline, true);
+    }
+
+    fn push_line_inner(
+        &mut self,
+        line: String,
+        has_trailing_newline: bool,
+        exceeded_byte_budget: bool,
+    ) {
         self.current_line += 1;
         self.last_line_had_newline = has_trailing_newline;
 
@@ -115,7 +181,9 @@ impl TextFileAccumulator {
             if self.current_line >= range.start && self.current_line < range.end && !self.truncated
             {
                 let line_bytes = line.len() + if self.buf.is_empty() { 0 } else { 1 };
-                if self.total_bytes_read + self.buf_bytes + line_bytes > self.max_bytes {
+                if exceeded_byte_budget
+                    || self.total_bytes_read + self.buf_bytes + line_bytes > self.max_bytes
+                {
                     self.truncated = true;
                 } else {
                     self.buf_bytes += line_bytes;
@@ -126,10 +194,23 @@ impl TextFileAccumulator {
         }
     }
 
+    pub(crate) fn remaining_bytes(&self) -> usize {
+        self.max_bytes
+            .saturating_sub(self.total_bytes_read + self.buf_bytes)
+    }
+
     /// Emits a [`TextFileSegment`] for the current range and resets per-range
     /// state. Always produces a segment — even when the buffer is empty (e.g.
     /// the requested range was entirely past EOF).
     fn flush_range(&mut self, final_flush: bool) {
+        if final_flush
+            && self.whole_file
+            && !self.truncated
+            && self.last_line_had_newline
+            && self.remaining_bytes() == 0
+        {
+            self.truncated = true;
+        }
         let range = self.effective_ranges[self.range_idx].clone();
         let line_range = if self.whole_file && !self.truncated {
             None

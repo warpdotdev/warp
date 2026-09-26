@@ -583,15 +583,13 @@ impl FileModel {
     ///
     /// **Line ending normalization**: `\n` and `\r\n` line endings are normalized
     /// to `\n` (LF) in the returned content. Classic Mac `\r`-only line endings
-    /// are **not** recognized as line separators (matching `read_line()` behavior).
-    /// A trailing newline at the end of the file is preserved so that
-    /// round-tripping content through this reader and writing it back does not
-    /// silently drop the final newline.
+    /// are **not** recognized as line separators because only `\n` separates lines.
+    /// A trailing newline at the end of the file is preserved when it fits within
+    /// the byte budget so that round-tripping content through this reader and writing
+    /// it back does not silently drop the final newline.
     ///
-    /// This is a modified version of the loop that [`futures::io::BufReader::lines()`]
-    /// uses internally (i.e. repeated `read_line()` calls with newline stripping),
-    /// but additionally tracks whether each line was terminated by a newline so
-    /// the accumulator can preserve the file's trailing newline.
+    /// Lines are scanned in buffered chunks so allocation does not grow with
+    /// unterminated content beyond the remaining byte budget.
     pub async fn read_text_file(
         path: &Path,
         max_bytes: usize,
@@ -612,36 +610,64 @@ impl FileModel {
             max_bytes,
         );
 
-        // Use `read_line()` instead of `lines()` so we can detect whether each
-        // line was terminated by a newline. `lines()` strips this information,
-        // which caused trailing newlines to be silently dropped.
-        let mut line_buf = String::new();
+        let mut utf8_pending = Vec::new();
         loop {
-            line_buf.clear();
-            let bytes_read = match reader.read_line(&mut line_buf).await {
-                Ok(n) => n,
-                Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
-                    // Not valid UTF-8.
-                    return Ok(TextFileReadResult::NotText);
+            let max_buffered_line_bytes = accumulator.remaining_bytes().saturating_add(1);
+            let mut line_buf = text_file_reader::BoundedLineBuffer::new(max_buffered_line_bytes);
+            let mut has_newline = false;
+            let mut read_any_bytes = false;
+
+            loop {
+                let available = match reader.fill_buf().await {
+                    Ok(bytes) => bytes,
+                    Err(e) => return Err(anyhow::anyhow!(e)),
+                };
+                if available.is_empty() {
+                    break;
                 }
-                Err(e) => return Err(anyhow::anyhow!(e)),
-            };
-            if bytes_read == 0 {
-                break; // EOF
+
+                let newline_index = available.iter().position(|byte| *byte == b'\n');
+                let bytes_consumed = newline_index.map_or(available.len(), |index| index + 1);
+                let line_bytes = &available[..newline_index.unwrap_or(bytes_consumed)];
+
+                utf8_pending.extend_from_slice(&available[..bytes_consumed]);
+                match std::str::from_utf8(&utf8_pending) {
+                    Ok(_) => utf8_pending.clear(),
+                    Err(error) if error.error_len().is_some() => {
+                        return Ok(TextFileReadResult::NotText);
+                    }
+                    Err(error) => {
+                        utf8_pending.drain(..error.valid_up_to());
+                    }
+                }
+
+                line_buf.extend_from_slice(line_bytes);
+
+                reader.consume_unpin(bytes_consumed);
+                read_any_bytes = true;
+                if newline_index.is_some() {
+                    has_newline = true;
+                    break;
+                }
             }
 
-            // Strip the line terminator (`\n` or `\r\n`) and record whether
-            // one was present. Note: `read_line()` only splits on `\n`, so
-            // standalone `\r` (classic Mac) is not treated as a line separator.
-            let has_newline = line_buf.ends_with('\n');
-            if has_newline {
-                line_buf.pop();
-            }
-            if line_buf.ends_with('\r') {
-                line_buf.pop();
+            if !read_any_bytes {
+                if utf8_pending.is_empty() {
+                    break;
+                }
+                return Ok(TextFileReadResult::NotText);
             }
 
-            accumulator.push_line(std::mem::take(&mut line_buf), has_newline);
+            if line_buf.exceeded_byte_budget() {
+                accumulator.push_truncated_line(has_newline);
+            } else {
+                if line_buf.last() == Some(b'\r') {
+                    line_buf.pop();
+                }
+                let line = String::from_utf8(line_buf.into_bytes())
+                    .expect("line bytes were validated as UTF-8");
+                accumulator.push_line(line, has_newline);
+            }
         }
 
         let (segments, bytes_read) = accumulator.finalize();
