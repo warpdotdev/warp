@@ -144,7 +144,17 @@ impl RateLimitConfig {
 
 /// The global sync queue singleton, generic over the task type.
 pub struct SyncQueue<T: SyncQueueTaskTrait> {
-    sender: Arc<MpscSender<TaskId>>,
+    /// A single long-lived `Sender`, reused (never cloned) across every
+    /// `enqueue`/`enqueue_with_result` call. `futures::mpsc` grants each live
+    /// `Sender` its own guaranteed buffer slot (capacity = buffer size + live
+    /// sender count), so cloning a fresh, disposable `Sender` per call would
+    /// defeat `DEFAULT_BUFFER_SIZE` backpressure: capacity would grow with
+    /// every enqueue and `try_send` would almost never fail. Reusing one
+    /// `Sender` keeps the sender count (and therefore capacity) fixed, so
+    /// `try_send` genuinely fails once the backlog exceeds the buffer,
+    /// engaging the cleanup below instead of growing `task_map` unbounded.
+    /// `try_send` needs `&mut self`, hence the `Mutex`.
+    sender: Arc<Mutex<MpscSender<TaskId>>>,
     task_map: Arc<Mutex<HashMap<TaskId, QueuedTask<T>>>>,
     /// Abort handle for the currently executing task. Set by the background
     /// processor before running a task and cleared after it completes.
@@ -221,7 +231,7 @@ impl<T: SyncQueueTaskTrait> SyncQueue<T> {
         ));
 
         Self {
-            sender: Arc::new(sender),
+            sender: Arc::new(Mutex::new(sender)),
             task_map,
             active_task_handle,
             mode,
@@ -242,9 +252,21 @@ impl<T: SyncQueueTaskTrait> SyncQueue<T> {
     /// Enqueues a task without returning a per-task result receiver.
     /// Results are delivered through the broadcast channel.
     ///
+    /// Returns `true` if the task was submitted to the worker. Returns
+    /// `false` if the channel was full and the task was dropped before ever
+    /// running — in that case, no result is ever broadcast for it. Callers
+    /// that key their own bookkeeping (e.g. a dedup set) off a task must
+    /// react to `false` themselves, since a broadcast-based cleanup will
+    /// never fire for a task that never ran.
+    ///
     /// # Panics
     /// Panics if this is a per-task queue.
-    pub fn enqueue(&self, task: T, retry_options: Option<RetryOption>, context: impl Into<String>) {
+    pub fn enqueue(
+        &self,
+        task: T,
+        retry_options: Option<RetryOption>,
+        context: impl Into<String>,
+    ) -> bool {
         assert!(
             matches!(self.mode, SyncQueueMode::Streaming { .. }),
             "enqueue() called on a per-task queue"
@@ -260,10 +282,12 @@ impl<T: SyncQueueTaskTrait> SyncQueue<T> {
 
         self.task_map.lock().unwrap().insert(task_id, queued_task);
 
-        if let Err(e) = self.sender.as_ref().clone().try_send(task_id) {
+        if let Err(e) = self.sender.lock().unwrap().try_send(task_id) {
             log::warn!("Failed to enqueue task because of receiver error {e}");
             self.task_map.lock().unwrap().remove(&task_id);
+            return false;
         }
+        true
     }
 
     /// Enqueues a task and returns a oneshot receiver for that task's result.
@@ -293,7 +317,7 @@ impl<T: SyncQueueTaskTrait> SyncQueue<T> {
         self.task_map.lock().unwrap().insert(task_id, queued_task);
 
         // Ignore send error if no receiver (e.g., queue processor dropped)
-        if let Err(e) = self.sender.as_ref().clone().try_send(task_id) {
+        if let Err(e) = self.sender.lock().unwrap().try_send(task_id) {
             log::warn!("Failed to enqueue task because of receiver error {e}");
             // Clean up the task from the map since it will never be processed.
             self.task_map.lock().unwrap().remove(&task_id);
