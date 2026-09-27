@@ -253,6 +253,30 @@ fn substituted_branch_checkout_rejects_missing_remote_head() {
 }
 
 #[test]
+fn substituted_branch_checkout_rejects_invalid_ref() {
+    let fixture = build_fixture();
+    let mut request = clone_request(
+        repo(CodeForge::GitHub, "copy", &fixture.repo_name),
+        Some(RepositoryHeadRef::Branch("../main".to_string())),
+    );
+    request.fetch_branch_only = true;
+    let command = checkout_command_for(&request, &fixture.working_dir, ShellType::Bash)
+        .unwrap()
+        .replace(&request.remote.https_clone_url(), &fixture.origin_url);
+
+    assert!(!run_command(&command).success());
+    let repo_dir = fixture.working_dir.join(&fixture.repo_name);
+    assert!(
+        !Command::new("git")
+            .args(["rev-parse", "--verify", "HEAD"])
+            .current_dir(&repo_dir)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+}
+#[test]
 fn parallel_substituted_branch_checkout_fetches_only_named_ref() {
     let fixture = build_fixture();
     let seed = fixture.working_dir.join("../seed");

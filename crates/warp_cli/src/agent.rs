@@ -102,22 +102,6 @@ impl RepositoryIdentity {
     }
 }
 
-fn valid_git_branch(branch: &str) -> bool {
-    !branch.is_empty()
-        && !branch.starts_with('-')
-        && !branch.starts_with('/')
-        && !branch.ends_with('/')
-        && !branch.ends_with('.')
-        && !branch.ends_with(".lock")
-        && !branch.contains("..")
-        && !branch.contains("//")
-        && branch
-            .split('/')
-            .all(|part| !part.starts_with('.') && !part.ends_with(".lock"))
-        && branch.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/' | b'@')
-        })
-}
 /// Server-supplied repository preparation override.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -164,13 +148,9 @@ impl RepositoryPreparationOverride {
                 }
             }
             RepositoryHeadRef::Branch(branch) => {
-                if branch.is_empty()
-                    || branch.trim() != branch
-                    || (self.clone_from.is_some() && !valid_git_branch(branch))
-                {
+                if branch.is_empty() || branch.trim() != branch {
                     return Err(
-                        "branch must be a valid checkout ref without surrounding whitespace"
-                            .to_string(),
+                        "branch must not be empty or contain surrounding whitespace".to_string()
                     );
                 }
             }
