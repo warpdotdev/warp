@@ -132,6 +132,9 @@ impl HarnessSupportClient for FailingUploadTargetsClient {
     ) -> Result<()> {
         unimplemented!("not used by the coordinator")
     }
+    async fn wait_for_events(&self) -> Result<()> {
+        unimplemented!("not used by the coordinator")
+    }
     async fn get_snapshot_upload_targets(
         &self,
         _request: &SnapshotUploadRequest,
@@ -231,6 +234,9 @@ impl HarnessSupportClient for RecordingClient {
         _error_message: String,
         _exit_code: Option<u8>,
     ) -> Result<()> {
+        unimplemented!("not used by the coordinator")
+    }
+    async fn wait_for_events(&self) -> Result<()> {
         unimplemented!("not used by the coordinator")
     }
     async fn get_snapshot_upload_targets(

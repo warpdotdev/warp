@@ -149,6 +149,8 @@ pub(super) enum CliTelemetryEvent {
     HarnessSupportFinishTask { success: bool },
     /// Executing `warp harness-support report-shutdown`
     HarnessSupportReportShutdown,
+    /// Executing `warp harness-support wait-for-events`
+    HarnessSupportWaitForEvents,
     /// Executing `warp runner list`
     RunnerList,
     /// Executing `warp runner create`
@@ -251,6 +253,7 @@ impl TelemetryEvent for CliTelemetryEvent {
                 Some(json!({ "success": success }))
             }
             CliTelemetryEvent::HarnessSupportReportShutdown => None,
+            CliTelemetryEvent::HarnessSupportWaitForEvents => None,
             CliTelemetryEvent::RunnerList => None,
             CliTelemetryEvent::RunnerCreate => None,
             CliTelemetryEvent::RunnerUpdate => None,
@@ -376,6 +379,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             }
             CliTelemetryEventDiscriminants::HarnessSupportReportShutdown => {
                 "CLI.Execute.HarnessSupport.ReportShutdown"
+            }
+            CliTelemetryEventDiscriminants::HarnessSupportWaitForEvents => {
+                "CLI.Execute.HarnessSupport.WaitForEvents"
             }
             CliTelemetryEventDiscriminants::RunnerList => "CLI.Execute.Runner.List",
             CliTelemetryEventDiscriminants::RunnerCreate => "CLI.Execute.Runner.Create",
@@ -540,6 +546,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             }
             CliTelemetryEventDiscriminants::HarnessSupportReportShutdown => {
                 "Reported agent shutdown via harness-support from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::HarnessSupportWaitForEvents => {
+                "Recorded a wait_for_events park via harness-support from the Warp CLI"
             }
             CliTelemetryEventDiscriminants::RunnerList => "Listed runners from the Warp CLI",
             CliTelemetryEventDiscriminants::RunnerCreate => "Created a runner from the Warp CLI",
