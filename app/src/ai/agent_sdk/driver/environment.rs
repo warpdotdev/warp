@@ -1241,10 +1241,13 @@ async fn clone_repo(
             );
             let command_result = execute_command(init_command, spawner).await?;
             if command_result.exit_code != 0.into() {
-                return Err(
-                    clone_repo_failure(request, repo_name.clone(), &command_result.block_id, spawner)
-                        .await,
-                );
+                return Err(clone_repo_failure(
+                    request,
+                    repo_name.clone(),
+                    &command_result.block_id,
+                    spawner,
+                )
+                .await);
             }
         }
     } else if dir_exists {
@@ -1268,10 +1271,13 @@ async fn clone_repo(
         let command = format!("git clone --filter=blob:none '{escaped_url}' '{escaped_dir}'");
         let command_result = execute_command(command, spawner).await?;
         if command_result.exit_code != 0.into() {
-            return Err(
-                clone_repo_failure(request, repo_name.clone(), &command_result.block_id, spawner)
-                    .await,
-            );
+            return Err(clone_repo_failure(
+                request,
+                repo_name.clone(),
+                &command_result.block_id,
+                spawner,
+            )
+            .await);
         }
 
         safe_info!(
@@ -1295,8 +1301,8 @@ async fn clone_repo(
             safe: ("Checking out pinned ref for repository"),
             full: ("Checking out {checkout_ref} for {repo_name}")
         );
-        let exit_code = execute_command(command, spawner).await?;
-        if exit_code != 0.into() {
+        let command_result = execute_command(command, spawner).await?;
+        if command_result.exit_code != 0.into() {
             let hosts = unique_clone_hosts(std::iter::once(request));
             let identity_diagnostics =
                 collect_clone_failure_identity_diagnostics(hosts, spawner).await;
