@@ -1504,6 +1504,7 @@ fn clone_failure_errors_preserve_the_original_failure_before_diagnostics() {
     };
     let clone_error = PrepareEnvironmentError::CloneRepo {
         repo_name: "warpdotdev/warp".to_string(),
+        output: None,
         identity_diagnostics: diagnostics.clone(),
     };
     let checkout_error = PrepareEnvironmentError::CheckoutFailed {
