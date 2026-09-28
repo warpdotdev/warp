@@ -20,6 +20,152 @@ fn update_deltas(diff: &AIRequestedCodeDiff) -> &[DiffDelta] {
 }
 
 #[test]
+fn test_search_replace_rejects_unrelated_external_insert() {
+    App::test((), |app| async move {
+        let file_path = "/tmp/stale-search-replace.rs".to_string();
+        let last_read = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1);
+        let externally_modified = last_read + std::time::Duration::from_secs(1);
+        let edit = ParsedDiff::StrReplaceEdit {
+            file: Some(file_path.clone()),
+            search: Some("2|let value = old_value;".to_string()),
+            replace: Some("let value = new_value;".to_string()),
+        };
+
+        let result = apply_edits(
+            vec![FileEdit::Edit(edit)],
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
+            app.background_executor(),
+            Arc::new(AuthState::new_for_test()),
+            false,
+            |_| {
+                futures::future::ready(
+                    FileReadResult::Found {
+                        content: "// Added outside the conversation\nlet value = old_value;\n"
+                            .to_string(),
+                        last_modified: Some(externally_modified),
+                    }
+                    .with_expected_revision(Some(FileRevision::present(
+                        "let value = old_value;\n",
+                        Some(last_read),
+                    ))),
+                )
+            },
+        )
+        .await;
+
+        let errors = result.expect_err("stale search-replace should fail before matching");
+        assert!(matches!(
+            errors.as_slice(),
+            [DiffApplicationError::FileChanged { file }] if file == &file_path
+        ));
+        assert_eq!(
+            DiffApplicationError::error_for_conversation(&errors),
+            format!(
+                "{file_path} changed since it was last read. Call read_files on {file_path} before retrying the edit."
+            )
+        );
+    });
+}
+
+#[test]
+fn test_overwrite_rejects_external_edit() {
+    App::test((), |app| async move {
+        let file_path = "/tmp/stale-overwrite.rs".to_string();
+        let last_read = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1);
+        let externally_modified = last_read + std::time::Duration::from_secs(1);
+        let edit = FileEdit::Create {
+            file: Some(file_path.clone()),
+            content: Some("model replacement\n".to_string()),
+            allow_overwrite: true,
+        };
+
+        let result = apply_edits(
+            vec![edit],
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
+            app.background_executor(),
+            Arc::new(AuthState::new_for_test()),
+            false,
+            |_| {
+                futures::future::ready(
+                    FileReadResult::Found {
+                        content: "human replacement\n".to_string(),
+                        last_modified: Some(externally_modified),
+                    }
+                    .with_expected_revision(Some(FileRevision::present(
+                        "original content\n",
+                        Some(last_read),
+                    ))),
+                )
+            },
+        )
+        .await;
+
+        let errors = result.expect_err("stale overwrite should not replace external edits");
+        assert!(matches!(
+            errors.as_slice(),
+            [DiffApplicationError::FileChanged { file }] if file == &file_path
+        ));
+    });
+}
+
+#[test]
+fn test_search_replace_rejects_externally_mutated_search_block() {
+    App::test((), |app| async move {
+        let file_path = "/tmp/stale-mutated-search.rs".to_string();
+        let last_read = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1);
+        let externally_modified = last_read + std::time::Duration::from_secs(1);
+        let edit = ParsedDiff::StrReplaceEdit {
+            file: Some(file_path.clone()),
+            search: Some("1|let timeout = 10;".to_string()),
+            replace: Some("let timeout = 20;".to_string()),
+        };
+
+        let result = apply_edits(
+            vec![FileEdit::Edit(edit)],
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
+            app.background_executor(),
+            Arc::new(AuthState::new_for_test()),
+            false,
+            |_| {
+                futures::future::ready(
+                    FileReadResult::Found {
+                        content: "let timeout = 15;\n".to_string(),
+                        last_modified: Some(externally_modified),
+                    }
+                    .with_expected_revision(Some(FileRevision::present(
+                        "let timeout = 10;\n",
+                        Some(last_read),
+                    ))),
+                )
+            },
+        )
+        .await;
+
+        let errors = result.expect_err("mutated search block should not be fuzzy-applied");
+        assert!(matches!(
+            errors.as_slice(),
+            [DiffApplicationError::FileChanged { file }] if file == &file_path
+        ));
+    });
+}
+
+#[test]
+fn test_missing_revision_rejects_externally_recreated_file() {
+    let current = FileReadResult::Found {
+        content: "recreated outside the conversation\n".to_string(),
+        last_modified: Some(std::time::UNIX_EPOCH),
+    };
+
+    assert!(matches!(
+        current.with_expected_revision(Some(FileRevision::Missing)),
+        FileReadResult::Changed
+    ));
+}
+
+#[test]
 fn test_apply_diffs_error_when_no_diffs_applied() {
     App::test((), |app| async move {
         let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
@@ -1385,6 +1531,55 @@ fn test_apply_v4a_rename_to_existing_file() {
             }
             other => panic!("Expected Update diff_type for target, got {other:?}"),
         }
+    });
+}
+
+#[test]
+fn test_apply_v4a_rename_rejects_externally_changed_target() {
+    App::test((), |app| async move {
+        let mut source_file = NamedTempFile::new().expect("Failed to create source file");
+        let source_path = source_file.path().to_string_lossy().to_string();
+        writeln!(&mut source_file, "source content").unwrap();
+
+        let mut target_file = NamedTempFile::new().expect("Failed to create target file");
+        let target_path = target_file.path().to_string_lossy().to_string();
+        writeln!(&mut target_file, "external target content").unwrap();
+        let last_modified = target_file
+            .as_file()
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok();
+
+        let edit = FileEdit::Edit(ParsedDiff::V4AEdit {
+            file: Some(source_path),
+            move_to: Some(target_path.clone()),
+            hunks: vec![],
+        });
+        let expected_target = FileRevision::present("previous target content\n", last_modified);
+        let target_for_read = target_path.clone();
+
+        let result = apply_edits(
+            vec![edit],
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
+            app.background_executor(),
+            Arc::new(AuthState::new_for_test()),
+            false,
+            move |path| {
+                let expected = (path == target_for_read).then_some(expected_target);
+                async move {
+                    let content = std::fs::read_to_string(&path);
+                    FileReadResult::from(content).with_expected_revision(expected)
+                }
+            },
+        )
+        .await;
+
+        let errors = result.expect_err("stale rename target should not be overwritten");
+        assert!(matches!(
+            errors.as_slice(),
+            [DiffApplicationError::FileChanged { file }] if file == &target_path
+        ));
     });
 }
 

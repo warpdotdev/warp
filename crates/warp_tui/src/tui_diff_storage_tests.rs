@@ -1,5 +1,6 @@
 use std::fs;
 
+use ai::agent::action_result::RequestFileEditsResult;
 use warp_core::HostId;
 use warpui::App;
 
@@ -16,11 +17,76 @@ fn add_tui_storage(
     app.add_model(|_| TuiDiffStorage::new(diffs, session_type))
 }
 
+#[test]
+fn accept_rejects_mutation_after_revision_capture_before_write_dispatch() {
+    App::test((), |mut app| async move {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stale.rs").to_string_lossy().to_string();
+        fs::write(&path, "observed\n").unwrap();
+        let expected_revisions = HashMap::from([(
+            path.clone(),
+            ExpectedFileRevision::from_content("observed\n"),
+        )]);
+        let model = add_tui_storage(
+            &mut app,
+            vec![FileDiff::new(
+                "observed\n".to_owned(),
+                path.clone(),
+                DiffType::update(
+                    vec![DiffDelta {
+                        replacement_line_range: 1..2,
+                        insertion: "agent".to_owned(),
+                    }],
+                    None,
+                ),
+            )],
+            DiffSessionType::Local,
+        );
+
+        fs::write(&path, "external mutation\n").unwrap();
+        let future = model.update(&mut app, |model, ctx| {
+            model.accept_and_save(expected_revisions, ctx)
+        });
+        let persisted = future.await;
+
+        assert!(matches!(
+            persisted.result,
+            RequestFileEditsResult::DiffApplicationFailed { error }
+                if error.contains("Call read_files")
+        ));
+        assert_eq!(fs::read_to_string(path).unwrap(), "external mutation\n");
+    });
+}
+
 /// Runs the shared accept flow for local diffs on a fresh app and awaits the result.
 async fn accept_local(app: &mut App, diffs: Vec<FileDiff>) -> RequestFileEditsResult {
+    let expected_revisions = diffs
+        .iter()
+        .flat_map(|diff| {
+            let path = diff.file_path();
+            let source = match diff.diff_type {
+                DiffType::Create { .. } => ExpectedFileRevision::Missing,
+                _ => ExpectedFileRevision::from_content(&diff.base.content),
+            };
+            let mut revisions = vec![(path, source)];
+            if let DiffType::Update {
+                rename: Some(ref target),
+                ..
+            } = diff.diff_type
+            {
+                revisions.push((
+                    target.to_string_lossy().to_string(),
+                    ExpectedFileRevision::Missing,
+                ));
+            }
+            revisions
+        })
+        .collect();
     let model = add_tui_storage(app, diffs, DiffSessionType::Local);
-    let future = model.update(app, |model, ctx| model.accept_and_save(ctx));
-    future.await
+    let future = model.update(app, |model, ctx| {
+        model.accept_and_save(expected_revisions, ctx)
+    });
+    future.await.result
 }
 
 #[test]
@@ -112,6 +178,41 @@ fn accept_renames_and_reports_source_as_deleted() {
     });
 }
 
+#[test]
+fn accept_rename_requires_a_destination_revision() {
+    App::test((), |mut app| async move {
+        let dir = tempfile::tempdir().unwrap();
+        let old_path = dir.path().join("old.rs").to_string_lossy().to_string();
+        let new_path = dir.path().join("new.rs").to_string_lossy().to_string();
+        fs::write(&old_path, "content\n").unwrap();
+        let model = add_tui_storage(
+            &mut app,
+            vec![FileDiff::new(
+                "content\n".to_owned(),
+                old_path.clone(),
+                DiffType::update(Vec::new(), Some(new_path.clone())),
+            )],
+            DiffSessionType::Local,
+        );
+        let expected_revisions = HashMap::from([(
+            old_path.clone(),
+            ExpectedFileRevision::from_content("content\n"),
+        )]);
+
+        let future = model.update(&mut app, |model, ctx| {
+            model.accept_and_save(expected_revisions, ctx)
+        });
+        let persisted = future.await;
+
+        assert!(matches!(
+            persisted.result,
+            RequestFileEditsResult::DiffApplicationFailed { error }
+                if error.contains("Call read_files")
+        ));
+        assert_eq!(fs::read_to_string(&old_path).unwrap(), "content\n");
+        assert!(!Path::new(&new_path).exists());
+    });
+}
 #[test]
 fn accept_deletes_a_file() {
     App::test((), |mut app| async move {

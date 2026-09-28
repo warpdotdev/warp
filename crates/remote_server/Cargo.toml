@@ -18,6 +18,7 @@ log.workspace = true
 prost.workspace = true
 repo_metadata.workspace = true
 serde.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 warp_core.workspace = true

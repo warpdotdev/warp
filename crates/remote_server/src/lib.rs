@@ -1,3 +1,6 @@
+use std::time::SystemTime;
+
+use sha2::{Digest, Sha256};
 pub mod auth;
 pub mod client;
 pub mod codebase_index_proto;
@@ -12,6 +15,39 @@ pub mod ssh;
 pub mod transport;
 
 pub use host_id::HostId;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExpectedFileRevision {
+    Present {
+        content_digest: [u8; 32],
+        last_modified: Option<SystemTime>,
+    },
+    Missing,
+    Uneditable,
+}
+
+impl ExpectedFileRevision {
+    pub fn from_content(content: impl AsRef<[u8]>) -> Self {
+        Self::Present {
+            content_digest: Sha256::digest(content).into(),
+            last_modified: None,
+        }
+    }
+
+    pub fn to_proto(self) -> proto::ExpectedFileRevision {
+        let state = match self {
+            Self::Present { content_digest, .. } => Some(
+                proto::expected_file_revision::State::ContentSha256(content_digest.to_vec()),
+            ),
+            Self::Missing => Some(proto::expected_file_revision::State::Missing(true)),
+            Self::Uneditable => Some(proto::expected_file_revision::State::Uneditable(true)),
+        };
+        proto::ExpectedFileRevision {
+            state,
+            last_modified_epoch_millis: None,
+        }
+    }
+}
 
 #[allow(clippy::large_enum_variant)]
 pub mod proto {

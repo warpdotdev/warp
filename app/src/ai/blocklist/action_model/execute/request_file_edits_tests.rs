@@ -1,26 +1,110 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use ai::diff_validation::{AIRequestedCodeDiff, DiffType};
+use ai::diff_validation::{AIRequestedCodeDiff, DiffType, ParsedDiff};
 use async_channel::unbounded;
 use futures::FutureExt;
 use warpui::{App, AppContext, EntityId};
 
+use super::super::file_revisions::FileRevision;
 use super::*;
+use crate::ai::agent::FileEdit;
 use crate::ai::agent::task::TaskId;
+use crate::ai::blocklist::diff_storage::PersistedFileEdits;
+use crate::auth::AuthStateProvider;
 use crate::terminal::model::session::Sessions;
 use crate::terminal::model_events::ModelEventDispatcher;
 
 /// Shared observable state for a [`TestStorage`].
 struct TestStorageState {
     diffs: RefCell<Option<(Vec<FileDiff>, DiffSessionType)>>,
+    expected_revisions: RefCell<HashMap<String, warp_files::ExpectedFileRevision>>,
     accepted: Cell<bool>,
+}
+
+#[test]
+fn execute_passes_preprocessing_revisions_to_storage() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("preview-race.rs");
+        let path = path.to_string_lossy().to_string();
+        std::fs::write(&path, "let value = old;\n").unwrap();
+
+        let conversation_id = AIConversationId::new();
+        let tracker = FileRevisionTracker::default();
+        tracker.record_revisions(
+            conversation_id,
+            [(
+                path.clone(),
+                FileRevision::present("let value = old;\n", None),
+            )],
+        );
+        let executor = add_executor_with_tracker(&mut app, tracker);
+        let action_id = AIAgentActionId::from("preview-race".to_owned());
+        let storage = register_storage(&mut app, &executor, &action_id);
+        let action = edit_action_with_edits(
+            &action_id,
+            vec![FileEdit::Edit(ParsedDiff::StrReplaceEdit {
+                file: Some(path.clone()),
+                search: Some("1|let value = old;".to_string()),
+                replace: Some("let value = agent;".to_string()),
+            })],
+        );
+
+        let preprocess = executor.update(&mut app, |executor, ctx| {
+            executor.preprocess_action(
+                PreprocessActionInput {
+                    action: &action,
+                    conversation_id,
+                },
+                ctx,
+            )
+        });
+        preprocess.await;
+        assert!(storage.diffs.borrow().is_some());
+
+        let external_content = "// external edit\nlet value = old;\n";
+        std::fs::write(&path, external_content).unwrap();
+        let execution = execute_action(&mut app, &executor, &action, conversation_id);
+        let AnyActionExecution::Async {
+            execute_future,
+            on_complete,
+        } = execution
+        else {
+            panic!("expected async execution");
+        };
+        let result = execute_future.await;
+        let result = app.update(|ctx| on_complete(result, ctx));
+
+        assert!(storage.accepted.get());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), external_content);
+        assert!(matches!(
+            result,
+            AIAgentActionResultType::RequestFileEdits(RequestFileEditsResult::Success { .. })
+        ));
+        assert!(matches!(
+            storage.expected_revisions.borrow().get(&path),
+            Some(warp_files::ExpectedFileRevision::Present { content_digest, .. })
+                if *content_digest
+                    == match warp_files::ExpectedFileRevision::from_content(
+                        "let value = old;\n"
+                    ) {
+                        warp_files::ExpectedFileRevision::Present {
+                            content_digest,
+                            ..
+                        } => content_digest,
+                        _ => unreachable!(),
+                    }
+        ));
+    });
 }
 
 impl TestStorageState {
     fn new() -> Rc<Self> {
         Rc::new(Self {
             diffs: RefCell::new(None),
+            expected_revisions: RefCell::new(HashMap::new()),
             accepted: Cell::new(false),
         })
     }
@@ -39,14 +123,22 @@ impl RegisteredDiffStorage for TestStorage {
         *self.0.diffs.borrow_mut() = Some((diffs, session_type));
     }
 
-    fn accept_and_save(&self, _app: &mut AppContext) -> BoxFuture<'static, RequestFileEditsResult> {
+    fn accept_and_save(
+        &self,
+        expected_revisions: HashMap<String, warp_files::ExpectedFileRevision>,
+        _app: &mut AppContext,
+    ) -> BoxFuture<'static, PersistedFileEdits> {
         self.0.accepted.set(true);
-        futures::future::ready(RequestFileEditsResult::Success {
-            diff: String::new(),
-            updated_files: Vec::new(),
-            deleted_files: Vec::new(),
-            lines_added: 0,
-            lines_removed: 0,
+        *self.0.expected_revisions.borrow_mut() = expected_revisions;
+        futures::future::ready(PersistedFileEdits {
+            result: RequestFileEditsResult::Success {
+                diff: String::new(),
+                updated_files: Vec::new(),
+                deleted_files: Vec::new(),
+                lines_added: 0,
+                lines_removed: 0,
+            },
+            files: Vec::new(),
         })
         .boxed()
     }
@@ -54,13 +146,24 @@ impl RegisteredDiffStorage for TestStorage {
 
 /// Builds an executor over a minimal test session.
 fn add_executor(app: &mut App) -> ModelHandle<RequestFileEditsExecutor> {
+    add_executor_with_tracker(app, FileRevisionTracker::default())
+}
+
+fn add_executor_with_tracker(
+    app: &mut App,
+    file_revision_tracker: FileRevisionTracker,
+) -> ModelHandle<RequestFileEditsExecutor> {
+    app.update(warp_core::telemetry::testing::MockTelemetryContextProvider::register);
+    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     let sessions = app.add_model(|_| Sessions::new_for_test());
     let (_, model_events_rx) = unbounded();
     let dispatcher =
         app.add_model(|ctx| ModelEventDispatcher::new(model_events_rx, sessions.clone(), ctx));
     let active_session =
         app.add_model(|ctx| ActiveSession::new(sessions.clone(), dispatcher.clone(), ctx));
-    app.add_model(|ctx| RequestFileEditsExecutor::new(active_session, EntityId::new(), ctx))
+    app.add_model(|ctx| {
+        RequestFileEditsExecutor::new(active_session, EntityId::new(), file_revision_tracker, ctx)
+    })
 }
 
 /// Registers a `TestStorage` for `action_id` and returns its observable state.
@@ -79,11 +182,15 @@ fn register_storage(
 
 /// Builds a `RequestFileEdits` action with the given id.
 fn edit_action(id: &AIAgentActionId) -> AIAgentAction {
+    edit_action_with_edits(id, Vec::new())
+}
+
+fn edit_action_with_edits(id: &AIAgentActionId, file_edits: Vec<FileEdit>) -> AIAgentAction {
     AIAgentAction {
         id: id.clone(),
         task_id: TaskId::new("task".to_owned()),
         action: AIAgentActionType::RequestFileEdits {
-            file_edits: Vec::new(),
+            file_edits,
             title: None,
         },
         requires_result: true,
@@ -98,11 +205,20 @@ fn execute(
 ) -> AnyActionExecution {
     let action = edit_action(action_id);
     let conversation_id = AIConversationId::new();
+    execute_action(app, executor, &action, conversation_id)
+}
+
+fn execute_action(
+    app: &mut App,
+    executor: &ModelHandle<RequestFileEditsExecutor>,
+    action: &AIAgentAction,
+    conversation_id: AIConversationId,
+) -> AnyActionExecution {
     executor.update(app, |executor, ctx| {
         executor
             .execute(
                 ExecuteActionInput {
-                    action: &action,
+                    action,
                     conversation_id,
                 },
                 ctx,
@@ -150,8 +266,15 @@ fn execute_accepts_through_registered_storage() {
         let storage = register_storage(&mut app, &executor, &action_id);
 
         let execution = execute(&mut app, &executor, &action_id);
-
-        assert!(matches!(execution, AnyActionExecution::Async { .. }));
+        let AnyActionExecution::Async {
+            execute_future,
+            on_complete,
+        } = execution
+        else {
+            panic!("expected async execution");
+        };
+        let result = execute_future.await;
+        app.update(|ctx| on_complete(result, ctx));
         assert!(storage.accepted.get());
         // The entry stays registered until the action's terminal result
         // funnels through `discard_pending`.

@@ -69,8 +69,8 @@ pub use crate::ai::blocklist::conversation_selection::{
     PendingQueryState,
 };
 pub use crate::ai::blocklist::diff_storage::{
-    DiffStorage, DiffStorageHelper, FileSnapshot, RegisteredDiffStorage, SaveFuture,
-    UpdatedFileState,
+    DiffStorage, DiffStorageHelper, FileSnapshot, PersistedFileEdits, RegisteredDiffStorage,
+    SaveFuture, UpdatedFileState,
 };
 pub use crate::ai::blocklist::diff_types::{DiffSessionType, FileDiff, changed_lines_from_op};
 #[cfg(feature = "local_fs")]

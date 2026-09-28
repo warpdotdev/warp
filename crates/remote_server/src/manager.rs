@@ -920,20 +920,36 @@ impl HostRequestHandle {
 
     /// Writes content to a file on the remote host, creating parent
     /// directories if they don't exist.
-    pub async fn write_file(&self, path: String, content: String) -> Result<(), HostRequestError> {
+    pub async fn write_file(
+        &self,
+        path: String,
+        content: String,
+        expected_revision: Option<crate::proto::ExpectedFileRevision>,
+    ) -> Result<(), HostRequestError> {
         let msg = self
             .send(crate::proto::host_scoped_request::Message::WriteFile(
-                crate::proto::WriteFile { path, content },
+                crate::proto::WriteFile {
+                    path,
+                    content,
+                    expected_revision,
+                },
             ))
             .await?;
         crate::host_response::write_file_result(&msg).map_err(HostRequestError::OperationFailed)
     }
 
     /// Deletes a file on the remote host.
-    pub async fn delete_file(&self, path: String) -> Result<(), HostRequestError> {
+    pub async fn delete_file(
+        &self,
+        path: String,
+        expected_revision: Option<crate::proto::ExpectedFileRevision>,
+    ) -> Result<(), HostRequestError> {
         let msg = self
             .send(crate::proto::host_scoped_request::Message::DeleteFile(
-                crate::proto::DeleteFile { path },
+                crate::proto::DeleteFile {
+                    path,
+                    expected_revision,
+                },
             ))
             .await?;
         crate::host_response::delete_file_result(&msg).map_err(HostRequestError::OperationFailed)

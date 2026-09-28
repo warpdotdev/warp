@@ -4,12 +4,12 @@ use std::collections::{HashMap, HashSet};
 /// Allows opening and saving files in a single, central model.  Subscribers can watch for content
 /// when files are loaded, and request that content be saved to disk.
 use std::future::Future;
-use std::io;
+use std::io::{self, Read, Seek, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use async_channel::Sender;
@@ -22,6 +22,7 @@ use remote_server::manager::RemoteServerManager;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::repository::{RepositorySubscriber, SubscriberId};
 use repo_metadata::{CanonicalizedPath, Repository, RepositoryUpdate, RepositoryWatchMode};
+use sha2::{Digest, Sha256};
 use warp_core::HostId;
 use warp_util::content_version::ContentVersion;
 use warp_util::file::{FileId, FileLoadError, FileSaveError};
@@ -31,6 +32,7 @@ use warpui_core::{Entity, ModelContext, ModelHandle, SingletonEntity};
 use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
 
 pub mod text_file_reader;
+pub use remote_server::ExpectedFileRevision;
 pub use text_file_reader::{TextFileReadResult, TextFileSegment};
 
 #[derive(Debug)]
@@ -60,9 +62,139 @@ pub enum FileModelEvent {
     },
 }
 
+/// Source and destination states required before a guarded rename can persist.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RenameExpectedRevisions {
+    pub source: ExpectedFileRevision,
+    pub target: ExpectedFileRevision,
+}
+
+fn stale_file_error(path: &Path) -> FileSaveError {
+    FileSaveError::Other(format!(
+        "{} changed since it was last read. Call read_files on {} before retrying the edit.",
+        path.display(),
+        path.display()
+    ))
+}
+
 /// Resolves with the outcome of one dispatched save. The sender is only
 /// dropped on app teardown, in which case the outcome is treated as success.
 pub type SaveFuture = BoxFuture<'static, Result<(), Arc<FileSaveError>>>;
+
+pub const MAX_GUARDED_REVISION_BYTES: u64 = 1_000_000;
+
+// Guarded mutations are serialized within a Warp process, including requests
+// served for remote sessions. Portable filesystem APIs do not provide an
+// atomic compare-and-swap for arbitrary path contents, so a non-cooperating
+// process can still change a path after the final comparison and before the
+// write, delete, or rename syscall.
+static GUARDED_PERSISTENCE_LOCK: Mutex<()> = Mutex::new(());
+
+fn guarded_revision_matches(
+    file: &mut std::fs::File,
+    expected: ExpectedFileRevision,
+) -> io::Result<bool> {
+    let ExpectedFileRevision::Present {
+        content_digest,
+        last_modified,
+    } = expected
+    else {
+        return Ok(false);
+    };
+    let metadata = file.metadata()?;
+    if metadata.len() > MAX_GUARDED_REVISION_BYTES {
+        return Ok(false);
+    }
+    if let Some(expected_modified) = last_modified
+        && metadata.modified().ok() != Some(expected_modified)
+    {
+        return Ok(false);
+    }
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut bytes_read = 0_u64;
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        bytes_read += count as u64;
+        if bytes_read > MAX_GUARDED_REVISION_BYTES {
+            return Ok(false);
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(<[u8; 32]>::from(hasher.finalize()) == content_digest)
+}
+
+fn guarded_write_unlocked(
+    path: &Path,
+    content: &[u8],
+    expected: ExpectedFileRevision,
+) -> io::Result<bool> {
+    match expected {
+        ExpectedFileRevision::Missing => {
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path);
+            let mut file = match file {
+                Ok(file) => file,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Ok(false),
+                Err(error) => return Err(error),
+            };
+            file.write_all(content)?;
+            Ok(true)
+        }
+        ExpectedFileRevision::Present { .. } => {
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path);
+            let mut file = match file {
+                Ok(file) => file,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+                Err(error) => return Err(error),
+            };
+            if !guarded_revision_matches(&mut file, expected)? {
+                return Ok(false);
+            }
+            file.rewind()?;
+            file.write_all(content)?;
+            file.set_len(content.len() as u64)?;
+            Ok(true)
+        }
+        ExpectedFileRevision::Uneditable => Ok(false),
+    }
+}
+fn guarded_write(path: &Path, content: &[u8], expected: ExpectedFileRevision) -> io::Result<bool> {
+    let _guard = GUARDED_PERSISTENCE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guarded_write_unlocked(path, content, expected)
+}
+
+fn guarded_delete(path: &Path, expected: ExpectedFileRevision) -> io::Result<bool> {
+    let _guard = GUARDED_PERSISTENCE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match expected {
+        ExpectedFileRevision::Present { .. } => {
+            let file = std::fs::OpenOptions::new().read(true).open(path);
+            let mut file = match file {
+                Ok(file) => file,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+                Err(error) => return Err(error),
+            };
+            if !guarded_revision_matches(&mut file, expected)? {
+                return Ok(false);
+            }
+            std::fs::remove_file(path)?;
+            Ok(true)
+        }
+        ExpectedFileRevision::Missing | ExpectedFileRevision::Uneditable => Ok(false),
+    }
+}
 
 impl FileModelEvent {
     pub fn file_id(&self) -> FileId {
@@ -611,6 +743,8 @@ impl FileModel {
             requested_ranges,
             max_bytes,
         );
+        let mut revision_hasher = Some(Sha256::new());
+        let mut revision_bytes = 0_u64;
 
         // Use `read_line()` instead of `lines()` so we can detect whether each
         // line was terminated by a newline. `lines()` strips this information,
@@ -628,6 +762,14 @@ impl FileModel {
             };
             if bytes_read == 0 {
                 break; // EOF
+            }
+            revision_bytes += bytes_read as u64;
+            if revision_bytes <= MAX_GUARDED_REVISION_BYTES {
+                if let Some(hasher) = &mut revision_hasher {
+                    hasher.update(line_buf.as_bytes());
+                }
+            } else {
+                revision_hasher = None;
             }
 
             // Strip the line terminator (`\n` or `\r\n`) and record whether
@@ -648,6 +790,7 @@ impl FileModel {
         Ok(TextFileReadResult::Segments {
             segments,
             bytes_read,
+            content_digest: revision_hasher.map(|hasher| hasher.finalize().into()),
         })
     }
 
@@ -779,7 +922,7 @@ impl FileModel {
                 let handle = RemoteServerManager::as_ref(ctx).host_request_handle(host_id);
                 let path = path.as_str().to_string();
                 ctx.spawn(
-                    async move { handle.write_file(path, content).await },
+                    async move { handle.write_file(path, content, None).await },
                     move |me, result, ctx| {
                         let result =
                             result.map_err(|e| Arc::new(FileSaveError::RemoteError(e.to_string())));
@@ -805,6 +948,230 @@ impl FileModel {
         }
 
         Ok(async move { rx.await.unwrap_or(Ok(())) }.boxed())
+    }
+    /// Saves only when the backing file still matches `expected_revision`.
+    pub fn save_with_expected_revision(
+        &mut self,
+        file_id: FileId,
+        content: String,
+        version: ContentVersion,
+        expected_revision: ExpectedFileRevision,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<SaveFuture, FileSaveError> {
+        let backend = self
+            .file_state
+            .get(file_id)
+            .ok_or(FileSaveError::NoFilePath(file_id))?;
+        let (tx, rx) = oneshot::channel();
+        match backend {
+            FileBackend::Local(_) => {
+                let file_path = self
+                    .file_path(file_id)
+                    .ok_or(FileSaveError::NoFilePath(file_id))?;
+                ctx.spawn(
+                    async move {
+                        Self::ensure_parent_directories(&file_path)
+                            .await
+                            .map_err(|error| FileSaveError::IOError {
+                                error,
+                                path: file_path.clone(),
+                            })?;
+                        let guarded_path = file_path.clone();
+                        let saved = blocking::unblock(move || {
+                            guarded_write(&guarded_path, content.as_bytes(), expected_revision)
+                        })
+                        .await
+                        .map_err(|error| FileSaveError::IOError {
+                            error,
+                            path: file_path.clone(),
+                        })?;
+                        if saved {
+                            Ok(())
+                        } else {
+                            Err(stale_file_error(&file_path))
+                        }
+                    },
+                    move |me, write_result: Result<(), FileSaveError>, ctx| {
+                        me.finish_save(file_id, version, write_result, tx, ctx);
+                    },
+                );
+            }
+            FileBackend::Remote { host_id, path } => {
+                let handle = RemoteServerManager::as_ref(ctx).host_request_handle(host_id);
+                let path = path.as_str().to_string();
+                ctx.spawn(
+                    async move {
+                        handle
+                            .write_file(path, content, Some(expected_revision.to_proto()))
+                            .await
+                    },
+                    move |me, result, ctx| {
+                        let result =
+                            result.map_err(|error| FileSaveError::RemoteError(error.to_string()));
+                        me.finish_save(file_id, version, result, tx, ctx);
+                    },
+                );
+            }
+        }
+        Ok(async move { rx.await.unwrap_or(Ok(())) }.boxed())
+    }
+    /// Renames and saves only when both guarded paths still match.
+    pub fn rename_and_save_with_expected_revisions(
+        &mut self,
+        file_id: FileId,
+        new_path: PathBuf,
+        content: String,
+        version: ContentVersion,
+        expected_revisions: RenameExpectedRevisions,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<SaveFuture, FileSaveError> {
+        let file_path = self
+            .file_path(file_id)
+            .ok_or(FileSaveError::NoFilePath(file_id))?;
+        let (tx, rx) = oneshot::channel();
+        ctx.spawn(
+            async move {
+                Self::ensure_parent_directories(&new_path)
+                    .await
+                    .map_err(|error| FileSaveError::IOError {
+                        error,
+                        path: new_path.clone(),
+                    })?;
+                let guarded_source = file_path.clone();
+                let guarded_target = new_path.clone();
+                let saved = blocking::unblock(move || {
+                    let _guard = GUARDED_PERSISTENCE_LOCK
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let target_matches = match expected_revisions.target {
+                        ExpectedFileRevision::Missing => !guarded_target.exists(),
+                        ExpectedFileRevision::Present { .. } => {
+                            let target =
+                                std::fs::OpenOptions::new().read(true).open(&guarded_target);
+                            let mut target = match target {
+                                Ok(target) => target,
+                                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                                    return Ok(false);
+                                }
+                                Err(error) => return Err(error),
+                            };
+                            guarded_revision_matches(&mut target, expected_revisions.target)?
+                        }
+                        ExpectedFileRevision::Uneditable => false,
+                    };
+                    if !target_matches {
+                        return Ok(false);
+                    }
+                    if !guarded_write_unlocked(
+                        &guarded_source,
+                        content.as_bytes(),
+                        expected_revisions.source,
+                    )? {
+                        return Ok(false);
+                    }
+                    std::fs::rename(&guarded_source, &guarded_target)?;
+                    Ok(true)
+                })
+                .await
+                .map_err(|error| FileSaveError::IOError {
+                    error,
+                    path: file_path.clone(),
+                })?;
+                if saved {
+                    Ok(())
+                } else {
+                    Err(stale_file_error(&file_path))
+                }
+            },
+            move |me, write_result: Result<(), FileSaveError>, ctx| {
+                me.finish_save(file_id, version, write_result, tx, ctx);
+            },
+        );
+        Ok(async move { rx.await.unwrap_or(Ok(())) }.boxed())
+    }
+    /// Deletes only when the backing file still matches `expected_revision`.
+    pub fn delete_with_expected_revision(
+        &mut self,
+        file_id: FileId,
+        version: ContentVersion,
+        expected_revision: ExpectedFileRevision,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<SaveFuture, FileSaveError> {
+        let backend = self
+            .file_state
+            .get(file_id)
+            .ok_or(FileSaveError::NoFilePath(file_id))?;
+        let (tx, rx) = oneshot::channel();
+        match backend {
+            FileBackend::Local(_) => {
+                let file_path = self
+                    .file_path(file_id)
+                    .ok_or(FileSaveError::NoFilePath(file_id))?;
+                ctx.spawn(
+                    async move {
+                        let guarded_path = file_path.clone();
+                        let deleted = blocking::unblock(move || {
+                            guarded_delete(&guarded_path, expected_revision)
+                        })
+                        .await
+                        .map_err(|error| FileSaveError::IOError {
+                            error,
+                            path: file_path.clone(),
+                        })?;
+                        if deleted {
+                            Ok(())
+                        } else {
+                            Err(stale_file_error(&file_path))
+                        }
+                    },
+                    move |me, delete_result: Result<(), FileSaveError>, ctx| {
+                        me.finish_save(file_id, version, delete_result, tx, ctx);
+                    },
+                );
+            }
+            FileBackend::Remote { host_id, path } => {
+                let handle = RemoteServerManager::as_ref(ctx).host_request_handle(host_id);
+                let path = path.as_str().to_string();
+                ctx.spawn(
+                    async move {
+                        handle
+                            .delete_file(path, Some(expected_revision.to_proto()))
+                            .await
+                    },
+                    move |me, result, ctx| {
+                        let result =
+                            result.map_err(|error| FileSaveError::RemoteError(error.to_string()));
+                        me.finish_save(file_id, version, result, tx, ctx);
+                    },
+                );
+            }
+        }
+        Ok(async move { rx.await.unwrap_or(Ok(())) }.boxed())
+    }
+
+    fn finish_save(
+        &mut self,
+        file_id: FileId,
+        version: ContentVersion,
+        result: Result<(), FileSaveError>,
+        completion: oneshot::Sender<Result<(), Arc<FileSaveError>>>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let result = result.map_err(Arc::new);
+        match &result {
+            Ok(()) => {
+                self.set_version(file_id, version);
+                ctx.emit(FileModelEvent::FileSaved {
+                    id: file_id,
+                    version,
+                });
+            }
+            Err(error) => ctx.emit(FileModelEvent::FailedToSave {
+                id: file_id,
+                error: error.clone(),
+            }),
+        }
+        let _ = completion.send(result);
     }
 
     /// Renames a file and also saves its content, returning a future that
@@ -937,7 +1304,7 @@ impl FileModel {
                 let handle = RemoteServerManager::as_ref(ctx).host_request_handle(host_id);
                 let path = path.as_str().to_string();
                 ctx.spawn(
-                    async move { handle.delete_file(path).await },
+                    async move { handle.delete_file(path, None).await },
                     move |me, result, ctx| {
                         let result =
                             result.map_err(|e| Arc::new(FileSaveError::RemoteError(e.to_string())));

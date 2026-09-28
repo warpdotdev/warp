@@ -12,7 +12,7 @@ use super::super::proto::{
 };
 use super::super::protocol::RequestId;
 use super::super::server_buffer_tracker::ServerBufferTracker;
-use super::{ConnectionId, PendingFileOps, ServerModel};
+use super::{ConnectionId, PendingFileOps, ServerModel, expected_file_revision_from_proto};
 use crate::auth::auth_state::AuthState;
 use crate::code_review::diff_state::DiffMode;
 use crate::remote_server::diff_state_tracker::DiffModelKey;
@@ -43,6 +43,27 @@ fn test_model(app: &mut App) -> ServerModel {
         git_status_subscribers: HashMap::new(),
         git_status_repo_by_conn: HashMap::new(),
     }
+}
+
+#[test]
+fn remote_expected_revision_is_digest_only() {
+    let content_digest = [7_u8; 32];
+    let revision = expected_file_revision_from_proto(super::super::proto::ExpectedFileRevision {
+        state: Some(
+            super::super::proto::expected_file_revision::State::ContentSha256(
+                content_digest.to_vec(),
+            ),
+        ),
+        last_modified_epoch_millis: Some(1_000),
+    });
+
+    assert_eq!(
+        revision,
+        warp_files::ExpectedFileRevision::Present {
+            content_digest,
+            last_modified: None,
+        }
+    );
 }
 
 /// Uses `try_new` instead of `try_from_local` so that Unix-style paths
