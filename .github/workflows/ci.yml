@@ -55,6 +55,7 @@ jobs:
       affects-database-schema: ${{ github.ref == 'master' || steps.filter.outputs.affects-database-schema }}
       affects-rust-sources: ${{ github.ref == 'master' || steps.filter.outputs.affects-rust-sources }}
       macos-runner: ${{ steps.mac_runner_type.outputs.value }}
+      needs-build: ${{ github.event_name != 'pull_request' || steps.build_filter.outputs.needs-build }}
       wasm-runner: ${{ steps.wasm_runner_type.outputs.value }}
     steps:
       - name: Checkout sources
@@ -70,6 +71,25 @@ jobs:
               - 'crates/persistence/migrations/**'
             affects-rust-sources:
               - '**.rs'
+
+      - name: Check for build inputs
+        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
+        id: build_filter
+        with:
+          predicate-quantifier: every
+          filters: |
+            needs-build:
+              - '**'
+              # Only human-readable files in known documentation locations may skip builds.
+              # Markdown elsewhere, including bundled skills, can affect shipped behavior.
+              - '!AGENTS.md'
+              - '!CODE_OF_CONDUCT.md'
+              - '!CONTRIBUTING.md'
+              - '!FAQ.md'
+              - '!README.md'
+              - '!SECURITY.md'
+              - '!.github/**/*.md'
+              - '!specs/**'
 
       - name: Determine macOS runner type
         id: mac_runner_type
@@ -125,6 +145,7 @@ jobs:
             is_self_hosted: false
     runs-on: ${{ matrix.runner }}
     needs: params
+    if: ${{ needs.params.outputs.needs-build == 'true' }}
     # Make sure an ID token is created with the necessary permissions to use
     # GCP's Workload Identity Federation (for service account authentication).
     permissions:
@@ -577,7 +598,7 @@ jobs:
             null_device: "NUL"
     runs-on: ${{ matrix.runner }}
     needs: params
-    #    if: ${{ needs.params.outputs.affects-rust-sources == 'true' }}
+    if: ${{ needs.params.outputs.needs-build == 'true' }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -629,6 +650,7 @@ jobs:
       fail-fast: false
     runs-on: ubuntu-latest
     needs: params
+    if: ${{ needs.params.outputs.needs-build == 'true' }}
     steps:
       - name: Checkout sources
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -695,6 +717,7 @@ jobs:
       fail-fast: false
     runs-on: ${{ fromJSON(needs.params.outputs.wasm-runner) }}
     needs: params
+    if: ${{ needs.params.outputs.needs-build == 'true' }}
     steps:
       - name: Compute IS_SELF_HOSTED
         id: is_self_hosted
@@ -763,6 +786,7 @@ jobs:
             null_device: "/dev/null"
     runs-on: ${{ matrix.runner }}
     needs: params
+    if: ${{ needs.params.outputs.needs-build == 'true' }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -796,6 +820,7 @@ jobs:
     # Match the platform used by agent-mode-evals CI.
     runs-on: ubuntu-latest-large
     needs: params
+    if: ${{ needs.params.outputs.needs-build == 'true' }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -839,14 +864,15 @@ jobs:
     steps:
       - name: Check CI results
         run: |
-          # Convert needs context to JSON and check required jobs
-          echo '${{ toJSON(needs) }}' | jq -r '
-            # Get all jobs except database-migration
-            to_entries | 
+          needs_build="${{ needs.params.outputs.needs-build }}"
+
+          echo '${{ toJSON(needs) }}' | jq -r --arg needs_build "$needs_build" '
+            to_entries |
             map(select(.key != "database-migration")) |
             .[] |
-            if .value.result != "success" then
-              "::error::Required job \(.key) failed or was skipped (status: \(.value.result))"
+            (if .key == "params" or $needs_build == "true" then "success" else "skipped" end) as $expected |
+            if .value.result != $expected then
+              "::error::Job \(.key) had unexpected status \(.value.result) (expected: \($expected))"
             else
               empty
             end

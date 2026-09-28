@@ -1,9 +1,11 @@
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use warpui::App;
 
 use super::*;
+use crate::ai::aws_credentials::AwsCredentialRefresher;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::auth::AuthStateProvider;
@@ -12,11 +14,18 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::team::MockTeamClient;
+use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::sync_queue::SyncQueue;
+use crate::settings::PrivacySettings;
 use crate::terminal::input::models::query_model_picker_choices;
 use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workspaces::team::Team;
 use crate::workspaces::team_tester::TeamTesterStatus;
-use crate::workspaces::user_workspaces::{TeamlessScopeForTest, UserWorkspaces};
+use crate::workspaces::user_workspaces::{
+    TeamContextForOperation, TeamlessScopeForTest, UserWorkspaces,
+};
+use crate::workspaces::workspace::Workspace;
 use crate::{LaunchMode, TuiEntryPoint};
 
 // -- DisableReason::should_clear_preference tests --
@@ -841,6 +850,231 @@ fn reconcile_preserves_custom_models_saved_on_execution_profile() {
                 profile.data().cli_agent_model.as_ref(),
                 Some(&custom_model_id)
             );
+        });
+    });
+}
+
+#[test]
+fn team_catalog_hydration_preserves_shared_profile_and_resolves_against_active_team() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(PrivacySettings::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+
+        let fable_id = LLMId::from("claude-5-1-fable");
+        let mut enabled_fable = server_llm(fable_id.as_str(), None);
+        enabled_fable.context_window.is_configurable = true;
+        let mut disabled_fable = server_llm(fable_id.as_str(), Some(DisableReason::AdminDisabled));
+        disabled_fable.context_window.is_configurable = true;
+        let enabled_models = ModelsByFeature {
+            agent_mode: available(
+                "auto-genius",
+                vec![server_llm("auto-genius", None), enabled_fable],
+            ),
+            ..Default::default()
+        };
+        let disabled_models = ModelsByFeature {
+            agent_mode: available(
+                "auto-genius",
+                vec![server_llm("auto-genius", None), disabled_fable],
+            ),
+            ..Default::default()
+        };
+        let engineering_team_uid = ServerId::from(101);
+        let disabled_team_uid = ServerId::from(102);
+        let engineering_team = Team::from_local_cache(
+            engineering_team_uid,
+            "Engineering".to_string(),
+            None,
+            None,
+            None,
+            Some(enabled_models.clone()),
+        );
+        let disabled_team = Team::from_local_cache(
+            disabled_team_uid,
+            "Disabled team".to_string(),
+            None,
+            None,
+            None,
+            Some(disabled_models.clone()),
+        );
+        let workspace = Workspace::from_local_cache(
+            ServerId::from(100).into(),
+            "Warp".to_string(),
+            Some(vec![engineering_team, disabled_team]),
+            Some(disabled_models.clone()),
+        );
+        let refreshed_workspace = workspace.clone();
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(MockTeamClient::new()),
+                Arc::new(MockWorkspaceClient::new()),
+                vec![workspace],
+                ctx,
+            )
+        });
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.subscribe_to_settings_changes(ctx);
+        });
+
+        let profiles_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+        let profile_id = profiles_model.read(&app, |profiles, _| profiles.default_profile_id());
+        profiles_model.update(&mut app, |profiles, ctx| {
+            profiles.set_base_model(&profile_id, Some(fable_id.clone()), ctx);
+            profiles.set_context_window_limit(&profile_id, Some(200_000), ctx);
+        });
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.update_workspaces(vec![refreshed_workspace], ctx);
+        });
+
+        let engineering_scope = TeamContextForOperation::new_for_test(engineering_team_uid);
+        let disabled_scope = TeamContextForOperation::new_for_test(disabled_team_uid);
+        llm_preferences.read(&app, |preferences, ctx| {
+            assert_eq!(
+                preferences
+                    .get_active_base_model(&engineering_scope, ctx, None)
+                    .id,
+                fable_id
+            );
+            assert_eq!(
+                preferences
+                    .get_active_base_model(&disabled_scope, ctx, None)
+                    .id
+                    .as_str(),
+                "auto-genius"
+            );
+            let disabled_fable = preferences
+                .get_base_llm_choices_for_agent_mode(&disabled_scope, ctx)
+                .find(|llm| llm.id == fable_id)
+                .expect("the preferred model should remain visible on the disabled team");
+            assert_eq!(
+                disabled_fable.disable_reason,
+                Some(DisableReason::AdminDisabled)
+            );
+        });
+        profiles_model.read(&app, |profiles, ctx| {
+            assert_eq!(
+                profiles.default_profile(ctx).data().base_model.as_ref(),
+                Some(&fable_id)
+            );
+            assert_eq!(
+                profiles.default_profile(ctx).data().context_window_limit,
+                Some(200_000)
+            );
+        });
+    });
+}
+
+#[test]
+fn reconcile_clears_unavailable_base_model_preference() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+
+        let profiles_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+        let profile_id = profiles_model.read(&app, |profiles, _| profiles.default_profile_id());
+        let unavailable_model_id = LLMId::from("unavailable-model");
+        let mut unavailable_model = server_llm(
+            unavailable_model_id.as_str(),
+            Some(DisableReason::Unavailable),
+        );
+        unavailable_model.context_window.is_configurable = true;
+        profiles_model.update(&mut app, |profiles, ctx| {
+            profiles.set_base_model(&profile_id, Some(unavailable_model_id), ctx);
+            profiles.set_context_window_limit(&profile_id, Some(200_000), ctx);
+        });
+        llm_preferences.update(&mut app, |preferences, ctx| {
+            preferences.update_feature_model_choices(
+                Ok(ModelsByFeature {
+                    agent_mode: available(
+                        "auto-genius",
+                        vec![server_llm("auto-genius", None), unavailable_model],
+                    ),
+                    ..Default::default()
+                }),
+                ctx,
+            );
+        });
+
+        profiles_model.read(&app, |profiles, ctx| {
+            let profile = profiles.default_profile(ctx);
+            assert_eq!(profile.data().base_model, None);
+            assert_eq!(profile.data().context_window_limit, None);
+        });
+    });
+}
+
+#[test]
+fn reconcile_clears_requires_upgrade_base_model_preference_without_byok() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+
+        let profiles_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+        let profile_id = profiles_model.read(&app, |profiles, _| profiles.default_profile_id());
+
+        let upgrade_model_id = LLMId::from("upgrade-model");
+        let mut upgrade_model = server_llm(
+            upgrade_model_id.as_str(),
+            Some(DisableReason::RequiresUpgrade),
+        );
+        upgrade_model.context_window.is_configurable = true;
+        profiles_model.update(&mut app, |profiles, ctx| {
+            profiles.set_base_model(&profile_id, Some(upgrade_model_id), ctx);
+            profiles.set_context_window_limit(&profile_id, Some(200_000), ctx);
+        });
+        llm_preferences.update(&mut app, |preferences, ctx| {
+            preferences.update_feature_model_choices(
+                Ok(ModelsByFeature {
+                    agent_mode: available(
+                        "auto-genius",
+                        vec![server_llm("auto-genius", None), upgrade_model],
+                    ),
+                    ..Default::default()
+                }),
+                ctx,
+            );
+        });
+
+        profiles_model.read(&app, |profiles, ctx| {
+            let profile = profiles.default_profile(ctx);
+            assert_eq!(profile.data().base_model, None);
+            assert_eq!(profile.data().context_window_limit, None);
         });
     });
 }

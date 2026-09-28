@@ -101,6 +101,7 @@ impl RepositoryIdentity {
         Ok(())
     }
 }
+
 /// Server-supplied repository preparation override.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -159,9 +160,6 @@ impl RepositoryPreparationOverride {
         }
         if self.preserve_origin && self.clone_from.is_none() {
             return Err("preserve_origin requires clone_from".to_string());
-        }
-        if self.clone_from.is_some() && !matches!(self.head, RepositoryHeadRef::CommitSha(_)) {
-            return Err("clone_from requires an exact COMMIT_SHA repository head".to_string());
         }
         Ok(())
     }
