@@ -1917,8 +1917,7 @@ impl BlocklistAIController {
         // teardown and get cancelled, leaving the run stuck `InProgress` (QUALITY-1801).
         let is_exiting =
             OrchestrationEventService::as_ref(ctx).is_conversation_exiting(conversation_id);
-        // The server folds pending inbox messages into a run's initial turn itself, so events must
-        // not be injected ahead of that turn. Hold them behind the same barrier as startup prompts.
+        // Hold all pending orchestration events behind native setup so the initial turn goes first.
         let is_dispatch_blocked =
             QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(conversation_id);
         let Some(conversation) =
