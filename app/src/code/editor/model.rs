@@ -1953,6 +1953,32 @@ impl CodeEditorModel {
         self.validate(ctx);
     }
 
+    /// Delete the line holding the primary cursor, trailing newline included.
+    ///
+    /// This is the delete half of a line-wise cut. On the last line of a buffer
+    /// that has no trailing newline there is no newline of its own to take, so
+    /// the newline before it goes instead, which keeps the deletion from leaving
+    /// an empty line behind. Does nothing in a document that has no line at all.
+    pub fn delete_current_line(&mut self, ctx: &mut ModelContext<Self>) {
+        let mut range = self.current_line_bounds(ctx);
+        if range.start >= range.end {
+            return;
+        }
+
+        let buffer = self.content().as_ref(ctx);
+        let cursor = self.selections(ctx).first().head;
+        let has_previous_line = cursor.to_buffer_point(buffer).row > 0;
+        let has_trailing_newline = buffer
+            .text_in_range(range.clone())
+            .into_string()
+            .ends_with('\n');
+        if !has_trailing_newline && has_previous_line {
+            range.start = CharOffset::from(range.start.as_usize() - 1);
+        }
+
+        self.delete_range_returning_text(range, ctx);
+    }
+
     /// The character range of the line holding the primary cursor. The range runs
     /// to the start of the next line, so it carries the trailing newline whenever
     /// the line has one, and stops at the end of the buffer on the last line. It

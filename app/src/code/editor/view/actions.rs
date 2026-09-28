@@ -810,6 +810,25 @@ impl CodeEditorViewAction {
     }
 }
 
+impl CodeEditorView {
+    /// Puts the line holding the cursor on the clipboard as a whole line, the shared
+    /// first half of a copy and a cut with an empty selection. Returns whether there
+    /// was a line to copy; an empty document has none, and its clipboard is left alone.
+    fn copy_cursor_line_to_clipboard(&self, ctx: &mut ViewContext<Self>) -> bool {
+        let Some(line) = self.model.as_ref(ctx).current_line_text(ctx) else {
+            return false;
+        };
+        // Writing through the system-clipboard register puts the text on the
+        // clipboard and records that it was a whole line, which is what lets
+        // the matching paste put it back as a line. Plain clipboard text
+        // would land at the caret and split the line pasted into.
+        VimRegisters::handle(ctx).update(ctx, |registers, ctx| {
+            registers.write_to_register('+', line, MotionType::Linewise, ctx);
+        });
+        true
+    }
+}
+
 impl TypedActionView for CodeEditorView {
     type Action = CodeEditorViewAction;
 
@@ -1016,9 +1035,23 @@ impl TypedActionView for CodeEditorView {
                     });
                 }
             }
-            Cut => self.model.update(ctx, |model, ctx| {
-                model.cut(ctx);
-            }),
+            Cut => {
+                // The cut counterpart of `Copy` above: with nothing selected, an editor that
+                // owns its shortcuts takes the cursor's line, recording it as a whole line so
+                // the matching paste puts it back as one, and removes it from the buffer.
+                // Every other editor keeps the plain cut.
+                if self.copy_line_when_selection_is_empty && self.selected_text(ctx).is_none() {
+                    if self.copy_cursor_line_to_clipboard(ctx) {
+                        self.model.update(ctx, |model, ctx| {
+                            model.delete_current_line(ctx);
+                        });
+                    }
+                } else {
+                    self.model.update(ctx, |model, ctx| {
+                        model.cut(ctx);
+                    });
+                }
+            }
             // Note that this is _not_ the only code path that could copy selected text to the clipboard.
             // This is only for the case when the editor is focused and the copy action gets dispatched directly.
             // The owner of the editor can also perform a copy by accessing the selected text and copying it to the clipboard.
@@ -1030,16 +1063,7 @@ impl TypedActionView for CodeEditorView {
                 // the default, because a parent view may hold the selection the user
                 // meant to copy.
                 if !has_selection && self.copy_line_when_selection_is_empty {
-                    let line = self.model.as_ref(ctx).current_line_text(ctx);
-                    if let Some(line) = line {
-                        // Writing through the system-clipboard register puts the text on the
-                        // clipboard and records that it was a whole line, which is what lets
-                        // the matching paste put it back as a line. Plain clipboard text
-                        // would land at the caret and split the line pasted into.
-                        VimRegisters::handle(ctx).update(ctx, |registers, ctx| {
-                            registers.write_to_register('+', line, MotionType::Linewise, ctx);
-                        });
-                    }
+                    self.copy_cursor_line_to_clipboard(ctx);
                 } else {
                     self.model.update(ctx, |model, ctx| {
                         model.copy(ctx);

@@ -225,22 +225,211 @@ fn pastes_a_copied_line_whole_when_the_cursor_sits_mid_line() {
 }
 
 #[test]
-fn a_cut_with_no_selection_leaves_no_stale_line_wise_paste() {
+fn cuts_the_cursor_line_when_the_selection_is_empty() {
+    App::test((), |mut app| async move {
+        let editor_view = initialize_editor_copying_the_cursor_line(&mut app, "alpha\nbeta\ngamma");
+
+        let text = editor_view.update(&mut app, |view, ctx| {
+            // Past "alpha\n". Vertical moves follow the laid-out rows, which a headless
+            // test has none of, so step across the buffer instead.
+            for _ in 0.."alpha\n".len() {
+                view.handle_action(&CodeEditorViewAction::MoveRight, ctx);
+            }
+            view.handle_action(&CodeEditorViewAction::Cut, ctx);
+            view.text(ctx)
+        });
+
+        assert_eq!(text.as_str(), "alpha\ngamma");
+        assert_eq!(
+            app.update(|ctx| ctx.clipboard().read().plain_text),
+            "beta\n",
+            "an empty-selection cut should take the cursor's line and its newline"
+        );
+    });
+}
+
+#[test]
+fn cutting_the_last_line_without_a_trailing_newline_takes_the_newline_before_it() {
     App::test((), |mut app| async move {
         let editor_view = initialize_editor_copying_the_cursor_line(&mut app, "alpha\nbeta");
 
         let text = editor_view.update(&mut app, |view, ctx| {
-            view.handle_action(&CodeEditorViewAction::Copy, ctx);
             view.handle_action(&CodeEditorViewAction::CursorAtBufferEnd, ctx);
             view.handle_action(&CodeEditorViewAction::Cut, ctx);
+            view.text(ctx)
+        });
+
+        assert_eq!(
+            text.as_str(),
+            "alpha",
+            "cutting the last line must not leave an empty line behind"
+        );
+        assert_eq!(app.update(|ctx| ctx.clipboard().read().plain_text), "beta");
+    });
+}
+
+#[test]
+fn cutting_the_only_line_empties_the_buffer() {
+    App::test((), |mut app| async move {
+        let editor_view = initialize_editor_copying_the_cursor_line(&mut app, "alpha");
+
+        let text = editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::Cut, ctx);
+            view.text(ctx)
+        });
+
+        assert_eq!(text.as_str(), "");
+        assert_eq!(app.update(|ctx| ctx.clipboard().read().plain_text), "alpha");
+    });
+}
+
+#[test]
+fn pastes_a_cut_line_above_the_cursor_line() {
+    App::test((), |mut app| async move {
+        let editor_view = initialize_editor_copying_the_cursor_line(&mut app, "alpha\nbeta\ngamma");
+
+        let text = editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::Cut, ctx);
+            view.handle_action(&CodeEditorViewAction::CursorAtBufferEnd, ctx);
+            view.handle_action(&CodeEditorViewAction::Paste, ctx);
+            view.text(ctx)
+        });
+
+        assert_eq!(text.as_str(), "beta\nalpha\ngamma");
+    });
+}
+
+#[test]
+fn pastes_a_cut_line_whole_when_the_cursor_sits_mid_line() {
+    App::test((), |mut app| async move {
+        let editor_view =
+            initialize_editor_copying_the_cursor_line(&mut app, "    alpha\nbeta\ngamma");
+
+        let text = editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::Cut, ctx);
+            view.handle_action(&CodeEditorViewAction::MoveToLineEnd, ctx);
             view.handle_action(&CodeEditorViewAction::Paste, ctx);
             view.text(ctx)
         });
 
         assert_eq!(
             text.as_str(),
-            "alpha\nbet",
-            "a cut clears the clipboard, so the paste after it must insert nothing rather than replay the line copied earlier"
+            "    alpha\nbeta\ngamma",
+            "a line-wise paste of a cut line must not split the line the caret sits in"
+        );
+    });
+}
+
+#[test]
+fn pastes_the_last_line_cut_without_a_trailing_newline_as_its_own_line() {
+    App::test((), |mut app| async move {
+        let editor_view = initialize_editor_copying_the_cursor_line(&mut app, "alpha\nbeta");
+
+        let text = editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::CursorAtBufferEnd, ctx);
+            view.handle_action(&CodeEditorViewAction::Cut, ctx);
+            view.handle_action(&CodeEditorViewAction::CursorAtBufferStart, ctx);
+            view.handle_action(&CodeEditorViewAction::Paste, ctx);
+            view.text(ctx)
+        });
+
+        assert_eq!(text.as_str(), "beta\nalpha");
+    });
+}
+
+#[test]
+fn a_cut_line_replaces_an_earlier_copied_line_for_the_next_paste() {
+    App::test((), |mut app| async move {
+        let editor_view = initialize_editor_copying_the_cursor_line(&mut app, "alpha\nbeta\ngamma");
+
+        let text = editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::Copy, ctx);
+            // Past "alpha\n". Vertical moves follow the laid-out rows, which a headless
+            // test has none of, so step across the buffer instead.
+            for _ in 0.."alpha\n".len() {
+                view.handle_action(&CodeEditorViewAction::MoveRight, ctx);
+            }
+            view.handle_action(&CodeEditorViewAction::Cut, ctx);
+            view.handle_action(&CodeEditorViewAction::CursorAtBufferEnd, ctx);
+            view.handle_action(&CodeEditorViewAction::Paste, ctx);
+            view.text(ctx)
+        });
+
+        assert_eq!(text.as_str(), "alpha\nbeta\ngamma");
+    });
+}
+
+#[test]
+fn cutting_the_selection_when_one_exists_leaves_the_line_alone() {
+    App::test((), |mut app| async move {
+        let editor_view = initialize_editor_copying_the_cursor_line(&mut app, "alpha\nbeta");
+
+        let text = editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::CursorAtBufferEnd, ctx);
+            view.handle_action(&CodeEditorViewAction::SelectLeft, ctx);
+            view.handle_action(&CodeEditorViewAction::SelectLeft, ctx);
+            view.handle_action(&CodeEditorViewAction::Cut, ctx);
+            view.text(ctx)
+        });
+
+        assert_eq!(text.as_str(), "alpha\nbe");
+        assert_eq!(app.update(|ctx| ctx.clipboard().read().plain_text), "ta");
+    });
+}
+
+#[test]
+fn cutting_an_empty_document_leaves_the_clipboard_untouched() {
+    App::test((), |mut app| async move {
+        let editor_view = initialize_editor_copying_the_cursor_line(&mut app, "");
+        app.update(|ctx| {
+            ctx.clipboard()
+                .write(ClipboardContent::plain_text("kept".to_string()))
+        });
+
+        let text = editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::Cut, ctx);
+            view.text(ctx)
+        });
+
+        assert_eq!(text.as_str(), "");
+        assert_eq!(
+            app.update(|ctx| ctx.clipboard().read().plain_text),
+            "kept",
+            "an empty document has no line to cut, so the clipboard must survive"
+        );
+    });
+}
+
+#[test]
+fn undoing_a_line_cut_puts_the_line_back() {
+    App::test((), |mut app| async move {
+        let editor_view = initialize_editor_copying_the_cursor_line(&mut app, "alpha\nbeta");
+
+        let text = editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::Cut, ctx);
+            view.handle_action(&CodeEditorViewAction::Undo, ctx);
+            view.text(ctx)
+        });
+
+        assert_eq!(text.as_str(), "alpha\nbeta");
+    });
+}
+
+#[test]
+fn an_editor_that_delegates_empty_copies_keeps_the_plain_cut() {
+    App::test((), |mut app| async move {
+        let (_window, editor_view) = initialize_editor(&mut app);
+
+        let text = editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::UserTyped(UserInput::new("ab")), ctx);
+            view.handle_action(&CodeEditorViewAction::Cut, ctx);
+            view.text(ctx)
+        });
+
+        assert_eq!(
+            text.as_str(),
+            "a",
+            "an editor that has not opted in cuts nothing to the clipboard and backspaces, as before"
         );
     });
 }
