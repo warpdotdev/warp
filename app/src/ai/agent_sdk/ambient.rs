@@ -50,7 +50,7 @@ use crate::server::server_api::ai::{
 use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::shared_session;
 use crate::util::time_format::format_approx_duration_from_now_utc;
-use crate::workspaces::user_workspaces::{TeamScopeForCli, UserWorkspaces};
+use crate::workspaces::user_workspaces::{HeadlessTeamScope, UserWorkspaces};
 
 const MAX_LINE_WIDTH: usize = 90;
 const STREAM_RETRY_BACKOFF_STEPS: &[u64] = &[1, 2, 5, 10];
@@ -572,8 +572,8 @@ impl AmbientAgentRunner {
                 config,
                 title: args.title,
                 team: Some(match &team_scope {
-                    TeamScopeForCli::Personal => false,
-                    TeamScopeForCli::Team(_) => true,
+                    HeadlessTeamScope::Personal => false,
+                    HeadlessTeamScope::Team(_) => true,
                 }),
                 agent_identity_uid: args.agent_uid,
                 skill,

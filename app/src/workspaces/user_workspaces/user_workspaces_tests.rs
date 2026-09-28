@@ -965,7 +965,7 @@ fn cli_scope_without_selection_is_teamless_without_teams() {
             let scope = UserWorkspaces::as_ref(ctx)
                 .team_scope_for_cli(&team_selection(None))
                 .expect("no selection should be teamless when the user has no teams");
-            assert!(matches!(scope, TeamScopeForCli::Personal));
+            assert!(matches!(scope, HeadlessTeamScope::Personal));
         });
     })
 }
@@ -981,7 +981,7 @@ fn cli_scope_without_selection_uses_the_sole_team() {
             let scope = UserWorkspaces::as_ref(ctx)
                 .team_scope_for_cli(&team_selection(None))
                 .expect("no selection should use the sole team");
-            assert!(matches!(scope, TeamScopeForCli::Team(uid) if uid == team_uid));
+            assert!(matches!(scope, HeadlessTeamScope::Team(uid) if uid == team_uid));
         });
     })
 }
@@ -1020,7 +1020,7 @@ fn cli_object_scope_personal_is_teamless_with_multiple_teams() {
             let scope = UserWorkspaces::as_ref(ctx)
                 .team_scope_for_cli_object(&object_scope(None, true))
                 .expect("explicit personal scope should not require a team");
-            assert!(matches!(scope, TeamScopeForCli::Personal));
+            assert!(matches!(scope, HeadlessTeamScope::Personal));
         });
     })
 }
@@ -1053,7 +1053,7 @@ fn cli_scope_bare_team_uses_the_sole_team() {
             let scope = UserWorkspaces::as_ref(ctx)
                 .team_scope_for_cli(&team_selection(Some(None)))
                 .expect("bare --team should use the sole team");
-            assert!(matches!(scope, TeamScopeForCli::Team(uid) if uid == team_uid));
+            assert!(matches!(scope, HeadlessTeamScope::Team(uid) if uid == team_uid));
         });
     })
 }
@@ -1095,7 +1095,7 @@ fn cli_scope_explicit_team_validates_the_uid_and_membership() {
             let scope = user_workspaces
                 .team_scope_for_cli(&team_selection(Some(Some(second_team_uid.to_string()))))
                 .expect("an explicit member team should resolve");
-            assert!(matches!(scope, TeamScopeForCli::Team(uid) if uid == second_team_uid));
+            assert!(matches!(scope, HeadlessTeamScope::Team(uid) if uid == second_team_uid));
 
             let invalid =
                 user_workspaces.team_scope_for_cli(&team_selection(Some(Some("invalid".into()))));

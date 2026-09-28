@@ -19,7 +19,7 @@ use warpui::{App, SingletonEntity, WindowId};
 use super::{
     AgentDriverRunner, CommandAuthentication, command_authentication, command_requires_auth,
     command_to_telemetry_event, reconcile_task_harness, resolve_agent_driver_team_scope,
-    team_scope_for_task_scope, validated_driver_repositories_for_preparation,
+    validated_driver_repositories_for_preparation,
 };
 use crate::ai::agent_sdk::driver::{AgentDriverError, AgentDriverOptions};
 use crate::ai::ambient_agents::task::TaskScope;
@@ -36,7 +36,7 @@ use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::workspaces::team::{Team, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
+use crate::workspaces::user_workspaces::{HeadlessTeamScope, TeamScope, UserWorkspaces};
 use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
@@ -156,6 +156,7 @@ fn agent_driver_options() -> AgentDriverOptions {
         selected_harness: Harness::Oz,
         third_party_harness_model_config: None,
         team_scope: None,
+        bedrock_oidc_credentials: None,
         snapshot_disabled: None,
         snapshot_upload_timeout: None,
         snapshot_script_timeout: None,
@@ -349,7 +350,7 @@ fn service_account_task_id_run_uses_sole_team_for_agent_driver() {
 }
 
 #[test]
-fn team_scope_for_task_scope_resolves_a_team_scoped_task() {
+fn agent_run_scope_resolves_a_team_scoped_task() {
     let owning_team_uid = ServerId::from(7);
     let scope = TaskScope {
         scope_type: "team".to_string(),
@@ -357,29 +358,29 @@ fn team_scope_for_task_scope_resolves_a_team_scoped_task() {
     };
 
     assert_eq!(
-        team_scope_for_task_scope(&scope).team_uid(),
+        HeadlessTeamScope::from_task_scope(&scope).team_uid(),
         Some(owning_team_uid)
     );
 }
 
 #[test]
-fn team_scope_for_task_scope_resolves_a_personal_task() {
+fn agent_run_scope_resolves_a_personal_task() {
     let scope = TaskScope {
         scope_type: "user".to_string(),
         uid: "some-user-uid".to_string(),
     };
 
-    assert_eq!(team_scope_for_task_scope(&scope).team_uid(), None);
+    assert_eq!(HeadlessTeamScope::from_task_scope(&scope).team_uid(), None);
 }
 
 #[test]
-fn team_scope_for_task_scope_falls_back_to_personal_for_an_unparseable_team_uid() {
+fn agent_run_scope_falls_back_to_personal_for_an_unparseable_team_uid() {
     let scope = TaskScope {
         scope_type: "team".to_string(),
         uid: "not-a-valid-uid".to_string(),
     };
 
-    assert_eq!(team_scope_for_task_scope(&scope).team_uid(), None);
+    assert_eq!(HeadlessTeamScope::from_task_scope(&scope).team_uid(), None);
 }
 
 #[test]
