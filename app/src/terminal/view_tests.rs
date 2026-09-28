@@ -4779,7 +4779,7 @@ fn test_scroll_fixed_to_bottom() {
                 view.scroll_position(),
                 ScrollPosition::FollowsBottomOfMostRecentBlock
             );
-            view.scroll(1.0.into_lines(), ctx);
+            view.scroll(1.0.into_lines(), true /* precise */, ctx);
 
             let expected_scroll_top = {
                 let model = view.model.lock();
@@ -4912,7 +4912,7 @@ fn test_stable_scrolling_during_grid_truncation() {
                 view.scroll_position(),
                 ScrollPosition::FollowsBottomOfMostRecentBlock
             );
-            view.scroll(1.into_lines(), ctx);
+            view.scroll(1.into_lines(), true /* precise */, ctx);
             assert!(matches!(
                 view.scroll_position(),
                 ScrollPosition::FixedWithinLongRunningBlock { .. }
@@ -4951,7 +4951,7 @@ fn test_stable_scrolling_during_grid_truncation() {
             }
 
             // Scroll up one line, bringing the previous block into the viewport.
-            view.scroll(1.into_lines(), ctx);
+            view.scroll(1.into_lines(), true /* precise */, ctx);
             assert!(matches!(
                 view.scroll_position(),
                 ScrollPosition::FixedAtPosition { .. }
@@ -4973,6 +4973,265 @@ fn test_stable_scrolling_during_grid_truncation() {
     })
 }
 
+#[test]
+fn test_smooth_scroll_precise_input_applies_immediately() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _smooth_scrolling = FeatureFlag::SmoothScrolling.override_enabled(true);
+        let restored_blocks = [
+            crate::terminal::model::block::SerializedBlock::new_for_test(
+                b"ls".to_vec(),
+                b"foo\n".repeat(1000),
+            )
+            .into(),
+        ];
+        let terminal = add_window_with_terminal(&mut app, Some(&restored_blocks));
+
+        terminal.update(&mut app, |view, ctx| {
+            let before = view.scroll_position();
+            view.scroll(1.0.into_lines(), true /* precise */, ctx);
+            assert_ne!(
+                view.scroll_position(),
+                before,
+                "precise input should apply immediately, not defer to the animation"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_smooth_scroll_direct_action_cancels_in_flight_animation() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _smooth_scrolling = FeatureFlag::SmoothScrolling.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, _ctx| {
+            let mut model = view.model.lock();
+            for _ in 0..100 {
+                model.simulate_block("ls", "foo");
+            }
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            let before = view.scroll_position();
+            view.scroll(1.0.into_lines(), false /* precise */, ctx);
+            assert_eq!(view.scroll_position(), before);
+            assert!(!view.smooth_scroll.try_start_driving());
+            view.update_scroll_position_locking(ScrollPositionUpdate::AfterHome, ctx);
+            assert!(!view.smooth_scroll.needs_tick(Instant::now()));
+            view.advance_smooth_scroll(ctx);
+            assert!(matches!(
+                view.scroll_position(),
+                ScrollPosition::FixedAtPosition {
+                    scroll_lines: ScrollLines::ScrollTop(top)
+                } if top == Lines::zero()
+            ));
+        });
+    })
+}
+
+#[test]
+fn test_smooth_scroll_animation_settles_into_follows_bottom_of_most_recent_block() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _smooth_scrolling = FeatureFlag::SmoothScrolling.override_enabled(true);
+        let restored_blocks = [
+            crate::terminal::model::block::SerializedBlock::new_for_test(
+                b"ls".to_vec(),
+                b"foo\n".repeat(1000),
+            )
+            .into(),
+        ];
+        let terminal = add_window_with_terminal(&mut app, Some(&restored_blocks));
+
+        terminal.update(&mut app, |view, ctx| {
+            view.scroll(50.0.into_lines(), true /* precise */, ctx);
+            assert!(matches!(
+                view.scroll_position(),
+                ScrollPosition::FixedAtPosition { .. }
+            ));
+
+            view.smooth_scroll.add_delta(
+                -1000.0.into_lines(),
+                Instant::now() - std::time::Duration::from_secs(1),
+            );
+            view.advance_smooth_scroll(ctx);
+            assert_eq!(
+                view.scroll_position(),
+                ScrollPosition::FollowsBottomOfMostRecentBlock,
+                "an animated scroll that overshoots the bottom must settle into sticky-bottom \
+                 mode, exactly like an immediate scroll of the same delta would"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_smooth_scroll_driver_applies_final_increment_without_mouse_movement() {
+    use warpui::r#async::FutureExt as _;
+
+    struct InertRoot;
+    impl Entity for InertRoot {
+        type Event = ();
+    }
+    impl View for InertRoot {
+        fn ui_name() -> &'static str {
+            "smooth_scroll_test_root"
+        }
+
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            Box::new(Empty::new())
+        }
+    }
+    impl TypedActionView for InertRoot {
+        type Action = ();
+    }
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _smooth_scrolling = FeatureFlag::SmoothScrolling.override_enabled(true);
+
+        let restored_blocks = [
+            crate::terminal::model::block::SerializedBlock::new_for_test(
+                b"ls".to_vec(),
+                b"foo\n".repeat(1000),
+            )
+            .into(),
+        ];
+        let tips_model = app.add_model(|_| Default::default());
+        let (window_id, _root) = app.add_window(WindowStyle::NotStealFocus, |_| InertRoot);
+        let terminal = app.add_view(window_id, |ctx| {
+            TerminalView::new_for_test(tips_model, Some(&restored_blocks), ctx)
+        });
+        let expected = terminal.update(&mut app, |view, ctx| {
+            let before = view.scroll_position();
+            let input_mode = *InputModeSettings::as_ref(ctx).input_mode.value();
+            let expected = {
+                let model = view.model.lock();
+                view.viewport_state(model.block_list(), input_mode, ctx)
+                    .next_scroll_position(
+                        ScrollPositionUpdate::AfterScrollEvent {
+                            scroll_delta: 1.0.into_lines(),
+                        },
+                        ctx,
+                    )
+            };
+            assert_ne!(before, expected);
+
+            let now = Instant::now();
+            view.smooth_scroll
+                .add_delta(1.0.into_lines(), now - std::time::Duration::from_secs(1));
+            assert!(view.smooth_scroll.try_start_driving());
+            TerminalView::drive_smooth_scroll(view.smooth_scroll.clone(), ctx);
+            expected
+        });
+
+        let (sender, receiver) = futures::channel::oneshot::channel();
+        let mut sender = Some(sender);
+        let observed = terminal.clone();
+        app.on_window_invalidated(window_id, move |_, ctx| {
+            if observed
+                .try_as_ref(ctx)
+                .is_some_and(|view| view.scroll_position() == expected)
+                && let Some(sender) = sender.take()
+            {
+                let _ = sender.send(());
+            }
+        });
+        receiver
+            .with_timeout(std::time::Duration::from_secs(2))
+            .await
+            .expect("driver should emit its final increment")
+            .expect("window should remain open");
+        terminal.read(&app, |view, _| assert_eq!(view.scroll_position(), expected));
+    })
+}
+
+#[test]
+fn test_smooth_scroll_cancels_when_entering_alt_screen_before_animation_settles() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _smooth_scrolling = FeatureFlag::SmoothScrolling.override_enabled(true);
+
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+        terminal.update(&mut app, |view, _ctx| {
+            let mut model = view.model.lock();
+            for _ in 0..100 {
+                model.simulate_block("ls", "foo");
+            }
+        });
+
+        let size_info = terminal.update(&mut app, |view, ctx| {
+            view.scroll(1.0.into_lines(), false /* precise */, ctx);
+            view.model.lock().set_mode(ansi::Mode::SwapScreen {
+                save_cursor_and_clear_screen: true,
+            });
+            *view.size_info
+        });
+        // A scene build exercises alt-screen cancellation without relying on elapsed time.
+        let root_view_id = app
+            .root_view_id(window_id)
+            .expect("window should have a root view");
+        let mut presenter = Presenter::new(window_id);
+        let invalidation = WindowInvalidation {
+            updated: [root_view_id].into_iter().collect(),
+            ..Default::default()
+        };
+        app.update(|ctx| {
+            presenter.invalidate(invalidation, ctx);
+            presenter.build_scene(
+                vec2f(size_info.pane_width_px, size_info.pane_height_px),
+                1.,
+                None,
+                ctx,
+            );
+        });
+        terminal.read(&app, |view, _ctx| {
+            assert!(!view.smooth_scroll.needs_tick(Instant::now()));
+        });
+    })
+}
+
+#[test]
+fn test_smooth_scroll_applies_pending_increment_after_content_grows() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _smooth_scrolling = FeatureFlag::SmoothScrolling.override_enabled(true);
+
+        let restored_blocks = [
+            crate::terminal::model::block::SerializedBlock::new_for_test(
+                b"ls".to_vec(),
+                b"foo\n".repeat(1000),
+            )
+            .into(),
+        ];
+        let terminal = add_window_with_terminal(&mut app, Some(&restored_blocks));
+        terminal.update(&mut app, |view, ctx| {
+            view.scroll(1.0.into_lines(), true /* precise */, ctx);
+            view.smooth_scroll.add_delta(
+                -10.0.into_lines(),
+                Instant::now() - std::time::Duration::from_secs(1),
+            );
+            view.model
+                .lock()
+                .simulate_block("ls", &"more output\n".repeat(20));
+            let input_mode = *InputModeSettings::as_ref(ctx).input_mode.value();
+            let expected = {
+                let model = view.model.lock();
+                view.viewport_state(model.block_list(), input_mode, ctx)
+                    .next_scroll_position(
+                        ScrollPositionUpdate::AfterScrollEvent {
+                            scroll_delta: (-10.0).into_lines(),
+                        },
+                        ctx,
+                    )
+            };
+            view.advance_smooth_scroll(ctx);
+            assert_eq!(view.scroll_position(), expected);
+        });
+    })
+}
 #[test]
 fn test_clear_buffer() {
     App::test((), |mut app| async move {
@@ -6784,7 +7043,7 @@ fn test_scroll_position_doesnt_change_when_block_finished() {
             view.model.lock().simulate_long_running_block("", "lr");
 
             // Before the block is finished, scroll up.
-            view.scroll(1.0.into_lines(), ctx);
+            view.scroll(1.0.into_lines(), true /* precise */, ctx);
             let scroll_position_before_finished = view.scroll_position();
             assert!(matches!(
                 scroll_position_before_finished,

@@ -620,6 +620,7 @@ pub fn init(app: &mut AppContext) {
             "Scroll terminal output up one line",
             TerminalAction::Scroll {
                 delta: 1.0.into_lines(),
+                precise: true,
             },
         )
         .with_context_predicate(id!("Terminal") & id!("TerminalView_NonEmptyBlockList")),
@@ -628,6 +629,7 @@ pub fn init(app: &mut AppContext) {
             "Scroll terminal output down one line",
             TerminalAction::Scroll {
                 delta: -(1.0.into_lines()),
+                precise: true,
             },
         )
         .with_context_predicate(id!("Terminal") & id!("TerminalView_NonEmptyBlockList")),
