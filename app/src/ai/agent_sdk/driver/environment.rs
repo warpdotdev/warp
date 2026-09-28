@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -43,13 +44,13 @@ pub enum PrepareEnvironmentError {
     #[error("Failed to clone {repo_name}{identity_diagnostics}")]
     CloneRepo {
         repo_name: String,
-        identity_diagnostics: String,
+        identity_diagnostics: CloneFailureIdentityDiagnostics,
     },
     #[error("Failed to check out {checkout_ref} in {repo_name}{identity_diagnostics}")]
     CheckoutFailed {
         repo_name: String,
         checkout_ref: String,
-        identity_diagnostics: String,
+        identity_diagnostics: CloneFailureIdentityDiagnostics,
     },
     #[error("Invalid repository preparation overrides: {reason}")]
     InvalidRepositoryPreparationOverrides { reason: String },
@@ -691,6 +692,7 @@ pub(super) struct RepositoryCloneRequest {
     pub(super) checkout: Option<RepositoryHeadRef>,
     pub(super) remove_origin: bool,
 }
+
 fn unique_clone_hosts<'a>(
     requests: impl IntoIterator<Item = &'a RepositoryCloneRequest>,
 ) -> Vec<String> {
@@ -724,14 +726,38 @@ fn sanitize_git_credential_username(value: &str) -> Option<String> {
     .then(|| value.to_string())
 }
 
-fn git_author_name(output: Option<&CommandOutput>) -> Option<String> {
-    let output = output.filter(|output| output.success())?;
-    let stdout = std::str::from_utf8(&output.stdout).ok()?;
-    sanitize_git_author_name(stdout)
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CloneFailureCredentialIdentity {
+    host: String,
+    username: Option<String>,
 }
 
-fn git_credential_username(output: Option<&CommandOutput>) -> Option<String> {
-    let output = output.filter(|output| output.success())?;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CloneFailureIdentityDiagnostics {
+    author: Option<String>,
+    credentials: Vec<CloneFailureCredentialIdentity>,
+}
+
+impl fmt::Display for CloneFailureIdentityDiagnostics {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let author = self.author.as_deref().unwrap_or("unset");
+        write!(formatter, "\nGit identity diagnostics:\n  Author: {author}")?;
+        for credential in &self.credentials {
+            let username = credential.username.as_deref().unwrap_or("unavailable");
+            write!(
+                formatter,
+                "\n  Credential username for {}: {username}",
+                credential.host
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn git_credential_username(output: &CommandOutput) -> Option<String> {
+    if !output.success() {
+        return None;
+    }
     let stdout = std::str::from_utf8(&output.stdout).ok()?;
     let mut usernames = stdout
         .lines()
@@ -743,17 +769,25 @@ fn git_credential_username(output: Option<&CommandOutput>) -> Option<String> {
     sanitize_git_credential_username(username)
 }
 
-fn format_clone_failure_identity_diagnostics<'a>(
+fn clone_failure_identity_diagnostics<'a>(
     author_output: Option<&CommandOutput>,
     credential_outputs: impl IntoIterator<Item = (&'a str, Option<&'a CommandOutput>)>,
-) -> String {
-    let author = git_author_name(author_output).unwrap_or_else(|| "unset".to_string());
-    let mut diagnostics = format!("\nGit identity diagnostics:\n  Author: {author}");
-    for (host, output) in credential_outputs {
-        let username = git_credential_username(output).unwrap_or_else(|| "unavailable".to_string());
-        diagnostics.push_str(&format!("\n  Credential username for {host}: {username}"));
+) -> CloneFailureIdentityDiagnostics {
+    let author = author_output
+        .filter(|output| output.success())
+        .and_then(|output| std::str::from_utf8(&output.stdout).ok())
+        .and_then(sanitize_git_author_name);
+    let credentials = credential_outputs
+        .into_iter()
+        .map(|(host, output)| CloneFailureCredentialIdentity {
+            host: host.to_string(),
+            username: output.and_then(git_credential_username),
+        })
+        .collect();
+    CloneFailureIdentityDiagnostics {
+        author,
+        credentials,
     }
-    diagnostics
 }
 
 fn build_git_credential_query_command(host: &str) -> String {
@@ -766,46 +800,36 @@ fn build_git_credential_query_command(host: &str) -> String {
     let escaped_script = shell_escape_single_quotes(&script, ShellType::Bash);
     format!("sh -c '{escaped_script}'")
 }
-fn clone_failure_identity_query_commands(hosts: &[String]) -> Vec<String> {
-    std::iter::once("git config --get user.name".to_string())
-        .chain(
-            hosts
-                .iter()
-                .map(|host| build_git_credential_query_command(host)),
-        )
-        .collect()
-}
-
-async fn run_clone_failure_identity_query(
-    command: String,
-    spawner: &ModelSpawner<TerminalDriver>,
-) -> Option<CommandOutput> {
-    match execute_silent_command(command, spawner)
-        .with_timeout(CLONE_FAILURE_IDENTITY_QUERY_TIMEOUT)
-        .await
-    {
-        Ok(Ok(output)) if output.success() => Some(output),
-        Ok(Ok(_)) | Ok(Err(_)) | Err(_) => None,
-    }
-}
 
 async fn collect_clone_failure_identity_diagnostics(
     hosts: Vec<String>,
     spawner: &ModelSpawner<TerminalDriver>,
-) -> String {
-    let commands = clone_failure_identity_query_commands(&hosts);
-    let outputs = join_all(
-        commands
-            .into_iter()
-            .map(|command| run_clone_failure_identity_query(command, spawner)),
+) -> CloneFailureIdentityDiagnostics {
+    let author_query = execute_silent_command("git config --get user.name".to_string(), spawner)
+        .with_timeout(CLONE_FAILURE_IDENTITY_QUERY_TIMEOUT);
+    let credential_queries = hosts.into_iter().map(|host| async move {
+        let command = build_git_credential_query_command(&host);
+        let output = execute_silent_command(command, spawner)
+            .with_timeout(CLONE_FAILURE_IDENTITY_QUERY_TIMEOUT)
+            .await;
+        let output = match output {
+            Ok(Ok(output)) if output.success() => Some(output),
+            Ok(Ok(_)) | Ok(Err(_)) | Err(_) => None,
+        };
+        (host, output)
+    });
+    let (author_output, credential_outputs) =
+        futures::join!(author_query, join_all(credential_queries));
+    let author_output = match author_output {
+        Ok(Ok(output)) if output.success() => Some(output),
+        Ok(Ok(_)) | Ok(Err(_)) | Err(_) => None,
+    };
+    clone_failure_identity_diagnostics(
+        author_output.as_ref(),
+        credential_outputs
+            .iter()
+            .map(|(host, output)| (host.as_str(), output.as_ref())),
     )
-    .await;
-    let author_output = outputs.first().and_then(Option::as_ref);
-    let credential_outputs = hosts
-        .iter()
-        .zip(outputs.iter().skip(1))
-        .map(|(host, output)| (host.as_str(), output.as_ref()));
-    format_clone_failure_identity_diagnostics(author_output, credential_outputs)
 }
 
 async fn clone_repo_failure(

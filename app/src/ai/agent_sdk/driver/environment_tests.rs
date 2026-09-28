@@ -10,16 +10,17 @@ use warp_cli::agent::{
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
 
 use super::{
-    PrepareEnvironmentError, RepositoryCloneRequest, build_git_credential_query_command,
-    build_parallel_clone_command, build_remove_repository_origins_command,
-    build_resolved_head_command, checkout_command_for, clone_failure_identity_query_commands,
-    environment_snapshot, format_clone_failure_identity_diagnostics, is_valid_git_object_id,
+    CloneFailureCredentialIdentity, CloneFailureIdentityDiagnostics, PrepareEnvironmentError,
+    RepositoryCloneRequest, build_git_credential_query_command, build_parallel_clone_command,
+    build_remove_repository_origins_command, build_resolved_head_command, checkout_command_for,
+    clone_failure_identity_diagnostics, environment_snapshot, is_valid_git_object_id,
     merge_repos_deduped, parse_resolved_head_sha, parse_resolved_head_shas, read_failed_repo_names,
     repository_clone_requests, single_repo_name, unique_clone_hosts,
     validate_repository_preparation_overrides,
 };
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::terminal::shell::ShellType;
+
 fn command_output(stdout: &str, stderr: &str, status: CommandExitStatus) -> CommandOutput {
     CommandOutput {
         stdout: stdout.as_bytes().to_vec(),
@@ -1067,17 +1068,6 @@ fn credential_query_is_noninteractive_and_contains_only_the_requested_host() {
 }
 
 #[test]
-fn clone_failure_queries_collect_the_author_and_each_deduplicated_host() {
-    let hosts = vec!["github.com".to_string(), "gitlab.com".to_string()];
-    let commands = clone_failure_identity_query_commands(&hosts);
-
-    assert_eq!(commands.len(), 3);
-    assert_eq!(commands[0], "git config --get user.name");
-    assert!(commands[1].contains("host=github.com"));
-    assert!(commands[2].contains("host=gitlab.com"));
-}
-
-#[test]
 fn clone_failure_identity_diagnostics_keep_only_sanitized_expected_fields() {
     let author = command_output("Ada Lovelace\n", "", CommandExitStatus::Success);
     let github = command_output(
@@ -1091,19 +1081,34 @@ fn clone_failure_identity_diagnostics_keep_only_sanitized_expected_fields() {
         CommandExitStatus::Success,
     );
 
-    let diagnostics = format_clone_failure_identity_diagnostics(
+    let diagnostics = clone_failure_identity_diagnostics(
         Some(&author),
         [("github.com", Some(&github)), ("gitlab.com", Some(&gitlab))],
     );
 
+    assert_eq!(diagnostics.author.as_deref(), Some("Ada Lovelace"));
     assert_eq!(
-        diagnostics,
+        diagnostics.credentials,
+        vec![
+            CloneFailureCredentialIdentity {
+                host: "github.com".to_string(),
+                username: Some("octocat".to_string()),
+            },
+            CloneFailureCredentialIdentity {
+                host: "gitlab.com".to_string(),
+                username: Some("gitlab-user".to_string()),
+            },
+        ]
+    );
+    let rendered = diagnostics.to_string();
+    assert_eq!(
+        rendered,
         "\nGit identity diagnostics:\n  Author: Ada Lovelace\n  Credential username for github.com: octocat\n  Credential username for gitlab.com: gitlab-user"
     );
-    assert!(!diagnostics.contains("password"));
-    assert!(!diagnostics.contains("secret-token"));
-    assert!(!diagnostics.contains("protocol="));
-    assert!(!diagnostics.contains("host="));
+    assert!(!rendered.contains("password"));
+    assert!(!rendered.contains("secret-token"));
+    assert!(!rendered.contains("protocol="));
+    assert!(!rendered.contains("host="));
 }
 
 #[test]
@@ -1129,7 +1134,7 @@ fn clone_failure_identity_diagnostics_fall_back_on_timeout_malformed_or_failed_q
         CommandExitStatus::Success,
     );
 
-    let diagnostics = format_clone_failure_identity_diagnostics(
+    let diagnostics = clone_failure_identity_diagnostics(
         Some(&malformed_author),
         [
             ("github.com", Some(&malformed_username)),
@@ -1139,8 +1144,31 @@ fn clone_failure_identity_diagnostics_fall_back_on_timeout_malformed_or_failed_q
         ],
     );
 
+    assert_eq!(diagnostics.author, None);
     assert_eq!(
-        diagnostics,
+        diagnostics.credentials,
+        vec![
+            CloneFailureCredentialIdentity {
+                host: "github.com".to_string(),
+                username: None,
+            },
+            CloneFailureCredentialIdentity {
+                host: "gitlab.com".to_string(),
+                username: None,
+            },
+            CloneFailureCredentialIdentity {
+                host: "bitbucket.org".to_string(),
+                username: None,
+            },
+            CloneFailureCredentialIdentity {
+                host: "dev.azure.com".to_string(),
+                username: None,
+            },
+        ]
+    );
+    let rendered = diagnostics.to_string();
+    assert_eq!(
+        rendered,
         "\nGit identity diagnostics:\n  Author: unset\n  Credential username for github.com: unavailable\n  Credential username for gitlab.com: unavailable\n  Credential username for bitbucket.org: unavailable\n  Credential username for dev.azure.com: unavailable"
     );
     for secret in [
@@ -1150,13 +1178,16 @@ fn clone_failure_identity_diagnostics_fall_back_on_timeout_malformed_or_failed_q
         "duplicate-secret",
         "https://token@github.com",
     ] {
-        assert!(!diagnostics.contains(secret));
+        assert!(!rendered.contains(secret));
     }
 }
 
 #[test]
 fn clone_failure_errors_preserve_the_original_failure_before_diagnostics() {
-    let diagnostics = "\nGit identity diagnostics:\n  Author: unset".to_string();
+    let diagnostics = CloneFailureIdentityDiagnostics {
+        author: None,
+        credentials: Vec::new(),
+    };
     let clone_error = PrepareEnvironmentError::CloneRepo {
         repo_name: "warpdotdev/warp".to_string(),
         identity_diagnostics: diagnostics.clone(),
