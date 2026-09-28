@@ -104,7 +104,7 @@ use crate::terminal::cli_agent_sessions::{
 };
 use crate::terminal::model::BlockId;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
-use crate::workspaces::user_workspaces::{AgentRunTeamScope, ResolvedTeamScope, UserWorkspaces};
+use crate::workspaces::user_workspaces::{HeadlessTeamScope, ResolvedTeamScope, UserWorkspaces};
 use crate::workspaces::workspace::BillingMetadata;
 
 pub(crate) mod attachments;
@@ -623,7 +623,7 @@ pub struct AgentDriverOptions {
     /// Model config for the selected harness. Only used for non-Oz harnesses.
     pub third_party_harness_model_config: Option<HarnessModelConfig>,
     /// Stable team scope assigned to this run and its headless window.
-    pub team_scope: Option<AgentRunTeamScope>,
+    pub team_scope: Option<HeadlessTeamScope>,
     pub(crate) bedrock_oidc_credentials: Option<BedrockOidcCredentialsConfig>,
     /// Whether to skip end-of-run snapshot upload.
     pub snapshot_disabled: Option<bool>,
@@ -670,7 +670,7 @@ pub struct AgentDriver {
 
     // The associated task ID for this agent run, if any.
     task_id: Option<AmbientAgentTaskId>,
-    team_scope: Option<AgentRunTeamScope>,
+    team_scope: Option<HeadlessTeamScope>,
     bedrock_oidc_credentials: Option<BedrockOidcCredentialsConfig>,
 
     /// Harness adapter for the running agent. This is only set if:

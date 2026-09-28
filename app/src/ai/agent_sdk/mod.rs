@@ -81,7 +81,7 @@ use crate::server::server_api::managed_secrets::AppManagedSecretManager as Manag
 use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::workflows::workflow::Workflow;
-use crate::workspaces::user_workspaces::{AgentRunTeamScope, TeamScopeForCli};
+use crate::workspaces::user_workspaces::HeadlessTeamScope;
 
 mod admin;
 mod agent_config;
@@ -401,7 +401,7 @@ fn build_merged_config_and_task(
     args: &RunAgentArgs,
     resolved_skill: &Option<ResolvedSkill>,
     prompt: &Option<Prompt>,
-    local_run_team_scope: Option<&TeamScopeForCli>,
+    local_run_team_scope: Option<&HeadlessTeamScope>,
     ctx: &mut AppContext,
 ) -> anyhow::Result<(AgentConfigSnapshot, Task)> {
     // Server-side prompt resolution (task_id is set): the task config already lives on the
@@ -677,7 +677,7 @@ impl warpui::SingletonEntity for AgentDriverRunner {}
 fn resolve_agent_driver_team_scope(
     args: &RunAgentArgs,
     ctx: &AppContext,
-) -> anyhow::Result<Option<TeamScopeForCli>> {
+) -> anyhow::Result<Option<HeadlessTeamScope>> {
     // We need a team scope if either:
     // 1. This is a local team-visible task that doesn't exist on the server yet.
     // 2. This task is authenticated as a service account
@@ -1129,7 +1129,7 @@ impl AgentDriverRunner {
     async fn build_driver_options_and_task(
         foreground: &ModelSpawner<Self>,
         args: RunAgentArgs,
-        agent_driver_team_scope: Option<TeamScopeForCli>,
+        agent_driver_team_scope: Option<HeadlessTeamScope>,
         server_api: &Arc<dyn AIClient>,
         setup_events: &SetupClientEventReporter,
     ) -> Result<(AgentDriverOptions, Task, Option<String>), AgentDriverError> {
@@ -1217,9 +1217,7 @@ impl AgentDriverRunner {
         // The existing-task branch also surfaces the task's `conversation_id` (if any) so
         // the caller can wire up resume without a separate `--conversation` arg.
         let task_conversation_id = if let Some(task_id_str) = task_id_str {
-            driver_options.team_scope = agent_driver_team_scope
-                .as_ref()
-                .map(AgentRunTeamScope::from_scope);
+            driver_options.team_scope = agent_driver_team_scope;
             setup_events
                 .record_result(
                     SetupStep::TaskDataFetch,
@@ -1275,11 +1273,11 @@ impl AgentDriverRunner {
         server_api: &Arc<dyn AIClient>,
         prompt: String,
         merged_config: AgentConfigSnapshot,
-        team_scope: TeamScopeForCli,
+        team_scope: HeadlessTeamScope,
         driver_options: &mut AgentDriverOptions,
     ) -> Result<(), AgentDriverError> {
         let request_team_scope = RequestTeamScope::from_scope(&team_scope);
-        driver_options.team_scope = Some(AgentRunTeamScope::from_scope(&team_scope));
+        driver_options.team_scope = Some(team_scope);
         let environment = merged_config.environment_id.clone();
         let task_config = if merged_config.is_empty() {
             None
@@ -1465,7 +1463,7 @@ impl AgentDriverRunner {
                 let task_team_scope = task_metadata
                     .scope
                     .as_ref()
-                    .map(AgentRunTeamScope::from_task_scope);
+                    .map(HeadlessTeamScope::from_task_scope);
                 (
                     task_metadata.parent_run_id,
                     task_metadata.conversation_id,
@@ -1496,9 +1494,8 @@ impl AgentDriverRunner {
         driver_options.additional_source_repos = additional_source_repos;
         driver_options.secrets = secrets;
         // The server-reported task scope is authoritative for the headless window this run
-        // creates; it supersedes whatever scope was resolved
-        // from CLI args before the task was fetched. Older servers that don't send `scope` fall
-        // back to that earlier resolution.
+        // creates; it supersedes whatever scope was resolved from CLI args before the task was
+        // fetched. Older servers that don't send `scope` fall back to that earlier resolution.
         if let Some(task_team_scope) = task_team_scope {
             driver_options.team_scope = Some(task_team_scope);
         }

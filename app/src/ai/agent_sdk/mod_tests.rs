@@ -36,9 +36,7 @@ use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::workspaces::team::{Team, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::{
-    AgentRunTeamScope, TeamScope, TeamScopeForCli, UserWorkspaces,
-};
+use crate::workspaces::user_workspaces::{HeadlessTeamScope, TeamScope, UserWorkspaces};
 use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
@@ -167,15 +165,6 @@ fn agent_driver_options() -> AgentDriverOptions {
         strict_mcp_startup: false,
         mcp_startup_timeout: None,
     }
-}
-
-#[test]
-fn agent_run_scope_keeps_the_resolved_cli_scope() {
-    let team_uid = ServerId::from(17);
-    let cli_scope = TeamScopeForCli::Team(team_uid);
-    let run_scope = AgentRunTeamScope::from_scope(&cli_scope);
-
-    assert_eq!(run_scope.team_uid(), Some(team_uid));
 }
 
 #[test]
@@ -369,7 +358,7 @@ fn agent_run_scope_resolves_a_team_scoped_task() {
     };
 
     assert_eq!(
-        AgentRunTeamScope::from_task_scope(&scope).team_uid(),
+        HeadlessTeamScope::from_task_scope(&scope).team_uid(),
         Some(owning_team_uid)
     );
 }
@@ -381,7 +370,7 @@ fn agent_run_scope_resolves_a_personal_task() {
         uid: "some-user-uid".to_string(),
     };
 
-    assert_eq!(AgentRunTeamScope::from_task_scope(&scope).team_uid(), None);
+    assert_eq!(HeadlessTeamScope::from_task_scope(&scope).team_uid(), None);
 }
 
 #[test]
@@ -391,7 +380,7 @@ fn agent_run_scope_falls_back_to_personal_for_an_unparseable_team_uid() {
         uid: "not-a-valid-uid".to_string(),
     };
 
-    assert_eq!(AgentRunTeamScope::from_task_scope(&scope).team_uid(), None);
+    assert_eq!(HeadlessTeamScope::from_task_scope(&scope).team_uid(), None);
 }
 
 #[test]

@@ -38,7 +38,7 @@ use crate::terminal::model::terminal_model::ShellProcessInfo;
 use crate::terminal::shared_session::{self, IsSharedSessionCreator, SharedSessionSource};
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::{ConversationRestorationInNewPaneType, Event};
-use crate::workspaces::user_workspaces::{AgentRunTeamScope, TeamScope, UserWorkspaces};
+use crate::workspaces::user_workspaces::{HeadlessTeamScope, TeamScope, UserWorkspaces};
 
 /// Describes why a terminal session bootstrap failed.
 #[derive(Debug)]
@@ -115,7 +115,7 @@ pub(crate) struct TerminalDriverOptions<'a> {
     pub should_share: bool,
     pub task_id: Option<AmbientAgentTaskId>,
     pub conversation_restoration: Option<ConversationRestorationInNewPaneType>,
-    pub team_scope: Option<&'a AgentRunTeamScope>,
+    pub team_scope: Option<&'a HeadlessTeamScope>,
 }
 
 /// Events emitted by [`TerminalDriver`] for [`super::AgentDriver`] to react to.
