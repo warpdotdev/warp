@@ -70,7 +70,7 @@ use super::{
 };
 use crate::ai::AIRequestUsageModel;
 #[cfg(not(target_family = "wasm"))]
-use crate::ai::aws_credentials::refresh_aws_credentials;
+use crate::ai::aws_credentials::refresh_local_chain_aws_credentials;
 use crate::ai::blocklist::agent_view::agent_input_footer::editor::{
     AgentToolbarEditorMode, AgentToolbarInlineEditor,
 };
@@ -2777,7 +2777,7 @@ impl TypedActionView for WarpAgentPageView {
             WarpAgentPageAction::RefreshAwsBedrockCredentials => {
                 #[cfg(not(target_family = "wasm"))]
                 ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-                    drop(refresh_aws_credentials(manager, ctx));
+                    drop(refresh_local_chain_aws_credentials(manager, ctx));
                 });
                 ctx.notify();
             }

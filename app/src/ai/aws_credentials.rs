@@ -236,7 +236,7 @@ impl AwsCredentialRefresher for ApiKeyManager {
                 let auth_command = &AISettings::as_ref(ctx).aws_bedrock_auth_refresh_command;
                 if command.trim().starts_with(auth_command.trim()) {
                     log::debug!("Detected AWS auth command completion, refreshing credentials");
-                    drop(refresh_aws_credentials(manager, ctx));
+                    drop(refresh_local_chain_aws_credentials(manager, ctx));
                 }
             }
         });
@@ -251,7 +251,7 @@ impl AwsCredentialRefresher for ApiKeyManager {
                 UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess
                     | UserWorkspacesEvent::TeamsChanged
             ) {
-                drop(refresh_aws_credentials(manager, ctx));
+                drop(refresh_local_chain_aws_credentials(manager, ctx));
             }
         });
 
@@ -263,33 +263,30 @@ impl AwsCredentialRefresher for ApiKeyManager {
                     | AISettingsChangedEvent::AwsBedrockAuthRefreshCommand { .. }
                     | AISettingsChangedEvent::AwsBedrockCredentialsEnabled { .. }
             ) {
-                drop(refresh_aws_credentials(manager, ctx));
+                drop(refresh_local_chain_aws_credentials(manager, ctx));
             }
         });
     }
 }
-/// Refreshes local-chain AWS credentials. OIDC refresh is owned by the agent driver.
+
+/// Refreshes AWS credentials from the local AWS SDK credential chain (~/.aws).
+///
+/// No-op under [`AwsCredentialsRefreshStrategy::OidcManaged`]: those credentials are minted and
+/// refreshed by the agent driver, which holds the role, region, task id, and request scope. This
+/// runs from ambient triggers (team metadata, settings changes, the auth-command detector) and
+/// must not overwrite a live STS session with the local chain's answer.
 ///
 /// Returns a future that resolves when the refresh completes. Subscription-triggered
 /// callers that don't need to wait should drop the returned future — the underlying
 /// work has already been scheduled on the executor by the time this returns.
-pub(crate) fn refresh_aws_credentials(
+pub(crate) fn refresh_local_chain_aws_credentials(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) -> BoxFuture<'static, Result<(), String>> {
-    match manager.aws_credentials_refresh_strategy() {
-        AwsCredentialsRefreshStrategy::LocalChain => {
-            refresh_aws_credentials_local_chain(manager, ctx)
-        }
-        AwsCredentialsRefreshStrategy::OidcManaged => Box::pin(async { Ok(()) }),
+    if manager.aws_credentials_refresh_strategy() == AwsCredentialsRefreshStrategy::OidcManaged {
+        return Box::pin(async { Ok(()) });
     }
-}
 
-/// Refreshes credentials from the local AWS SDK credential chain (~/.aws).
-fn refresh_aws_credentials_local_chain(
-    manager: &mut ApiKeyManager,
-    ctx: &mut ModelContext<ApiKeyManager>,
-) -> BoxFuture<'static, Result<(), String>> {
     // Credential loading is a background `ApiKeyManager` job with no window behind it, and
     // there is one local AWS credential store, so it runs if any of the user's teams enables
     // Bedrock. Whether a given request may then carry those credentials is decided separately.
