@@ -35,6 +35,34 @@ fn native_key_code_to_key_code(native_key_code: u16) -> Option<KeyCode> {
     }
 }
 
+/// The key a keystroke carries, from the characters AppKit reported for the key without
+/// modifiers. `None` when AppKit reported no character at all.
+///
+/// A keyboard layout that is not ASCII-capable, such as Korean 2-Set, reports its own
+/// letters here (ㅑ for the I key, even with Command held), so a Command keystroke would
+/// never match a binding written as `cmd-i`. For a Command keystroke on a non-ASCII
+/// character this asks `ascii_capable_key` for the key on the ASCII-capable layout
+/// instead, which is what the same key reports when that layout is active. Every other
+/// keystroke keeps the layout's own character, so typing and Option combinations are
+/// unchanged.
+fn keystroke_key(
+    unmodified_chars: &str,
+    cmd: bool,
+    ascii_capable_key: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    let first_char = unmodified_chars.chars().next()?;
+    if let Some(named_key) = unicode_char_to_key(first_char as u16) {
+        return Some(named_key.to_owned());
+    }
+    if cmd
+        && !first_char.is_ascii()
+        && let Some(key) = ascii_capable_key()
+    {
+        return Some(key);
+    }
+    Some(unmodified_chars.to_owned())
+}
+
 /// # Safety
 /// This code is only unsafe since it requires interfacing with platform code.
 /// Creates an event from a native event, taking in the current window_height and whether this is
@@ -78,19 +106,19 @@ pub unsafe fn from_native(
                     .to_str()
                     .ok()?;
 
-                let unmodified_chars = if let Some(first_char) = unmodified_chars.chars().next() {
-                    unicode_char_to_key(first_char as u16).unwrap_or(unmodified_chars)
-                } else {
-                    return None;
-                };
+                let cmd = native_modifiers.contains(NSEventModifierFlags::Command);
+                let shift = native_modifiers.contains(NSEventModifierFlags::Shift);
+                let key = keystroke_key(unmodified_chars, cmd, || {
+                    Keycode(native_event.keyCode()).try_to_ascii_capable_key_name(shift)
+                })?;
 
                 let keystroke = Keystroke {
                     ctrl: native_modifiers.contains(NSEventModifierFlags::Control),
                     alt: native_modifiers.contains(NSEventModifierFlags::Option),
-                    shift: native_modifiers.contains(NSEventModifierFlags::Shift),
-                    cmd: native_modifiers.contains(NSEventModifierFlags::Command),
+                    shift,
+                    cmd,
                     meta: false, /* handled separately */
-                    key: unmodified_chars.into(),
+                    key,
                 };
 
                 let characters = native_event.characters();
@@ -253,3 +281,7 @@ pub unsafe fn from_native(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "event_tests.rs"]
+mod tests;

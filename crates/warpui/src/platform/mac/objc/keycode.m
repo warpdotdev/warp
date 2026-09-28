@@ -158,6 +158,37 @@ NSString* keyCodeToChar(UInt16 keyCode, BOOL shifted) {
     }
 }
 
+// Convert keycode to its character on the ASCII-capable keyboard layout, the Latin layout
+// the user switches to alongside the current one. Returns nil when the current keyboard layout
+// is already ASCII-capable, so the caller keeps the character AppKit reported. A layout
+// such as Korean 2-Set reports its own letters from charactersIgnoringModifiers (ㅑ for
+// the I key), which no Command binding is written in.
+NSString* keyCodeToAsciiCapableChar(UInt16 keyCode, BOOL shifted) {
+    TISInputSourceRef current_layout = TISCopyCurrentKeyboardLayoutInputSource();
+    CFBooleanRef is_ascii_capable = current_layout
+        ? (CFBooleanRef)TISGetInputSourceProperty(current_layout,
+                                                  kTISPropertyInputSourceIsASCIICapable)
+        : NULL;
+    BOOL current_is_ascii_capable = is_ascii_capable && CFBooleanGetValue(is_ascii_capable);
+    if (current_layout) CFRelease(current_layout);
+    if (current_is_ascii_capable) return nil;
+
+    TISInputSourceRef ascii_layout = TISCopyCurrentASCIICapableKeyboardLayoutInputSource();
+    if (!ascii_layout) return nil;
+    CFDataRef layout_data =
+        (CFDataRef)(TISGetInputSourceProperty(ascii_layout, kTISPropertyUnicodeKeyLayoutData));
+
+    // The shift key representation in Carbon is 1 << 9; see keyCodeToChar.
+    UInt32 modifier_key_state = shifted ? 1 << 1 : 0;
+    UniChar translated_char =
+        TranslatedUnicodeCharFromKeyCode(layout_data, keyCode, modifier_key_state, LMGetKbdLast());
+    // layout_data belongs to ascii_layout, so release only after translating.
+    CFRelease(ascii_layout);
+
+    if (!layout_data || IsUnicodeControl(translated_char)) return nil;
+    return [NSString stringWithFormat:@"%C", translated_char];
+}
+
 NSArray<NSNumber*>* charToKeyCodes(NSString* keyChar) {
     if (keycodeDict == nil) {
         keycodeDict = [[NSMutableDictionary alloc] init];

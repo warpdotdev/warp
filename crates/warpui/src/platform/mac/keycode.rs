@@ -16,6 +16,7 @@ pub const CONTROL_KEY: u16 = 4096;
 unsafe extern "C" {
     fn charToKeyCodes(keyChar: id) -> id;
     fn keyCodeToChar(keyCode: NSUInteger, shifted: BOOL) -> id;
+    fn keyCodeToAsciiCapableChar(keyCode: u16, shifted: BOOL) -> id;
 }
 
 pub struct Keycode(pub u16);
@@ -28,16 +29,19 @@ impl Keycode {
             // But clippy isn't smart enough to know that so we silence it here for now.
             #[allow(clippy::useless_conversion)]
             let key = keyCodeToChar(self.0 as u64, shift_key_pressed.into());
+            nsstring_to_string(key)
+        }
+    }
 
-            if key.is_null() {
-                return None;
-            }
-
-            let key = &*key.cast::<NSString>();
-            let cstr = key.UTF8String() as *const u8;
-            std::str::from_utf8(slice::from_raw_parts(cstr, key.len()))
-                .ok()
-                .map(|s| s.to_string())
+    /// The key's name on the current ASCII-capable keyboard layout, the Latin layout the
+    /// user switches to alongside a layout such as Korean 2-Set. `None` when the current
+    /// layout is already ASCII-capable, or when the key has no printable character there.
+    pub fn try_to_ascii_capable_key_name(self, shift_key_pressed: bool) -> Option<String> {
+        unsafe {
+            // See `try_to_key_name` for why the conversion is needed.
+            #[allow(clippy::useless_conversion)]
+            let key = keyCodeToAsciiCapableChar(self.0, shift_key_pressed.into());
+            nsstring_to_string(key)
         }
     }
 
@@ -59,6 +63,22 @@ impl Keycode {
             let keycode = unsafe { (*keycodes).objectAtIndex(i).unsignedIntegerValue() };
             Self(keycode as u16)
         })
+    }
+}
+
+/// # Safety
+/// `key` must be null or point to a live `NSString`.
+unsafe fn nsstring_to_string(key: id) -> Option<String> {
+    if key.is_null() {
+        return None;
+    }
+
+    unsafe {
+        let key = &*key.cast::<NSString>();
+        let cstr = key.UTF8String() as *const u8;
+        std::str::from_utf8(slice::from_raw_parts(cstr, key.len()))
+            .ok()
+            .map(|s| s.to_string())
     }
 }
 
