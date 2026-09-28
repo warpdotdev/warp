@@ -102,6 +102,8 @@ pub enum Event {
     ScrollWheel {
         position: Vector2F,
         delta: Vector2F,
+        /// Whether `delta` is a continuous, pixel-accurate movement (e.g. a trackpad swipe),
+        /// as opposed to a discrete, line-quantized notch (e.g. a mouse wheel click).
         precise: bool,
         modifiers: ModifiersState,
     },
