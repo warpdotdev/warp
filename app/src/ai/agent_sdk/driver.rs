@@ -2299,7 +2299,7 @@ impl AgentDriver {
                         .await?;
                     let mcp_startup_result = setup_events
                         .record_result(
-                            SetupStep::ConfiguredMcpServerStartup,
+                            SetupStep::McpServerStartup,
                             Self::start_task_and_profile_mcp_servers(
                                 &task.mcp_specs,
                                 managed_mcp_client,

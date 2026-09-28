@@ -186,7 +186,7 @@ pub(crate) enum SetupStep {
     SkillRepoClone,
     TerminalBootstrap,
     CloudProviderSetup,
-    ConfiguredMcpServerStartup,
+    McpServerStartup,
     AgentProfileConfiguration,
     SharedSessionEstablishment,
     GlobalSkillResolution,
@@ -243,8 +243,8 @@ impl SetupStep {
             Self::CloudProviderSetup => {
                 span_and_name!("setup_cloud_provider_setup")
             }
-            Self::ConfiguredMcpServerStartup => {
-                span_and_name!("setup_configured_mcp_server_startup")
+            Self::McpServerStartup => {
+                span_and_name!("setup_mcp_server_startup")
             }
             Self::AgentProfileConfiguration => {
                 span_and_name!("setup_agent_profile_configuration")
