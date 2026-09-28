@@ -3,6 +3,8 @@
 //! Subcommands:
 //! - [`ping`] — fetches the current run by task ID and prints its info.
 //! - [`report_artifact`] — reports an artifact (e.g. a PR) back to the Oz platform.
+use std::io::Write as _;
+
 use anyhow::Result;
 use warp_cli::GlobalOptions;
 use warp_cli::agent::OutputFormat;
@@ -255,7 +257,7 @@ fn finish_task(
                             println!("{{}}");
                         }
                         OutputFormat::Pretty | OutputFormat::Text => {
-                            println!("Task finished.");
+                            let _ = writeln!(std::io::stdout(), "Task finished.");
                         }
                     }
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
