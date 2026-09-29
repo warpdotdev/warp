@@ -11,11 +11,12 @@ use warp_completer::completer::{CommandExitStatus, CommandOutput};
 
 use super::{
     CloneFailureCredentialIdentity, CloneFailureIdentityDiagnostics, PrepareEnvironmentError,
-    RepositoryCloneRequest, build_git_credential_query_command, build_parallel_clone_command,
+    RepositoryCloneRequest, SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER,
+    build_git_credential_query_command, build_parallel_clone_command,
     build_remove_repository_origins_command, build_resolved_head_command, checkout_command_for,
     clone_failure_identity_diagnostics, environment_snapshot, is_valid_git_object_id,
     merge_repos_deduped, parse_resolved_head_sha, parse_resolved_head_shas, read_failed_repo_names,
-    repository_clone_requests, single_repo_name, unique_clone_hosts,
+    repository_clone_requests, setup_command_failure, single_repo_name, unique_clone_hosts,
     validate_repository_preparation_overrides,
 };
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
@@ -47,6 +48,44 @@ fn clone_error_includes_short_output() {
     );
 }
 
+#[test]
+fn setup_command_error_includes_short_output() {
+    let error = setup_command_failure(
+        "./setup.sh".to_string(),
+        Some(" \n permission denied \n ".to_string()),
+    );
+    assert_eq!(
+        error.to_string(),
+        "Failed to run setup command: ./setup.sh\nCommand output:\npermission denied"
+    );
+}
+
+#[test]
+fn setup_command_error_includes_redacted_truncated_output() {
+    let secret = "AKIAIOSFODNN7EXAMPLE";
+    let output = format!("START {secret}\n{} END", "x".repeat(5_000));
+    let error = setup_command_failure("./setup.sh".to_string(), Some(output));
+    let message = error.to_string();
+
+    assert!(
+        message.starts_with("Failed to run setup command: ./setup.sh\nCommand output:\nSTART ")
+    );
+    assert!(!message.contains(secret));
+    assert!(message.contains(&"*".repeat(secret.len())));
+    assert!(message.contains(SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER));
+    assert!(message.ends_with(" END"));
+    assert!(
+        message.len() - "Failed to run setup command: ./setup.sh\nCommand output:\n".len() <= 4_096
+    );
+}
+
+#[test]
+fn setup_command_error_without_readable_output_keeps_original_message() {
+    for output in [None, Some("  \n  ".to_string())] {
+        let error = setup_command_failure("./setup.sh".to_string(), output);
+        assert_eq!(error.to_string(), "Failed to run setup command: ./setup.sh");
+    }
+}
 fn commit_head_override(
     code_forge: RepositoryForge,
     owner: &str,

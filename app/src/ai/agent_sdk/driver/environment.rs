@@ -38,6 +38,7 @@ const CODEBASE_INDEX_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 const ENVIRONMENT_SNAPSHOT_CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
 const CLONE_FAILURE_IDENTITY_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 const CLONE_FAILURE_OUTPUT_TRUNCATION_MARKER: &str = "\n… clone output truncated …\n";
+const SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER: &str = "\n… setup command output truncated …\n";
 
 #[derive(Debug, thiserror::Error)]
 pub enum PrepareEnvironmentError {
@@ -62,8 +63,14 @@ pub enum PrepareEnvironmentError {
     InvalidRepositoryPreparationOverrides { reason: String },
     #[error("Failed to remove origins from environment repositories")]
     RemoveRepositoryOrigins,
-    #[error("Failed to run setup command: {command}")]
-    SetupCommand { command: String },
+    #[error(
+        "Failed to run setup command: {command}{}",
+        setup_command_output_suffix(.output.as_deref())
+    )]
+    SetupCommand {
+        command: String,
+        output: Option<String>,
+    },
     #[error("Failed to change directory into {repo_name}")]
     ChangeDirectory { repo_name: String },
     #[error(
@@ -80,6 +87,21 @@ pub enum PrepareEnvironmentError {
     UnsupportedRepositoryForge { repo_name: String },
     #[error("Terminal driver error while preparing environment: {source}")]
     TerminalDriver { source: AgentDriverError },
+}
+fn setup_command_output_suffix(output: Option<&str>) -> String {
+    output
+        .filter(|output| !output.is_empty())
+        .map(|output| format!("\nCommand output:\n{output}"))
+        .unwrap_or_default()
+}
+
+fn setup_command_failure(command: String, output: Option<String>) -> PrepareEnvironmentError {
+    let output = output
+        .map(|output| {
+            failure_output::prepare_failure_output(&output, SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER)
+        })
+        .filter(|output| !output.is_empty());
+    PrepareEnvironmentError::SetupCommand { command, output }
 }
 
 fn clone_failure_output_suffix(output: Option<&str>) -> String {
@@ -520,9 +542,9 @@ async fn prepare_environment_impl(
 
                     let command_result = execute_command(command, spawner).await?;
                     if command_result.exit_code != 0.into() {
-                        return Err(PrepareEnvironmentError::SetupCommand {
-                            command: command_for_error,
-                        });
+                        let output =
+                            fetch_block_output_plaintext(&command_result.block_id, spawner).await;
+                        return Err(setup_command_failure(command_for_error, output));
                     }
 
                     let working_dir_string = working_dir.to_string_lossy().to_string();
@@ -1580,16 +1602,24 @@ async fn fetch_clone_failure_output(
     block_id: &BlockId,
     spawner: &ModelSpawner<TerminalDriver>,
 ) -> Option<String> {
+    fetch_block_output_plaintext(block_id, spawner)
+        .await
+        .map(|output| {
+            failure_output::prepare_failure_output(&output, CLONE_FAILURE_OUTPUT_TRUNCATION_MARKER)
+        })
+        .filter(|output| !output.is_empty())
+}
+
+async fn fetch_block_output_plaintext(
+    block_id: &BlockId,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Option<String> {
     let block_id = block_id.clone();
     spawner
         .spawn(move |driver, ctx| driver.block_output_plaintext(&block_id, ctx))
         .await
         .ok()
         .flatten()
-        .map(|output| {
-            failure_output::prepare_failure_output(&output, CLONE_FAILURE_OUTPUT_TRUNCATION_MARKER)
-        })
-        .filter(|output| !output.is_empty())
 }
 
 async fn execute_silent_command(
