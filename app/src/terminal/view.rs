@@ -7342,12 +7342,13 @@ impl TerminalView {
         is_expanded: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        // Close any existing turn panel for this specific AI block.
-        if let Some(id) = self.turn_panel_view_ids.remove(&source_ai_block_view_id) {
-            let mut model = self.model.lock();
-            model.block_list_mut().remove_rich_content(id);
-            drop(model);
-            self.rich_content_views.retain(|rc| rc.view_id() != id);
+        if self
+            .turn_panel_view_ids
+            .remove(&source_ai_block_view_id)
+            .is_some()
+            && let Some(ai_block_handle) = self.ai_block_handle_by_view_id(source_ai_block_view_id)
+        {
+            ai_block_handle.update(ctx, |block, ctx| block.set_turn_panel_view(None, ctx));
         }
 
         if !is_expanded {
@@ -7388,38 +7389,10 @@ impl TerminalView {
 
         self.turn_panel_view_ids
             .insert(source_ai_block_view_id, turn_view.id());
-
-        let agent_view_conversation_id = self
-            .agent_view_controller
-            .as_ref(ctx)
-            .agent_view_state()
-            .active_conversation_id();
-
-        let item = RichContentItem::new(None, turn_view.id(), agent_view_conversation_id, false);
-
-        let mut model = self.model.lock();
-        let inserted = model.block_list_mut().insert_rich_content_after_item(
-            RemovableBlocklistItem::RichContent(source_ai_block_view_id),
-            item,
-        );
-        drop(model);
-
-        if inserted {
-            self.rich_content_views.push(
-                RichContent::new(turn_view, agent_view_conversation_id)
-                    .with_metadata(RichContentMetadata::TurnPanel),
-            );
-        } else {
-            // Fallback: append the turn panel to the end of the blocklist.
-            self.insert_rich_content(
-                None,
-                turn_view,
-                Some(RichContentMetadata::TurnPanel),
-                RichContentInsertionPosition::Append {
-                    insert_below_long_running_block: true,
-                },
-                ctx,
-            );
+        if let Some(ai_block_handle) = self.ai_block_handle_by_view_id(source_ai_block_view_id) {
+            ai_block_handle.update(ctx, |block, ctx| {
+                block.set_turn_panel_view(Some(turn_view), ctx)
+            });
         }
 
         ctx.notify();
@@ -23997,7 +23970,7 @@ impl TerminalView {
         self.rich_content_views
             .iter()
             .rev()
-            .find(|rc| !rc.is_usage_footer() && !rc.is_turn_panel() && !rc.is_pending_user_query())
+            .find(|rc| !rc.is_usage_footer() && !rc.is_pending_user_query())
             .and_then(|rich_content| rich_content.ai_block_metadata())
             .map(|ai_metadata| ai_metadata.ai_block_handle.clone())
     }

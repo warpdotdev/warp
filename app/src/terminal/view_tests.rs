@@ -2096,6 +2096,53 @@ fn is_passive_conversation_is_false_for_a_directly_issued_user_query() {
 }
 
 #[test]
+fn turn_panel_does_not_insert_a_block_after_its_footer() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _pricing_transparency = FeatureFlag::PricingTransparency.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let ai_block = terminal.update(&mut app, |view, ctx| {
+            view.insert_dummy_ai_block("query".to_string(), "response".to_string(), ctx)
+        });
+
+        let initial_content_ids = terminal.read(&app, |view, _| {
+            view.rich_content_views
+                .iter()
+                .map(|content| content.view_id())
+                .collect::<Vec<_>>()
+        });
+
+        ai_block.update(&mut app, |block, ctx| {
+            block.handle_action(&AIBlockAction::ToggleIsTurnPanelExpanded, ctx);
+        });
+        terminal.read(&app, |view, _| {
+            assert!(view.turn_panel_view_ids.contains_key(&ai_block.id()));
+            assert_eq!(
+                view.rich_content_views
+                    .iter()
+                    .map(|content| content.view_id())
+                    .collect::<Vec<_>>(),
+                initial_content_ids
+            );
+        });
+
+        ai_block.update(&mut app, |block, ctx| {
+            block.handle_action(&AIBlockAction::ToggleIsTurnPanelExpanded, ctx);
+        });
+        terminal.read(&app, |view, _| {
+            assert!(!view.turn_panel_view_ids.contains_key(&ai_block.id()));
+            assert_eq!(
+                view.rich_content_views
+                    .iter()
+                    .map(|content| content.view_id())
+                    .collect::<Vec<_>>(),
+                initial_content_ids
+            );
+        });
+    })
+}
+
+#[test]
 fn is_passive_conversation_is_recomputed_on_conversation_reassignment() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);

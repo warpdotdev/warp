@@ -85,6 +85,7 @@ use super::permissions::is_agent_mode_autonomy_allowed;
 use super::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use super::suggested_rule_modal::SuggestedRuleAndId;
 use super::telemetry_banner::should_collect_ai_ugc_telemetry;
+use super::usage::request_metadata_turn_view::RequestMetadataTurnView;
 use super::{
     BlocklistAIActionModel, BlocklistAIController, BlocklistAIHistoryModel, BlocklistAIPermissions,
     ResponseStreamId,
@@ -1085,6 +1086,7 @@ pub struct AIBlock {
     /// Whether the per-turn request-metadata "Turn" panel is expanded. Independent of
     /// `is_usage_footer_expanded`: the two panels are separate surfaces.
     is_turn_panel_expanded: bool,
+    turn_panel_view: Option<ViewHandle<RequestMetadataTurnView>>,
 
     /// Controller for reading/modifying `AgentView` state for this terminal pane (e.g. if there is
     /// an active agent view or not, which affects whether or not this block should be hidden).
@@ -1553,6 +1555,7 @@ impl AIBlock {
             last_right_clicked_command: None,
             is_usage_footer_expanded: false,
             is_turn_panel_expanded: false,
+            turn_panel_view: None,
             agent_view_controller,
             ambient_agent_view_model,
             aws_bedrock_credentials_error_view: None,
@@ -6091,6 +6094,15 @@ fn set_imported_comment_button_disabled(
 }
 
 impl AIBlock {
+    pub(crate) fn set_turn_panel_view(
+        &mut self,
+        view: Option<ViewHandle<RequestMetadataTurnView>>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.turn_panel_view = view;
+        ctx.notify();
+    }
+
     /// Notifies the terminal view of the turn panel's current expansion state, using this
     /// block's own conversation/exchange ids.
     fn emit_turn_panel_toggled(&self, ctx: &mut ViewContext<Self>) {

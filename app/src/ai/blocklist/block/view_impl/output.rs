@@ -103,7 +103,9 @@ use crate::ai::blocklist::inline_action::web_fetch::WebFetchView;
 use crate::ai::blocklist::inline_action::web_search::WebSearchView;
 use crate::ai::blocklist::keyboard_navigable_buttons::KeyboardNavigableButtons;
 use crate::ai::blocklist::secret_redaction::SecretRedactionState;
-use crate::ai::blocklist::usage::request_metadata_turn_view::turn_panel_tooltip_text_for_data;
+use crate::ai::blocklist::usage::request_metadata_turn_view::{
+    RequestMetadataTurnView, turn_panel_tooltip_text_for_data,
+};
 use crate::ai::blocklist::usage::rollup::compute_orchestration_rollup;
 use crate::ai::blocklist::view_util::{
     FAILED_OUTPUT_USAGE_NOTICE_TEXT, format_usage, should_show_failed_output_usage_notice,
@@ -187,6 +189,7 @@ pub(crate) struct Props<'a> {
     pub(super) finish_reason: Option<&'a FinishReason>,
     pub(super) is_usage_footer_expanded: bool,
     pub(super) is_turn_panel_expanded: bool,
+    pub(super) turn_panel_view: Option<&'a ViewHandle<RequestMetadataTurnView>>,
     pub(super) shared_session_status: &'a SharedSessionStatus,
     pub(super) terminal_view_id: EntityId,
     pub(super) is_conversation_transcript_viewer: bool,
@@ -1171,6 +1174,9 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                     .then(|| render_response_footer(props, app))
                     .flatten()
                 {
+                    if let Some(turn_panel_view) = props.turn_panel_view {
+                        output_items.add_child(ChildView::new(turn_panel_view).finish());
+                    }
                     output_items.add_child(footer);
                 }
 
