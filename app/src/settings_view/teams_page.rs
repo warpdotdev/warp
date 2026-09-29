@@ -16,9 +16,9 @@ use warp_core::ui::theme::color::internal_colors;
 use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    Align, Border, ChildAnchor, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Element, Flex, FormattedTextElement, HighlightedHyperlink, Hoverable,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    Align, Border, ChildAnchor, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Element, Flex, FormattedTextElement, HighlightedHyperlink,
+    Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollTarget, ScrollToPositionMode,
     Shrinkable, Stack, Text,
 };
@@ -2913,7 +2913,7 @@ impl TeamsWidget {
             has_admin_permissions,
             team_metadata,
             use_workspace_admin_panel,
-            workspace.teams.len() > 1,
+            view.user_workspaces.as_ref(app).can_switch_teams(),
             view,
             appearance,
         ));
@@ -3137,13 +3137,19 @@ impl TeamsWidget {
             .with_main_axis_alignment(MainAxisAlignment::Start);
 
         if has_admin_permissions {
-            left_side.add_child(ChildView::new(&view.rename_team_editor).finish());
+            left_side.add_child(
+                Shrinkable::new(1., ChildView::new(&view.rename_team_editor).finish()).finish(),
+            );
         } else {
             left_side.add_child(
-                Text::new_inline(team.name.clone(), appearance.ui_font_family(), 24.)
-                    .with_style(Properties::default().weight(Weight::Bold))
-                    .with_color(appearance.theme().active_ui_text_color().into())
-                    .finish(),
+                Shrinkable::new(
+                    1.,
+                    Text::new_inline(team.name.clone(), appearance.ui_font_family(), 24.)
+                        .with_style(Properties::default().weight(Weight::Bold))
+                        .with_color(appearance.theme().active_ui_text_color().into())
+                        .finish(),
+                )
+                .finish(),
             );
         }
 
@@ -3186,7 +3192,8 @@ impl TeamsWidget {
             | DelinquencyStatus::Unknown => (),
         }
 
-        team_name_header.add_child(left_side.finish());
+        team_name_header
+            .add_child(Shrinkable::new(1., Clipped::new(left_side.finish()).finish()).finish());
         let has_joinable_teams = !view.open_team_states.is_empty();
         let mut right_side = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -3218,7 +3225,11 @@ impl TeamsWidget {
             });
         }
         if has_joinable_teams || has_admin_permissions || can_switch_teams {
-            team_name_header.add_child(right_side.finish());
+            team_name_header.add_child(
+                Container::new(right_side.finish())
+                    .with_margin_left(16.)
+                    .finish(),
+            );
         }
 
         team_name_header.finish()
