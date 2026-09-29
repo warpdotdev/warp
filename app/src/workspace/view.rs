@@ -1,6 +1,7 @@
 pub(crate) mod agent_cli_launch_modal;
 pub(crate) mod auto_handoff_sleep_modal;
 mod build_plan_migration_modal;
+pub(crate) mod chatgpt_plan_modal;
 pub(crate) mod cloud_agent_capacity_modal;
 pub(crate) mod codex_modal;
 pub mod conversation_list;
@@ -55,6 +56,7 @@ use futures::Future;
 use instant::Instant;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use onboarding::DeferredOnboardingTutorial;
 pub(crate) use onboarding::OnboardingTutorial;
 use parking_lot::FairMutex;
 use pathfinder_color::ColorU;
@@ -515,6 +517,7 @@ use crate::workspace::view::auto_handoff_sleep_modal::{
 use crate::workspace::view::build_plan_migration_modal::{
     BuildPlanMigrationModal, BuildPlanMigrationModalEvent,
 };
+use crate::workspace::view::chatgpt_plan_modal::{ChatGPTPlanModal, ChatGPTPlanModalEvent};
 use crate::workspace::view::cloud_agent_capacity_modal::{
     CloudAgentCapacityModal, CloudAgentCapacityModalEvent, CloudAgentCapacityModalVariant,
 };
@@ -1109,6 +1112,7 @@ pub struct Workspace {
     show_session_config_tab_config_chip: bool,
     pending_session_config_tab_config_chip_tutorial:
         Option<PendingSessionConfigTabConfigChipTutorial>,
+    onboarding_tutorial_deferred_by_modal: Option<DeferredOnboardingTutorial>,
     new_worktree_modal: ModalViewState<Modal<NewWorktreeModal>>,
     close_session_confirmation_dialog: ViewHandle<CloseSessionConfirmationDialog>,
     rewind_confirmation_dialog: ViewHandle<RewindConfirmationDialog>,
@@ -1148,6 +1152,7 @@ pub struct Workspace {
     /// not re-show it elsewhere.
     feature_intro_tab_pane_group_id: Option<EntityId>,
     auto_handoff_sleep_modal: ViewHandle<AutoHandoffSleepModal>,
+    chatgpt_plan_modal: ViewHandle<ChatGPTPlanModal>,
     enable_auto_reload_modal: ViewHandle<EnableAutoReloadModal>,
     build_plan_migration_modal: ViewHandle<BuildPlanMigrationModal>,
     codex_modal: ViewHandle<CodexModal>,
@@ -3081,6 +3086,11 @@ impl Workspace {
             me.handle_auto_handoff_sleep_modal_event(event, ctx);
         });
 
+        let chatgpt_plan_view = ctx.add_typed_action_view(ChatGPTPlanModal::new);
+        ctx.subscribe_to_view(&chatgpt_plan_view, |me, _, event, ctx| {
+            me.handle_chatgpt_plan_modal_event(event, ctx);
+        });
+
         let launch_config_save_modal = Self::build_launch_config_save_modal(ctx);
 
         let tab_config_params_modal = Self::build_tab_config_params_modal(ctx);
@@ -3407,6 +3417,8 @@ impl Workspace {
                         me.focus_agent_cli_launch_modal(ctx);
                     } else if model_ref.is_auto_handoff_sleep_modal_open() {
                         me.focus_auto_handoff_sleep_modal(ctx);
+                    } else if model_ref.is_chatgpt_plan_modal_open() {
+                        me.focus_chatgpt_plan_modal(ctx);
                     } else if model_ref.is_free_ai_removal_modal_open() {
                         me.focus_free_ai_removal_modal(ctx);
                     } else if model_ref.is_hoa_onboarding_open() {
@@ -3417,6 +3429,8 @@ impl Workspace {
                         me.show_feature_intro_modal(id, ctx);
                     }
                 }
+            } else {
+                me.resume_onboarding_tutorial_deferred_by_modal(ctx);
             }
             ctx.notify();
         });
@@ -3483,6 +3497,7 @@ impl Workspace {
             pending_session_config_tab_config_chip: false,
             show_session_config_tab_config_chip: false,
             pending_session_config_tab_config_chip_tutorial: None,
+            onboarding_tutorial_deferred_by_modal: None,
             new_worktree_modal,
             close_session_confirmation_dialog,
             rewind_confirmation_dialog,
@@ -3557,6 +3572,7 @@ impl Workspace {
             feature_intro_modal: feature_intro_view,
             feature_intro_tab_pane_group_id: None,
             auto_handoff_sleep_modal: auto_handoff_sleep_view,
+            chatgpt_plan_modal: chatgpt_plan_view,
             enable_auto_reload_modal,
             agent_management_view,
             notification_mailbox_view,
@@ -16363,6 +16379,9 @@ impl Workspace {
                 self.pending_session_config_tab_config_chip = false;
                 self.show_session_config_tab_config_chip = false;
                 self.pending_session_config_tab_config_chip_tutorial = None;
+                OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.set_onboarding_tutorial_active(false, ctx);
+                });
                 ctx.notify();
             }
             pane_group::Event::InvalidatedActiveConversation => {
@@ -19378,6 +19397,22 @@ impl Workspace {
         });
         self.focus_active_tab(ctx);
         ctx.notify();
+    }
+
+    fn handle_chatgpt_plan_modal_event(
+        &mut self,
+        event: &ChatGPTPlanModalEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            ChatGPTPlanModalEvent::Close => {
+                OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.mark_chatgpt_plan_modal_dismissed(ctx);
+                });
+                self.focus_active_tab(ctx);
+                ctx.notify();
+            }
+        }
     }
 
     fn handle_oz_launch_modal_event(
@@ -23910,6 +23945,10 @@ impl Workspace {
         ctx.focus(&self.auto_handoff_sleep_modal);
     }
 
+    fn focus_chatgpt_plan_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        ctx.focus(&self.chatgpt_plan_modal);
+    }
+
     fn open_tab_and_focus_oz_launch_modal(&mut self, ctx: &mut ViewContext<Self>) {
         // Create a new tab with one terminal session titled "Introducing Oz"
         self.add_tab_with_pane_layout(
@@ -26059,6 +26098,25 @@ impl TypedActionView for Workspace {
                 ctx.notify();
             }
             #[cfg(debug_assertions)]
+            OpenChatGPTPlanModal => {
+                OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.force_open_chatgpt_plan_modal(ctx);
+                });
+                ctx.notify();
+            }
+            #[cfg(debug_assertions)]
+            ResetChatGPTPlanModalState => {
+                AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
+                    if let Err(e) = ai_settings
+                        .did_show_chatgpt_plan_modal
+                        .set_value(false, ctx)
+                    {
+                        log::warn!("Failed to reset ChatGPT plan modal shown setting: {e}");
+                    }
+                });
+                log::info!("ChatGPT plan modal shown state has been reset");
+            }
+            #[cfg(debug_assertions)]
             ResetAutoHandoffSleepModalState => {
                 let old_value = *AISettings::as_ref(ctx).did_show_auto_handoff_sleep_modal;
                 AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
@@ -27596,6 +27654,10 @@ impl View for Workspace {
 
         if should_show_modal && one_time_modal_model.is_auto_handoff_sleep_modal_open() {
             stack.add_child(ChildView::new(&self.auto_handoff_sleep_modal).finish());
+        }
+
+        if should_show_modal && one_time_modal_model.is_chatgpt_plan_modal_open() {
+            stack.add_child(ChildView::new(&self.chatgpt_plan_modal).finish());
         }
 
         if should_show_modal && one_time_modal_model.is_free_ai_removal_modal_open() {

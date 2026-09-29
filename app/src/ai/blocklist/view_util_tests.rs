@@ -1,7 +1,82 @@
 use warp_core::features::FeatureFlag;
+use warpui::App;
 
 use super::*;
+use crate::ai::agent::ChatGPTSubscriptionErrorActionKind;
 use crate::settings::UsageDisplayUnit;
+
+fn chatgpt_subscription_error(actions: Vec<ChatGPTSubscriptionErrorAction>) -> RenderableAIError {
+    RenderableAIError::ChatGPTSubscriptionError {
+        code: "subscription_sharing_usage_limit_exceeded".to_string(),
+        title: "You've reached your ChatGPT usage limit".to_string(),
+        message: "Continue with Warp credits to keep going.".to_string(),
+        actions,
+    }
+}
+
+fn chatgpt_action(kind: ChatGPTSubscriptionErrorActionKind) -> ChatGPTSubscriptionErrorAction {
+    ChatGPTSubscriptionErrorAction {
+        label: format!("{kind:?}"),
+        kind,
+    }
+}
+
+#[test]
+fn chatgpt_subscription_error_presents_server_copy_and_actions_in_order() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            for actions in [
+                vec![],
+                vec![chatgpt_action(
+                    ChatGPTSubscriptionErrorActionKind::ContinueWithWarpCredits,
+                )],
+                vec![
+                    chatgpt_action(ChatGPTSubscriptionErrorActionKind::Retry),
+                    chatgpt_action(ChatGPTSubscriptionErrorActionKind::ContinueWithWarpCredits),
+                ],
+                vec![
+                    chatgpt_action(ChatGPTSubscriptionErrorActionKind::OpenUrl {
+                        url: "https://chatgpt.com/#settings/Usage".to_string(),
+                    }),
+                    chatgpt_action(ChatGPTSubscriptionErrorActionKind::ContinueWithWarpCredits),
+                ],
+            ] {
+                let error = chatgpt_subscription_error(actions.clone());
+                assert_eq!(
+                    failed_output_presentation(&error, false, ctx),
+                    Some(FailedOutputPresentation::ChatGPTSubscription {
+                        title: "You've reached your ChatGPT usage limit".to_string(),
+                        message: "Continue with Warp credits to keep going.".to_string(),
+                        actions,
+                    })
+                );
+            }
+        });
+    });
+}
+
+#[test]
+fn chatgpt_subscription_error_becomes_disclosure_once_conversation_uses_warp_credits() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let error = chatgpt_subscription_error(vec![chatgpt_action(
+                ChatGPTSubscriptionErrorActionKind::ContinueWithWarpCredits,
+            )]);
+            assert_eq!(
+                failed_output_presentation(&error, true, ctx),
+                Some(FailedOutputPresentation::ChatGPTSubscriptionContinuedWithWarpCredits)
+            );
+        });
+    });
+}
+
+#[test]
+fn chatgpt_subscription_error_suppresses_usage_notice() {
+    let error = chatgpt_subscription_error(vec![]);
+    assert!(!should_show_failed_output_usage_notice(
+        &error, true, false, false
+    ));
+}
 
 #[test]
 fn format_credits_never_rounds_a_real_charge_to_zero() {

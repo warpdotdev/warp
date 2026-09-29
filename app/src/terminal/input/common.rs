@@ -15,6 +15,7 @@ use warpui::presenter::ChildView;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{AppContext, EntityId, SingletonEntity, ViewHandle};
 
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::llms::{LLMPreferences, should_show_key_icon_for_model};
 use crate::ai::{AIRequestUsageModel, BuyCreditsBannerDisplayState};
 use crate::appearance::Appearance;
@@ -510,6 +511,7 @@ pub(super) fn maybe_add_buy_credits_banner(
     );
     let is_using_api_key_for_current_model = should_show_key_icon_for_model(
         LLMPreferences::as_ref(app).get_active_base_model(scope, app, Some(terminal_view_id)),
+        BlocklistAIHistoryModel::as_ref(app).active_conversation(terminal_view_id),
         scope,
         app,
     );

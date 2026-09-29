@@ -129,7 +129,7 @@ fn apply_onboarding_settings_preserves_existing_cloud_profile_on_existing_user_l
         // map to every `ActionPermission` being `AlwaysAsk`.
         let onboarding_settings = SelectedSettings::AgentDrivenDevelopment {
             agent_settings: AgentDevelopmentSettings {
-                selected_model_id: LLMId::from("onboarding-chosen-model"),
+                selected_model_id: Some(LLMId::from("onboarding-chosen-model")),
                 autonomy: Some(AgentAutonomy::None),
                 cli_agent_toolbar_enabled: true,
                 session_default: onboarding::SessionDefault::Agent,
@@ -202,7 +202,7 @@ fn account_first_settings_enable_agent_for_authenticated_users_and_apply_ui_choi
 
         let selected_settings = SelectedSettings::AgentDrivenDevelopment {
             agent_settings: AgentDevelopmentSettings {
-                selected_model_id: LLMId::from("auto"),
+                selected_model_id: None,
                 autonomy: None,
                 cli_agent_toolbar_enabled: true,
                 session_default: onboarding::SessionDefault::Agent,
@@ -323,6 +323,59 @@ fn apply_account_first_onboarding_settings_sets_dollars_for_new_accounts_only() 
     });
 }
 
+/// A fresh profile only gets a pinned base model when the user explicitly picked one during
+/// onboarding; otherwise it keeps following the server default.
+#[test]
+fn apply_onboarding_settings_pins_base_model_only_when_explicitly_selected() {
+    let agent_settings = |selected_model_id| AgentDevelopmentSettings {
+        selected_model_id,
+        autonomy: Some(AgentAutonomy::Partial),
+        cli_agent_toolbar_enabled: true,
+        session_default: onboarding::SessionDefault::Agent,
+        disable_oz: false,
+        show_agent_notifications: true,
+    };
+    for (selected_model_id, expected_base_model) in [
+        (None, None),
+        (
+            Some(LLMId::from("onboarding-chosen-model")),
+            Some(LLMId::from("onboarding-chosen-model")),
+        ),
+    ] {
+        let agent_settings = agent_settings(selected_model_id);
+        App::test((), |mut app| async move {
+            initialize_settings_for_tests(&mut app);
+            app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+            app.add_singleton_model(SyncQueue::mock);
+            app.add_singleton_model(|_| NetworkStatus::new());
+            app.add_singleton_model(TeamTesterStatus::mock);
+            app.add_singleton_model(UpdateManager::mock);
+            app.add_singleton_model(CloudModel::mock);
+            app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+            app.add_singleton_model(PrivacySettings::mock);
+            app.add_singleton_model(UserWorkspaces::default_mock);
+            let profile_model = app.add_singleton_model(|ctx| {
+                AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+            });
+
+            let onboarding_settings = SelectedSettings::AgentDrivenDevelopment {
+                agent_settings,
+                ui_customization: None,
+            };
+            app.update(|ctx| {
+                apply_onboarding_settings(&onboarding_settings, true, team_context_for_test(), ctx);
+            });
+
+            profile_model.read(&app, |model, ctx| {
+                assert_eq!(
+                    model.default_profile(ctx).data().base_model,
+                    expected_base_model,
+                );
+            });
+        });
+    }
+}
+
 /// Warp's AI features run on a Warp account. For third-party agent intent
 /// (`disable_oz = true`), AI is therefore off when the user skips creating an
 /// account and on once they have one.
@@ -345,7 +398,7 @@ fn apply_onboarding_settings_gates_third_party_ai_on_account() {
 
         let onboarding_settings = SelectedSettings::AgentDrivenDevelopment {
             agent_settings: AgentDevelopmentSettings {
-                selected_model_id: LLMId::from("auto"),
+                selected_model_id: None,
                 autonomy: None,
                 cli_agent_toolbar_enabled: true,
                 session_default: onboarding::SessionDefault::Agent,

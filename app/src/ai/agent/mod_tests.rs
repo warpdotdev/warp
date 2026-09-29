@@ -11,7 +11,8 @@ use warp_multi_agent_api::{FileContent, FileContentLineRange};
 use crate::ai::agent::{
     AIAgentAttachment, AIAgentContext, AIAgentOutput, AIAgentOutputMessage,
     AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AgentOutputImage,
-    AgentOutputImageLayout, AgentOutputMermaidDiagram, AnyFileContent, CurrentHead, DiffBase,
+    AgentOutputImageLayout, AgentOutputMermaidDiagram, AnyFileContent,
+    ChatGPTSubscriptionErrorAction, ChatGPTSubscriptionErrorActionKind, CurrentHead, DiffBase,
     DiffSetHunk, DocumentContentAttachmentSource, DriveObjectPayload, FileContext,
     FormattedTextWrapper, ImageContext, MessageId, ProgrammingLanguage, RenderableAIError,
     TransientNetworkErrorKind,
@@ -128,6 +129,119 @@ fn transient_network_error_reports_pending_resume() {
     );
 
     assert!(error.will_attempt_resume());
+}
+
+#[test]
+fn chatgpt_subscription_error_maps_known_actions_and_drops_unknown_kinds() {
+    use warp_multi_agent_api::response_event::stream_finished::ChatGptSubscriptionError;
+    use warp_multi_agent_api::response_event::stream_finished::chat_gpt_subscription_error::{
+        Action,
+        action::{ContinueWithWarpCredits, Kind, Retry},
+    };
+
+    let error = RenderableAIError::from_chatgpt_subscription_error(ChatGptSubscriptionError {
+        code: "subscription_sharing_usage_unavailable".to_string(),
+        title: "ChatGPT couldn't verify your subscription usage".to_string(),
+        message: "Try again, or continue with Warp credits.".to_string(),
+        actions: vec![
+            Action {
+                label: "Try again".to_string(),
+                kind: Some(Kind::Retry(Retry {})),
+            },
+            // A kind from a newer server decodes as an unset oneof.
+            Action {
+                label: "From a newer server".to_string(),
+                kind: None,
+            },
+            Action {
+                label: "Continue with Warp credits".to_string(),
+                kind: Some(Kind::ContinueWithWarpCredits(ContinueWithWarpCredits {})),
+            },
+        ],
+    });
+
+    let RenderableAIError::ChatGPTSubscriptionError {
+        code,
+        title,
+        message,
+        actions,
+    } = &error
+    else {
+        panic!("expected a ChatGPT subscription error, got {error:?}");
+    };
+    assert_eq!(code, "subscription_sharing_usage_unavailable");
+    assert_eq!(title, "ChatGPT couldn't verify your subscription usage");
+    assert_eq!(message, "Try again, or continue with Warp credits.");
+    assert_eq!(
+        actions,
+        &[
+            ChatGPTSubscriptionErrorAction {
+                kind: ChatGPTSubscriptionErrorActionKind::Retry,
+                label: "Try again".to_string(),
+            },
+            ChatGPTSubscriptionErrorAction {
+                kind: ChatGPTSubscriptionErrorActionKind::ContinueWithWarpCredits,
+                label: "Continue with Warp credits".to_string(),
+            },
+        ]
+    );
+    assert!(error.is_chatgpt_subscription_error());
+    assert_eq!(
+        error.to_string(),
+        "ChatGPT couldn't verify your subscription usage\n\nTry again, or continue with Warp credits."
+    );
+}
+
+#[test]
+fn chatgpt_subscription_error_maps_open_url_action_and_includes_link_in_text() {
+    use warp_multi_agent_api::response_event::stream_finished::ChatGptSubscriptionError;
+    use warp_multi_agent_api::response_event::stream_finished::chat_gpt_subscription_error::{
+        Action,
+        action::{ContinueWithWarpCredits, Kind, OpenUrl},
+    };
+
+    let error = RenderableAIError::from_chatgpt_subscription_error(ChatGptSubscriptionError {
+        code: "subscription_sharing_usage_limit_exceeded".to_string(),
+        title: "You've reached your ChatGPT usage limit".to_string(),
+        message: "Your ChatGPT subscription has reached its usage limit for now.".to_string(),
+        actions: vec![
+            Action {
+                label: "Manage ChatGPT usage".to_string(),
+                kind: Some(Kind::OpenUrl(OpenUrl {
+                    url: "https://chatgpt.com/#settings/Usage".to_string(),
+                })),
+            },
+            Action {
+                label: "Continue with Warp credits".to_string(),
+                kind: Some(Kind::ContinueWithWarpCredits(ContinueWithWarpCredits {})),
+            },
+        ],
+    });
+
+    let RenderableAIError::ChatGPTSubscriptionError { actions, .. } = &error else {
+        panic!("expected a ChatGPT subscription error, got {error:?}");
+    };
+    assert_eq!(
+        actions,
+        &[
+            ChatGPTSubscriptionErrorAction {
+                kind: ChatGPTSubscriptionErrorActionKind::OpenUrl {
+                    url: "https://chatgpt.com/#settings/Usage".to_string(),
+                },
+                label: "Manage ChatGPT usage".to_string(),
+            },
+            ChatGPTSubscriptionErrorAction {
+                kind: ChatGPTSubscriptionErrorActionKind::ContinueWithWarpCredits,
+                label: "Continue with Warp credits".to_string(),
+            },
+        ]
+    );
+    assert_eq!(
+        error.to_string(),
+        "You've reached your ChatGPT usage limit\n\n\
+         Your ChatGPT subscription has reached its usage limit for now.\n\n\
+         Manage ChatGPT usage: https://chatgpt.com/#settings/Usage"
+    );
 }
 
 #[test]

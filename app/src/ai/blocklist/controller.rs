@@ -2484,6 +2484,8 @@ impl BlocklistAIController {
                 // separate, read-only requests.
                 ambient_agent_task_id: None,
                 existing_suggestions: None,
+                use_warp_credits_instead_of_chatgpt: conversation
+                    .use_warp_credits_instead_of_chatgpt(),
             };
             (conversation_id, task_id, conversation_data)
         } else if !matches!(
@@ -2502,6 +2504,7 @@ impl BlocklistAIController {
                 // separate, read-only requests.
                 ambient_agent_task_id: None,
                 existing_suggestions: None,
+                use_warp_credits_instead_of_chatgpt: false,
             };
             (conversation_id, task_id, conversation_data)
         } else {
@@ -2680,6 +2683,7 @@ impl BlocklistAIController {
             active_tasks,
             parent_agent_id,
             agent_name,
+            use_warp_credits_instead_of_chatgpt,
         ) = {
             let Some(conversation) = history_model
                 .as_ref(ctx)
@@ -2702,6 +2706,7 @@ impl BlocklistAIController {
                 active_tasks,
                 conversation.parent_agent_id().map(str::to_string),
                 conversation.agent_name().map(str::to_string),
+                conversation.use_warp_credits_instead_of_chatgpt(),
             )
         };
 
@@ -2760,6 +2765,7 @@ impl BlocklistAIController {
                 .as_ref(ctx)
                 .existing_suggestions_for_conversation(conversation_id)
                 .cloned(),
+            use_warp_credits_instead_of_chatgpt,
         };
 
         // Log an error if tool call results do not have corresponding tool calls in task context
@@ -3721,14 +3727,10 @@ impl BlocklistAIController {
                     );
                 });
             }
-            Some(warp_multi_agent_api::response_event::stream_finished::Reason::InternalError(
-                warp_multi_agent_api::response_event::stream_finished::InternalError{ message})) => {
-                let error_message = format!(
-                    "Response stream finished unexpectedly with internal error: {message}",
-                );
+            Some(warp_multi_agent_api::response_event::stream_finished::Reason::ChatgptSubscriptionError(error)) => {
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_with_error(
-                        RenderableAIError::AgentStreamFailure { error_message },
+                        RenderableAIError::from_chatgpt_subscription_error(error),
                         /*recovery_pending*/ false,
                         stream_id,
                         conversation_id,
@@ -3737,12 +3739,14 @@ impl BlocklistAIController {
                     );
                 });
             }
-            Some(warp_multi_agent_api::response_event::stream_finished::Reason::ChatgptSubscriptionError(details)) => {
+            Some(warp_multi_agent_api::response_event::stream_finished::Reason::InternalError(
+                warp_multi_agent_api::response_event::stream_finished::InternalError{ message})) => {
+                let error_message = format!(
+                    "Response stream finished unexpectedly with internal error: {message}",
+                );
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_with_error(
-                        RenderableAIError::AgentStreamFailure {
-                            error_message: details.message,
-                        },
+                        RenderableAIError::AgentStreamFailure { error_message },
                         /*recovery_pending*/ false,
                         stream_id,
                         conversation_id,

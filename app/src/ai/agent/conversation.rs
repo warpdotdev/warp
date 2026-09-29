@@ -450,6 +450,10 @@ pub struct AIConversation {
     /// only matters for the live process that bootstrapped the conversation, and a restored
     /// conversation resumes ordinary synchronization.
     task_sync_mode: TaskSyncMode,
+
+    /// Whether the user chose Warp-funded inference for this conversation after a ChatGPT
+    /// token-sharing failure. Sticky for the rest of the conversation and inherited by forks.
+    use_warp_credits_instead_of_chatgpt: bool,
 }
 
 pub(crate) fn artifact_from_fork_proto(
@@ -507,6 +511,7 @@ impl AIConversation {
             orchestration_configs: HashMap::new(),
             pinned: false,
             task_sync_mode: TaskSyncMode::default(),
+            use_warp_credits_instead_of_chatgpt: false,
         }
     }
 
@@ -643,6 +648,7 @@ impl AIConversation {
             autoexecute_override,
             last_event_sequence,
             pinned,
+            use_warp_credits_instead_of_chatgpt,
         ) = if let Some(data) = conversation_data {
             let server_conversation_token = data
                 .server_conversation_token
@@ -699,6 +705,7 @@ impl AIConversation {
                 autoexecute_override,
                 data.last_event_sequence,
                 data.pinned,
+                data.use_warp_credits_instead_of_chatgpt,
             )
         } else {
             (
@@ -716,6 +723,7 @@ impl AIConversation {
                 None,
                 AIConversationAutoexecuteMode::default(),
                 None,
+                false,
                 false,
             )
         };
@@ -760,6 +768,7 @@ impl AIConversation {
             orchestration_configs: HashMap::new(),
             pinned,
             task_sync_mode: TaskSyncMode::default(),
+            use_warp_credits_instead_of_chatgpt,
         })
     }
 
@@ -1325,6 +1334,18 @@ impl AIConversation {
     /// `write_updated_conversation_state` to push the change to SQLite.
     pub fn set_pinned(&mut self, pinned: bool) {
         self.pinned = pinned;
+    }
+
+    /// Returns whether requests in this conversation must run on Warp's OpenAI key instead of
+    /// the user's ChatGPT subscription.
+    pub fn use_warp_credits_instead_of_chatgpt(&self) -> bool {
+        self.use_warp_credits_instead_of_chatgpt
+    }
+
+    /// Switches the rest of this conversation to Warp-funded inference. Callers must follow up
+    /// with `write_updated_conversation_state` to push the change to SQLite.
+    pub fn set_use_warp_credits_instead_of_chatgpt(&mut self) {
+        self.use_warp_credits_instead_of_chatgpt = true;
     }
 
     /// Returns true if this conversation was spawned by a parent orchestrator
@@ -3997,6 +4018,7 @@ impl AIConversation {
                 autoexecute_override: Some(self.autoexecute_override.into()),
                 last_event_sequence: self.last_event_sequence,
                 pinned: self.pinned,
+                use_warp_credits_instead_of_chatgpt: self.use_warp_credits_instead_of_chatgpt,
             },
         };
         ctx.spawn(

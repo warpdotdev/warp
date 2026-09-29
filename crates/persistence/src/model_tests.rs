@@ -444,6 +444,22 @@ fn agent_conversation_data_skips_serializing_none_last_event_sequence() {
 }
 
 #[test]
+fn agent_conversation_data_roundtrips_use_warp_credits_instead_of_chatgpt() {
+    let data = AgentConversationData {
+        use_warp_credits_instead_of_chatgpt: true,
+        ..Default::default()
+    };
+    let json = serde_json::to_string(&data).expect("serialize");
+    let roundtripped: AgentConversationData = serde_json::from_str(&json).expect("deserialize");
+    assert!(roundtripped.use_warp_credits_instead_of_chatgpt);
+
+    let legacy_json = r#"{"server_conversation_token":null}"#;
+    let legacy: AgentConversationData =
+        serde_json::from_str(legacy_json).expect("legacy rows must deserialize");
+    assert!(!legacy.use_warp_credits_instead_of_chatgpt);
+}
+
+#[test]
 fn agent_conversation_data_roundtrips_pinned() {
     let data = AgentConversationData {
         pinned: true,

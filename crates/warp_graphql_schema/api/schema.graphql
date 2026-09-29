@@ -690,6 +690,17 @@ type CategoryTokenBreakdown {
   tokens: Int!
 }
 
+type ChatGPTConnection {
+  connectedAt: Time!
+  email: String
+
+  """
+  Whether the server currently holds delegated ChatGPT credentials that can be
+  attached to OpenAI requests on the user's behalf.
+  """
+  tokenSharingActive: Boolean!
+}
+
 input ClientContext {
   version: String
 }
@@ -1208,6 +1219,30 @@ enum DelinquencyStatus {
 type DirectApiUsOnlyInferencePolicy {
   default: Boolean!
 }
+
+"""
+disconnectChatGPT unlinks the calling user's ChatGPT account and discards any
+delegated credentials held for it. Succeeds even when nothing is linked.
+"""
+type DisconnectChatGPTOutput implements Response {
+  responseContext: ResponseContext!
+}
+
+union DisconnectChatGPTResult = DisconnectChatGPTOutput | UserFacingError
+
+"""
+startChatGPTLink begins linking a ChatGPT account to the calling user's Warp
+account, regardless of the ChatGPT account's email. The returned URL must be
+opened in a browser; it is bound to the caller by a short-lived, single-use
+ticket. The browser flow ends at continueUrl with `chatgpt_linked=1` on
+success or `chatgpt_error=<code>` on failure.
+"""
+type StartChatGPTLinkOutput implements Response {
+  authorizationUrl: String!
+  responseContext: ResponseContext!
+}
+
+union StartChatGPTLinkResult = StartChatGPTLinkOutput | UserFacingError
 
 type DirectLinkSharingPolicy {
   toggleable: Boolean!
@@ -3211,6 +3246,7 @@ type RootMutation {
   deleteManagedSecret(input: DeleteManagedSecretInput!, requestContext: RequestContext!): DeleteManagedSecretResult!
   deleteObject(input: DeleteObjectInput!, requestContext: RequestContext!): DeleteObjectResult!
   deleteTeamInvite(input: DeleteTeamInviteInput!, requestContext: RequestContext!): DeleteTeamInviteResult!
+  disconnectChatGPT(requestContext: RequestContext!): DisconnectChatGPTResult!
   emptyTrash(input: EmptyTrashInput!, requestContext: RequestContext!): EmptyTrashResult!
   expireApiKey(input: ExpireApiKeyInput!, requestContext: RequestContext!): ExpireApiKeyResult!
   generateApiKey(input: GenerateApiKeyInput!, requestContext: RequestContext!): GenerateApiKeyResult!
@@ -3260,6 +3296,7 @@ type RootMutation {
   setTeamMemberRole(input: SetTeamMemberRoleInput!, requestContext: RequestContext!): SetTeamMemberRoleResult!
   setUserIsOnboarded(requestContext: RequestContext!): SetUserIsOnboardedResult!
   shareBlock(input: ShareBlockInput!, requestContext: RequestContext!): ShareBlockResult!
+  startChatGPTLink(requestContext: RequestContext!, continueUrl: String!): StartChatGPTLinkResult!
   stripeBillingPortal(input: StripeBillingPortalInput!, requestContext: RequestContext!): StripeBillingPortalResult!
   transferGenericStringObjectOwner(input: TransferGenericStringObjectOwnerInput!, requestContext: RequestContext!): TransferGenericStringObjectOwnerResult!
   transferNotebookOwner(input: TransferNotebookOwnerInput!, requestContext: RequestContext!): TransferNotebookOwnerResult!
@@ -4671,6 +4708,11 @@ type User {
   billingMetadata: BillingMetadata
   blocks: [Block!]!
   bonusGrants: [BonusGrant!]!
+
+  """
+  The ChatGPT account linked to this user, or null when none is linked.
+  """
+  chatgptConnection: ChatGPTConnection
   completedOzWebappFtue: Boolean!
 
   """

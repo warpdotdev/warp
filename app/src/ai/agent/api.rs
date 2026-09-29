@@ -169,6 +169,9 @@ pub struct RequestParams {
     /// registry. `None` when no custom router is selected.
     pub custom_model_routers: Option<warp_multi_agent_api::request::settings::CustomModelRouters>,
     pub allow_use_of_warp_credits: bool,
+    /// Asks the server not to attach the user's delegated ChatGPT token, so OpenAI requests run
+    /// on Warp's key. Set for the rest of a conversation after a token-sharing failure.
+    pub skip_chatgpt_subscription: bool,
     pub autonomy_level: warp_multi_agent_api::AutonomyLevel,
     pub isolation_level: warp_multi_agent_api::IsolationLevel,
     pub web_search_enabled: bool,
@@ -202,6 +205,7 @@ pub struct ConversationData {
     pub forked_from_conversation_token: Option<ServerConversationToken>,
     pub ambient_agent_task_id: Option<AmbientAgentTaskId>,
     pub existing_suggestions: Option<Suggestions>,
+    pub use_warp_credits_instead_of_chatgpt: bool,
 }
 
 impl RequestParams {
@@ -231,6 +235,7 @@ impl RequestParams {
             custom_model_providers: None,
             custom_model_routers: None,
             allow_use_of_warp_credits: false,
+            skip_chatgpt_subscription: false,
             autonomy_level: Default::default(),
             isolation_level: Default::default(),
             web_search_enabled: false,
@@ -442,6 +447,7 @@ impl RequestParams {
             custom_model_providers,
             custom_model_routers,
             allow_use_of_warp_credits,
+            skip_chatgpt_subscription: conversation.use_warp_credits_instead_of_chatgpt,
             autonomy_level,
             isolation_level,
             web_search_enabled,

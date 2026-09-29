@@ -244,9 +244,7 @@ fn create_user_query_message(
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
-                origin: None,
-                author: None,
-                source_message: None,
+                ..Default::default()
             },
         )),
         request_id: request_id.to_string(),
@@ -806,6 +804,7 @@ fn test_initialize_historical_conversations_resolves_parent_agent_id_children_vi
                     autoexecute_override: None,
                     last_event_sequence: None,
                     pinned: false,
+                    use_warp_credits_instead_of_chatgpt: false,
                 },
                 now,
                 None,
@@ -828,6 +827,7 @@ fn test_initialize_historical_conversations_resolves_parent_agent_id_children_vi
                     autoexecute_override: None,
                     last_event_sequence: None,
                     pinned: false,
+                    use_warp_credits_instead_of_chatgpt: false,
                 },
                 now - chrono::Duration::seconds(1),
                 Some("Parent query"),
@@ -878,6 +878,7 @@ fn test_initialize_historical_conversations_uses_root_task_description_title() {
                     autoexecute_override: None,
                     last_event_sequence: None,
                     pinned: false,
+                    use_warp_credits_instead_of_chatgpt: false,
                 })
                 .expect("conversation data should serialize"),
                 last_modified_at: now,
@@ -1044,6 +1045,7 @@ fn test_initialize_historical_conversations_eagerly_hydrates_orchestration_child
                     autoexecute_override: None,
                     last_event_sequence: None,
                     pinned: false,
+                    use_warp_credits_instead_of_chatgpt: false,
                 },
                 now,
                 // Child needs at least one root task so `AIConversation::new_restored` succeeds.
@@ -1067,6 +1069,7 @@ fn test_initialize_historical_conversations_eagerly_hydrates_orchestration_child
                     autoexecute_override: None,
                     last_event_sequence: None,
                     pinned: false,
+                    use_warp_credits_instead_of_chatgpt: false,
                 },
                 now - chrono::Duration::seconds(1),
                 Some("Parent query"),
@@ -3529,6 +3532,7 @@ fn test_find_by_token_after_insert_forked_conversation_from_tasks() {
             autoexecute_override: None,
             last_event_sequence: None,
             pinned: false,
+            use_warp_credits_instead_of_chatgpt: false,
         };
         let tasks = vec![warp_multi_agent_api::Task {
             id: "root-task".to_string(),
@@ -3746,6 +3750,7 @@ fn test_fork_then_bind_handoff_token_resolves_to_forked_conversation() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             }),
         )
         .expect("restored source conversation should build");
@@ -3834,6 +3839,7 @@ fn test_fork_then_bind_handoff_token_persists_to_restored_conversation() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             }),
         )
         .expect("restored source conversation should build");
@@ -3947,6 +3953,7 @@ fn test_fork_then_bind_handoff_token_updates_cached_metadata_and_emits_refresh_e
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             }),
         )
         .expect("restored source conversation should build");
@@ -4076,6 +4083,7 @@ fn test_fork_conversation_preserves_task_ids_when_requested() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             }),
         )
         .expect("restored source conversation should build");
@@ -4227,6 +4235,7 @@ fn test_fork_conversation_title_override_replaces_prefix() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             }),
         )
         .expect("restored source conversation should build");
@@ -4317,6 +4326,7 @@ fn hydrate_remote_child_placeholder_with_cloud_transcript_preserves_placeholder_
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             }),
         )
         .expect("placeholder conversation should build");
@@ -4363,6 +4373,7 @@ fn hydrate_remote_child_placeholder_with_cloud_transcript_preserves_placeholder_
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             }),
         )
         .expect("cloud conversation should build");
@@ -5159,6 +5170,7 @@ fn straddle_rewind_followup_requests_are_clean_and_durable() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             }),
         )
         .expect("conversation should build");

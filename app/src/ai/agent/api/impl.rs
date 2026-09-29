@@ -59,6 +59,7 @@ pub async fn generate_multi_agent_output(
     let api_keys = api_keys_with_warp_credit_fallback_setting(
         params.api_keys,
         params.allow_use_of_warp_credits,
+        params.skip_chatgpt_subscription,
     );
 
     let request = api::Request {
@@ -113,7 +114,7 @@ pub async fn generate_multi_agent_output(
             // Unconditional: echoed agent messages are always confirmed delivered, so injection
             // cannot produce a duplicate turn.
             supports_server_side_agent_message_injection: true,
-            supports_chatgpt_subscription_error: false,
+            supports_chatgpt_subscription_error: true,
             custom_model_providers: params.custom_model_providers,
             custom_model_routers: params.custom_model_routers,
         }),
@@ -197,16 +198,21 @@ async fn convert_multi_agent_client_error(
 fn api_keys_with_warp_credit_fallback_setting(
     api_keys: Option<api::request::settings::ApiKeys>,
     allow_use_of_warp_credits: bool,
+    skip_chatgpt_subscription: bool,
 ) -> Option<api::request::settings::ApiKeys> {
     match api_keys {
         Some(mut api_keys) => {
             api_keys.allow_use_of_warp_credits = allow_use_of_warp_credits;
+            api_keys.skip_chatgpt_subscription = skip_chatgpt_subscription;
             Some(api_keys)
         }
-        None if allow_use_of_warp_credits => Some(api::request::settings::ApiKeys {
-            allow_use_of_warp_credits: true,
-            ..Default::default()
-        }),
+        None if allow_use_of_warp_credits || skip_chatgpt_subscription => {
+            Some(api::request::settings::ApiKeys {
+                allow_use_of_warp_credits,
+                skip_chatgpt_subscription,
+                ..Default::default()
+            })
+        }
         None => None,
     }
 }

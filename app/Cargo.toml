@@ -468,6 +468,7 @@ autoupdate = []
 figma_detection = []
 bundled_skills = []
 supergrok = []
+chatgpt_subscription = []
 gemini_enterprise = []
 agent_mode = []
 agent_mode_computer_use = []
@@ -690,6 +691,7 @@ default = [
     "solo_user_byok",
     "custom_model_routers",
     "supergrok",
+    "chatgpt_subscription",
     "gemini_enterprise",
     "billing_and_usage_page_v2",
     "remote_code_review",

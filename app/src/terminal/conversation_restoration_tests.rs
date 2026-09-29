@@ -248,9 +248,7 @@ fn user_query_with_pwd(id: &str, request_id: &str, query: &str, pwd: &str) -> ap
             referenced_attachments: HashMap::new(),
             mode: None,
             intended_agent: Default::default(),
-            origin: None,
-            author: None,
-            source_message: None,
+            ..Default::default()
         })),
         request_id: request_id.to_string(),
         timestamp: None,

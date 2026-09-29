@@ -1227,6 +1227,10 @@ pub struct AgentConversationData {
     /// pill bar. Orchestrator conversations always serialize as `false`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub pinned: bool,
+    /// Whether the user chose Warp-funded inference for this conversation after a ChatGPT
+    /// token-sharing failure. Sent as `skip_chatgpt_subscription` on every request.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub use_warp_credits_instead_of_chatgpt: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

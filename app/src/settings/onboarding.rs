@@ -239,11 +239,9 @@ fn apply_agent_settings(
             return;
         }
 
-        profiles.set_base_model(
-            &default_profile_id,
-            Some(agent_settings.selected_model_id.clone()),
-            ctx,
-        );
+        if let Some(model_id) = &agent_settings.selected_model_id {
+            profiles.set_base_model(&default_profile_id, Some(model_id.clone()), ctx);
+        }
 
         // If autonomy is None, the workspace enforces autonomy settings, so skip setting them.
         let Some(autonomy) = agent_settings.autonomy else {

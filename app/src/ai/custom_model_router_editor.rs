@@ -1061,6 +1061,7 @@ fn fill_filterable_dropdown<F>(
         None,
         None,
         CollapsedModelVariants::default(),
+        None,
         &scope,
         ctx,
     );

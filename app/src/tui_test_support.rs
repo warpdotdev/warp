@@ -113,9 +113,7 @@ pub fn forkable_tui_conversation_for_test(query: &str) -> AIConversation {
                     referenced_attachments: HashMap::new(),
                     mode: None,
                     intended_agent: Default::default(),
-                    origin: None,
-                    author: None,
-                    source_message: None,
+                    ..Default::default()
                 },
             )),
             request_id: request_id.to_owned(),

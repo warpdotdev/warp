@@ -180,6 +180,7 @@ pub(crate) struct OnboardingStateModel {
     agent_settings: AgentDevelopmentSettings,
     ui_customization: UICustomizationSettings,
     models: Vec<OnboardingModelInfo>,
+    default_model_id: LLMId,
     /// Whether the workspace enforces autonomy settings, hiding the user selection UI.
     workspace_enforces_autonomy: bool,
     /// The AI setup selected on the "Choose your AI setup" slide.
@@ -207,9 +208,10 @@ impl OnboardingStateModel {
         Self {
             step: OnboardingStep::Intro,
             intention: OnboardingIntention::AgentDrivenDevelopment,
-            agent_settings: AgentDevelopmentSettings::new(default_model_id),
+            agent_settings: AgentDevelopmentSettings::default(),
             ui_customization: UICustomizationSettings::agent_defaults(),
             models,
+            default_model_id,
             workspace_enforces_autonomy,
             ai_setup_choice: AiSetupChoice::default(),
             ai_access_choice: AiAccessChoice::default(),
@@ -292,6 +294,15 @@ impl OnboardingStateModel {
 
     pub(crate) fn agent_settings(&self) -> &AgentDevelopmentSettings {
         &self.agent_settings
+    }
+
+    /// The model the agent slide presents as selected: the user's explicit pick, else the
+    /// server default.
+    pub(crate) fn effective_model_id(&self) -> &LLMId {
+        self.agent_settings
+            .selected_model_id
+            .as_ref()
+            .unwrap_or(&self.default_model_id)
     }
 
     pub(crate) fn workspace_enforces_autonomy(&self) -> bool {
@@ -681,7 +692,7 @@ impl OnboardingStateModel {
     }
 
     pub(crate) fn on_user_selected_model(&mut self, model_id: LLMId, ctx: &mut ModelContext<Self>) {
-        if self.agent_settings.selected_model_id == model_id {
+        if self.agent_settings.selected_model_id.as_ref() == Some(&model_id) {
             return;
         }
 
@@ -693,7 +704,7 @@ impl OnboardingStateModel {
             ctx
         );
 
-        self.agent_settings.selected_model_id = model_id;
+        self.agent_settings.selected_model_id = Some(model_id);
         ctx.notify();
     }
 
@@ -727,7 +738,8 @@ impl OnboardingStateModel {
             return;
         }
 
-        self.agent_settings.selected_model_id = default_model_id.clone();
+        self.default_model_id = default_model_id;
+        self.agent_settings.selected_model_id = None;
 
         self.models = models;
         ctx.emit(OnboardingStateEvent::ModelsUpdated);
@@ -773,7 +785,7 @@ impl OnboardingStateModel {
             OnboardingIntention::Terminal => (self.intention.to_string(), None, None, None),
             OnboardingIntention::AgentDrivenDevelopment => (
                 self.intention.to_string(),
-                Some(self.agent_settings.selected_model_id.to_string()),
+                Some(self.effective_model_id().to_string()),
                 self.agent_settings.autonomy.map(|x| x.to_string()),
                 Some(self.ai_setup_choice.to_string()),
             ),

@@ -21340,6 +21340,15 @@ impl TerminalView {
             AIBlockEvent::ResumeConversation { conversation_id } => {
                 self.handle_resume_conversation(conversation_id, ctx);
             }
+            AIBlockEvent::ContinueWithWarpCredits { conversation_id } => {
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                    history_model.set_conversation_use_warp_credits_instead_of_chatgpt(
+                        *conversation_id,
+                        ctx,
+                    );
+                });
+                self.handle_resume_conversation(conversation_id, ctx);
+            }
             AIBlockEvent::InsertForkSlashCommand => {
                 #[cfg(target_family = "wasm")]
                 let command_name = commands::FORK.name;

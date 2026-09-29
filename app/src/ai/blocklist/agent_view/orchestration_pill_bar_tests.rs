@@ -171,6 +171,7 @@ fn pill_bar_data_layer_finds_restored_children_before_pane_creation() {
                         autoexecute_override: None,
                         last_event_sequence: None,
                         pinned: false,
+                        use_warp_credits_instead_of_chatgpt: false,
                     })
                     .expect("child conversation data should serialize"),
                     last_modified_at: now,
@@ -191,9 +192,7 @@ fn pill_bar_data_layer_finds_restored_children_before_pane_creation() {
                                 referenced_attachments: Default::default(),
                                 mode: None,
                                 intended_agent: Default::default(),
-                                origin: None,
-                                author: None,
-                                source_message: None,
+                                ..Default::default()
                             },
                         )),
                         request_id: "request-1".to_string(),
@@ -225,6 +224,7 @@ fn pill_bar_data_layer_finds_restored_children_before_pane_creation() {
                         autoexecute_override: None,
                         last_event_sequence: None,
                         pinned: false,
+                        use_warp_credits_instead_of_chatgpt: false,
                     })
                     .expect("parent conversation data should serialize"),
                     last_modified_at: now - chrono::Duration::seconds(1),
@@ -245,9 +245,7 @@ fn pill_bar_data_layer_finds_restored_children_before_pane_creation() {
                                 referenced_attachments: Default::default(),
                                 mode: None,
                                 intended_agent: Default::default(),
-                                origin: None,
-                                author: None,
-                                source_message: None,
+                                ..Default::default()
                             },
                         )),
                         request_id: "request-2".to_string(),
@@ -523,9 +521,7 @@ fn breadcrumbs_resolve_token_only_parent_linkage_after_restore() {
                         referenced_attachments: Default::default(),
                         mode: None,
                         intended_agent: Default::default(),
-                        origin: None,
-                        author: None,
-                        source_message: None,
+                        ..Default::default()
                     },
                 )),
                 request_id: format!("request-{conversation_id}"),
@@ -559,6 +555,7 @@ fn breadcrumbs_resolve_token_only_parent_linkage_after_restore() {
             autoexecute_override: None,
             last_event_sequence: None,
             pinned: false,
+            use_warp_credits_instead_of_chatgpt: false,
         };
         let child_data = AgentConversationData {
             server_conversation_token: None,
@@ -576,6 +573,7 @@ fn breadcrumbs_resolve_token_only_parent_linkage_after_restore() {
             autoexecute_override: None,
             last_event_sequence: None,
             pinned: false,
+            use_warp_credits_instead_of_chatgpt: false,
         };
 
         let conversations = vec![

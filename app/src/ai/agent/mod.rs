@@ -747,6 +747,75 @@ pub enum RenderableAIError {
     /// GUI error card (`render_cloud_mode_error_screen`) which shows the
     /// message directly.
     CloudStartupFailed(String),
+    /// A request funded by the user's ChatGPT subscription was rejected by OpenAI's
+    /// token-sharing checks. The server authors the copy and the recovery actions; the client
+    /// renders them generically and never branches on `code`. Always a terminal failure (FAILED).
+    ChatGPTSubscriptionError {
+        /// The raw OpenAI error code, for telemetry only.
+        code: String,
+        title: String,
+        message: String,
+        /// Recovery actions in display order.
+        actions: Vec<ChatGPTSubscriptionErrorAction>,
+    },
+}
+
+/// A recovery action offered on a [`RenderableAIError::ChatGPTSubscriptionError`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChatGPTSubscriptionErrorAction {
+    pub kind: ChatGPTSubscriptionErrorActionKind,
+    /// Server-authored button label.
+    pub label: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChatGPTSubscriptionErrorActionKind {
+    /// Re-issue the turn unchanged, still funded by the ChatGPT subscription.
+    Retry,
+    /// Switch the rest of the conversation to Warp-funded inference, then resume.
+    ContinueWithWarpCredits,
+    /// Open an external page in the browser without changing the conversation.
+    OpenUrl { url: String },
+}
+
+impl From<warp_multi_agent_api::response_event::stream_finished::chat_gpt_subscription_error::action::Kind>
+    for ChatGPTSubscriptionErrorActionKind
+{
+    fn from(
+        kind: warp_multi_agent_api::response_event::stream_finished::chat_gpt_subscription_error::action::Kind,
+    ) -> Self {
+        use warp_multi_agent_api::response_event::stream_finished::chat_gpt_subscription_error::action::Kind;
+        match kind {
+            Kind::Retry(_) => Self::Retry,
+            Kind::ContinueWithWarpCredits(_) => Self::ContinueWithWarpCredits,
+            Kind::OpenUrl(open_url) => Self::OpenUrl { url: open_url.url },
+        }
+    }
+}
+
+impl RenderableAIError {
+    /// Builds a [`Self::ChatGPTSubscriptionError`] from the server's finish reason, dropping
+    /// actions whose kind this client does not understand (decoded as an unset `kind`).
+    pub fn from_chatgpt_subscription_error(
+        error: warp_multi_agent_api::response_event::stream_finished::ChatGptSubscriptionError,
+    ) -> Self {
+        let actions = error
+            .actions
+            .into_iter()
+            .filter_map(|action| {
+                Some(ChatGPTSubscriptionErrorAction {
+                    kind: action.kind?.into(),
+                    label: action.label,
+                })
+            })
+            .collect();
+        Self::ChatGPTSubscriptionError {
+            code: error.code,
+            title: error.title,
+            message: error.message,
+            actions,
+        }
+    }
 }
 
 impl RenderableAIError {
@@ -779,6 +848,10 @@ impl RenderableAIError {
 
     pub fn is_aws_bedrock_credentials_error(&self) -> bool {
         matches!(self, Self::AwsBedrockCredentialsExpiredOrInvalid { .. })
+    }
+
+    pub fn is_chatgpt_subscription_error(&self) -> bool {
+        matches!(self, Self::ChatGPTSubscriptionError { .. })
     }
 
     /// Returns true if an automatic resume will be attempted for this error.
@@ -937,6 +1010,20 @@ impl Display for RenderableAIError {
                  scripts that can exit the shell."
             ),
             Self::CloudStartupFailed(msg) => write!(f, "{msg}"),
+            Self::ChatGPTSubscriptionError {
+                title,
+                message,
+                actions,
+                ..
+            } => {
+                write!(f, "{title}\n\n{message}")?;
+                for action in actions {
+                    if let ChatGPTSubscriptionErrorActionKind::OpenUrl { url } = &action.kind {
+                        write!(f, "\n\n{}: {url}", action.label)?;
+                    }
+                }
+                Ok(())
+            }
         }
     }
 }

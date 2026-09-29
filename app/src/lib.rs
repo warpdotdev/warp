@@ -149,11 +149,12 @@ use ai::agent_conversations_model::AgentConversationsModel;
 use ai::agent_management::AgentNotificationsModel;
 use ai::ambient_agents::scheduled::ScheduledAgentManager;
 use ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
+use ai::chatgpt_subscription::ChatGPTSubscriptionModel;
 use ai::execution_profiles::editor::ExecutionProfileEditorManager;
 use ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use ai::metadata_project_rules::read_project_rule_contents;
 use ai::persisted_workspace::PersistedWorkspace;
-use auth::auth_manager::AuthManager;
+use auth::auth_manager::{AuthManager, AuthManagerEvent};
 use auth::auth_state::{AuthState, AuthStateProvider};
 use code::editor_management::CodeManager;
 use code::opened_files::OpenedFilesModel;
@@ -1792,12 +1793,25 @@ pub(crate) fn initialize_app(
     ctx.subscribe_to_model(
         &::ai::api_keys::ApiKeyManager::handle(ctx),
         |_, event, ctx| {
-            let ::ai::api_keys::ApiKeyManagerEvent::KeysUpdated = event;
-            AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
-                usage_model.request_availability_refresh(ctx);
-            });
+            if let ::ai::api_keys::ApiKeyManagerEvent::KeysUpdated = event {
+                AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
+                    usage_model.request_availability_refresh(ctx);
+                });
+            }
         },
     );
+    if FeatureFlag::ChatGPTSubscription.is_enabled() {
+        let ai_client = server_api_provider.as_ref(ctx).get_ai_client();
+        ctx.add_singleton_model(|_| ChatGPTSubscriptionModel::new(ai_client));
+        ChatGPTSubscriptionModel::handle(ctx).update(ctx, |model, ctx| model.refresh(ctx));
+        ctx.subscribe_to_model(&AuthManager::handle(ctx), |_, event, ctx| {
+            if matches!(event, AuthManagerEvent::AuthComplete) {
+                ChatGPTSubscriptionModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.refresh(ctx);
+                });
+            }
+        });
+    }
 
     ctx.add_singleton_model(AntivirusInfo::new);
 

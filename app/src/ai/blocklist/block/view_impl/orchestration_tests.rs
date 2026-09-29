@@ -148,6 +148,7 @@ fn participant_for_restored_child_run_id_resolves_to_agent_name() {
                     autoexecute_override: None,
                     last_event_sequence: None,
                     pinned: false,
+                    use_warp_credits_instead_of_chatgpt: false,
                 })
                 .expect("child conversation data should serialize"),
                 last_modified_at: now,
@@ -168,9 +169,7 @@ fn participant_for_restored_child_run_id_resolves_to_agent_name() {
                             referenced_attachments: Default::default(),
                             mode: None,
                             intended_agent: Default::default(),
-                            origin: None,
-                            author: None,
-                            source_message: None,
+                            ..Default::default()
                         },
                     )),
                     request_id: "request-1".to_string(),
@@ -205,6 +204,7 @@ fn participant_for_restored_child_run_id_resolves_to_agent_name() {
                     autoexecute_override: None,
                     last_event_sequence: None,
                     pinned: false,
+                    use_warp_credits_instead_of_chatgpt: false,
                 })
                 .expect("parent conversation data should serialize"),
                 last_modified_at: now - chrono::Duration::seconds(1),
@@ -225,9 +225,7 @@ fn participant_for_restored_child_run_id_resolves_to_agent_name() {
                             referenced_attachments: Default::default(),
                             mode: None,
                             intended_agent: Default::default(),
-                            origin: None,
-                            author: None,
-                            source_message: None,
+                            ..Default::default()
                         },
                     )),
                     request_id: "request-2".to_string(),

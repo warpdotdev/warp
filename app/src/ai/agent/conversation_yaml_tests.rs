@@ -32,9 +32,7 @@ fn make_user_query_message(id: &str, task_id: &str, query: &str) -> api::Message
             mode: None,
             referenced_attachments: Default::default(),
             intended_agent: Default::default(),
-            origin: None,
-            author: None,
-            source_message: None,
+            ..Default::default()
         })),
         request_id: String::new(),
         timestamp: None,

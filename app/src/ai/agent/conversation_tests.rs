@@ -60,6 +60,7 @@ fn conversation_data_with_provider_cost(
         autoexecute_override: None,
         last_event_sequence: None,
         pinned: false,
+        use_warp_credits_instead_of_chatgpt: false,
     }
 }
 
@@ -92,9 +93,7 @@ fn user_query_message(id: &str, request_id: &str, query: &str) -> api::Message {
             referenced_attachments: HashMap::new(),
             mode: None,
             intended_agent: Default::default(),
-            origin: None,
-            author: None,
-            source_message: None,
+            ..Default::default()
         })),
         request_id: request_id.to_string(),
         timestamp: None,
@@ -1341,6 +1340,19 @@ fn restored_conversation_ignores_persisted_autoexecute_override_when_disabled() 
         conversation.autoexecute_override(),
         AIConversationAutoexecuteMode::RespectUserSettings
     );
+}
+
+#[test]
+fn restored_conversation_keeps_use_warp_credits_instead_of_chatgpt() {
+    let conversation_data: AgentConversationData = serde_json::from_str(
+        r#"{"server_conversation_token":null,"use_warp_credits_instead_of_chatgpt":true}"#,
+    )
+    .unwrap();
+
+    let conversation = restored_conversation(Some(conversation_data));
+
+    assert!(conversation.use_warp_credits_instead_of_chatgpt());
+    assert!(!AIConversation::new(false, false).use_warp_credits_instead_of_chatgpt());
 }
 
 #[test]

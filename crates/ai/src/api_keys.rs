@@ -39,10 +39,45 @@ const LEGACY_ENDPOINT_PREFIX: &str = "legacy-";
 /// a refresh lifecycle, not a user-pasted static key.
 const GROK_SECURE_STORAGE_KEY: &str = "GrokOAuthTokens";
 
-/// Emitted when user-provided API keys are updated in-memory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApiKeyManagerEvent {
+    /// User-provided API keys were updated in-memory.
     KeysUpdated,
+    /// The ChatGPT connection status or an in-flight connect attempt changed.
+    ChatGPTConnectionUpdated,
+    /// A connect attempt started from this client finished without a linked
+    /// ChatGPT account.
+    ChatGPTConnectFailed(ChatGPTConnectFailure),
+}
+
+/// Why a ChatGPT connect attempt did not end with a linked account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatGPTConnectFailure {
+    /// The ChatGPT account is linked to another Warp account, or this Warp
+    /// account already has a different ChatGPT account linked.
+    AlreadyLinked,
+    /// The ChatGPT account's email is not verified with OpenAI.
+    EmailUnverified,
+    /// The user declined OpenAI's authorization prompt.
+    Denied,
+    /// The browser is signed in to a different Warp account than this client, so the link was
+    /// refused rather than attached to the wrong account.
+    AccountMismatch,
+    /// The flow finished without a specific reason being reported.
+    Unknown,
+}
+
+impl ChatGPTConnectFailure {
+    /// Parses the `chatgpt_error` code warp-server appends to the link deep link.
+    pub fn from_deep_link_code(code: &str) -> Self {
+        match code {
+            "already_linked" => Self::AlreadyLinked,
+            "email_unverified" => Self::EmailUnverified,
+            "denied" => Self::Denied,
+            "account_mismatch" => Self::AccountMismatch,
+            _ => Self::Unknown,
+        }
+    }
 }
 
 /// User-provided API keys for AI providers.
@@ -448,6 +483,28 @@ pub struct GrokTokens {
     pub connected_at: Option<SystemTime>,
 }
 
+/// A ChatGPT account linked to the Warp user, as reported by warp-server. The
+/// server owns the link and any delegated credentials; nothing is stored
+/// locally.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatGPTConnection {
+    pub email: Option<String>,
+    pub connected_at: SystemTime,
+    /// Whether the server currently holds delegated credentials it can attach
+    /// to OpenAI requests on the user's behalf.
+    pub token_sharing_active: bool,
+}
+
+/// The last server-reported ChatGPT connection state.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ChatGPTConnectionStatus {
+    /// Not fetched yet (or the fetch failed and nothing is cached).
+    #[default]
+    Unknown,
+    NotConnected,
+    Connected(ChatGPTConnection),
+}
+
 impl GrokTokens {
     /// Returns the access token whenever it is non-empty, regardless of
     /// expiry. Possibly-expired tokens are still sent so the server stays the
@@ -519,6 +576,9 @@ pub struct ApiKeyManager {
     /// separately from `keys` under [`GROK_SECURE_STORAGE_KEY`];
     /// `crate::grok_subscription` keeps these fresh.
     grok_tokens: Option<GrokTokens>,
+    chatgpt_connection: ChatGPTConnectionStatus,
+    /// True while a ChatGPT OAuth attempt is waiting on the browser callback.
+    chatgpt_oauth_pending: bool,
     /// Whether background refresh of `grok_tokens` is currently allowed.
     /// Mirrors the BYO API key policy, which lives in the app layer; wired in
     /// via `ApiKeyManager::set_grok_refresh_allowed` (`crate::grok_subscription`).
@@ -614,6 +674,8 @@ impl ApiKeyManager {
                 resolved: resolved_custom_endpoints,
             },
             grok_tokens,
+            chatgpt_connection: ChatGPTConnectionStatus::Unknown,
+            chatgpt_oauth_pending: false,
             #[cfg(not(target_family = "wasm"))]
             grok_refresh_allowed: false,
             #[cfg(not(target_family = "wasm"))]
@@ -790,8 +852,16 @@ impl ApiKeyManager {
             .is_some()
     }
 
+    /// Returns `true` when a ChatGPT subscription is connected and the server
+    /// holds delegated credentials it can attach to OpenAI requests.
+    pub fn has_chatgpt_subscription(&self) -> bool {
+        self.chatgpt_connection()
+            .is_some_and(|connection| connection.token_sharing_active)
+    }
+
     /// Returns `true` when the user has any usable BYO credential: a pasted
-    /// provider or custom-endpoint key, or a connected Grok subscription.
+    /// provider or custom-endpoint key, or a connected Grok or ChatGPT
+    /// subscription.
     pub fn has_any_key(&self) -> bool {
         self.keys.provider_key_count() > 0
             || self
@@ -800,11 +870,86 @@ impl ApiKeyManager {
                 .iter()
                 .any(|endpoint| !endpoint.api_key.trim().is_empty())
             || self.has_grok_subscription()
+            || self.has_chatgpt_subscription()
     }
 
-    /// Stores (or clears, with `None`) the xAI/Grok OAuth tokens and persists
-    /// them to secure storage. No-op when the value is unchanged so we don't
-    /// emit spurious events or schedule redundant keychain writes.
+    pub fn chatgpt_connection_status(&self) -> &ChatGPTConnectionStatus {
+        &self.chatgpt_connection
+    }
+
+    pub fn chatgpt_connection(&self) -> Option<&ChatGPTConnection> {
+        match &self.chatgpt_connection {
+            ChatGPTConnectionStatus::Connected(connection) => Some(connection),
+            ChatGPTConnectionStatus::Unknown | ChatGPTConnectionStatus::NotConnected => None,
+        }
+    }
+
+    pub fn chatgpt_oauth_pending(&self) -> bool {
+        self.chatgpt_oauth_pending
+    }
+
+    pub fn set_chatgpt_oauth_pending(&mut self, pending: bool, ctx: &mut ModelContext<Self>) {
+        if self.chatgpt_oauth_pending == pending {
+            return;
+        }
+        self.chatgpt_oauth_pending = pending;
+        ctx.emit(ApiKeyManagerEvent::ChatGPTConnectionUpdated);
+    }
+
+    /// Replaces the cached server-reported connection status. Does not touch an
+    /// in-flight connect attempt.
+    pub fn set_chatgpt_connection_status(
+        &mut self,
+        status: ChatGPTConnectionStatus,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.chatgpt_connection == status {
+            return;
+        }
+        self.chatgpt_connection = status;
+        ctx.emit(ApiKeyManagerEvent::ChatGPTConnectionUpdated);
+    }
+
+    /// Finishes a connect attempt started from this client using the status the
+    /// server reported once the browser flow handed control back. `None` means
+    /// the status could not be fetched; the cached status is left as-is.
+    pub fn resolve_chatgpt_oauth(
+        &mut self,
+        status: Option<ChatGPTConnectionStatus>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let was_pending = std::mem::replace(&mut self.chatgpt_oauth_pending, false);
+        let status_changed = match status {
+            Some(status) if self.chatgpt_connection != status => {
+                self.chatgpt_connection = status;
+                true
+            }
+            Some(_) | None => false,
+        };
+        if was_pending || status_changed {
+            ctx.emit(ApiKeyManagerEvent::ChatGPTConnectionUpdated);
+        }
+        if was_pending && self.chatgpt_connection().is_none() {
+            ctx.emit(ApiKeyManagerEvent::ChatGPTConnectFailed(
+                ChatGPTConnectFailure::Unknown,
+            ));
+        }
+    }
+
+    /// Finishes a connect attempt started from this client that the browser flow reported as
+    /// failed. No-op when no attempt is pending.
+    pub fn fail_chatgpt_oauth(
+        &mut self,
+        failure: ChatGPTConnectFailure,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !std::mem::replace(&mut self.chatgpt_oauth_pending, false) {
+            return;
+        }
+        ctx.emit(ApiKeyManagerEvent::ChatGPTConnectionUpdated);
+        ctx.emit(ApiKeyManagerEvent::ChatGPTConnectFailed(failure));
+    }
+
     pub fn set_grok_tokens(&mut self, tokens: Option<GrokTokens>, ctx: &mut ModelContext<Self>) {
         if self.grok_tokens == tokens {
             return;
@@ -1098,11 +1243,9 @@ impl ApiKeyManager {
                 google,
                 open_router,
                 grok_oauth_access_token,
-                allow_use_of_warp_credits: false,
                 aws_credentials,
                 google_cloud_credentials,
-                chatgpt_delegated_access_token: String::new(),
-                skip_chatgpt_subscription: false,
+                ..Default::default()
             })
         }
     }

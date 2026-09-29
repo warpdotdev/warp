@@ -752,6 +752,12 @@ pub enum WorkspaceAction {
     /// Reset the auto-handoff sleep modal shown state (for debugging)
     #[cfg(debug_assertions)]
     ResetAutoHandoffSleepModalState,
+    /// Open the "You're using your ChatGPT plan" modal (for debugging)
+    #[cfg(debug_assertions)]
+    OpenChatGPTPlanModal,
+    /// Reset the ChatGPT plan modal shown state (for debugging)
+    #[cfg(debug_assertions)]
+    ResetChatGPTPlanModalState,
     /// Trigger the auto-handoff-to-cloud flow in-process, as if the machine
     /// were about to sleep (for debugging)
     #[cfg(debug_assertions)]
@@ -1227,6 +1233,8 @@ impl WorkspaceAction {
             | ResetFeatureIntroModalState
             | OpenAutoHandoffSleepModal
             | ResetAutoHandoffSleepModalState
+            | OpenChatGPTPlanModal
+            | ResetChatGPTPlanModalState
             | TriggerAutoHandoffToCloud
             | OpenFreeAiRemovalModal
             | ResetFreeAiRemovalModalState

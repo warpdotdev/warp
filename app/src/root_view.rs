@@ -104,7 +104,9 @@ use crate::window_settings::WindowSettings;
 use crate::workspace::hoa_onboarding::mark_hoa_onboarding_completed;
 use crate::workspace::tab_settings::TabSettings;
 use crate::workspace::view::OnboardingTutorial;
-use crate::workspace::{PaneViewLocator, Workspace, WorkspaceAction, WorkspaceRegistry};
+use crate::workspace::{
+    OneTimeModalModel, PaneViewLocator, Workspace, WorkspaceAction, WorkspaceRegistry,
+};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces, UserWorkspacesEvent};
@@ -152,6 +154,15 @@ fn team_enforces_autonomy(ctx: &ViewContext<RootView>) -> bool {
     user_workspaces
         .ai_autonomy_settings(&scope)
         .has_any_overrides()
+}
+
+/// Lets app-level models react to this window's workspace becoming visible, e.g. to surface
+/// one-time modals that were deferred while auth or onboarding covered it.
+fn notify_workspace_shown(ctx: &mut ViewContext<RootView>) {
+    let window_id = ctx.window_id();
+    OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+        model.on_workspace_shown(window_id, ctx);
+    });
 }
 
 /// Re-reads the account state onboarding decides on once the user has been out
@@ -2537,6 +2548,7 @@ impl RootView {
 
         self.auth_onboarding_state = AuthOnboardingState::Terminal(target.to_workspace(ctx));
         ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
+        notify_workspace_shown(ctx);
         if completion.starts_agent_tutorial() && settings_applied {
             self.start_pending_tutorial(ctx);
         }
@@ -2750,6 +2762,7 @@ impl RootView {
                 self.pending_tutorial = Some(tutorial);
                 self.auth_onboarding_state = AuthOnboardingState::Terminal(workspace);
                 ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
+                notify_workspace_shown(ctx);
                 self.start_pending_tutorial(ctx);
                 self.start_autoupdate_polling(ctx);
                 ctx.notify();
@@ -2773,6 +2786,7 @@ impl RootView {
                 let workspace = target.to_workspace(ctx);
                 self.auth_onboarding_state = AuthOnboardingState::Terminal(workspace);
                 ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
+                notify_workspace_shown(ctx);
                 self.start_autoupdate_polling(ctx);
                 ctx.notify();
             }
@@ -4153,6 +4167,9 @@ impl AuthOnboardingState {
             _ => {}
         };
         ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
+        if matches!(self, AuthOnboardingState::Terminal(_)) {
+            notify_workspace_shown(ctx);
+        }
     }
 
     fn try_open_onboarding_slides(&mut self, ctx: &mut ViewContext<RootView>) {
@@ -4189,6 +4206,7 @@ impl AuthOnboardingState {
         if let AuthOnboardingState::NeedsSsoLink(needs_sso_link_mode) = self {
             *self = AuthOnboardingState::Terminal(needs_sso_link_mode.to_workspace(ctx));
             ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
+            notify_workspace_shown(ctx);
         }
     }
 

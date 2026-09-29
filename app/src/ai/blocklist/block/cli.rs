@@ -1212,6 +1212,10 @@ impl View for CLISubagentView {
             // opt out so developers still see every transport failure aggressively.
             if !error.should_suppress_during_recovery() {
                 output_border = Border::all(1.).with_border_color(theme.ui_error_color());
+                let conversation_uses_warp_credits_instead_of_chatgpt = self
+                    .model
+                    .conversation(app)
+                    .is_some_and(|conversation| conversation.use_warp_credits_instead_of_chatgpt());
                 output_items.add_child(render_failed_output(
                     FailedOutputProps {
                         error,
@@ -1222,12 +1226,19 @@ impl View for CLISubagentView {
                         subscribe_button_handle: &self.state_handles.subscribe_button_handle,
                         aws_bedrock_credentials_error_view: None,
                         gemini_enterprise_credentials_error_view: None,
+                        // The CLI subagent block cannot resume the conversation itself; the
+                        // user takes over instead.
+                        chatgpt_subscription_actions: None,
+                        conversation_uses_warp_credits_instead_of_chatgpt,
                         icon_right_margin: AVATAR_RIGHT_MARGIN,
                     },
                     app,
                 ));
 
-                if !self.model.is_restored() && !error.is_invalid_api_key() {
+                if !self.model.is_restored()
+                    && !error.is_invalid_api_key()
+                    && !error.is_chatgpt_subscription_error()
+                {
                     output_items.add_child(
                         Container::new(render_informational_footer(
                             app,

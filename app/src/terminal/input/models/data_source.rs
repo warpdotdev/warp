@@ -25,6 +25,8 @@ use super::model_spec_scores::{
     MODEL_SPECS_TITLE, ModelSpecScoresLayout, REASONING_LEVEL_DESCRIPTION, REASONING_LEVEL_TITLE,
     render_model_spec_header, render_model_spec_scores,
 };
+use crate::ai::agent::conversation::AIConversation;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::execution_profiles::model_menu_items::is_auto;
 use crate::ai::llms::{
@@ -156,10 +158,12 @@ impl ModelPickerChoice {
 }
 
 /// Applies the GUI model picker's ordering, fuzzy filtering, and effective disabled state.
+/// `conversation` is the conversation the picker applies to, when known.
 pub fn query_model_picker_choices<'a>(
     llm_preferences: &LLMPreferences,
     choices: impl IntoIterator<Item = &'a LLMInfo>,
     query_text: &str,
+    conversation: Option<&AIConversation>,
     scope: &dyn TeamScope,
     app: &AppContext,
 ) -> Vec<ModelPickerChoice> {
@@ -185,7 +189,7 @@ pub fn query_model_picker_choices<'a>(
                 Some(result)
             };
             let disable_reason = if llm.disable_reason == Some(DisableReason::RequiresUpgrade)
-                && should_show_key_icon_for_model(llm, scope, app)
+                && should_show_key_icon_for_model(llm, conversation, scope, app)
             {
                 None
             } else {
@@ -325,20 +329,28 @@ impl SyncDataSource for ModelSelectorDataSource {
                 .collect_vec()
         };
         let upgrade_url = UserWorkspaces::as_ref(app).upgrade_link_for_scope(&scope, app);
-        Ok(
-            query_model_picker_choices(llm_preferences, choices, &query.text, &scope, app)
-                .into_iter()
-                .map(|choice| {
-                    QueryResult::from(ModelSearchItem::new(
-                        choice,
-                        &active_llm_id,
-                        &upgrade_url,
-                        &scope,
-                        app,
-                    ))
-                })
-                .collect(),
+        let conversation =
+            BlocklistAIHistoryModel::as_ref(app).active_conversation(self.terminal_view_id);
+        Ok(query_model_picker_choices(
+            llm_preferences,
+            choices,
+            &query.text,
+            conversation,
+            &scope,
+            app,
         )
+        .into_iter()
+        .map(|choice| {
+            QueryResult::from(ModelSearchItem::new(
+                choice,
+                &active_llm_id,
+                &upgrade_url,
+                conversation,
+                &scope,
+                app,
+            ))
+        })
+        .collect())
     }
 }
 
@@ -376,6 +388,7 @@ impl ModelSearchItem {
         choice: ModelPickerChoice,
         active_llm_id: &LLMId,
         upgrade_url: &str,
+        conversation: Option<&AIConversation>,
         scope: &dyn TeamScope,
         app: &AppContext,
     ) -> Self {
@@ -385,7 +398,7 @@ impl ModelSearchItem {
         let is_using_bedrock = should_show_bedrock_icon_for_model(llm, scope, app);
         let is_using_gemini_enterprise_agent_platform =
             should_show_gemini_enterprise_agent_platform_icon_for_model(llm, scope, app);
-        let byo_key_source = byo_key_source_for_model(llm, scope, app);
+        let byo_key_source = byo_key_source_for_model(llm, conversation, scope, app);
         let leading_icon = model_leading_icon(
             llm,
             ModelIconFlags {
@@ -626,13 +639,17 @@ impl SearchItem for ModelSearchItem {
                 "api"
             }
             .to_string();
+            let manage_label = self
+                .byo_key_source
+                .map_or("Manage", ByoKeySource::manage_button_label);
+            let manage_url = self.byo_key_source.and_then(ByoKeySource::manage_url);
             let manage_button = appearance
                 .ui_builder()
                 .button(
                     ButtonVariant::Outlined,
                     self.manage_api_key_mouse_state.clone(),
                 )
-                .with_text_label("Manage".to_string())
+                .with_text_label(manage_label.to_string())
                 .with_style(UiComponentStyles {
                     height: Some(24.),
                     padding: Some(Coords {
@@ -646,10 +663,14 @@ impl SearchItem for ModelSearchItem {
                 .with_cursor(Some(Cursor::PointingHand))
                 .build()
                 .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(WorkspaceAction::ShowSettingsPageWithSearch {
-                        search_query: search_query.clone(),
-                        section: Some(SettingsSection::WarpAgent),
-                    });
+                    let action = match manage_url {
+                        Some(url) => WorkspaceAction::OpenLink(url.to_string()),
+                        None => WorkspaceAction::ShowSettingsPageWithSearch {
+                            search_query: search_query.clone(),
+                            section: Some(SettingsSection::WarpAgent),
+                        },
+                    };
+                    ctx.dispatch_typed_action(action);
                 })
                 .finish();
             CostRow::BilledToProvider {
