@@ -866,6 +866,12 @@ pub enum AgentDriverError {
     EnvironmentNotFound(String),
     #[error("Environment setup failed: {0}")]
     EnvironmentSetupFailed(String),
+    #[error("Environment setup failed: {message}")]
+    SetupCommandFailed {
+        message: String,
+        command: String,
+        output: Option<String>,
+    },
     #[error("Cloud provider setup failed")]
     CloudProviderSetupFailed(#[from] cloud_provider::CloudProviderSetupError),
     #[error("Could not resolve working directory {}", path.display())]
@@ -1028,10 +1034,18 @@ impl From<warpui::ModelDropped> for AgentDriverError {
 
 impl From<PrepareEnvironmentError> for AgentDriverError {
     fn from(error: PrepareEnvironmentError) -> Self {
+        let message = error.to_string();
         match error {
             PrepareEnvironmentError::InvalidRuntimeState => AgentDriverError::InvalidRuntimeState,
             PrepareEnvironmentError::TerminalDriver { source } => source,
-            error => AgentDriverError::EnvironmentSetupFailed(error.to_string()),
+            PrepareEnvironmentError::SetupCommand { command, output } => {
+                AgentDriverError::SetupCommandFailed {
+                    message,
+                    command,
+                    output,
+                }
+            }
+            _ => AgentDriverError::EnvironmentSetupFailed(message),
         }
     }
 }
@@ -1627,6 +1641,7 @@ impl AgentDriver {
                 if matches!(
                     err,
                     AgentDriverError::EnvironmentSetupFailed(_)
+                        | AgentDriverError::SetupCommandFailed { .. }
                         | AgentDriverError::SetupCommandExitedShell { .. }
                 ) {
                     let _ = foreground_for_error
@@ -2732,7 +2747,17 @@ impl AgentDriver {
             return;
         };
 
-        let status = setup_failure_status_update(message);
+        let status = match error {
+            AgentDriverError::SetupCommandFailed {
+                command, output, ..
+            } => error_classification::setup_command_status_update(
+                error,
+                command,
+                output.as_deref(),
+                false,
+            ),
+            _ => setup_failure_status_update(message),
+        };
         let deadline = debug_window_deadline(window);
         if let Err(error) = ai_client
             .update_agent_task(

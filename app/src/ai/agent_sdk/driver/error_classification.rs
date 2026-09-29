@@ -1,5 +1,5 @@
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
-use warp_graphql::platform_error::PlatformErrorInfo;
+use warp_graphql::platform_error::{PlatformErrorInfo, PlatformErrorMessageFormat};
 
 use super::AgentDriverError;
 use super::terminal::ShareSessionError;
@@ -186,6 +186,12 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 ),
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
+        ),
+        AgentDriverError::SetupCommandFailed {
+            command, output, ..
+        } => (
+            AgentTaskState::Failed,
+            setup_command_status_update(error, command, output.as_deref(), true),
         ),
         // The shell died while an environment setup command was running
         // (e.g. the command ran `exit`). This is a user-side environment
@@ -420,6 +426,43 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
             TaskStatusUpdate::message(error.to_string()),
         ),
     }
+}
+
+pub(super) fn setup_command_status_update(
+    error: &AgentDriverError,
+    command: &str,
+    output: Option<&str>,
+    include_recovery_hint: bool,
+) -> TaskStatusUpdate {
+    let recovery_hint = if include_recovery_hint {
+        ". Check your repository URLs and setup commands."
+    } else {
+        ""
+    };
+    let plain_text = format!("{error}{recovery_hint}");
+    let mut update = TaskStatusUpdate::with_error_code(
+        plain_text.clone(),
+        PlatformErrorCode::EnvironmentSetupFailed,
+    );
+
+    if let Some(output) = output {
+        let markdown_hint = if include_recovery_hint {
+            "\n\nCheck your repository URLs and setup commands."
+        } else {
+            ""
+        };
+        let markdown = format!(
+            "Environment setup failed: Failed to run setup command:\n\n    {}\n\nCommand output:\n\n    {}{markdown_hint}",
+            command.replace('\n', "\n    "),
+            output.replace('\n', "\n    "),
+        );
+        let info = update.platform_error.as_mut().expect("platform error");
+        info.user_facing_messages
+            .insert(PlatformErrorMessageFormat::PlainText, plain_text);
+        info.user_facing_messages
+            .insert(PlatformErrorMessageFormat::Markdown, markdown);
+    }
+    update
 }
 
 /// Map a `PlatformErrorCode` to the `AgentTaskState` it implies. Not specific

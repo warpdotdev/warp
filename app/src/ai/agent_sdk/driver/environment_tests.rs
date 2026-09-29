@@ -65,17 +65,19 @@ fn setup_command_error_includes_redacted_truncated_output() {
     let secret = "AKIAIOSFODNN7EXAMPLE";
     let output = format!("START {secret}\n{} END", "x".repeat(5_000));
     let error = setup_command_failure("./setup.sh".to_string(), Some(output));
-    let message = error.to_string();
-
-    assert!(
-        message.starts_with("Failed to run setup command: ./setup.sh\nCommand output:\nSTART ")
+    let prefix = format!("START {}\n", "*".repeat(secret.len()));
+    let marker = SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER;
+    let retained = 4_096 - marker.len();
+    let expected_output = format!(
+        "{}{}{}{} END",
+        prefix,
+        "x".repeat(retained / 2 - prefix.len()),
+        marker,
+        "x".repeat(retained - retained / 2 - " END".len()),
     );
-    assert!(!message.contains(secret));
-    assert!(message.contains(&"*".repeat(secret.len())));
-    assert!(message.contains(SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER));
-    assert!(message.ends_with(" END"));
-    assert!(
-        message.len() - "Failed to run setup command: ./setup.sh\nCommand output:\n".len() <= 4_096
+    assert_eq!(
+        error.to_string(),
+        format!("Failed to run setup command: ./setup.sh\nCommand output:\n{expected_output}")
     );
 }
 
@@ -86,6 +88,7 @@ fn setup_command_error_without_readable_output_keeps_original_message() {
         assert_eq!(error.to_string(), "Failed to run setup command: ./setup.sh");
     }
 }
+
 fn commit_head_override(
     code_forge: RepositoryForge,
     owner: &str,

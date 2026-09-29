@@ -88,6 +88,7 @@ pub enum PrepareEnvironmentError {
     #[error("Terminal driver error while preparing environment: {source}")]
     TerminalDriver { source: AgentDriverError },
 }
+
 fn setup_command_output_suffix(output: Option<&str>) -> String {
     output
         .filter(|output| !output.is_empty())
