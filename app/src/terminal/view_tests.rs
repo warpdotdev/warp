@@ -1513,6 +1513,31 @@ fn append_exchange_with_inputs_and_handle_event(
     (conversation_id, task_id, exchange_id, response_stream_id)
 }
 
+#[test]
+fn turn_panel_survives_unrelated_conversation_but_closes_on_same_turn_continuation() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _pricing = FeatureFlag::PricingTransparency.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            let (conversation_id, _, exchange_id, _) =
+                append_exchange_and_handle_event(view, agent_view_user_query_input("first"), ctx);
+            let owner = view.last_ai_block().expect("AI block");
+            owner.update(ctx, |block, ctx| {
+                block.handle_action(&AIBlockAction::SetIsTurnPanelExpanded(true), ctx);
+            });
+            view.handle_turn_panel_toggled(owner.id(), conversation_id, exchange_id, true, ctx);
+            assert!(view.turn_panel_view_ids.contains_key(&owner.id()));
+
+            append_exchange_and_handle_event(view, agent_view_user_query_input("unrelated"), ctx);
+            assert!(view.turn_panel_view_ids.contains_key(&owner.id()));
+
+            append_inputs_to_conversation_and_handle_event(view, conversation_id, vec![], ctx);
+        });
+        terminal.read(&app, |view, _| assert!(view.turn_panel_view_ids.is_empty()));
+    });
+}
+
 fn update_exchange_input_and_handle_event(
     view: &mut TerminalView,
     conversation_id: AIConversationId,

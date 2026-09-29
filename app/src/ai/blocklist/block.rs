@@ -208,7 +208,9 @@ use crate::view_components::action_button::{
 };
 use crate::view_components::compactible_action_button::CompactibleActionButton;
 use crate::view_components::find::FindEvent;
-use crate::workspace::{ForkAIConversationParams, ForkedConversationDestination, WorkspaceAction};
+use crate::workspace::{
+    ForkAIConversationParams, ForkFromExchange, ForkedConversationDestination, WorkspaceAction,
+};
 use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
@@ -6091,6 +6093,13 @@ fn set_imported_comment_button_disabled(
 }
 
 impl AIBlock {
+    // Synthetic mouse events during pane creation can otherwise leave the fork tooltip stuck.
+    fn reset_fork_button_interaction_state(&self) {
+        if let Ok(mut state) = self.state_handles.fork_conversation_handle.lock() {
+            state.reset_interaction_state();
+        }
+    }
+
     /// Notifies the terminal view of the turn panel's current expansion state, using this
     /// block's own conversation/exchange ids.
     fn emit_turn_panel_toggled(&self, ctx: &mut ViewContext<Self>) {
@@ -6323,6 +6332,8 @@ pub enum AIBlockAction {
     /// Fork the conversation
     ForkConversation,
 
+    ForkConversationFromTurn,
+
     /// Manually cancel sending an AI request or streaming an AI response for a requested action.
     /// View-based inline actions (`RequestedCommandView`, etc.) should be handling AI block
     /// cancellation via their own View events.
@@ -6537,13 +6548,26 @@ impl TypedActionView for AIBlock {
                     conversation_id: self.client_ids.conversation_id,
                 });
             }
+            AIBlockAction::ForkConversationFromTurn => {
+                self.reset_fork_button_interaction_state();
+                ctx.dispatch_global_action(
+                    "workspace:fork_ai_conversation",
+                    ForkAIConversationParams {
+                        conversation_id: self.client_ids.conversation_id,
+                        fork_from_exchange: Some(ForkFromExchange {
+                            exchange_id: self.client_ids.client_exchange_id,
+                            fork_from_exact_exchange: false,
+                        }),
+                        summarize_after_fork: false,
+                        summarization_prompt: None,
+                        initial_prompt: None,
+                        destination: ForkedConversationDestination::SplitPane,
+                    },
+                );
+                ctx.notify();
+            }
             AIBlockAction::ForkConversation => {
-                // Fully reset the fork button's interaction state before navigation.
-                // This avoids an immediate re-hover (and stuck tooltip) from synthetic mouse events
-                // that can occur while the new pane is being created.
-                if let Ok(mut state) = self.state_handles.fork_conversation_handle.lock() {
-                    state.reset_interaction_state();
-                }
+                self.reset_fork_button_interaction_state();
 
                 let is_read_only = self.terminal_model.lock().is_read_only();
                 if FeatureFlag::AgentView.is_enabled() && !is_read_only {
