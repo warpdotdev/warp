@@ -191,7 +191,7 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
             command, output, ..
         } => (
             AgentTaskState::Failed,
-            setup_command_status_update(error, command, output.as_deref(), true),
+            setup_command_status_update(error, command, output.as_deref()),
         ),
         // The shell died while an environment setup command was running
         // (e.g. the command ran `exit`). This is a user-side environment
@@ -432,28 +432,18 @@ pub(super) fn setup_command_status_update(
     error: &AgentDriverError,
     command: &str,
     output: Option<&str>,
-    include_recovery_hint: bool,
 ) -> TaskStatusUpdate {
-    let recovery_hint = if include_recovery_hint {
-        ". Check your repository URLs and setup commands."
-    } else {
-        ""
-    };
-    let plain_text = format!("{error}{recovery_hint}");
+    let plain_text = format!("{error}. Check your repository URLs and setup commands.");
     let mut update = TaskStatusUpdate::with_error_code(
         plain_text.clone(),
         PlatformErrorCode::EnvironmentSetupFailed,
     );
 
     if let Some(output) = output {
-        let markdown_hint = if include_recovery_hint {
-            "\n\nCheck your repository URLs and setup commands."
-        } else {
-            ""
-        };
+        // Indentation keeps arbitrary backticks in the output from closing a fenced code block.
         let markdown = format!(
-            "Environment setup failed: Failed to run setup command:\n\n    {}\n\nCommand output:\n\n    {}{markdown_hint}",
-            command.replace('\n', "\n    "),
+            "Failed to run setup command {}:\n\n    {}\n\nCheck your repository URLs and setup commands.",
+            markdown_code_span(command),
             output.replace('\n', "\n    "),
         );
         let info = update.platform_error.as_mut().expect("platform error");
@@ -463,6 +453,22 @@ pub(super) fn setup_command_status_update(
             .insert(PlatformErrorMessageFormat::Markdown, markdown);
     }
     update
+}
+
+fn markdown_code_span(text: &str) -> String {
+    let longest_run = text
+        .split(|character| character != '`')
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    let fence = "`".repeat(longest_run + 1);
+    let text = text.replace("\r\n", " ").replace(&['\r', '\n'][..], " ");
+    let padding = if text.starts_with('`') || text.ends_with('`') {
+        " "
+    } else {
+        ""
+    };
+    format!("{fence}{padding}{text}{padding}{fence}")
 }
 
 /// Map a `PlatformErrorCode` to the `AgentTaskState` it implies. Not specific

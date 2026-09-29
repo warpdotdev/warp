@@ -495,8 +495,16 @@ impl<T: Clone + Send + 'static> DebugWindowController<T> {
 /// The code must stay `EnvironmentSetupFailed`: `TaskStatusMessage::is_environment_setup_failure`
 /// matches that variant alone, and the cloud-continuation resolver keys its no-CTA tombstone off
 /// that check.
-fn setup_failure_status_update(message: String) -> TaskStatusUpdate {
-    TaskStatusUpdate::with_error_code(message, PlatformErrorCode::EnvironmentSetupFailed)
+fn setup_failure_status_update(error: &AgentDriverError) -> TaskStatusUpdate {
+    match error {
+        AgentDriverError::SetupCommandFailed {
+            command, output, ..
+        } => error_classification::setup_command_status_update(error, command, output.as_deref()),
+        _ => TaskStatusUpdate::with_error_code(
+            error.to_string(),
+            PlatformErrorCode::EnvironmentSetupFailed,
+        ),
+    }
 }
 
 /// The post-failure debug window's deadline, `window` from now. Shared by
@@ -2736,7 +2744,6 @@ impl AgentDriver {
         error: &AgentDriverError,
         window: Duration,
     ) {
-        let message = error.to_string();
         let resolved = foreground
             .spawn(|me, ctx| {
                 me.task_id
@@ -2747,17 +2754,7 @@ impl AgentDriver {
             return;
         };
 
-        let status = match error {
-            AgentDriverError::SetupCommandFailed {
-                command, output, ..
-            } => error_classification::setup_command_status_update(
-                error,
-                command,
-                output.as_deref(),
-                false,
-            ),
-            _ => setup_failure_status_update(message),
-        };
+        let status = setup_failure_status_update(error);
         let deadline = debug_window_deadline(window);
         if let Err(error) = ai_client
             .update_agent_task(

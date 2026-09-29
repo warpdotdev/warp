@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_graphql::platform_error::{PlatformErrorInfo, PlatformErrorMessageFormat};
 
-use super::{classify_driver_error, setup_command_status_update};
+use super::{classify_driver_error, markdown_code_span};
 use crate::ai::agent::{RenderableAIError, TransientNetworkErrorKind};
 use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::agent_sdk::driver::environment::PrepareEnvironmentError;
@@ -298,16 +298,13 @@ fn setup_command_failure_has_plain_text_and_markdown_status_messages() {
     assert_eq!(messages[&PlatformErrorMessageFormat::PlainText], plain_text);
     assert_eq!(
         messages[&PlatformErrorMessageFormat::Markdown],
-        "Environment setup failed: Failed to run setup command:\n\n    echo '```'\n\nCommand output:\n\n    ```\n    permission denied\n\nCheck your repository URLs and setup commands."
+        "Failed to run setup command ````echo '```'````:\n\n    ```\n    permission denied\n\nCheck your repository URLs and setup commands."
     );
+}
 
-    let retained_status =
-        setup_command_status_update(&error, "echo '```'", Some("```\npermission denied"), false);
-    assert_eq!(
-        retained_status.platform_error.unwrap().user_facing_messages
-            [&PlatformErrorMessageFormat::Markdown],
-        "Environment setup failed: Failed to run setup command:\n\n    echo '```'\n\nCommand output:\n\n    ```\n    permission denied"
-    );
+#[test]
+fn setup_command_markdown_quotes_backticks_at_command_boundaries() {
+    assert_eq!(markdown_code_span("`echo`"), "`` `echo` ``");
 }
 
 #[test]
