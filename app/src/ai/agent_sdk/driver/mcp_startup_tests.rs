@@ -944,12 +944,12 @@ fn runnable_mcp_server_json(name: &str) -> String {
     let server = if cfg!(windows) {
         serde_json::json!({
             "command": "powershell.exe",
-            "args": ["-NoProfile", "-Command", "Start-Sleep -Seconds 30"]
+            "args": ["-NoProfile", "-Command", "Start-Sleep -Seconds 5"]
         })
     } else {
         serde_json::json!({
             "command": "sh",
-            "args": ["-c", "sleep 30"]
+            "args": ["-c", "sleep 5"]
         })
     };
     let mut servers = serde_json::Map::new();
@@ -1178,6 +1178,17 @@ fn configured_and_profile_mcp_servers_wait_for_environment_setup() {
             .await
             .expect("task/config and profile MCP servers should start after environment setup")
             .expect("MCP startup state subscription should remain active");
+
+        let started_uuids = started_uuids.borrow().clone();
+        TemplatableMCPServerManager::handle(&app).update(&mut app, |manager, ctx| {
+            for uuid in started_uuids {
+                manager.shutdown_server(uuid, ctx);
+                assert!(matches!(
+                    manager.get_server_state(uuid),
+                    Some(MCPServerState::NotRunning)
+                ));
+            }
+        });
     });
 }
 
