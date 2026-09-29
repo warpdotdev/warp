@@ -969,6 +969,27 @@ fn configured_and_profile_mcp_servers_wait_for_environment_setup() {
         let file_based_mcp = FileBasedMcpFixture::register(&mut app);
         file_based_mcp.complete_initial_global_scan(&mut app);
         let terminal_view = add_window_with_terminal(&mut app, None);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let session_id = loop {
+            let session_id = terminal_view.read(&app, |terminal, ctx| {
+                let session_id = terminal.active_block_session_id()?;
+                terminal.sessions_model().as_ref(ctx).get(session_id)?;
+                Some(session_id)
+            });
+            if let Some(session_id) = session_id {
+                break session_id;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "test terminal session should bootstrap"
+            );
+            Timer::after(Duration::from_millis(10)).await;
+        };
+        terminal_view.update(&mut app, |terminal, ctx| {
+            terminal.sessions_model().update(ctx, |sessions, _| {
+                sessions.register_session_for_test(SessionInfo::new_for_test().with_id(session_id));
+            });
+        });
         let (executed_command_tx, mut executed_command_rx) = mpsc::unbounded();
         app.update(|ctx| {
             ctx.subscribe_to_view(&terminal_view, move |_, event, _| {
