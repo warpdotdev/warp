@@ -652,14 +652,10 @@ impl ResponseStream {
                         .get(&LLMModelHost::GeminiEnterprise)
                         .is_some_and(|host| host.enabled)
                 });
-            if uses_geap
-                && let Some(binding) =
-                    crate::ai::geap_credentials::current_geap_policy_for_any_team(ctx)
-                        .mint_binding()
-            {
+            if uses_geap && let Some(binding) = params.geap_mint_binding.as_ref() {
                 let refresh_binding = binding.clone();
                 let refresh_rx = ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-                    manager.begin_expired_geap_refresh(&binding, ctx, |manager, waiter, ctx| {
+                    manager.begin_expired_geap_refresh(binding, ctx, |manager, waiter, ctx| {
                         crate::ai::geap_credentials::start_geap_refresh_for_waiter(
                             manager, waiter, ctx,
                         );
@@ -1016,7 +1012,8 @@ fn apply_geap_refresh_to_params(
     params: &mut api::RequestParams,
     fresh_credentials: Option<maa_api::request::settings::api_keys::GoogleCloudCredentials>,
 ) {
-    if let Some(credentials) = fresh_credentials
+    if params.geap_mint_binding.is_some()
+        && let Some(credentials) = fresh_credentials
         && let Some(keys) = params.api_keys.as_mut()
     {
         keys.google_cloud_credentials = Some(credentials);

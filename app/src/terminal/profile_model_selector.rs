@@ -49,13 +49,14 @@ use crate::ai::harness_availability::{
 use crate::ai::llms::{
     ByoKeySource, LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, LLMSpec,
     byo_key_source_for_model, dedupe_model_display_names, is_model_allowed_for_scope,
-    should_show_key_icon_for_model,
+    is_model_host_usable_for_scope, should_show_key_icon_for_model,
 };
 use crate::appearance::Appearance;
 use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::context_chips::display_chip::{udi_font_size, udi_icon_size};
 use crate::context_chips::spacing;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
+use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::settings_view::SettingsSection;
 use crate::terminal::TerminalModel;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
@@ -66,7 +67,9 @@ use crate::view_components::action_button::{
 };
 use crate::view_components::{FeaturePopup, NewFeaturePopupEvent, NewFeaturePopupLabel};
 use crate::workspace::WorkspaceAction;
-use crate::workspaces::user_workspaces::{ResolvedTeamScope, TeamContext, UserWorkspaces};
+use crate::workspaces::user_workspaces::{
+    ResolvedTeamScope, TeamContext, TeamScope, UserWorkspaces, UserWorkspacesEvent,
+};
 
 const MENU_WIDTH: f32 = 280.;
 const NEW_MODEL_CHOICES_POPUP_DELAY: Duration = Duration::from_millis(500);
@@ -498,6 +501,26 @@ impl ProfileModelSelector {
                 ctx.notify();
             },
         );
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
+            if matches!(
+                event,
+                AISettingsChangedEvent::AwsBedrockCredentialsEnabled { .. }
+                    | AISettingsChangedEvent::GeminiEnterpriseCredentialsEnabled { .. }
+            ) {
+                me.refresh_model_menu(ctx);
+                ctx.notify();
+            }
+        });
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            if matches!(
+                event,
+                UserWorkspacesEvent::TeamsChanged
+                    | UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess
+            ) {
+                me.refresh_model_menu(ctx);
+                ctx.notify();
+            }
+        });
 
         ctx.subscribe_to_model(
             &AIExecutionProfilesModel::handle(ctx),
@@ -1037,7 +1060,9 @@ impl ProfileModelSelector {
         let server_choices: Vec<&LLMInfo> = self
             .all_model_choices
             .iter()
-            .filter(|llm| !custom_ids.contains(&llm.id))
+            .filter(|llm| {
+                !custom_ids.contains(&llm.id) && is_model_host_usable_for_scope(llm, &scope, ctx)
+            })
             .collect();
         let custom_choices: Vec<&LLMInfo> = self
             .all_model_choices
@@ -1077,10 +1102,9 @@ impl ProfileModelSelector {
         let mut items = available_model_menu_items(
             auto_choices,
             |llm| {
-                let all_refs: Vec<_> = self.all_model_choices.iter().collect();
                 if is_auto(llm) {
                     ProfileModelSelectorAction::SelectAutoModel
-                } else if has_reasoning_variants(llm, &all_refs) {
+                } else if has_reasoning_variants(llm, &server_choices) {
                     ProfileModelSelectorAction::SelectReasoningModel(
                         llm.base_model_name().to_string(),
                     )
@@ -1133,10 +1157,9 @@ impl ProfileModelSelector {
             items.extend(available_model_menu_items(
                 other_choices,
                 |llm| {
-                    let all_refs: Vec<_> = self.all_model_choices.iter().collect();
                     if is_auto(llm) {
                         ProfileModelSelectorAction::SelectAutoModel
-                    } else if has_reasoning_variants(llm, &all_refs) {
+                    } else if has_reasoning_variants(llm, &server_choices) {
                         ProfileModelSelectorAction::SelectReasoningModel(
                             llm.base_model_name().to_string(),
                         )
@@ -1169,39 +1192,17 @@ impl ProfileModelSelector {
     ) {
         let scope =
             ResolvedTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
-        let llm_preferences = LLMPreferences::as_ref(ctx);
-        let active_llm =
-            llm_preferences.get_active_base_model(&scope, ctx, Some(self.terminal_view_id));
+        let active_llm = LLMPreferences::as_ref(ctx).get_active_base_model(
+            &scope,
+            ctx,
+            Some(self.terminal_view_id),
+        );
         let active_llm_id = active_llm.id.clone();
 
         let items: Vec<MenuItem<ProfileModelSelectorAction>> = match kind {
-            ModelSpecSidecarKind::Auto => llm_preferences
-                .get_base_llm_choices_for_agent_mode(&scope, ctx)
-                .filter(|llm| is_auto(llm))
-                .map(|llm| {
-                    let is_selected = llm.id == active_llm_id;
-
-                    let label = if llm.display_name.starts_with("auto (") {
-                        // Auto display names are formatted like "auto (<sub-variant>)"
-                        // We extract the sub-variant and capitalize it for use in the sidecar menu.
-                        let trimmed = llm
-                            .display_name
-                            .trim_start_matches("auto (")
-                            .trim_end_matches(")");
-
-                        // Capitalize the first letter of the auto sub-variant.
-                        let mut chars = trimmed.chars();
-                        chars
-                            .next()
-                            .map(|first| first.to_uppercase().chain(chars).collect())
-                            .unwrap_or_default()
-                    } else {
-                        llm.display_name.clone()
-                    };
-
-                    Self::make_sidecar_item(label, &llm.id, is_selected)
-                })
-                .collect(),
+            ModelSpecSidecarKind::Auto => {
+                Self::auto_sidecar_items(&self.all_model_choices, &active_llm_id, &scope, ctx)
+            }
             ModelSpecSidecarKind::Reasoning => {
                 // For Reasoning without a base_name, return empty (use refresh_model_spec_sidecar_for_model instead)
                 Vec::new()
@@ -1230,16 +1231,13 @@ impl ProfileModelSelector {
             llm_preferences.get_active_base_model(&scope, ctx, Some(self.terminal_view_id));
         let active_llm_id = active_llm.id.clone();
 
-        let items: Vec<MenuItem<ProfileModelSelectorAction>> = self
-            .all_model_choices
-            .iter()
-            .filter(|llm| llm.base_model_name() == base_name && llm.has_reasoning_level())
-            .map(|llm| {
-                let is_selected = llm.id == active_llm_id;
-                let label = llm.reasoning_level().unwrap_or_default();
-                Self::make_sidecar_item(label, &llm.id, is_selected)
-            })
-            .collect();
+        let items = Self::reasoning_sidecar_items(
+            &self.all_model_choices,
+            base_name,
+            &active_llm_id,
+            &scope,
+            ctx,
+        );
 
         let selected_index = Self::find_sidecar_selected_index(&items, &active_llm_id);
         self.model_spec_sidecar.active_kind = Some(ModelSpecSidecarKind::Reasoning);
@@ -1251,6 +1249,59 @@ impl ProfileModelSelector {
         });
 
         self.set_sidecar_hovered_info(Some(selected_index), ctx);
+    }
+
+    fn auto_sidecar_items(
+        choices: &[LLMInfo],
+        active_llm_id: &LLMId,
+        scope: &dyn TeamScope,
+        app: &AppContext,
+    ) -> Vec<MenuItem<ProfileModelSelectorAction>> {
+        choices
+            .iter()
+            .filter(|llm| is_auto(llm) && is_model_host_usable_for_scope(llm, scope, app))
+            .map(|llm| {
+                let label = if llm.display_name.starts_with("auto (") {
+                    let trimmed = llm
+                        .display_name
+                        .trim_start_matches("auto (")
+                        .trim_end_matches(")");
+
+                    let mut chars = trimmed.chars();
+                    chars
+                        .next()
+                        .map(|first| first.to_uppercase().chain(chars).collect())
+                        .unwrap_or_default()
+                } else {
+                    llm.display_name.clone()
+                };
+                Self::make_sidecar_item(label, &llm.id, llm.id == *active_llm_id)
+            })
+            .collect()
+    }
+
+    fn reasoning_sidecar_items(
+        choices: &[LLMInfo],
+        base_name: &str,
+        active_llm_id: &LLMId,
+        scope: &dyn TeamScope,
+        app: &AppContext,
+    ) -> Vec<MenuItem<ProfileModelSelectorAction>> {
+        choices
+            .iter()
+            .filter(|llm| {
+                llm.base_model_name() == base_name
+                    && llm.has_reasoning_level()
+                    && is_model_host_usable_for_scope(llm, scope, app)
+            })
+            .map(|llm| {
+                Self::make_sidecar_item(
+                    llm.reasoning_level().unwrap_or_default(),
+                    &llm.id,
+                    llm.id == *active_llm_id,
+                )
+            })
+            .collect()
     }
 
     fn make_sidecar_item(
@@ -1389,7 +1440,9 @@ impl ProfileModelSelector {
                             let llm_prefs = LLMPreferences::as_ref(ctx);
                             llm_prefs
                                 .get_base_llm_choices_for_agent_mode(&scope, ctx)
-                                .find(|llm| is_auto(llm))
+                                .find(|llm| {
+                                    is_auto(llm) && is_model_host_usable_for_scope(llm, &scope, ctx)
+                                })
                                 .cloned()
                         }
                         ProfileModelSelectorAction::SelectReasoningModel(base_name) => {
@@ -1397,7 +1450,9 @@ impl ProfileModelSelector {
                             self.all_model_choices
                                 .iter()
                                 .find(|llm| {
-                                    llm.base_model_name() == base_name && llm.has_reasoning_level()
+                                    llm.base_model_name() == base_name
+                                        && llm.has_reasoning_level()
+                                        && is_model_host_usable_for_scope(llm, &scope, ctx)
                                 })
                                 .cloned()
                         }
@@ -1416,7 +1471,7 @@ impl ProfileModelSelector {
 
         let shows_sidecar = llm_info
             .as_ref()
-            .is_some_and(|info| is_auto(info) || self.has_multiple_reasoning_variants(info));
+            .is_some_and(|info| is_auto(info) || self.has_multiple_reasoning_variants(info, ctx));
         let shows_side_panel =
             shows_sidecar || llm_info.as_ref().is_some_and(|info| info.spec.is_some());
 
@@ -1451,7 +1506,7 @@ impl ProfileModelSelector {
                     .dropdown
                     .read(ctx, |menu, _| menu.selected_index());
                 self.set_sidecar_hovered_info(auto_index, ctx);
-            } else if self.has_multiple_reasoning_variants(info) {
+            } else if self.has_multiple_reasoning_variants(info, ctx) {
                 // If hovering a model with multiple reasoning variants, refresh reasoning menu
                 self.refresh_model_spec_sidecar_for_model(info.base_model_name(), ctx);
             }
@@ -1464,8 +1519,13 @@ impl ProfileModelSelector {
             self.get_selected_llm_info(MenuType::Sidecar, index, ctx);
     }
 
-    fn has_multiple_reasoning_variants(&self, llm: &LLMInfo) -> bool {
-        let all_refs: Vec<_> = self.all_model_choices.iter().collect();
+    fn has_multiple_reasoning_variants(&self, llm: &LLMInfo, app: &AppContext) -> bool {
+        let scope = self.team_scope(app);
+        let all_refs: Vec<_> = self
+            .all_model_choices
+            .iter()
+            .filter(|other| is_model_host_usable_for_scope(other, &scope, app))
+            .collect();
         has_reasoning_variants(llm, &all_refs)
     }
 
@@ -2365,7 +2425,7 @@ impl View for ProfileModelSelector {
                 // Decide whether to show a sidecar purely from the hovered item
                 let sidecar_kind = if is_auto(info) {
                     Some(ModelSpecSidecarKind::Auto)
-                } else if self.has_multiple_reasoning_variants(info) {
+                } else if self.has_multiple_reasoning_variants(info, app) {
                     Some(ModelSpecSidecarKind::Reasoning)
                 } else {
                     None
@@ -2458,3 +2518,7 @@ impl View for ProfileModelSelector {
 impl Entity for ProfileModelSelector {
     type Event = ProfileModelSelectorEvent;
 }
+
+#[cfg(test)]
+#[path = "profile_model_selector_tests.rs"]
+mod tests;

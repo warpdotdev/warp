@@ -877,18 +877,29 @@ impl ExecutionProfileEditorView {
 
         let workspace = UserWorkspaces::handle(ctx);
         ctx.subscribe_to_model(&workspace, |me, _, event, ctx| {
-            if let UserWorkspacesEvent::TeamsChanged = event {
+            if matches!(
+                event,
+                UserWorkspacesEvent::TeamsChanged
+                    | UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess
+            ) {
                 Self::update_all_editor_interaction_states(me, ctx);
+                me.refresh_profile_state(ctx);
                 me.update_mouse_state_handles(ctx);
                 ctx.notify();
             }
         });
-        ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
-            if let AISettingsChangedEvent::IsAnyAIEnabled { .. } = event {
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| match event {
+            AISettingsChangedEvent::IsAnyAIEnabled { .. } => {
                 Self::update_all_editor_interaction_states(me, ctx);
                 me.sync_context_window_editor(ctx, true);
                 ctx.notify();
             }
+            AISettingsChangedEvent::AwsBedrockCredentialsEnabled { .. }
+            | AISettingsChangedEvent::GeminiEnterpriseCredentialsEnabled { .. } => {
+                me.refresh_profile_state(ctx);
+                ctx.notify();
+            }
+            _ => {}
         });
 
         Self::update_all_editor_interaction_states(&view, ctx);

@@ -12,7 +12,7 @@ use warpui::{Action, AppContext, Element, SingletonEntity as _};
 use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::llms::{
     DisableReason, LLMId, LLMInfo, LLMPreferences, ModelIconFlags, is_model_allowed_for_scope,
-    model_leading_icon, should_show_bedrock_icon_for_model,
+    is_model_host_usable_for_scope, model_leading_icon, should_show_bedrock_icon_for_model,
     should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
 };
 use crate::menu::{MenuItem, MenuItemFields, MenuTooltipPosition};
@@ -207,6 +207,7 @@ pub fn available_model_menu_items<A: Action + Clone>(
     choices
         .into_iter()
         .filter(|llm| is_model_allowed_for_scope(prefs, llm, scope, app))
+        .filter(|llm| is_model_host_usable_for_scope(llm, scope, app))
         .map(|llm| {
             make_item_fields(
                 llm,

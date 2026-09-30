@@ -10,6 +10,8 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 pub use ai::agent::convert::ConvertToAPITypeError;
 use ai::api_keys::ApiKeyManager;
+#[cfg(not(target_family = "wasm"))]
+use ai::api_keys::GeapMintBinding;
 pub(crate) use convert_from::convert_user_query_mode;
 pub use convert_from::{
     ConversionParams, ConvertAPIMessageToClientOutputMessage, MaybeAIAgentOutputMessage,
@@ -31,7 +33,10 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::{BlocklistAIPermissions, RequestInput, SessionContext};
 use crate::ai::execution_profiles::AIExecutionProfileAppExt;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
-use crate::ai::llms::{LLMId, LLMPreferences};
+use crate::ai::llms::{
+    LLMId, LLMPreferences, ModelsByFeature, is_model_host_usable_for_scope,
+    should_attach_aws_bedrock_credentials,
+};
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::send_telemetry_from_app_ctx;
 use crate::server::server_api::AIApiError;
@@ -161,6 +166,9 @@ pub struct RequestParams {
     pub member_byo_credentials_allowed: bool,
     /// User-provided API keys for AI providers (BYO API Key).
     pub api_keys: Option<warp_multi_agent_api::request::settings::ApiKeys>,
+    /// A refresh must retain this request's team policy; unrelated keys do not grant GEAP access.
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) geap_mint_binding: Option<GeapMintBinding>,
     /// User-provided custom model providers (BYOK endpoints).
     pub custom_model_providers:
         Option<warp_multi_agent_api::request::settings::CustomModelProviders>,
@@ -228,6 +236,8 @@ impl RequestParams {
             should_redact_secrets: false,
             member_byo_credentials_allowed: false,
             api_keys: None,
+            #[cfg(not(target_family = "wasm"))]
+            geap_mint_binding: None,
             custom_model_providers: None,
             custom_model_routers: None,
             allow_use_of_warp_credits: false,
@@ -252,7 +262,17 @@ impl RequestParams {
         metadata: Option<RequestMetadata>,
         scope: &impl TeamScope,
         app: &AppContext,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
+        let models = UserWorkspaces::as_ref(app).feature_model_choice_for_scope(scope);
+        validate_model_hosts_for_request(
+            models,
+            &request_input.model_id,
+            &request_input.coding_model_id,
+            &request_input.cli_agent_model_id,
+            &request_input.computer_use_model_id,
+            scope,
+            app,
+        )?;
         let ai_settings = AISettings::as_ref(app);
         let is_memory_enabled = ai_settings.is_memory_enabled(app);
         let warp_drive_context_enabled = ai_settings.is_warp_drive_context_enabled(app);
@@ -343,8 +363,8 @@ impl RequestParams {
         let geap_binding: Option<::ai::api_keys::GeapMintBinding> = None;
         let api_keys = api_key_manager.api_keys_for_request(
             is_byo_enabled,
-            user_workspaces.is_aws_bedrock_credentials_enabled(scope, app),
-            geap_binding,
+            should_attach_aws_bedrock_credentials(scope, app),
+            geap_binding.clone(),
         );
         let is_custom_inference_enabled = user_workspaces.is_byo_endpoint_enabled(app)
             && user_workspaces.are_member_byo_endpoints_allowed(scope);
@@ -418,7 +438,7 @@ impl RequestParams {
             .data()
             .context_window_limit_for_request(app);
 
-        Self {
+        Ok(Self {
             input: request_input.all_inputs().cloned().collect(),
             conversation_token: conversation.server_conversation_token,
             forked_from_conversation_token: conversation.forked_from_conversation_token,
@@ -439,6 +459,8 @@ impl RequestParams {
             should_redact_secrets,
             member_byo_credentials_allowed,
             api_keys,
+            #[cfg(not(target_family = "wasm"))]
+            geap_mint_binding: geap_binding,
             custom_model_providers,
             custom_model_routers,
             allow_use_of_warp_credits,
@@ -452,8 +474,44 @@ impl RequestParams {
             supported_tools_override: request_input.supported_tools_override.clone(),
             parent_agent_id: None,
             agent_name: None,
+        })
+    }
+}
+
+pub(crate) fn validate_model_hosts_for_request(
+    models: &ModelsByFeature,
+    base: &LLMId,
+    coding: &LLMId,
+    cli_agent: &LLMId,
+    computer_use: &LLMId,
+    scope: &dyn TeamScope,
+    app: &AppContext,
+) -> anyhow::Result<()> {
+    for (id, info) in [
+        (base, models.agent_mode.info_for_id(base)),
+        (coding, models.coding.info_for_id(coding)),
+        (
+            cli_agent,
+            models
+                .cli_agent
+                .as_ref()
+                .and_then(|available| available.info_for_id(cli_agent)),
+        ),
+        (
+            computer_use,
+            models
+                .computer_use
+                .as_ref()
+                .and_then(|available| available.info_for_id(computer_use)),
+        ),
+    ] {
+        if info.is_some_and(|llm| !is_model_host_usable_for_scope(llm, scope, app)) {
+            anyhow::bail!(
+                "Model '{id}' is unavailable because its enabled hosts are turned off in your AI settings."
+            );
         }
     }
+    Ok(())
 }
 
 /// Reports that computer use was enabled for a run but is unavailable on this host, at most once

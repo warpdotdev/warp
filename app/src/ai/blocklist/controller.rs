@@ -2553,7 +2553,7 @@ impl BlocklistAIController {
             metadata,
             &scope,
             ctx,
-        );
+        )?;
 
         Ok((conversation_id, request_params))
     }
@@ -2794,7 +2794,7 @@ impl BlocklistAIController {
             query_metadata,
             &scope,
             ctx,
-        );
+        )?;
         request_params.parent_agent_id = parent_agent_id;
         request_params.agent_name = agent_name;
 
