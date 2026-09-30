@@ -16,6 +16,9 @@ use thiserror::Error;
 pub use user_uid::{TEST_USER_EMAIL, TEST_USER_UID, UserUid};
 use warp_errors::{AnyhowErrorExt, ErrorExt, register_error};
 use warp_graphql::client::Operation;
+use warp_graphql::mutations::claim_factories_launch_intro::{
+    ClaimFactoriesLaunchIntro, ClaimFactoriesLaunchIntroResult, ClaimFactoriesLaunchIntroVariables,
+};
 use warp_graphql::mutations::create_anonymous_user::{
     AnonymousUserType, CreateAnonymousUser, CreateAnonymousUserResult, CreateAnonymousUserVariables,
 };
@@ -139,6 +142,8 @@ pub trait AuthClient: Send + Sync {
     async fn update_user_settings(&self, input: UpdateUserSettingsInput) -> Result<()>;
 
     async fn set_user_is_onboarded(&self) -> Result<bool>;
+
+    async fn claim_factories_launch_intro(&self) -> Result<bool>;
 
     /// Requests a device authorization code from the server for headless CLI or SDK authentication.
     async fn request_device_code(
@@ -398,6 +403,26 @@ impl AuthClient for AuthClientImpl {
                 warp_graphql::client::get_user_facing_error_message(error)
             )),
             SetUserIsOnboardedResult::Unknown => Err(anyhow!("failed to set user is onboarded")),
+        }
+    }
+
+    async fn claim_factories_launch_intro(&self) -> Result<bool> {
+        let operation = ClaimFactoriesLaunchIntro::build(ClaimFactoriesLaunchIntroVariables {
+            request_context: warp_graphql::client::get_request_context(),
+        });
+        let result = send_graphql_request(self.base_client.as_ref(), operation, None)
+            .await?
+            .claim_factories_launch_intro;
+        match result {
+            ClaimFactoriesLaunchIntroResult::ClaimFactoriesLaunchIntroOutput(output) => {
+                Ok(output.claimed)
+            }
+            ClaimFactoriesLaunchIntroResult::UserFacingError(error) => Err(anyhow!(
+                warp_graphql::client::get_user_facing_error_message(error)
+            )),
+            ClaimFactoriesLaunchIntroResult::Unknown => {
+                Err(anyhow!("failed to claim Factories launch intro"))
+            }
         }
     }
 

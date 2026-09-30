@@ -20,6 +20,8 @@ use crate::features::FeatureFlag;
 mod convert;
 mod model;
 
+#[cfg(test)]
+pub use model::TestModel;
 pub use model::{Event as ServerExperimentsEvent, ServerExperiments};
 
 /// The known server-side experiments.
@@ -46,6 +48,8 @@ pub enum ServerExperiment {
     OzMultiHarnessExperiment,
     MacosRunnersControl,
     MacosRunnersExperiment,
+    FactoriesLaunchModalControl,
+    FactoriesLaunchModalExperiment,
     /// A test-only experiment.
     /// Does not correspond to a real server-side experiment.
     #[cfg(test)]
@@ -133,6 +137,12 @@ impl ServerExperiment {
             }
             Self::MacosRunnersControl | Self::MacosRunnersExperiment => {
                 // Runner availability is gated directly by the experiment arm.
+            }
+            Self::FactoriesLaunchModalControl => {
+                FeatureFlag::FactoriesLaunchModal.set_enabled(false);
+            }
+            Self::FactoriesLaunchModalExperiment => {
+                FeatureFlag::FactoriesLaunchModal.set_enabled(true);
             }
             #[cfg(test)]
             Self::TestExperiment => {
