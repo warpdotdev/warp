@@ -14,13 +14,16 @@ use super::{
     SETTINGS_FILE_LAST_SYNCED_HASH_KEY, initialize_cloud_preferences_syncer,
 };
 use crate::ASSETS;
+use crate::auth::AuthStateProvider;
 use crate::auth::auth_state::AuthState;
+use crate::auth::user::{PrincipalType, User};
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
+use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{
-    BulkCreateCloudObjectResult, CreatedCloudObject, GenericStringObjectFormat,
-    GenericStringObjectUniqueKey, JsonObjectType, ObjectDeleteResult, ObjectIdType, Owner,
-    Revision, RevisionAndLastEditor, ServerMetadata, ServerObject, ServerPermissions,
-    ServerPreference, UniquePer, UpdateCloudObjectResult,
+    BulkCreateCloudObjectResult, CloudObjectSyncStatus, CreatedCloudObject,
+    GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType, ObjectDeleteResult,
+    ObjectIdType, Owner, Revision, RevisionAndLastEditor, ServerMetadata, ServerObject,
+    ServerPermissions, ServerPreference, UniquePer, UpdateCloudObjectResult,
 };
 use crate::server::cloud_objects::fake_object_client::FakeObjectClient;
 use crate::server::cloud_objects::test_utils::{
@@ -146,6 +149,15 @@ fn enable_settings_sync(app: &mut App) {
             let _ = prefs_settings.settings_sync_enabled.set_value(true, ctx);
         });
     });
+}
+
+fn set_service_account(app: &mut App) -> Arc<AuthState> {
+    let auth_state = app.read(|ctx| AuthStateProvider::as_ref(ctx).get().clone());
+    let mut user = User::test();
+    user.is_onboarded = false;
+    user.principal_type = PrincipalType::ServiceAccount;
+    auth_state.set_user(Some(user));
+    auth_state
 }
 
 fn initial_load_response_with_cloud_settings(
@@ -462,6 +474,116 @@ fn test_sync_local_pref_to_cloud_after_initial_sync() {
     })
 }
 
+#[test]
+fn service_account_keeps_cloud_preferences_syncer_inert() {
+    App::test(ASSETS, |mut app| async move {
+        initialize_settings(&mut app);
+        let server_api = mock_object_client_with_base_expectations();
+        let UpdateManagerStruct { update_manager, .. } =
+            create_update_manager_struct(&mut app, Arc::new(server_api));
+        let auth_state = set_service_account(&mut app);
+
+        let syncer = app.add_singleton_model(|ctx| {
+            CloudPreferencesSyncer::new_for_test(
+                ctx,
+                Arc::new(TestClientIdProvider::new(Vec::new())),
+            )
+        });
+        TestSettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .all_platforms_always_sync_cloud_setting
+                .set_value(true, ctx)
+                .expect("setting should update");
+        });
+        syncer.update(&mut app, |syncer, ctx| {
+            syncer.handle_user_fetched(auth_state, ctx);
+            syncer.sync(ForceCloudToMatchLocal::No, ctx);
+            syncer.maybe_sync_local_prefs_to_cloud(
+                vec![AllPlatformsAlwaysSync::storage_key().to_owned()],
+                ctx,
+            );
+        });
+        update_manager.update(&mut app, |update_manager, ctx| {
+            update_manager.mock_initial_load(InitialLoadResponse::default(), ctx);
+        });
+
+        warpui::r#async::Timer::after(Duration::from_millis(100)).await;
+
+        app.read(|ctx| {
+            assert!(!*CloudPreferencesSettings::as_ref(ctx).settings_sync_enabled);
+            assert!(!CloudPreferencesSyncer::as_ref(ctx).has_completed_initial_load());
+            assert!(SyncQueue::as_ref(ctx).queue().is_empty());
+            assert!(SyncQueue::as_ref(ctx).spawned_futures().is_empty());
+        });
+    })
+}
+
+#[test]
+fn service_account_does_not_retry_failed_preferences() {
+    App::test(ASSETS, |mut app| async move {
+        initialize_settings(&mut app);
+        let server_api = mock_object_client_with_base_expectations();
+        let UpdateManagerStruct { update_manager, .. } =
+            create_update_manager_struct(&mut app, Arc::new(server_api));
+        set_service_account(&mut app);
+        let preference_id: GenericStringObjectId = 123.into();
+        let sync_id = SyncId::ServerId(preference_id.into());
+
+        update_manager.update(&mut app, |update_manager, ctx| {
+            update_manager.mock_initial_load(
+                initial_load_response_with_cloud_settings(vec![SettingToLoad {
+                    id: preference_id,
+                    serialized_preference:
+                        "{\"storage_key\":\"AllPlatforms\",\"value\":true,\"platform\":\"Global\"}"
+                            .to_owned(),
+                }]),
+                ctx,
+            );
+        });
+        CloudModel::handle(&app).update(&mut app, |cloud_model, _| {
+            cloud_model
+                .get_mut_by_uid(&sync_id.uid())
+                .expect("preference should exist")
+                .set_pending_content_changes_status(CloudObjectSyncStatus::Errored);
+        });
+
+        let syncer = app.add_singleton_model(|ctx| {
+            CloudPreferencesSyncer::new_for_test(
+                ctx,
+                Arc::new(TestClientIdProvider::new(Vec::new())),
+            )
+        });
+        syncer.update(&mut app, |syncer, ctx| {
+            syncer.retry_failed_settings_once(ctx);
+        });
+
+        app.read(|ctx| {
+            let preference = CloudModel::as_ref(ctx)
+                .get_by_uid(&sync_id.uid())
+                .expect("preference should exist");
+            assert!(preference.metadata().is_errored());
+            assert!(SyncQueue::as_ref(ctx).queue().is_empty());
+        });
+    })
+}
+
+#[test]
+fn service_account_stops_retry_loop_started_before_authentication() {
+    App::test(ASSETS, |mut app| async move {
+        initialize_settings(&mut app);
+        let server_api = mock_object_client_with_base_expectations();
+        let _ = create_update_manager_struct(&mut app, Arc::new(server_api));
+
+        let syncer = app.add_singleton_model(|ctx| {
+            CloudPreferencesSyncer::new(false, std::path::PathBuf::new(), true, ctx)
+        });
+        set_service_account(&mut app);
+
+        syncer.update(&mut app, |syncer, ctx| {
+            assert!(!syncer.handle_retry_timer(ctx));
+        });
+    })
+}
 fn run_initial_sync_test(is_onboarded: bool) {
     App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);

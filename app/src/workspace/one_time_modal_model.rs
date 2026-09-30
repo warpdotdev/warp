@@ -72,11 +72,17 @@ pub struct OneTimeModalModel {
 }
 
 impl OneTimeModalModel {
+    fn should_skip_modal_checks(ctx: &ModelContext<Self>) -> bool {
+        AuthStateProvider::as_ref(ctx).get().is_service_account()
+    }
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         // Subscribe to UserWorkspaces to detect when sunsetted_to_build_ts changes
         ctx.subscribe_to_model(
             &crate::workspaces::user_workspaces::UserWorkspaces::handle(ctx),
             |me, _, event, ctx| {
+                if Self::should_skip_modal_checks(ctx) {
+                    return;
+                }
                 use crate::workspaces::user_workspaces::UserWorkspacesEvent;
                 match event {
                     UserWorkspacesEvent::SunsettedToBuildDataUpdated => {
@@ -95,6 +101,9 @@ impl OneTimeModalModel {
         // The base-credit allowance that gates the free-AI-removal notice loads
         // asynchronously, so re-evaluate the notice whenever request usage updates.
         ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |me, _, event, ctx| {
+            if Self::should_skip_modal_checks(ctx) {
+                return;
+            }
             if let AIRequestUsageModelEvent::RequestUsageUpdated = event {
                 me.maybe_recheck_free_ai_removal_modal(ctx);
             }
@@ -107,6 +116,9 @@ impl OneTimeModalModel {
             };
 
             let auth_state = crate::auth::AuthStateProvider::as_ref(ctx).get().clone();
+            if auth_state.is_service_account() {
+                return;
+            }
             let is_existing_user = auth_state.is_onboarded().unwrap_or_default();
             if is_existing_user {
                 // Settings modals settings are synced to the cloud, not respecting the user's sync setting, so they
@@ -116,6 +128,9 @@ impl OneTimeModalModel {
                     move |me, _, event, ctx| {
                         if let CloudPreferencesSyncerEvent::InitialLoadCompleted = event {
                             ctx.unsubscribe_from_model(&CloudPreferencesSyncer::handle(ctx));
+                            if Self::should_skip_modal_checks(ctx) {
+                                return;
+                            }
                             me.has_completed_initial_modal_checks = true;
                             me.check_and_trigger_all_modals(ctx);
                             maybe_ensure_handoff_chip_in_toolbar(ctx);
@@ -244,6 +259,9 @@ impl OneTimeModalModel {
     }
 
     fn resume_modal_checks_after_feature_intro(&mut self, ctx: &mut ModelContext<Self>) {
+        if Self::should_skip_modal_checks(ctx) {
+            return;
+        }
         if self.check_and_trigger_free_ai_removal_modal(ctx) {
             return;
         }
@@ -302,6 +320,9 @@ impl OneTimeModalModel {
         &mut self,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
+        if Self::should_skip_modal_checks(ctx) {
+            return false;
+        }
         let ai_settings = AISettings::as_ref(ctx);
         if *ai_settings.did_show_auto_handoff_sleep_modal {
             return false;
@@ -461,6 +482,9 @@ impl OneTimeModalModel {
     }
 
     fn check_and_trigger_all_modals(&mut self, ctx: &mut ModelContext<Self>) {
+        if Self::should_skip_modal_checks(ctx) {
+            return;
+        }
         // Never show one-time modals on WASM.
         if cfg!(target_family = "wasm") {
             return;
@@ -539,7 +563,8 @@ impl OneTimeModalModel {
     /// Re-evaluates the free-AI-removal notice outside the initial startup check, e.g.
     /// when workspace billing data arrives after startup.
     fn maybe_recheck_free_ai_removal_modal(&mut self, ctx: &mut ModelContext<Self>) {
-        if !self.has_completed_initial_modal_checks
+        if Self::should_skip_modal_checks(ctx)
+            || !self.has_completed_initial_modal_checks
             || self.is_any_modal_open()
             || self.active_feature_intro.is_some()
         {
@@ -549,6 +574,9 @@ impl OneTimeModalModel {
     }
 
     fn check_and_trigger_free_ai_removal_modal(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        if Self::should_skip_modal_checks(ctx) {
+            return false;
+        }
         // Never show one-time modals on WASM. `check_and_trigger_all_modals` already
         // guards its own call, but `maybe_recheck_free_ai_removal_modal` and
         // `resume_modal_checks_after_feature_intro` call this directly (e.g. from an
@@ -626,6 +654,9 @@ impl OneTimeModalModel {
     }
 
     fn check_and_trigger_hoa_onboarding(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        if Self::should_skip_modal_checks(ctx) {
+            return false;
+        }
         if !FeatureFlag::HOAOnboardingFlow.is_enabled() {
             return false;
         }
@@ -646,6 +677,9 @@ impl OneTimeModalModel {
     }
 
     fn check_and_trigger_oz_launch_modal(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        if Self::should_skip_modal_checks(ctx) {
+            return false;
+        }
         // Only show if the feature flag is enabled.
         if !FeatureFlag::OzLaunchModal.is_enabled() {
             return false;
@@ -674,6 +708,9 @@ impl OneTimeModalModel {
     }
 
     fn check_and_trigger_openwarp_launch_modal(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        if Self::should_skip_modal_checks(ctx) {
+            return false;
+        }
         // Only show if the feature flag is enabled.
         if !FeatureFlag::OpenWarpLaunchModal.is_enabled() {
             return false;
@@ -706,6 +743,9 @@ impl OneTimeModalModel {
         &mut self,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
+        if Self::should_skip_modal_checks(ctx) {
+            return false;
+        }
         if !FeatureFlag::OrchestrationLaunchModal.is_enabled() {
             return false;
         }
@@ -730,6 +770,9 @@ impl OneTimeModalModel {
     }
 
     fn check_and_trigger_agent_cli_launch_modal(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        if Self::should_skip_modal_checks(ctx) {
+            return false;
+        }
         if !FeatureFlag::AgentCliLaunchModal.is_enabled() {
             return false;
         }
@@ -754,6 +797,9 @@ impl OneTimeModalModel {
     }
 
     fn check_and_trigger_feature_intro_modal(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        if Self::should_skip_modal_checks(ctx) {
+            return false;
+        }
         if !AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
             return false;
         }
@@ -810,6 +856,9 @@ impl OneTimeModalModel {
         ctx: &mut ModelContext<Self>,
     ) -> bool {
         use crate::workspaces::user_workspaces::UserWorkspaces;
+        if Self::should_skip_modal_checks(ctx) {
+            return false;
+        }
 
         // Check if already dismissed
         let general_settings = GeneralSettings::as_ref(ctx);

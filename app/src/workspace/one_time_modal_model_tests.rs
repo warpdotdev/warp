@@ -3,11 +3,14 @@ use warp_core::features::FeatureFlag;
 use warpui::{App, SingletonEntity};
 
 use super::{
-    AISettings, AuthManager, AuthManagerEvent, AuthStateProvider, CloudPreferencesSyncer,
-    FEATURE_INTROS, FeatureIntroId, FreeAiRemovalModalDecision, OneTimeModalModel,
+    AIRequestUsageModel, AIRequestUsageModelEvent, AISettings, AuthManager, AuthManagerEvent,
+    AuthStateProvider, CloudPreferencesSyncer, CloudPreferencesSyncerEvent, FEATURE_INTROS,
+    FeatureIntroId, FreeAiRemovalModalDecision, GeneralSettings, OneTimeModalModel,
     free_ai_removal_modal_decision, hoa_onboarding,
 };
+use crate::auth::user::{PrincipalType, User};
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::CustomerType;
 
 #[test]
@@ -433,6 +436,68 @@ fn agent_cli_launch_modal_skipped_when_flag_disabled() {
             });
         });
     });
+}
+
+#[test]
+fn service_account_does_not_update_one_time_modal_bookkeeping() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(|ctx| {
+            CloudPreferencesSyncer::new(false, std::path::PathBuf::new(), true, ctx)
+        });
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |_, ctx| {
+            let _model = OneTimeModalModel::handle(ctx);
+            AuthStateProvider::as_ref(ctx).get().set_is_onboarded(true);
+            AuthManager::handle(ctx).update(ctx, |_, ctx| {
+                ctx.emit(AuthManagerEvent::AuthComplete);
+            });
+        });
+        let mut user = User::test();
+        user.is_onboarded = true;
+        user.principal_type = PrincipalType::ServiceAccount;
+        app.update(|ctx| {
+            AuthStateProvider::as_ref(ctx).get().set_user(Some(user));
+            UserWorkspaces::handle(ctx).update(ctx, |_, ctx| {
+                ctx.emit(UserWorkspacesEvent::SunsettedToBuildDataUpdated);
+                ctx.emit(UserWorkspacesEvent::TeamsChanged);
+            });
+            AIRequestUsageModel::handle(ctx).update(ctx, |_, ctx| {
+                ctx.emit(AIRequestUsageModelEvent::RequestUsageUpdated);
+            });
+            CloudPreferencesSyncer::handle(ctx).update(ctx, |_, ctx| {
+                ctx.emit(CloudPreferencesSyncerEvent::InitialLoadCompleted);
+            });
+        });
+
+        terminal.update(&mut app, |_, ctx| {
+            OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                assert!(!model.check_and_trigger_auto_handoff_sleep_modal(ctx));
+                assert!(!model.check_and_trigger_build_plan_migration_modal(ctx));
+                model.resume_modal_checks_after_feature_intro(ctx);
+                assert!(!model.has_completed_initial_modal_checks);
+                assert!(!model.has_fetched_workspaces);
+                assert!(!model.is_any_modal_open());
+            });
+        });
+
+        app.read(|ctx| {
+            let ai_settings = AISettings::as_ref(ctx);
+            assert!(!*ai_settings.did_check_to_trigger_oz_launch_modal);
+            assert!(!*ai_settings.did_check_to_trigger_orchestration_launch_modal);
+            assert!(!*ai_settings.did_check_to_trigger_agent_cli_launch_modal);
+            assert!(!*ai_settings.did_check_to_trigger_free_ai_removal_modal);
+            assert!(
+                FEATURE_INTROS
+                    .iter()
+                    .all(|intro| !ai_settings.is_feature_intro_seen(intro.id.as_key()))
+            );
+            assert!(!*GeneralSettings::as_ref(ctx).did_check_to_trigger_openwarp_launch_modal);
+            assert!(!*ai_settings.did_show_auto_handoff_sleep_modal);
+            assert!(!hoa_onboarding::has_completed_hoa_onboarding(ctx));
+        });
+    })
 }
 
 #[test]

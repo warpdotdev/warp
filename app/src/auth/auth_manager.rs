@@ -412,6 +412,7 @@ impl AuthManager {
                 } = user_output.into();
 
                 self.complete_authentication(user.clone(), credentials, ctx);
+                let is_service_account = self.auth_state.is_service_account();
 
                 self.set_needs_reauth(false, ctx);
 
@@ -465,7 +466,7 @@ impl AuthManager {
                     index_manager_updater.on_user_changed(ctx);
                 });
 
-                if !user.is_user_anonymous() {
+                if !is_service_account && !user.is_user_anonymous() {
                     GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
                         report_if_error!(
                             settings.did_non_anonymous_user_log_in.set_value(true, ctx)
@@ -474,7 +475,7 @@ impl AuthManager {
                 }
 
                 // Force refresh for shared sessions if user may have changed.
-                if !from_refresh {
+                if !is_service_account && !from_refresh {
                     SharedSessionManager::handle(ctx).update(ctx, |manager, ctx| {
                         manager.stop_all_shared_sessions(ctx);
                         manager.rejoin_all_shared_sessions(ctx);
@@ -502,13 +503,12 @@ impl AuthManager {
                     );
                 };
 
-                // Fetch the user's privacy settings from the server if any or update the server settings.
                 let privacy_settings_handle = PrivacySettings::handle(ctx);
-                let privacy_settings_snapshot =
-                    privacy_settings_handle.as_ref(ctx).get_snapshot(ctx);
-                ctx.update_model(&privacy_settings_handle, |privacy_settings, ctx| {
-                    privacy_settings.fetch_or_update_settings(ctx);
-                });
+                if !is_service_account {
+                    ctx.update_model(&privacy_settings_handle, |privacy_settings, ctx| {
+                        privacy_settings.fetch_or_update_settings(ctx);
+                    });
+                }
 
                 // Now that the user is logged in, do the daily version check.
                 if FeatureFlag::Autoupdate.is_enabled() {
@@ -517,44 +517,48 @@ impl AuthManager {
                     });
                 }
 
-                let server_api = self.server_api.clone();
-                let user_id = self.auth_state.user_id().unwrap_or_default();
-                let anonymous_id = self.auth_state.anonymous_id();
-                let _ = ctx.spawn(
-                    // Synchronously add the identify and login event to the telemetry event queue and
-                    // then flush the queue to ensure the events get to Rudderstack. We need to do this
-                    // one-off because the login event happens only once for the user and we don't want
-                    // to drop the event if the user quits the app before the next flush of the queue.
-                    // TODO(alokedesai): Investigate a more robust way of handling events
-                    // that don't get flushed to Rudderstack outside of this event specifically.
-                    async move {
-                        warpui::telemetry::record_identify_user_event(
-                            user_id.as_string(),
-                            anonymous_id.clone(),
-                            warpui::time::get_current_time(),
-                        );
-                        warpui::telemetry::record_event(
-                            Some(user_id.as_string()),
-                            anonymous_id,
-                            TelemetryEvent::Login.name().into(),
-                            TelemetryEvent::Login.payload(),
-                            TelemetryEvent::Login.contains_ugc(),
-                            warpui::time::get_current_time(),
-                        );
+                if !is_service_account {
+                    let privacy_settings_snapshot =
+                        privacy_settings_handle.as_ref(ctx).get_snapshot(ctx);
+                    let server_api = self.server_api.clone();
+                    let user_id = self.auth_state.user_id().unwrap_or_default();
+                    let anonymous_id = self.auth_state.anonymous_id();
+                    let _ = ctx.spawn(
+                        // Synchronously add the identify and login event to the telemetry event queue and
+                        // then flush the queue to ensure the events get to Rudderstack. We need to do this
+                        // one-off because the login event happens only once for the user and we don't want
+                        // to drop the event if the user quits the app before the next flush of the queue.
+                        // TODO(alokedesai): Investigate a more robust way of handling events
+                        // that don't get flushed to Rudderstack outside of this event specifically.
+                        async move {
+                            warpui::telemetry::record_identify_user_event(
+                                user_id.as_string(),
+                                anonymous_id.clone(),
+                                warpui::time::get_current_time(),
+                            );
+                            warpui::telemetry::record_event(
+                                Some(user_id.as_string()),
+                                anonymous_id,
+                                TelemetryEvent::Login.name().into(),
+                                TelemetryEvent::Login.payload(),
+                                TelemetryEvent::Login.contains_ugc(),
+                                warpui::time::get_current_time(),
+                            );
 
-                        // Note that this snapshot might get overwritten to disabled after the server fetch.
-                        // However, it is still fine to flush to Rudderstack here as the login event is low-risk
-                        // and it is better to err on the side of over-reporting than under-reporting.
-                        if let Err(e) = server_api
-                            .flush_telemetry_events(privacy_settings_snapshot)
-                            .await
-                        {
-                            log::info!("Failed to flush events from Telemetry queue: {e}");
-                        }
-                        server_api.notify_login().await;
-                    },
-                    |_, _, _| {},
-                );
+                            // Note that this snapshot might get overwritten to disabled after the server fetch.
+                            // However, it is still fine to flush to Rudderstack here as the login event is low-risk
+                            // and it is better to err on the side of over-reporting than under-reporting.
+                            if let Err(e) = server_api
+                                .flush_telemetry_events(privacy_settings_snapshot)
+                                .await
+                            {
+                                log::info!("Failed to flush events from Telemetry queue: {e}");
+                            }
+                            server_api.notify_login().await;
+                        },
+                        |_, _, _| {},
+                    );
+                }
 
                 // Once the user is authenticated, attempt to report the sandbox that Warp is running in, if any.
                 ctx.spawn(
