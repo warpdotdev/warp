@@ -887,6 +887,8 @@ pub enum AgentDriverError {
         command: String,
         output: Option<String>,
     },
+    #[error("Environment setup failed: {message}")]
+    SetupCommandTimedOut { message: String },
     #[error("Cloud provider setup failed")]
     CloudProviderSetupFailed(#[from] cloud_provider::CloudProviderSetupError),
     #[error("Could not resolve working directory {}", path.display())]
@@ -1059,6 +1061,9 @@ impl From<PrepareEnvironmentError> for AgentDriverError {
                     command,
                     output,
                 }
+            }
+            PrepareEnvironmentError::SetupCommandTimedOut { .. } => {
+                AgentDriverError::SetupCommandTimedOut { message }
             }
             _ => AgentDriverError::EnvironmentSetupFailed(message),
         }
@@ -1660,6 +1665,7 @@ impl AgentDriver {
                     err,
                     AgentDriverError::EnvironmentSetupFailed(_)
                         | AgentDriverError::SetupCommandFailed { .. }
+                        | AgentDriverError::SetupCommandTimedOut { .. }
                         | AgentDriverError::SetupCommandExitedShell { .. }
                 ) {
                     let _ = foreground_for_error
@@ -2531,6 +2537,13 @@ impl AgentDriver {
         stage: &str,
         error: &AgentDriverError,
     ) {
+        // The terminal may still be executing setup; do not retain it or accept debug turns.
+        if matches!(error, AgentDriverError::SetupCommandTimedOut { .. }) {
+            log::warn!(
+                "Environment setup lifecycle: event=timeout_teardown stage={stage} retention_skipped=true"
+            );
+            return;
+        }
         let idle_on_fail = match foreground.spawn(|me, _| me.idle_on_fail).await {
             Ok(idle_on_fail) => idle_on_fail,
             Err(spawn_error) => {
