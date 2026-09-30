@@ -14045,6 +14045,7 @@ impl TerminalView {
             agent,
             status,
             session_context,
+            ..
         } = event
         else {
             return;

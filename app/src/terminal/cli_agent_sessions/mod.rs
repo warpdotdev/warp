@@ -284,6 +284,7 @@ pub enum CLIAgentSessionsModelEvent {
         terminal_view_id: EntityId,
         agent: CLIAgent,
         status: CLIAgentSessionStatus,
+        is_prompt_submit: bool,
         session_context: Box<CLIAgentSessionContext>,
     },
     InputSessionChanged {
@@ -517,6 +518,7 @@ impl CLIAgentSessionsModel {
                 terminal_view_id,
                 agent,
                 status: new_status,
+                is_prompt_submit: matches!(event_type, CLIAgentEventType::PromptSubmit),
                 session_context: Box::new(session.session_context.clone()),
             });
         }
@@ -660,6 +662,7 @@ impl CLIAgentSessionsModel {
             terminal_view_id,
             agent,
             status: CLIAgentSessionStatus::Cancelled,
+            is_prompt_submit: false,
             session_context,
         });
     }
