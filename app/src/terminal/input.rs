@@ -12944,9 +12944,10 @@ impl Input {
             buffer_text: buffer_text[0..cursor_position].to_owned(),
             results_tx,
         });
+        let completion_session = completion_context.session.clone();
 
         let abort_handle = ctx
-            .spawn(
+            .spawn_abortable(
                 async move {
                     let native_suggestions = results_rx.recv().await.ok().map(|(results, span)| {
                         native_shell_suggestion_results(
@@ -12983,6 +12984,9 @@ impl Input {
                         editor_model,
                         ctx,
                     );
+                },
+                move |_, _| {
+                    completion_session.cancel_active_commands();
                 },
             )
             .abort_handle();

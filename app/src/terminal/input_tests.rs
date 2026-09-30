@@ -1,7 +1,8 @@
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
@@ -95,12 +96,13 @@ use crate::terminal::model::block::{BlockId, SerializedBlock};
 use crate::terminal::model::blocks::{BlockListPoint, insert_block};
 use crate::terminal::model::grid::Dimensions as _;
 use crate::terminal::model::index::Side;
+use crate::terminal::model::session::command_executor::{CommandExecutor, ExecuteCommandOptions};
 use crate::terminal::model::session::{BootstrapSessionType, SessionInfo};
 use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::model_events::ModelEvent;
 use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
-use crate::terminal::shell::ShellType;
+use crate::terminal::shell::{Shell, ShellType};
 use crate::terminal::universal_developer_input::UniversalDeveloperInputButtonBarEvent;
 use crate::terminal::view::Event as TerminalViewEvent;
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
@@ -3552,6 +3554,92 @@ fn native_completions_after_empty_specs_bails_when_stale() {
                 "a stale request must not ask the shell or arm/clobber the abort handle"
             );
         });
+    });
+}
+
+#[derive(Debug)]
+struct CancellationTrackingExecutor(Arc<AtomicUsize>);
+
+#[async_trait::async_trait]
+impl CommandExecutor for CancellationTrackingExecutor {
+    async fn execute_command(
+        &self,
+        _command: &str,
+        _shell: &Shell,
+        _current_directory_path: Option<&str>,
+        _environment_variables: Option<HashMap<String, String>>,
+        _execute_command_options: ExecuteCommandOptions,
+    ) -> anyhow::Result<warp_completer::completer::CommandOutput> {
+        anyhow::bail!("no executor command expected")
+    }
+
+    fn cancel_active_commands(&self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn supports_parallel_command_execution(&self) -> bool {
+        false
+    }
+}
+
+#[test]
+fn aborting_native_completions_after_empty_specs_cancels_session_commands() {
+    let _native_completions_flag = FeatureFlag::NativeShellCompletions.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let session_info = SessionInfo::new_for_test();
+        let session_id = session_info.session_id;
+        let terminal =
+            add_window_with_bootstrapped_terminal(&mut app, None, Some(session_info.clone())).await;
+        let cancellations = Arc::new(AtomicUsize::new(0));
+        let executor = Arc::new(CancellationTrackingExecutor(cancellations.clone()));
+        let sessions = terminal.read(&app, |terminal, _| terminal.sessions_model().clone());
+        sessions.update(&mut app, |sessions, ctx| {
+            *sessions = Sessions::new_for_test().with_command_executor(executor);
+            sessions.initialize_bootstrapped_session(
+                session_info,
+                "test command".to_string(),
+                Vec::new(),
+                None,
+                ctx,
+            );
+        });
+        simulate_directory_for_completion(session_id, &terminal, &mut app, "/usr/bin");
+
+        let native_reply = Rc::new(RefCell::new(None));
+        let native_reply_for_subscription = native_reply.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event: &TerminalViewEvent, _| {
+                if let TerminalViewEvent::RunNativeShellCompletions { results_tx, .. } = event {
+                    *native_reply_for_subscription.borrow_mut() = Some(results_tx.clone());
+                }
+            });
+        });
+
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("warptool ./src/", ctx);
+            input.input_tab(ctx);
+        });
+        assert_eventually!(
+            600 => native_reply.borrow().is_some(),
+            "gave up waiting for phase-two native shell dispatch"
+        );
+
+        let cancellations_before_abort = cancellations.load(Ordering::SeqCst);
+        input.update(&mut app, |input, _| {
+            input.completions_abort_handle.take().unwrap().abort();
+        });
+        assert_eventually!(
+            600 => cancellations.load(Ordering::SeqCst) > cancellations_before_abort,
+            "aborting phase-two completions must cancel the session's active commands"
+        );
     });
 }
 
