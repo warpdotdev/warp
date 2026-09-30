@@ -285,11 +285,14 @@ fn refresh_geap_credentials_with_options(
     // exchange below and never cached across mints.
     let token_future = ManagedSecretManager::handle(ctx)
         .as_ref(ctx)
-        .issue_task_identity_token(IdentityTokenOptions {
-            audience: minted_for.audience.clone(),
-            requested_duration: GEAP_IDENTITY_TOKEN_DURATION,
-            subject_template: vec1!["principal".to_string()],
-        });
+        .issue_task_identity_token(
+            None,
+            IdentityTokenOptions {
+                audience: minted_for.audience.clone(),
+                requested_duration: GEAP_IDENTITY_TOKEN_DURATION,
+                subject_template: vec1!["principal".to_string()],
+            },
+        );
     let binding = minted_for.clone();
     let _ = ctx.spawn(
         async move {

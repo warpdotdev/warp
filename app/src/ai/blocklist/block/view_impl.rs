@@ -1128,6 +1128,7 @@ impl View for AIBlock {
                 finish_reason: self.finish_reason.as_ref(),
                 is_usage_footer_expanded: self.is_usage_footer_expanded,
                 is_turn_panel_expanded: self.is_turn_panel_expanded,
+                turn_panel_view: self.turn_panel_view.as_ref(),
                 shared_session_status: &shared_session_status,
                 terminal_view_id: self.terminal_view_id,
                 is_conversation_transcript_viewer,
@@ -1392,7 +1393,8 @@ impl AIAgentInput {
             | AIAgentInput::MessagesReceivedFromAgents { .. }
             | AIAgentInput::EventsFromAgents { .. }
             | AIAgentInput::PassiveSuggestionResult { .. }
-            | AIAgentInput::OrchestrationConfigUpdate { .. } => None,
+            | AIAgentInput::OrchestrationConfigUpdate { .. }
+            | AIAgentInput::AgentWake => None,
         }
     }
 }

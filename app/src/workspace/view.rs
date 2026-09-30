@@ -156,7 +156,7 @@ use super::tab_settings::{
 };
 use super::util::{
     PaneViewLocator, TabMovement, TerminalSessionFallbackBehavior, WelcomeTipsViewState,
-    WorkspaceMouseStates, WorkspaceState,
+    WorkspaceMouseStates, WorkspaceState, team_switcher_menu_items,
 };
 use super::{ActiveSession, TabBarDropTargetData, TabBarLocation, WorkspaceRegistry, util};
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
@@ -6318,25 +6318,7 @@ impl Workspace {
             return;
         }
         let current_team_uid = user_workspaces.team_uid_for_window(window_id);
-        let mut items: Vec<MenuItem<WorkspaceAction>> = vec![
-            MenuItem::Header {
-                fields: MenuItemFields::new("Teams"),
-                clickable: false,
-                right_side_fields: None,
-            },
-            MenuItem::Separator,
-        ];
-        items.extend(workspace.teams.iter().map(|team| {
-            let uid = team.uid;
-            let mut fields = MenuItemFields::new(team.name.clone())
-                .with_on_select_action(WorkspaceAction::OpenNewWindowForTeam { team_uid: uid });
-            fields = if Some(uid) == current_team_uid {
-                fields.with_icon(icons::Icon::Check)
-            } else {
-                fields.with_indent()
-            };
-            fields.into_item()
-        }));
+        let mut items = team_switcher_menu_items(&workspace.teams, current_team_uid);
         if joinable_team_count > 0 {
             items.push(MenuItem::Separator);
             items.push(

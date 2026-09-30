@@ -488,20 +488,15 @@ pub enum GrokRefreshOutcome {
     Failed,
 }
 
-/// Controls how AWS credentials are refreshed by [`ApiKeyManager`].
+/// Who refreshes the AWS credentials held by [`ApiKeyManager`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum AwsCredentialsRefreshStrategy {
-    /// Load credentials from the local AWS credential chain (~/.aws). This is the default.
+    /// Ambient triggers reload them from the local AWS credential chain (~/.aws).
     #[default]
     LocalChain,
-    /// Credentials are managed externally via OIDC/STS.
-    /// The task ID is used to scope the STS AssumeRoleWithWebIdentity session.
-    /// The role ARN + region are the info used to assume the IAM role via STS.
-    OidcManaged {
-        task_id: Option<String>,
-        role_arn: String,
-        region: String,
-    },
+    /// An agent run mints them via OIDC/STS and refreshes them itself; ambient triggers must
+    /// leave them alone. Also forces them onto requests regardless of the per-user setting.
+    OidcManaged,
 }
 
 struct CustomEndpointState {
@@ -1063,7 +1058,7 @@ impl ApiKeyManager {
         let include_aws = include_aws_bedrock_credentials
             || matches!(
                 self.aws_credentials_refresh_strategy,
-                AwsCredentialsRefreshStrategy::OidcManaged { .. }
+                AwsCredentialsRefreshStrategy::OidcManaged
             );
         let aws_credentials = include_aws
             .then(|| match self.aws_credentials_state {

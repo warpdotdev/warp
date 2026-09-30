@@ -110,6 +110,9 @@ pub async fn generate_multi_agent_output(
             supports_background_computer_use: FeatureFlag::BackgroundComputerUse.is_enabled()
                 && computer_use::background_supported(),
             supports_stored_screenshots: FeatureFlag::StoredScreenshots.is_enabled(),
+            // Unconditional: echoed agent messages are always confirmed delivered, so injection
+            // cannot produce a duplicate turn.
+            supports_server_side_agent_message_injection: true,
             supports_chatgpt_subscription_error: false,
             custom_model_providers: params.custom_model_providers,
             custom_model_routers: params.custom_model_routers,

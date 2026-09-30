@@ -1,12 +1,14 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use futures::FutureExt as _;
-use futures::channel::oneshot;
+use futures::channel::{mpsc, oneshot};
 use futures::executor::block_on;
+use futures::{FutureExt as _, StreamExt as _};
 use http::StatusCode;
 use instant::Instant;
 use uuid::Uuid;
@@ -22,13 +24,18 @@ use warpui::r#async::{FutureExt as _, Timer};
 use warpui::{App, ModelContext, ModelHandle, SingletonEntity as _};
 
 use super::{AgentDriver, AgentDriverError, MANAGED_MCP_RESOLVE_MAX_ATTEMPTS};
+use crate::ai::agent_sdk::driver::harness::HarnessKind;
 use crate::ai::agent_sdk::driver::terminal::TerminalDriver;
+use crate::ai::agent_sdk::driver::{AgentRunPrompt, Task};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::cloud_environments::AmbientAgentEnvironment;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::mcp::builtin::{FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_NAME};
 use crate::ai::mcp::file_based_manager::{FileBasedMCPManager, FileBasedMCPManagerEvent};
 use crate::ai::mcp::file_mcp_watcher::PendingScan;
 use crate::ai::mcp::parsing::normalize_mcp_json;
+use crate::ai::mcp::templatable_manager::TemplatableMCPServerManagerEvent;
 use crate::ai::mcp::{
     FileMCPWatcher, FileMCPWatcherEvent, JSONMCPServer, JSONTransportType, MCPProvider,
     MCPServerState, ParsedTemplatableMCPServerResult, TemplatableMCPServerInstallation,
@@ -39,6 +46,10 @@ use crate::auth::credentials::Credentials;
 use crate::server::graphql::GraphQLError;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::managed_mcp::MockManagedMcpClient;
+use crate::terminal::History;
+use crate::terminal::model::block::BlockMetadata;
+use crate::terminal::model::session::SessionInfo;
+use crate::terminal::view::Event as TerminalViewEvent;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use crate::warp_managed_paths_watcher::warp_managed_mcp_config_path;
 
@@ -903,6 +914,282 @@ fn managed_resolution_retries_transient_error_then_succeeds() {
 
     assert_eq!(resolved.ephemeral_installations.len(), 1);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+fn install_profile_mcp_server(app: &mut App, json: &str) -> Uuid {
+    let parsed_profile_server = ParsedTemplatableMCPServerResult::from_user_json(json)
+        .expect("profile MCP configuration should parse")
+        .into_iter()
+        .next()
+        .expect("profile MCP configuration should contain one server");
+    let profile_server = parsed_profile_server.templatable_mcp_server;
+    let profile_variables = parsed_profile_server
+        .templatable_mcp_server_installation
+        .expect("profile MCP configuration should produce an installation")
+        .variable_values()
+        .clone();
+    let profile_uuid = TemplatableMCPServerManager::handle(app).update(app, |manager, ctx| {
+        manager
+            .install_from_template(profile_server, profile_variables, false, ctx)
+            .expect("profile MCP server should install")
+            .uuid()
+    });
+    AIExecutionProfilesModel::handle(app).update(app, |profiles, ctx| {
+        profiles.add_to_mcp_allowlist(&profiles.default_profile_id(), &profile_uuid, ctx);
+    });
+    profile_uuid
+}
+
+fn runnable_mcp_server_json(name: &str) -> String {
+    let server = if cfg!(windows) {
+        serde_json::json!({
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-Command", "Start-Sleep -Seconds 5"]
+        })
+    } else {
+        serde_json::json!({
+            "command": "sh",
+            "args": ["-c", "sleep 5"]
+        })
+    };
+    let mut servers = serde_json::Map::new();
+    servers.insert(name.to_string(), server);
+    serde_json::Value::Object(servers).to_string()
+}
+
+#[test]
+#[serial_test::serial]
+fn configured_and_profile_mcp_servers_wait_for_environment_setup() {
+    let _factory_mcp_flag = FeatureFlag::FactoryMcp.override_enabled(false);
+    let _global_skills_flag = FeatureFlag::OzPlatformSkills.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(|_| simple_logger::manager::LogManager::new());
+        let file_based_mcp = FileBasedMcpFixture::register(&mut app);
+        file_based_mcp.complete_initial_global_scan(&mut app);
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let session_id = loop {
+            let session_id = terminal_view.read(&app, |terminal, ctx| {
+                let session_id = terminal.active_block_session_id()?;
+                terminal.sessions_model().as_ref(ctx).get(session_id)?;
+                Some(session_id)
+            });
+            if let Some(session_id) = session_id {
+                break session_id;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "test terminal session should bootstrap"
+            );
+            Timer::after(Duration::from_millis(10)).await;
+        };
+        terminal_view.update(&mut app, |terminal, ctx| {
+            terminal.sessions_model().update(ctx, |sessions, _| {
+                sessions.register_session_for_test(SessionInfo::new_for_test().with_id(session_id));
+            });
+        });
+        let (executed_command_tx, mut executed_command_rx) = mpsc::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal_view, move |_, event, _| {
+                if let TerminalViewEvent::ExecuteCommand(event) = event {
+                    let _ = executed_command_tx.unbounded_send(event.command.clone());
+                }
+            });
+        });
+
+        let profile_uuid =
+            install_profile_mcp_server(&mut app, &runnable_mcp_server_json("profile-server"));
+
+        let started_uuids = Rc::new(RefCell::new(HashSet::new()));
+        let (both_started_tx, both_started_rx) = oneshot::channel();
+        let both_started_tx = Rc::new(RefCell::new(Some(both_started_tx)));
+        app.update(|ctx| {
+            let started_uuids = Rc::clone(&started_uuids);
+            let both_started_tx = Rc::clone(&both_started_tx);
+            ctx.subscribe_to_model(
+                &TemplatableMCPServerManager::handle(ctx),
+                move |_, event, _| {
+                    if let TemplatableMCPServerManagerEvent::StateChanged {
+                        uuid,
+                        state: MCPServerState::Starting,
+                    } = event
+                    {
+                        let mut started_uuids = started_uuids.borrow_mut();
+                        started_uuids.insert(*uuid);
+                        if started_uuids.contains(&profile_uuid)
+                            && started_uuids.iter().any(|uuid| *uuid != profile_uuid)
+                            && let Some(tx) = both_started_tx.borrow_mut().take()
+                        {
+                            let _ = tx.send(());
+                        }
+                    }
+                },
+            );
+        });
+
+        let driver_terminal_view = terminal_view.clone();
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                TerminalDriver::create_from_existing_view(driver_terminal_view, ctx);
+            let mut driver = AgentDriver::new_for_test(std::env::temp_dir(), terminal_driver, ctx);
+            driver.environment = Some(AmbientAgentEnvironment::new(
+                "test".to_string(),
+                None,
+                vec![],
+                String::new(),
+                vec!["environment-setup-is-still-running".to_string()],
+            ));
+            driver.mcp_startup_timeout = Duration::from_secs(5);
+            driver
+        });
+        let task = Task {
+            prompt: AgentRunPrompt::Local(String::new()),
+            model: None,
+            profile: None,
+            mcp_specs: vec![MCPSpec::Json(runnable_mcp_server_json("task-server"))],
+            harness: HarnessKind::Oz,
+        };
+        driver_handle.update(&mut app, |_, ctx| {
+            let foreground = ctx.spawner();
+            ctx.spawn(
+                async move {
+                    let _ = AgentDriver::run_internal(task, foreground).await;
+                },
+                |_, _, _| {},
+            );
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut pending_command = loop {
+            let pending_command = terminal_view.read(&app, |terminal, ctx| {
+                if terminal.has_pending_command_or_awaiting_completion(ctx) {
+                    terminal
+                        .input()
+                        .read(ctx, |input, ctx| input.buffer_text(ctx))
+                } else {
+                    String::new()
+                }
+            });
+            if !pending_command.is_empty() {
+                break pending_command;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "environment setup command should become pending"
+            );
+            Timer::after(Duration::from_millis(10)).await;
+        };
+
+        assert!(
+            started_uuids.borrow().is_empty(),
+            "task/config and profile MCP servers must remain stopped while environment setup is pending"
+        );
+        let session_info = SessionInfo::new_for_test();
+        let session_id = session_info.session_id;
+        terminal_view.update(&mut app, |terminal, ctx| {
+            terminal
+                .model
+                .lock()
+                .block_list_mut()
+                .active_block_for_test()
+                .set_session_id(session_id);
+            terminal
+                .model_event_dispatcher()
+                .update(ctx, |dispatcher, _| {
+                    dispatcher.set_active_session_id(session_id);
+                });
+            terminal.sessions_model().update(ctx, |sessions, ctx| {
+                sessions.initialize_bootstrapped_session(
+                    session_info,
+                    "test command".to_string(),
+                    vec![],
+                    None,
+                    ctx,
+                );
+            });
+        });
+        let mut history_handle = History::handle(&app);
+        History::initialized_sessions(&mut history_handle, &mut app, vec![session_id]).await;
+        terminal_view.update(&mut app, |terminal, ctx| {
+            terminal.input().update(ctx, |input, ctx| {
+                input.set_active_block_metadata(
+                    BlockMetadata::new(Some(session_id), None),
+                    false,
+                    ctx,
+                );
+            });
+        });
+
+        let mut executed_commands = Vec::new();
+        for command_index in 0..4 {
+            terminal_view.update(&mut app, |terminal, ctx| {
+                terminal.execute_pending_command((), ctx);
+            });
+            let executed_command = executed_command_rx
+                .next()
+                .with_timeout(Duration::from_secs(5))
+                .await
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "next environment setup command should execute after {executed_commands:?}: \
+                         {err:?}"
+                    )
+                })
+                .expect("terminal execution subscription should remain active");
+            terminal_view.update(&mut app, |terminal, _| {
+                let mut model = terminal.model.lock();
+                model.simulate_cmd(executed_command.as_str());
+                model.finish_block();
+            });
+            executed_commands.push(executed_command);
+            if command_index < 3 {
+                let completed_command = pending_command;
+                let deadline = Instant::now() + Duration::from_secs(5);
+                pending_command = loop {
+                    let next_command = terminal_view.read(&app, |terminal, ctx| {
+                        terminal
+                            .input()
+                            .read(ctx, |input, ctx| input.buffer_text(ctx))
+                    });
+                    if !next_command.is_empty() && next_command != completed_command {
+                        break next_command;
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "the next environment setup command should become pending after \
+                         {completed_command:?}; current input: {next_command:?}"
+                    );
+                    Timer::after(Duration::from_millis(10)).await;
+                };
+            }
+        }
+        assert_eq!(executed_commands[0], "export CI=true");
+        assert!(
+            executed_commands
+                .iter()
+                .any(|command| command == "environment-setup-is-still-running"),
+            "configured environment setup command should execute"
+        );
+
+        both_started_rx
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("task/config and profile MCP servers should start after environment setup")
+            .expect("MCP startup state subscription should remain active");
+
+        let started_uuids = started_uuids.borrow().clone();
+        TemplatableMCPServerManager::handle(&app).update(&mut app, |manager, ctx| {
+            for uuid in started_uuids {
+                manager.shutdown_server(uuid, ctx);
+                assert!(matches!(
+                    manager.get_server_state(uuid),
+                    Some(MCPServerState::NotRunning)
+                ));
+            }
+        });
+    });
 }
 
 #[test]

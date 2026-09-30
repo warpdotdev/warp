@@ -1,5 +1,5 @@
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
-use warp_graphql::platform_error::PlatformErrorInfo;
+use warp_graphql::platform_error::{PlatformErrorInfo, PlatformErrorMessageFormat};
 
 use super::AgentDriverError;
 use super::terminal::ShareSessionError;
@@ -186,6 +186,12 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 ),
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
+        ),
+        AgentDriverError::SetupCommandFailed {
+            command, output, ..
+        } => (
+            AgentTaskState::Failed,
+            setup_command_status_update(error, command, output.as_deref()),
         ),
         // The shell died while an environment setup command was running
         // (e.g. the command ran `exit`). This is a user-side environment
@@ -420,6 +426,49 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
             TaskStatusUpdate::message(error.to_string()),
         ),
     }
+}
+
+pub(super) fn setup_command_status_update(
+    error: &AgentDriverError,
+    command: &str,
+    output: Option<&str>,
+) -> TaskStatusUpdate {
+    let plain_text = format!("{error}. Check your repository URLs and setup commands.");
+    let mut update = TaskStatusUpdate::with_error_code(
+        plain_text.clone(),
+        PlatformErrorCode::EnvironmentSetupFailed,
+    );
+
+    if let Some(output) = output {
+        // Indentation keeps arbitrary backticks in the output from closing a fenced code block.
+        let markdown = format!(
+            "Failed to run setup command {}:\n\n    {}\n\nCheck your repository URLs and setup commands.",
+            markdown_code_span(command),
+            output.replace('\n', "\n    "),
+        );
+        let info = update.platform_error.as_mut().expect("platform error");
+        info.user_facing_messages
+            .insert(PlatformErrorMessageFormat::PlainText, plain_text);
+        info.user_facing_messages
+            .insert(PlatformErrorMessageFormat::Markdown, markdown);
+    }
+    update
+}
+
+fn markdown_code_span(text: &str) -> String {
+    let longest_run = text
+        .split(|character| character != '`')
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    let fence = "`".repeat(longest_run + 1);
+    let text = text.replace("\r\n", " ").replace(&['\r', '\n'][..], " ");
+    let padding = if text.starts_with('`') || text.ends_with('`') {
+        " "
+    } else {
+        ""
+    };
+    format!("{fence}{padding}{text}{padding}{fence}")
 }
 
 /// Map a `PlatformErrorCode` to the `AgentTaskState` it implies. Not specific

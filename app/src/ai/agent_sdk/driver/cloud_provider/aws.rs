@@ -96,6 +96,7 @@ impl CloudProvider for AwsCloudProvider {
                     ManagedSecretManager::handle(ctx)
                         .as_ref(ctx)
                         .issue_task_identity_token(
+                            None,
                             warp_managed_secrets::client::IdentityTokenOptions {
                                 audience,
                                 requested_duration: duration,

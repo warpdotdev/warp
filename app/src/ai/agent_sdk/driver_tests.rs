@@ -22,6 +22,7 @@ use warp_cli::{
 };
 use warp_core::channel::ChannelState;
 use warp_graphql::ai::AgentTaskState;
+use warp_graphql::platform_error::PlatformErrorMessageFormat;
 use warp_managed_secrets::ManagedSecretValue;
 use warp_multi_agent_api::response_event;
 use warp_util::standardized_path::StandardizedPath;
@@ -29,12 +30,13 @@ use warpui::r#async::Timer;
 use warpui::{App, SingletonEntity as _};
 
 use super::{
-    AgentDriver, AgentRunPrompt, CLIAgentSessionStatus, DebugWindowController, IdleTimeoutSender,
-    LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
-    OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
-    PlatformErrorCode, SDKConversationOutputStatus, WARP_MESSAGE_LISTENER_STATE_ROOT_ENV,
-    build_secret_env_vars, debug_turn_task_state, idle_window_for_cli_session_status,
-    idle_window_for_terminal_status, setup_failure_status_update, terminal_status_log_outcome,
+    AgentDriver, AgentDriverError, AgentRunPrompt, CLIAgentSessionStatus, DebugWindowController,
+    IdleTimeoutSender, LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
+    LEGACY_OZ_PARENT_STATE_ROOT_ENV, OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
+    OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, PlatformErrorCode, SDKConversationOutputStatus,
+    WARP_MESSAGE_LISTENER_STATE_ROOT_ENV, build_secret_env_vars, debug_turn_task_state,
+    idle_window_for_cli_session_status, idle_window_for_terminal_status,
+    setup_failure_status_update, terminal_status_log_outcome,
 };
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::task::TaskId;
@@ -43,6 +45,7 @@ use crate::ai::agent::{
     AIAgentOutputMessage, ArtifactCreatedData, CancellationReason, MessageId, RenderableAIError,
     UploadArtifactResult,
 };
+use crate::ai::agent_sdk::driver::environment::PrepareEnvironmentError;
 use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::orchestration_events::{
@@ -461,11 +464,36 @@ fn setup_failure_is_reported_as_an_environment_setup_failure() {
     // alone, and the cloud-continuation resolver uses it to decide that a setup failure with no
     // conversation gets a tombstone with no continue CTA. A generic code silently reroutes those
     // runs into continuation handling that has nothing to continue.
-    let status = setup_failure_status_update("Environment setup failed: bad command".to_string());
+    let status = setup_failure_status_update(&AgentDriverError::EnvironmentSetupFailed(
+        "bad command".to_string(),
+    ));
 
     assert_eq!(
         status.error_code,
         Some(PlatformErrorCode::EnvironmentSetupFailed)
+    );
+}
+
+#[test]
+fn retained_setup_failure_includes_markdown_output_and_recovery_hint() {
+    let error = AgentDriverError::from(PrepareEnvironmentError::SetupCommand {
+        command: "./setup.sh".to_string(),
+        output: Some("permission denied".to_string()),
+    });
+    let status = setup_failure_status_update(&error);
+    let messages = &status.platform_error.as_ref().unwrap().user_facing_messages;
+
+    assert_eq!(
+        status.message,
+        "Environment setup failed: Failed to run setup command: ./setup.sh\nCommand output:\npermission denied. Check your repository URLs and setup commands."
+    );
+    assert_eq!(
+        messages[&PlatformErrorMessageFormat::PlainText],
+        status.message
+    );
+    assert_eq!(
+        messages[&PlatformErrorMessageFormat::Markdown],
+        "Failed to run setup command `./setup.sh`:\n\n    permission denied\n\nCheck your repository URLs and setup commands."
     );
 }
 

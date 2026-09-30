@@ -131,6 +131,9 @@ pub struct ReportShutdownArgs {
     #[arg(long)]
     pub error_message: Option<String>,
 
+    /// PID of the agent process that exited.
+    #[arg(long)]
+    pub pid: Option<u32>,
     /// Process exit code for abnormal shutdown.
     /// Omit for clean shutdown or when the exit code is unavailable.
     #[arg(long, value_parser = clap::value_parser!(u8).range(1..))]

@@ -547,11 +547,9 @@ impl AgentDriver {
             .collect()
     }
 
-    /// Starts the MCP servers requested for the run (`--mcp` specs plus the built-in Factory
-    /// server) and waits for them to settle. Both startup phases run even when one degrades,
-    /// collecting degradation details so non-strict runs can continue with whichever servers
-    /// did start.
-    pub(super) async fn start_task_mcp_servers(
+    /// Starts the MCP servers requested for the run and profile in one launch, then waits for
+    /// all of them through one manager subscription.
+    pub(super) async fn start_task_and_profile_mcp_servers(
         mcp_specs: &[MCPSpec],
         managed_mcp_client: Arc<dyn ManagedMcpClient>,
         foreground: &ModelSpawner<Self>,
@@ -618,37 +616,12 @@ impl AgentDriver {
             existing_uuids.len(),
             ephemeral_installations.len()
         );
-
-        let mut degraded = Vec::new();
-        if !existing_uuids.is_empty() {
-            let result = foreground
-                .spawn(move |me, ctx| me.start_mcp_servers(&existing_uuids, ctx))
-                .await?
-                .await;
-            Self::collect_mcp_degradation(result, &mut degraded)?;
-        }
-        if !ephemeral_installations.is_empty() {
-            let result = foreground
-                .spawn(move |me, ctx| me.start_ephemeral_mcp_servers(ephemeral_installations, ctx))
-                .await?
-                .await;
-            Self::collect_mcp_degradation(result, &mut degraded)?;
-        }
-        if degraded.is_empty() {
-            Ok(())
-        } else {
-            Err(AgentDriverError::MCPStartupFailed { details: degraded })
-        }
-    }
-
-    /// Start MCP servers from profile allowlist for the terminal.
-    pub(super) fn start_profile_mcp_servers(
-        &self,
-        ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = Result<(), AgentDriverError>> + use<> {
-        let terminal_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
-        let permissions = BlocklistAIPermissions::as_ref(ctx);
-        let profile_allowlist = permissions.get_mcp_allowlist(ctx, Some(terminal_id));
+        let profile_allowlist = foreground
+            .spawn(|me, ctx| {
+                let terminal_id = me.terminal_driver.as_ref(ctx).terminal_view().id();
+                BlocklistAIPermissions::as_ref(ctx).get_mcp_allowlist(ctx, Some(terminal_id))
+            })
+            .await?;
 
         if !profile_allowlist.is_empty() {
             log::info!(
@@ -656,7 +629,82 @@ impl AgentDriver {
                 profile_allowlist.len()
             );
         }
-        self.start_mcp_servers(&profile_allowlist, ctx)
+
+        foreground
+            .spawn(move |me, ctx| {
+                me.start_mcp_servers_concurrently(
+                    existing_uuids,
+                    ephemeral_installations,
+                    profile_allowlist,
+                    ctx,
+                )
+            })
+            .await?
+            .await
+    }
+
+    fn start_mcp_servers_concurrently(
+        &self,
+        task_uuids: Vec<Uuid>,
+        ephemeral_installations: Vec<TemplatableMCPServerInstallation>,
+        profile_uuids: Vec<Uuid>,
+        ctx: &mut ModelContext<Self>,
+    ) -> impl Future<Output = Result<(), AgentDriverError>> + use<> {
+        let task_servers = match self.get_mcp_servers_to_start(&task_uuids, ctx) {
+            Ok(servers) => servers,
+            Err(error) => return Either::Right(future::ready(Err(error))),
+        };
+        let profile_servers = match self.get_mcp_servers_to_start(&profile_uuids, ctx) {
+            Ok(servers) => servers,
+            Err(error) => return Either::Right(future::ready(Err(error))),
+        };
+        let (ephemeral_installations, mut degraded) =
+            Self::apply_secrets_to_ephemeral_mcp_installations(
+                ephemeral_installations,
+                &self.secrets,
+            );
+
+        let persistent_servers: HashSet<Uuid> =
+            task_servers.into_iter().chain(profile_servers).collect();
+        let mut named_servers: HashMap<Uuid, String> = {
+            let manager = TemplatableMCPServerManager::as_ref(ctx);
+            persistent_servers
+                .iter()
+                .map(|uuid| {
+                    let name = manager
+                        .get_installed_server(uuid)
+                        .map(|installation| installation.templatable_mcp_server().name.clone())
+                        .unwrap_or_else(|| uuid.to_string());
+                    (*uuid, name)
+                })
+                .collect()
+        };
+        named_servers.extend(ephemeral_installations.iter().map(|installation| {
+            (
+                installation.uuid(),
+                installation.templatable_mcp_server().name.clone(),
+            )
+        }));
+
+        let wait = self.wait_for_mcp_servers_started(named_servers, ctx);
+        TemplatableMCPServerManager::handle(ctx).update(ctx, move |manager, ctx| {
+            for uuid in persistent_servers {
+                manager.spawn_server(uuid, ctx);
+            }
+            for installation in ephemeral_installations {
+                manager.spawn_cli_ephemeral_server(installation, ctx);
+            }
+        });
+
+        Either::Left(async move {
+            Self::collect_mcp_degradation(wait.await, &mut degraded)?;
+            if degraded.is_empty() {
+                Ok(())
+            } else {
+                degraded.sort();
+                Err(AgentDriverError::MCPStartupFailed { details: degraded })
+            }
+        })
     }
 
     fn get_mcp_servers_to_start(
@@ -860,110 +908,6 @@ impl AgentDriver {
             }
         }
         Ok(())
-    }
-
-    fn spawn_inactive_servers(
-        &self,
-        servers_to_start: HashSet<Uuid>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let templatable_mcp_manager = TemplatableMCPServerManager::handle(ctx);
-        templatable_mcp_manager.update(ctx, |manager, ctx| {
-            for uuid in servers_to_start {
-                manager.spawn_server(uuid, ctx);
-            }
-        });
-    }
-
-    fn start_mcp_servers(
-        &self,
-        uuids: &[Uuid],
-        ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = Result<(), AgentDriverError>> + use<> {
-        let servers_to_start = match self.get_mcp_servers_to_start(uuids, ctx) {
-            Ok(val) => val,
-            Err(e) => {
-                return Either::Right(future::ready(Err(e)));
-            }
-        };
-
-        // If we don't need to start any servers, complete immediately.
-        if servers_to_start.is_empty() {
-            return Either::Right(future::ready(Ok(())));
-        }
-
-        log::info!("Starting {} MCP servers...", servers_to_start.len());
-
-        let named_servers: HashMap<Uuid, String> = {
-            let manager = TemplatableMCPServerManager::as_ref(ctx);
-            servers_to_start
-                .iter()
-                .map(|uuid| {
-                    let name = manager
-                        .get_installed_server(uuid)
-                        .map(|installation| installation.templatable_mcp_server().name.clone())
-                        .unwrap_or_else(|| uuid.to_string());
-                    (*uuid, name)
-                })
-                .collect()
-        };
-        let wait = self.wait_for_mcp_servers_started(named_servers, ctx);
-
-        self.spawn_inactive_servers(servers_to_start, ctx);
-
-        Either::Left(wait)
-    }
-
-    /// Start ephemeral MCP servers from inline JSON specifications.
-    /// These servers are not persisted and exist only for the duration of the agent run.
-    fn start_ephemeral_mcp_servers(
-        &self,
-        installations: Vec<TemplatableMCPServerInstallation>,
-        ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = Result<(), AgentDriverError>> + use<> {
-        if installations.is_empty() {
-            return Either::Right(future::ready(Ok(())));
-        }
-        let (installations, mut unresolved_failures) =
-            Self::apply_secrets_to_ephemeral_mcp_installations(installations, &self.secrets);
-
-        if !installations.is_empty() {
-            log::info!("Starting {} ephemeral MCP servers...", installations.len());
-        }
-
-        let named_servers: HashMap<Uuid, String> = installations
-            .iter()
-            .map(|installation| {
-                (
-                    installation.uuid(),
-                    installation.templatable_mcp_server().name.clone(),
-                )
-            })
-            .collect();
-        let wait = self.wait_for_mcp_servers_started(named_servers, ctx);
-
-        // Spawn the ephemeral servers.
-        let templatable_mcp_manager = TemplatableMCPServerManager::handle(ctx);
-        templatable_mcp_manager.update(ctx, move |manager, ctx| {
-            for installation in installations {
-                manager.spawn_cli_ephemeral_server(installation, ctx);
-            }
-        });
-
-        Either::Left(async move {
-            let mut failures = match wait.await {
-                Ok(()) => Vec::new(),
-                Err(AgentDriverError::MCPStartupFailed { details }) => details,
-                Err(other) => return Err(other),
-            };
-            failures.append(&mut unresolved_failures);
-            if failures.is_empty() {
-                Ok(())
-            } else {
-                failures.sort();
-                Err(AgentDriverError::MCPStartupFailed { details: failures })
-            }
-        })
     }
 
     /// Awaits a file-based MCP `scan`, then the readiness of the servers it reports, within

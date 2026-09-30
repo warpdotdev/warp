@@ -109,6 +109,15 @@ impl MessageHydrator {
                 return None;
             }
         };
+        // Already delivered by another route; surfacing it again would repeat a turn.
+        if message.delivered_at.is_some() {
+            log::debug!(
+                "Skipping already-delivered agent message {} for event sequence {}",
+                message.message_id,
+                event.sequence
+            );
+            return None;
+        }
         if message.body.is_empty() {
             log::warn!(
                 "Hydrated empty-body agent message: message_id={} event_sequence={} recipient_run_id={} sender_run_id={} subject={:?} task_id={:?}",

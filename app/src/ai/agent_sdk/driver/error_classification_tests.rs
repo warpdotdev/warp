@@ -3,9 +3,10 @@ use std::collections::BTreeMap;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_graphql::platform_error::{PlatformErrorInfo, PlatformErrorMessageFormat};
 
-use super::classify_driver_error;
+use super::{classify_driver_error, markdown_code_span};
 use crate::ai::agent::{RenderableAIError, TransientNetworkErrorKind};
 use crate::ai::agent_sdk::driver::AgentDriverError;
+use crate::ai::agent_sdk::driver::environment::PrepareEnvironmentError;
 use crate::ai::agent_sdk::driver::terminal::{BootstrapError, ShareSessionError};
 use crate::server::server_api::ai::TaskGitCredentialsError;
 
@@ -276,6 +277,53 @@ fn environment_setup_failed_is_failed() {
         AgentDriverError::EnvironmentSetupFailed("bad repo".into()),
         AgentTaskState::Failed,
         Some(PlatformErrorCode::EnvironmentSetupFailed),
+    );
+}
+#[test]
+fn setup_command_failure_has_plain_text_and_markdown_status_messages() {
+    let error = AgentDriverError::from(PrepareEnvironmentError::SetupCommand {
+        command: "echo '```'".to_string(),
+        output: Some("```\npermission denied".to_string()),
+    });
+    let (state, update) = classify_driver_error(&error);
+
+    assert_eq!(state, AgentTaskState::Failed);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::EnvironmentSetupFailed)
+    );
+    let plain_text = "Environment setup failed: Failed to run setup command: echo '```'\nCommand output:\n```\npermission denied. Check your repository URLs and setup commands.";
+    assert_eq!(update.message, plain_text);
+    let messages = &update.platform_error.as_ref().unwrap().user_facing_messages;
+    assert_eq!(messages[&PlatformErrorMessageFormat::PlainText], plain_text);
+    assert_eq!(
+        messages[&PlatformErrorMessageFormat::Markdown],
+        "Failed to run setup command ````echo '```'````:\n\n    ```\n    permission denied\n\nCheck your repository URLs and setup commands."
+    );
+}
+
+#[test]
+fn setup_command_markdown_quotes_backticks_at_command_boundaries() {
+    assert_eq!(markdown_code_span("`echo`"), "`` `echo` ``");
+}
+
+#[test]
+fn setup_command_failure_without_output_retains_plain_text_fallback() {
+    let error = AgentDriverError::from(PrepareEnvironmentError::SetupCommand {
+        command: "./setup.sh".to_string(),
+        output: None,
+    });
+    let (_, update) = classify_driver_error(&error);
+    assert_eq!(
+        update.message,
+        "Environment setup failed: Failed to run setup command: ./setup.sh. Check your repository URLs and setup commands."
+    );
+    assert!(
+        update
+            .platform_error
+            .unwrap()
+            .user_facing_messages
+            .is_empty()
     );
 }
 

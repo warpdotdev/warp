@@ -3,7 +3,10 @@
 //! Subcommands:
 //! - [`ping`] — fetches the current run by task ID and prints its info.
 //! - [`report_artifact`] — reports an artifact (e.g. a PR) back to the Oz platform.
+
 use anyhow::Result;
+#[cfg(target_os = "linux")]
+use command::blocking::Command;
 use warp_cli::GlobalOptions;
 use warp_cli::agent::OutputFormat;
 use warp_cli::harness_support::{
@@ -277,9 +280,12 @@ fn finish_task(
 fn report_shutdown(
     ctx: &mut AppContext,
     runner: ModelHandle<HarnessSupportRunner>,
-    args: ReportShutdownArgs,
+    mut args: ReportShutdownArgs,
     output_format: OutputFormat,
 ) -> Result<()> {
+    if let Some(evidence) = detect_oom_shutdown(args.exit_code, args.pid) {
+        apply_oom_classification(&mut args, evidence);
+    }
     runner.update(ctx, |_, ctx| {
         let client = ServerApiProvider::as_ref(ctx).get_harness_support_client();
 
@@ -319,6 +325,124 @@ fn report_shutdown(
     Ok(())
 }
 
+/// Results of attempting to infer whether or not the Warp agent process was OOM-killed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OomDetectionResult {
+    /// The process exited with status 137, conventionally reserved for the OOM killer.
+    exit_status: bool,
+    /// Kernel logs include a reference to the OOM killer terminating the process.
+    kernel_logs: bool,
+}
+
+impl OomDetectionResult {
+    fn was_oom(&self) -> bool {
+        self.exit_status || self.kernel_logs
+    }
+}
+
+fn apply_oom_classification(args: &mut ReportShutdownArgs, result: OomDetectionResult) {
+    if !result.was_oom() {
+        return;
+    }
+
+    log::info!(
+        "Classifying shutdown as OOM: exit status 137 = {}, kernel logs = {}",
+        result.exit_status,
+        result.kernel_logs
+    );
+    tracing::info!(
+        exit_status_137 = result.exit_status,
+        kernel_logs = result.kernel_logs,
+        "Classifying shutdown as OOM"
+    );
+
+    args.error_category = Some("oom".to_string());
+    args.error_message = Some("The agent sandbox ran out of memory.".to_string());
+}
+
+fn detect_oom_shutdown(exit_code: Option<u8>, pid: Option<u32>) -> Option<OomDetectionResult> {
+    let mut result = OomDetectionResult {
+        exit_status: exit_code.is_some_and(|code| code == 137),
+        kernel_logs: false,
+    };
+
+    // Only check kernel logs (potentially expensive) if the process failed.
+    if exit_code.is_some_and(|code| code != 0) {
+        result.kernel_logs = pid.is_some_and(kernel_logs_contain_oom_for_pid);
+    }
+
+    if result.was_oom() { Some(result) } else { None }
+}
+
+#[cfg(target_os = "linux")]
+fn kernel_log_commands() -> [(&'static str, &'static [&'static str]); 2] {
+    const DMESG_ARGS: &[&str] = &["--level=info,warn,err,crit,alert,emerg", "--color=never"];
+    const JOURNALCTL_ARGS: &[&str] = &[
+        "-k",
+        "--priority=0..6",
+        "--no-pager",
+        "--grep=(?i)(oom-kill:|out of memory: killed process)",
+    ];
+
+    [("dmesg", DMESG_ARGS), ("journalctl", JOURNALCTL_ARGS)]
+}
+
+#[cfg(target_os = "linux")]
+fn kernel_logs_contain_oom_for_pid(pid: u32) -> bool {
+    kernel_log_commands()
+        .into_iter()
+        .filter_map(|(program, args)| Command::new(program).args(args).output().ok())
+        .filter(|output| output.status.success())
+        .any(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .any(|line| oom_kill_line_matches_pid(line, pid))
+        })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn kernel_logs_contain_oom_for_pid(_: u32) -> bool {
+    false
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn oom_kill_line_matches_pid(line: &str, pid: u32) -> bool {
+    let pid = pid.to_string();
+    // Linux emits this victim format in `oom_kill_process`:
+    // https://github.com/torvalds/linux/blob/fc5def2c2ad049588c875d86c7408537300ee43e/mm/oom_kill.c#L949-L950
+    let killed_process = (line.contains("Out of memory:") || line.contains("out of memory:"))
+        && line
+            .match_indices("Killed process ")
+            .any(|(index, prefix)| {
+                let suffix = &line[index + prefix.len()..];
+                suffix
+                    .strip_prefix(&pid)
+                    .is_some_and(|suffix| suffix.starts_with(" ("))
+            });
+    if killed_process {
+        return true;
+    }
+
+    // Linux emits this victim format in `dump_oom_victim`:
+    // https://github.com/torvalds/linux/blob/fc5def2c2ad049588c875d86c7408537300ee43e/mm/oom_kill.c#L442-L451
+    line.contains("oom-kill:")
+        && line.match_indices("pid=").any(|(index, prefix)| {
+            let field_start = index + prefix.len();
+            let valid_start = index == 0
+                || line[..index].chars().next_back().is_some_and(|character| {
+                    character == ',' || character == ':' || character.is_ascii_whitespace()
+                });
+            valid_start
+                && line[field_start..]
+                    .strip_prefix(&pid)
+                    .is_some_and(|suffix| {
+                        suffix.chars().next().is_none_or(|character| {
+                            character == ',' || character.is_ascii_whitespace()
+                        })
+                    })
+        })
+}
+
 /// Singleton model for running async harness-support operations.
 struct HarnessSupportRunner;
 
@@ -327,3 +451,7 @@ impl warpui::Entity for HarnessSupportRunner {
 }
 
 impl SingletonEntity for HarnessSupportRunner {}
+
+#[cfg(test)]
+#[path = "harness_support_tests.rs"]
+mod tests;

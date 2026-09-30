@@ -25,6 +25,8 @@ use warpui::{AppContext, Entity, SingletonEntity, ViewContext, WeakViewHandle, W
 #[cfg(not(target_family = "wasm"))]
 use super::SoleTeamError;
 use super::UserWorkspaces;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::ambient_agents::task::TaskScope;
 #[cfg(any(test, feature = "test-util"))]
 use crate::ai::llms::LLMInfo;
 use crate::ai::llms::{LLMId, LLMModelHost, LLMProvider, ModelsByFeature};
@@ -93,23 +95,47 @@ impl TeamScope for TeamContext<'_> {
     }
 }
 
-/// The team a headless CLI invocation acts as, resolved from its command-line selection and
-/// memberships instead of from a window.
+/// The team a headless invocation acts as, resolved without a window.
+///
+/// It has two minting roots. [`UserWorkspaces::team_scope_for_cli`] resolves the command-line
+/// selection against the user's memberships and rejects a team they are not on.
+/// [`Self::from_task_scope`] takes the server's record of which team owns a task and performs no
+/// membership check: a service-account worker resuming a run may belong to none of the task's
+/// teams, and the server has already decided the task's ownership.
 #[cfg(not(target_family = "wasm"))]
-pub enum TeamScopeForCli {
+pub enum HeadlessTeamScope {
     Personal,
     Team(ServerId),
 }
 
 #[cfg(not(target_family = "wasm"))]
-impl sealed::Sealed for TeamScopeForCli {}
+impl HeadlessTeamScope {
+    pub(crate) fn from_task_scope(scope: &TaskScope) -> Self {
+        if !scope.is_team() {
+            return Self::Personal;
+        }
+        match ServerId::try_from(scope.uid.as_str()) {
+            Ok(team_uid) => Self::Team(team_uid),
+            Err(err) => {
+                log::warn!(
+                    "Task reported an invalid team scope uid '{}': {err}",
+                    scope.uid
+                );
+                Self::Personal
+            }
+        }
+    }
+}
 
 #[cfg(not(target_family = "wasm"))]
-impl TeamScope for TeamScopeForCli {
+impl sealed::Sealed for HeadlessTeamScope {}
+
+#[cfg(not(target_family = "wasm"))]
+impl TeamScope for HeadlessTeamScope {
     fn team_uid(&self) -> Option<ServerId> {
         match self {
-            TeamScopeForCli::Personal => None,
-            TeamScopeForCli::Team(team_uid) => Some(*team_uid),
+            HeadlessTeamScope::Personal => None,
+            HeadlessTeamScope::Team(team_uid) => Some(*team_uid),
         }
     }
 }
@@ -220,7 +246,7 @@ impl UserWorkspaces {
     pub(crate) fn team_scope_for_cli(
         &self,
         team_selection: &TeamSelection,
-    ) -> Result<TeamScopeForCli, TeamScopeForCliError> {
+    ) -> Result<HeadlessTeamScope, TeamScopeForCliError> {
         let team_uid = match &team_selection.team {
             None => match self.sole_team_uid() {
                 Ok(team_uid) => Some(team_uid),
@@ -243,8 +269,8 @@ impl UserWorkspaces {
             return Err(NotATeamMemberError { team_uid }.into());
         }
         Ok(match team_uid {
-            Some(team_uid) => TeamScopeForCli::Team(team_uid),
-            None => TeamScopeForCli::Personal,
+            Some(team_uid) => HeadlessTeamScope::Team(team_uid),
+            None => HeadlessTeamScope::Personal,
         })
     }
 
@@ -252,9 +278,9 @@ impl UserWorkspaces {
     pub(crate) fn team_scope_for_cli_object(
         &self,
         object_scope: &ObjectScope,
-    ) -> Result<TeamScopeForCli, TeamScopeForCliError> {
+    ) -> Result<HeadlessTeamScope, TeamScopeForCliError> {
         if object_scope.personal {
-            Ok(TeamScopeForCli::Personal)
+            Ok(HeadlessTeamScope::Personal)
         } else {
             self.team_scope_for_cli(&object_scope.team_selection)
         }

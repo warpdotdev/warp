@@ -28,7 +28,7 @@ use crate::server::server_api::ai::AIClient;
 use crate::server::team_scope::RequestTeamScope;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::team_workspace_settings::{
-    NotATeamMemberError, TeamScopeForCli, TeamScopeForCliError,
+    HeadlessTeamScope, NotATeamMemberError, TeamScopeForCliError,
 };
 use crate::workspaces::user_workspaces::{SoleTeamError, TeamScope, UserWorkspaces};
 
@@ -152,7 +152,7 @@ fn describe_team_resolution_error(error: TeamScopeForCliError, ctx: &AppContext)
 pub(super) fn resolve_team_scope(
     team_selection: &TeamSelection,
     ctx: &AppContext,
-) -> anyhow::Result<TeamScopeForCli> {
+) -> anyhow::Result<HeadlessTeamScope> {
     UserWorkspaces::as_ref(ctx)
         .team_scope_for_cli(team_selection)
         .map_err(|err| describe_team_resolution_error(err, ctx))
@@ -168,7 +168,7 @@ pub(super) fn request_team_scope_for_cli(
 pub(super) fn resolve_object_scope(
     object_scope: &ObjectScope,
     ctx: &AppContext,
-) -> anyhow::Result<TeamScopeForCli> {
+) -> anyhow::Result<HeadlessTeamScope> {
     UserWorkspaces::as_ref(ctx)
         .team_scope_for_cli_object(object_scope)
         .map_err(|err| describe_team_resolution_error(err, ctx))
