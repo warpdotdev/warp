@@ -36,6 +36,72 @@ fn member(email: &str, role: MembershipRole) -> TeamMember {
 
 #[cfg(not(target_family = "wasm"))]
 #[test]
+fn adding_domain_restrictions_emits_only_the_mutation_result_toast() {
+    App::test((), |mut app| async move {
+        let mut team_client = MockTeamClient::new();
+        team_client
+            .expect_add_invite_link_domain_restriction()
+            .withf(|team_uid, domain| *team_uid == ServerId::from(123) && domain == "warp.dev")
+            .times(1)
+            .return_once(|_, _| Err(anyhow::anyhow!("domain mutation rejected")));
+        initialize_app_with_team_client(&mut app, Arc::new(team_client));
+        let workspace = mock_workspace(&mut app);
+        let teams_page = workspace.update(&mut app, |_, ctx| {
+            ctx.add_typed_action_view(TeamsPageView::new)
+        });
+        teams_page.update(&mut app, |teams_page, ctx| {
+            teams_page
+                .approve_domains_block_editor
+                .update(ctx, |editor, ctx| {
+                    editor.set_editor_buffer_text("warp.dev", ctx);
+                });
+        });
+
+        let (sender, receiver) = async_channel::unbounded();
+        let (terminal_sender, terminal_receiver) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&teams_page, move |_, event, _| {
+                if let TeamsPageViewEvent::ShowToast { message, flavor } = event {
+                    let _ = sender.try_send((message.clone(), *flavor));
+                }
+            });
+            ctx.subscribe_to_model(
+                &UserWorkspaces::handle(ctx),
+                move |_, event: &UserWorkspacesEvent, _| {
+                    if matches!(event, UserWorkspacesEvent::AddDomainRestrictionsRejected(_)) {
+                        let _ = terminal_sender.try_send(());
+                    }
+                },
+            );
+        });
+
+        teams_page.update(&mut app, |teams_page, ctx| {
+            teams_page.add_domain_restrictions(ServerId::from(123), ctx);
+        });
+        assert!(
+            receiver.try_recv().is_err(),
+            "submission must not emit an eager success toast"
+        );
+        terminal_receiver
+            .recv()
+            .await
+            .expect("expected terminal mutation event");
+
+        assert_eq!(
+            receiver.try_recv().expect("expected mutation result toast"),
+            (
+                "Failed to add domain restriction".to_string(),
+                ToastFlavor::Error
+            )
+        );
+        assert!(
+            receiver.try_recv().is_err(),
+            "a rejected mutation must emit exactly one toast"
+        );
+    });
+}
+#[cfg(not(target_family = "wasm"))]
+#[test]
 fn joining_a_workspace_team_opens_only_a_new_scoped_window() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -625,6 +691,29 @@ fn workspace_admin_gets_team_management_permissions() {
     ));
 }
 
+#[test]
+fn native_team_admin_cannot_manage_workspace_domain_restrictions() {
+    let team = team_with_members(vec![member(ADMIN_EMAIL, MembershipRole::Admin)], true);
+    let workspace = workspace_with_member(ADMIN_EMAIL, MembershipRole::User, true);
+
+    assert!(!TeamsPageView::can_manage_domain_restrictions(
+        &team,
+        &workspace,
+        ADMIN_EMAIL
+    ));
+}
+
+#[test]
+fn legacy_team_admin_can_manage_team_domain_restrictions() {
+    let team = team_with_members(vec![member(ADMIN_EMAIL, MembershipRole::Admin)], true);
+    let workspace = workspace_with_member(ADMIN_EMAIL, MembershipRole::User, false);
+
+    assert!(TeamsPageView::can_manage_domain_restrictions(
+        &team,
+        &workspace,
+        ADMIN_EMAIL
+    ));
+}
 #[test]
 fn workspace_admin_without_native_workspaces_policy_can_manage_members() {
     let team = team_with_members(

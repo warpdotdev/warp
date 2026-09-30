@@ -217,6 +217,18 @@ type AddInviteLinkDomainRestrictionOutput implements Response {
 
 union AddInviteLinkDomainRestrictionResult = AddInviteLinkDomainRestrictionOutput | UserFacingError
 
+input AddWorkspaceInviteLinkDomainRestrictionInput {
+  domain: String!
+  workspaceUid: ID!
+}
+
+type AddWorkspaceInviteLinkDomainRestrictionOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union AddWorkspaceInviteLinkDomainRestrictionResult = AddWorkspaceInviteLinkDomainRestrictionOutput | UserFacingError
+
 input AddObjectGuestsInput {
   accessLevel: AccessLevel!
   objectUid: ID!
@@ -1152,6 +1164,18 @@ type DeleteInviteLinkDomainRestrictionOutput implements Response {
 }
 
 union DeleteInviteLinkDomainRestrictionResult = DeleteInviteLinkDomainRestrictionOutput | UserFacingError
+
+input DeleteWorkspaceInviteLinkDomainRestrictionInput {
+  workspaceUid: ID!
+  uid: ID!
+}
+
+type DeleteWorkspaceInviteLinkDomainRestrictionOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union DeleteWorkspaceInviteLinkDomainRestrictionResult = DeleteWorkspaceInviteLinkDomainRestrictionOutput | UserFacingError
 
 input DeleteManagedSecretInput {
   name: String!
@@ -3186,6 +3210,7 @@ union DeleteRunnerResult = DeleteRunnerOutput | UserFacingError
 
 type RootMutation {
   addInviteLinkDomainRestriction(input: AddInviteLinkDomainRestrictionInput!, requestContext: RequestContext!): AddInviteLinkDomainRestrictionResult!
+  addWorkspaceInviteLinkDomainRestriction(input: AddWorkspaceInviteLinkDomainRestrictionInput!, requestContext: RequestContext!): AddWorkspaceInviteLinkDomainRestrictionResult!
   addObjectGuests(input: AddObjectGuestsInput!, requestContext: RequestContext!): AddObjectGuestsResult!
   bulkCreateObjects(input: BulkCreateObjectsInput!, requestContext: RequestContext!): BulkCreateObjectsResult!
   confirmFileArtifactUpload(input: ConfirmFileArtifactUploadInput!, requestContext: RequestContext!): ConfirmFileArtifactUploadResult!
@@ -3208,6 +3233,7 @@ type RootMutation {
   deleteConversation(input: DeleteConversationInput!, requestContext: RequestContext!): DeleteConversationResult!
   deleteRunner(input: DeleteRunnerInput!, requestContext: RequestContext!): DeleteRunnerResult!
   deleteInviteLinkDomainRestriction(input: DeleteInviteLinkDomainRestrictionInput!, requestContext: RequestContext!): DeleteInviteLinkDomainRestrictionResult!
+  deleteWorkspaceInviteLinkDomainRestriction(input: DeleteWorkspaceInviteLinkDomainRestrictionInput!, requestContext: RequestContext!): DeleteWorkspaceInviteLinkDomainRestrictionResult!
   deleteManagedSecret(input: DeleteManagedSecretInput!, requestContext: RequestContext!): DeleteManagedSecretResult!
   deleteObject(input: DeleteObjectInput!, requestContext: RequestContext!): DeleteObjectResult!
   deleteTeamInvite(input: DeleteTeamInviteInput!, requestContext: RequestContext!): DeleteTeamInviteResult!

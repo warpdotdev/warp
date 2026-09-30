@@ -1,5 +1,6 @@
 pub mod add_invite_link_domain_restriction;
 pub mod add_object_guests;
+pub mod add_workspace_invite_link_domain_restriction;
 pub mod bulk_create_objects;
 pub mod confirm_file_artifact_upload;
 pub mod create_agent_task;
@@ -19,6 +20,7 @@ pub mod delete_managed_secret;
 pub mod delete_object;
 pub mod delete_runner;
 pub mod delete_team_invite;
+pub mod delete_workspace_invite_link_domain_restriction;
 pub mod empty_trash;
 pub mod expire_api_key;
 pub mod generate_api_key;

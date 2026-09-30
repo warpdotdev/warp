@@ -4,6 +4,16 @@ use cynic::{MutationBuilder, QueryBuilder};
 #[cfg(test)]
 use mockall::{automock, predicate::*};
 use warp_graphql::error::UserFacingErrorInterface;
+use warp_graphql::mutations::add_workspace_invite_link_domain_restriction::{
+    AddWorkspaceInviteLinkDomainRestriction, AddWorkspaceInviteLinkDomainRestrictionInput,
+    AddWorkspaceInviteLinkDomainRestrictionResult,
+    AddWorkspaceInviteLinkDomainRestrictionVariables,
+};
+use warp_graphql::mutations::delete_workspace_invite_link_domain_restriction::{
+    DeleteWorkspaceInviteLinkDomainRestriction, DeleteWorkspaceInviteLinkDomainRestrictionInput,
+    DeleteWorkspaceInviteLinkDomainRestrictionResult,
+    DeleteWorkspaceInviteLinkDomainRestrictionVariables,
+};
 use warp_graphql::mutations::purchase_addon_credits::{
     PurchaseAddonCredits, PurchaseAddonCreditsInput, PurchaseAddonCreditsResult,
     PurchaseAddonCreditsVariables,
@@ -52,6 +62,17 @@ pub enum PurchaseAddonCreditsOutcome {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait WorkspaceClient: 'static + Send + Sync {
+    async fn add_invite_link_domain_restriction(
+        &self,
+        workspace_uid: WorkspaceUid,
+        domain: String,
+    ) -> Result<WorkspacesMetadataWithPricing>;
+
+    async fn delete_invite_link_domain_restriction(
+        &self,
+        workspace_uid: WorkspaceUid,
+        domain_uid: ServerId,
+    ) -> Result<WorkspacesMetadataWithPricing>;
     async fn generate_stripe_billing_portal_link(&self, team_uid: ServerId) -> Result<String>;
     async fn remove_user_from_workspace(
         &self,
@@ -87,6 +108,89 @@ pub trait WorkspaceClient: 'static + Send + Sync {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl WorkspaceClient for ServerApi {
+    async fn add_invite_link_domain_restriction(
+        &self,
+        workspace_uid: WorkspaceUid,
+        domain: String,
+    ) -> Result<WorkspacesMetadataWithPricing> {
+        let variables = AddWorkspaceInviteLinkDomainRestrictionVariables {
+            input: AddWorkspaceInviteLinkDomainRestrictionInput {
+                workspace_uid: String::from(workspace_uid).into(),
+                domain,
+            },
+            request_context: get_request_context(),
+        };
+        let operation = AddWorkspaceInviteLinkDomainRestriction::build(variables);
+        let result = self
+            .send_graphql_request(operation, None)
+            .await?
+            .add_workspace_invite_link_domain_restriction;
+
+        match result {
+            AddWorkspaceInviteLinkDomainRestrictionResult::AddWorkspaceInviteLinkDomainRestrictionOutput(
+                result,
+            ) if result.success => {}
+            AddWorkspaceInviteLinkDomainRestrictionResult::AddWorkspaceInviteLinkDomainRestrictionOutput(
+                _,
+            ) => {
+                return Err(anyhow!(
+                    "failed to add workspace invite link domain restriction"
+                ));
+            }
+            AddWorkspaceInviteLinkDomainRestrictionResult::UserFacingError(error) => {
+                return Err(anyhow!(get_user_facing_error_message(error)));
+            }
+            AddWorkspaceInviteLinkDomainRestrictionResult::Unknown => {
+                return Err(anyhow!(
+                    "unknown error while adding workspace invite link domain restriction"
+                ));
+            }
+        }
+
+        TeamClient::workspaces_metadata(self).await
+    }
+
+    async fn delete_invite_link_domain_restriction(
+        &self,
+        workspace_uid: WorkspaceUid,
+        domain_uid: ServerId,
+    ) -> Result<WorkspacesMetadataWithPricing> {
+        let variables = DeleteWorkspaceInviteLinkDomainRestrictionVariables {
+            input: DeleteWorkspaceInviteLinkDomainRestrictionInput {
+                workspace_uid: String::from(workspace_uid).into(),
+                uid: domain_uid.into(),
+            },
+            request_context: get_request_context(),
+        };
+        let operation = DeleteWorkspaceInviteLinkDomainRestriction::build(variables);
+        let result = self
+            .send_graphql_request(operation, None)
+            .await?
+            .delete_workspace_invite_link_domain_restriction;
+
+        match result {
+            DeleteWorkspaceInviteLinkDomainRestrictionResult::DeleteWorkspaceInviteLinkDomainRestrictionOutput(
+                result,
+            ) if result.success => {}
+            DeleteWorkspaceInviteLinkDomainRestrictionResult::DeleteWorkspaceInviteLinkDomainRestrictionOutput(
+                _,
+            ) => {
+                return Err(anyhow!(
+                    "failed to delete workspace invite link domain restriction"
+                ));
+            }
+            DeleteWorkspaceInviteLinkDomainRestrictionResult::UserFacingError(error) => {
+                return Err(anyhow!(get_user_facing_error_message(error)));
+            }
+            DeleteWorkspaceInviteLinkDomainRestrictionResult::Unknown => {
+                return Err(anyhow!(
+                    "unknown error while deleting workspace invite link domain restriction"
+                ));
+            }
+        }
+
+        TeamClient::workspaces_metadata(self).await
+    }
     async fn generate_stripe_billing_portal_link(&self, team_uid: ServerId) -> Result<String> {
         let variables = StripeBillingPortalVariables {
             input: StripeBillingPortalInput {
