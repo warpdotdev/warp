@@ -100,3 +100,54 @@ fn test_sort_single_item() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].name, "single");
 }
+
+#[test]
+fn test_expand_tilde_bare_expands_to_home_directory() {
+    assert_eq!(
+        expand_tilde("~", Some("/home/remoteuser")),
+        "/home/remoteuser"
+    );
+}
+
+#[test]
+fn test_expand_tilde_with_subdir_expands_to_home_directory() {
+    assert_eq!(
+        expand_tilde("~/projects/warp", Some("/home/remoteuser")),
+        "/home/remoteuser/projects/warp"
+    );
+}
+
+#[test]
+fn test_expand_tilde_uses_remote_home_not_local_home() {
+    // Regression test for https://github.com/warpdotdev/warp/issues/15131: the remote
+    // session's home directory (e.g. a Linux path) must be used even though the local Warp
+    // process's home directory (e.g. a Windows path) differs.
+    assert_eq!(
+        expand_tilde("~", Some("/home/remoteuser")),
+        "/home/remoteuser"
+    );
+    assert_ne!(
+        expand_tilde("~", Some("/home/remoteuser")),
+        "C:\\Users\\localuser"
+    );
+}
+
+#[test]
+fn test_expand_tilde_no_home_directory_returns_unchanged() {
+    assert_eq!(expand_tilde("~", None), "~");
+    assert_eq!(expand_tilde("~/subdir", None), "~/subdir");
+}
+
+#[test]
+fn test_expand_tilde_absolute_path_unchanged() {
+    assert_eq!(expand_tilde("/tmp", Some("/home/remoteuser")), "/tmp");
+}
+
+#[test]
+fn test_expand_tilde_non_home_tilde_unchanged() {
+    // `~otheruser` is not the current user's home and should not be expanded.
+    assert_eq!(
+        expand_tilde("~otheruser", Some("/home/remoteuser")),
+        "~otheruser"
+    );
+}
