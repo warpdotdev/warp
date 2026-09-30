@@ -140,6 +140,7 @@ fn stream_client_actions_event() -> warp_multi_agent_api::ResponseEvent {
 fn assert_terminal_stream_task_update(
     app: &App,
     conversation_id: AIConversationId,
+    expected_state: AgentTaskState,
     expected_code: PlatformErrorCode,
 ) {
     BlocklistAIHistoryModel::handle(app).read(app, |history, _| {
@@ -147,7 +148,7 @@ fn assert_terminal_stream_task_update(
             .conversation(&conversation_id)
             .expect("test conversation must exist");
         let (state, update) = map_conversation_status_for_test(conversation);
-        assert_eq!(state, AgentTaskState::Error);
+        assert_eq!(state, expected_state);
 
         let update = update.expect("terminal stream error must include a task status update");
         assert_eq!(update.error_code, Some(expected_code));
@@ -175,6 +176,7 @@ fn transport_failure_classification_is_independent_of_stream_start() {
         assert_terminal_stream_task_update(
             &app,
             started_conversation_id,
+            AgentTaskState::Error,
             PlatformErrorCode::AgentStreamNetworkError,
         );
 
@@ -188,6 +190,7 @@ fn transport_failure_classification_is_independent_of_stream_start() {
         assert_terminal_stream_task_update(
             &app,
             retried_conversation_id,
+            AgentTaskState::Error,
             PlatformErrorCode::AgentStreamNetworkError,
         );
     });
@@ -504,22 +507,38 @@ fn explicit_stream_finished_failures_are_classified_without_init() {
         initialize_app_for_terminal_view(&mut app);
         let terminal = add_window_with_terminal(&mut app, None);
 
-        let reasons = [
-            response_event::stream_finished::Reason::Other(Default::default()),
-            response_event::stream_finished::Reason::LlmUnavailable(Default::default()),
-            response_event::stream_finished::Reason::ChatgptSubscriptionError(
-                response_event::stream_finished::ChatGptSubscriptionError {
-                    message: "subscription limit reached".to_owned(),
-                    ..Default::default()
-                },
+        let cases = [
+            (
+                response_event::stream_finished::Reason::Other(Default::default()),
+                AgentTaskState::Error,
+                PlatformErrorCode::AgentStreamFailure,
             ),
-            response_event::stream_finished::Reason::InternalError(
-                response_event::stream_finished::InternalError {
-                    message: "server stream failure".to_owned(),
-                },
+            (
+                response_event::stream_finished::Reason::LlmUnavailable(Default::default()),
+                AgentTaskState::Error,
+                PlatformErrorCode::AgentStreamFailure,
+            ),
+            (
+                response_event::stream_finished::Reason::ChatgptSubscriptionError(
+                    response_event::stream_finished::ChatGptSubscriptionError {
+                        message: "subscription limit reached".to_owned(),
+                        ..Default::default()
+                    },
+                ),
+                AgentTaskState::Failed,
+                PlatformErrorCode::InvalidRequest,
+            ),
+            (
+                response_event::stream_finished::Reason::InternalError(
+                    response_event::stream_finished::InternalError {
+                        message: "server stream failure".to_owned(),
+                    },
+                ),
+                AgentTaskState::Error,
+                PlatformErrorCode::AgentStreamFailure,
             ),
         ];
-        for reason in reasons {
+        for (reason, expected_state, expected_code) in cases {
             let (conversation_id, stream) = register_mock_response_stream(&terminal, &mut app);
             stream.update(&mut app, |stream, ctx| {
                 stream.emit_response_event_for_test(
@@ -542,7 +561,8 @@ fn explicit_stream_finished_failures_are_classified_without_init() {
             assert_terminal_stream_task_update(
                 &app,
                 conversation_id,
-                PlatformErrorCode::AgentStreamFailure,
+                expected_state,
+                expected_code,
             );
         }
     });
