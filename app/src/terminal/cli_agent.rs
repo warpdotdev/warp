@@ -142,12 +142,14 @@ const GROK_COLOR: ColorU = ColorU {
     b: 16,
     a: 255,
 };
+
 const KIRO_PURPLE: ColorU = ColorU {
     r: 144,
     g: 70,
     b: 255,
     a: 255,
 };
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Sequence, Serialize, Deserialize)]
 pub enum CLIAgent {
     Claude,
