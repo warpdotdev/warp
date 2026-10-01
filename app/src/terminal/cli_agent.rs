@@ -203,7 +203,7 @@ impl CLIAgent {
                 "run-tui",
             ],
             CLIAgent::Grok => &["grok"],
-            CLIAgent::Kiro => &["kiro-cli"],
+            CLIAgent::Kiro => &["kiro-cli", "kiro"],
             CLIAgent::Unknown => &[],
         }
     }
