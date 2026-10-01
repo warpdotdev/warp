@@ -151,6 +151,8 @@ pub struct CodexUsage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cached_input_tokens: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write_input_tokens: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_output_tokens: Option<i64>,
