@@ -71,6 +71,31 @@ fn chatgpt_subscription_error_becomes_disclosure_once_conversation_uses_warp_cre
 }
 
 #[test]
+fn chatgpt_subscription_message_with_links_appends_only_url_actions() {
+    let message = "Continue with Warp credits to keep going.";
+    assert_eq!(
+        chatgpt_subscription_message_with_links(message, &[]),
+        message
+    );
+    assert_eq!(
+        chatgpt_subscription_message_with_links(
+            message,
+            &[
+                chatgpt_action(ChatGPTSubscriptionErrorActionKind::Retry),
+                ChatGPTSubscriptionErrorAction {
+                    kind: ChatGPTSubscriptionErrorActionKind::OpenUrl {
+                        url: "https://chatgpt.com/#settings/Usage".to_string(),
+                    },
+                    label: "Manage usage".to_string(),
+                },
+                chatgpt_action(ChatGPTSubscriptionErrorActionKind::ContinueWithWarpCredits),
+            ],
+        ),
+        format!("{message}\n\nManage usage: https://chatgpt.com/#settings/Usage")
+    );
+}
+
+#[test]
 fn chatgpt_subscription_error_suppresses_usage_notice() {
     let error = chatgpt_subscription_error(vec![]);
     assert!(!should_show_failed_output_usage_notice(

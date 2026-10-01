@@ -24,7 +24,8 @@ use warp::tui_export::{
     FailedOutputPresentation, MessageId, ModelEvent, ModelEventDispatcher, ReceivedMessageDisplay,
     RenderableAIError, SummarizationType, TelemetryEvent, TerminalModel, TodoOperation, TodoStatus,
     TuiOnboardingMarker, TuiOnboardingMarkers, TuiOnboardingMarkersEvent, UserWorkspaces,
-    failed_output_presentation, should_show_failed_output_usage_notice,
+    chatgpt_subscription_message_with_links, failed_output_presentation,
+    should_show_failed_output_usage_notice,
 };
 use warpui::SingletonEntity;
 use warpui_core::elements::MouseStateHandle;
@@ -316,16 +317,21 @@ fn render_failure_section(
             (message.clone(), body_style),
         ])
         .finish(),
-        // The TUI cannot dispatch the recovery actions, so only the copy is shown.
-        FailedOutputPresentation::ChatGPTSubscription { title, message, .. } => {
-            TuiText::from_spans([
-                (FAILURE_WARNING_PREFIX.to_owned(), error_style),
-                (title.clone(), error_style.add_modifier(Modifier::BOLD)),
-                ("\n  ".to_owned(), body_style),
-                (message.clone(), body_style),
-            ])
-            .finish()
-        }
+        // The TUI cannot dispatch the recovery actions, so only the copy and any links are shown.
+        FailedOutputPresentation::ChatGPTSubscription {
+            title,
+            message,
+            actions,
+        } => TuiText::from_spans([
+            (FAILURE_WARNING_PREFIX.to_owned(), error_style),
+            (title.clone(), error_style.add_modifier(Modifier::BOLD)),
+            ("\n  ".to_owned(), body_style),
+            (
+                chatgpt_subscription_message_with_links(message, actions).replace('\n', "\n  "),
+                body_style,
+            ),
+        ])
+        .finish(),
         FailedOutputPresentation::ChatGPTSubscriptionContinuedWithWarpCredits => {
             TuiText::new(CHATGPT_CONTINUED_WITH_WARP_CREDITS_TEXT)
                 .with_style(body_style)
@@ -360,7 +366,12 @@ fn failure_text(presentation: &FailedOutputPresentation, app: &AppContext) -> St
         FailedOutputPresentation::InvalidApiKey { title, detail } => {
             format!("{title}\n{detail}")
         }
-        FailedOutputPresentation::ChatGPTSubscription { title, message, .. } => {
+        FailedOutputPresentation::ChatGPTSubscription {
+            title,
+            message,
+            actions,
+        } => {
+            let message = chatgpt_subscription_message_with_links(message, actions);
             format!("{title}\n{message}")
         }
         FailedOutputPresentation::ChatGPTSubscriptionContinuedWithWarpCredits => {

@@ -80,7 +80,8 @@ use crate::ai::blocklist::model::{AIBlockModel, AIBlockModelHelper};
 use crate::ai::blocklist::secret_redaction::{SecretRedactionState, redact_secrets_in_element};
 use crate::ai::blocklist::view_util::{
     CHATGPT_CONTINUED_WITH_WARP_CREDITS_TEXT, FailedOutputPresentation,
-    OUT_OF_CREDITS_SUBSCRIBE_LABEL, error_color, failed_output_presentation,
+    OUT_OF_CREDITS_SUBSCRIBE_LABEL, chatgpt_subscription_message_with_links, error_color,
+    failed_output_presentation,
 };
 use crate::ai::blocklist::{BlocklistAIActionModel, ShellCommandExecutor, TextLocation};
 use crate::ai::loading::shimmering_warp_loading_text;
@@ -3428,18 +3429,7 @@ fn render_chatgpt_subscription_error(
     let message = if action_props.is_some() {
         message.to_string()
     } else {
-        actions
-            .iter()
-            .filter_map(|action| match &action.kind {
-                ChatGPTSubscriptionErrorActionKind::OpenUrl { url } => {
-                    Some(format!("{}: {url}", action.label))
-                }
-                ChatGPTSubscriptionErrorActionKind::Retry
-                | ChatGPTSubscriptionErrorActionKind::ContinueWithWarpCredits => None,
-            })
-            .fold(message.to_string(), |text, link| {
-                format!("{text}\n\n{link}")
-            })
+        chatgpt_subscription_message_with_links(message, actions)
     };
 
     let alert_icon = ConstrainedBox::new(

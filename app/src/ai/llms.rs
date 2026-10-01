@@ -2036,13 +2036,17 @@ impl LLMPreferences {
     /// stops funding OpenAI requests, since the server derives the agent-mode default and the
     /// tier gating of OpenAI models from that state. The first status the server reports after
     /// login is only recorded: the login user fetch already delivered a catalog computed from it.
+    /// A connect attempt that starts before any status was reported is the exception: the
+    /// catalog predates whatever the attempt produces, so it is treated as a not-connected
+    /// baseline.
     fn refresh_models_if_chatgpt_subscription_changed(&mut self, ctx: &mut ModelContext<Self>) {
         let manager = ApiKeyManager::as_ref(ctx);
         if matches!(
             manager.chatgpt_connection_status(),
             ChatGPTConnectionStatus::Unknown
         ) {
-            self.last_seen_chatgpt_subscription_connected = None;
+            self.last_seen_chatgpt_subscription_connected =
+                manager.chatgpt_oauth_pending().then_some(false);
             return;
         }
         let connected = manager.has_chatgpt_subscription();

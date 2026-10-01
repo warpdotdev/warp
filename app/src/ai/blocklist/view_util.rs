@@ -18,7 +18,9 @@ use warpui::ui_components::text::Span;
 use warpui::{AppContext, Element, EntityId, EventContext, SingletonEntity};
 
 use crate::ai::AIRequestUsageModel;
-use crate::ai::agent::{ChatGPTSubscriptionErrorAction, RenderableAIError};
+use crate::ai::agent::{
+    ChatGPTSubscriptionErrorAction, ChatGPTSubscriptionErrorActionKind, RenderableAIError,
+};
 use crate::settings::UsageDisplayUnit;
 use crate::themes::theme::{AnsiColorIdentifier, Fill, WarpTheme};
 use crate::ui_components::icons::Icon;
@@ -206,6 +208,26 @@ pub fn failed_output_presentation(
             actions: actions.clone(),
         },
     })
+}
+
+/// Appends each `OpenUrl` recovery action of a ChatGPT subscription error to its message as a
+/// `label: url` line, for surfaces that cannot render the actions as buttons.
+pub fn chatgpt_subscription_message_with_links(
+    message: &str,
+    actions: &[ChatGPTSubscriptionErrorAction],
+) -> String {
+    actions
+        .iter()
+        .filter_map(|action| match &action.kind {
+            ChatGPTSubscriptionErrorActionKind::OpenUrl { url } => {
+                Some(format!("{}: {url}", action.label))
+            }
+            ChatGPTSubscriptionErrorActionKind::Retry
+            | ChatGPTSubscriptionErrorActionKind::ContinueWithWarpCredits => None,
+        })
+        .fold(message.to_string(), |text, link| {
+            format!("{text}\n\n{link}")
+        })
 }
 
 /// Whether a failed Agent Mode response should explain that it will not count towards usage.
