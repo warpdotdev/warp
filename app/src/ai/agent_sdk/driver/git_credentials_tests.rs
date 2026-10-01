@@ -158,7 +158,7 @@ fn write_gh_hosts_yml_uses_gh_cli_filename() -> Result<()> {
             email: Some("octocat@example.com".to_string()),
             host: "github.com".to_string(),
         }],
-        temp_dir.path(),
+        &gh_config_dir,
     )?;
 
     let hosts_path = gh_config_dir.join(GH_HOSTS_FILENAME);
@@ -198,7 +198,7 @@ fn write_gh_hosts_yml_excludes_gitlab_credentials() -> Result<()> {
                 host: "gitlab.com".to_string(),
             },
         ],
-        temp_dir.path(),
+        &gh_config_dir,
     )?;
 
     let hosts = std::fs::read_to_string(gh_config_dir.join(GH_HOSTS_FILENAME))?;
@@ -212,6 +212,7 @@ fn write_gh_hosts_yml_excludes_gitlab_credentials() -> Result<()> {
 #[test]
 fn write_gh_hosts_yml_skips_gitlab_only_credentials() -> Result<()> {
     let temp_dir = tempfile::tempdir()?;
+    let gh_config_dir = temp_dir.path().join(".config").join("gh");
 
     write_gh_hosts_yml(
         &[GitCredential {
@@ -220,12 +221,78 @@ fn write_gh_hosts_yml_skips_gitlab_only_credentials() -> Result<()> {
             email: None,
             host: "gitlab.com".to_string(),
         }],
-        temp_dir.path(),
+        &gh_config_dir,
     )?;
 
-    assert!(!temp_dir.path().join(".config").join("gh").exists());
+    assert!(!gh_config_dir.exists());
 
     Ok(())
+}
+
+#[test]
+fn gh_config_dir_follows_gh_precedence() {
+    struct Case {
+        name: &'static str,
+        is_windows: bool,
+        env: Vec<(&'static str, &'static str)>,
+        expected: &'static str,
+    }
+    let cases = [
+        Case {
+            name: "GH_CONFIG_DIR wins over everything",
+            is_windows: true,
+            env: vec![
+                ("GH_CONFIG_DIR", "/gh-config-dir"),
+                ("XDG_CONFIG_HOME", "/xdg"),
+                ("APPDATA", "/appdata"),
+            ],
+            expected: "/gh-config-dir",
+        },
+        Case {
+            name: "XDG_CONFIG_HOME wins over APPDATA",
+            is_windows: true,
+            env: vec![("XDG_CONFIG_HOME", "/xdg"), ("APPDATA", "/appdata")],
+            expected: "/xdg/gh",
+        },
+        Case {
+            name: "Windows uses APPDATA",
+            is_windows: true,
+            env: vec![("APPDATA", "/appdata")],
+            expected: "/appdata/GitHub CLI",
+        },
+        Case {
+            name: "other platforms ignore APPDATA",
+            is_windows: false,
+            env: vec![("APPDATA", "/appdata")],
+            expected: "/home/user/.config/gh",
+        },
+        Case {
+            name: "empty variables are treated as unset",
+            is_windows: true,
+            env: vec![
+                ("GH_CONFIG_DIR", ""),
+                ("XDG_CONFIG_HOME", ""),
+                ("APPDATA", ""),
+            ],
+            expected: "/home/user/.config/gh",
+        },
+        Case {
+            name: "nothing set falls back to the home directory",
+            is_windows: true,
+            env: vec![],
+            expected: "/home/user/.config/gh",
+        },
+    ];
+
+    for case in cases {
+        let resolved = resolve_gh_config_dir(Path::new("/home/user"), case.is_windows, |key| {
+            case.env
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| OsString::from(value))
+        });
+        assert_eq!(resolved, PathBuf::from(case.expected), "{}", case.name);
+    }
 }
 
 fn github_credential() -> GitCredential {
