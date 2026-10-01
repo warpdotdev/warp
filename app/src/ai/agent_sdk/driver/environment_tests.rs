@@ -67,7 +67,7 @@ fn setup_timeout_covers_command_start_and_exit_without_resetting_deadline() {
             let error = wait.await.unwrap_err();
             assert_eq!(
                 error.to_string(),
-                "Setup command #2 timed out after 1800s while waiting for command startup or completion: `./setup.sh`"
+                "Setup command #2 timed out after 1800s while waiting for command to complete: `./setup.sh`"
             );
             if let Some(start_tx) = start_tx {
                 assert!(start_tx.is_canceled());

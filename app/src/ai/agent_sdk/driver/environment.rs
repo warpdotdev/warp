@@ -41,7 +41,7 @@ const ENVIRONMENT_SNAPSHOT_CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
 const CLONE_FAILURE_IDENTITY_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 const CLONE_FAILURE_OUTPUT_TRUNCATION_MARKER: &str = "\n… clone output truncated …\n";
 const SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER: &str = "\n… setup command output truncated …\n";
-const SETUP_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+const SETUP_COMMAND_TIMEOUT: Duration = Duration::from_mins(30);
 const SETUP_COMMAND_CWD_RESET_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug)]
@@ -62,7 +62,7 @@ impl SetupCommandPhase {
 impl fmt::Display for SetupCommandPhase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Execute => "waiting for command startup or completion",
+            Self::Execute => "waiting for command to complete",
             Self::ResetWorkingDirectory => "resetting the working directory after the command",
         })
     }
