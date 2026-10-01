@@ -470,6 +470,7 @@ pub enum CLIAgentType {
     Vibe,
     Antigravity,
     Grok,
+    Muse,
     /// Warp's own headless TUI, targeted by the code review panel as a CLI-agent-equivalent destination.
     WarpTui,
     Unknown,
