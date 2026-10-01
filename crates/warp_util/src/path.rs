@@ -123,7 +123,8 @@ pub fn user_friendly_path<'a>(path: &'a str, home_dir: Option<&str>) -> Cow<'a, 
         .unwrap_or(Cow::Borrowed(path))
 }
 
-/// Expands an exact `~` or `~` followed by a session path separator against the session home.
+/// Expands `~` alone, or a path beginning with `~` and a session path separator, against the
+/// session home.
 /// Other paths, including `~user` and paths without a known home, are returned unchanged.
 pub fn expand_session_home(
     path: &str,
