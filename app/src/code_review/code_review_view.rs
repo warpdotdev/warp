@@ -3028,6 +3028,7 @@ impl CodeReviewView {
                                 )
                                 .lazy_layout()
                                 .line_height_override(CODE_REVIEW_EDITOR_LINE_HEIGHT_RATIO)
+                                .follows_word_wrap_setting()
                                 .with_show_comment_editor_provider(ShowCommentEditor {
                                     comment_list_save_position_id: self
                                         .code_review_list_position_id
@@ -3114,6 +3115,7 @@ impl CodeReviewView {
                     CodeEditorRenderOptions::new(VerticalExpansionBehavior::InfiniteHeight)
                         .lazy_layout()
                         .line_height_override(CODE_REVIEW_EDITOR_LINE_HEIGHT_RATIO)
+                        .follows_word_wrap_setting()
                         .with_show_comment_editor_provider(ShowCommentEditor {
                             comment_list_save_position_id: self
                                 .code_review_list_position_id
