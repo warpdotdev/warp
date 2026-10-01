@@ -2222,13 +2222,17 @@ impl AgentDriver {
                     additional_source_repos,
                     repository_preparation_overrides,
                     remove_repository_origins,
+                    session_shell_type,
                 ) = foreground
-                    .spawn(|me, _| {
+                    .spawn(|me, ctx| {
                         (
                             me.environment.clone(),
                             me.additional_source_repos.clone(),
                             me.repository_preparation_overrides.clone(),
                             me.remove_repository_origins,
+                            me.terminal_driver
+                                .as_ref(ctx)
+                                .active_session_shell_type(ctx),
                         )
                     })
                     .await?;
@@ -2239,7 +2243,10 @@ impl AgentDriver {
                 // The Factory definition checkout is run-scoped: the dispatch decides
                 // whether this run gets one by attaching the clone variables,
                 // independent of which environment the run executes in.
-                environment::prepend_factory_definition_clone(&mut setup_commands);
+                environment::prepend_factory_definition_clone(
+                    &mut setup_commands,
+                    session_shell_type,
+                );
                 let source_repos = environment::merge_repos_deduped(
                     environment_opt
                         .as_ref()

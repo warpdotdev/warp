@@ -2068,6 +2068,7 @@ fn factory_clone_is_prepended_when_clone_values_are_present() {
     super::prepend_factory_definition_clone_for_values(
         "https://t:token@definitions.example.com/team/factory.git",
         "acme_factory_repo",
+        ShellType::Bash,
         &mut setup_commands,
     );
     assert_eq!(
@@ -2080,11 +2081,48 @@ fn factory_clone_is_prepended_when_clone_values_are_present() {
 }
 
 #[test]
+fn factory_clone_references_env_vars_with_the_session_shells_syntax() {
+    let posix_command = "git clone \"$WARP_FACTORY_REPO_CLONE_URL\" \"$WARP_FACTORY_REPO_DIR\"";
+    let powershell_command =
+        "git clone \"$env:WARP_FACTORY_REPO_CLONE_URL\" \"$env:WARP_FACTORY_REPO_DIR\"";
+    for (shell_type, expected) in [
+        (ShellType::Bash, posix_command),
+        (ShellType::Zsh, posix_command),
+        (ShellType::Fish, posix_command),
+        (ShellType::PowerShell, powershell_command),
+    ] {
+        let mut setup_commands = Vec::new();
+        super::prepend_factory_definition_clone_for_values(
+            "https://t:token@definitions.example.com/team/factory.git",
+            "acme_factory_repo",
+            shell_type,
+            &mut setup_commands,
+        );
+        assert_eq!(setup_commands, vec![expected.to_string()], "{shell_type:?}");
+    }
+}
+
+#[test]
 fn factory_clone_is_skipped_without_clone_values() {
     let mut setup_commands = vec!["make setup".to_string()];
-    super::prepend_factory_definition_clone_for_values("", "", &mut setup_commands);
-    super::prepend_factory_definition_clone_for_values("url", "  ", &mut setup_commands);
-    super::prepend_factory_definition_clone_for_values("  ", "dir", &mut setup_commands);
+    super::prepend_factory_definition_clone_for_values(
+        "",
+        "",
+        ShellType::Bash,
+        &mut setup_commands,
+    );
+    super::prepend_factory_definition_clone_for_values(
+        "url",
+        "  ",
+        ShellType::Bash,
+        &mut setup_commands,
+    );
+    super::prepend_factory_definition_clone_for_values(
+        "  ",
+        "dir",
+        ShellType::Bash,
+        &mut setup_commands,
+    );
     assert_eq!(setup_commands, vec!["make setup".to_string()]);
 }
 
@@ -2100,6 +2138,7 @@ fn factory_clone_defers_to_a_persisted_environment_copy() {
     super::prepend_factory_definition_clone_for_values(
         "https://t:token@definitions.example.com/team/factory.git",
         "acme_factory_repo",
+        ShellType::Bash,
         &mut setup_commands,
     );
     assert_eq!(setup_commands, vec![persisted, "make setup".to_string()]);
@@ -2114,6 +2153,7 @@ fn factory_clone_defers_to_a_persisted_bare_clone_copy() {
     super::prepend_factory_definition_clone_for_values(
         "https://t:token@definitions.example.com/team/factory.git",
         "acme_factory_repo",
+        ShellType::Bash,
         &mut setup_commands,
     );
     assert_eq!(setup_commands, vec![persisted, "make setup".to_string()]);

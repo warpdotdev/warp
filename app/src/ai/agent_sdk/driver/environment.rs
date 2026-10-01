@@ -394,15 +394,24 @@ const FACTORY_REPO_DIR_ENV_VAR: &str = "WARP_FACTORY_REPO_DIR";
 /// Prepends the setup command that clones a Factory's definition repository
 /// when the dispatch attached the clone variables to this run, so the checkout
 /// exists before user-declared setup commands run.
-pub(super) fn prepend_factory_definition_clone(setup_commands: &mut Vec<String>) {
+pub(super) fn prepend_factory_definition_clone(
+    setup_commands: &mut Vec<String>,
+    shell_type: Option<ShellType>,
+) {
     let clone_url = std::env::var(FACTORY_REPO_CLONE_URL_ENV_VAR).unwrap_or_default();
     let clone_dir = std::env::var(FACTORY_REPO_DIR_ENV_VAR).unwrap_or_default();
-    prepend_factory_definition_clone_for_values(&clone_url, &clone_dir, setup_commands);
+    prepend_factory_definition_clone_for_values(
+        &clone_url,
+        &clone_dir,
+        shell_type.unwrap_or(ShellType::Bash),
+        setup_commands,
+    );
 }
 
 fn prepend_factory_definition_clone_for_values(
     clone_url: &str,
     clone_dir: &str,
+    shell_type: ShellType,
     setup_commands: &mut Vec<String>,
 ) {
     if clone_url.trim().is_empty() || clone_dir.trim().is_empty() {
@@ -422,10 +431,21 @@ fn prepend_factory_definition_clone_for_values(
     // command text. There is deliberately no existence guard: a bare clone
     // into an already-present target directory fails, which is treated as a
     // fatal setup-command error upstream.
-    setup_commands.insert(
-        0,
-        format!("git clone \"${FACTORY_REPO_CLONE_URL_ENV_VAR}\" \"${FACTORY_REPO_DIR_ENV_VAR}\""),
-    );
+    setup_commands.insert(0, factory_definition_clone_command(shell_type));
+}
+
+fn factory_definition_clone_command(shell_type: ShellType) -> String {
+    // PowerShell reads environment variables through the `env:` drive; a bare `$NAME` there is
+    // an unset PowerShell variable that expands to an empty string.
+    let env_var_reference = |name: &str| match shell_type {
+        ShellType::PowerShell => format!("$env:{name}"),
+        ShellType::Zsh | ShellType::Bash | ShellType::Fish => format!("${name}"),
+    };
+    format!(
+        "git clone \"{}\" \"{}\"",
+        env_var_reference(FACTORY_REPO_CLONE_URL_ENV_VAR),
+        env_var_reference(FACTORY_REPO_DIR_ENV_VAR)
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
