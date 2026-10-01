@@ -347,6 +347,82 @@ fn counter_bounds_and_absence_survive_serialization() {
 }
 
 #[test]
+fn excessive_cache_write_totals_preserve_the_valid_prefix() {
+    for input in [0, 100, i64::MAX - 1] {
+        let usage = json!({
+            "input_tokens": input,
+            "cache_write_input_tokens": input,
+            "output_tokens": 0,
+            "total_tokens": input,
+        });
+        let valid = json!({"type":"event_msg","payload":{"type":"token_count","info":{
+            "total_token_usage": usage,
+            "last_token_usage": usage,
+        }}});
+        let mut invalid = valid.clone();
+        invalid["payload"]["info"]["total_token_usage"]["cache_write_input_tokens"] =
+            json!(input + 1);
+        let snapshot = capture(&[
+            json!({"type":"turn_context","payload":{"model":"codex-a"}}),
+            valid,
+            invalid,
+        ]);
+        let payload = serde_json::to_value(&snapshot.payload).unwrap();
+        assert_eq!(payload["usage"], usage);
+        assert_eq!(
+            payload["attribution"],
+            json!([{"model":"codex-a","usage":usage}])
+        );
+        assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
+        assert_eq!(snapshot.diagnostics.reasons[&ReasonCode::InvalidData], 1);
+    }
+}
+
+#[test]
+fn excessive_last_cache_write_usage_cannot_confirm_attribution() {
+    let first_usage = json!({
+        "input_tokens": 100,
+        "cache_write_input_tokens": 60,
+        "output_tokens": 10,
+        "total_tokens": 110,
+    });
+    let total_usage = json!({
+        "input_tokens": 200,
+        "cache_write_input_tokens": 120,
+        "output_tokens": 20,
+        "total_tokens": 220,
+    });
+    let mut invalid_last = first_usage.clone();
+    invalid_last["cache_write_input_tokens"] = json!(101);
+    let snapshot = capture(&[
+        json!({"type":"turn_context","payload":{"model":"codex-a"}}),
+        json!({"type":"event_msg","payload":{"type":"token_count","info":{
+            "total_token_usage":first_usage,
+            "last_token_usage":first_usage,
+        }}}),
+        json!({"type":"event_msg","payload":{"type":"token_count","info":{
+            "total_token_usage":total_usage,
+            "last_token_usage":invalid_last,
+        }}}),
+    ]);
+    let payload = serde_json::to_value(&snapshot.payload).unwrap();
+    assert_eq!(payload["usage"], total_usage);
+    assert_eq!(
+        payload["attribution"],
+        json!([
+            {"usage":first_usage},
+            {"model":"codex-a","usage":first_usage},
+        ])
+    );
+    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
+    assert_eq!(snapshot.diagnostics.reasons[&ReasonCode::InvalidData], 1);
+    assert_eq!(
+        snapshot.diagnostics.reasons[&ReasonCode::AmbiguousAccounting],
+        1
+    );
+}
+
+#[test]
 fn malformed_usage_cannot_establish_known_zero() {
     let snapshot = capture(&[
         json!({"type":"event_msg","payload":{"type":"token_count","info":{}}}),
