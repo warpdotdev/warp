@@ -299,6 +299,37 @@ fn droid_default_handler_forwards_permission_request() {
 }
 
 #[test]
+fn hermes_end_to_end_parsing_and_handling() {
+    let mut handler = create_handler(&CLIAgent::Hermes).expect("should create handler");
+
+    // Payload shapes mirror what Hermes emits (hermes_cli/terminal_notify.py):
+    // `response` on `stop`, `summary` on `permission_request`.
+    let stop_body = r#"{"v":1,"agent":"hermes","event":"stop","session_id":"sess-7","cwd":"/tmp/proj","project":"proj","response":"Done: fixed the bug"}"#;
+    let parsed_stop = handler
+        .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), stop_body, false)
+        .expect("should parse stop");
+    assert_eq!(parsed_stop.agent, CLIAgent::Hermes);
+    assert_eq!(parsed_stop.event, CLIAgentEventType::Stop);
+    assert_eq!(parsed_stop.session_id.as_deref(), Some("sess-7"));
+    assert_eq!(
+        parsed_stop.payload.response.as_deref(),
+        Some("Done: fixed the bug")
+    );
+    assert!(handler.handle_event(parsed_stop).is_some());
+
+    let approval_body = r#"{"v":1,"agent":"hermes","event":"permission_request","session_id":"sess-7","cwd":"/tmp/proj","project":"proj","summary":"Approve dangerous command?"}"#;
+    let parsed_approval = handler
+        .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), approval_body, false)
+        .expect("should parse permission_request");
+    assert_eq!(parsed_approval.event, CLIAgentEventType::PermissionRequest);
+    assert_eq!(
+        parsed_approval.payload.summary.as_deref(),
+        Some("Approve dangerous command?")
+    );
+    assert!(handler.handle_event(parsed_approval).is_some());
+}
+
+#[test]
 fn warp_tui_notifications_are_supported() {
     assert!(is_agent_supported(&CLIAgent::WarpTui));
     let mut handler = create_handler(&CLIAgent::WarpTui).expect("should create handler");
