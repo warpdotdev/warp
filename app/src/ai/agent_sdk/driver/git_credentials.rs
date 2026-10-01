@@ -87,7 +87,33 @@ pub(crate) fn ensure_workload_token_available() -> Result<(), TaskGitCredentials
 }
 
 fn home_dir() -> Result<PathBuf> {
-    dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
+    let home = if cfg!(windows) {
+        git_home_dir(|key| std::env::var_os(key))
+    } else {
+        None
+    };
+    home.or_else(dirs::home_dir)
+        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
+}
+
+/// Resolves `~` the way git does on Windows: from the environment, not from the profile of the
+/// account the process runs as. The credential files must land where git's `store` helper reads
+/// them, and `dirs::home_dir` disagrees with git when a process running as SYSTEM carries another
+/// user's `USERPROFILE`.
+fn git_home_dir(get_env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    let non_empty = |key: &str| get_env(key).filter(|value| !value.is_empty());
+    if let Some(home) = non_empty("HOME") {
+        return Some(PathBuf::from(home));
+    }
+    if let (Some(drive), Some(path)) = (non_empty("HOMEDRIVE"), non_empty("HOMEPATH")) {
+        let mut combined = drive;
+        combined.push(path);
+        let combined = PathBuf::from(combined);
+        if combined.is_dir() {
+            return Some(combined);
+        }
+    }
+    non_empty("USERPROFILE").map(PathBuf::from)
 }
 
 /// Write `content` to `path` using owner-only (0600) permissions.

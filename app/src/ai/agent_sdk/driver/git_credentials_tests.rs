@@ -734,3 +734,81 @@ fn refreshed_credentials_return_err_when_the_local_write_fails() {
     assert!(message.contains("Failed to write refreshed git credentials"));
     assert!(message.contains("github.com"));
 }
+
+#[test]
+fn git_home_dir_resolves_from_the_environment_in_git_order() -> Result<()> {
+    let existing_home = tempfile::tempdir()?;
+    let existing_home_path = existing_home.path().to_string_lossy().into_owned();
+    let missing_home_path = existing_home
+        .path()
+        .join("does-not-exist")
+        .to_string_lossy()
+        .into_owned();
+    // Splits a path into the non-empty drive and path halves whose concatenation is the original.
+    let split_drive = |path: &str| {
+        let (drive, rest) = path.split_at(1);
+        (drive.to_string(), rest.to_string())
+    };
+    let (existing_drive, existing_rest) = split_drive(&existing_home_path);
+    let (missing_drive, missing_rest) = split_drive(&missing_home_path);
+
+    struct Case {
+        name: &'static str,
+        env: Vec<(&'static str, String)>,
+        expected: Option<String>,
+    }
+    let cases = [
+        Case {
+            name: "HOME wins over every other variable",
+            env: vec![
+                ("HOME", "/from/home".to_string()),
+                ("HOMEDRIVE", existing_drive.clone()),
+                ("HOMEPATH", existing_rest.clone()),
+                ("USERPROFILE", "/from/userprofile".to_string()),
+            ],
+            expected: Some("/from/home".to_string()),
+        },
+        Case {
+            name: "an empty HOME is treated as unset",
+            env: vec![
+                ("HOME", String::new()),
+                ("USERPROFILE", "/from/userprofile".to_string()),
+            ],
+            expected: Some("/from/userprofile".to_string()),
+        },
+        Case {
+            name: "HOMEDRIVE and HOMEPATH win over USERPROFILE when the directory exists",
+            env: vec![
+                ("HOMEDRIVE", existing_drive),
+                ("HOMEPATH", existing_rest),
+                ("USERPROFILE", "/from/userprofile".to_string()),
+            ],
+            expected: Some(existing_home_path.clone()),
+        },
+        Case {
+            name: "a missing HOMEDRIVE and HOMEPATH directory falls back to USERPROFILE",
+            env: vec![
+                ("HOMEDRIVE", missing_drive),
+                ("HOMEPATH", missing_rest),
+                ("USERPROFILE", "/from/userprofile".to_string()),
+            ],
+            expected: Some("/from/userprofile".to_string()),
+        },
+        Case {
+            name: "nothing set resolves to nothing",
+            env: vec![],
+            expected: None,
+        },
+    ];
+
+    for case in cases {
+        let resolved = git_home_dir(|key| {
+            case.env
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| OsString::from(value))
+        });
+        assert_eq!(resolved, case.expected.map(PathBuf::from), "{}", case.name);
+    }
+    Ok(())
+}
