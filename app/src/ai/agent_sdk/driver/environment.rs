@@ -41,7 +41,7 @@ const ENVIRONMENT_SNAPSHOT_CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
 const CLONE_FAILURE_IDENTITY_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 const CLONE_FAILURE_OUTPUT_TRUNCATION_MARKER: &str = "\n… clone output truncated …\n";
 const SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER: &str = "\n… setup command output truncated …\n";
-const SETUP_COMMAND_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const SETUP_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const SETUP_COMMAND_CWD_RESET_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug)]

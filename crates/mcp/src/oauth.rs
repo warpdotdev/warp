@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use futures::future::BoxFuture;
 use oauth2::{RefreshToken, TokenResponse as _};
 use rmcp::transport::auth::{
-    AuthClient, AuthorizationManager, CredentialStore, InMemoryCredentialStore, OAuthClientConfig,
-    OAuthState, StoredCredentials,
+    AuthClient, AuthorizationManager, AuthorizationRequest, CredentialStore,
+    InMemoryCredentialStore, OAuthClientConfig, OAuthState, StoredCredentials,
 };
 use rmcp::transport::{AuthError, AuthorizationSession};
 use serde::de::DeserializeOwned;
@@ -335,7 +335,7 @@ pub async fn make_authenticated_client(
         ));
     }
 
-    let metadata = auth_manager.discover_metadata().await?;
+    let metadata = auth_manager.resolve_metadata().await?.metadata;
 
     // Configure the auth manager's OAuth client using dynamic or static client registration.
     let mut oauth_state = if let Some(provider) = metadata
@@ -387,7 +387,7 @@ pub async fn make_authenticated_client(
         // Try dynamic client registration.
         let mut oauth_state = OAuthState::Unauthorized(auth_manager);
         oauth_state
-            .start_authorization(&[], &redirect_uri, Some("Warp"))
+            .start_authorization(AuthorizationRequest::new(&redirect_uri).with_client_name("Warp"))
             .await?;
         oauth_state
     };

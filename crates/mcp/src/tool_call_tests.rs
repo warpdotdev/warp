@@ -9,10 +9,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 use futures::future::{pending, ready};
-use rmcp::model::{CallToolRequestParams, ErrorData, ProgressNotificationParam};
-use rmcp::service::NotificationContext;
+use rmcp::model::{CallToolRequestParams, ErrorData};
 use rmcp::transport::StreamableHttpClientTransport;
-use rmcp::{ClientHandler, RoleClient, ServiceError, ServiceExt};
+use rmcp::{ServiceError, ServiceExt};
 use serde_json::{Value, json};
 use tokio::sync::{Notify, oneshot};
 use tokio::task::JoinHandle;
@@ -23,10 +22,12 @@ use super::call_tool_with_deadline_inner;
 #[derive(Clone, Copy)]
 enum Reply {
     Success,
+    SseSuccess,
     ToolError,
     ProtocolError,
     HttpError,
     WrongId,
+    EmptySse,
     IncompleteSse,
     ResumableSse,
     StuckSend,
@@ -45,13 +46,6 @@ struct TestServer {
     uri: String,
     state: Arc<ServerState>,
     task: JoinHandle<()>,
-}
-struct ProgressObserver(Arc<Notify>);
-
-impl ClientHandler for ProgressObserver {
-    async fn on_progress(&self, _: ProgressNotificationParam, _: NotificationContext<RoleClient>) {
-        self.0.notify_one();
-    }
 }
 
 impl Drop for TestServer {
@@ -136,6 +130,10 @@ async fn handle_post(
             }
             match state.reply {
                 Reply::Success => Json(result(request["id"].clone(), false)).into_response(),
+                Reply::SseSuccess => sse(format!(
+                    "data: {}\n\n",
+                    result(request["id"].clone(), false)
+                )),
                 Reply::ToolError => Json(result(request["id"].clone(), true)).into_response(),
                 Reply::ProtocolError => Json(json!({
                     "jsonrpc": "2.0",
@@ -145,6 +143,7 @@ async fn handle_post(
                 .into_response(),
                 Reply::HttpError => StatusCode::BAD_GATEWAY.into_response(),
                 Reply::WrongId => Json(result(json!("unrelated"), false)).into_response(),
+                Reply::EmptySse => sse(String::new()),
                 Reply::IncompleteSse => sse(format!(
                     "data: {}\n\nevent: message\ndata: {{\"jsonrpc\":\"2.0\"",
                     progress(&request),
@@ -220,6 +219,7 @@ async fn connection_error_is_preserved() {
 async fn successful_and_error_results_complete_without_retry() {
     for reply in [
         Reply::Success,
+        Reply::SseSuccess,
         Reply::ToolError,
         Reply::ProtocolError,
         Reply::HttpError,
@@ -243,7 +243,9 @@ async fn successful_and_error_results_complete_without_retry() {
         .await
         .unwrap();
         match reply {
-            Reply::Success => assert_eq!(result.unwrap().is_error, Some(false)),
+            Reply::Success | Reply::SseSuccess => {
+                assert_eq!(result.unwrap().is_error, Some(false))
+            }
             Reply::ToolError => assert_eq!(result.unwrap().is_error, Some(true)),
             Reply::ProtocolError => assert!(
                 result
@@ -259,53 +261,71 @@ async fn successful_and_error_results_complete_without_retry() {
         service.cancel().await.unwrap();
     }
 }
+#[tokio::test]
+async fn wrong_response_id_returns_outcome_unknown_at_deadline() {
+    let server = start_server(Reply::WrongId).await;
+    let service =
+        ().serve(StreamableHttpClientTransport::from_uri(server.uri.clone()))
+            .await
+            .unwrap();
+    let (expire, deadline) = oneshot::channel();
+    let task = tokio::spawn(call_tool_with_deadline_inner(
+        Uuid::nil(),
+        Uuid::nil(),
+        CallToolRequestParams::new("test"),
+        ready(Ok(service.peer().clone())),
+        async { deadline.await.unwrap() },
+        pending,
+    ));
+    server.state.request_seen.notified().await;
+    expire.send(()).unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("outcome is unknown")
+    );
+    assert_eq!(server.state.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(server.state.cancellations.load(Ordering::SeqCst), 1);
+    service.cancel().await.unwrap();
+}
 
 #[tokio::test]
-async fn incomplete_sse_and_wrong_response_id_return_outcome_unknown() {
-    for reply in [Reply::IncompleteSse, Reply::WrongId] {
+async fn ended_sse_without_result_fails_without_waiting_for_deadline() {
+    for reply in [Reply::EmptySse, Reply::IncompleteSse] {
         let server = start_server(reply).await;
-        let progress_seen = Arc::new(Notify::new());
-        let service = ProgressObserver(progress_seen.clone())
-            .serve(StreamableHttpClientTransport::from_uri(server.uri.clone()))
-            .await
-            .unwrap();
-        let peer = service.peer().clone();
-        let (expire, deadline) = oneshot::channel();
-        let task = tokio::spawn(call_tool_with_deadline_inner(
-            Uuid::nil(),
-            Uuid::nil(),
-            CallToolRequestParams::new("test"),
-            ready(Ok(peer)),
-            async { deadline.await.unwrap() },
-            pending,
-        ));
-        server.state.request_seen.notified().await;
-        if matches!(reply, Reply::IncompleteSse) {
-            tokio::time::timeout(Duration::from_secs(5), progress_seen.notified())
+        let service =
+            ().serve(StreamableHttpClientTransport::from_uri(server.uri.clone()))
                 .await
                 .unwrap();
-        }
-        assert!(!task.is_finished());
-        expire.send(()).unwrap();
-        let result = tokio::time::timeout(Duration::from_secs(5), task)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("outcome is unknown")
-        );
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            call_tool_with_deadline_inner(
+                Uuid::nil(),
+                Uuid::nil(),
+                CallToolRequestParams::new("test"),
+                ready(Ok(service.peer().clone())),
+                pending(),
+                pending,
+            ),
+        )
+        .await
+        .expect("a terminated response must not leave the tool call pending");
+        assert!(matches!(result, Err(ServiceError::TransportClosed)));
         assert_eq!(server.state.calls.load(Ordering::SeqCst), 1);
-        assert_eq!(server.state.cancellations.load(Ordering::SeqCst), 1);
+        assert_eq!(server.state.cancellations.load(Ordering::SeqCst), 0);
+        assert!(!service.is_transport_closed());
         service.cancel().await.unwrap();
     }
 }
 
 #[tokio::test]
 async fn timed_out_request_does_not_close_the_connection_or_replay_the_tool() {
-    let server = start_server(Reply::IncompleteSse).await;
+    let server = start_server(Reply::WrongId).await;
     let service =
         ().serve(StreamableHttpClientTransport::from_uri(server.uri.clone()))
             .await
