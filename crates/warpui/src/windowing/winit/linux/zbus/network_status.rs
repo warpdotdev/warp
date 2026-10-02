@@ -39,16 +39,24 @@ async fn watch_network_status_changed_internal(
     let mut state_changed_stream = network_manager_proxy.receive_state_changed().await?;
     while let Some(msg) = state_changed_stream.next().await {
         if let Ok(args) = msg.args() {
-            // Only consider the internet as connected if it is equivalent to
-            // `NM_STATE_CONNECTED_GLOBAL`, indicating there is "full network connectivity". See
-            // https://developer-old.gnome.org/NetworkManager/stable/nm-dbus-types.html for more
-            // information.
-            if args.state == 70 {
-                let _ = event_proxy.send_event(CustomEvent::InternetConnected);
-            } else {
-                let _ = event_proxy.send_event(CustomEvent::InternetDisconnected);
-            }
+            let _ = event_proxy.send_event(network_state_event(args.state));
         }
     }
     Ok(())
 }
+
+fn network_state_event(state: u32) -> CustomEvent {
+    // NetworkManager's connectivity check can report `NM_STATE_CONNECTED_LOCAL` or
+    // `NM_STATE_CONNECTED_SITE` when tun interfaces misroute its probes, even though the app
+    // can still reach the internet. `NM_STATE_UNKNOWN` is also documented as an unknown
+    // state, not as disconnected.
+    // See also: https://networkmanager.dev/docs/api/1.32.10/nm-dbus-types.html
+    match state {
+        0 | 50 | 60 | 70 => CustomEvent::InternetConnected,
+        _ => CustomEvent::InternetDisconnected,
+    }
+}
+
+#[cfg(test)]
+#[path = "network_status_tests.rs"]
+mod tests;
