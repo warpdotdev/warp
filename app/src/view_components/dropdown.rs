@@ -715,6 +715,10 @@ where
     fn top_bar_label(&self) -> String {
         format!("dropdown_top_bar_{}", self.dropdown.id())
     }
+    #[cfg(feature = "integration_tests")]
+    pub fn top_bar_position_id(&self) -> String {
+        self.top_bar_label()
+    }
 
     fn handle_menu_event(&mut self, event: &MenuEvent, ctx: &mut ViewContext<Self>) {
         match event {
