@@ -211,6 +211,10 @@ jobs:
           Write-Output "powershell_path=$env:POWERSHELL_PATH" >> $env:GITHUB_OUTPUT
           Write-Output "::notice title=${{ matrix.name }} Tests - Powershell Version::$env:POWERSHELL_VERSION"
 
+      - name: Run zsh native-completion protocol tests
+        if: ${{ matrix.os != 'windows' }}
+        run: python3 script/test_zsh_native_completions.py -v
+
       - name: Echo Default Shell
         id: echo_default_shell
         shell: bash
