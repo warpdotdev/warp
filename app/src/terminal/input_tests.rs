@@ -2621,9 +2621,9 @@ fn slash_compact_still_queues_while_in_progress() {
 }
 
 #[test]
-fn custom_history_action_does_not_reenter_inline_history_menu_update() {
+fn history_up_does_not_reenter_inline_history_menu_update() {
+    let _inline_history_menu = FeatureFlag::InlineHistoryMenu.override_enabled(true);
     App::test((), |mut app| async move {
-        let _inline_history_menu = FeatureFlag::InlineHistoryMenu.override_enabled(true);
         initialize_app(&mut app);
 
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
@@ -2631,20 +2631,38 @@ fn custom_history_action_does_not_reenter_inline_history_menu_update() {
         input.update(&mut app, |input, ctx| {
             input.open_inline_history_menu(ctx);
         });
+        input.read(&app, |input, ctx| {
+            assert!(
+                input
+                    .suggestions_mode_model
+                    .as_ref(ctx)
+                    .is_inline_history_menu()
+            );
+        });
 
         let inline_history_menu =
             input.read(&app, |input, _| input.inline_history_menu_view.clone());
         inline_history_menu.update(&mut app, |_, ctx| {
-            let window_id = ctx.window_id();
-            ctx.dispatch_custom_action(CustomAction::History, window_id);
+            input.update(ctx, |input, ctx| {
+                input.handle_action(&InputAction::Up, ctx);
+            });
+        });
+        input.read(&app, |input, ctx| {
+            assert!(
+                input
+                    .suggestions_mode_model
+                    .as_ref(ctx)
+                    .is_inline_history_menu(),
+                "History/Up must still show inline history after a nested checkout"
+            );
         });
     });
 }
 
 #[test]
 fn editor_down_does_not_reenter_inline_history_menu_update() {
+    let _inline_history_menu = FeatureFlag::InlineHistoryMenu.override_enabled(true);
     App::test((), |mut app| async move {
-        let _inline_history_menu = FeatureFlag::InlineHistoryMenu.override_enabled(true);
         initialize_app(&mut app);
 
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
@@ -2652,11 +2670,28 @@ fn editor_down_does_not_reenter_inline_history_menu_update() {
         input.update(&mut app, |input, ctx| {
             input.open_inline_history_menu(ctx);
         });
+        input.read(&app, |input, ctx| {
+            assert!(
+                input
+                    .suggestions_mode_model
+                    .as_ref(ctx)
+                    .is_inline_history_menu()
+            );
+        });
 
         let inline_history_menu =
             input.read(&app, |input, _| input.inline_history_menu_view.clone());
         inline_history_menu.update(&mut app, |_, ctx| {
             input.update(ctx, |input, ctx| input.editor_down(ctx));
+        });
+        input.read(&app, |input, ctx| {
+            assert!(
+                !input
+                    .suggestions_mode_model
+                    .as_ref(ctx)
+                    .is_inline_history_menu(),
+                "Down on empty inline history must close the menu after the nested checkout ends"
+            );
         });
     });
 }

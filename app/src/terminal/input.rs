@@ -1134,8 +1134,9 @@ pub enum InputAction {
     CtrlR,
     CtrlD,
     Up,
-    // Dispatch these actions deferred to avoid re-entering an active inline history view update.
+    /// Deferred so Up does not update InlineHistoryMenuView while it is already checked out.
     SelectPreviousInlineHistoryItem,
+    /// Deferred so Down does not update InlineHistoryMenuView while it is already checked out.
     SelectNextInlineHistoryItem,
     PageUp,
     PageDown,
