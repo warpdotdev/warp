@@ -101,6 +101,32 @@ fn scanner_detection_during_an_in_flight_ladder_does_not_restart_it() {
 }
 
 #[test]
+fn shutdown_while_awaiting_input_force_kills_without_sending_any_input() {
+    let (escalation, actions) =
+        actions_for(&[ExitEscalationEvent::ShutdownRequestedWhileAwaitingInput]);
+
+    assert_eq!(actions, vec![ExitEscalationAction::ForceKillAndFinish]);
+    assert_eq!(escalation.phase(), ExitEscalationPhase::Done);
+}
+
+#[test]
+fn shutdown_while_awaiting_input_does_not_restart_an_in_flight_ladder() {
+    let mut escalation = ExitEscalation::new();
+    assert_eq!(
+        escalation.on_event(ExitEscalationEvent::ShutdownRequested),
+        ExitEscalationAction::SendExit
+    );
+    assert_eq!(
+        escalation.on_event(ExitEscalationEvent::ShutdownRequestedWhileAwaitingInput),
+        ExitEscalationAction::Ignore
+    );
+    assert_eq!(
+        escalation.phase(),
+        ExitEscalationPhase::AwaitingGracefulExit
+    );
+}
+
+#[test]
 fn bounded_timeout_is_not_a_driver_error_and_is_still_err_before_mapping() {
     let timeout = Err(AgentDriverError::HarnessExitTimedOut {
         harness: "claude".into(),

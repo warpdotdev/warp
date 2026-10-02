@@ -1,6 +1,7 @@
 //! Bounded shutdown ladder for a third-party harness: `/exit`, a follow-up
 //! Enter, then a best-effort force-kill. Completes without waiting to prove
-//! the process exited.
+//! the process exited. A harness waiting on user input skips straight to the
+//! force-kill, since typed text would answer whatever prompt is open.
 
 use super::super::AgentDriverError;
 
@@ -19,6 +20,8 @@ pub(crate) enum ExitEscalationEvent {
     CommandExited,
     /// CLI session reached a terminal state and asked the driver to stop the harness.
     ShutdownRequested,
+    /// Same request, but the CLI session is blocked on user input.
+    ShutdownRequestedWhileAwaitingInput,
     /// Runtime-failure scanner confirmed a hang/auth failure and asked the driver to stop.
     ScannerDetected,
     FollowupDeadlineElapsed,
@@ -72,6 +75,13 @@ impl ExitEscalation {
                 ExitEscalationAction::SendExit
             }
             (
+                ExitEscalationPhase::Running,
+                ExitEscalationEvent::ShutdownRequestedWhileAwaitingInput,
+            ) => {
+                self.phase = ExitEscalationPhase::Done;
+                ExitEscalationAction::ForceKillAndFinish
+            }
+            (
                 ExitEscalationPhase::AwaitingGracefulExit,
                 ExitEscalationEvent::FollowupDeadlineElapsed,
             ) => {
@@ -89,13 +99,16 @@ impl ExitEscalation {
                 ExitEscalationPhase::Done,
                 ExitEscalationEvent::CommandExited
                 | ExitEscalationEvent::ShutdownRequested
+                | ExitEscalationEvent::ShutdownRequestedWhileAwaitingInput
                 | ExitEscalationEvent::ScannerDetected
                 | ExitEscalationEvent::FollowupDeadlineElapsed
                 | ExitEscalationEvent::ForceKillDeadlineElapsed,
             )
             | (
                 ExitEscalationPhase::AwaitingGracefulExit | ExitEscalationPhase::AwaitingFollowup,
-                ExitEscalationEvent::ShutdownRequested | ExitEscalationEvent::ScannerDetected,
+                ExitEscalationEvent::ShutdownRequested
+                | ExitEscalationEvent::ShutdownRequestedWhileAwaitingInput
+                | ExitEscalationEvent::ScannerDetected,
             )
             | (
                 ExitEscalationPhase::Running,

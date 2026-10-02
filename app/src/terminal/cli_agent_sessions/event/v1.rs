@@ -21,6 +21,7 @@ pub(super) fn parse(body: &str) -> Option<CLIAgentEvent> {
         "permission_request" => CLIAgentEventType::PermissionRequest,
         "permission_replied" => CLIAgentEventType::PermissionReplied,
         "question_asked" => CLIAgentEventType::QuestionAsked,
+        "agent_needs_input" => CLIAgentEventType::NeedsInput,
         "idle_prompt" => CLIAgentEventType::IdlePrompt,
         other => CLIAgentEventType::Unknown(other.to_string()),
     };

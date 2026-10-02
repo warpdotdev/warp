@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warpui::r#async::Timer;
 use warpui::{App, EntityId};
 
@@ -110,6 +111,15 @@ fn parse_idle_prompt_notification() {
         notif.payload.summary.as_deref(),
         Some("Claude is waiting for your input")
     );
+}
+
+#[test]
+fn parse_agent_needs_input_notification() {
+    let body = r#"{"v":1,"agent":"claude","event":"agent_needs_input","session_id":"abc","cwd":"/tmp","project":"tmp","summary":"Some dialog text"}"#;
+    let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
+
+    assert_eq!(notif.event, CLIAgentEventType::NeedsInput);
+    assert_eq!(notif.payload.summary.as_deref(), Some("Some dialog text"));
 }
 
 #[test]
@@ -703,6 +713,130 @@ fn permission_request_still_populates_summary_and_tool_fields() {
     ));
 }
 
+#[test]
+fn needs_input_blocks_session_with_the_event_summary() {
+    let mut session = cli_agent_session(CLIAgentSessionStatus::InProgress, true);
+
+    let event = CLIAgentEvent {
+        payload: CLIAgentEventPayload {
+            summary: Some("Some dialog text".to_owned()),
+            ..Default::default()
+        },
+        ..rich_event(CLIAgentEventType::NeedsInput)
+    };
+
+    let new_status = session.apply_event(&event);
+
+    let expected = CLIAgentSessionStatus::Blocked {
+        message: Some("Some dialog text".to_owned()),
+    };
+    assert_eq!(new_status, Some(expected.clone()));
+    assert_eq!(session.status, expected);
+    assert!(session.is_blocked_on_needs_input());
+}
+
+#[test]
+fn needs_input_without_a_summary_blocks_session_with_the_generic_message() {
+    let mut session = cli_agent_session(CLIAgentSessionStatus::InProgress, true);
+
+    let new_status = session.apply_event(&rich_event(CLIAgentEventType::NeedsInput));
+
+    let expected = CLIAgentSessionStatus::Blocked {
+        message: Some("Agent requires user input".to_owned()),
+    };
+    assert_eq!(new_status, Some(expected));
+    assert!(session.is_blocked_on_needs_input());
+}
+
+#[test]
+fn other_blocked_events_are_not_blocked_on_needs_input() {
+    for event in [
+        CLIAgentEventType::PermissionRequest,
+        CLIAgentEventType::QuestionAsked,
+    ] {
+        let mut session = cli_agent_session(CLIAgentSessionStatus::InProgress, true);
+
+        session.apply_event(&rich_event(event));
+
+        assert!(matches!(
+            session.status,
+            CLIAgentSessionStatus::Blocked { .. }
+        ));
+        assert!(!session.is_blocked_on_needs_input());
+    }
+}
+
+#[test]
+fn permission_request_after_needs_input_is_no_longer_blocked_on_needs_input() {
+    let mut session = cli_agent_session(CLIAgentSessionStatus::InProgress, true);
+    session.apply_event(&rich_event(CLIAgentEventType::NeedsInput));
+
+    session.apply_event(&rich_event(CLIAgentEventType::PermissionRequest));
+
+    assert!(!session.is_blocked_on_needs_input());
+}
+
+#[test]
+fn tool_complete_after_needs_input_returns_session_to_in_progress() {
+    let mut session = cli_agent_session(CLIAgentSessionStatus::InProgress, true);
+    session.apply_event(&rich_event(CLIAgentEventType::NeedsInput));
+
+    session.apply_event(&rich_event(CLIAgentEventType::ToolComplete));
+
+    assert_eq!(session.status, CLIAgentSessionStatus::InProgress);
+    assert!(!session.is_blocked_on_needs_input());
+}
+
+#[test]
+fn idle_prompt_after_needs_input_keeps_session_blocked() {
+    let mut session = cli_agent_session(CLIAgentSessionStatus::InProgress, true);
+    session.apply_event(&rich_event(CLIAgentEventType::NeedsInput));
+
+    let new_status = session.apply_event(&rich_event(CLIAgentEventType::IdlePrompt));
+
+    assert_eq!(new_status, None);
+    assert!(matches!(
+        session.status,
+        CLIAgentSessionStatus::Blocked { .. }
+    ));
+    assert!(session.is_blocked_on_needs_input());
+}
+
+fn assert_needs_input_blocks_session_in_mode(mode: ExecutionMode, expect_blocked: bool) {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|ctx| AppExecutionMode::new(mode, false, ctx));
+        let model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let view_id = EntityId::new();
+        model.update(&mut app, |m, ctx| {
+            m.set_session(
+                view_id,
+                cli_agent_session(CLIAgentSessionStatus::InProgress, true),
+                ctx,
+            );
+        });
+
+        model.update(&mut app, |m, ctx| {
+            m.update_from_event(view_id, &rich_event(CLIAgentEventType::NeedsInput), ctx);
+        });
+
+        let status = model.read(&app, |m, _| m.session(view_id).map(|s| s.status.clone()));
+        assert_eq!(
+            matches!(status, Some(CLIAgentSessionStatus::Blocked { .. })),
+            expect_blocked
+        );
+    });
+}
+
+#[test]
+fn needs_input_blocks_autonomous_sessions() {
+    assert_needs_input_blocks_session_in_mode(ExecutionMode::Sdk, true);
+}
+
+#[test]
+fn needs_input_is_ignored_in_the_desktop_app() {
+    assert_needs_input_blocks_session_in_mode(ExecutionMode::App, false);
+}
+
 // --- Ctrl-C pending-cancel state machine ---
 
 /// Grace window used by the tests below. Long enough to comfortably
@@ -934,6 +1068,7 @@ fn window_lapse_transitions_session_to_cancelled() {
 /// longer resolves to `Cancelled` once it would have lapsed.
 fn assert_event_disarms_pending_cancel(disarming_event: CLIAgentEvent) {
     App::test((), |mut app| async move {
+        app.add_singleton_model(|ctx| AppExecutionMode::new(ExecutionMode::Sdk, false, ctx));
         let model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
         let view_id = EntityId::new();
         model.update(&mut app, |m, ctx| {
@@ -990,6 +1125,11 @@ fn permission_request_event_disarms_pending_cancel() {
 #[test]
 fn question_asked_event_disarms_pending_cancel() {
     assert_event_disarms_pending_cancel(rich_event(CLIAgentEventType::QuestionAsked));
+}
+
+#[test]
+fn needs_input_event_disarms_pending_cancel() {
+    assert_event_disarms_pending_cancel(rich_event(CLIAgentEventType::NeedsInput));
 }
 
 #[test]

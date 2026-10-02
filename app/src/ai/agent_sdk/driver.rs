@@ -3237,10 +3237,15 @@ impl AgentDriver {
                         .context("Failed to enqueue periodic harness conversation save"));
                 }
                 _ = harness_exit_rx => {
+                    let start_event = if Self::session_blocked_on_needs_input(foreground).await {
+                        ExitEscalationEvent::ShutdownRequestedWhileAwaitingInput
+                    } else {
+                        ExitEscalationEvent::ShutdownRequested
+                    };
                     break Self::escalate_harness_exit(
                         runner.as_ref(),
                         &harness_name,
-                        ExitEscalationEvent::ShutdownRequested,
+                        start_event,
                         &mut command_handle,
                         foreground,
                     )
@@ -3396,8 +3401,10 @@ impl AgentDriver {
         let mut escalation = ExitEscalation::new();
         match escalation.on_event(start_event) {
             ExitEscalationAction::SendExit => {}
+            ExitEscalationAction::ForceKillAndFinish => {
+                return Self::force_kill_and_report_timeout(harness_name, 1, foreground).await;
+            }
             ExitEscalationAction::SendFollowup
-            | ExitEscalationAction::ForceKillAndFinish
             | ExitEscalationAction::Finish
             | ExitEscalationAction::Ignore => {
                 log::error!(
@@ -3471,15 +3478,36 @@ impl AgentDriver {
             }
         }
 
+        Self::force_kill_and_report_timeout(harness_name, 3, foreground).await
+    }
+
+    async fn force_kill_and_report_timeout(
+        harness_name: &str,
+        attempt: u8,
+        foreground: &ModelSpawner<Self>,
+    ) -> Result<warp_core::command::ExitCode, AgentDriverError> {
         log::warn!(
             "Ambient agent CLI lifecycle: event=harness_exit_attempt \
-             harness={harness_name} attempt=3 method=force_kill"
+             harness={harness_name} attempt={attempt} method=force_kill"
         );
         Self::send_harness_exit_telemetry(harness_name, "force_kill", foreground).await;
         Self::force_kill_harness(foreground).await;
         Err(AgentDriverError::HarnessExitTimedOut {
             harness: harness_name.to_owned(),
         })
+    }
+
+    async fn session_blocked_on_needs_input(foreground: &ModelSpawner<Self>) -> bool {
+        foreground
+            .spawn(|me, ctx| {
+                let view_id = me.terminal_driver.as_ref(ctx).terminal_view().id();
+                CLIAgentSessionsModel::handle(ctx)
+                    .as_ref(ctx)
+                    .session(view_id)
+                    .is_some_and(|session| session.is_blocked_on_needs_input())
+            })
+            .await
+            .unwrap_or(false)
     }
 
     /// Force-kills the harness and attempts a final conversation save after a sandbox-deadline
