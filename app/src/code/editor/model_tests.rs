@@ -4,8 +4,10 @@ use futures::channel::oneshot;
 use vec1::vec1;
 use warp_editor::content::buffer::{InitialBufferState, SelectionOffsets};
 use warp_editor::multiline::MultilineString;
+use warp_editor::render::model::viewport::SizeInfo;
 use warp_util::content_version::ContentVersion;
 use warpui::App;
+use warpui::geometry::vector::Vector2F;
 
 use super::*;
 use crate::code::editor::line::EditorLineLocation;
@@ -1237,5 +1239,70 @@ fn test_line_at_vertical_offset_returns_none_for_invalid() {
             beyond.is_none(),
             "Expected None for offset beyond content height"
         );
+    })
+}
+
+#[test]
+fn test_soft_wrap_wraps_visually_without_touching_the_buffer() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let long_line = "word ".repeat(200);
+        let text = format!("short\n{long_line}\nafter\n");
+        let editor = mock_model(&mut app, &text, ContentVersion::new());
+        let render_state = editor.read(&app, |editor, _| editor.render_state.clone());
+        render_state.update(&mut app, |render_state, ctx| {
+            render_state.set_viewport_size(
+                SizeInfo {
+                    viewport_size: Vector2F::new(300., 600.),
+                    needs_layout: true,
+                },
+                ctx,
+            );
+        });
+        layout_model(&mut app, &editor).await;
+
+        let (unwrapped_rows, unwrapped_after_y, original_text, version) =
+            editor.read(&app, |editor, ctx| {
+                assert!(!editor.soft_wrap(ctx));
+                let render_state = editor.render_state.as_ref(ctx);
+                let buffer = editor.content.as_ref(ctx);
+                (
+                    render_state.max_line(),
+                    render_state.content().y_offset_at_line(LineCount::from(2)),
+                    buffer.text().as_str().to_string(),
+                    buffer.buffer_version(),
+                )
+            });
+
+        editor.update(&mut app, |editor, ctx| editor.set_soft_wrap(true, ctx));
+        layout_model(&mut app, &editor).await;
+
+        editor.read(&app, |editor, ctx| {
+            assert!(editor.soft_wrap(ctx));
+            let render_state = editor.render_state.as_ref(ctx);
+            assert!(
+                render_state.max_line() > unwrapped_rows,
+                "a 1000-character line should wrap at 300px"
+            );
+            // The line after the long one is still logical line 2, pushed down by the wrap.
+            assert!(
+                render_state.content().y_offset_at_line(LineCount::from(2)) > unwrapped_after_y
+            );
+            assert_eq!(editor.content.as_ref(ctx).text().as_str(), original_text);
+            assert_eq!(editor.content.as_ref(ctx).buffer_version(), version);
+        });
+
+        editor.update(&mut app, |editor, ctx| editor.set_soft_wrap(false, ctx));
+        layout_model(&mut app, &editor).await;
+
+        editor.read(&app, |editor, ctx| {
+            let render_state = editor.render_state.as_ref(ctx);
+            assert_eq!(render_state.max_line(), unwrapped_rows);
+            assert_eq!(
+                render_state.content().y_offset_at_line(LineCount::from(2)),
+                unwrapped_after_y
+            );
+            assert_eq!(editor.content.as_ref(ctx).text().as_str(), original_text);
+        });
     })
 }

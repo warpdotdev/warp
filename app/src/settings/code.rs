@@ -100,4 +100,14 @@ define_settings_group!(CodeSettings, settings: [
         toml_path: "code.editor.auto_save",
         description: "Whether the Warp text editor automatically saves changes as you type and when the editor loses focus.",
     },
+    word_wrap: WordWrap {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "code.editor.word_wrap",
+        description: "Whether long lines in the code editor and code review diffs wrap to the pane width instead of scrolling horizontally. Wrapping is visual only and never changes the file.",
+    },
 ]);

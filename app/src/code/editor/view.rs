@@ -77,7 +77,10 @@ use crate::code_review::comments::{CommentId, CommentOrigin};
 use crate::editor::InteractionState;
 use crate::features::FeatureFlag;
 use crate::notebooks::editor::rich_text_styles;
-use crate::settings::{AppEditorSettings, CodeEditorLineNumberMode, FontSettings};
+use crate::settings::{
+    AppEditorSettings, CodeEditorLineNumberMode, CodeSettings, CodeSettingsChangedEvent,
+    FontSettings,
+};
 use crate::view_components::find::FindDirection;
 
 mod actions;
@@ -214,6 +217,9 @@ pub struct CodeEditorRenderOptions {
     vertical_expansion_behavior: VerticalExpansionBehavior,
     line_height_override: Option<f32>,
     lazy_layout: bool,
+    /// Whether this surface soft-wraps according to the user's word wrap setting. Off by default
+    /// so embedded editors (AI blocks, comment boxes, cards) keep their fixed layout.
+    follows_word_wrap_setting: bool,
     show_comment_editor_provider: Box<dyn ShowCommentEditorProvider>,
     show_find_references_provider: Box<dyn ShowFindReferencesCardProvider>,
 }
@@ -224,6 +230,7 @@ impl CodeEditorRenderOptions {
             vertical_expansion_behavior,
             line_height_override: None,
             lazy_layout: false,
+            follows_word_wrap_setting: false,
             show_comment_editor_provider: Box::new(NoopCommentEditorProvider),
             show_find_references_provider: Box::new(NoopFindReferencesCardProvider),
         }
@@ -236,6 +243,11 @@ impl CodeEditorRenderOptions {
 
     pub fn line_height_override(mut self, line_height: f32) -> Self {
         self.line_height_override = Some(line_height);
+        self
+    }
+
+    pub fn follows_word_wrap_setting(mut self) -> Self {
+        self.follows_word_wrap_setting = true;
         self
     }
 
@@ -325,6 +337,21 @@ impl CodeEditorView {
         ctx.subscribe_to_model(&model, |me, _, event, ctx| {
             me.handle_editor_model_event(event, ctx);
         });
+
+        if render_options.follows_word_wrap_setting && FeatureFlag::CodeEditorSoftWrap.is_enabled()
+        {
+            // Apply before the first layout so a pane opened (or restored) with wrap on never
+            // flashes unwrapped.
+            let word_wrap = *CodeSettings::as_ref(ctx).word_wrap;
+            model.update(ctx, |model, ctx| model.set_soft_wrap(word_wrap, ctx));
+            ctx.subscribe_to_model(&CodeSettings::handle(ctx), |me, _, event, ctx| {
+                if let CodeSettingsChangedEvent::WordWrap { .. } = event {
+                    let word_wrap = *CodeSettings::as_ref(ctx).word_wrap;
+                    me.model
+                        .update(ctx, |model, ctx| model.set_soft_wrap(word_wrap, ctx));
+                }
+            });
+        }
 
         // Creates a new model for searching the editor
         let buffer = model.as_ref(ctx).buffer().clone();
