@@ -26057,12 +26057,7 @@ impl TypedActionView for Workspace {
                 let new_value = *GeneralSettings::as_ref(ctx)
                     .did_check_to_trigger_openwarp_launch_modal
                     .value();
-                log::info!(
-                    "OpenWarp launch modal state: old={}, new={}, feature_flag_enabled={}",
-                    old_value,
-                    new_value,
-                    FeatureFlag::OpenWarpLaunchModal.is_enabled()
-                );
+                log::info!("OpenWarp launch modal state: old={old_value}, new={new_value}");
             }
             #[cfg(debug_assertions)]
             OpenOrchestrationLaunchModal => {

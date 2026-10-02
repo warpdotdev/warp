@@ -675,10 +675,6 @@ pub enum FeatureFlag {
     /// Enables the Oz launch modal for introducing cloud agent features.
     OzLaunchModal,
 
-    /// Enables the OpenWarp launch modal announcing Warp going open-source.
-    /// When enabled, the HOA onboarding flow is suppressed.
-    OpenWarpLaunchModal,
-
     /// Enables the orchestration launch modal announcing multi-agent orchestration features.
     OrchestrationLaunchModal,
 

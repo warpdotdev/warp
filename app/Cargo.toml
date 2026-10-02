@@ -630,7 +630,6 @@ default = [
     "inline_model_selector",
     "restore_prompt_on_inline_model_selector_search",
     "oz_launch_modal",
-    "open_warp_launch_modal",
     "orchestration_launch_modal",
     "agent_cli_launch_modal",
     "new_tab_styling",
@@ -983,7 +982,6 @@ restore_prompt_on_inline_model_selector_search = []
 oz_platform_skills = []
 oz_identity_federation = []
 oz_launch_modal = []
-open_warp_launch_modal = []
 orchestration_launch_modal = []
 agent_cli_launch_modal = []
 new_tab_styling = []
