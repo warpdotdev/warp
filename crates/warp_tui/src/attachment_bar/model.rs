@@ -14,7 +14,7 @@ use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, Singl
 
 use super::image_processing::{
     ClipboardPasteContent, classify_clipboard_content, parse_image_paths,
-    process_clipboard_content, process_paths, read_clipboard_content,
+    process_clipboard_contents, process_paths, read_clipboard_content,
 };
 use crate::input_mode_policy::AI_LOCKED_CONFIG;
 
@@ -281,20 +281,39 @@ impl TuiAttachmentModel {
         content: ClipboardContent,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
-        if let Err(error) = self.validate_new_images(1, ctx) {
+        let image_count = content
+            .images
+            .as_ref()
+            .map(|images| {
+                images
+                    .iter()
+                    .filter(|image| {
+                        warpui_core::clipboard_utils::CLIPBOARD_IMAGE_MIME_TYPES
+                            .contains(&image.mime_type.as_str())
+                    })
+                    .count()
+            })
+            .unwrap_or(0)
+            .max(1);
+        if let Err(error) = self.validate_new_images(image_count, ctx) {
             ctx.emit(TuiAttachmentModelEvent::ShowHint(error));
             return false;
         }
-        self.start_processing("clipboard-image.png".to_owned(), 1, ctx);
+        let file_name = if image_count == 1 {
+            "clipboard-image.png".to_owned()
+        } else {
+            format!("{image_count} clipboard images")
+        };
+        self.start_processing(file_name, image_count, ctx);
         self.in_flight = Some(ctx.spawn_abortable(
-            blocking::unblock(move || process_clipboard_content(content)),
+            blocking::unblock(move || process_clipboard_contents(content)),
             |model, result, ctx| {
                 model.in_flight = None;
                 model.finish_processing();
                 match result {
-                    Ok(image) => {
+                    Ok(images) => {
                         model.context_model.update(ctx, |context_model, ctx| {
-                            context_model.append_pending_images(vec![image], ctx);
+                            context_model.append_pending_images(images, ctx);
                         });
                     }
                     Err(error) => ctx.emit(TuiAttachmentModelEvent::ShowHint(error)),
