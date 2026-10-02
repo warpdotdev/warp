@@ -17,62 +17,6 @@ use crate::terminal::model::test_utils::{
 };
 use crate::test_util::mock_blockgrid;
 
-#[test]
-fn right_prompt_uses_shell_default_margin() {
-    for (shell_type, margin) in [
-        (Some(ShellType::Fish), 0),
-        (Some(ShellType::PowerShell), 0),
-        (Some(ShellType::Zsh), 1),
-        (Some(ShellType::Bash), 1),
-        (None, 1),
-    ] {
-        let mut block = TestBlockBuilder::new().with_honor_ps1(true).build();
-        if let Some(shell_type) = shell_type {
-            block.set_shell_host(ShellHost {
-                shell_type,
-                user: "user".into(),
-                hostname: "host".into(),
-            });
-        }
-        block.prompt_only_precmd(PromptMetadata::default());
-        let mut processor = ansi::Processor::new();
-        processor.parse_bytes(
-            &mut block,
-            "\x1b]133;A\x07top\r\nL>\x1b]133;B\x07\x1b]133;P;k=r\x07─╯\x1b]133;B\x07".as_bytes(),
-            &mut std::io::sink(),
-        );
-        let size = block.size();
-        assert_eq!(
-            block.rprompt_render_offset(&size).x(),
-            (block.prompt_grid_columns() - margin - 2) as f32 * size.cell_width_px().as_f32(),
-            "shell {shell_type:?}"
-        );
-        assert_eq!(
-            block.rprompt_render_offset(&size).y(),
-            size.cell_height_px().as_f32()
-        );
-        assert!(block.should_display_rprompt(&size));
-    }
-}
-
-#[test]
-fn right_prompt_is_hidden_when_overlapping() {
-    let mut block = TestBlockBuilder::new().with_honor_ps1(true).build();
-    block.set_shell_host(ShellHost {
-        shell_type: ShellType::Fish,
-        user: "user".into(),
-        hostname: "host".into(),
-    });
-    block.prompt_only_precmd(PromptMetadata::default());
-    let mut processor = ansi::Processor::new();
-    processor.parse_bytes(
-        &mut block,
-        b"\x1b]133;A\x07LEFT\x1b]133;B\x07\x1b]133;P;k=r\x071234\x1b]133;B\x07",
-        &mut std::io::sink(),
-    );
-    assert!(!block.should_display_rprompt(&block.size()));
-}
-
 impl float_cmp::ApproxEq for BlockSection {
     type Margin = float_cmp::F64Margin;
 

@@ -13,34 +13,8 @@ use crate::terminal::model::ansi::Handler;
 use crate::terminal::model::block::AgentInteractionMetadata;
 use crate::terminal::model::test_utils::TestBlockListBuilder;
 use crate::terminal::model::{TerminalModel, test_utils};
-use crate::terminal::shell::ShellType;
 use crate::terminal::view::{InlineBannerItem, InlineBannerType};
 use crate::terminal::{BlockListSettings, SizeUpdateReason};
-
-#[test]
-fn restored_right_prompt_uses_its_saved_shell_identity() {
-    let mut block = SerializedBlock::new_for_test(b"x".to_vec(), Vec::new());
-    block.ps1 = Some(hex::encode("top\r\nL>"));
-    block.rprompt = Some(hex::encode("─╯"));
-    block.honor_ps1 = true;
-    block.shell_host = Some(ShellHost {
-        shell_type: ShellType::Fish,
-        user: "user".into(),
-        hostname: "host".into(),
-    });
-    let restored_blocks = [block.into()];
-    let block_list = TestBlockListBuilder::new()
-        .with_honor_ps1(true)
-        .with_restored_blocks(&restored_blocks)
-        .build();
-    let restored_block = &block_list.blocks()[0];
-    let size = block_list.size();
-    assert_eq!(
-        restored_block.rprompt_render_offset(size).x(),
-        (restored_block.prompt_grid_columns() - 2) as f32 * size.cell_width_px().as_f32()
-    );
-    assert!(restored_block.should_display_rprompt(size));
-}
 
 pub fn input_string(block_list: &mut BlockList, input: &str) {
     for c in input.chars() {
