@@ -2656,6 +2656,20 @@ impl Block {
         self.session_id = Some(id);
     }
 
+    /// Copies session/cwd from the last populated precmd without marking this block
+    /// as having received Precmd.
+    ///
+    /// Used after in-band `CommandFinished` so `can_execute_command` can resolve a
+    /// session id during the gap before the shell's real Precmd. Must not set
+    /// [`PrecmdState::AfterPrecmd`] — that would desync the lifecycle coordinator
+    /// from `LineEditorStatus` activation.
+    pub(super) fn inherit_session_context_pending_precmd(&mut self, data: PromptMetadata) {
+        self.session_id = data.session_id.map(Into::into);
+        if data.pwd.is_some() {
+            self.pwd = data.pwd;
+        }
+    }
+
     pub fn pwd(&self) -> Option<&String> {
         self.pwd.as_ref()
     }

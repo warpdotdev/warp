@@ -3293,7 +3293,8 @@ impl BlockList {
             "Completing active block with next ID disposition {next_block_id_disposition:?}"
         );
         let active_block_was_finished = self.active_block().finished();
-        if self.active_block().is_for_in_band_command {
+        let was_in_band_command = self.active_block().is_for_in_band_command;
+        if was_in_band_command {
             self.in_flight_in_band_command_count =
                 self.in_flight_in_band_command_count.saturating_sub(1);
         }
@@ -3303,7 +3304,7 @@ impl BlockList {
             self.bootstrap_stage
         };
 
-        if !self.active_block().is_for_in_band_command {
+        if !was_in_band_command {
             self.finish_background_block();
         }
 
@@ -3324,6 +3325,16 @@ impl BlockList {
             None, /* prompt_metadata */
             None, /* restored_block_was_local */
         );
+        // After an in-band CommandFinished the new block has no session_id until the
+        // real Precmd arrives. Inherit session/cwd only — do not call apply_precmd
+        // here. A full precmd apply would set received_precmd while the lifecycle
+        // coordinator is still AwaitingPrecmd, reconcile to Unknown, and cause the
+        // shell's real Precmd (and LineEditorStatus activation) to be ignored —
+        // which breaks Tab / native completions and other in-band writes.
+        if was_in_band_command && let Some(meta) = self.last_populated_precmd_payload.clone() {
+            self.active_block_mut()
+                .inherit_session_context_pending_precmd(meta);
+        }
         if next_bootstrap_stage == BootstrapStage::ScriptExecution {
             self.start_active_block();
             self.update_active_block_height();

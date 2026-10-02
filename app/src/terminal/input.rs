@@ -115,6 +115,7 @@ use super::ligature_settings::LigatureSettings;
 use super::model::block::{
     AgentInteractionMetadata, BlockId, BlockMetadata, BlocklistEnvVarMetadata,
 };
+use super::model::blocks::BlockList;
 use super::model::completions::ShellCompletion;
 use super::model::session::{Session, SessionId, SessionType, Sessions};
 use super::prompt_render_helper::{
@@ -1671,6 +1672,11 @@ enum DenyExecutionReason {
     /// Can't execute command because there's an active command in control of the pty.
     ExistingActiveCommand,
 
+    /// An in-band generator command currently owns the active block / PTY write path.
+    /// User Enter should be queued and retried after that command finishes — starting a
+    /// user command on the same executing block is rejected by the lifecycle coordinator.
+    InBandCommandInFlight,
+
     /// With the exception of shared sessions, we should only execute commands if they can be
     /// recorded in history.
     ///
@@ -1686,6 +1692,15 @@ enum DenyExecutionReason {
 impl DenyExecutionReason {
     pub fn is_existing_active_command(&self) -> bool {
         matches!(self, DenyExecutionReason::ExistingActiveCommand)
+    }
+
+    fn should_queue_pending_retry(self) -> bool {
+        matches!(
+            self,
+            DenyExecutionReason::HistoryNotAppendable
+                | DenyExecutionReason::NotBootstrapped
+                | DenyExecutionReason::InBandCommandInFlight
+        )
     }
 }
 
@@ -7685,19 +7700,45 @@ impl Input {
 
         if !model.block_list().is_bootstrapped() {
             CanExecuteCommand::No(DenyExecutionReason::NotBootstrapped)
+        } else if model.block_list().is_writing_or_executing_in_band_command() {
+            // In-band commands reuse the active block. Starting a user command while one is
+            // in flight is rejected/coalesced by the lifecycle coordinator, which looks like
+            // a no-op Enter on Warpified SSH (completer `ls` traffic). Queue and retry after.
+            CanExecuteCommand::No(DenyExecutionReason::InBandCommandInFlight)
         } else if active_block.is_active_and_long_running()
             && !active_block.is_in_band_command_block()
         {
             CanExecuteCommand::No(DenyExecutionReason::ExistingActiveCommand)
         } else if !model.shared_session_status().is_executor()
-            && active_block
-                .session_id()
-                .is_none_or(|session_id| !History::as_ref(ctx).is_appendable(&session_id))
+            && !Self::history_is_appendable_for_execution(model.block_list(), ctx)
         {
             CanExecuteCommand::No(DenyExecutionReason::HistoryNotAppendable)
         } else {
             CanExecuteCommand::Yes
         }
+    }
+
+    /// Session id used to decide whether history can accept the next command.
+    ///
+    /// Prefers the active block's session id. Between `CommandFinished` and `Precmd`
+    /// the new active block may not have one yet; fall back to the previous
+    /// non-background block so Enter is not denied as `HistoryNotAppendable`
+    /// during that gap (common under Warpified-SSH in-band completer traffic).
+    fn session_id_for_command_execution(block_list: &BlockList) -> Option<SessionId> {
+        block_list.active_block().session_id().or_else(|| {
+            block_list
+                .blocks()
+                .iter()
+                .rev()
+                .skip(1)
+                .find(|block| !block.is_background())
+                .and_then(|block| block.session_id())
+        })
+    }
+
+    fn history_is_appendable_for_execution(block_list: &BlockList, ctx: &AppContext) -> bool {
+        Self::session_id_for_command_execution(block_list)
+            .is_some_and(|session_id| History::as_ref(ctx).is_appendable(&session_id))
     }
 
     pub fn execute_pending_command(&mut self, ctx: &mut ViewContext<Self>) {
@@ -7710,8 +7751,12 @@ impl Input {
             return;
         }
 
-        self.try_execute_command(&command, ctx);
-        self.has_pending_command = false;
+        // Keep pending until the command actually starts. During the
+        // CommandFinished → Precmd gap, can_execute can already pass (inherited
+        // session id) while has_received_precmd is still false.
+        if self.try_execute_command(&command, ctx) {
+            self.has_pending_command = false;
+        }
 
         self.editor.update(ctx, |editor, ctx| {
             editor.set_interaction_state(InteractionState::Editable, ctx);
@@ -7964,6 +8009,15 @@ impl Input {
                         ctx,
                     );
                 });
+            } else if reason.should_queue_pending_retry() {
+                // Retry once the session/precmd is ready, or once in-band generator traffic
+                // releases the PTY (common on Warpified SSH while the completer runs `ls`).
+                self.has_pending_command = true;
+                if matches!(reason, DenyExecutionReason::InBandCommandInFlight)
+                    && let Some(session) = self.active_session(ctx)
+                {
+                    session.cancel_active_commands();
+                }
             }
 
             log::warn!("Tried to execute command but can_execute_command was false: {reason:?}");
@@ -8114,7 +8168,11 @@ impl Input {
             // We don't want to submit the command if precmd has not
             // been received. Instead, we want the user to be aware
             // that the prompt might not be up to date.
+            //
+            // Queue a retry for when Precmd arrives (common during the
+            // Warpified-SSH in-band CommandFinished → Precmd gap).
             send_telemetry_from_ctx!(TelemetryEvent::TriedToExecuteBeforePrecmd, ctx);
+            self.has_pending_command = true;
             did_execute = false;
         }
 
