@@ -3,6 +3,7 @@ use std::ops::Deref;
 use serde_json::{Value, json};
 
 use crate::api::{ClaudeUsage, CoverageStatus, HarnessUsageSnapshot, UsageSnapshot};
+use crate::test_helpers::totals;
 use crate::{
     CaptureDiagnostics, ExtractionDiagnostics, ExtractionOutcome, JsonlDiagnostics, JsonlLimits,
     JsonlReadStatus, ReasonCode, extract_claude, parse_jsonl,
@@ -60,7 +61,7 @@ fn a_category_missing_from_one_response_makes_observed_totals_partial() {
         response("b", json!({"output_tokens":2}), json!([])),
     ]);
     assert_eq!(
-        serde_json::to_value(&snapshot.payload).unwrap()["usage"],
+        totals(&snapshot.payload),
         json!({"input_tokens":10,"output_tokens":3})
     );
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
@@ -81,7 +82,7 @@ fn conflicting_tool_names_leave_response_usage_unchanged() {
         ),
     ]);
     let payload = serde_json::to_value(&snapshot.payload).unwrap();
-    assert_eq!(payload["usage"], json!({"input_tokens":4}));
+    assert_eq!(totals(&snapshot.payload), json!({"input_tokens":4}));
     assert_eq!(payload["toolCalls"], json!({"total":1,"byName":{"Read":1}}));
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Known);
     assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Partial);
@@ -92,7 +93,7 @@ fn response(id: &str, usage: Value, content: Value) -> Value {
 }
 
 #[test]
-fn evolving_responses_do_not_deduplicate_distinct_tool_blocks() {
+fn evolving_and_model_less_responses_preserve_usage_and_distinct_tool_blocks() {
     let entries = parse_jsonl(
         include_bytes!("fixtures/claude.jsonl").as_slice(),
         JSONL_LIMITS,
@@ -114,10 +115,7 @@ fn known_metadata_does_not_degrade_usage_coverage() {
         json!({"type":"ai-title","title":"A title"}),
         response("a", json!({"input_tokens":10}), json!([])),
     ]);
-    assert_eq!(
-        serde_json::to_value(&snapshot.payload).unwrap()["usage"],
-        json!({"input_tokens":10})
-    );
+    assert_eq!(totals(&snapshot.payload), json!({"input_tokens":10}));
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Known);
     assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Known);
 }
@@ -135,9 +133,9 @@ fn empty_optional_classification_is_unknown() {
     })]);
     let payload = serde_json::to_value(&snapshot.payload).unwrap();
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Known);
-    assert_eq!(payload["usage"], json!({"input_tokens":10}));
+    assert_eq!(totals(&snapshot.payload), json!({"input_tokens":10}));
     assert_eq!(
-        payload["attribution"],
+        payload["requests"],
         json!([{"model":"claude-a","usage":{"input_tokens":10}}])
     );
 }
@@ -155,7 +153,7 @@ fn conflicting_response_does_not_discard_independent_tool_data() {
         response("", json!({"input_tokens":900}), json!([])),
     ]);
     let payload = serde_json::to_value(&snapshot.payload).unwrap();
-    assert_eq!(payload["usage"], json!({"input_tokens":2}));
+    assert_eq!(totals(&snapshot.payload), json!({"input_tokens":2}));
     assert_eq!(payload["toolCalls"], json!({"total":1,"byName":{"Read":1}}));
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
     assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Known);
@@ -172,10 +170,7 @@ fn overlapping_partial_vectors_are_not_reconstructed_from_maxima() {
         response("a", json!({"input_tokens":11}), json!([])),
         response("b", json!({"output_tokens":2}), json!([])),
     ]);
-    assert_eq!(
-        serde_json::to_value(&snapshot.payload).unwrap()["usage"],
-        json!({"output_tokens":2})
-    );
+    assert_eq!(totals(&snapshot.payload), json!({"output_tokens":2}));
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
 }
 
@@ -196,7 +191,7 @@ fn overflow_omits_the_counter_without_rounding_large_integers() {
         ),
     ]);
     assert_eq!(
-        serde_json::to_value(&snapshot.payload).unwrap()["usage"],
+        totals(&snapshot.payload),
         json!({"output_tokens":9007199254740993_i64})
     );
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
@@ -242,10 +237,7 @@ fn subagent_counts_are_included_without_claiming_unreadable_scope() {
         [("agent-a", child.as_slice())],
         &diagnostics,
     ));
-    assert_eq!(
-        serde_json::to_value(&snapshot.payload).unwrap()["usage"],
-        json!({"input_tokens":30})
-    );
+    assert_eq!(totals(&snapshot.payload), json!({"input_tokens":30}));
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
     assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Unavailable);
     assert!(
@@ -262,7 +254,7 @@ fn readable_empty_is_not_missing_or_an_oversized_scope() {
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Unavailable);
     assert_eq!(
         serde_json::to_value(&snapshot.payload).unwrap(),
-        json!({"toolCalls":{"total":0,"byName":{}}})
+        json!({"requests":[],"toolCalls":{"total":0,"byName":{}}})
     );
     assert!(matches!(
         extract_claude("root", &[], [], &CaptureDiagnostics::default()),
@@ -283,6 +275,6 @@ fn synthetic_messages_and_tool_results_do_not_add_usage() {
     ]);
     assert_eq!(
         serde_json::to_value(&snapshot.payload).unwrap(),
-        json!({"toolCalls":{"total":0,"byName":{}}})
+        json!({"requests":[],"toolCalls":{"total":0,"byName":{}}})
     );
 }

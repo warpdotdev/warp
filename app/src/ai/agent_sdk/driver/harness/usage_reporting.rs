@@ -86,12 +86,21 @@ impl CaptureIdentity {
                         extracted.diagnostics.reasons
                     );
                 }
-                Some(HarnessUsageRequest::new(
+                let mut request = HarnessUsageRequest::new(
                     self.execution_id,
                     self.sequence,
                     captured_at,
                     extracted.snapshot,
-                ))
+                );
+                match request.bound_to_body() {
+                    Ok(true) => log::debug!("Harness usage compacted: reason=ResourceLimit"),
+                    Ok(false) => {}
+                    Err(_) => {
+                        log::debug!("Harness usage unavailable: report encoding failed");
+                        return None;
+                    }
+                }
+                request.has_usable_category().then_some(request)
             }
             ExtractionOutcome::Unavailable(diagnostics) => {
                 log::debug!(

@@ -3,9 +3,7 @@ use std::mem;
 
 use serde_json::Value;
 
-use crate::api::{
-    Attribution, CodexUsage, Coverage, HarnessUsageSnapshot, UsagePayload, UsageSnapshot,
-};
+use crate::api::{Attribution, CodexUsage, Coverage, HarnessUsageSnapshot, UsageSnapshot};
 use crate::claude::classification;
 use crate::counters::{Accounting, Counters};
 use crate::tools::Tools;
@@ -14,22 +12,39 @@ use crate::{
     identifier,
 };
 
-const PATHS: [&str; 5] = [
+const PATHS: [&str; 6] = [
     "/input_tokens",
     "/cached_input_tokens",
     "/output_tokens",
     "/reasoning_output_tokens",
     "/total_tokens",
+    "/cache_write_input_tokens",
 ];
+impl From<&CodexUsage> for Counters<6> {
+    fn from(usage: &CodexUsage) -> Self {
+        Self {
+            values: [
+                usage.input_tokens,
+                usage.cached_input_tokens,
+                usage.output_tokens,
+                usage.reasoning_output_tokens,
+                usage.total_tokens,
+                usage.cache_write_input_tokens,
+            ],
+            ..Self::default()
+        }
+    }
+}
 
-impl From<Counters<5>> for CodexUsage {
-    fn from(counts: Counters<5>) -> Self {
+impl From<Counters<6>> for CodexUsage {
+    fn from(counts: Counters<6>) -> Self {
         let [
             input_tokens,
             cached_input_tokens,
             output_tokens,
             reasoning_output_tokens,
             total_tokens,
+            cache_write_input_tokens,
         ] = counts.values;
         Self {
             input_tokens,
@@ -37,21 +52,22 @@ impl From<Counters<5>> for CodexUsage {
             output_tokens,
             reasoning_output_tokens,
             total_tokens,
+            cache_write_input_tokens,
         }
     }
 }
 
 #[derive(Default)]
 struct Segment {
-    latest: Option<Counters<5>>,
+    latest: Option<Counters<6>>,
     ambiguous: bool,
-    accounting: Accounting<5>,
+    accounting: Accounting<6>,
 }
 
 impl Segment {
-    fn finish(mut self, accounting: &mut Accounting<5>, findings: &mut Findings) {
+    fn finish(mut self, accounting: &mut Accounting<6>, findings: &mut Findings) {
         if let Some(total) = self.latest {
-            self.accounting.total = total;
+            self.accounting.diagnostic_total = total;
             accounting.merge(self.accounting, findings);
         }
     }
@@ -158,15 +174,11 @@ pub fn extract_codex(
     }
     segment.finish(&mut accounting, &mut findings);
     let tool_calls = tools.finish(diagnostics.root.is_complete(), &mut findings);
-    let usage = accounting
-        .total
-        .any()
-        .then(|| accounting.total.clone().into());
-    let attribution = accounting.groups();
-    if findings.limit_exceeded || (usage.is_none() && tool_calls.is_none()) {
+    let has_usage = accounting.has_usage();
+    if findings.limit_exceeded || (!has_usage && tool_calls.is_none()) {
         return ExtractionOutcome::Unavailable(findings.diagnostics());
     }
-    let token_status = Findings::status(usage.is_some(), findings.tokens_partial);
+    let token_status = Findings::status(has_usage, findings.tokens_partial);
     let tool_status = Findings::status(tool_calls.is_some(), findings.tools_partial);
     let diagnostics = findings.diagnostics();
     ExtractionOutcome::Usable(Box::new(ExtractedUsage {
@@ -175,11 +187,7 @@ pub fn extract_codex(
                 token_status,
                 tool_status,
             },
-            payload: UsagePayload {
-                usage,
-                attribution,
-                tool_calls,
-            },
+            payload: accounting.payload(tool_calls),
         }),
         diagnostics,
     }))
@@ -222,41 +230,38 @@ fn observe_checkpoint(
             segment.accounting.omit_missing_fields(&total);
             let baseline = total.new_fields(previous);
             if baseline.any() {
-                segment
-                    .accounting
-                    .attribute(&baseline, &Attribution::default(), findings);
+                segment.accounting.unassigned(&baseline, findings);
             }
             findings.token(ReasonCode::AmbiguousAccounting);
         }
         let delta = total.delta(previous);
-        if delta.any() {
+        if delta.values.iter().flatten().any(|count| *count > 0) {
             if last
                 .as_ref()
                 .is_some_and(|last| last.matches_observed(&delta))
             {
-                segment.accounting.attribute(&delta, attribution, findings);
+                segment.accounting.request(&delta, attribution, findings);
             } else {
-                segment
-                    .accounting
-                    .attribute(&delta, &Attribution::default(), findings);
+                segment.accounting.unassigned(&delta, findings);
                 findings.token(ReasonCode::AmbiguousAccounting);
             }
         }
     } else if last.as_ref() == Some(&total) {
-        segment.accounting.attribute(&total, attribution, findings);
+        segment.accounting.request(&total, attribution, findings);
     } else {
         // Turn context does not establish the model of history preceding the first checkpoint.
-        segment
-            .accounting
-            .attribute(&total, &Attribution::default(), findings);
+        segment.accounting.unassigned(&total, findings);
+        findings.token(ReasonCode::AmbiguousAccounting);
     }
     segment.latest = Some(total);
 }
 
-fn parse_usage(value: &Value, findings: &mut Findings) -> Option<Counters<5>> {
+fn parse_usage(value: &Value, findings: &mut Findings) -> Option<Counters<6>> {
     let usage = Counters::parse(value, PATHS, findings)?;
-    let [input, cached, output, reasoning, total] = usage.values;
+    let [input, cached, output, reasoning, total, writes] = usage.values;
     let invalid = matches!((input, cached), (Some(input), Some(cached)) if cached > input)
+        || matches!((input, writes), (Some(input), Some(writes)) if writes > input)
+        || matches!((input, cached, writes), (Some(input), Some(cached), Some(writes)) if cached.checked_add(writes).is_none_or(|sum| sum > input))
         || matches!((output, reasoning), (Some(output), Some(reasoning)) if reasoning > output)
         || matches!((input, output, total), (Some(input), Some(output), Some(total)) if input.checked_add(output) != Some(total));
     if invalid {

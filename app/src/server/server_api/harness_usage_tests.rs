@@ -34,20 +34,20 @@ fn report() -> HarnessUsageRequest {
                 token_status: CoverageStatus::Known,
                 tool_status: CoverageStatus::Partial,
             },
-            payload: UsagePayload {
-                usage: Some(ClaudeUsage {
+            payload: UsagePayload::new(
+                Vec::new(),
+                Some(ClaudeUsage {
                     input_tokens: Some(9_007_199_254_740_993),
                     output_tokens: None,
                     cache_read_input_tokens: None,
                     cache_creation_input_tokens: None,
                     cache_creation: None,
                 }),
-                attribution: Vec::new(),
-                tool_calls: Some(ToolCalls {
+                Some(ToolCalls {
                     total: 1,
                     by_name: BTreeMap::from([("Read".into(), 1)]),
                 }),
-            },
+            ),
         }),
     )
 }

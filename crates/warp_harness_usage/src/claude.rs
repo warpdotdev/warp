@@ -1,10 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
 use crate::api::{
-    Attribution, CacheCreation, ClaudeUsage, Coverage, HarnessUsageSnapshot, UsagePayload,
-    UsageSnapshot,
+    Attribution, CacheCreation, ClaudeUsage, Coverage, HarnessUsageSnapshot, UsageSnapshot,
 };
 use crate::counters::{Accounting, Counters};
 use crate::tools::Tools;
@@ -21,6 +20,27 @@ const PATHS: [&str; 6] = [
     "/cache_creation/ephemeral_5m_input_tokens",
     "/cache_creation/ephemeral_1h_input_tokens",
 ];
+impl From<&ClaudeUsage> for Counters<6> {
+    fn from(usage: &ClaudeUsage) -> Self {
+        Self {
+            values: [
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cache_read_input_tokens,
+                usage.cache_creation_input_tokens,
+                usage
+                    .cache_creation
+                    .as_ref()
+                    .and_then(|cache| cache.ephemeral_5m_input_tokens),
+                usage
+                    .cache_creation
+                    .as_ref()
+                    .and_then(|cache| cache.ephemeral_1h_input_tokens),
+            ],
+            ..Self::default()
+        }
+    }
+}
 
 impl From<Counters<6>> for ClaudeUsage {
     fn from(counts: Counters<6>) -> Self {
@@ -93,7 +113,7 @@ pub fn extract_claude<'a>(
         }
     }
     let mut sessions = BTreeSet::from([session_id.to_owned()]);
-    let mut responses = HashMap::new();
+    let mut responses = BTreeMap::new();
     let mut tools = Tools::default();
     for entries in std::iter::once(root).chain(sources.into_values()) {
         for entry in entries {
@@ -227,8 +247,8 @@ pub fn extract_claude<'a>(
             let fields = usage.values.map(|value| value.is_some());
             missing_category |= observed_fields.is_some_and(|previous| previous != fields);
             observed_fields = Some(fields);
-            accounting.total.add(&usage, &mut findings);
-            accounting.attribute(&usage, &response.attribution, &mut findings);
+            accounting.diagnostic_total.add(&usage, &mut findings);
+            accounting.request(&usage, &response.attribution, &mut findings);
         } else if !response.conflicted {
             findings.token(ReasonCode::IncompleteInput);
         }
@@ -242,15 +262,11 @@ pub fn extract_claude<'a>(
             .values()
             .any(|file| file.is_complete());
     let tool_calls = tools.finish(readable, &mut findings);
-    let usage = accounting
-        .total
-        .any()
-        .then(|| accounting.total.clone().into());
-    let attribution = accounting.groups();
-    if findings.limit_exceeded || (usage.is_none() && tool_calls.is_none()) {
+    let has_usage = accounting.has_usage();
+    if findings.limit_exceeded || (!has_usage && tool_calls.is_none()) {
         return ExtractionOutcome::Unavailable(findings.diagnostics());
     }
-    let token_status = Findings::status(usage.is_some(), findings.tokens_partial);
+    let token_status = Findings::status(has_usage, findings.tokens_partial);
     let tool_status = Findings::status(tool_calls.is_some(), findings.tools_partial);
     let diagnostics = findings.diagnostics();
     ExtractionOutcome::Usable(Box::new(ExtractedUsage {
@@ -259,11 +275,7 @@ pub fn extract_claude<'a>(
                 token_status,
                 tool_status,
             },
-            payload: UsagePayload {
-                usage,
-                attribution,
-                tool_calls,
-            },
+            payload: accounting.payload(tool_calls),
         }),
         diagnostics,
     }))

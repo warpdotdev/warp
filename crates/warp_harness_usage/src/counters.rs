@@ -1,14 +1,12 @@
-use std::collections::BTreeMap;
-
 use serde_json::Value;
 
-use crate::api::{AttributedUsage, Attribution};
-use crate::{Findings, MAX_ATTRIBUTIONS, ReasonCode};
+use crate::api::{Attribution, RequestUsage, ToolCalls, UsagePayload};
+use crate::{Findings, MAX_REQUESTS, ReasonCode};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Counters<const N: usize> {
     pub(crate) values: [Option<i64>; N],
-    overflowed: [bool; N],
+    pub(crate) overflowed: [bool; N],
 }
 
 impl<const N: usize> Default for Counters<N> {
@@ -48,6 +46,15 @@ impl<const N: usize> Counters<N> {
 
     pub(crate) fn any(&self) -> bool {
         self.values.iter().any(Option::is_some)
+    }
+
+    pub(crate) fn restore_overflow(&mut self, overflowed: &[bool]) {
+        for (index, overflowed) in overflowed.iter().copied().enumerate().take(N) {
+            if overflowed {
+                self.values[index] = None;
+                self.overflowed[index] = true;
+            }
+        }
     }
 
     pub(crate) fn add(&mut self, other: &Self, findings: &mut Findings) {
@@ -134,60 +141,87 @@ impl<const N: usize> Counters<N> {
 }
 
 pub(crate) struct Accounting<const N: usize> {
-    pub(crate) total: Counters<N>,
-    groups: BTreeMap<Attribution, Counters<N>>,
+    /// Aggregate used only to diagnose counter drift and overflow, never emitted in the payload.
+    pub(crate) diagnostic_total: Counters<N>,
+    requests: Vec<(Attribution, Counters<N>)>,
+    unattributed: Counters<N>,
 }
 
 impl<const N: usize> Default for Accounting<N> {
     fn default() -> Self {
         Self {
-            total: Counters::default(),
-            groups: BTreeMap::new(),
+            diagnostic_total: Counters::default(),
+            requests: Vec::new(),
+            unattributed: Counters::default(),
         }
     }
 }
 
 impl<const N: usize> Accounting<N> {
     pub(crate) fn omit_missing_fields(&mut self, latest: &Counters<N>) {
-        self.groups.retain(|_, usage| {
+        self.requests.retain_mut(|(_, usage)| {
             usage.omit_missing_fields(latest);
             usage.any()
         });
+        self.unattributed.omit_missing_fields(latest);
     }
 
     pub(crate) fn merge(&mut self, other: Self, findings: &mut Findings) {
-        if self.total.any() && other.total.any() && !self.total.same_fields(&other.total) {
+        if self.diagnostic_total.any()
+            && other.diagnostic_total.any()
+            && !self.diagnostic_total.same_fields(&other.diagnostic_total)
+        {
             findings.token(ReasonCode::IncompleteInput);
         }
-        self.total.add(&other.total, findings);
-        for (attribution, usage) in other.groups {
-            self.attribute(&usage, &attribution, findings);
+        self.diagnostic_total.add(&other.diagnostic_total, findings);
+        self.unattributed.add(&other.unattributed, findings);
+        for (attribution, usage) in other.requests {
+            self.request(&usage, &attribution, findings);
         }
     }
-    pub(crate) fn attribute(
+
+    pub(crate) fn request(
         &mut self,
         usage: &Counters<N>,
         attribution: &Attribution,
         findings: &mut Findings,
     ) {
-        if !self.groups.contains_key(attribution) && self.groups.len() >= MAX_ATTRIBUTIONS {
-            findings.limit(ReasonCode::ResourceLimit);
-            return;
+        if self.requests.len() >= MAX_REQUESTS {
+            self.unattributed.add(usage, findings);
+            findings.token(ReasonCode::ResourceLimit);
+        } else {
+            self.requests.push((attribution.clone(), usage.clone()));
         }
-        self.groups
-            .entry(attribution.clone())
-            .or_default()
-            .add(usage, findings);
     }
 
-    pub(crate) fn groups<T: From<Counters<N>>>(self) -> Vec<AttributedUsage<T>> {
-        self.groups
+    pub(crate) fn unassigned(&mut self, usage: &Counters<N>, findings: &mut Findings) {
+        self.unattributed.add(usage, findings);
+    }
+
+    pub(crate) fn has_usage(&self) -> bool {
+        self.unattributed.any() || self.requests.iter().any(|(_, usage)| usage.any())
+    }
+
+    pub(crate) fn payload<T: From<Counters<N>>>(
+        self,
+        tool_calls: Option<ToolCalls>,
+    ) -> UsagePayload<T> {
+        let unattributed_overflowed = self.unattributed.overflowed.to_vec();
+        let unattributed_usage = self.unattributed.any().then(|| self.unattributed.into());
+        let requests = self
+            .requests
             .into_iter()
             .filter(|(_, usage)| usage.any())
-            .map(|(attribution, usage)| AttributedUsage {
+            .map(|(attribution, usage)| RequestUsage {
                 attribution,
                 usage: usage.into(),
             })
-            .collect()
+            .collect();
+        UsagePayload {
+            requests,
+            unattributed_usage,
+            tool_calls,
+            unattributed_overflowed,
+        }
     }
 }

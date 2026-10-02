@@ -9,16 +9,14 @@
       "tool_status": "known"
     },
     "payload": {
-      "usage": {
-        "input_tokens": 9007199254740993,
-        "output_tokens": 0,
-        "cache_read_input_tokens": 2,
-        "cache_creation_input_tokens": 3,
-        "cache_creation": {
-          "ephemeral_5m_input_tokens": 3
+      "toolCalls": {
+        "total": 2,
+        "byName": {
+          "Read": 1,
+          "mcp__test__lookup": 1
         }
       },
-      "attribution": [
+      "requests": [
         {
           "model": "claude-test",
           "service_tier": "standard",
@@ -26,17 +24,15 @@
           "speed": "fast",
           "usage": {
             "input_tokens": 9007199254740993,
-            "output_tokens": 0
+            "output_tokens": 0,
+            "cache_read_input_tokens": 2,
+            "cache_creation_input_tokens": 3,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 3
+            }
           }
         }
-      ],
-      "toolCalls": {
-        "total": 2,
-        "byName": {
-          "Read": 1,
-          "mcp__test__lookup": 1
-        }
-      }
+      ]
     }
   }
 }

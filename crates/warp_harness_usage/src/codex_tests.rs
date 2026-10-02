@@ -3,6 +3,7 @@ use std::ops::Deref;
 use serde_json::{Value, json};
 
 use crate::api::{CodexUsage, CoverageStatus, HarnessUsageSnapshot, UsageSnapshot};
+use crate::test_helpers::totals;
 use crate::{
     CaptureDiagnostics, ExtractionDiagnostics, ExtractionOutcome, JsonlDiagnostics, JsonlLimits,
     JsonlReadStatus, ReasonCode, extract_codex, parse_jsonl,
@@ -17,6 +18,29 @@ const JSONL_LIMITS: JsonlLimits = JsonlLimits {
 struct TestCapture {
     snapshot: UsageSnapshot<CodexUsage>,
     diagnostics: ExtractionDiagnostics,
+}
+
+#[test]
+fn new_field_baselines_do_not_establish_another_request() {
+    let snapshot = capture(&[
+        checkpoint(10, 10),
+        json!({"type":"event_msg","payload":{"type":"token_count","info":{
+            "total_token_usage":{"input_tokens":10,"total_tokens":10},
+            "last_token_usage":{"input_tokens":10,"total_tokens":0}
+        }}}),
+    ]);
+    assert_eq!(snapshot.payload.requests.len(), 1);
+    assert_eq!(snapshot.payload.requests[0].usage.total_tokens, Some(10));
+    assert_eq!(
+        snapshot
+            .payload
+            .unattributed_usage
+            .as_ref()
+            .unwrap()
+            .input_tokens,
+        Some(10)
+    );
+    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
 }
 
 impl Deref for TestCapture {
@@ -66,15 +90,21 @@ fn optional_category_drift_preserves_latest_totals_without_inventing_a_baseline(
     ]);
     let payload = serde_json::to_value(&snapshot.payload).unwrap();
     assert_eq!(
-        payload["usage"],
+        totals(&snapshot.payload),
         json!({"input_tokens":30,"output_tokens":10,"total_tokens":40})
     );
     assert_eq!(
-        payload["attribution"],
+        payload["requests"],
         json!([
-            {"usage":{"input_tokens":30,"output_tokens":10}},
-            {"model":"codex-a","usage":{"total_tokens":40}}
+            {"model":"codex-a","usage":{"total_tokens":10}},
+            {"model":"codex-a","usage":{"total_tokens":10}},
+            {"model":"codex-a","usage":{"total_tokens":10}},
+            {"model":"codex-a","usage":{"total_tokens":10}}
         ])
+    );
+    assert_eq!(
+        payload["unattributed_usage"],
+        json!({"input_tokens":30,"output_tokens":10})
     );
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
     assert_eq!(
@@ -97,7 +127,7 @@ fn cumulative_checkpoints_preserve_distinct_equal_sized_requests() {
         JSONL_LIMITS,
     );
     let snapshot = capture(&entries.entries);
-    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Known);
+    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
     assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Known);
     assert_eq!(
         serde_json::to_value(&snapshot.payload).unwrap(),
@@ -112,14 +142,11 @@ fn unexplained_decrease_retains_only_the_unambiguous_prefix() {
         checkpoint(20, 20),
         checkpoint(120, 100),
     ]);
-    assert_eq!(
-        serde_json::to_value(&snapshot.payload).unwrap()["usage"],
-        json!({"total_tokens":100})
-    );
+    assert_eq!(totals(&snapshot.payload), json!({"total_tokens":100}));
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
     assert_eq!(
         snapshot.diagnostics.reasons[&ReasonCode::AmbiguousAccounting],
-        1
+        2
     );
 }
 
@@ -136,12 +163,35 @@ fn native_session_transition_allows_an_independent_counter_segment() {
         checkpoint(20, 20),
     ]);
     let payload = serde_json::to_value(&snapshot.payload).unwrap();
-    assert_eq!(payload["usage"], json!({"total_tokens":120}));
+    assert_eq!(totals(&snapshot.payload), json!({"total_tokens":120}));
+    assert_eq!(payload["unattributed_usage"], json!({"total_tokens":100}));
     assert_eq!(
         payload["toolCalls"],
         json!({"total":2,"byName":{"shell":2}})
     );
-    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Known);
+    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
+}
+
+#[test]
+fn confirmed_requests_keep_cache_writes_and_repeated_checkpoints_add_nothing() {
+    let usage = json!({"input_tokens":10,"cached_input_tokens":2,"cache_write_input_tokens":3,
+        "output_tokens":1,"total_tokens":11});
+    let first = json!({"type":"event_msg","payload":{"type":"token_count","info":{
+        "total_token_usage":usage,"last_token_usage":usage}}});
+    let snapshot = capture(&[
+        json!({"type":"turn_context","payload":{"model":"codex-a"}}),
+        first.clone(),
+        first,
+        json!({"type":"event_msg","payload":{"type":"token_count","info":{
+            "total_token_usage":{"input_tokens":20,"cached_input_tokens":4,"cache_write_input_tokens":6,
+                "output_tokens":2,"total_tokens":22}, "last_token_usage":usage
+        }}}),
+    ]);
+    assert_eq!(snapshot.payload.requests.len(), 2);
+    assert!(snapshot.payload.unattributed_usage.is_none());
+    for row in &snapshot.payload.requests {
+        assert_eq!(serde_json::to_value(&row.usage).unwrap(), usage);
+    }
 }
 
 #[test]
@@ -152,11 +202,9 @@ fn mismatching_last_usage_is_not_attributed_to_the_current_model() {
         checkpoint(120, 10),
     ]);
     let payload = serde_json::to_value(&snapshot.payload).unwrap();
-    assert_eq!(payload["usage"], json!({"total_tokens":120}));
-    assert_eq!(
-        payload["attribution"],
-        json!([{"usage":{"total_tokens":120}}])
-    );
+    assert_eq!(totals(&snapshot.payload), json!({"total_tokens":120}));
+    assert_eq!(payload["unattributed_usage"], json!({"total_tokens":120}));
+    assert_eq!(payload["requests"], json!([]));
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
 }
 
@@ -182,7 +230,7 @@ fn conflicting_and_unidentified_invocations_do_not_fabricate_calls() {
 fn counter_bounds_and_absence_survive_serialization() {
     let snapshot = capture(&[checkpoint(9007199254740993, 9007199254740993)]);
     assert_eq!(
-        serde_json::to_value(&snapshot.payload).unwrap()["usage"],
+        totals(&snapshot.payload),
         json!({"total_tokens":9007199254740993_i64})
     );
     let overflow = capture(&[
@@ -191,7 +239,8 @@ fn counter_bounds_and_absence_survive_serialization() {
         json!({"type":"session_meta","payload":{"id":"next"}}),
         checkpoint(1, 1),
     ]);
-    assert_eq!(overflow.coverage.token_status, CoverageStatus::Unavailable);
+    assert_eq!(overflow.coverage.token_status, CoverageStatus::Partial);
+    assert_eq!(overflow.payload.requests.len(), 2);
     assert!(
         overflow
             .diagnostics
@@ -213,10 +262,7 @@ fn malformed_usage_cannot_establish_known_zero() {
         json!({"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1,"cached_input_tokens":2}}}}),
         checkpoint(0, 0),
     ]);
-    assert_eq!(
-        serde_json::to_value(&snapshot.payload).unwrap()["usage"],
-        json!({"total_tokens":0})
-    );
+    assert_eq!(totals(&snapshot.payload), json!({"total_tokens":0}));
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
     assert!(matches!(
         extract_codex("root", &[], &CaptureDiagnostics::default()),
@@ -230,9 +276,6 @@ fn status_only_token_events_do_not_degrade_valid_usage() {
         json!({"type":"event_msg","payload":{"type":"token_count","info":null}}),
         checkpoint(10, 10),
     ]);
-    assert_eq!(
-        serde_json::to_value(&snapshot.payload).unwrap()["usage"],
-        json!({"total_tokens":10})
-    );
+    assert_eq!(totals(&snapshot.payload), json!({"total_tokens":10}));
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Known);
 }

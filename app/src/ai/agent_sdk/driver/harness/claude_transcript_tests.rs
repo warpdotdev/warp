@@ -38,10 +38,8 @@ fn captured_metrics_and_raw_bytes_share_records_before_late_append() {
         unreachable!()
     };
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
-    assert_eq!(
-        serde_json::to_value(snapshot.payload).unwrap()["usage"]["input_tokens"],
-        10
-    );
+    assert_eq!(snapshot.payload.requests.len(), 1);
+    assert_eq!(snapshot.payload.requests[0].usage.input_tokens, Some(10));
     let uploaded: ClaudeTranscriptEnvelope = serde_json::from_slice(&raw).unwrap();
     assert_eq!(uploaded.entries, envelope.entries);
     assert!(diagnostics.root.incomplete_trailing_record);
