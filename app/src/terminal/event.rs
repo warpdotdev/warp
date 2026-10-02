@@ -224,10 +224,14 @@ pub struct BootstrappedEvent {
 pub struct BlockCompletedEvent {
     pub block_type: BlockType,
     pub num_secrets_obfuscated: usize,
-    pub block_index: BlockIndex,
     pub block_id: BlockId,
     pub session_id: Option<SessionId>,
     pub restored_block_was_local: Option<bool>,
+}
+impl BlockCompletedEvent {
+    pub fn current_index(&self, block_list: &BlockList) -> Option<BlockIndex> {
+        block_list.block_index_for_id(&self.block_id)
+    }
 }
 
 #[derive(Clone)]
@@ -314,7 +318,7 @@ pub struct BlockWorkingDirectoryUpdatedEvent {
 #[derive(Clone, Debug)]
 /// Contents of a normal block that a user executed.
 pub struct UserBlockCompleted {
-    pub index: BlockIndex,
+    pub block_id: BlockId,
 
     /// The block's serialized representation. Cheap to clone once computed, since it's wrapped
     /// in an `Arc`.
@@ -353,7 +357,7 @@ pub struct UserBlockCompleted {
 impl UserBlockCompleted {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
-        index: BlockIndex,
+        block_id: BlockId,
         serialized_block: Lazy<Arc<SerializedBlock>, BlockList>,
         command: Lazy<String, BlockList>,
         command_with_obfuscated_secrets: Lazy<String, BlockList>,
@@ -365,7 +369,7 @@ impl UserBlockCompleted {
         num_output_lines_truncated: u64,
     ) -> Self {
         Self {
-            index,
+            block_id,
             serialized_block,
             command,
             command_with_obfuscated_secrets,
@@ -378,11 +382,14 @@ impl UserBlockCompleted {
         }
     }
 
+    pub fn current_index(&self, block_list: &BlockList) -> Option<BlockIndex> {
+        block_list.block_index_for_id(&self.block_id)
+    }
+
     /// Test-only constructor that treats every lazy field as already computed.
     #[cfg(any(test, feature = "test-util"))]
     #[allow(clippy::too_many_arguments)]
     pub fn new_for_test(
-        index: BlockIndex,
         serialized_block: Arc<SerializedBlock>,
         command: String,
         command_with_obfuscated_secrets: String,
@@ -393,8 +400,9 @@ impl UserBlockCompleted {
         num_output_lines: u64,
         num_output_lines_truncated: u64,
     ) -> Self {
+        let block_id = serialized_block.id.clone();
         Self::new(
-            index,
+            block_id,
             Lazy::provided(serialized_block),
             Lazy::provided(command),
             Lazy::provided(command_with_obfuscated_secrets),
