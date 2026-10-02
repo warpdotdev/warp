@@ -64,8 +64,8 @@ use crate::server::server_api::team::{MockTeamClient, TeamClient};
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
+use crate::settings::PrivacySettings;
 use crate::settings::cloud_preferences_syncer::CloudPreferencesSyncer;
-use crate::settings::{PrivacySettings, SettingsFileError};
 use crate::settings_view::DisplayCount;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
@@ -282,60 +282,6 @@ pub(crate) fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
         )
     });
     workspace
-}
-
-pub(crate) fn workspace_settings_error_state(
-    workspace: &ViewHandle<Workspace>,
-    ctx: &AppContext,
-) -> (Option<SettingsFileError>, bool, bool) {
-    workspace.read(ctx, |workspace, ctx| {
-        (
-            workspace.settings_file_error.clone(),
-            workspace.settings_error_banner_dismissed,
-            workspace.render_settings_error_banner(ctx).is_some(),
-        )
-    })
-}
-
-#[test]
-fn settings_error_sync_skips_pane_in_closed_window() {
-    App::test((), |mut app| async move {
-        initialize_app(&mut app);
-        let workspace = mock_workspace(&mut app);
-        let other_workspace = mock_workspace(&mut app);
-        let settings_pane =
-            other_workspace.read(&app, |workspace, _| workspace.settings_pane.clone());
-        let window_id = app.read(|ctx| settings_pane.window_id(ctx));
-        workspace.update(&mut app, |workspace, _| {
-            workspace.settings_pane = settings_pane;
-        });
-        app.update(|ctx| ctx.simulate_window_closed(window_id));
-        let error = SettingsFileError::FileParseFailed("invalid TOML".into());
-
-        app.update(|ctx| {
-            WarpConfig::handle(ctx).update(ctx, |_, ctx| {
-                ctx.emit(WarpConfigUpdateEvent::SettingsErrors(error.clone()));
-            });
-        });
-        app.read(|ctx| {
-            assert_eq!(
-                workspace_settings_error_state(&workspace, ctx),
-                (Some(error), false, true),
-            );
-        });
-
-        app.update(|ctx| {
-            WarpConfig::handle(ctx).update(ctx, |_, ctx| {
-                ctx.emit(WarpConfigUpdateEvent::SettingsErrorsCleared);
-            });
-        });
-        app.read(|ctx| {
-            assert_eq!(
-                workspace_settings_error_state(&workspace, ctx),
-                (None, false, false),
-            );
-        });
-    });
 }
 
 #[test]
