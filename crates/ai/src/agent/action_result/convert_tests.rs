@@ -1,4 +1,26 @@
 use super::*;
+#[test]
+fn terminal_busy_is_a_recoverable_serialized_tool_error() {
+    let result = RequestCommandOutputResult::TerminalBusy {
+        command: "ls".into(),
+        block_id: "running-command".to_owned().into(),
+    };
+    let action_result = AIAgentActionResultType::RequestCommandOutput(result.clone());
+    assert!(action_result.is_failed());
+    assert!(!action_result.is_successful());
+    assert!(!action_result.is_cancelled());
+    assert!(action_result.should_trigger_request_upon_completion());
+    assert!(result.to_string().contains("not started"));
+    let api::request::input::tool_call_result::Result::RunShellCommand(result) =
+        api::request::input::tool_call_result::Result::try_from(result).unwrap()
+    else {
+        panic!("expected run-shell result");
+    };
+    assert_eq!(result.command, "ls");
+    assert!(matches!(result.result,
+        Some(api::run_shell_command_result::Result::TerminalBusy(busy))
+            if busy.running_command_id == "running-command"));
+}
 
 #[test]
 fn read_files_partial_success_converts_failed_files() {

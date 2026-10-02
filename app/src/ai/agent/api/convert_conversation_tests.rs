@@ -14,6 +14,42 @@ use crate::cloud_object::{Revision, ServerMetadata, ServerPermissions};
 use crate::persistence::model::ConversationUsageMetadata;
 use crate::server::ids::ServerId;
 
+#[test]
+fn terminal_busy_restores_as_recoverable_error() {
+    let result = api::message::ToolCallResult {
+        tool_call_id: "ls".into(),
+        result: Some(api::message::tool_call_result::Result::RunShellCommand(
+            api::RunShellCommandResult {
+                command: "ls".into(),
+                result: Some(api::run_shell_command_result::Result::TerminalBusy(
+                    api::run_shell_command_result::TerminalBusy {
+                        running_command_id: "lint-block".into(),
+                    },
+                )),
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    let input = convert_tool_call_result_to_input(
+        &TaskId::new("root".into()),
+        &result,
+        &HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .unwrap();
+    let AIAgentInput::ActionResult { result, .. } = input else {
+        panic!("expected action result");
+    };
+    assert!(result.result.is_failed());
+    assert!(!result.result.is_cancelled());
+    assert!(
+        matches!(result.result, AIAgentActionResultType::RequestCommandOutput(
+        RequestCommandOutputResult::TerminalBusy { block_id, command }
+    ) if block_id.as_str() == "lint-block" && command == "ls")
+    );
+}
+
 fn test_server_metadata(
     server_token: &str,
     ambient_agent_task_id: Option<AmbientAgentTaskId>,
