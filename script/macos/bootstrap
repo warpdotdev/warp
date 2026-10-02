@@ -72,8 +72,14 @@ brew install multitime
 # /usr/local/share/dotnet install from Microsoft or the Xcode toolchain).
 # Skip entirely when a working pwsh is already on PATH — covers an existing
 # cask install, a non-Homebrew /usr/local/bin/pwsh, or any other working pwsh.
+# Homebrew has since dropped the stable `powershell` cask, so fall back to the
+# formula when the cask no longer exists.
 if ! pwsh --version >/dev/null 2>&1; then
-    brew install --cask powershell
+    if brew info --cask powershell >/dev/null 2>&1; then
+        brew install --cask powershell
+    else
+        brew install powershell
+    fi
 fi
 brew install pkgconf
 brew install llvm
