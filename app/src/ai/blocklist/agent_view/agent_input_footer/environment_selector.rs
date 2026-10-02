@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
+use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill;
@@ -16,22 +17,24 @@ use warpui::{
 
 use super::{AgentInputButtonTheme, AmbientAgentViewModel};
 use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
+use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::cloud_environments::{
-    CloudAmbientAgentEnvironment, CloudEnvironmentCatalog, environment_matches_scope,
+    CloudAmbientAgentEnvironment, CloudEnvironmentCatalog, CloudSelectorChoice,
+    FactorySelectorCatalog, FactorySelectorRow, FactorySelectorState, environment_matches_scope,
 };
 use crate::appearance::Appearance;
 use crate::cloud_object::CloudObjectLookup as _;
 use crate::context_chips::display_menu::{
     ChipMenuType, DisplayChipMenu, FixedFooter, GenericMenuItem, PromptDisplayMenuEvent,
 };
-use crate::server::ids::SyncId;
+use crate::server::ids::{ServerId, SyncId};
 use crate::terminal::input::{
     HandoffComposeState, HandoffComposeStateEvent, MenuPositioning, MenuPositioningProvider,
 };
 use crate::terminal::view::ambient_agent::AmbientAgentViewModelEvent;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ActionButtonTheme, ButtonSize};
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces, UserWorkspacesEvent};
 
 /// Normalizes ambient-agent and handoff environment selection state behind one API.
 #[derive(Clone)]
@@ -40,31 +43,97 @@ pub(crate) enum EnvironmentSelectorTarget {
     Handoff(ModelHandle<HandoffComposeState>),
 }
 
+#[cfg(test)]
+mod factory_label_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_names_use_unique_alias_or_uid_to_disambiguate() {
+        let row = |uid: &str, alias: Option<&str>| FactorySelectorRow {
+            choice: CloudSelectorChoice::Factory {
+                uid: uid.to_owned(),
+                environment_uid: SyncId::ServerId(ServerId::from(12)),
+                foreman_agent_uid: "foreman".to_owned(),
+            },
+            name: "Build".to_owned(),
+            alias: alias.map(str::to_owned),
+        };
+        let rows = vec![
+            row("factory-a", Some("east")),
+            row("factory-b", Some("shared")),
+            row("factory-c", Some("shared")),
+        ];
+        assert_eq!(factory_row_label(&rows[0], &rows), "Build · Factory (east)");
+        assert_eq!(
+            factory_row_label(&rows[1], &rows),
+            "Build · Factory (factory-b)"
+        );
+        assert_eq!(
+            factory_row_label(&rows[2], &rows),
+            "Build · Factory (factory-c)"
+        );
+    }
+}
+
+fn factory_row_label(factory: &FactorySelectorRow, rows: &[FactorySelectorRow]) -> String {
+    let same_name = rows
+        .iter()
+        .filter(|other| other.name == factory.name)
+        .count()
+        > 1;
+    if !same_name {
+        return format!("{} · Factory", factory.name);
+    }
+    let alias = factory.alias.as_deref().unwrap_or_default();
+    let unique_alias = !alias.is_empty()
+        && rows
+            .iter()
+            .filter(|other| other.name == factory.name && other.alias.as_deref() == Some(alias))
+            .count()
+            == 1;
+    let qualifier = if unique_alias {
+        alias.to_owned()
+    } else if let CloudSelectorChoice::Factory { uid, .. } = &factory.choice {
+        uid.clone()
+    } else {
+        String::new()
+    };
+    format!("{} · Factory ({qualifier})", factory.name)
+}
+
 impl EnvironmentSelectorTarget {
+    fn selected_choice(&self, ctx: &AppContext) -> Option<CloudSelectorChoice> {
+        match self {
+            Self::CloudPane(model) => model.as_ref(ctx).selected_choice().cloned(),
+            Self::Handoff(state) => state.as_ref(ctx).selected_choice().cloned(),
+        }
+    }
+
+    fn selection_invalidated(&self, ctx: &AppContext) -> bool {
+        match self {
+            Self::CloudPane(model) => model.as_ref(ctx).selection_invalidated(),
+            Self::Handoff(state) => state.as_ref(ctx).selection_invalidated(),
+        }
+    }
+
+    fn set_choice(&self, choice: CloudSelectorChoice, ctx: &mut ViewContext<EnvironmentSelector>) {
+        match self {
+            Self::CloudPane(model) => model.update(ctx, |model, ctx| model.set_choice(choice, ctx)),
+            Self::Handoff(state) => state.update(ctx, |state, ctx| state.set_choice(choice, ctx)),
+        }
+    }
+
+    fn invalidate_choice(&self, ctx: &mut ViewContext<EnvironmentSelector>) {
+        match self {
+            Self::CloudPane(model) => model.update(ctx, |model, ctx| model.invalidate_choice(ctx)),
+            Self::Handoff(state) => state.update(ctx, |state, ctx| state.invalidate_choice(ctx)),
+        }
+    }
+
     fn selected_environment_id(&self, ctx: &AppContext) -> Option<SyncId> {
         match self {
             Self::CloudPane(model) => model.as_ref(ctx).selected_environment_id().cloned(),
             Self::Handoff(state) => state.as_ref(ctx).selected_environment_id().cloned(),
-        }
-    }
-
-    fn set_environment_id(
-        &self,
-        environment_id: Option<SyncId>,
-        is_explicit: bool,
-        ctx: &mut ViewContext<EnvironmentSelector>,
-    ) {
-        match self {
-            Self::CloudPane(model) => {
-                model.update(ctx, |model, ctx| {
-                    model.set_environment_id(environment_id, ctx);
-                });
-            }
-            Self::Handoff(state) => {
-                state.update(ctx, |state, ctx| {
-                    state.set_environment_id(environment_id, is_explicit, ctx);
-                });
-            }
         }
     }
 
@@ -115,6 +184,8 @@ pub struct EnvironmentSelector {
     button: ViewHandle<ActionButton>,
     dropdown: ViewHandle<DisplayChipMenu>,
     environments: ModelHandle<CloudEnvironmentCatalog>,
+    factory_catalog: ModelHandle<FactorySelectorCatalog>,
+    last_scope: Option<Option<ServerId>>,
     is_menu_open: bool,
     menu_positioning_provider: Arc<dyn MenuPositioningProvider>,
     target: EnvironmentSelectorTarget,
@@ -133,7 +204,7 @@ pub enum EnvironmentSelectorAction {
 /// Menu item for an environment in the selector.
 #[derive(Debug, Clone)]
 struct EnvironmentMenuItem {
-    id: SyncId,
+    choice: CloudSelectorChoice,
     name: String,
     is_selected: bool,
 }
@@ -154,7 +225,10 @@ impl GenericMenuItem for EnvironmentMenuItem {
     }
 
     fn action_data(&self) -> String {
-        self.id.to_string()
+        match &self.choice {
+            CloudSelectorChoice::Environment(id) => id.to_string(),
+            CloudSelectorChoice::Factory { uid, .. } => format!("factory:{uid}"),
+        }
     }
 
     fn right_side_element(&self, app: &AppContext) -> Option<Box<dyn Element>> {
@@ -244,21 +318,42 @@ impl EnvironmentSelector {
                     .as_any()
                     .downcast_ref::<EnvironmentMenuItem>()
                 {
-                    if !me.is_environment_visible(env_item.id, ctx) {
+                    if !me.is_choice_visible(&env_item.choice, ctx) {
                         me.set_menu_visibility(false, ctx);
                         return;
                     }
-                    send_telemetry_from_ctx!(
-                        CloudAgentTelemetryEvent::EnvironmentSelected {
-                            environment_id: env_item.id.into_server(),
-                        },
-                        ctx
-                    );
+                    match &env_item.choice {
+                        CloudSelectorChoice::Environment(id) => {
+                            send_telemetry_from_ctx!(
+                                CloudAgentTelemetryEvent::EnvironmentSelected {
+                                    environment_id: id.into_server(),
+                                },
+                                ctx
+                            );
+                        }
+                        CloudSelectorChoice::Factory { uid, .. } => {
+                            send_telemetry_from_ctx!(
+                                CloudAgentTelemetryEvent::FactorySelected {
+                                    factory_uid: uid.clone(),
+                                },
+                                ctx
+                            );
+                        }
+                    }
                     if me.is_configuring(ctx) {
-                        me.target.set_environment_id(Some(env_item.id), true, ctx);
-                        me.environments.update(ctx, |catalog, ctx| {
-                            catalog.persist_selection(env_item.id, ctx);
-                        });
+                        me.target.set_choice(env_item.choice.clone(), ctx);
+                        if me.factory_enabled() {
+                            let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+                            let preference = env_item.choice.preference();
+                            CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
+                                settings.persist_cloud_selector_preference(&scope, preference, ctx);
+                            });
+                        }
+                        if let CloudSelectorChoice::Environment(id) = &env_item.choice {
+                            me.environments.update(ctx, |catalog, ctx| {
+                                catalog.persist_selection(*id, ctx);
+                            });
+                        }
                     }
                     me.set_menu_visibility(false, ctx);
                 }
@@ -269,7 +364,11 @@ impl EnvironmentSelector {
         });
 
         let environments = CloudEnvironmentCatalog::handle(ctx);
+        let factory_catalog = FactorySelectorCatalog::handle(ctx);
         ctx.subscribe_to_model(&environments, |me, _, _, ctx| {
+            me.reconcile_selection_and_refresh(ctx);
+        });
+        ctx.subscribe_to_model(&factory_catalog, |me, _, _, ctx| {
             me.reconcile_selection_and_refresh(ctx);
         });
         let user_workspaces = UserWorkspaces::handle(ctx);
@@ -315,6 +414,8 @@ impl EnvironmentSelector {
             button,
             dropdown,
             environments,
+            factory_catalog,
+            last_scope: None,
             is_menu_open: false,
             menu_positioning_provider,
             target,
@@ -338,15 +439,69 @@ impl EnvironmentSelector {
         self.target.is_configuring(ctx)
     }
 
+    fn factory_enabled(&self) -> bool {
+        FeatureFlag::CloudModeFactorySelector.is_enabled()
+    }
+
+    fn selector_state<'a>(
+        &'a self,
+        ctx: &'a ViewContext<Self>,
+    ) -> Option<&'a FactorySelectorState> {
+        let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        self.factory_catalog.as_ref(ctx).state_for(&scope)
+    }
+
+    fn is_choice_visible(&self, choice: &CloudSelectorChoice, ctx: &ViewContext<Self>) -> bool {
+        match choice {
+            CloudSelectorChoice::Environment(id) => self.is_environment_visible(*id, ctx),
+            CloudSelectorChoice::Factory { uid, .. } if self.factory_enabled() => {
+                matches!(self.selector_state(ctx), Some(FactorySelectorState::Ready(snapshot)) if
+                    snapshot.factory(uid).is_some_and(|row| row.choice == *choice))
+            }
+            CloudSelectorChoice::Factory { .. } => false,
+        }
+    }
+
+    fn visible_choices(&self, ctx: &ViewContext<Self>) -> Vec<EnvironmentMenuItem> {
+        let selected = self.target.selected_choice(ctx);
+        let mut choices = self
+            .environments
+            .as_ref(ctx)
+            .environments()
+            .iter()
+            .filter(|environment| self.is_environment_visible(environment.id, ctx))
+            .map(|environment| EnvironmentMenuItem {
+                choice: CloudSelectorChoice::Environment(environment.id),
+                name: environment.name.clone(),
+                is_selected: false,
+            })
+            .collect::<Vec<_>>();
+        if self.factory_enabled()
+            && let Some(FactorySelectorState::Ready(snapshot)) = self.selector_state(ctx)
+        {
+            for factory in snapshot.factories() {
+                choices.push(EnvironmentMenuItem {
+                    choice: factory.choice.clone(),
+                    name: factory_row_label(factory, snapshot.factories()),
+                    is_selected: false,
+                });
+            }
+        }
+        for item in &mut choices {
+            item.is_selected = selected.as_ref() == Some(&item.choice);
+        }
+        choices
+    }
+
     fn highlight_selected_environment(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some(selected_id) = self.target.selected_environment_id(ctx) else {
+        let Some(selected_choice) = self.target.selected_choice(ctx) else {
             return;
         };
 
         let Some(index) = self
-            .visible_environment_ids(ctx)
+            .visible_choices(ctx)
             .iter()
-            .position(|environment_id| *environment_id == selected_id)
+            .position(|item| item.choice == selected_choice)
         else {
             return;
         };
@@ -361,6 +516,16 @@ impl EnvironmentSelector {
             return;
         }
         if is_open {
+            if self.factory_enabled() {
+                let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+                if matches!(
+                    self.selector_state(ctx),
+                    Some(FactorySelectorState::Failed) | Some(FactorySelectorState::Ready(_))
+                ) {
+                    self.factory_catalog
+                        .update(ctx, |catalog, ctx| catalog.refresh(&scope, ctx));
+                }
+            }
             self.reconcile_selection_and_refresh(ctx);
         }
 
@@ -381,6 +546,20 @@ impl EnvironmentSelector {
     }
 
     fn reconcile_selection_and_refresh(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.factory_enabled() {
+            let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+            if self
+                .last_scope
+                .is_some_and(|previous| previous != scope.team_uid())
+                && self.target.selected_choice(ctx).is_some()
+                && self.is_configuring(ctx)
+            {
+                self.target.invalidate_choice(ctx);
+            }
+            self.last_scope = Some(scope.team_uid());
+            self.factory_catalog
+                .update(ctx, |catalog, ctx| catalog.ensure_loaded(&scope, ctx));
+        }
         self.auto_select_default_environment_if_new_session(ctx);
         self.refresh_menu(ctx);
         self.refresh_button(ctx);
@@ -398,6 +577,30 @@ impl EnvironmentSelector {
 
     /// Ensures a default environment is selected if none is currently selected.
     fn ensure_default_selection(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.factory_enabled() {
+            let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+            let Some(FactorySelectorState::Ready(_)) = self.selector_state(ctx) else {
+                return;
+            };
+            if let Some(current) = self.target.selected_choice(ctx) {
+                if self.is_choice_visible(&current, ctx) {
+                    return;
+                }
+                self.target.invalidate_choice(ctx);
+                return;
+            }
+            if self.target.selection_invalidated(ctx) {
+                return;
+            }
+            if let Some(choice) = self
+                .factory_catalog
+                .as_ref(ctx)
+                .preferred_choice(&scope, ctx)
+            {
+                self.target.set_choice(choice, ctx);
+            }
+            return;
+        }
         let current_selection = self.target.selected_environment_id(ctx);
         if let Some(environment_id) = current_selection {
             if self.is_environment_visible(environment_id, ctx) {
@@ -413,6 +616,9 @@ impl EnvironmentSelector {
     }
 
     fn is_environment_visible(&self, environment_id: SyncId, ctx: &ViewContext<Self>) -> bool {
+        if self.factory_enabled() {
+            return self.visible_environment_ids(ctx).contains(&environment_id);
+        }
         let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
         CloudAmbientAgentEnvironment::get_by_id(&environment_id, ctx)
             .is_some_and(|environment| environment_matches_scope(environment, &scope, true))
@@ -420,6 +626,15 @@ impl EnvironmentSelector {
 
     fn visible_environment_ids(&self, ctx: &ViewContext<Self>) -> Vec<SyncId> {
         let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        if self.factory_enabled() {
+            return self
+                .factory_catalog
+                .as_ref(ctx)
+                .visible_environments(&scope, ctx)
+                .into_iter()
+                .map(|env| env.id)
+                .collect();
+        }
         self.environments
             .as_ref(ctx)
             .environments()
@@ -442,6 +657,15 @@ impl EnvironmentSelector {
     }
 
     fn refresh_menu(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.factory_enabled() {
+            let items = self.visible_choices(ctx);
+            self.dropdown
+                .update(ctx, |menu, ctx| menu.update_menu_items(items, ctx));
+            if self.is_menu_open {
+                self.highlight_selected_environment(ctx);
+            }
+            return;
+        }
         let selected_id = self.target.selected_environment_id(ctx);
         let visible_environment_ids = self.visible_environment_ids(ctx);
         let menu_items = self
@@ -453,7 +677,7 @@ impl EnvironmentSelector {
             .map(|environment| {
                 let is_selected = selected_id == Some(environment.id);
                 EnvironmentMenuItem {
-                    id: environment.id,
+                    choice: CloudSelectorChoice::Environment(environment.id),
                     name: environment.name.clone(),
                     is_selected,
                 }
@@ -471,6 +695,33 @@ impl EnvironmentSelector {
 
     fn refresh_button(&mut self, ctx: &mut ViewContext<Self>) {
         let is_configuring = self.is_configuring(ctx);
+        if self.factory_enabled() {
+            let label = if !is_configuring {
+                self.target
+                    .selected_environment_id(ctx)
+                    .and_then(|id| self.environments.as_ref(ctx).environment(id))
+                    .map(|env| env.name.clone())
+                    .unwrap_or_else(|| "Empty environment".to_owned())
+            } else if let Some(item) = self
+                .visible_choices(ctx)
+                .into_iter()
+                .find(|item| item.is_selected)
+            {
+                item.name
+            } else if self.target.selection_invalidated(ctx) {
+                "Choose a replacement".to_owned()
+            } else {
+                match self.selector_state(ctx) {
+                    Some(FactorySelectorState::Failed) => "Retry loading environments".to_owned(),
+                    _ => "Loading environments".to_owned(),
+                }
+            };
+            self.button.update(ctx, |button, ctx| {
+                button.set_label(label, ctx);
+                button.set_disabled(!is_configuring, ctx);
+            });
+            return;
+        }
 
         let label = if let Some(id) = self
             .target

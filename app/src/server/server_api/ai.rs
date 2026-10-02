@@ -333,6 +333,38 @@ pub struct SpawnAgentRequest {
     pub orchestration_handoff: Option<bool>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+pub struct FactorySelectorOption {
+    pub uid: String,
+    pub team_uid: String,
+    pub name: String,
+    pub alias: Option<String>,
+    pub default_environment_uid: String,
+    pub foreman_agent_uid: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct FactorySelectorPageInfo {
+    pub has_next_page: bool,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct FactorySelectorOptionsResponse {
+    pub factories: Vec<FactorySelectorOption>,
+    pub managed_environment_uids: Vec<String>,
+    pub page_info: FactorySelectorPageInfo,
+}
+
+fn factory_selector_path(team_uid: &str, cursor: Option<&str>) -> String {
+    let mut path = format!("factory/selector-options?team_uid={team_uid}");
+    if let Some(cursor) = cursor {
+        path.push_str("&cursor=");
+        path.push_str(&urlencoding::encode(cursor));
+    }
+    path
+}
+
 /// Server-minted token returned by `POST /agent/handoff/upload-snapshot` that scopes a batch
 /// of presigned upload URLs to `handoff/{token}/`. The client passes it
 /// back via `SpawnAgentRequest.initial_snapshot_token`; the server stores it on the new run's
@@ -1362,6 +1394,12 @@ pub trait AIClient: 'static + Send + Sync {
         request: SpawnAgentRequest,
         team_scope: RequestTeamScope,
     ) -> anyhow::Result<SpawnAgentResponse, anyhow::Error>;
+
+    async fn get_factory_selector_options(
+        &self,
+        team_scope: RequestTeamScope,
+        cursor: Option<String>,
+    ) -> anyhow::Result<FactorySelectorOptionsResponse>;
 
     /// Allocate an initial snapshot token and presigned upload URLs for staging local-to-cloud
     /// handoff snapshot files before the corresponding cloud task exists.
@@ -2544,6 +2582,19 @@ impl AIClient for ServerApi {
         team_scope: RequestTeamScope,
     ) -> anyhow::Result<ListConnectedSelfHostedWorkersResponse, anyhow::Error> {
         self.get_public_api_for_team(CONNECTED_SELF_HOSTED_WORKERS_PATH, team_scope)
+            .await
+    }
+
+    async fn get_factory_selector_options(
+        &self,
+        team_scope: RequestTeamScope,
+        cursor: Option<String>,
+    ) -> anyhow::Result<FactorySelectorOptionsResponse> {
+        let team_uid = team_scope
+            .team_uid()
+            .ok_or_else(|| anyhow!("Factory selector requires a team"))?;
+        let path = factory_selector_path(&team_uid.uid(), cursor.as_deref());
+        self.get_public_api_with_team_scope(&path, Some(team_scope))
             .await
     }
 

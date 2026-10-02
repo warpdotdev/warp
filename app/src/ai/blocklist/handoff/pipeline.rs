@@ -44,7 +44,9 @@ use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in
 use crate::ai::blocklist::{
     BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryModel, PendingAttachment,
 };
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::cloud_environments::{
+    CloudAmbientAgentEnvironment, CloudSelectorChoice, FactorySelectorCatalog, FactorySelectorState,
+};
 use crate::ai::execution_profiles::resolve_cloud_agent_computer_use_state;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::orchestration::{
@@ -83,11 +85,26 @@ pub struct HandoffPrepareInput {
     launch: Option<PendingCloudLaunch>,
     transfer_pending_attachments: bool,
     environment_id: Option<SyncId>,
+    selected_choice: Option<CloudSelectorChoice>,
     environment_required: bool,
     entry_point: HandoffEntryPoint,
     surface: HandoffSurface,
     cancellation_reason: CancellationReason,
     require_in_progress_source: bool,
+}
+
+fn factory_choices(team_uid: Option<ServerId>, ctx: &AppContext) -> Vec<CloudSelectorChoice> {
+    if !warp_core::features::FeatureFlag::CloudModeFactorySelector.is_enabled() {
+        return Vec::new();
+    }
+    match FactorySelectorCatalog::as_ref(ctx).state_for_team_uid(team_uid) {
+        Some(FactorySelectorState::Ready(snapshot)) => snapshot
+            .factories()
+            .iter()
+            .map(|row| row.choice.clone())
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 impl HandoffPrepareInput {
@@ -113,6 +130,7 @@ impl HandoffPrepareInput {
             launch: None,
             transfer_pending_attachments: true,
             environment_id: None,
+            selected_choice: None,
             environment_required: false,
             entry_point,
             surface,
@@ -169,6 +187,11 @@ impl HandoffPrepareInput {
         self
     }
 
+    pub fn with_selected_choice(mut self, choice: Option<CloudSelectorChoice>) -> Self {
+        self.selected_choice = choice;
+        self
+    }
+
     #[cfg_attr(not(feature = "tui"), allow(dead_code))]
     pub fn with_environment_required(mut self, environment_required: bool) -> Self {
         self.environment_required = environment_required;
@@ -211,6 +234,8 @@ pub enum HandoffPrepareError {
     MissingRequiredEnvironment,
     /// The selected environment is no longer present in the current catalog.
     InvalidEnvironment,
+    /// The selected Factory or its launch defaults are no longer available.
+    InvalidFactory,
     /// The selected model cannot run as a cloud Oz model.
     InvalidModel,
 }
@@ -223,6 +248,7 @@ pub enum HandoffPrepareError {
 pub struct HandoffPresentationSnapshot {
     pub source_conversation_id: Option<AIConversationId>,
     pub environment_id: Option<SyncId>,
+    pub selected_choice: Option<CloudSelectorChoice>,
     pub model_id: String,
     pub forked_existing_conversation: bool,
 }
@@ -237,6 +263,7 @@ pub struct HandoffRestoration {
     pub prompt: String,
     pub attachments: Vec<PendingAttachment>,
     pub environment_id: Option<SyncId>,
+    pub selected_choice: Option<CloudSelectorChoice>,
 }
 
 /// Data supplied after the server conversation-fork decision is complete.
@@ -282,13 +309,16 @@ pub struct PendingHandoff {
     request_attachments: Vec<AttachmentInput>,
     restoration: Option<HandoffRestoration>,
     selected_environment_id: Option<SyncId>,
+    selected_choice: Option<CloudSelectorChoice>,
     environment_required: bool,
     environment_selection_is_explicit: bool,
     valid_environment_ids: HashSet<SyncId>,
+    valid_factory_choices: Vec<CloudSelectorChoice>,
     selected_model_id: String,
     model_selection_is_explicit: bool,
     model_is_cloud_runnable: bool,
     config: AgentConfigSnapshot,
+    ordinary_config: AgentConfigSnapshot,
     snapshot_target: SnapshotUploadTarget,
     snapshot_disabled: bool,
     orchestration_handoff: Option<bool>,
@@ -301,6 +331,7 @@ impl PendingHandoff {
         HandoffPresentationSnapshot {
             source_conversation_id: self.source_conversation.as_ref().map(AIConversation::id),
             environment_id: self.selected_environment_id,
+            selected_choice: self.selected_choice.clone(),
             model_id: self.selected_model_id.clone(),
             forked_existing_conversation: self.source_conversation.is_some(),
         }
@@ -317,7 +348,42 @@ impl PendingHandoff {
         }
         self.selected_environment_id = environment_id;
         self.environment_selection_is_explicit |= is_explicit;
+        if matches!(
+            self.selected_choice,
+            Some(CloudSelectorChoice::Factory { .. })
+        ) {
+            self.config = self.ordinary_config.clone();
+        }
+        self.selected_choice = environment_id.map(CloudSelectorChoice::Environment);
         self.config.environment_id = environment_id.map(|id| id.to_string());
+        if let Some(restoration) = &mut self.restoration {
+            restoration.environment_id = environment_id;
+            restoration.selected_choice = self.selected_choice.clone();
+        }
+    }
+
+    pub fn set_choice(&mut self, choice: CloudSelectorChoice, is_explicit: bool) {
+        if !is_explicit && self.environment_selection_is_explicit {
+            return;
+        }
+        let environment_id = choice.environment_id();
+        self.selected_environment_id = Some(environment_id);
+        self.config.environment_id = Some(environment_id.to_string());
+        if matches!(choice, CloudSelectorChoice::Factory { .. }) {
+            self.config = AgentConfigSnapshot {
+                environment_id: Some(environment_id.to_string()),
+                ..Default::default()
+            };
+        } else {
+            self.config = self.ordinary_config.clone();
+            self.config.environment_id = Some(environment_id.to_string());
+        }
+        self.selected_choice = Some(choice);
+        self.environment_selection_is_explicit |= is_explicit;
+        if let Some(restoration) = &mut self.restoration {
+            restoration.environment_id = Some(environment_id);
+            restoration.selected_choice = self.selected_choice.clone();
+        }
     }
 
     /// Applies a model selection and records whether it is cloud-runnable.
@@ -326,6 +392,12 @@ impl PendingHandoff {
     /// defaults cannot replace it.
     #[cfg_attr(not(feature = "tui"), allow(dead_code))]
     pub fn set_model_id(&mut self, model_id: String, is_explicit: bool, ctx: &AppContext) {
+        if matches!(
+            self.selected_choice,
+            Some(CloudSelectorChoice::Factory { .. })
+        ) {
+            return;
+        }
         if !is_explicit && self.model_selection_is_explicit {
             return;
         }
@@ -341,6 +413,12 @@ impl PendingHandoff {
         self.selected_model_id = model_id.clone();
         self.model_selection_is_explicit |= is_explicit;
         self.config.model_id = Some(model_id);
+        if !matches!(
+            self.selected_choice,
+            Some(CloudSelectorChoice::Factory { .. })
+        ) {
+            self.ordinary_config.model_id = self.config.model_id.clone();
+        }
     }
 
     /// Replaces the environment catalog used by [`Self::validate`].
@@ -351,18 +429,34 @@ impl PendingHandoff {
         self.valid_environment_ids = valid_environment_ids;
     }
 
+    pub fn set_valid_factory_choices(&mut self, choices: Vec<CloudSelectorChoice>) {
+        self.valid_factory_choices = choices;
+    }
+
     /// Validates the editable selections without starting external work.
     pub fn validate(&self) -> Result<(), HandoffPrepareError> {
         if self.environment_required && self.selected_environment_id.is_none() {
             return Err(HandoffPrepareError::MissingRequiredEnvironment);
         }
-        if self
-            .selected_environment_id
-            .is_some_and(|id| !self.valid_environment_ids.contains(&id))
-        {
-            return Err(HandoffPrepareError::InvalidEnvironment);
+        match &self.selected_choice {
+            Some(choice @ CloudSelectorChoice::Factory { .. }) => {
+                if !self.valid_factory_choices.contains(choice) {
+                    return Err(HandoffPrepareError::InvalidFactory);
+                }
+            }
+            _ if self
+                .selected_environment_id
+                .is_some_and(|id| !self.valid_environment_ids.contains(&id)) =>
+            {
+                return Err(HandoffPrepareError::InvalidEnvironment);
+            }
+            _ => {}
         }
-        if !self.model_is_cloud_runnable || self.selected_model_id.trim().is_empty() {
+        if !matches!(
+            self.selected_choice,
+            Some(CloudSelectorChoice::Factory { .. })
+        ) && (!self.model_is_cloud_runnable || self.selected_model_id.trim().is_empty())
+        {
             return Err(HandoffPrepareError::InvalidModel);
         }
         Ok(())
@@ -404,6 +498,7 @@ pub fn prepare_handoff(
         launch,
         transfer_pending_attachments,
         environment_id: selected_environment_id,
+        selected_choice,
         environment_required,
         entry_point,
         surface,
@@ -495,6 +590,13 @@ pub fn prepare_handoff(
     if source_conversation.is_none() && prompt.is_empty() && source_paths.is_empty() {
         return Err(HandoffPrepareError::EmptySourceAndPrompt);
     }
+    let team_scope = RequestTeamScope::from_scope(&controller.as_ref(ctx).team_context(ctx));
+    let valid_factory_choices = factory_choices(team_scope.team_uid(), ctx);
+    if let Some(choice @ CloudSelectorChoice::Factory { .. }) = &selected_choice
+        && !valid_factory_choices.contains(choice)
+    {
+        return Err(HandoffPrepareError::InvalidFactory);
+    }
 
     let HandoffLaunchAttachments {
         request_attachments,
@@ -507,6 +609,7 @@ pub fn prepare_handoff(
         prompt: prompt.clone(),
         attachments: display_attachments,
         environment_id: selected_environment_id,
+        selected_choice: selected_choice.clone(),
     });
 
     if source_conversation_active {
@@ -533,18 +636,22 @@ pub fn prepare_handoff(
         });
     }
 
-    let environment_selection_is_explicit = selected_environment_id.is_some();
-    let environment_id = selected_environment_id.or_else(|| {
-        resolve_default_environment_id(ctx)
-            .and_then(|id| ServerId::try_from(id.as_str()).ok())
-            .map(SyncId::ServerId)
-    });
+    let environment_selection_is_explicit =
+        selected_environment_id.is_some() || selected_choice.is_some();
+    let environment_id = selected_choice
+        .as_ref()
+        .map(CloudSelectorChoice::environment_id)
+        .or(selected_environment_id)
+        .or_else(|| {
+            resolve_default_environment_id(ctx)
+                .and_then(|id| ServerId::try_from(id.as_str()).ok())
+                .map(SyncId::ServerId)
+        });
     let valid_environment_ids = CloudAmbientAgentEnvironment::get_all(ctx)
         .into_iter()
         .map(|environment| environment.id)
         .collect();
     let scope = controller.as_ref(ctx).team_context(ctx);
-    let team_scope = RequestTeamScope::from_scope(&scope);
     let preferences = LLMPreferences::as_ref(ctx);
     let active_model_id = &preferences
         .get_active_base_model(&scope, ctx, Some(terminal_surface_id))
@@ -580,7 +687,7 @@ pub fn prepare_handoff(
         ctx
     );
 
-    Ok(PendingHandoff {
+    let mut pending = PendingHandoff {
         source_conversation,
         source_conversation_active,
         source_paths,
@@ -590,18 +697,27 @@ pub fn prepare_handoff(
         request_attachments,
         restoration,
         selected_environment_id: environment_id,
+        selected_choice: selected_choice
+            .clone()
+            .or_else(|| environment_id.map(CloudSelectorChoice::Environment)),
         environment_required,
         environment_selection_is_explicit,
         valid_environment_ids,
+        valid_factory_choices,
         selected_model_id: model_id,
         model_selection_is_explicit: false,
         model_is_cloud_runnable,
+        ordinary_config: config.clone(),
         config,
         snapshot_target,
         snapshot_disabled,
         orchestration_handoff,
         team_scope,
-    })
+    };
+    if let Some(choice @ CloudSelectorChoice::Factory { .. }) = selected_choice {
+        pending.set_choice(choice, true);
+    }
+    Ok(pending)
 }
 
 /// Successful cloud-run creation returned by [`execute_handoff`].
@@ -623,7 +739,7 @@ pub struct HandoffCreated {
 ///
 /// Depending on the failed stage, this may include a completed spawn request
 /// for existing retry UI and source-input restoration state for a frontend
-/// that has not yet materialized its destination.
+/// that must discard a provisional destination or has not materialized one.
 pub struct HandoffCommitFailure {
     pub issue: CloudAgentStartupIssue,
     pub request: Option<SpawnAgentRequest>,
@@ -640,11 +756,11 @@ pub enum HandoffCommitOutcome {
         error: HandoffPrepareError,
     },
     /// Fork, materialization, or spawn failed after execution began.
-    Failed(HandoffCommitFailure),
+    Failed(Box<HandoffCommitFailure>),
     /// The frontend cancelled execution before the cloud run was created.
     Cancelled,
     /// The cloud run was created and is ready for frontend monitoring.
-    Created(HandoffCreated),
+    Created(Box<HandoffCreated>),
 }
 
 pub fn handoff_dispatch_error(issue: &CloudAgentStartupIssue) -> String {
@@ -700,6 +816,7 @@ pub fn execute_handoff(
             .map(|environment| environment.id)
             .collect(),
     );
+    pending.set_valid_factory_choices(factory_choices(pending.team_scope.team_uid(), ctx));
     pending.model_is_cloud_runnable = LLMPreferences::as_ref(ctx)
         .is_cloud_runnable_oz_model_id(&LLMId::from(pending.selected_model_id.as_str()));
     pending.snapshot_disabled = should_disable_snapshot(ctx);
@@ -733,7 +850,7 @@ async fn execute_validated_handoff(
 ) -> HandoffCommitOutcome {
     let mut forked = match fork_source_conversation(pending, &ai_client).await {
         Ok(forked) => forked,
-        Err(failure) => return HandoffCommitOutcome::Failed(failure),
+        Err(failure) => return HandoffCommitOutcome::Failed(Box::new(failure)),
     };
     let mut cancellation = caller_cancellation;
     if let Some(materialize_handoff_target) = materialize_handoff_target {
@@ -751,6 +868,7 @@ async fn execute_validated_handoff(
                     prompt: forked.pending.prompt.clone(),
                     source_conversation_active: forked.pending.source_conversation_active,
                     config: forked.pending.config.clone(),
+                    selected_choice: forked.pending.selected_choice.clone(),
                     title: forked.pending.title.clone(),
                     attachments: forked.pending.request_attachments.clone(),
                     snapshot_disabled: forked.pending.snapshot_disabled,
@@ -767,13 +885,13 @@ async fn execute_validated_handoff(
             .await
             .context("Failed to materialize handoff target")
         {
-            return HandoffCommitOutcome::Failed(HandoffCommitFailure {
+            return HandoffCommitOutcome::Failed(Box::new(HandoffCommitFailure {
                 issue: classify_cloud_agent_startup_error(&error),
                 request: None,
                 restoration: forked.pending.take_restoration(),
                 derived_workspace_had_content: None,
                 snapshot_failed: false,
-            });
+            }));
         }
         cancellation = Some(receiver);
     }
@@ -793,6 +911,37 @@ async fn execute_validated_handoff(
         None => (prepare_snapshot_for_spawn(forked).await, None),
     };
 
+    if cancellation
+        .as_mut()
+        .is_some_and(handoff_cancellation_requested)
+    {
+        return HandoffCommitOutcome::Cancelled;
+    }
+
+    if let Some(choice @ CloudSelectorChoice::Factory { .. }) =
+        settled.spawn_ready.selected_choice.as_ref()
+    {
+        match crate::ai::cloud_environments::revalidate_factory_choice(
+            ai_client.clone(),
+            settled.team_scope,
+            choice,
+        )
+        .await
+        {
+            Ok(true) => {}
+            Ok(false) | Err(_) => {
+                return HandoffCommitOutcome::Failed(Box::new(HandoffCommitFailure {
+                    issue: CloudAgentStartupIssue::Failed(CloudAgentStartupFailure::Other {
+                        message: "Factory is no longer available. Choose an available Factory and try again.".to_owned(),
+                    }),
+                    request: None,
+                    restoration: settled.restoration.take(),
+                    derived_workspace_had_content: Some(settled.derived_workspace_had_content),
+                    snapshot_failed: settled.snapshot_failed,
+                }));
+            }
+        }
+    }
     if cancellation
         .as_mut()
         .is_some_and(handoff_cancellation_requested)
@@ -827,17 +976,17 @@ async fn execute_validated_handoff(
     let response = match response {
         Ok(response) => response,
         Err(error) => {
-            return HandoffCommitOutcome::Failed(HandoffCommitFailure {
+            return HandoffCommitOutcome::Failed(Box::new(HandoffCommitFailure {
                 issue: classify_cloud_agent_startup_error(&error),
                 request: Some(request),
                 restoration: settled.restoration.take(),
                 derived_workspace_had_content: Some(settled.derived_workspace_had_content),
                 snapshot_failed: settled.snapshot_failed,
-            });
+            }));
         }
     };
 
-    HandoffCommitOutcome::Created(HandoffCreated {
+    HandoffCommitOutcome::Created(Box::new(HandoffCreated {
         task_id: response.task_id,
         run_id: response.run_id.clone(),
         url: oz_run_url(&response.run_id),
@@ -845,7 +994,7 @@ async fn execute_validated_handoff(
         request,
         derived_workspace_had_content: settled.derived_workspace_had_content,
         snapshot_failed: settled.snapshot_failed,
-    })
+    }))
 }
 
 fn handoff_cancellation_requested(cancellation: &mut oneshot::Receiver<()>) -> bool {
@@ -902,13 +1051,16 @@ async fn prepare_snapshot_for_spawn(forked: ForkedHandoff) -> SnapshotSettledHan
         request_attachments,
         restoration,
         selected_environment_id: _,
+        selected_choice,
         environment_required: _,
         environment_selection_is_explicit: _,
         valid_environment_ids: _,
+        valid_factory_choices: _,
         selected_model_id: _,
         model_selection_is_explicit: _,
         model_is_cloud_runnable: _,
         config,
+        ordinary_config: _,
         snapshot_target,
         snapshot_disabled,
         orchestration_handoff,
@@ -931,6 +1083,7 @@ async fn prepare_snapshot_for_spawn(forked: ForkedHandoff) -> SnapshotSettledHan
             prompt,
             source_conversation_active,
             config,
+            selected_choice,
             title,
             attachments: request_attachments,
             snapshot_disabled,
@@ -950,6 +1103,7 @@ struct SpawnReadyHandoff {
     prompt: String,
     source_conversation_active: bool,
     config: AgentConfigSnapshot,
+    selected_choice: Option<CloudSelectorChoice>,
     title: Option<String>,
     attachments: Vec<AttachmentInput>,
     snapshot_disabled: bool,
@@ -966,6 +1120,7 @@ fn build_spawn_request(
         prompt,
         source_conversation_active,
         config,
+        selected_choice,
         title,
         attachments,
         snapshot_disabled,
@@ -1006,7 +1161,12 @@ fn build_spawn_request(
         referenced_attachments: Vec::new(),
         conversation_id: forked_conversation_id,
         initial_snapshot_token,
-        agent_identity_uid: None,
+        agent_identity_uid: match &selected_choice {
+            Some(CloudSelectorChoice::Factory {
+                foreman_agent_uid, ..
+            }) => Some(foreman_agent_uid.clone()),
+            _ => None,
+        },
         snapshot_disabled: snapshot_disabled.then_some(true),
         orchestration_handoff,
     }

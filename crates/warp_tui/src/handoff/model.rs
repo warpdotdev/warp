@@ -313,7 +313,8 @@ impl TuiHandoffModel {
             | HandoffPrepareError::SourceNotInProgress
             | HandoffPrepareError::HandoffDisabled
             | HandoffPrepareError::MissingRequiredEnvironment
-            | HandoffPrepareError::InvalidEnvironment => {
+            | HandoffPrepareError::InvalidEnvironment
+            | HandoffPrepareError::InvalidFactory => {
                 "Couldn't start the handoff. Check the current conversation and try again."
             }
         }
@@ -324,7 +325,7 @@ impl TuiHandoffModel {
             HandoffPrepareError::MissingRequiredEnvironment => {
                 "Select an environment before starting the handoff."
             }
-            HandoffPrepareError::InvalidEnvironment => {
+            HandoffPrepareError::InvalidEnvironment | HandoffPrepareError::InvalidFactory => {
                 "The selected environment is no longer available."
             }
             HandoffPrepareError::InvalidModel => {

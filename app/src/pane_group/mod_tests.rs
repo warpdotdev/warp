@@ -55,7 +55,7 @@ use crate::ai::blocklist::{
     BlocklistAIHistoryModel, QueuedQueryModel, StartAgentRequest,
     TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR,
 };
-use crate::ai::cloud_environments::CloudEnvironmentCatalog;
+use crate::ai::cloud_environments::{CloudEnvironmentCatalog, FactorySelectorCatalog};
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
@@ -149,6 +149,7 @@ fn initialize_app_with_history(app: &mut App, conversations: Vec<AgentConversati
     app.add_singleton_model(SyncQueue::mock);
     app.add_singleton_model(CloudModel::mock);
     app.add_singleton_model(CloudEnvironmentCatalog::new);
+    app.add_singleton_model(FactorySelectorCatalog::new);
     app.add_singleton_model(UserWorkspaces::default_mock);
     app.add_singleton_model(TeamTesterStatus::mock);
     app.add_singleton_model(TeamUpdateManager::mock);

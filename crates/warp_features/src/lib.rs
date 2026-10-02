@@ -845,6 +845,9 @@ pub enum FeatureFlag {
 
     CloudModeInputV2,
 
+    /// Enables Factory choices in the GUI Cloud Mode environment selector.
+    CloudModeFactorySelector,
+
     /// Enables continuing cloud mode conversations in the cloud after an execution ends.
     HandoffCloudCloud,
 

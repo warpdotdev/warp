@@ -189,6 +189,10 @@ use crate::ai::blocklist::{
 };
 use crate::ai::cloud_agent_settings::{AuthSecretPreference, CloudAgentSettings};
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::cloud_environments::{
+    CloudSelectorChoice, FactorySelectorCatalog, FactorySelectorState,
+};
 use crate::ai::connected_self_hosted_workers::{
     ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,
 };
@@ -3076,6 +3080,7 @@ impl Input {
                             WorkspaceAction::OpenLocalToCloudHandoffPane {
                                 launch: None,
                                 environment_id: None,
+                                selected_choice: None,
                                 entry_point: HandoffEntryPoint::FooterChip,
                             },
                         );
@@ -4441,6 +4446,30 @@ impl Input {
         true
     }
 
+    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+    fn handoff_choice_is_available(
+        &self,
+        choice: Option<&CloudSelectorChoice>,
+        ctx: &ViewContext<Self>,
+    ) -> bool {
+        let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        let Some(FactorySelectorState::Ready(snapshot)) =
+            FactorySelectorCatalog::as_ref(ctx).state_for(&scope)
+        else {
+            return false;
+        };
+        match choice {
+            Some(choice @ CloudSelectorChoice::Factory { uid, .. }) => snapshot
+                .factory(uid)
+                .is_some_and(|row| &row.choice == choice),
+            Some(CloudSelectorChoice::Environment(id)) => {
+                !snapshot.is_managed(*id)
+                    && CloudAmbientAgentEnvironment::get_by_id(id, ctx).is_some()
+            }
+            None => false,
+        }
+    }
+
     /// Shows a transient error toast for a follow-up submission that was blocked or redirected.
     fn show_ephemeral_error_toast(&self, message: &str, ctx: &mut ViewContext<Self>) {
         let window_id = ctx.window_id();
@@ -4665,6 +4694,8 @@ impl Input {
         &mut self,
         launch: PendingCloudLaunch,
         environment_id: Option<SyncId>,
+        selected_choice: Option<crate::ai::cloud_environments::CloudSelectorChoice>,
+        invalidate_factory_choice: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         self.activate_cloud_handoff_compose(HandoffEntryPoint::Ampersand, ctx);
@@ -4676,7 +4707,20 @@ impl Input {
                 model.append_pending_attachments(vec![attachment], ctx);
             }
         });
-        if let Some(env_id) = environment_id {
+        if invalidate_factory_choice
+            && matches!(
+                selected_choice.as_ref(),
+                Some(crate::ai::cloud_environments::CloudSelectorChoice::Factory { .. })
+            )
+        {
+            self.handoff_compose_state.update(ctx, |state, ctx| {
+                state.invalidate_choice(ctx);
+            });
+        } else if let Some(choice) = selected_choice {
+            self.handoff_compose_state.update(ctx, |state, ctx| {
+                state.set_choice(choice, ctx);
+            });
+        } else if let Some(env_id) = environment_id {
             self.handoff_compose_state.update(ctx, |state, ctx| {
                 state.set_environment_id(Some(env_id), true, ctx);
             });
@@ -4964,6 +5008,14 @@ impl Input {
     /// front instead of failing at spawn time.
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     fn block_cloud_handoff_if_model_unsupported(&self, ctx: &mut ViewContext<Self>) -> bool {
+        if FeatureFlag::CloudModeFactorySelector.is_enabled()
+            && matches!(
+                self.handoff_compose_state.as_ref(ctx).selected_choice(),
+                Some(CloudSelectorChoice::Factory { .. })
+            )
+        {
+            return false;
+        }
         let scope =
             ResolvedTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
         if LLMPreferences::as_ref(ctx).is_active_base_model_cloud_runnable(
@@ -5012,7 +5064,9 @@ impl Input {
                 return true;
             }
 
-            if CloudAmbientAgentEnvironment::get_all(ctx).is_empty() {
+            if CloudAmbientAgentEnvironment::get_all(ctx).is_empty()
+                && !FeatureFlag::CloudModeFactorySelector.is_enabled()
+            {
                 ctx.emit(Event::OpenHandoffEnvironmentCreationModal);
                 return true;
             }
@@ -5022,27 +5076,58 @@ impl Input {
                 .as_ref(ctx)
                 .selected_environment_id()
                 .cloned();
+            let selected_choice = self
+                .handoff_compose_state
+                .as_ref(ctx)
+                .selected_choice()
+                .cloned();
+            if FeatureFlag::CloudModeFactorySelector.is_enabled()
+                && !self.handoff_choice_is_available(selected_choice.as_ref(), ctx)
+            {
+                self.show_ephemeral_error_toast(
+                    "Select an available environment or Factory before handing off.",
+                    ctx,
+                );
+                return true;
+            }
             let entry_point = self.handoff_compose_state.as_ref(ctx).entry_point();
             self.exit_cloud_handoff_compose_and_clear_prompt(ctx);
             ctx.dispatch_typed_action_deferred(WorkspaceAction::OpenLocalToCloudHandoffPane {
                 launch: None,
                 environment_id,
+                selected_choice,
                 entry_point,
             });
             return true;
         }
 
-        if CloudAmbientAgentEnvironment::get_all(ctx).is_empty() {
+        if CloudAmbientAgentEnvironment::get_all(ctx).is_empty()
+            && !FeatureFlag::CloudModeFactorySelector.is_enabled()
+        {
             ctx.emit(Event::OpenHandoffEnvironmentCreationModal);
             return true;
         }
 
-        let attachments = self.collect_cloud_launch_attachments(ctx);
         let environment_id = self
             .handoff_compose_state
             .as_ref(ctx)
             .selected_environment_id()
             .cloned();
+        let selected_choice = self
+            .handoff_compose_state
+            .as_ref(ctx)
+            .selected_choice()
+            .cloned();
+        if FeatureFlag::CloudModeFactorySelector.is_enabled()
+            && !self.handoff_choice_is_available(selected_choice.as_ref(), ctx)
+        {
+            self.show_ephemeral_error_toast(
+                "Select an available environment or Factory before handing off.",
+                ctx,
+            );
+            return true;
+        }
+        let attachments = self.collect_cloud_launch_attachments(ctx);
         let entry_point = self.handoff_compose_state.as_ref(ctx).entry_point();
         let launch = PendingCloudLaunch {
             prompt,
@@ -5054,6 +5139,7 @@ impl Input {
         ctx.dispatch_typed_action_deferred(WorkspaceAction::OpenLocalToCloudHandoffPane {
             launch: Some(launch),
             environment_id,
+            selected_choice,
             entry_point,
         });
         true
@@ -14176,6 +14262,19 @@ impl Input {
                 let prompt = command.trim().to_owned();
                 if prompt.is_empty() {
                     return;
+                }
+
+                if FeatureFlag::CloudModeFactorySelector.is_enabled()
+                    && let Some(model) = self.ambient_agent_view_model()
+                {
+                    let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+                    if !model.as_ref(ctx).can_spawn_selected_choice(&scope, ctx) {
+                        self.show_ephemeral_error_toast(
+                            "Select an available environment or Factory before starting.",
+                            ctx,
+                        );
+                        return;
+                    }
                 }
 
                 if self.is_cloud_mode_input_v2_composing(ctx)

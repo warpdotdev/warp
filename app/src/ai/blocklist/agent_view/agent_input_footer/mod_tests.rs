@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 use persistence::model::{ConversationUsageMetadata, PRIMARY_AGENT_CATEGORY};
+use settings::Setting as _;
 use warp_multi_agent_api as api;
 use warpui::{App, SingletonEntity};
 
@@ -11,20 +12,72 @@ use crate::ai::agent::conversation::{AIAgentHarness, ServerAIConversationMetadat
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::{AmbientAgentTask, AmbientAgentTaskState, TaskPrincipalInfo};
+use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::ai::blocklist::{InputConfig, InputType};
+use crate::ai::cloud_environments::CloudSelectorChoice;
 use crate::auth::user::TEST_USER_UID;
 use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerObjectGuest, ServerPermissions};
-use crate::server::ids::ServerId;
+use crate::server::ids::{ServerId, SyncId};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext,
     CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
+use crate::terminal::session_settings::AgentToolbarChipSelection;
 use crate::terminal::shared_session::{SharedSessionSource, SharedSessionStatus};
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 
 const CONVERSATION_TOKEN: &str = "server-conversation-token";
+
+#[test]
+fn factory_handoff_v1_footer_hides_model_selector_in_default_and_custom_layouts() {
+    App::test((), |mut app| async move {
+        let _cloud_mode_v2 = FeatureFlag::CloudModeInputV2.override_enabled(false);
+        let _factory_selector = FeatureFlag::CloudModeFactorySelector.override_enabled(true);
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let footer = terminal.read(&app, |view, ctx| {
+            view.input().as_ref(ctx).agent_input_footer().clone()
+        });
+        let model_selector_id = footer.read(&app, |footer, _| footer.model_selector.id());
+
+        for layout in [
+            AgentToolbarChipSelection::Default,
+            AgentToolbarChipSelection::Custom {
+                left: vec![AgentToolbarItemKind::ModelSelector],
+                right: vec![AgentToolbarItemKind::ModelSelector],
+            },
+        ] {
+            SessionSettings::handle(&app).update(&mut app, |settings, ctx| {
+                settings
+                    .agent_footer_chip_selection
+                    .set_value(layout, ctx)
+                    .expect("toolbar layout");
+            });
+            footer.update(&mut app, |footer, ctx| {
+                footer.handoff_compose_state.update(ctx, |state, ctx| {
+                    state.activate(HandoffEntryPoint::Ampersand, ctx);
+                    state.set_choice(
+                        CloudSelectorChoice::Factory {
+                            uid: "factory".to_owned(),
+                            environment_uid: SyncId::ServerId(ServerId::from(12)),
+                            foreman_agent_uid: "foreman".to_owned(),
+                        },
+                        ctx,
+                    );
+                });
+                assert!(footer.is_factory_composing(ctx));
+                assert!(
+                    !footer
+                        .render(ctx)
+                        .debug_child_view_ids()
+                        .contains(&model_selector_id)
+                );
+            });
+        }
+    });
+}
 
 fn ambient_task_id(index: usize) -> AmbientAgentTaskId {
     format!("550e8400-e29b-41d4-a716-{index:012}")

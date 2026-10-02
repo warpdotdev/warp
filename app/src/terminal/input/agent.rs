@@ -5,7 +5,7 @@ use warpui::elements::{
     Align, AnchorPair, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     DispatchEventResult, DropTarget, Element, Empty, EventHandler, Expanded, Flex, Hoverable,
     MainAxisSize, OffsetPositioning, OffsetType, ParentElement, PositionedElementOffsetBounds,
-    PositioningAxis, Radius, SavePosition, Stack, XAxisAnchor, YAxisAnchor,
+    PositioningAxis, Radius, SavePosition, Stack, Text, XAxisAnchor, YAxisAnchor,
 };
 use warpui::presenter::ChildView;
 use warpui::{AppContext, SingletonEntity as _, ViewHandle};
@@ -119,6 +119,9 @@ impl Input {
 
         let show_harness_row = FeatureFlag::CloudMode.is_enabled()
             && HarnessAvailabilityModel::as_ref(app).should_show_harness_selector()
+            && !self
+                .ambient_agent_view_model()
+                .is_some_and(|model| model.as_ref(app).is_factory_selected())
             && self
                 .ambient_agent_view_model()
                 .is_some_and(|ambient_agent_model| {
@@ -590,6 +593,19 @@ impl Input {
     }
 
     fn render_cloud_mode_v2_top_row(&self, app: &AppContext) -> Box<dyn Element> {
+        if self
+            .ambient_agent_view_model()
+            .is_some_and(|model| model.as_ref(app).is_factory_selected())
+        {
+            let appearance = Appearance::as_ref(app);
+            return Text::new(
+                "Factory defaults",
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_color(appearance.theme().foreground().into())
+            .finish();
+        }
         let mut row = Flex::row()
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)

@@ -1099,6 +1099,7 @@ impl Input {
                         WorkspaceAction::OpenLocalToCloudHandoffPane {
                             launch: Some(launch),
                             environment_id: None,
+                            selected_choice: None,
                             entry_point: HandoffEntryPoint::SlashCommand,
                         },
                     );
@@ -1111,6 +1112,7 @@ impl Input {
                         WorkspaceAction::OpenLocalToCloudHandoffPane {
                             launch: None,
                             environment_id: None,
+                            selected_choice: None,
                             entry_point: HandoffEntryPoint::SlashCommand,
                         },
                     );

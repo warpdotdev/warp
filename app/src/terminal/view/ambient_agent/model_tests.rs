@@ -15,6 +15,34 @@ fn attachment() -> AttachmentInput {
     }
 }
 
+#[test]
+fn invalidated_factory_choice_blocks_dispatch_until_reselected() {
+    App::test((), |mut app| async move {
+        let _factory_selector = FeatureFlag::CloudModeFactorySelector.override_enabled(true);
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+        let scope = TeamContextForOperation::new_for_test(7.into());
+        model.update(&mut app, |model, ctx| {
+            model.set_choice(
+                CloudSelectorChoice::Factory {
+                    uid: "factory-12".to_owned(),
+                    environment_uid: SyncId::ServerId(ServerId::from(12)),
+                    foreman_agent_uid: "foreman-12".to_owned(),
+                },
+                ctx,
+            );
+            model.invalidate_choice(ctx);
+            model.spawn_agent("do work".to_owned(), vec![], &scope, ctx);
+        });
+        model.read(&app, |model, _| {
+            assert!(model.selection_invalidated());
+            assert!(model.selected_choice().is_none());
+            assert!(model.request().is_none());
+            assert!(matches!(model.status(), Status::Composing));
+        });
+    });
+}
+
 fn team_request_scope() -> RequestTeamScope {
     RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(7.into()))
 }
@@ -158,6 +186,67 @@ fn spawn_config_honors_pane_model_override() {
     });
 }
 
+#[test]
+fn factory_choice_omits_local_execution_overrides_and_restores_them_on_switch() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+        let factory_env = SyncId::ServerId(ServerId::from(12));
+        let ordinary_env = SyncId::ServerId(ServerId::from(13));
+        model.update(&mut app, |model, ctx| {
+            model.worker_host = Some("local-worker".to_owned());
+            model.harness = Harness::Claude;
+            model.harness_model_id = Some("local-model".to_owned());
+            model.harness_auth_secret_name = Some("local-secret".to_owned());
+            model.set_choice(
+                CloudSelectorChoice::Factory {
+                    uid: "factory-12".to_owned(),
+                    environment_uid: factory_env,
+                    foreman_agent_uid: "foreman-12".to_owned(),
+                },
+                ctx,
+            );
+            model.set_worker_host(Some("ignored".to_owned()));
+            model.set_harness(Harness::Codex, ctx);
+        });
+        model.read(&app, |model, app| {
+            let config = model
+                .build_default_spawn_config(&TeamContextForOperation::new_for_test(7.into()), app);
+            assert_eq!(
+                config.environment_id.as_deref(),
+                Some(factory_env.to_string().as_str())
+            );
+            assert!(config.model_id.is_none());
+            assert!(config.harness.is_none());
+            assert!(config.harness_auth_secrets.is_none());
+            assert!(config.worker_host.is_none());
+            assert!(config.computer_use_enabled.is_none());
+        });
+        model.update(&mut app, |model, ctx| {
+            model.set_choice(CloudSelectorChoice::Environment(ordinary_env), ctx);
+        });
+        model.read(&app, |model, app| {
+            let config = model
+                .build_default_spawn_config(&TeamContextForOperation::new_for_test(7.into()), app);
+            assert_eq!(
+                config.environment_id.as_deref(),
+                Some(ordinary_env.to_string().as_str())
+            );
+            assert_eq!(config.worker_host.as_deref(), Some("local-worker"));
+            assert_eq!(
+                config.harness.as_ref().map(|harness| harness.harness_type),
+                Some(Harness::Claude)
+            );
+            assert_eq!(
+                config
+                    .harness_auth_secrets
+                    .as_ref()
+                    .and_then(|secrets| secrets.claude_auth_secret_name.as_deref()),
+                Some("local-secret")
+            );
+        });
+    });
+}
 #[test]
 fn spawn_agent_omits_orchestration_handoff_for_fresh_launches() {
     App::test((), |mut app| async move {

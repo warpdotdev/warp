@@ -4,6 +4,7 @@
 use warpui::{Entity, ModelContext};
 
 use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
+use crate::ai::cloud_environments::CloudSelectorChoice;
 use crate::server::ids::SyncId;
 
 #[derive(Clone)]
@@ -18,6 +19,8 @@ pub enum HandoffComposeStateEvent {
 pub struct HandoffComposeState {
     active: bool,
     selected_environment_id: Option<SyncId>,
+    selected_choice: Option<CloudSelectorChoice>,
+    selection_invalidated: bool,
     has_explicit_environment_selection: bool,
     entry_point: HandoffEntryPoint,
 }
@@ -34,6 +37,9 @@ impl HandoffComposeState {
     ) {
         self.active = true;
         self.has_explicit_environment_selection = false;
+        self.selected_environment_id = None;
+        self.selected_choice = None;
+        self.selection_invalidated = false;
         self.entry_point = entry_point;
         ctx.emit(HandoffComposeStateEvent::ActiveChanged);
     }
@@ -57,6 +63,30 @@ impl HandoffComposeState {
         self.selected_environment_id.as_ref()
     }
 
+    pub(crate) fn selected_choice(&self) -> Option<&CloudSelectorChoice> {
+        self.selected_choice.as_ref()
+    }
+
+    pub(crate) fn selection_invalidated(&self) -> bool {
+        self.selection_invalidated
+    }
+
+    pub(crate) fn set_choice(&mut self, choice: CloudSelectorChoice, ctx: &mut ModelContext<Self>) {
+        self.selected_environment_id = Some(choice.environment_id());
+        self.selected_choice = Some(choice);
+        self.selection_invalidated = false;
+        self.has_explicit_environment_selection = true;
+        ctx.emit(HandoffComposeStateEvent::EnvironmentSelected);
+    }
+
+    pub(crate) fn invalidate_choice(&mut self, ctx: &mut ModelContext<Self>) {
+        self.selected_environment_id = None;
+        self.selected_choice = None;
+        self.selection_invalidated = true;
+        self.has_explicit_environment_selection = true;
+        ctx.emit(HandoffComposeStateEvent::EnvironmentSelected);
+    }
+
     pub(crate) fn set_environment_id(
         &mut self,
         environment_id: Option<SyncId>,
@@ -72,12 +102,15 @@ impl HandoffComposeState {
         // No-op when the value is unchanged, unless this is the first explicit
         // selection (which needs to promote `has_explicit_environment_selection`).
         if self.selected_environment_id == environment_id
+            && self.selected_choice == environment_id.map(CloudSelectorChoice::Environment)
             && (!is_explicit || self.has_explicit_environment_selection)
         {
             return;
         }
 
         self.selected_environment_id = environment_id;
+        self.selected_choice = environment_id.map(CloudSelectorChoice::Environment);
+        self.selection_invalidated = false;
         if is_explicit {
             self.has_explicit_environment_selection = true;
         }
@@ -98,6 +131,8 @@ impl HandoffComposeState {
         if self.selected_environment_id.take().is_none() {
             return;
         }
+        self.selected_choice = None;
+        self.selection_invalidated = false;
         self.has_explicit_environment_selection = false;
         ctx.emit(HandoffComposeStateEvent::EnvironmentSelected);
     }
