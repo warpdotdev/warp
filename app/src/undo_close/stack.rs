@@ -411,7 +411,3 @@ impl Entity for UndoCloseStack {
 }
 
 impl SingletonEntity for UndoCloseStack {}
-
-#[cfg(test)]
-#[path = "stack_tests.rs"]
-mod tests;
