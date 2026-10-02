@@ -6461,9 +6461,6 @@ impl Workspace {
         position: Vector2F,
         ctx: &mut ViewContext<Self>,
     ) {
-        if !FeatureFlag::ConfigurableToolbar.is_enabled() {
-            return;
-        }
         let items = vec![
             MenuItemFields::new("Re-arrange toolbar items")
                 .with_on_select_action(WorkspaceAction::OpenHeaderToolbarEditor)
@@ -6477,9 +6474,6 @@ impl Workspace {
     }
 
     fn open_header_toolbar_editor(&mut self, ctx: &mut ViewContext<Self>) {
-        if !FeatureFlag::ConfigurableToolbar.is_enabled() {
-            return;
-        }
         self.header_toolbar_editor_modal
             .update(ctx, |modal, ctx| modal.open(ctx));
         self.close_all_overlays(ctx);
