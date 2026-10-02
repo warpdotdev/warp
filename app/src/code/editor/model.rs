@@ -1910,6 +1910,89 @@ impl CodeEditorModel {
         ctx.clipboard().write(clipboard);
     }
 
+    /// The text of the line holding the primary cursor, including its trailing
+    /// newline when the line has one.
+    ///
+    /// `None` in a document with no line to read, so a caller can leave the
+    /// clipboard alone instead of clearing it.
+    pub fn current_line_text(&self, ctx: &AppContext) -> Option<String> {
+        let range = self.current_line_bounds(ctx);
+        if range.start >= range.end {
+            return None;
+        }
+        let buffer = self.content().as_ref(ctx);
+        Some(buffer.text_in_range(range).into_string())
+    }
+
+    /// Insert `text` as a whole line above the line holding the primary cursor.
+    ///
+    /// This is the paste half of a line-wise copy. Inserting at the start of the
+    /// line rather than at the caret is what keeps a copied line a line: pasting
+    /// at the caret would split whichever line the caret happened to sit in. The
+    /// insert lands before the cursor, so the cursor rides down with the text it
+    /// was already on.
+    pub fn paste_line_above_cursor(&mut self, text: &str, ctx: &mut ModelContext<Self>) {
+        let line_start = self.current_line_bounds(ctx).start;
+        // Normalize to exactly one trailing newline, so the inserted text occupies
+        // its own line whatever the clipboard happened to carry.
+        let without_newline = text.strip_suffix('\n').unwrap_or(text);
+        let line = format!("{without_newline}\n");
+        let edits = vec1![(line, line_start..line_start)];
+
+        let selection_model = self.selection_model.clone();
+        self.update_content(
+            |mut content, ctx| {
+                content.apply_edit(
+                    BufferEditAction::InsertAtCharOffsetRanges { edits: &edits },
+                    EditOrigin::UserInitiated,
+                    selection_model,
+                    ctx,
+                );
+            },
+            ctx,
+        );
+        self.validate(ctx);
+    }
+
+    /// Delete the line holding the primary cursor, trailing newline included.
+    ///
+    /// This is the delete half of a line-wise cut. On the last line of a buffer
+    /// that has no trailing newline there is no newline of its own to take, so
+    /// the newline before it goes instead, which keeps the deletion from leaving
+    /// an empty line behind. Does nothing in a document that has no line at all.
+    pub fn delete_current_line(&mut self, ctx: &mut ModelContext<Self>) {
+        let mut range = self.current_line_bounds(ctx);
+        if range.start >= range.end {
+            return;
+        }
+
+        let buffer = self.content().as_ref(ctx);
+        let cursor = self.selections(ctx).first().head;
+        let has_previous_line = cursor.to_buffer_point(buffer).row > 0;
+        let has_trailing_newline = buffer
+            .text_in_range(range.clone())
+            .into_string()
+            .ends_with('\n');
+        if !has_trailing_newline && has_previous_line {
+            range.start = CharOffset::from(range.start.as_usize() - 1);
+        }
+
+        self.delete_range_returning_text(range, ctx);
+    }
+
+    /// The character range of the line holding the primary cursor. The range runs
+    /// to the start of the next line, so it carries the trailing newline whenever
+    /// the line has one, and stops at the end of the buffer on the last line. It
+    /// is empty only in a document that has no line at all.
+    fn current_line_bounds(&self, ctx: &AppContext) -> Range<CharOffset> {
+        let buffer = self.content().as_ref(ctx);
+        let cursor = self.selections(ctx).first().head;
+        let row = cursor.to_buffer_point(buffer).row;
+        let start = Point::new(row, 0).to_buffer_char_offset(buffer);
+        let end = Point::new(row + 1, 0).to_buffer_char_offset(buffer);
+        start..end
+    }
+
     #[cfg(windows)]
     /// If there is selected text, copy it. Otherwise, emit an event to allow
     /// an ancestor to handle the `WindowsCtrlC` event.
