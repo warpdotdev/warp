@@ -39,8 +39,7 @@ fn discard_closed_tab_skips_unavailable_pane_group() {
             );
 
             stack.update(ctx, |stack, ctx| {
-                let removed_item = stack.stack.pop().unwrap();
-                removed_item.closed_item.discard(ctx);
+                stack.discard_pane_group_parent(pane_group.id(), ctx);
                 assert!(stack.is_empty());
             });
         });
