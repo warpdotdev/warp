@@ -148,6 +148,10 @@ integration_tests! {
     test_inline_model_selector_restores_prompt_on_dismissal,
     test_inline_model_selector_restores_prompt_on_model_selection,
     test_inline_model_selector_restores_prompt_on_chip_toggle_close,
+    test_profile_selector_preserves_prompt_on_dismissal,
+    test_profile_selector_preserves_prompt_on_selection,
+    test_profile_selector_restores_prompt_when_interrupting_model_selector,
+    test_ctrl_c_does_not_restore_non_model_inline_menu_snapshot,
     test_paste_and_type_characters_before_bootstrap,
     #[ignore = "Flaking on CI - KC looking into 3/31/26"]
     test_code_review_scroll_anchor_preserved_when_inserting_above,
