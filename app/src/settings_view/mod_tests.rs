@@ -13,7 +13,9 @@ use super::*;
 use crate::appearance::Appearance;
 use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 use crate::workspace::view::WorkspaceBanner;
-use crate::workspace::view::tests::{initialize_app, mock_workspace};
+use crate::workspace::view::tests::{
+    initialize_app, mock_workspace, workspace_settings_error_state,
+};
 use crate::workspaces::workspace::{BillingMetadata, CustomerType};
 
 fn billing_metadata(customer_type: CustomerType) -> BillingMetadata {
@@ -21,6 +23,47 @@ fn billing_metadata(customer_type: CustomerType) -> BillingMetadata {
         customer_type,
         ..Default::default()
     }
+}
+
+#[test]
+fn settings_error_sync_skips_checked_out_pane() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let settings_pane = app.read(|ctx| {
+            ctx.views_of_type::<SettingsView>(workspace.window_id(ctx))
+                .unwrap()
+                .pop()
+                .unwrap()
+        });
+        let error = SettingsFileError::FileParseFailed("invalid TOML".into());
+        app.update(|ctx| {
+            WarpConfig::handle(ctx).update(ctx, |_, ctx| {
+                ctx.emit(WarpConfigUpdateEvent::SettingsErrors(error.clone()));
+            });
+        });
+
+        settings_pane.update(&mut app, |_, ctx| {
+            workspace.update(ctx, |workspace, ctx| {
+                workspace.handle_action(
+                    &WorkspaceAction::DismissWorkspaceBanner(WorkspaceBanner::InvalidSettings),
+                    ctx,
+                );
+            });
+        });
+        app.foreground_executor().spawn(async {}).await;
+
+        app.read(|ctx| {
+            assert_eq!(
+                workspace_settings_error_state(&workspace, ctx),
+                (Some(error.clone()), true, false),
+            );
+        });
+        settings_pane.read(&app, |view, _| {
+            assert_eq!(view.settings_file_error, Some(error));
+            assert!(!view.settings_error_banner_dismissed);
+        });
+    });
 }
 
 #[test]
