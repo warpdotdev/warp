@@ -105,13 +105,18 @@ impl TuiCloudRunState {
         &mut self,
         task_id: AmbientAgentTaskId,
         run_id: String,
-        run_url: String,
+        run_url: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) {
         self.task_id = Some(task_id);
         self.run_id = Some(run_id);
-        self.run_url = Some(run_url);
+        self.run_url = run_url;
         self.startup = TuiCloudRunStartup::Spawned;
+        ctx.emit(TuiCloudRunStateEvent::Updated);
+    }
+
+    pub(crate) fn set_run_url(&mut self, run_url: String, ctx: &mut ModelContext<Self>) {
+        self.run_url = Some(run_url);
         ctx.emit(TuiCloudRunStateEvent::Updated);
     }
 }

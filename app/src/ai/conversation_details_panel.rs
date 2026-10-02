@@ -53,6 +53,7 @@ use crate::ai::blocklist::view_util::{UsageLabelKind, format_usage, usage_label}
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, CloudAmbientAgentEnvironment};
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
+use crate::ai::orchestration::{cloud_run_url, has_factory_access};
 use crate::ai::runner_display::{self, RunnerPlatform};
 use crate::appearance::Appearance;
 use crate::auth::UserUid;
@@ -673,7 +674,7 @@ pub enum ConversationDetailsPanelAction {
     CopySelectedText,
     #[cfg(not(target_family = "wasm"))]
     ContinueLocally,
-    OpenInOz,
+    OpenRunInWeb,
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -710,8 +711,7 @@ pub struct ConversationDetailsPanel {
     show_open_button: bool,
     #[cfg(not(target_family = "wasm"))]
     continue_locally_button: ViewHandle<ActionButton>,
-    /// Text button "View in Oz" shown next to "Continue locally".
-    open_in_oz_button: ViewHandle<ActionButton>,
+    open_run_button: ViewHandle<ActionButton>,
     /// Tracks when each copy button was last clicked (for checkmark feedback).
     copy_feedback_times: HashMap<CopyButtonKind, Instant>,
     /// Selection state for cmd+C copy.
@@ -751,12 +751,12 @@ impl ConversationDetailsPanel {
                     ctx.dispatch_typed_action(ConversationDetailsPanelAction::ContinueLocally);
                 })
         });
-        let open_in_oz_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("View in Oz", SecondaryTheme)
-                .with_tooltip("View this run in the Oz web app")
+        let open_run_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("View run", SecondaryTheme)
+                .with_tooltip("View this run in the web app")
                 .with_size(ButtonSize::Small)
                 .on_click(|ctx| {
-                    ctx.dispatch_typed_action(ConversationDetailsPanelAction::OpenInOz);
+                    ctx.dispatch_typed_action(ConversationDetailsPanelAction::OpenRunInWeb);
                 })
         });
         ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
@@ -777,7 +777,7 @@ impl ConversationDetailsPanel {
             show_open_button,
             #[cfg(not(target_family = "wasm"))]
             continue_locally_button,
-            open_in_oz_button,
+            open_run_button,
             resizable_state_handle: resizable_state_handle(initial_width),
             scroll_state: ClippedScrollStateHandle::default(),
             copy_feedback_times: HashMap::new(),
@@ -978,15 +978,13 @@ impl ConversationDetailsPanel {
         }
     }
 
-    /// Builds the Oz web UI URL for a task, if a task_id is available.
-    fn oz_run_url(data: &ConversationDetailsData) -> Option<String> {
+    fn run_id(data: &ConversationDetailsData) -> Option<String> {
         if let PanelMode::Task {
             task_id: Some(task_id),
             ..
         } = &data.mode
         {
-            let oz_root_url = ChannelState::oz_root_url();
-            Some(format!("{oz_root_url}/runs/{task_id}"))
+            Some(task_id.to_string())
         } else {
             None
         }
@@ -1440,11 +1438,8 @@ impl ConversationDetailsPanel {
             .with_height(STATUS_ICON_SIZE)
             .finish();
 
-        // When we have an Oz run URL, the whole chip becomes a clickable
-        // target that opens the run in the Oz web app. In that case the label
-        // is not selectable so a click navigates rather than starting a text
-        // selection.
-        let is_clickable = Self::oz_run_url(&self.data).is_some();
+        // Avoid starting a text selection when the status chip navigates to a run.
+        let is_clickable = Self::run_id(&self.data).is_some();
 
         let status_text = Text::new(display_text, appearance.ui_font_family(), ui_font_size)
             .with_color(color)
@@ -1471,7 +1466,7 @@ impl ConversationDetailsPanel {
                 let mut stack = Stack::new().with_child(status_badge);
                 if state.is_hovered() {
                     let tooltip = ui_builder
-                        .tool_tip("View run in Oz web".to_string())
+                        .tool_tip("View run in web app".to_string())
                         .build()
                         .finish();
                     stack.add_positioned_overlay_child(
@@ -1488,7 +1483,7 @@ impl ConversationDetailsPanel {
             })
             .with_cursor(Cursor::PointingHand)
             .on_click(|ctx, _, _| {
-                ctx.dispatch_typed_action(ConversationDetailsPanelAction::OpenInOz);
+                ctx.dispatch_typed_action(ConversationDetailsPanelAction::OpenRunInWeb);
             })
             .finish()
         } else {
@@ -2087,17 +2082,17 @@ impl View for ConversationDetailsPanel {
         let has_local_continuation_info = self.local_continuation_info(app).is_some();
         #[cfg(target_family = "wasm")]
         let has_local_continuation_info = false;
-        let has_oz_url = Self::oz_run_url(&self.data).is_some();
+        let has_run_id = Self::run_id(&self.data).is_some();
 
-        if has_local_continuation_info || has_oz_url {
+        if has_local_continuation_info || has_run_id {
             let mut buttons_wrap = Wrap::row().with_spacing(8.).with_run_spacing(8.);
 
             #[cfg(not(target_family = "wasm"))]
             if has_local_continuation_info {
                 buttons_wrap.add_child(ChildView::new(&self.continue_locally_button).finish());
             }
-            if has_oz_url {
-                buttons_wrap.add_child(ChildView::new(&self.open_in_oz_button).finish());
+            if has_run_id {
+                buttons_wrap.add_child(ChildView::new(&self.open_run_button).finish());
             }
 
             header_row.add_child(
@@ -2576,9 +2571,15 @@ impl TypedActionView for ConversationDetailsPanel {
                     }
                 }
             }
-            ConversationDetailsPanelAction::OpenInOz => {
-                if let Some(url) = Self::oz_run_url(&self.data) {
-                    ctx.open_url(&url);
+            ConversationDetailsPanelAction::OpenRunInWeb => {
+                if let Some(run_id) = Self::run_id(&self.data) {
+                    let client = ServerApiProvider::as_ref(ctx).get_factory_client();
+                    ctx.spawn(
+                        async move { has_factory_access(client.as_ref()).await },
+                        move |_, factory_access, ctx| {
+                            ctx.open_url(&cloud_run_url(&run_id, factory_access));
+                        },
+                    );
                 }
             }
         }

@@ -5,9 +5,11 @@
 use std::path::{Path, PathBuf};
 #[cfg(not(target_family = "wasm"))]
 use std::str::FromStr;
+use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use futures::future::{Either, select};
 use prost::Message as _;
 use warp_cli::agent::Harness;
 #[cfg(not(target_family = "wasm"))]
@@ -30,6 +32,7 @@ use crate::ai::blocklist::StartAgentRequest;
 use crate::ai::skills::resolve_skill_spec;
 use crate::ai::skills::{SkillManager, SkillReference};
 use crate::server::server_api::ai::{AgentConfigSnapshot, SpawnAgentRequest};
+use crate::server::server_api::factory::FactoryClient;
 use crate::server::server_api::{AIApiError, ClientError, CloudAgentCapacityError};
 use crate::server::team_scope::RequestTeamScope;
 use crate::settings::PrivacySettings;
@@ -374,10 +377,31 @@ pub(crate) fn should_disable_snapshot(ctx: &AppContext) -> bool {
     )
 }
 
-/// Builds the Oz web URL for a server-assigned agent run ID.
+/// Builds the web URL for a server-assigned cloud run ID.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
-pub fn oz_run_url(run_id: &str) -> String {
-    format!("{}/runs/{run_id}", ChannelState::oz_root_url())
+pub fn cloud_run_url(run_id: &str, factory_access: bool) -> String {
+    if factory_access {
+        let origin = if ChannelState::uses_staging_server() {
+            "https://platform.staging.warp.dev"
+        } else {
+            "https://platform.warp.dev"
+        };
+        format!("{origin}/runs/{run_id}")
+    } else {
+        format!("{}/runs/{run_id}", ChannelState::oz_root_url())
+    }
+}
+
+pub async fn has_factory_access(client: &dyn FactoryClient) -> bool {
+    match select(
+        Box::pin(client.has_factory_access()),
+        Box::pin(warpui::r#async::Timer::after(Duration::from_secs(5))),
+    )
+    .await
+    {
+        Either::Left((Ok(allowed), _)) => allowed,
+        Either::Left((Err(_), _)) | Either::Right(_) => false,
+    }
 }
 
 fn resolve_runtime_skills(

@@ -1,4 +1,5 @@
 //! Commands to interact with ambient agents on Warp's platform.
+use std::future::Future;
 use std::io::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,6 +39,7 @@ use crate::ai::ambient_agents::{
     AgentConfigSnapshot, AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState,
 };
 use crate::ai::artifacts::Artifact;
+use crate::ai::orchestration::{cloud_run_url, has_factory_access};
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::server::ids::{ServerId, SyncId};
@@ -59,6 +61,82 @@ const HTTP_UNPROCESSABLE_ENTITY: u16 = 422;
 const HTTP_NOT_FOUND: u16 = 404;
 const OPERATION_NOT_SUPPORTED_TYPE_URI: &str =
     "https://docs.warp.dev/errors/operation_not_supported";
+
+async fn run_spawned_ambient_agent<F: Future<Output = bool>>(
+    request: SpawnAgentRequest,
+    team_scope: RequestTeamScope,
+    ai_client: Arc<dyn AIClient>,
+    factory_access: F,
+    upgrade_link: Option<String>,
+) -> anyhow::Result<Option<SessionJoinInfo>> {
+    let mut stream = Box::pin(spawn_task(
+        request,
+        team_scope,
+        ai_client,
+        Some(TASK_STATUS_POLLING_DURATION),
+    ));
+    let mut factory_access = Some(factory_access);
+    let mut session_join_info = None;
+    let mut spawned_task_id = None;
+
+    while let Some(event_result) = stream.next().await {
+        match event_result? {
+            AmbientAgentEvent::TaskSpawned { task_id, .. } => {
+                println!("Spawned ambient agent with run ID: {task_id}");
+                let allowed = factory_access
+                    .take()
+                    .expect("a cloud task is spawned once")
+                    .await;
+                println!("View run: {}", cloud_run_url(&task_id.to_string(), allowed));
+                spawned_task_id = Some(task_id);
+            }
+            AmbientAgentEvent::AtCapacity => {
+                println!(
+                    "Concurrent cloud agent limit reached. This agent run will begin when one of your current cloud runs completes."
+                );
+                if let Some(url) = &upgrade_link {
+                    println!("To increase your concurrent agent limit, upgrade your plan: {url}");
+                }
+            }
+            AmbientAgentEvent::StateChanged {
+                state,
+                status_message,
+            } => {
+                if matches!(
+                    state,
+                    AmbientAgentTaskState::InProgress | AmbientAgentTaskState::Succeeded
+                ) || state.is_failure_like()
+                {
+                    println!("Agent state: {state:?}");
+                }
+                if state.is_failure_like() {
+                    if let Some(msg) = status_message {
+                        println!("Error: {}", msg.message);
+                    } else {
+                        println!("Run failed with no error message");
+                    }
+                }
+            }
+            AmbientAgentEvent::SessionStarted {
+                session_join_info: info,
+            } => {
+                println!("View agent session: {}", info.session_link);
+                session_join_info = Some(info);
+            }
+            AmbientAgentEvent::TimedOut => {
+                let task_id_str = spawned_task_id
+                    .as_ref()
+                    .map_or_else(|| "unknown".to_string(), |id| id.to_string());
+                println!(
+                    "Agent session with run ID {task_id_str} is not ready after {}s. Check for a sharing link in the ambient agent management panel. See https://docs.warp.dev/platform/managing-cloud-agents for details.",
+                    TASK_STATUS_POLLING_DURATION.as_secs()
+                );
+            }
+        }
+    }
+
+    Ok(session_join_info)
+}
 
 /// Singleton model that runs async work for ambient agent CLI commands.
 struct AmbientAgentRunner;
@@ -590,71 +668,18 @@ impl AmbientAgentRunner {
             };
 
             let should_open = args.open;
-            let oz_root_url = ChannelState::oz_root_url();
+            let factory_client = ServerApiProvider::as_ref(ctx).get_factory_client();
             let ai_client_clone = ai_client.clone();
             let request_team_scope = RequestTeamScope::from_scope(&team_scope);
             let spawn_future = async move {
-                let mut stream = Box::pin(spawn_task(
+                run_spawned_ambient_agent(
                     request,
                     request_team_scope,
                     ai_client_clone,
-                    Some(TASK_STATUS_POLLING_DURATION),
-                ));
-                let mut session_join_info = None;
-                let mut spawned_task_id = None;
-
-                while let Some(event_result) = stream.next().await {
-                    match event_result {
-                        Ok(event) => match event {
-                            AmbientAgentEvent::TaskSpawned { task_id, .. } => {
-                                println!("Spawned ambient agent with run ID: {task_id}");
-                                println!("View run: {oz_root_url}/runs/{task_id}");
-                                spawned_task_id = Some(task_id);
-                            }
-                            AmbientAgentEvent::AtCapacity => {
-                                println!("Concurrent cloud agent limit reached. This agent run will begin when one of your current cloud runs completes.");
-                                if let Some(url) = &upgrade_link {
-                                    println!("To increase your concurrent agent limit, upgrade your plan: {}", url);
-                                }
-                            }
-                            AmbientAgentEvent::StateChanged {
-                                state,
-                                status_message,
-                            } => {
-                                if matches!(
-                                    state,
-                                    AmbientAgentTaskState::InProgress
-                                        | AmbientAgentTaskState::Succeeded
-                                ) || state.is_failure_like()
-                                {
-                                    println!("Agent state: {:?}", state);
-                                }
-                                if state.is_failure_like() {
-                                    if let Some(msg) = status_message {
-                                        println!("Error: {}", msg.message);
-                                    } else {
-                                        println!("Run failed with no error message");
-                                    }
-                                }
-                            }
-                            AmbientAgentEvent::SessionStarted {
-                                session_join_info: info,
-                            } => {
-                                println!("View agent session: {}", info.session_link);
-                                session_join_info = Some(info);
-                            }
-                            AmbientAgentEvent::TimedOut => {
-                                let task_id_str = spawned_task_id.as_ref().map_or_else(|| "unknown".to_string(), |id| id.to_string());
-                                println!("Agent session with run ID {task_id_str} is not ready after {}s. Check for a sharing link in the ambient agent management panel. See https://docs.warp.dev/platform/managing-cloud-agents for details.", TASK_STATUS_POLLING_DURATION.as_secs());
-                            }
-                        },
-                        Err(err) => {
-                            return Err(err);
-                        }
-                    }
-                }
-
-                Ok(session_join_info)
+                    has_factory_access(factory_client.as_ref()),
+                    upgrade_link,
+                )
+                .await
             };
 
             ctx.spawn(spawn_future, move |_, result, ctx| match result {

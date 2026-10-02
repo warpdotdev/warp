@@ -49,14 +49,16 @@ use crate::ai::execution_profiles::resolve_cloud_agent_computer_use_state;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::orchestration::{
     CloudAgentStartupBlocker, CloudAgentStartupFailure, CloudAgentStartupIssue,
-    classify_cloud_agent_startup_error, oz_run_url, resolve_default_environment_id,
-    resolve_default_host_slug, should_disable_snapshot,
+    classify_cloud_agent_startup_error, cloud_run_url, has_factory_access,
+    resolve_default_environment_id, resolve_default_host_slug, should_disable_snapshot,
 };
 use crate::cloud_object::CloudObjectLookup as _;
 use crate::server::ids::{ServerId, SyncId};
+use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{
     AIClient, AgentConfigSnapshot, AttachmentInput, InitialSnapshotToken, SpawnAgentRequest,
 };
+use crate::server::server_api::factory::FactoryClient;
 use crate::server::team_scope::RequestTeamScope;
 use crate::settings::AISettings;
 
@@ -716,10 +718,12 @@ pub fn execute_handoff(
             }
         });
     }
+    let factory_client = ServerApiProvider::as_ref(ctx).get_factory_client();
 
     Box::pin(execute_validated_handoff(
         pending,
         ai_client,
+        factory_client,
         caller_cancellation,
         materialize_handoff_target,
     ))
@@ -728,6 +732,7 @@ pub fn execute_handoff(
 async fn execute_validated_handoff(
     pending: PendingHandoff,
     ai_client: Arc<dyn AIClient>,
+    factory_client: Arc<dyn FactoryClient>,
     caller_cancellation: Option<oneshot::Receiver<()>>,
     materialize_handoff_target: Option<MaterializeHandoffTarget>,
 ) -> HandoffCommitOutcome {
@@ -814,13 +819,7 @@ async fn execute_validated_handoff(
         .is_some_and(handoff_cancellation_requested)
     {
         if let Ok(response) = &response {
-            let task_id = response.task_id;
-            if let Err(error) = ai_client.cancel_ambient_agent_task(&task_id).await {
-                report_error!(
-                    error.context("Failed to cancel ambient agent task"),
-                    extra: { "task_id" => %task_id }
-                );
-            }
+            cancel_handoff_task(&ai_client, response.task_id).await;
         }
         return HandoffCommitOutcome::Cancelled;
     }
@@ -837,15 +836,44 @@ async fn execute_validated_handoff(
         }
     };
 
+    let factory_access = if let Some(receiver) = cancellation {
+        let probe = Box::pin(has_factory_access(factory_client.as_ref()));
+        match select(probe, Box::pin(receiver)).await {
+            Either::Left((allowed, mut receiver)) => {
+                if handoff_cancellation_requested(&mut receiver) {
+                    cancel_handoff_task(&ai_client, response.task_id).await;
+                    return HandoffCommitOutcome::Cancelled;
+                }
+                allowed
+            }
+            Either::Right((Ok(()), _)) => {
+                cancel_handoff_task(&ai_client, response.task_id).await;
+                return HandoffCommitOutcome::Cancelled;
+            }
+            Either::Right((Err(_), probe)) => probe.await,
+        }
+    } else {
+        has_factory_access(factory_client.as_ref()).await
+    };
+
     HandoffCommitOutcome::Created(HandoffCreated {
         task_id: response.task_id,
         run_id: response.run_id.clone(),
-        url: oz_run_url(&response.run_id),
+        url: cloud_run_url(&response.run_id, factory_access),
         at_capacity: response.at_capacity,
         request,
         derived_workspace_had_content: settled.derived_workspace_had_content,
         snapshot_failed: settled.snapshot_failed,
     })
+}
+
+async fn cancel_handoff_task(ai_client: &Arc<dyn AIClient>, task_id: AmbientAgentTaskId) {
+    if let Err(error) = ai_client.cancel_ambient_agent_task(&task_id).await {
+        report_error!(
+            error.context("Failed to cancel ambient agent task"),
+            extra: { "task_id" => %task_id }
+        );
+    }
 }
 
 fn handoff_cancellation_requested(cancellation: &mut oneshot::Receiver<()>) -> bool {

@@ -482,10 +482,7 @@ fn test_from_task_uses_server_reported_dollar_cost() {
 }
 
 #[test]
-fn test_oz_run_url_present_for_task_and_absent_for_conversation() {
-    // The Status chip is only clickable (navigating to the Oz run view) when
-    // `oz_run_url` yields a URL, which happens for task-backed runs but not for
-    // plain local conversations.
+fn test_run_id_present_for_task_and_absent_for_conversation() {
     App::test((), |mut app| async move {
         let _history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
@@ -493,17 +490,13 @@ fn test_oz_run_url_present_for_task_and_absent_for_conversation() {
         let task = create_test_task(task_id);
 
         app.update(|ctx| {
-            // Task mode → the chip should link to the Oz run view.
             let task_data = ConversationDetailsData::from_task(&task, None, None, ctx);
-            let url = ConversationDetailsPanel::oz_run_url(&task_data)
-                .expect("a task with a task_id should produce an Oz run URL");
-            assert!(
-                url.ends_with(&format!("/runs/{task_id}")),
-                "unexpected Oz run URL: {url}"
+            assert_eq!(
+                ConversationDetailsPanel::run_id(&task_data).as_deref(),
+                Some(task_id)
             );
         });
 
-        // Conversation mode → there is no run view to navigate to.
         let conversation_data = ConversationDetailsData::from_conversation_metadata(
             AIConversationId::new(),
             "Title".to_string(),
@@ -519,7 +512,7 @@ fn test_oz_run_url_present_for_task_and_absent_for_conversation() {
             None,
             Some(Harness::Oz),
         );
-        assert!(ConversationDetailsPanel::oz_run_url(&conversation_data).is_none());
+        assert!(ConversationDetailsPanel::run_id(&conversation_data).is_none());
     });
 }
 
