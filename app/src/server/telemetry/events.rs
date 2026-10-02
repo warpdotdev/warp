@@ -451,31 +451,6 @@ pub enum CodePanelsFileOpenEntrypoint {
     GlobalSearch,
 }
 
-/// The CLI agent being used (for telemetry purposes).
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-pub enum CLIAgentType {
-    Claude,
-    Gemini,
-    Codex,
-    Amp,
-    Droid,
-    OpenCode,
-    Copilot,
-    Pi,
-    OhMyPi,
-    Auggie,
-    Cursor,
-    Goose,
-    Hermes,
-    Vibe,
-    Antigravity,
-    Grok,
-    Kiro,
-    /// Warp's own headless TUI, targeted by the code review panel as a CLI-agent-equivalent destination.
-    WarpTui,
-    Unknown,
-}
-
 /// The kind of plugin chip shown or dismissed (for telemetry purposes).
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -491,14 +466,14 @@ pub enum NotificationAgentVariant {
     /// Warp's built-in agent (Oz).
     Oz,
     /// A CLI agent (e.g., Claude Code, Gemini CLI, etc.).
-    CLIAgent(CLIAgentType),
+    CLIAgent(&'static str),
 }
 
 impl From<NotificationSourceAgent> for NotificationAgentVariant {
     fn from(agent: NotificationSourceAgent) -> Self {
         match agent {
             NotificationSourceAgent::Oz { .. } => Self::Oz,
-            NotificationSourceAgent::CLI { agent, .. } => Self::CLIAgent(agent.into()),
+            NotificationSourceAgent::CLI { agent, .. } => Self::CLIAgent(agent.telemetry_name()),
         }
     }
 }
@@ -1830,7 +1805,7 @@ pub enum TelemetryEvent {
         source: FileTreeSource,
         is_code_mode_v2: bool,
         /// The CLI agent type if opened from a CLI agent footer (e.g., Claude Code).
-        cli_agent: Option<CLIAgentType>,
+        cli_agent: Option<&'static str>,
     },
     /// User attached a file or directory as context from the file tree
     FileTreeItemAttachedAsContext {
@@ -2632,71 +2607,71 @@ pub enum TelemetryEvent {
     /// Emitted when the user uses voice input from the CLI agent footer.
     CLIAgentToolbarVoiceInputUsed {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: &'static str,
     },
     /// Emitted when the user attaches an image from the CLI agent footer.
     CLIAgentToolbarImageAttached {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: &'static str,
     },
     /// Emitted when the CLI agent footer is shown.
     CLIAgentToolbarShown {
         /// The CLI agent being shown.
-        cli_agent: CLIAgentType,
+        cli_agent: &'static str,
     },
     /// Emitted when the user opens the CLI agent rich input editor.
     CLIAgentRichInputOpened {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: &'static str,
         /// How the editor was opened (Ctrl-G or footer button).
         entrypoint: CLIAgentInputEntrypoint,
     },
     /// Emitted when the CLI agent rich input editor is closed.
     CLIAgentRichInputClosed {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: &'static str,
         /// Why the editor was closed.
         reason: CLIAgentRichInputCloseReason,
     },
     /// Emitted when the user submits a prompt via the CLI agent rich input editor.
     CLIAgentRichInputSubmitted {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: &'static str,
         /// Length of the submitted prompt in characters.
         prompt_length: usize,
     },
     /// Emitted when the user clicks a plugin chip (install, update, or instructions).
     CLIAgentPluginChipClicked {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: &'static str,
         /// The specific action taken.
         action: PluginChipTelemetryAction,
     },
     /// Emitted when the user dismisses the plugin chip.
     CLIAgentPluginChipDismissed {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: &'static str,
         /// Whether this was the install or update chip.
         chip_kind: PluginChipTelemetryKind,
     },
     /// Emitted when auto plugin install or update succeeds.
     CLIAgentPluginOperationSucceeded {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: &'static str,
         /// Whether this was an install or update operation.
         operation: PluginChipTelemetryKind,
     },
     /// Emitted when auto plugin install or update fails.
     CLIAgentPluginOperationFailed {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: &'static str,
         /// Whether this was an install or update operation.
         operation: PluginChipTelemetryKind,
     },
     /// Emitted when a CLI agent plugin is first recognized (SessionStart event received).
     CLIAgentPluginDetected {
         /// The CLI agent whose plugin was detected.
-        cli_agent: CLIAgentType,
+        cli_agent: &'static str,
     },
     /// Emitted when an agent notification is shown (toast or mailbox notification).
     AgentNotificationShown {

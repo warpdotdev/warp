@@ -13832,7 +13832,7 @@ impl TerminalView {
         if notification.event == CLIAgentEventType::SessionStart {
             send_telemetry_from_ctx!(
                 TelemetryEvent::CLIAgentPluginDetected {
-                    cli_agent: notification.agent.into(),
+                    cli_agent: notification.agent.telemetry_name(),
                 },
                 ctx
             );
@@ -14135,7 +14135,7 @@ impl TerminalView {
             trigger,
             title,
             description,
-            Some(NotificationAgentVariant::CLIAgent((*agent).into())),
+            Some(NotificationAgentVariant::CLIAgent(agent.telemetry_name())),
             ctx,
         );
     }
@@ -27011,7 +27011,7 @@ impl TerminalView {
     pub(super) fn toggle_file_tree(
         &mut self,
         source: crate::server::telemetry::FileTreeSource,
-        cli_agent: Option<crate::server::telemetry::CLIAgentType>,
+        cli_agent: Option<&'static str>,
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::server::telemetry::TelemetryEvent;

@@ -540,6 +540,47 @@ fn test_detect_aifx_agent_run_claude_not_on_uber_team() {
 }
 
 #[test]
+fn test_telemetry_names_preserve_analytics_values() {
+    let names: Vec<_> = enum_iterator::all::<CLIAgent>()
+        .map(|agent| agent.telemetry_name())
+        .collect();
+
+    assert_eq!(
+        names,
+        [
+            "Claude",
+            "Gemini",
+            "Codex",
+            "Amp",
+            "Droid",
+            "OpenCode",
+            "Copilot",
+            "Pi",
+            "OhMyPi",
+            "Auggie",
+            "Cursor",
+            "Goose",
+            "Hermes",
+            "Vibe",
+            "Antigravity",
+            "Grok",
+            "Kiro",
+            "WarpTui",
+            "Unknown",
+        ]
+    );
+}
+
+#[test]
+fn test_cursor_session_sharing_uses_runtime_variant_name() {
+    assert_eq!(CLIAgent::CursorCli.to_serialized_name(), "CursorCli");
+    assert_eq!(
+        CLIAgent::from_serialized_name("CursorCli"),
+        CLIAgent::CursorCli
+    );
+}
+
+#[test]
 fn test_serialized_name_round_trips_known_agents() {
     for agent in enum_iterator::all::<CLIAgent>() {
         let name = agent.to_serialized_name();
@@ -660,10 +701,6 @@ fn test_warp_tui_variant_properties() {
     assert!(CLIAgent::WarpTui.supported_skill_providers().is_empty());
     assert!(!CLIAgent::WarpTui.supports_bash_mode());
     assert!(!CLIAgent::WarpTui.supports_cli_agent_footer());
-    assert!(matches!(
-        crate::server::telemetry::CLIAgentType::from(CLIAgent::WarpTui),
-        crate::server::telemetry::CLIAgentType::WarpTui
-    ));
     // Serialized name round-trips (also covered by
     // `test_serialized_name_round_trips_known_agents`, asserted explicitly here).
     assert_eq!(

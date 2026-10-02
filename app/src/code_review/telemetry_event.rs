@@ -9,7 +9,6 @@ use warp_core::telemetry::{EnablementState, TelemetryEvent, TelemetryEventDesc};
 
 use crate::code_review::diff_state::{BackendOrigin, DiffMode, DiffOperation};
 use crate::features::FeatureFlag;
-use crate::server::telemetry::CLIAgentType;
 use crate::view_components::find::FindDirection;
 
 /// Identifies which git button the user clicked in the code review header.
@@ -188,7 +187,7 @@ pub enum CodeReviewTelemetryEvent {
         entrypoint: CodeReviewPaneEntrypoint,
         is_code_mode_v2: bool,
         /// The CLI agent type if opened from a CLI agent footer (e.g., Claude Code).
-        cli_agent: Option<CLIAgentType>,
+        cli_agent: Option<&'static str>,
     },
     /// Emitted when a user adds content to AI context from code review.
     AddToContext {
