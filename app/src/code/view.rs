@@ -61,7 +61,7 @@ use crate::quit_warning::UnsavedStateSummary;
 use crate::search::ItemHighlightState;
 use crate::search::files::icon::icon_from_file_path;
 use crate::server::telemetry::CodeContextDestination;
-use crate::settings::CodeSettings;
+use crate::settings::{CodeSettings, CodeSettingsChangedEvent};
 use crate::tab::TAB_BAR_BORDER_HEIGHT;
 use crate::terminal::cli_agent::{
     build_selection_line_range_prompt, build_selection_substring_prompt,
@@ -249,6 +249,12 @@ impl CodeView {
     fn new_internal(source: CodeSource, ctx: &mut ViewContext<Self>) -> Self {
         let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new(""));
         let window_id = ctx.window_id();
+
+        ctx.subscribe_to_model(&CodeSettings::handle(ctx), |_, _, event, ctx| {
+            if let CodeSettingsChangedEvent::TabCloseButtonInIconSlot { .. } = event {
+                ctx.notify();
+            }
+        });
 
         Self {
             tab_group: Default::default(),
@@ -1616,17 +1622,41 @@ impl CodeView {
             .map(|loc| display_name_with_host(loc, app))
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| "Untitled".to_string());
-        let language_icon =
-            icon_from_file_path(&file_name, appearance, ItemHighlightState::Default);
+        let close_button_in_icon_slot = *CodeSettings::as_ref(app).tab_close_button_in_icon_slot;
+        let close_button_placement =
+            tab_close_button_placement(is_active, is_hovered, close_button_in_icon_slot);
+        let language_icon = ConstrainedBox::new(icon_from_file_path(
+            &file_name,
+            appearance,
+            ItemHighlightState::Default,
+        ))
+        .with_width(LANGUAGE_ICON_WIDTH)
+        .with_height(LANGUAGE_ICON_WIDTH)
+        .finish();
+        let leading_slot = if close_button_in_icon_slot {
+            let slot_content = match close_button_placement {
+                TabCloseButtonPlacement::IconSlot => Self::render_close_button(
+                    appearance,
+                    tab_data.mouse_state_handles.close_handle.clone(),
+                    index,
+                ),
+                TabCloseButtonPlacement::Trailing
+                | TabCloseButtonPlacement::TrailingPlaceholder
+                | TabCloseButtonPlacement::Omitted => Align::new(language_icon).finish(),
+            };
+            // Sized for the close button even while showing the icon, so swapping them on hover
+            // doesn't shift the file name.
+            ConstrainedBox::new(slot_content)
+                .with_width(CLOSE_BUTTON_WIDTH)
+                .with_height(CLOSE_BUTTON_WIDTH)
+                .finish()
+        } else {
+            language_icon
+        };
         row.add_child(
-            Container::new(
-                ConstrainedBox::new(language_icon)
-                    .with_width(LANGUAGE_ICON_WIDTH)
-                    .with_height(LANGUAGE_ICON_WIDTH)
-                    .finish(),
-            )
-            .with_margin_right(TAB_INTERNAL_MARGIN)
-            .finish(),
+            Container::new(leading_slot)
+                .with_margin_right(TAB_INTERNAL_MARGIN)
+                .finish(),
         );
 
         if has_unsaved_changes {
@@ -1661,28 +1691,26 @@ impl CodeView {
             .finish(),
         );
 
-        let show_close = is_active || is_hovered;
-        row.add_child(
-            Shrinkable::new(
-                1.,
-                if show_close {
-                    Self::render_close_button(
-                        appearance,
-                        tab_data.mouse_state_handles.close_handle.clone(),
-                        index,
-                    )
-                } else {
-                    Container::new(
-                        ConstrainedBox::new(Empty::new().finish())
-                            .with_width(CLOSE_BUTTON_WIDTH)
-                            .with_height(CLOSE_BUTTON_WIDTH)
-                            .finish(),
-                    )
-                    .finish()
-                },
-            )
-            .finish(),
-        );
+        let trailing_slot = match close_button_placement {
+            TabCloseButtonPlacement::Trailing => Some(Self::render_close_button(
+                appearance,
+                tab_data.mouse_state_handles.close_handle.clone(),
+                index,
+            )),
+            TabCloseButtonPlacement::TrailingPlaceholder => Some(
+                Container::new(
+                    ConstrainedBox::new(Empty::new().finish())
+                        .with_width(CLOSE_BUTTON_WIDTH)
+                        .with_height(CLOSE_BUTTON_WIDTH)
+                        .finish(),
+                )
+                .finish(),
+            ),
+            TabCloseButtonPlacement::IconSlot | TabCloseButtonPlacement::Omitted => None,
+        };
+        if let Some(trailing_slot) = trailing_slot {
+            row.add_child(Shrinkable::new(1., trailing_slot).finish());
+        }
 
         let draggable = Draggable::new(
             tab_data.mouse_state_handles.tab_draggable_state.clone(),
@@ -2514,3 +2542,38 @@ fn render_unsaved_changes_icon(color: ColorU) -> Box<dyn Element> {
     .with_height(8.)
     .finish()
 }
+
+/// Where an editor tab renders its close button.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TabCloseButtonPlacement {
+    /// In place of the file icon.
+    IconSlot,
+    /// After the file name.
+    Trailing,
+    /// Not shown, but its space after the file name is kept so the tab doesn't resize on hover.
+    TrailingPlaceholder,
+    /// Not shown, with no space reserved for it.
+    Omitted,
+}
+
+fn tab_close_button_placement(
+    is_active: bool,
+    is_hovered: bool,
+    close_button_in_icon_slot: bool,
+) -> TabCloseButtonPlacement {
+    if close_button_in_icon_slot {
+        if is_hovered {
+            TabCloseButtonPlacement::IconSlot
+        } else {
+            TabCloseButtonPlacement::Omitted
+        }
+    } else if is_active || is_hovered {
+        TabCloseButtonPlacement::Trailing
+    } else {
+        TabCloseButtonPlacement::TrailingPlaceholder
+    }
+}
+
+#[cfg(test)]
+#[path = "view_tests.rs"]
+mod tests;
