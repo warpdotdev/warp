@@ -30,7 +30,7 @@ use crate::ai::agent_sdk::environment_snapshot::{
     EnvironmentSnapshot, EnvironmentSnapshotReporter, RepositoryRevision,
 };
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
-use crate::ai::cloud_environments::SourceRepo;
+use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::server::telemetry::secret_redaction::redact_secrets_in_string;
 use crate::terminal::model::BlockId;
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
@@ -455,6 +455,119 @@ pub(crate) fn merge_repos_deduped(
     }
 
     Ok(merged)
+}
+
+/// Resolves the eager repository list for this run.
+///
+/// `source_repos_to_clone` is the authoritative run-scoped materialization plan computed by
+/// the server for a Factory-owned run: when present, including when empty, it is used exactly
+/// as-is and is never combined with the environment's repositories or
+/// `additional_source_repos`. `None` means this is a legacy task, so the environment's
+/// repositories and `additional_source_repos` are merged as before.
+///
+/// Either branch is passed through [`merge_repos_deduped`] so the existing identity
+/// normalization and exact-target-name [`PrepareEnvironmentError::CloneDirectoryCollision`]
+/// check keep applying.
+pub(crate) fn resolve_eager_source_repos(
+    environment: Option<&AmbientAgentEnvironment>,
+    source_repos_to_clone: Option<Vec<SourceRepo>>,
+    additional_source_repos: Vec<SourceRepo>,
+) -> Result<Vec<SourceRepo>, PrepareEnvironmentError> {
+    match source_repos_to_clone {
+        Some(source_repos_to_clone) => merge_repos_deduped(source_repos_to_clone, Vec::new()),
+        None => merge_repos_deduped(
+            environment
+                .map(AmbientAgentEnvironment::effective_repos)
+                .unwrap_or_default(),
+            additional_source_repos,
+        ),
+    }
+}
+
+/// Builds the inventory for a run with deferred Factory repositories.
+pub(crate) fn build_deferred_repos_instruction(
+    working_dir: &Path,
+    eager_repos: &[SourceRepo],
+    deferred_repos: &[SourceRepo],
+) -> Option<String> {
+    if deferred_repos.is_empty() {
+        return None;
+    }
+
+    let mut sorted_deferred = deferred_repos.to_vec();
+    sorted_deferred.sort_by(|a, b| {
+        a.code_forge
+            .unwrap_or_default()
+            .to_string()
+            .cmp(&b.code_forge.unwrap_or_default().to_string())
+            .then_with(|| a.owner.to_lowercase().cmp(&b.owner.to_lowercase()))
+            .then_with(|| a.repo.to_lowercase().cmp(&b.repo.to_lowercase()))
+    });
+
+    let entries = sorted_deferred.iter().map(|repo| {
+        let forge = repo.code_forge.unwrap_or_default();
+        let clone_url = repo.https_clone_url();
+        let identity = format!("{forge} {}/{}", repo.owner, repo.repo);
+        if let Some(conflicting) = target_name_conflict(repo, eager_repos, &sorted_deferred) {
+            format!(
+                "- {identity} — {clone_url}; target '{}' conflicts with {conflicting}; choose an unused absolute target",
+                repo.repo
+            )
+        } else {
+            let target = deferred_repo_target(working_dir, &repo.repo);
+            format!("- {identity} — {clone_url}; preferred target: {target}")
+        }
+    });
+
+    Some(format!(
+        "Deferred Factory repositories (not yet cloned):\n{}\n\
+         When needed, read the built-in factory-deferred-repositories skill before cloning.",
+        entries.collect::<Vec<_>>().join("\n\n")
+    ))
+}
+
+/// Renders the preferred on-demand clone target for `repo_name` under `working_dir`, joined
+/// with a POSIX separator regardless of the host platform. The agent runs this target through
+/// its own POSIX shell (`test`/`git clone`) per the factory-deferred-repositories skill, so a
+/// host-native `Path::join` would emit backslashes on a Windows client and break that command,
+/// even though `working_dir` itself already names a path inside the run's session.
+fn deferred_repo_target(working_dir: &Path, repo_name: &str) -> String {
+    format!(
+        "{}/{repo_name}",
+        working_dir.to_string_lossy().trim_end_matches('/')
+    )
+}
+
+/// Returns a display string naming every other repository (eager or deferred) that shares
+/// `repo`'s exact clone target name, or `None` when `repo`'s target is unambiguous. Lets the
+/// hidden instruction tell the agent exactly which identities it must avoid colliding with
+/// instead of only "another attached repository".
+fn target_name_conflict(
+    repo: &SourceRepo,
+    eager_repos: &[SourceRepo],
+    deferred_repos: &[SourceRepo],
+) -> Option<String> {
+    let conflicting: Vec<String> = eager_repos
+        .iter()
+        .chain(deferred_repos.iter())
+        .filter(|other| {
+            other.repo == repo.repo
+                && (other.owner != repo.owner || other.code_forge != repo.code_forge)
+        })
+        .map(|other| {
+            format!(
+                "{} {}/{}",
+                other.code_forge.unwrap_or_default(),
+                other.owner,
+                other.repo
+            )
+        })
+        .collect();
+    if conflicting.is_empty() {
+        None
+    } else {
+        Some(conflicting.join(", "))
+    }
 }
 
 /// Environment variable carrying the authenticated remote URL of a Factory's

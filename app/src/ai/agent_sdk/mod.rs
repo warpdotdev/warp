@@ -49,7 +49,9 @@ use crate::ai::agent::api::convert_conversation::{
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::driver::harness::{HarnessKind, harness_kind};
-use crate::ai::agent_sdk::driver::{AgentDriverOptions, AgentRunPrompt, Task};
+use crate::ai::agent_sdk::driver::{
+    AgentDriverOptions, AgentRunPrompt, RunRepositorySources, Task,
+};
 use crate::ai::agent_sdk::mcp_config::build_mcp_servers_from_specs;
 use crate::ai::agent_sdk::setup_observability::{
     OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
@@ -59,9 +61,7 @@ use crate::ai::ambient_agents::task::HarnessConfig;
 use crate::ai::attachment_utils::attachments_download_dir;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::aws_credentials::{BedrockOidcCredentialsConfig, refresh_aws_credentials_oidc};
-use crate::ai::cloud_environments::{
-    AmbientAgentEnvironment, CloudAmbientAgentEnvironment, SourceRepo,
-};
+use crate::ai::cloud_environments::{CloudAmbientAgentEnvironment, SourceRepo};
 use crate::ai::llms::LLMId;
 use crate::ai::skills::{
     ResolveSkillError, ResolvedSkill, clone_repo_for_skill, resolve_skill_spec,
@@ -136,14 +136,9 @@ fn maybe_warn_team_api_key(ctx: &AppContext) {
 fn validated_driver_repositories_for_preparation(
     options: &AgentDriverOptions,
 ) -> Result<Vec<SourceRepo>, driver::environment::PrepareEnvironmentError> {
-    let source_repos = driver::environment::merge_repos_deduped(
-        options
-            .environment
-            .as_ref()
-            .map(AmbientAgentEnvironment::effective_repos)
-            .unwrap_or_default(),
-        options.additional_source_repos.clone(),
-    )?;
+    let source_repos = options
+        .repository_sources
+        .eager_repos(options.environment.as_ref())?;
     driver::environment::validate_repository_preparation_overrides(
         &source_repos,
         &options.repository_preparation_overrides,
@@ -473,6 +468,8 @@ fn build_merged_config_and_task(
         harness: harness_override,
         harness_auth_secrets: None,
         additional_source_repos: None,
+        source_repos_to_clone: None,
+        deferred_source_repos: Vec::new(),
     };
 
     let runtime_mcp_specs = match merged_config.mcp_servers.as_ref() {
@@ -576,6 +573,8 @@ fn build_server_side_task(
         harness: harness_override,
         harness_auth_secrets: None,
         additional_source_repos: None,
+        source_repos_to_clone: None,
+        deferred_source_repos: Vec::new(),
     };
 
     let skill = resolved_skill.as_ref().map(|s| s.parsed_skill.clone());
@@ -1188,7 +1187,7 @@ impl AgentDriverRunner {
                     resume: None,
                     cloud_providers: Vec::new(),
                     environment: None,
-                    additional_source_repos: Vec::new(),
+                    repository_sources: RunRepositorySources::default(),
                     repository_preparation_overrides: args.repository_preparation_overrides.clone(),
                     remove_repository_origins: args.remove_repository_origins,
                     selected_harness: args.harness,
@@ -1447,6 +1446,8 @@ impl AgentDriverRunner {
             task_harness,
             task_harness_model_config,
             additional_source_repos,
+            source_repos_to_clone,
+            deferred_source_repos,
             task_team_scope,
             experimental,
         ) = match task_metadata_result {
@@ -1460,6 +1461,13 @@ impl AgentDriverRunner {
                     .map(|h| h.harness_type)
                     .unwrap_or(Harness::Oz);
                 let task_harness_model_config = task_harness_config.and_then(|h| h.model_config());
+                let source_repos_to_clone = agent_config_snapshot
+                    .as_ref()
+                    .and_then(|config| config.source_repos_to_clone.clone());
+                let deferred_source_repos = agent_config_snapshot
+                    .as_ref()
+                    .map(|config| config.deferred_source_repos.clone())
+                    .unwrap_or_default();
                 let experimental = agent_config_snapshot
                     .as_ref()
                     .and_then(|config| config.experimental.clone());
@@ -1476,11 +1484,23 @@ impl AgentDriverRunner {
                     Some(task_harness),
                     task_harness_model_config,
                     additional_source_repos,
+                    source_repos_to_clone,
+                    deferred_source_repos,
                     task_team_scope,
                     experimental,
                 )
             }
-            Ok(None) => (None, None, None, None, Vec::new(), None, None),
+            Ok(None) => (
+                None,
+                None,
+                None,
+                None,
+                Vec::new(),
+                None,
+                Vec::new(),
+                None,
+                None,
+            ),
             Err(err) => return Err(AgentDriverError::TaskMetadataFetchFailed(err)),
         };
         match experimental.as_ref() {
@@ -1508,8 +1528,16 @@ impl AgentDriverRunner {
 
         driver_options.task_id = parsed_task_id;
         driver_options.parent_run_id = parent_run_id;
+        driver_options.repository_sources = match source_repos_to_clone {
+            Some(eager) => RunRepositorySources::FactoryPlan {
+                eager,
+                deferred: deferred_source_repos,
+            },
+            None => RunRepositorySources::Legacy {
+                additional: additional_source_repos,
+            },
+        };
         driver_options.experimental = experimental;
-        driver_options.additional_source_repos = additional_source_repos;
         driver_options.secrets = secrets;
         // The server-reported task scope is authoritative for the headless window this run
         // creates; it supersedes whatever scope was resolved from CLI args before the task was

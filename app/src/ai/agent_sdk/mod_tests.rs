@@ -25,7 +25,9 @@ use super::{
     validated_driver_repositories_for_preparation,
 };
 use crate::ai::agent_sdk::driver::harness::HarnessKind;
-use crate::ai::agent_sdk::driver::{AgentDriverError, AgentDriverOptions, AgentRunPrompt, Task};
+use crate::ai::agent_sdk::driver::{
+    AgentDriverError, AgentDriverOptions, AgentRunPrompt, RunRepositorySources, Task,
+};
 use crate::ai::ambient_agents::task::{AmbientAgentTask, AmbientAgentTaskState, TaskScope};
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::auth::AuthStateProvider;
@@ -68,11 +70,13 @@ fn driver_validation_uses_live_repository_membership() {
         "warpdotdev".to_string(),
         "warp".to_string(),
     )]);
-    options.additional_source_repos = vec![SourceRepo::new(
-        CodeForge::GitHub,
-        "warpdotdev".to_string(),
-        "added-after-dispatch".to_string(),
-    )];
+    options.repository_sources = RunRepositorySources::Legacy {
+        additional: vec![SourceRepo::new(
+            CodeForge::GitHub,
+            "warpdotdev".to_string(),
+            "added-after-dispatch".to_string(),
+        )],
+    };
     options.environment = Some(environment);
     options.repository_preparation_overrides = vec![RepositoryPreparationOverride {
         code_forge: RepositoryForge::GitHub,
@@ -106,6 +110,45 @@ fn driver_validation_uses_live_repository_membership() {
     );
 }
 
+#[test]
+fn factory_plan_is_authoritative_and_still_validates_checkout_overrides() {
+    let mut options = agent_driver_options();
+    let mut environment =
+        AmbientAgentEnvironment::new(String::new(), None, vec![], String::new(), vec![]);
+    environment.source_repos = Some(vec![SourceRepo::new(
+        CodeForge::GitHub,
+        "acme".to_string(),
+        "unselected".to_string(),
+    )]);
+    options.environment = Some(environment);
+    let eager = SourceRepo::new(
+        CodeForge::GitLab,
+        "platform/backend".to_string(),
+        "api".to_string(),
+    );
+    let deferred = SourceRepo::new(
+        CodeForge::GitHub,
+        "acme".to_string(),
+        "on-demand".to_string(),
+    );
+    options.repository_sources = RunRepositorySources::FactoryPlan {
+        eager: vec![eager.clone()],
+        deferred: vec![deferred],
+    };
+    options.repository_preparation_overrides = vec![RepositoryPreparationOverride {
+        code_forge: RepositoryForge::GitLab,
+        repo_owner: "platform/backend".to_string(),
+        repo_name: "api".to_string(),
+        head: RepositoryHeadRef::CommitSha("0123456789abcdef0123456789abcdef01234567".to_string()),
+        clone_from: None,
+        preserve_origin: true,
+    }];
+
+    assert_eq!(
+        validated_driver_repositories_for_preparation(&options).unwrap(),
+        vec![eager]
+    );
+}
 fn team(uid: i64, name: &str) -> Team {
     Team {
         uid: ServerId::from(uid),
@@ -156,7 +199,7 @@ pub(crate) fn agent_driver_options() -> AgentDriverOptions {
         resume: None,
         cloud_providers: vec![],
         environment: None,
-        additional_source_repos: vec![],
+        repository_sources: RunRepositorySources::default(),
         repository_preparation_overrides: vec![],
         remove_repository_origins: false,
         selected_harness: Harness::Oz,

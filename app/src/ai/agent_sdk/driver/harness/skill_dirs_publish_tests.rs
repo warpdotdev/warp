@@ -18,6 +18,69 @@ fn write_skill(dir: &Path, name: &str) -> PathBuf {
     skill_dir
 }
 
+#[test]
+fn required_deferred_skill_reserves_canonical_name_for_claude_codex_and_gemini() {
+    let root = TempDir::new().unwrap();
+    let configured_root = root.path().join("configured");
+    let bundled_root = root.path().join("resources/bundled/skills");
+    fs::create_dir_all(&configured_root).unwrap();
+    fs::create_dir_all(&bundled_root).unwrap();
+    let configured = write_skill(&configured_root, FACTORY_DEFERRED_REPOSITORIES_SKILL);
+    let bundled = write_skill(&bundled_root, FACTORY_DEFERRED_REPOSITORIES_SKILL);
+
+    for relative_root in [".claude/skills", ".agents/skills", ".gemini/skills"] {
+        let skill_root = root.path().join(relative_root);
+        let published = publish_skill_sources(
+            &skill_root,
+            std::slice::from_ref(&configured),
+            &[],
+            Some(&bundled),
+            false,
+        )
+        .unwrap();
+        let canonical = skill_root.join(FACTORY_DEFERRED_REPOSITORIES_SKILL);
+        assert_eq!(published, vec![canonical.clone()]);
+        assert_eq!(fs::read_link(canonical).unwrap(), bundled);
+        assert!(configured.join("SKILL.md").is_file());
+    }
+}
+
+#[test]
+fn required_deferred_skill_preserves_conflicting_targets_in_sandbox_and_fails_outside() {
+    let root = TempDir::new().unwrap();
+    let bundled_root = root.path().join("resources/bundled/skills");
+    fs::create_dir_all(&bundled_root).unwrap();
+    let bundled = write_skill(&bundled_root, FACTORY_DEFERRED_REPOSITORIES_SKILL);
+
+    for relative_root in [".claude/skills", ".agents/skills", ".gemini/skills"] {
+        let skill_root = root.path().join(relative_root);
+        fs::create_dir_all(&skill_root).unwrap();
+        let canonical = skill_root.join(FACTORY_DEFERRED_REPOSITORIES_SKILL);
+        fs::create_dir_all(&canonical).unwrap();
+        fs::write(canonical.join("SKILL.md"), "existing user skill").unwrap();
+
+        assert!(publish_skill_sources(&skill_root, &[], &[], Some(&bundled), false).is_err());
+        assert_eq!(
+            fs::read_to_string(canonical.join("SKILL.md")).unwrap(),
+            "existing user skill"
+        );
+        assert!(
+            !skill_root
+                .join("warp-factory-deferred-repositories")
+                .exists()
+        );
+
+        let published = publish_skill_sources(&skill_root, &[], &[], Some(&bundled), true).unwrap();
+        assert_eq!(published, vec![canonical.clone()]);
+        assert_eq!(fs::read_link(canonical).unwrap(), bundled);
+        assert_eq!(
+            fs::read_to_string(skill_root.join("factory-deferred-repositories.backup/SKILL.md"))
+                .unwrap(),
+            "existing user skill"
+        );
+    }
+}
+
 fn publish_source_dirs(
     skill_root: &Path,
     source_dirs: &[PathBuf],

@@ -143,6 +143,22 @@ fn factory_files_skill_carries_no_copy_of_the_format() {
 }
 
 #[test]
+fn factory_deferred_repositories_skill_is_not_in_the_general_catalog() {
+    let resources_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../resources");
+    let path = resources_dir.join("bundled/skills/factory-deferred-repositories/SKILL.md");
+    let skill = parse_bundled_skill(&path).expect("Factory deferred skill parses");
+    assert_eq!(skill.name, FACTORY_DEFERRED_REPOSITORIES_SKILL);
+    assert!(skill.content.contains("test ! -L"));
+    assert!(
+        skill
+            .content
+            .contains("preconfigured Git credential helper")
+    );
+
+    let catalog = futures::executor::block_on(load_bundled_skill_definitions(&resources_dir));
+    assert!(!catalog.contains_key(FACTORY_DEFERRED_REPOSITORIES_SKILL));
+}
+#[test]
 fn local_and_remote_catalogs_are_isolated() {
     let first_host_id = HostId::new("first-host".to_string());
     let second_host_id = HostId::new("second-host".to_string());

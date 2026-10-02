@@ -10,8 +10,8 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 
 use ai::skills::{
-    ParsedSkill, SKILL_PROVIDER_DEFINITIONS, parse_skills_dirs_env, read_skills_for_skills_dirs,
-    resolve_skills_dirs,
+    ParsedSkill, SKILL_PROVIDER_DEFINITIONS, SkillProvider, SkillScope, parse_bundled_skill,
+    parse_skills_dirs_env, read_skills_for_skills_dirs, resolve_skills_dirs,
 };
 use anyhow::{Context as _, anyhow};
 use chrono::{DateTime, Utc};
@@ -83,8 +83,8 @@ use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentModelEve
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::skills::{
-    SkillManager, SkillWatcher, filter_skills_by_spec, read_skills_from_directories,
-    resolve_skill_repos,
+    SkillManager, SkillWatcher, factory_deferred_repositories_skill_path, filter_skills_by_spec,
+    read_skills_from_directories, resolve_skill_repos,
 };
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::{CloudObject, CloudObjectLookup as _};
@@ -190,6 +190,7 @@ const HARNESS_EXIT_FORCE_KILL_DELAY: Duration = Duration::from_secs(14);
 const TASK_STATUS_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
 /// Timeout for individual harness auth preflight commands.
 const PREFLIGHT_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+pub(super) const DEFERRED_REPOSITORIES_SKILL_ENV: &str = "WARP_FACTORY_DEFERRED_REPOSITORIES_SKILL";
 /// Last-resort bound for draining `PendingCliHarnessPromptQueue` when the CLI-harness plugin
 /// never reports `CLIAgentSessionsModelEvent::StatusChanged` with `CLIAgentSessionStatus::InProgress`
 /// — the normal drain signal. Finding anything still queued once this window elapses is not a
@@ -593,6 +594,49 @@ pub enum ResumeOptions {
     Oz(Box<ConversationRestorationInNewPaneType>),
     ThirdParty(Box<ResumePayload>),
 }
+/// Repository membership for one run; Factory plans cannot carry legacy additions.
+#[derive(Clone)]
+pub enum RunRepositorySources {
+    Legacy {
+        additional: Vec<SourceRepo>,
+    },
+    FactoryPlan {
+        eager: Vec<SourceRepo>,
+        deferred: Vec<SourceRepo>,
+    },
+}
+impl Default for RunRepositorySources {
+    fn default() -> Self {
+        Self::Legacy {
+            additional: Vec::new(),
+        }
+    }
+}
+
+impl RunRepositorySources {
+    pub(super) fn eager_repos(
+        &self,
+        environment: Option<&AmbientAgentEnvironment>,
+    ) -> Result<Vec<SourceRepo>, PrepareEnvironmentError> {
+        match self {
+            Self::Legacy { additional } => {
+                environment::resolve_eager_source_repos(environment, None, additional.clone())
+            }
+            Self::FactoryPlan { eager, .. } => environment::resolve_eager_source_repos(
+                environment,
+                Some(eager.clone()),
+                Vec::new(),
+            ),
+        }
+    }
+
+    fn deferred_repos(&self) -> &[SourceRepo] {
+        match self {
+            Self::FactoryPlan { deferred, .. } => deferred,
+            Self::Legacy { .. } => &[],
+        }
+    }
+}
 
 /// Options for initializing the agent driver.
 pub struct AgentDriverOptions {
@@ -622,9 +666,7 @@ pub struct AgentDriverOptions {
     pub cloud_providers: Vec<Box<dyn cloud_provider::CloudProvider>>,
     /// Resolved environment configuration, if any.
     pub environment: Option<AmbientAgentEnvironment>,
-    /// Additional per-task repositories supplied by the server, such as a webhook's
-    /// originating repository. Empty for local runs.
-    pub additional_source_repos: Vec<SourceRepo>,
+    pub repository_sources: RunRepositorySources,
     /// Server-owned repository preparation overrides for the agent's session.
     pub repository_preparation_overrides: Vec<RepositoryPreparationOverride>,
     /// Whether origin remotes should be removed from environment repositories.
@@ -724,8 +766,7 @@ pub struct AgentDriver {
 
     /// Resolved environment configuration.
     environment: Option<AmbientAgentEnvironment>,
-    /// Additional per-task repositories supplied by the server.
-    additional_source_repos: Vec<SourceRepo>,
+    repository_sources: RunRepositorySources,
     repository_preparation_overrides: Vec<RepositoryPreparationOverride>,
     remove_repository_origins: bool,
 
@@ -827,6 +868,40 @@ pub enum AgentRunPrompt {
         /// Directory where task attachments were downloaded.
         attachments_dir: Option<String>,
     },
+}
+
+/// Injects the deferred-repositories hidden instruction into `prompt` so every harness
+/// receives it before the first model turn, without mutating any user-authored Agent or
+/// Automation source.
+///
+/// For a `Local` prompt, the instruction is prepended directly since there is no separate
+/// hidden channel. For a `ServerSide` prompt, it rides the existing `skill` slot: `runtime_skill`
+/// is already documented as content sent to the LLM but hidden from the UI query bubble, and the
+/// same skill content is what `prepare_harness` forwards to `resolve_prompt` to build a
+/// third-party harness's system prompt. When a real skill was also requested, the instruction is
+/// prepended to its content rather than replacing it.
+fn inject_deferred_repos_instruction(prompt: &mut AgentRunPrompt, instruction: String) {
+    match prompt {
+        AgentRunPrompt::Local(text) => *text = format!("{instruction}\n\n{text}"),
+        AgentRunPrompt::ServerSide { skill, .. } => {
+            *skill = Some(match skill.take() {
+                Some(mut existing) => {
+                    existing.content = format!("{instruction}\n\n{}", existing.content);
+                    existing
+                }
+                None => ParsedSkill {
+                    path: LocalOrRemotePath::Local(PathBuf::from("deferred-repositories")),
+                    name: "deferred-repositories".to_string(),
+                    description: "Instructions for dealing with repositories attached to this factory that are not cloned yet."
+                        .to_string(),
+                    content: instruction,
+                    line_range: None,
+                    provider: SkillProvider::Warp,
+                    scope: SkillScope::Bundled,
+                },
+            });
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1093,7 +1168,7 @@ impl AgentDriver {
             resume,
             cloud_providers,
             environment,
-            additional_source_repos,
+            repository_sources,
             repository_preparation_overrides,
             remove_repository_origins,
             selected_harness,
@@ -1160,6 +1235,12 @@ impl AgentDriver {
             selected_harness,
             third_party_harness_model_config.as_ref(),
         ));
+        if !repository_sources.deferred_repos().is_empty() {
+            env_vars.insert(
+                OsString::from(DEFERRED_REPOSITORIES_SKILL_ENV),
+                OsString::from("1"),
+            );
+        }
         if let Err(error) = git_credentials::prepend_azure_cli_wrapper_to_path(&mut env_vars) {
             safe_warn!(
                 safe: ("Failed to add the Azure CLI authentication wrapper to PATH"),
@@ -1282,7 +1363,7 @@ impl AgentDriver {
             resume_payload,
             cloud_providers,
             environment,
-            additional_source_repos,
+            repository_sources,
             repository_preparation_overrides,
             remove_repository_origins,
             snapshot_disabled: snapshot_disabled_value,
@@ -1337,7 +1418,7 @@ impl AgentDriver {
             resume_payload: None,
             cloud_providers: Vec::new(),
             environment: None,
-            additional_source_repos: Vec::new(),
+            repository_sources: RunRepositorySources::default(),
             repository_preparation_overrides: Vec::new(),
             remove_repository_origins: false,
             snapshot_disabled: false,
@@ -2093,13 +2174,37 @@ impl AgentDriver {
         }
     }
 
+    async fn load_factory_deferred_repositories_skill(foreground: &ModelSpawner<Self>) {
+        let Some(path) = factory_deferred_repositories_skill_path() else {
+            log::warn!("Bundled deferred repositories skill is unavailable");
+            return;
+        };
+        let skill = match parse_bundled_skill(&path.join("SKILL.md")) {
+            Ok(skill) => skill,
+            Err(error) => {
+                log::warn!("Could not read bundled deferred repositories skill: {error}");
+                return;
+            }
+        };
+        if let Err(error) = foreground
+            .spawn(move |_, ctx| {
+                SkillManager::handle(ctx).update(ctx, |manager, _| {
+                    manager.add_skills_dirs_skills(vec![skill]);
+                });
+            })
+            .await
+        {
+            log::warn!("Could not register bundled deferred repositories skill: {error}");
+        }
+    }
+
     /// Runs the agent to completion.
     /// Driving the agent mostly requires main-thread UI framework updates, but using `async` and
     /// a `ModelSpawner` lets us express the high-level process linearly rather than in a
     /// series of callbacks and state machine updates.
     #[tracing::instrument(name = "AgentDriver::run_internal", skip_all, err, fields(tags.cloud_agent = true))]
     async fn run_internal(
-        task: Task,
+        mut task: Task,
         foreground: ModelSpawner<Self>,
     ) -> Result<(), AgentDriverError> {
         safe_debug!(
@@ -2225,7 +2330,7 @@ impl AgentDriver {
 
                 let (
                     environment_opt,
-                    additional_source_repos,
+                    repository_sources,
                     repository_preparation_overrides,
                     remove_repository_origins,
                     session_shell_type,
@@ -2233,7 +2338,7 @@ impl AgentDriver {
                     .spawn(|me, ctx| {
                         (
                             me.environment.clone(),
-                            me.additional_source_repos.clone(),
+                            me.repository_sources.clone(),
                             me.repository_preparation_overrides.clone(),
                             me.remove_repository_origins,
                             me.terminal_driver
@@ -2253,13 +2358,14 @@ impl AgentDriver {
                     &mut setup_commands,
                     session_shell_type,
                 );
-                let source_repos = environment::merge_repos_deduped(
-                    environment_opt
-                        .as_ref()
-                        .map(AmbientAgentEnvironment::effective_repos)
-                        .unwrap_or_default(),
-                    additional_source_repos,
-                )?;
+                let source_repos = repository_sources.eager_repos(environment_opt.as_ref())?;
+                if let Some(instruction) = environment::build_deferred_repos_instruction(
+                    &foreground.spawn(|me, _| me.working_dir.clone()).await?,
+                    &source_repos,
+                    repository_sources.deferred_repos(),
+                ) {
+                    inject_deferred_repos_instruction(&mut task.prompt, instruction);
+                }
 
                 if environment_opt.is_some()
                     || !source_repos.is_empty()
@@ -2396,6 +2502,9 @@ impl AgentDriver {
                             Self::load_skills_dirs(&foreground),
                         )
                         .await;
+                    if !repository_sources.deferred_repos().is_empty() {
+                        Self::load_factory_deferred_repositories_skill(&foreground).await;
+                    }
                 }
 
                 let (task_id_for_refresh, ai_client_for_refresh, bedrock_config_for_refresh) =

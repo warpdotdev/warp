@@ -17,11 +17,12 @@ use warp_core::command::ExitCode;
 use super::{
     CloneFailureCredentialIdentity, CloneFailureIdentityDiagnostics, PrepareEnvironmentError,
     RepositoryCloneRequest, SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER, SetupCommandPhase,
-    await_setup_phase, build_git_credential_query_command, build_parallel_clone_command,
-    build_remove_repository_origins_command, build_resolved_head_command, checkout_command_for,
-    clone_failure_identity_diagnostics, environment_snapshot, is_valid_git_object_id,
-    merge_repos_deduped, parse_resolved_head_sha, parse_resolved_head_shas, read_failed_repo_names,
-    repository_clone_requests, setup_command_failure, single_repo_name, unique_clone_hosts,
+    await_setup_phase, build_deferred_repos_instruction, build_git_credential_query_command,
+    build_parallel_clone_command, build_remove_repository_origins_command,
+    build_resolved_head_command, checkout_command_for, clone_failure_identity_diagnostics,
+    environment_snapshot, is_valid_git_object_id, merge_repos_deduped, parse_resolved_head_sha,
+    parse_resolved_head_shas, read_failed_repo_names, repository_clone_requests,
+    resolve_eager_source_repos, setup_command_failure, single_repo_name, unique_clone_hosts,
     validate_repository_preparation_overrides,
 };
 use crate::ai::agent_sdk::driver::AgentDriverError;
@@ -679,6 +680,7 @@ fn environment_snapshot_omits_unresolved_heads() {
     assert_eq!(snapshot.repositories.len(), 1);
     assert_eq!(snapshot.repositories[0].repo_name, "second");
 }
+
 fn branch_head_override(
     code_forge: RepositoryForge,
     owner: &str,
@@ -814,6 +816,183 @@ fn merge_repos_supports_additional_only_and_empty_inputs() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn source_repos_to_clone_none_retains_legacy_merge_behavior() {
+    // Pins today's behavior so a regression in the branching logic is caught: `None`
+    // must merge the environment's repos with `additional_source_repos` exactly as
+    // `merge_repos_deduped` already does.
+    let environment = environment_with_repos(vec![repo(CodeForge::GitHub, "WarpDotDev", "Warp")]);
+    let additional = vec![repo(CodeForge::GitHub, "warpdotdev", "warp-server")];
+
+    assert_eq!(
+        resolve_eager_source_repos(Some(&environment), None, additional).unwrap(),
+        vec![
+            repo(CodeForge::GitHub, "WarpDotDev", "Warp"),
+            repo(CodeForge::GitHub, "warpdotdev", "warp-server"),
+        ]
+    );
+}
+
+#[test]
+fn source_repos_to_clone_some_empty_clones_nothing() {
+    let environment = environment_with_repos(vec![repo(CodeForge::GitHub, "acme", "monolith")]);
+    let additional = vec![repo(CodeForge::GitHub, "acme", "webhook-origin")];
+
+    let eager = resolve_eager_source_repos(Some(&environment), Some(vec![]), additional).unwrap();
+    assert!(eager.is_empty());
+}
+
+#[test]
+fn source_repos_to_clone_some_ignores_environment_and_additional() {
+    let environment = environment_with_repos(vec![repo(CodeForge::GitHub, "acme", "monolith")]);
+    let additional = vec![repo(CodeForge::GitHub, "acme", "webhook-origin")];
+    let plan = vec![repo(CodeForge::GitHub, "acme", "billing")];
+
+    let eager =
+        resolve_eager_source_repos(Some(&environment), Some(plan.clone()), additional).unwrap();
+    assert_eq!(eager, plan);
+}
+
+#[test]
+fn source_repos_to_clone_some_still_applies_collision_check() {
+    let error = resolve_eager_source_repos(
+        None,
+        Some(vec![
+            repo(CodeForge::GitHub, "a", "widget"),
+            repo(CodeForge::GitLab, "b", "widget"),
+        ]),
+        Vec::new(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        PrepareEnvironmentError::CloneDirectoryCollision { repo_name, .. } if repo_name == "widget"
+    ));
+}
+
+#[test]
+fn single_eager_repo_with_deferred_repos_still_selects_for_auto_cd() {
+    let eager = resolve_eager_source_repos(
+        None,
+        Some(vec![repo(CodeForge::GitHub, "acme", "eager-repo")]),
+        Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(single_repo_name(&eager), Some("eager-repo".to_string()));
+}
+
+#[test]
+fn zero_eager_repos_leaves_no_repo_to_auto_cd_into() {
+    let eager = resolve_eager_source_repos(None, Some(vec![]), Vec::new()).unwrap();
+    assert_eq!(single_repo_name(&eager), None);
+}
+
+fn test_working_dir() -> PathBuf {
+    PathBuf::from("/home/agent")
+}
+
+#[test]
+fn deferred_instruction_absent_when_nothing_deferred() {
+    let eager = vec![repo(CodeForge::GitHub, "acme", "monolith")];
+    assert!(build_deferred_repos_instruction(&test_working_dir(), &eager, &[]).is_none());
+}
+
+#[test]
+fn deferred_instruction_lists_github_and_nested_gitlab_repos_in_order() {
+    let deferred = vec![
+        repo(CodeForge::GitLab, "platform/backend", "api"),
+        repo(CodeForge::GitHub, "acme", "billing"),
+    ];
+    let instruction =
+        build_deferred_repos_instruction(&test_working_dir(), &[], &deferred).unwrap();
+
+    let github_pos = instruction.find("GitHub acme/billing").unwrap();
+    let gitlab_pos = instruction.find("GitLab platform/backend/api").unwrap();
+    assert!(
+        github_pos < gitlab_pos,
+        "repos must be sorted by forge, then owner, then name: {instruction}"
+    );
+    assert!(instruction.contains("https://github.com/acme/billing.git"));
+    assert!(instruction.contains("https://gitlab.com/platform/backend/api.git"));
+    assert!(instruction.contains("preferred target: /home/agent/billing"));
+    assert!(instruction.contains("preferred target: /home/agent/api"));
+    assert!(instruction.contains("read the built-in factory-deferred-repositories skill"));
+    assert!(!instruction.contains("git clone"));
+}
+
+#[test]
+fn deferred_instruction_targets_absolute_paths_under_the_single_eager_repo_auto_cd_state() {
+    let working_dir = test_working_dir();
+    let eager = vec![repo(CodeForge::GitHub, "acme", "eager-repo")];
+    let deferred = vec![repo(CodeForge::GitHub, "acme", "billing")];
+    let instruction = build_deferred_repos_instruction(&working_dir, &eager, &deferred).unwrap();
+
+    assert!(instruction.contains("preferred target: /home/agent/billing"));
+}
+
+#[test]
+fn deferred_instruction_is_deterministic_regardless_of_input_order() {
+    let a = vec![
+        repo(CodeForge::GitHub, "acme", "billing"),
+        repo(CodeForge::GitHub, "acme", "monolith"),
+    ];
+    let b = vec![
+        repo(CodeForge::GitHub, "acme", "monolith"),
+        repo(CodeForge::GitHub, "acme", "billing"),
+    ];
+
+    assert_eq!(
+        build_deferred_repos_instruction(&test_working_dir(), &[], &a),
+        build_deferred_repos_instruction(&test_working_dir(), &[], &b)
+    );
+}
+
+#[test]
+fn deferred_instruction_flags_conflict_with_shared_target_name_and_never_emits_it() {
+    let deferred = vec![
+        repo(CodeForge::GitHub, "acme", "widget"),
+        repo(CodeForge::GitLab, "other", "widget"),
+    ];
+    let instruction =
+        build_deferred_repos_instruction(&test_working_dir(), &[], &deferred).unwrap();
+
+    assert!(!instruction.contains("preferred target: /home/agent/widget"));
+    assert!(instruction.contains("target 'widget' conflicts with GitHub acme/widget"));
+    assert!(instruction.contains("target 'widget' conflicts with GitLab other/widget"));
+    assert!(instruction.contains("choose an unused absolute target"));
+}
+
+#[test]
+fn deferred_instruction_flags_conflict_with_an_eager_repo_target() {
+    let eager = vec![repo(CodeForge::GitHub, "acme", "widget")];
+    let deferred = vec![repo(CodeForge::GitLab, "other", "widget")];
+    let instruction =
+        build_deferred_repos_instruction(&test_working_dir(), &eager, &deferred).unwrap();
+
+    assert!(!instruction.contains("preferred target: /home/agent/widget"));
+    assert!(instruction.contains("target 'widget' conflicts with GitHub acme/widget"));
+}
+
+#[test]
+fn deferred_instruction_never_contains_secret_bearing_content() {
+    let deferred = vec![repo(CodeForge::GitHub, "acme", "billing")];
+    let instruction =
+        build_deferred_repos_instruction(&test_working_dir(), &[], &deferred).unwrap();
+
+    assert!(!instruction.contains("WARP_FACTORY_REPO_CLONE_URL"));
+    assert!(
+        !instruction.contains("://") || !instruction.contains('@'),
+        "must not contain a user:pass@ URL: {instruction}"
+    );
+    for url in instruction.split_whitespace().filter(|s| s.contains("://")) {
+        assert!(
+            url.starts_with("https://github.com/") || url.starts_with("https://gitlab.com/"),
+            "unexpected URL shape (must be a plain forge HTTPS clone URL): {url}"
+        );
+    }
 }
 
 #[test]
