@@ -54,7 +54,9 @@ jobs:
     outputs:
       affects-database-schema: ${{ github.ref == 'master' || steps.filter.outputs.affects-database-schema }}
       affects-rust-sources: ${{ github.ref == 'master' || steps.filter.outputs.affects-rust-sources }}
-      macos-runner: ${{ steps.mac_runner_type.outputs.value }}
+      macos-runner-lints: ${{ steps.mac_runner_type.outputs.lints }}
+      macos-runner-release-check: ${{ steps.mac_runner_type.outputs.release-check }}
+      macos-runner-tests: ${{ steps.mac_runner_type.outputs.tests }}
       needs-build: ${{ github.event_name != 'pull_request' || steps.build_filter.outputs.needs-build }}
       wasm-runner: ${{ steps.wasm_runner_type.outputs.value }}
     steps:
@@ -91,11 +93,23 @@ jobs:
               - '!.github/**/*.md'
               - '!specs/**'
 
-      - name: Determine macOS runner type
+      - name: Determine macOS runner types
         id: mac_runner_type
         run: |
-          RUNNER_TYPE='["namespace-profile-mac-ci"]'
-          echo "value=$RUNNER_TYPE" >> $GITHUB_OUTPUT
+          # Give each macOS job its own Namespace cache volume. When the tests, lints and
+          # release-check jobs share one volume, each job overwrites the others' build
+          # artifacts (last writer wins) and the volume keeps growing until Namespace resets
+          # it, which forces the next job to rebuild everything from scratch.
+          #
+          # Custom cache tags are scoped to the Namespace workspace rather than the
+          # repository, so the tag embeds the repository name to keep repositories isolated.
+          # Tags may only contain [a-z0-9.-].
+          # https://namespace.so/docs/solutions/github-actions/caching#custom-cache-identity
+          PROFILE='namespace-profile-mac-ci'
+          TAG_PREFIX="$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9.\n' '-')-mac"
+          for JOB in tests lints release-check; do
+            echo "$JOB=[\"$PROFILE;overrides.cache-tag=$TAG_PREFIX-$JOB\"]" >> $GITHUB_OUTPUT
+          done
 
       - name: Determine wasm runner type
         id: wasm_runner_type
@@ -127,8 +141,8 @@ jobs:
         include:
           - os: "macos"
             name: "MacOS"
-            runner: ${{ fromJSON(needs.params.outputs.macos-runner) }}
-            is_self_hosted: ${{ contains(fromJSON(needs.params.outputs.macos-runner), 'self-hosted') }}
+            runner: ${{ fromJSON(needs.params.outputs.macos-runner-tests) }}
+            is_self_hosted: ${{ contains(fromJSON(needs.params.outputs.macos-runner-tests), 'self-hosted') }}
 
           - os: "linux"
             name: "Linux"
@@ -264,13 +278,37 @@ jobs:
           brew: vim
           apt: vim
 
+      # The cache-stats and timings steps below are temporary diagnostics for slow
+      # macOS test compiles. Remove them once the cause has been pinned down.
+      - name: Report macOS cache volume and machine stats before compiling
+        if: ${{ matrix.os == 'macos' }}
+        continue-on-error: true
+        run: ./script/macos/report_ci_cache_stats
+
       - name: Compile tests
-        run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} --no-run
+        # `--timings` makes cargo write a per-crate build timeline to
+        # target/cargo-timings/cargo-timing.html without changing the build.
+        run: cargo nextest run ${{ env.WORKSPACE_TEST_ARGS }} --no-run --timings
         env:
           # Attach the GitHub auth token so that requests to the GitHub API
           # don't get rate limited during compilation (e.g.: retrieving
           # Sentry SDK binary releases).
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Report macOS cache volume and machine stats after compiling
+        if: ${{ matrix.os == 'macos' && !cancelled() }}
+        continue-on-error: true
+        run: ./script/macos/report_ci_cache_stats
+
+      - name: Upload macOS compile timings
+        if: ${{ matrix.os == 'macos' && !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cargo-timings-macos
+          path: target/cargo-timings/cargo-timing.html
+          if-no-files-found: ignore
+          overwrite: true
 
       - name: Run unit tests
         # Unlike later test steps, only run this if previous steps succeed (so
@@ -577,8 +615,8 @@ jobs:
         include:
           - os: "macos"
             name: "MacOS"
-            runner: ${{ fromJSON(needs.params.outputs.macos-runner) }}
-            is_self_hosted: ${{ contains(fromJSON(needs.params.outputs.macos-runner), 'self-hosted') }}
+            runner: ${{ fromJSON(needs.params.outputs.macos-runner-lints) }}
+            is_self_hosted: ${{ contains(fromJSON(needs.params.outputs.macos-runner-lints), 'self-hosted') }}
             null_device: "/dev/null"
 
           - os: "linux"
@@ -759,8 +797,8 @@ jobs:
         include:
           - os: "macos"
             name: "MacOS"
-            runner: ${{ fromJSON(needs.params.outputs.macos-runner) }}
-            is_self_hosted: ${{ contains(fromJSON(needs.params.outputs.macos-runner), 'self-hosted') }}
+            runner: ${{ fromJSON(needs.params.outputs.macos-runner-release-check) }}
+            is_self_hosted: ${{ contains(fromJSON(needs.params.outputs.macos-runner-release-check), 'self-hosted') }}
             null_device: "/dev/null"
 
           - os: "linux"
