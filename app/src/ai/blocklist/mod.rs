@@ -56,7 +56,7 @@ pub use action_model::{
 };
 #[cfg_attr(target_family = "wasm", allow(unused_imports))]
 pub(crate) use action_model::{
-    FileReadResult, ReadFileContextResult, RequestFileEditsFormatKind, apply_edits,
+    ReadFileContextResult, RequestFileEditsFormatKind, apply_edits, read_local_file,
     read_local_file_context,
 };
 // Consumed by `tui_export` for the `warp_tui` frontend.
