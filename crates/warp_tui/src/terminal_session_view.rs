@@ -52,7 +52,6 @@ use warp::tui_export::{
     slash_command_selection_behavior, throttle,
 };
 use warp_core::channel::{Channel, ChannelState};
-use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
 use warp_editor::model::CoreEditorModel;
 use warp_errors::report_error;
@@ -4693,9 +4692,6 @@ impl TuiTerminalSessionView {
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
             SlashCommandKind::InvokeSkill => {
-                if !FeatureFlag::ListSkills.is_enabled() {
-                    return;
-                }
                 self.skills_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
