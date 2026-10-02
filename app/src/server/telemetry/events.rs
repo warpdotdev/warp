@@ -460,7 +460,7 @@ pub enum PluginChipTelemetryKind {
 }
 
 /// Identifies the agent variant that triggered a notification (for telemetry purposes).
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NotificationAgentVariant {
     /// Warp's built-in agent (Oz).
