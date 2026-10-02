@@ -1085,7 +1085,7 @@ impl ServerApi {
         event: impl TelemetryEvent,
         settings_snapshot: PrivacySettingsSnapshot,
     ) -> Result<()> {
-        let user_id = self.user_id();
+        let user_id = self.telemetry_user_id();
         let anonymous_id = self.anonymous_id();
         self.telemetry_api
             .send_telemetry_event(user_id, anonymous_id, event, settings_snapshot)

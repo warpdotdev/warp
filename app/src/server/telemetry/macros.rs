@@ -78,7 +78,7 @@ macro_rules! send_telemetry_on_executor {
         use warp_core::telemetry::TelemetryEvent as _;
         let event = $event;
         if event.enablement_state().is_enabled() {
-            let user_id = $auth_state.user_id().map(|uid| uid.as_string());
+            let user_id = $auth_state.telemetry_user_id();
             let anonymous_id = $auth_state.anonymous_id();
             warpui::record_telemetry_on_executor!(
                 user_id,
