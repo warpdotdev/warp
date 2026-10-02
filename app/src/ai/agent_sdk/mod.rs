@@ -317,9 +317,6 @@ fn run_agent(
                     "unexpected argument '--conversation' found"
                 ));
             }
-            if args.skill.is_some() && !FeatureFlag::OzPlatformSkills.is_enabled() {
-                return Err(anyhow::anyhow!("unexpected argument '--skill' found"));
-            }
             if args.harness != Harness::Oz && !FeatureFlag::AgentHarness.is_enabled() {
                 return Err(anyhow::anyhow!("unexpected argument '--harness' found"));
             }
@@ -1082,9 +1079,6 @@ impl AgentDriverRunner {
         working_dir: &Path,
         setup_events: &SetupClientEventReporter,
     ) -> Result<Option<ResolvedSkill>, AgentDriverError> {
-        if !FeatureFlag::OzPlatformSkills.is_enabled() {
-            return Ok(None);
-        }
         let Some(skill_spec) = args.skill.clone() else {
             return Ok(None);
         };

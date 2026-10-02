@@ -1802,13 +1802,6 @@ impl AgentDriver {
     async fn resolve_global_skills(
         foreground: &ModelSpawner<Self>,
     ) -> Result<GlobalSkillResolution, AgentDriverError> {
-        if !FeatureFlag::OzPlatformSkills.is_enabled() {
-            return Ok(GlobalSkillResolution {
-                specs: Vec::new(),
-                repos: Vec::new(),
-            });
-        }
-
         let raw_global_specs = foreground
             .spawn(|_, ctx| AuthStateProvider::as_ref(ctx).get().global_skills())
             .await?;
