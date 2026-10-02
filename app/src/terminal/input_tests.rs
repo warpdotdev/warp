@@ -75,7 +75,6 @@ use crate::settings_view::keybindings::KeybindingChangedNotifier;
 #[cfg(windows)]
 use crate::system::SystemInfo;
 use crate::system::SystemStats;
-use crate::terminal::TerminalView;
 use crate::terminal::alt_screen_reporting::AltScreenReporting;
 use crate::terminal::block_list_viewport::ScrollPosition;
 use crate::terminal::cli_agent_sessions::{
@@ -107,6 +106,7 @@ use crate::terminal::universal_developer_input::UniversalDeveloperInputButtonBar
 use crate::terminal::view::Event as TerminalViewEvent;
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
 use crate::terminal::writeable_pty::command_history::update_command_history;
+use crate::terminal::{ShellHost, TerminalView};
 use crate::test_util::assert_eventually;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::themes::theme::AnsiColorIdentifier;
@@ -131,6 +131,74 @@ fn pending_ctrl_r_handoff() -> PendingShellWidgetHandoff {
         apply_mode: ShellWidgetApplyMode::Replace,
         cursor_offset: None,
     }
+}
+
+#[test]
+fn cached_right_prompt_rendering_uses_matching_geometry() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        SessionSettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings.honor_ps1.set_value(true, ctx).unwrap();
+        });
+        InputSettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .input_box_type
+                .set_value(InputBoxType::Classic, ctx)
+                .unwrap();
+        });
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.read(&app, |input, ctx| {
+            let mut model = input.model.lock();
+            model.block_list_mut().set_honor_ps1(true);
+            model.block_list_mut().set_active_shell_host(ShellHost {
+                shell_type: ShellType::Fish,
+                user: "user".into(),
+                hostname: "host".into(),
+            });
+            model
+                .block_list_mut()
+                .prompt_only_precmd(PromptMetadata::default());
+            model.process_bytes(
+                "\x1b]133;A\x07top\r\nL>\x1b]133;B\x07\x1b]133;P;k=r\x07─╯\x1b]133;B\x07",
+            );
+            let size = input
+                .input_render_state_model_handle
+                .as_ref(ctx)
+                .size_info();
+            let offset = model
+                .block_list()
+                .active_block()
+                .rprompt_render_offset(&size);
+            model
+                .block_list_mut()
+                .start_active_block_for_in_band_command();
+            model
+                .block_list_mut()
+                .active_block_mut()
+                .prompt_only_precmd(PromptMetadata {
+                    ps1: Some(hex::encode("T>")),
+                    rprompt: Some(hex::encode("transient")),
+                    ..Default::default()
+                });
+
+            let (_, _, right_prompt, rendered_offset) =
+                input
+                    .prompt_render_helper
+                    .render_prompt(&model, Appearance::as_ref(ctx), ctx);
+            assert_eq!(right_prompt.unwrap().element.text(ctx).trim(), "─╯");
+            assert_eq!(rendered_offset, Some(offset));
+
+            model.block_list_mut().command_finished(Default::default());
+            assert!(model.block_list().active_block().shell_host().is_none());
+            let (_, _, right_prompt, rendered_offset) =
+                input
+                    .prompt_render_helper
+                    .render_prompt(&model, Appearance::as_ref(ctx), ctx);
+            assert_eq!(right_prompt.unwrap().element.text(ctx).trim(), "─╯");
+            assert_eq!(rendered_offset, Some(offset));
+        });
+    });
 }
 
 fn pending_ctrl_t_handoff() -> PendingShellWidgetHandoff {

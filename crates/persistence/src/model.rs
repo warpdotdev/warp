@@ -736,7 +736,6 @@ pub struct NewBlock<'a> {
     pub start_ts: Option<NaiveDateTime>,
     pub ps1: Option<&'a String>,
     pub rprompt: Option<&'a String>,
-    pub rprompt_margin: Option<i64>,
     pub honor_ps1: bool,
     pub shell: Option<&'a str>,
     pub user: Option<&'a str>,
@@ -771,7 +770,6 @@ pub struct Block {
     pub host: Option<String>,
     pub is_background: bool,
     pub rprompt: Option<String>,
-    pub rprompt_margin: Option<i64>,
     /// JSON-serialized representation of the Warp prompt snapshot (Context Chips). Note that this
     /// is different from PS1 and RPROMPT1
     pub prompt_snapshot: Option<String>,

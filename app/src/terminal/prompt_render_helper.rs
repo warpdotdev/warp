@@ -463,7 +463,7 @@ impl PromptRenderHelper {
                 .and_then(|session_id| self.sessions.as_ref(app).get(session_id))
                 .map(|session| session.is_msys2())
                 .unwrap_or_default();
-            let (prompt_grid, rprompt_grid, rprompt_margin) =
+            let (prompt_grid, rprompt_grid) =
                 match &model.block_list().cached_prompt_data_from_last_user_block() {
                     // If we've cached the prompt from the active block, use our
                     // cached copy instead of the block's current prompt.  This
@@ -478,32 +478,26 @@ impl PromptRenderHelper {
                         prompt_grid,
                         rprompt_grid,
                         block_creation_time,
-                        rprompt_margin,
                     }) if block_creation_time == prompt_block.creation_ts()
                         || (prompt_block.is_prompt_empty()
                             && chrono::Local::now() - *prompt_block.creation_ts()
                                 < prompt_marker_grace_period(shell_type, is_msys2)) =>
                     {
-                        (prompt_grid, rprompt_grid, *rprompt_margin)
+                        (prompt_grid, rprompt_grid)
                     }
                     // If neither of those conditions apply, simply use the prompt
                     // grid as-is.
-                    _ => (
-                        prompt_block.prompt_grid(),
-                        prompt_block.rprompt_grid(),
-                        prompt_block.rprompt_margin(),
-                    ),
+                    _ => (prompt_block.prompt_grid(), prompt_block.rprompt_grid()),
                 };
             // Ignore the default horizontal padding used for grids, as this is
             // already applied by the Input.
             let mut size_info = app.model(&self.input_render_state_model_handle).size_info();
             size_info.padding_x_px = Pixels::zero();
-            let rprompt_offset = Block::rprompt_offset_for_grid(
+            let rprompt_offset = prompt_block.rprompt_offset_for_grid(
                 &size_info,
                 prompt_grid.grid_storage().columns(),
                 prompt_grid.len(),
                 rprompt_grid,
-                rprompt_margin,
             );
             let should_display_rprompt = rprompt_grid.finished()
                 && rprompt_grid.has_received_content()

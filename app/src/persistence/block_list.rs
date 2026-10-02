@@ -317,9 +317,6 @@ fn create_block<'a>(
         start_ts: block.start_ts.map(|ts| ts.naive_utc()),
         ps1: block.ps1.as_ref(),
         rprompt: block.rprompt.as_ref(),
-        rprompt_margin: block
-            .rprompt_margin
-            .and_then(|margin| i64::try_from(margin).ok()),
         honor_ps1: block.honor_ps1,
         is_background: block.is_background,
         shell: block.shell_host.as_ref().map(|host| host.shell_type.name()),

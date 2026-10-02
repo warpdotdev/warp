@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Local};
 use diesel::sqlite::SqliteConnection;
-use diesel::{Connection, ExpressionMethods, QueryDsl, RunQueryDsl, SelectableHelper};
+use diesel::{Connection, ExpressionMethods, QueryDsl, RunQueryDsl};
 use diesel_migrations::MigrationHarness;
 
 use super::{
@@ -18,36 +18,6 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentExchangeId, AIAgentInput, UserQueryMode};
 use crate::ai::blocklist::{AIQueryHistoryOutputStatus, PersistedAIInput, PersistedAIInputType};
 use crate::ai::llms::LLMId;
-use crate::terminal::model::block::SerializedBlock;
-use crate::terminal::model::test_utils::TestBlockListBuilder;
-#[test]
-fn right_prompt_margin_survives_persistence_and_restoration() {
-    use crate::persistence::{model, schema};
-    let mut conn = test_connection();
-    let block = SerializedBlock {
-        ps1: Some(hex::encode("top\r\nL>")),
-        rprompt: Some(hex::encode("─╯")),
-        rprompt_margin: Some(3),
-        honor_ps1: true,
-        ..SerializedBlock::new_for_test(b"echo hi".to_vec(), Vec::new())
-    };
-    super::save_block(&mut conn, vec![0; 16], &block, true).unwrap();
-    let persisted = schema::blocks::table
-        .select(model::Block::as_select())
-        .first::<model::Block>(&mut conn)
-        .unwrap();
-    let restored = SerializedBlock::from(persisted);
-    let restored = SerializedBlock::from_json(&restored.to_json().unwrap()).unwrap();
-    let restored_blocks = [restored.into()];
-    let block_list = TestBlockListBuilder::new()
-        .with_restored_blocks(&restored_blocks)
-        .build();
-    let block = &block_list.blocks()[0];
-    assert_eq!(
-        block.rprompt_render_offset(&block.size()).x(),
-        (block.prompt_grid_columns() - 3 - 2) as f32 * block.size().cell_width_px().as_f32()
-    );
-}
 
 /// Builds an in-memory SQLite database with all migrations applied.
 fn test_connection() -> SqliteConnection {

@@ -103,7 +103,6 @@ diesel::table! {
         is_local -> Nullable<Bool>,
         agent_view_visibility -> Nullable<Text>,
         git_branch_name -> Nullable<Text>,
-        rprompt_margin -> Nullable<BigInt>,
     }
 }
 

@@ -1078,7 +1078,7 @@ impl ansi::Handler for HeaderGrid {
 
     fn prompt_marker(&mut self, marker: ansi::PromptMarker) {
         match marker {
-            ansi::PromptMarker::StartPrompt { kind, .. } => {
+            ansi::PromptMarker::StartPrompt { kind } => {
                 match kind {
                     ansi::PromptKind::Initial => {
                         log::debug!("Received start prompt marker for initial prompt");
