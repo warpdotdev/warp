@@ -18,6 +18,7 @@ use warp_util::standardized_path::StandardizedPath;
 
 use crate::index::file_outline::{FileOutline, Outline, Symbol};
 use crate::index::{Entry, FileId, FileMetadata, THREADPOOL};
+const PARSE_BATCH_SIZE: usize = 100;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
@@ -61,36 +62,11 @@ pub async fn build_outline(
     )
     .await?;
 
-    let (sender, receiver) = oneshot::channel();
-
-    let Some(pool) = THREADPOOL.as_ref() else {
-        return Err(anyhow!("No threadpool exists for outline generation."));
-    };
-
-    pool.spawn(move || {
-        // Parse each file in parallel. Note that we have to fold and then reduce given the parallelization.
-        let result = pool.install(|| {
-            files
-                .par_iter()
-                .map(|metadata| {
-                    let outline = parse_file_outline(&metadata.path.to_local_path_lossy())
-                        .ok()
-                        .unwrap_or_default();
-
-                    (metadata.file_id, outline)
-                })
-                .collect::<HashMap<_, _>>()
-        });
-
-        if sender.send(result).is_err() {
-            report_error!(
-                anyhow!("Could not send result of outline generation to background thread"),
-                warp_errors::ReportErrorLogMode::OncePerRun
-            );
-        }
-    });
-
-    let file_id_to_outline = receiver.await?;
+    let mut file_id_to_outline = HashMap::with_capacity(files.len());
+    parse_symbols_for_files(files, |outlines| {
+        file_id_to_outline.extend(outlines);
+    })
+    .await?;
 
     Ok(Outline {
         root: entry,
@@ -141,9 +117,10 @@ impl Outline {
             self.file_id_to_outline.remove(&metadata.file_id);
         }
 
-        if let Some(updated_outlines) = parse_symbols_for_files(files_metadata).await {
+        let _ = parse_symbols_for_files(files_metadata, |updated_outlines| {
             self.file_id_to_outline.extend(updated_outlines);
-        }
+        })
+        .await;
     }
 
     /// Returns the `FileMetadata` for the file corresponding to the given target path.
@@ -208,15 +185,20 @@ impl Outline {
 
 /// Parse file symbols in parallel. This uses the [shared Rayon file-parsing pool](THREADPOOL),
 /// but is `async` because it MUST NOT be called from the main thread.
-async fn parse_symbols_for_files(files: Vec<FileMetadata>) -> Option<HashMap<FileId, FileOutline>> {
-    let pool = THREADPOOL.as_ref()?;
+async fn parse_symbols_for_files(
+    files: Vec<FileMetadata>,
+    mut extend_outlines: impl FnMut(HashMap<FileId, FileOutline>),
+) -> anyhow::Result<()> {
+    let Some(pool) = THREADPOOL.as_ref() else {
+        return Err(anyhow!("No threadpool exists for outline generation."));
+    };
 
-    let (tx, rx) = oneshot::channel();
+    for files in files.chunks(PARSE_BATCH_SIZE) {
+        let files = files.to_vec();
+        let (tx, rx) = oneshot::channel();
 
-    pool.install(move || {
-        rayon::spawn(move || {
-            // Parse each file in parallel. Note that we have to fold and then reduce given the parallelization.
-            let result = files
+        pool.spawn(move || {
+            let outlines = files
                 .par_iter()
                 .map(|metadata| {
                     let outline = parse_file_outline(&metadata.path.to_local_path_lossy())
@@ -226,11 +208,19 @@ async fn parse_symbols_for_files(files: Vec<FileMetadata>) -> Option<HashMap<Fil
                     (metadata.file_id, outline)
                 })
                 .collect::<HashMap<_, _>>();
-            let _ = tx.send(result);
-        });
-    });
 
-    rx.await.ok()
+            if tx.send(outlines).is_err() {
+                report_error!(
+                    anyhow!("Could not send result of outline generation to background thread"),
+                    warp_errors::ReportErrorLogMode::OncePerRun
+                );
+            }
+        });
+
+        extend_outlines(rx.await?);
+    }
+
+    Ok(())
 }
 
 /// Given the path of a file, try to construct its outline.
