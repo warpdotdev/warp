@@ -64,8 +64,8 @@ use crate::server::server_api::team::{MockTeamClient, TeamClient};
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
-use crate::settings::PrivacySettings;
 use crate::settings::cloud_preferences_syncer::CloudPreferencesSyncer;
+use crate::settings::{PrivacySettings, SettingsFileError};
 use crate::settings_view::DisplayCount;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
@@ -282,6 +282,51 @@ pub(crate) fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
         )
     });
     workspace
+}
+
+#[test]
+fn settings_error_sync_skips_checked_out_pane() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let settings_pane = workspace.read(&app, |workspace, _| workspace.settings_pane.clone());
+        let error = SettingsFileError::FileParseFailed("invalid TOML".into());
+
+        settings_pane.update(&mut app, |_, ctx| {
+            workspace.update(ctx, |workspace, ctx| {
+                workspace.settings_file_error = Some(error.clone());
+                workspace.sync_settings_error_state_into_settings_pane(ctx);
+                assert_eq!(workspace.settings_file_error, Some(error));
+
+                workspace.settings_file_error = None;
+                workspace.sync_settings_error_state_into_settings_pane(ctx);
+                assert_eq!(workspace.settings_file_error, None);
+            });
+        });
+    });
+}
+
+#[test]
+fn settings_error_sync_skips_pane_in_closed_window() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let other_workspace = mock_workspace(&mut app);
+        let settings_pane =
+            other_workspace.read(&app, |workspace, _| workspace.settings_pane.clone());
+        let window_id = app.read(|ctx| settings_pane.window_id(ctx));
+        workspace.update(&mut app, |workspace, _| {
+            workspace.settings_pane = settings_pane;
+        });
+        app.update(|ctx| ctx.simulate_window_closed(window_id));
+        let error = SettingsFileError::FileParseFailed("invalid TOML".into());
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.settings_file_error = Some(error.clone());
+            workspace.sync_settings_error_state_into_settings_pane(ctx);
+            assert_eq!(workspace.settings_file_error, Some(error));
+        });
+    });
 }
 
 #[test]

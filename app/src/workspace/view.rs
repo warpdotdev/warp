@@ -2838,13 +2838,12 @@ impl Workspace {
         });
     }
 
-    /// Pushes the current settings-file error + banner-dismissal state into
-    /// the settings pane so its nav-rail footer ("Open settings file" button
-    /// or inline error alert) stays in sync with the workspace banner.
+    /// Mirrors the current settings-file error and banner-dismissal state into the settings pane's
+    /// nav-rail footer when the pane is available.
     fn sync_settings_error_state_into_settings_pane(&mut self, ctx: &mut ViewContext<Self>) {
         let error = self.settings_file_error.clone();
         let dismissed = self.settings_error_banner_dismissed;
-        self.settings_pane.update(ctx, |view, ctx| {
+        let _ = self.settings_pane.try_update(ctx, |view, ctx| {
             view.set_settings_error_state(error, dismissed, ctx);
         });
     }

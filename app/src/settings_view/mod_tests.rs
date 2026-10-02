@@ -11,6 +11,9 @@ use warpui::{
 
 use super::*;
 use crate::appearance::Appearance;
+use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
+use crate::workspace::view::WorkspaceBanner;
+use crate::workspace::view::tests::{initialize_app, mock_workspace};
 use crate::workspaces::workspace::{BillingMetadata, CustomerType};
 
 fn billing_metadata(customer_type: CustomerType) -> BillingMetadata {
@@ -18,6 +21,50 @@ fn billing_metadata(customer_type: CustomerType) -> BillingMetadata {
         customer_type,
         ..Default::default()
     }
+}
+
+#[test]
+fn settings_error_events_update_live_pane() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let settings_pane = app.read(|ctx| {
+            ctx.views_of_type::<SettingsView>(workspace.window_id(ctx))
+                .unwrap()
+                .pop()
+                .unwrap()
+        });
+        let error = SettingsFileError::FileParseFailed("invalid TOML".into());
+
+        app.update(|ctx| {
+            WarpConfig::handle(ctx).update(ctx, |_, ctx| {
+                ctx.emit(WarpConfigUpdateEvent::SettingsErrors(error.clone()));
+            });
+        });
+        settings_pane.read(&app, |view, _| {
+            assert_eq!(view.settings_file_error, Some(error));
+            assert!(!view.settings_error_banner_dismissed);
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(
+                &WorkspaceAction::DismissWorkspaceBanner(WorkspaceBanner::InvalidSettings),
+                ctx,
+            );
+        });
+        settings_pane.read(&app, |view, _| {
+            assert!(view.settings_error_banner_dismissed);
+        });
+
+        app.update(|ctx| {
+            WarpConfig::handle(ctx).update(ctx, |_, ctx| {
+                ctx.emit(WarpConfigUpdateEvent::SettingsErrorsCleared);
+            });
+        });
+        settings_pane.read(&app, |view, _| {
+            assert_eq!(view.settings_file_error, None);
+        });
+    });
 }
 
 #[test]
