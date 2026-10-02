@@ -310,33 +310,73 @@ impl RequestMetadataTurnView {
             .collect()
     }
 
-    fn inference_usage_header_row(
-        &self,
-        appearance: &Appearance,
-        usage_display_unit: UsageDisplayUnit,
-    ) -> LabelValueRow {
-        let header_font_size = appearance.overline_font_size() + 3.;
+    /// The bold value shown beside the "INFERENCE USAGE" section header.
+    fn render_inference_header_value(text: String, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let value = Text::new(
-            format_tokens_with_cost(
-                self.summary.total_tokens(),
-                self.summary.inference_cost_in_cents(),
-                self.summary.inference_cost_in_credits(),
-                usage_display_unit,
-            ),
+        Text::new(
+            text,
             appearance.ui_font_family(),
-            header_font_size,
+            appearance.overline_font_size() + 3.,
         )
         .with_style(warpui::fonts::Properties {
             weight: warpui::fonts::Weight::Bold,
             ..Default::default()
         })
         .with_color(blended_colors::text_main(theme, theme.surface_2()))
-        .finish();
+        .finish()
+    }
+
+    fn inference_usage_header_row(
+        &self,
+        appearance: &Appearance,
+        usage_display_unit: UsageDisplayUnit,
+    ) -> LabelValueRow {
         (
             Self::render_section_header("INFERENCE USAGE", appearance),
-            value,
+            Self::render_inference_header_value(
+                format_tokens_with_cost(
+                    self.summary.total_tokens(),
+                    self.summary.inference_cost_in_cents(),
+                    self.summary.inference_cost_in_credits(),
+                    usage_display_unit,
+                ),
+                appearance,
+            ),
         )
+    }
+
+    /// The legacy inference header's value text, or `None` when the section should be hidden:
+    /// a legacy turn has no model attribution, so its inference section is at most a single
+    /// header row, and without a figure in the user's display unit a zero or missing value
+    /// would read as "free".
+    fn legacy_inference_header_text(
+        charges: &LegacyCharges,
+        usage_display_unit: UsageDisplayUnit,
+    ) -> Option<String> {
+        match (charges, usage_display_unit) {
+            (LegacyCharges::Unknown, UsageDisplayUnit::Dollars | UsageDisplayUnit::Credits)
+            | (LegacyCharges::CreditsOnly(_), UsageDisplayUnit::Dollars) => None,
+            (LegacyCharges::CreditsOnly(credits), UsageDisplayUnit::Credits) => {
+                Some(format_credits_amount(*credits))
+            }
+            (LegacyCharges::Breakdown { totals, .. }, UsageDisplayUnit::Dollars) => {
+                Some(format_tokens_with_cost(
+                    u64::from(totals.total_tokens()),
+                    totals.inference_cost_in_cents(),
+                    0.0,
+                    usage_display_unit,
+                ))
+            }
+            (LegacyCharges::Breakdown { totals, credits }, UsageDisplayUnit::Credits) => credits
+                .map(|credits| {
+                    format_tokens_with_cost(
+                        u64::from(totals.total_tokens()),
+                        0.0,
+                        credits,
+                        usage_display_unit,
+                    )
+                }),
+        }
     }
 
     /// The "PLATFORM USAGE" section: a header row with the platform charge in the value
@@ -526,24 +566,18 @@ impl RequestMetadataTurnView {
                 }
             };
 
-        // A legacy turn without any charge data hides the inference section entirely:
-        // its charges are unknown, and a zero header would read as "free".
         match &self.legacy_charges {
-            Some(LegacyCharges::Unknown) => (),
-            Some(LegacyCharges::CreditsOnly(credits)) => {
-                // Only a credits total is known: no token/cost rows anywhere.
-                let header_font_size = appearance.overline_font_size() + 3.;
-                push_row(
-                    Self::render_section_header("INFERENCE USAGE", appearance),
-                    render_value_text(
-                        format_credits_amount(*credits),
-                        header_font_size,
-                        appearance,
-                    ),
-                    8.,
-                );
+            Some(charges) => {
+                if let Some(text) = Self::legacy_inference_header_text(charges, usage_display_unit)
+                {
+                    push_row(
+                        Self::render_section_header("INFERENCE USAGE", appearance),
+                        Self::render_inference_header_value(text, appearance),
+                        ROW_MARGIN_BOTTOM + SECTION_END_EXTRA_MARGIN,
+                    );
+                }
             }
-            Some(LegacyCharges::Breakdown(_)) | None => {
+            None => {
                 let (inference_label, inference_value) =
                     self.inference_usage_header_row(appearance, usage_display_unit);
                 push_row(inference_label, inference_value, 8.);
@@ -657,31 +691,43 @@ pub(crate) fn turn_panel_tooltip_text_for_data(
     usage_display_unit: UsageDisplayUnit,
 ) -> String {
     match data {
-        TurnPanelData::Legacy {
-            charges: LegacyCharges::CreditsOnly(credits),
-            ..
-        } => format!("Turn: {}", format_credits_amount(*credits)),
-        _ => turn_panel_tooltip_text(data.records(), usage_display_unit),
+        TurnPanelData::Records(records) => turn_panel_tooltip_text(records, usage_display_unit),
+        TurnPanelData::Legacy { charges, .. } => match charges {
+            LegacyCharges::Unknown => tooltip_text(0.0, 0.0, usage_display_unit),
+            LegacyCharges::CreditsOnly(credits) => tooltip_text(0.0, *credits, usage_display_unit),
+            LegacyCharges::Breakdown { totals, credits } => tooltip_text(
+                totals.total_cost_in_cents(),
+                credits.unwrap_or(0.0),
+                usage_display_unit,
+            ),
+        },
     }
 }
 
-/// The trigger icon's hover tooltip: the turn's charge, honoring the user's credits/dollars
-/// display-unit setting. Stays quiet ("Turn") rather than fabricating a total when neither
-/// figure is known.
+/// The trigger icon's hover tooltip for a turn backed by server records.
 pub(crate) fn turn_panel_tooltip_text(
     records: &[RequestMetadataRecord],
     usage_display_unit: UsageDisplayUnit,
 ) -> String {
-    let total_cost_in_cents: f32 = records
-        .iter()
-        .map(|record| record.total_cost_in_cents())
-        .sum();
-    let total_credits: f32 = records
-        .iter()
-        .map(|record| record.total_cost_in_credits())
-        .sum();
-    let turn_cost = Some(total_cost_in_cents).filter(|&cost| cost > 0.0);
-    let credits = Some(total_credits).filter(|&credits| credits > 0.0);
+    tooltip_text(
+        records
+            .iter()
+            .map(|record| record.total_cost_in_cents())
+            .sum(),
+        records
+            .iter()
+            .map(|record| record.total_cost_in_credits())
+            .sum(),
+        usage_display_unit,
+    )
+}
+
+/// The turn's charge, honoring the user's credits/dollars display-unit setting and falling
+/// back to the other unit when the preferred one is unknown. Stays quiet ("Turn") rather than
+/// fabricating a total when neither figure is known.
+fn tooltip_text(cost_in_cents: f32, credits: f32, usage_display_unit: UsageDisplayUnit) -> String {
+    let turn_cost = Some(cost_in_cents).filter(|&cost| cost > 0.0);
+    let credits = Some(credits).filter(|&credits| credits > 0.0);
     let value = match (usage_display_unit, turn_cost, credits) {
         (UsageDisplayUnit::Dollars, Some(cost), _) => format_dollars(cost),
         (UsageDisplayUnit::Dollars | UsageDisplayUnit::Credits, _, Some(credits)) => {
