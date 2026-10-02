@@ -3217,8 +3217,10 @@ name = "command"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-io",
  "async-process",
  "futures-lite 1.13.0",
+ "instant",
  "lazy_static",
  "libc",
  "log",

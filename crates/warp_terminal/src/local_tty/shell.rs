@@ -1,9 +1,9 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::{io, process};
+use std::process;
+use std::time::Duration;
 
 use anyhow::Context as _;
-use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use typed_path::UnixPathBuf;
 use warp_core::channel::{Channel, ChannelState};
@@ -22,6 +22,7 @@ use crate::shell::{ShellLaunchData, ShellName, ShellType};
 pub const ZSH_SHELL_PATH: &str = "/bin/zsh";
 pub const BASH_SHELL_PATH: &str = "/bin/bash";
 pub const FISH_SHELL_PATH: &str = "/bin/fish";
+pub const WSL_SHELL_STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub trait AvailableShell {
     fn get_valid_shell_path_and_type(&self) -> Option<ShellLaunchData>;
@@ -349,6 +350,8 @@ pub struct WslShellStarter {
     /// session.
     args: Vec<OsString>,
     distribution: String,
+    #[serde(default)]
+    home_directory: Option<PathBuf>,
 
     /// The client-generated session ID for the WSL shell bootstrap. For WSL zsh,
     /// `TerminalManager::enqueue_init_script` injects this same ID immediately
@@ -417,19 +420,19 @@ impl ShellStarterSourceOrWslName {
     /// For non WSL shells this is a trivial conversion and is synchronous.
     /// For WSL shells this requires starting a new WSL instance so we can compute the shell type,
     /// which can potentially be extremely latent.
-    pub async fn to_shell_starter_source(self) -> Option<ShellStarterSource> {
+    pub async fn to_shell_starter_source(self) -> anyhow::Result<Option<ShellStarterSource>> {
         match self {
-            ShellStarterSourceOrWslName::Source(source) => Some(source),
+            ShellStarterSourceOrWslName::Source(source) => Ok(Some(source)),
             ShellStarterSourceOrWslName::WSLName { distro_name } => {
                 if let Some(wsl_shell_starter) =
-                    WslShellStarter::init_from_wsl_distribution(distro_name.as_ref()).await
+                    WslShellStarter::init_from_wsl_distribution(distro_name.as_ref()).await?
                 {
-                    return Some(ShellStarterSource::Override(ShellStarter::Wsl(
+                    return Ok(Some(ShellStarterSource::Override(ShellStarter::Wsl(
                         wsl_shell_starter,
-                    )));
+                    ))));
                 }
 
-                ShellStarter::compute_fallback_shell()
+                Ok(ShellStarter::compute_fallback_shell())
             }
         }
     }
@@ -502,10 +505,11 @@ impl DirectShellStarter {
 }
 
 impl WslShellStarter {
-    async fn init_from_wsl_distribution(distribution: &str) -> Option<Self> {
+    async fn init_from_wsl_distribution(distribution: &str) -> anyhow::Result<Option<Self>> {
         // We store the path as a String because we can't easily store a Unix path on Windows.
         // This command can have a lot of latency because it might spin up a VM.
-        let command_result = command::r#async::Command::new("wsl")
+        let mut command = command::r#async::Command::new("wsl");
+        command
             .arg("--distribution")
             .arg(distribution)
             .arg("--shell-type")
@@ -513,11 +517,31 @@ impl WslShellStarter {
             .arg("--")
             .arg("printenv")
             .arg("SHELL")
-            .output()
-            .await;
-        let shell_path = decode_wsl_path_result(command_result)?
-            .to_string_lossy()
-            .into_owned();
+            .arg("HOME");
+        let command_result = command
+            .output_with_timeout(WSL_SHELL_STARTUP_TIMEOUT)
+            .await
+            .inspect_err(|error| {
+                if error.is_timeout() {
+                    command::wsl::record_distribution_timeout(distribution);
+                }
+            })
+            .context("WSL did not respond while determining the distribution's shell")?;
+        let output = match decode_wsl_output(command_result) {
+            Some(output) => output,
+            None => return Ok(None),
+        };
+        let (shell_path, home_directory) = parse_wsl_environment(&output);
+        let shell_path = shell_path.to_string_lossy().into_owned();
+        let home_directory = home_directory.and_then(|home_directory| {
+            warp_util::path::convert_wsl_to_windows_host_path(
+                &home_directory.to_typed_path(),
+                distribution,
+            )
+            .context("error converting WSL home dir for host")
+            .inspect_err(|err| report_error!(err))
+            .ok()
+        });
 
         // We don't need to check the validity of the path or the existence of the binary since
         // we get this information directly from a spun-up shell in WSL.
@@ -529,7 +553,7 @@ impl WslShellStarter {
             ShellType::Fish
         } else {
             log::warn!("The shell {shell_path:#} is not yet supported in WSL");
-            return None;
+            return Ok(None);
         };
 
         let session_id = generate_session_id();
@@ -540,13 +564,14 @@ impl WslShellStarter {
             session_id,
         );
 
-        Some(Self {
+        Ok(Some(Self {
             shell_type,
             shell_path,
             args,
             distribution: distribution.to_string(),
+            home_directory,
             session_id,
-        })
+        }))
     }
 
     pub fn args(&self) -> &Vec<OsString> {
@@ -576,24 +601,7 @@ impl WslShellStarter {
 
     /// Gives the Windows path to the WSL home directory (e.g. `\\WSL$\home\user`).
     pub fn home_directory(&self) -> Option<PathBuf> {
-        let command_result = command::blocking::Command::new("wsl")
-            .arg("--distribution")
-            .arg(&self.distribution)
-            .arg("--shell-type")
-            .arg("standard")
-            .arg("--")
-            .arg("printenv")
-            .arg("HOME")
-            .output();
-        let home_dir =
-            decode_wsl_path_result(command_result).filter(|s| !s.as_bytes().is_empty())?;
-        warp_util::path::convert_wsl_to_windows_host_path(
-            &home_dir.to_typed_path(),
-            &self.distribution,
-        )
-        .context("error conversion WSL home dir for host")
-        .inspect_err(|err| report_error!(err))
-        .ok()
+        self.home_directory.clone()
     }
 }
 
@@ -778,16 +786,7 @@ pub fn ssh_socket_dir() -> String {
     socket_dir
 }
 
-/// Take the output of a wsl.exe subcommand and try to decode it while reporting errors.
-/// NOTE: The empty string Some("") may be returned.
-fn decode_wsl_path_result(result: io::Result<process::Output>) -> Option<UnixPathBuf> {
-    let output = match result.context("error finding wsl.exe") {
-        Ok(output) => output,
-        Err(err) => {
-            report_error!(err);
-            return None;
-        }
-    };
+fn decode_wsl_output(output: process::Output) -> Option<Vec<u8>> {
     if !output.status.success() {
         // Errors with wsl.exe usage itself outputs error messages in UTF-16.
         cfg_if::cfg_if! {
@@ -813,13 +812,17 @@ fn decode_wsl_path_result(result: io::Result<process::Output>) -> Option<UnixPat
         }
         return None;
     }
+    Some(take_until_utf16_crlf(output.stdout))
+}
 
-    Some(UnixPathBuf::from(
-        take_until_utf16_crlf(output.stdout)
-            .into_iter()
-            .take_while(|b| *b != b'\n')
-            .collect_vec(),
-    ))
+fn parse_wsl_environment(output: &[u8]) -> (UnixPathBuf, Option<UnixPathBuf>) {
+    let mut lines = output.split(|byte| *byte == b'\n');
+    let shell_path = UnixPathBuf::from(lines.next().unwrap_or_default().to_vec());
+    let home_directory = lines
+        .next()
+        .filter(|line| !line.is_empty())
+        .map(|line| UnixPathBuf::from(line.to_vec()));
+    (shell_path, home_directory)
 }
 
 /// Takes bytes until [13, 0, 10, 0] is found in the byte sequence, dropping the rest.
