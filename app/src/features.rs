@@ -241,8 +241,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::UndoClosedPanes,
         #[cfg(feature = "multi_profile")]
         FeatureFlag::MultiProfile,
-        #[cfg(feature = "conversation_artifacts")]
-        FeatureFlag::ConversationArtifacts,
         #[cfg(feature = "sync_ambient_plans")]
         FeatureFlag::SyncAmbientPlans,
         #[cfg(feature = "get_started_tab")]

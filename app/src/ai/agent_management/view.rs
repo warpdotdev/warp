@@ -146,7 +146,7 @@ pub fn init(app: &mut AppContext) {
 }
 
 fn should_show_artifacts(artifacts: &[Artifact]) -> bool {
-    !artifacts.is_empty() && FeatureFlag::ConversationArtifacts.is_enabled()
+    !artifacts.is_empty()
 }
 
 pub type ManagementCardItemId = AgentConversationEntryId;
@@ -1674,7 +1674,7 @@ impl AgentManagementView {
         let theme = appearance.theme();
 
         let artifact_buttons_element = card_state.artifact_buttons_view.as_ref().and_then(|view| {
-            if view.as_ref(app).is_empty() || !FeatureFlag::ConversationArtifacts.is_enabled() {
+            if view.as_ref(app).is_empty() {
                 None
             } else {
                 Some(ChildView::new(view).finish())
