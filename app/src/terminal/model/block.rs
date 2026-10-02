@@ -299,6 +299,7 @@ pub struct Block {
     size: SizeInfo,
     header_grid: HeaderGrid,
     rprompt_grid: BlockGrid,
+    pub(super) rprompt_margin: usize,
     output_grid: BlockGrid,
     padding: BlockPadding,
     state: BlockState,
@@ -973,6 +974,7 @@ impl Block {
             size: sizes.size,
             header_grid,
             rprompt_grid,
+            rprompt_margin: 1,
             output_grid,
             padding: sizes.block_padding,
             render_delay_complete: Arc::new(AtomicBool::new(false)),
@@ -1322,9 +1324,11 @@ impl Block {
         &mut self,
         prompt_grid: BlockGrid,
         rprompt_grid: BlockGrid,
+        rprompt_margin: usize,
     ) {
         self.header_grid.set_prompt_from_cached_data(prompt_grid);
         self.rprompt_grid = rprompt_grid;
+        self.rprompt_margin = rprompt_margin;
         self.ignore_next_rprompt = true;
     }
 
@@ -2018,13 +2022,33 @@ impl Block {
     /// Returns the offset, in pixels, at which the rprompt should be rendered
     /// relative to the prompt.
     pub fn rprompt_render_offset(&self, size: &SizeInfo) -> Vector2F {
-        let rprompt_width_cells = self.rprompt_grid.grid_storage().max_cursor_point.col;
+        Self::rprompt_offset_for_grid(
+            size,
+            self.prompt_grid_columns(),
+            self.prompt_number_of_rows(),
+            &self.rprompt_grid,
+            self.rprompt_margin,
+        )
+    }
+
+    pub(in crate::terminal) fn rprompt_offset_for_grid(
+        size: &SizeInfo,
+        prompt_columns: usize,
+        prompt_rows: usize,
+        rprompt_grid: &BlockGrid,
+        right_margin: usize,
+    ) -> Vector2F {
+        let rprompt_width_cells = rprompt_grid.grid_storage().max_cursor_point.col;
         let rprompt_width_px = rprompt_width_cells as f32 * size.cell_width_px.as_f32();
         Vector2F::new(
-            (self.prompt_grid_columns().saturating_sub(1) as f32 * size.cell_width_px().as_f32())
+            (prompt_columns.saturating_sub(right_margin) as f32 * size.cell_width_px().as_f32())
                 - rprompt_width_px,
-            self.prompt_number_of_rows().saturating_sub(1) as f32 * size.cell_height_px().as_f32(),
+            prompt_rows.saturating_sub(1) as f32 * size.cell_height_px().as_f32(),
         )
+    }
+
+    pub(in crate::terminal) fn rprompt_margin(&self) -> usize {
+        self.rprompt_margin
     }
 
     pub fn update_padding(&mut self, padding: BlockPadding) {
@@ -3360,7 +3384,7 @@ impl ansi::Handler for Block {
 
     fn prompt_marker(&mut self, marker: ansi::PromptMarker) {
         match marker {
-            ansi::PromptMarker::StartPrompt { kind } => {
+            ansi::PromptMarker::StartPrompt { kind, right_margin } => {
                 match kind {
                     ansi::PromptKind::Initial => {
                         self.header_grid.prompt_marker(marker);
@@ -3374,6 +3398,7 @@ impl ansi::Handler for Block {
                     ansi::PromptKind::Right => {
                         if !self.ignore_next_rprompt {
                             log::debug!("Received start prompt marker for right prompt");
+                            self.rprompt_margin = right_margin.unwrap_or(1);
                             self.rprompt_grid.reset_state();
                             self.rprompt_grid.start();
                         }

@@ -2950,7 +2950,7 @@ impl ansi::Handler for TerminalModel {
         }
 
         let event = match &marker {
-            ansi::PromptMarker::StartPrompt { kind } => match kind {
+            ansi::PromptMarker::StartPrompt { kind, .. } => match kind {
                 ansi::PromptKind::Initial => HandlerEvent::PromptStart,
                 ansi::PromptKind::Right => HandlerEvent::RPromptStart,
             },

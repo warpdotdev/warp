@@ -234,6 +234,7 @@ pub struct CachedPromptData {
     pub prompt_grid: BlockGrid,
     /// The right-side prompt grid data.
     pub rprompt_grid: BlockGrid,
+    pub rprompt_margin: usize,
     /// The time at which the block containing these prompts was created.
     pub block_creation_time: DateTime<Local>,
 }
@@ -2888,13 +2889,14 @@ impl BlockList {
             && let Some(CachedPromptData {
                 prompt_grid,
                 rprompt_grid,
+                rprompt_margin,
                 ..
             }) = &self.cached_prompt_data
         {
             let prompt_grid = prompt_grid.clone();
             let rprompt_grid = rprompt_grid.clone();
             log::debug!("Initializing new block using cached prompt grids");
-            block.set_prompt_grids_from_cached_data(prompt_grid, rprompt_grid);
+            block.set_prompt_grids_from_cached_data(prompt_grid, rprompt_grid, *rprompt_margin);
         }
 
         if self.is_executing_oz_environment_startup_commands {
@@ -3086,6 +3088,7 @@ impl BlockList {
         self.cached_prompt_data = Some(CachedPromptData {
             prompt_grid: previous_prompt_grid,
             rprompt_grid: previous_rprompt_grid,
+            rprompt_margin: active_block.rprompt_margin(),
             block_creation_time: *active_block.creation_ts(),
         });
     }
@@ -3184,6 +3187,7 @@ impl BlockList {
             Some(prompt_metadata),
             block.is_local,
         );
+        self.active_block_mut().rprompt_margin = block.rprompt_margin.unwrap_or(1);
         if let Some(shell_host) = &block.shell_host {
             self.active_block_mut().set_shell_host(shell_host.clone());
         }

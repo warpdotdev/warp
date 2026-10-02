@@ -910,7 +910,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
 
         # Wrap prompt in Prompt Marker OSCs
         $startPromptMarker = "$e]133;A$oscEnd"
-        $startRPromptMarker = "$e]133;P;k=r$oscEnd"
+        $startRPromptMarker = "$e]133;P;k=r;warp_margin=0$oscEnd"
         if ("$env:WARP_HONOR_PS1" -eq '0') {
             $endPromptMarker = "$e]133;B$oscEnd$oscResetGrid"
         } else {

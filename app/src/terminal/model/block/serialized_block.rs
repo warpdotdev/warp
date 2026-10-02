@@ -182,6 +182,8 @@ pub struct SerializedBlock {
     pub ps1: Option<String>,
 
     pub rprompt: Option<String>,
+    #[serde(default)]
+    pub rprompt_margin: Option<usize>,
 
     pub honor_ps1: bool,
 
@@ -330,6 +332,7 @@ impl From<&Block> for SerializedBlock {
             is_background: block.is_background(),
             ps1: prompt_info.ps1,
             rprompt: prompt_info.rprompt,
+            rprompt_margin: Some(block.rprompt_margin),
             honor_ps1: prompt_info.honor_ps1,
             session_id: block.session_id,
             shell_host: block.shell_host.clone(),
@@ -365,6 +368,9 @@ impl From<crate::persistence::model::Block> for SerializedBlock {
                 .map(|naive_ts| Local.from_utc_datetime(&naive_ts)),
             ps1: block.ps1,
             rprompt: block.rprompt,
+            rprompt_margin: block
+                .rprompt_margin
+                .and_then(|margin| usize::try_from(margin).ok()),
             honor_ps1: block.honor_ps1,
             session_id: None,
             is_background: block.is_background,

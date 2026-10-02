@@ -943,8 +943,19 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
       PROMPT="$prompt_prefix$PROMPT$suffix"
     fi
 
-    if [[ -n "${RPROMPT:-}" && "${RPROMPT:-}" != *"$rprompt_prefix"* ]]; then
-      RPROMPT="$rprompt_prefix$RPROMPT$suffix"
+    local rprompt_marker_start=$'\e]133;P;k=r'
+    local rprompt_margin=$(( ${ZLE_RPROMPT_INDENT-1} ))
+    (( rprompt_margin < 0 )) && rprompt_margin=0
+    local rprompt_marker="$rprompt_marker_start;warp_margin=$rprompt_margin"$'\a'
+    if [[ -n "${RPROMPT:-}" ]]; then
+      if [[ "$RPROMPT" == *"$rprompt_marker_start"* ]]; then
+        local preceding_marker=${RPROMPT%%$rprompt_marker_start*}
+        local following_marker=${RPROMPT#*$rprompt_marker_start}
+        following_marker=${following_marker#*$'\a'}
+        RPROMPT="$preceding_marker$rprompt_marker$following_marker"
+      else
+        RPROMPT="$rprompt_marker$RPROMPT$suffix"
+      fi
     fi
 
     # The "%{" and "%}" indicate to zsh that the sequence between the markers

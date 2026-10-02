@@ -4513,6 +4513,7 @@ impl AIConversation {
                 completed_ts: command_block.completed_ts.or(exchange_time),
                 ps1: None,
                 rprompt: None,
+                rprompt_margin: None,
                 honor_ps1: false,
                 session_id: None,
                 shell_host: None,

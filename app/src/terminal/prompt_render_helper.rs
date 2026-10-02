@@ -1,6 +1,7 @@
 use std::fmt;
 use std::num::NonZeroUsize;
 
+use pathfinder_geometry::vector::Vector2F;
 use settings::Setting as _;
 use warp_core::semantic_selection::SemanticSelection;
 use warpui::elements::{
@@ -15,6 +16,7 @@ use warpui::{AppContext, EntityId, ModelAsRef, ModelHandle, SingletonEntity, Vie
 use super::input::InputRenderStateModel;
 use super::model::block::Block;
 use super::model::blocks::CachedPromptData;
+use super::model::grid::Dimensions as _;
 use super::safe_mode_settings::get_secret_obfuscation_mode;
 use super::session_settings::SessionSettings;
 use super::settings::TerminalSettings;
@@ -164,6 +166,7 @@ pub(super) struct SameLinePromptElements {
     // Bottom (nth) line of lprompt.
     pub(super) lprompt_bottom: Option<Box<dyn Element>>,
     pub(super) rprompt: Option<Box<dyn Element>>,
+    pub(super) rprompt_offset: Option<Vector2F>,
 }
 #[derive(Clone)]
 pub struct PromptRenderHelper {
@@ -402,6 +405,7 @@ impl PromptRenderHelper {
         Option<PromptAndPadding>,
         Option<PromptAndPadding>,
         Option<PromptAndPadding>,
+        Option<Vector2F>,
     ) {
         let active_block = model.block_list().active_block();
         let is_universal_input =
@@ -443,9 +447,9 @@ impl PromptRenderHelper {
                 padding_right,
             };
             if render_prompt_on_same_line {
-                (None, Some(prompt), None)
+                (None, Some(prompt), None, None)
             } else {
-                (Some(prompt), None, None)
+                (Some(prompt), None, None, None)
             }
         } else if active_block.honor_ps1()
             && model.block_list().is_bootstrapped()
@@ -459,7 +463,7 @@ impl PromptRenderHelper {
                 .and_then(|session_id| self.sessions.as_ref(app).get(session_id))
                 .map(|session| session.is_msys2())
                 .unwrap_or_default();
-            let (lprompt_grid_top, lprompt_grid_bottom, rprompt_grid) =
+            let (prompt_grid, rprompt_grid, rprompt_margin) =
                 match &model.block_list().cached_prompt_data_from_last_user_block() {
                     // If we've cached the prompt from the active block, use our
                     // cached copy instead of the block's current prompt.  This
@@ -474,30 +478,43 @@ impl PromptRenderHelper {
                         prompt_grid,
                         rprompt_grid,
                         block_creation_time,
+                        rprompt_margin,
                     }) if block_creation_time == prompt_block.creation_ts()
                         || (prompt_block.is_prompt_empty()
                             && chrono::Local::now() - *prompt_block.creation_ts()
                                 < prompt_marker_grace_period(shell_type, is_msys2)) =>
                     {
-                        Self::compute_prompt_layout(
-                            render_prompt_on_same_line,
-                            prompt_grid,
-                            rprompt_grid,
-                        )
+                        (prompt_grid, rprompt_grid, *rprompt_margin)
                     }
                     // If neither of those conditions apply, simply use the prompt
                     // grid as-is.
-                    _ => Self::compute_prompt_layout(
-                        render_prompt_on_same_line,
+                    _ => (
                         prompt_block.prompt_grid(),
                         prompt_block.rprompt_grid(),
+                        prompt_block.rprompt_margin(),
                     ),
                 };
-
             // Ignore the default horizontal padding used for grids, as this is
             // already applied by the Input.
             let mut size_info = app.model(&self.input_render_state_model_handle).size_info();
             size_info.padding_x_px = Pixels::zero();
+            let rprompt_offset = Block::rprompt_offset_for_grid(
+                &size_info,
+                prompt_grid.grid_storage().columns(),
+                prompt_grid.len(),
+                rprompt_grid,
+                rprompt_margin,
+            );
+            let should_display_rprompt = rprompt_grid.finished()
+                && rprompt_grid.has_received_content()
+                && rprompt_offset.x()
+                    > prompt_grid
+                        .grid_handler()
+                        .rightmost_visible_nonempty_cell_in_row(prompt_grid.len().saturating_sub(1))
+                        .unwrap_or(0) as f32
+                        * size_info.cell_width_px().as_f32();
+            let (lprompt_grid_top, lprompt_grid_bottom, rprompt_grid) =
+                Self::compute_prompt_layout(render_prompt_on_same_line, prompt_grid, rprompt_grid);
 
             let obfuscate_secrets: ObfuscateSecrets = get_secret_obfuscation_mode(app);
 
@@ -532,14 +549,17 @@ impl PromptRenderHelper {
                 size_info,
                 app,
             );
-            let rprompt_val = prompt_block
-                .should_display_rprompt(&size_info)
-                .then_some(rprompt);
+            let rprompt_val = should_display_rprompt.then_some(rprompt);
             let lprompt_bottom_val = render_prompt_on_same_line
                 .then_some(lprompt_bottom)
                 .flatten();
 
-            (lprompt_top, lprompt_bottom_val, rprompt_val)
+            (
+                lprompt_top,
+                lprompt_bottom_val,
+                rprompt_val,
+                Some(rprompt_offset),
+            )
 
         // If not render the default starting shell message.
         } else if model.block_list().active_block().honor_ps1() && !is_universal_input {
@@ -551,9 +571,9 @@ impl PromptRenderHelper {
                 padding_right,
             };
             if render_prompt_on_same_line {
-                (None, Some(prompt), None)
+                (None, Some(prompt), None, None)
             } else {
-                (Some(prompt), None, None)
+                (Some(prompt), None, None, None)
             }
         } else {
             let element = {
@@ -572,9 +592,9 @@ impl PromptRenderHelper {
                 padding_right,
             };
             if render_prompt_on_same_line {
-                (None, Some(prompt), None)
+                (None, Some(prompt), None, None)
             } else {
-                (Some(prompt), None, None)
+                (Some(prompt), None, None, None)
             }
         }
     }
@@ -722,7 +742,7 @@ impl PromptRenderHelper {
         appearance: &Appearance,
         app: &AppContext,
     ) -> PromptElements {
-        let (lprompt_and_padding_option, _, rprompt_and_padding_option) =
+        let (lprompt_and_padding_option, _, rprompt_and_padding_option, _) =
             self.render_prompt(model, appearance, app);
         let lprompt = lprompt_and_padding_option.and_then(|lprompt_top_and_padding| {
             self.render_prompt_area_helper(
@@ -755,6 +775,7 @@ impl PromptRenderHelper {
             lprompt_top_and_padding_option,
             lprompt_bottom_and_padding_option,
             rprompt_and_padding_option,
+            rprompt_offset,
         ) = self.render_prompt(model, appearance, app);
         let lprompt_top = lprompt_top_and_padding_option.and_then(|lprompt_top_and_padding| {
             self.render_prompt_area_helper(
@@ -788,6 +809,7 @@ impl PromptRenderHelper {
             lprompt_top,
             lprompt_bottom,
             rprompt,
+            rprompt_offset,
         }
     }
 

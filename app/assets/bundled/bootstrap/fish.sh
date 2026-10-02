@@ -275,7 +275,7 @@ function warp_update_prompt_vars
     if functions -q warp_original_fish_right_prompt
       function fish_right_prompt
         echo -n (printf '\x1b')
-        echo -n ']133;P;k=r'
+        echo -n ']133;P;k=r;warp_margin=0'
         echo -n (printf '\x07')
         warp_original_fish_right_prompt
         end_prompt

@@ -45,6 +45,7 @@ fn create_default_serialized_block() -> SerializedBlock {
         completed_ts: Some(Local::now()),
         ps1: None,
         rprompt: None,
+        rprompt_margin: None,
         honor_ps1: false,
         session_id: None,
         shell_host: None,
@@ -518,6 +519,7 @@ fn test_restored_blocks_on_different_host() {
             ),
             ps1: None,
             rprompt: None,
+            rprompt_margin: None,
             honor_ps1: false,
             session_id: None,
             shell_host: Some(ShellHost {
@@ -556,6 +558,7 @@ fn test_restored_blocks_on_different_host() {
             ),
             ps1: None,
             rprompt: None,
+            rprompt_margin: None,
             honor_ps1: false,
             session_id: None,
             shell_host: Some(ShellHost {
@@ -594,6 +597,7 @@ fn test_restored_blocks_on_different_host() {
             ),
             ps1: None,
             rprompt: None,
+            rprompt_margin: None,
             honor_ps1: false,
             session_id: None,
             shell_host: Some(ShellHost {
@@ -632,6 +636,7 @@ fn test_restored_blocks_on_different_host() {
             ),
             ps1: None,
             rprompt: None,
+            rprompt_margin: None,
             honor_ps1: false,
             session_id: None,
             shell_host: None,

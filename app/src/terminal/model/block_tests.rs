@@ -17,6 +17,44 @@ use crate::terminal::model::test_utils::{
 };
 use crate::test_util::mock_blockgrid;
 
+#[test]
+fn right_prompt_margin_controls_render_position() {
+    for (option, margin) in [(";warp_margin=0", 0), ("", 1), (";warp_margin=3", 3)] {
+        let mut block = TestBlockBuilder::new().with_honor_ps1(true).build();
+        block.prompt_only_precmd(PromptMetadata::default());
+        let mut processor = ansi::Processor::new();
+        let prompt = format!(
+            "\x1b]133;A\x07top\r\nL>\x1b]133;B\x07\x1b]133;P;k=r{option}\x07─╯\x1b]133;B\x07"
+        );
+        processor.parse_bytes(&mut block, prompt.as_bytes(), &mut std::io::sink());
+        let size = block.size();
+        assert_eq!(
+            block.rprompt_render_offset(&size).x(),
+            (block.prompt_grid_columns() - margin - 2) as f32 * size.cell_width_px().as_f32(),
+            "right prompt option {option}"
+        );
+        assert_eq!(
+            block.rprompt_render_offset(&size).y(),
+            size.cell_height_px().as_f32()
+        );
+        assert!(block.should_display_rprompt(&size));
+    }
+}
+
+#[test]
+fn right_prompt_is_hidden_when_absent_or_margin_leaves_no_room() {
+    let mut block = TestBlockBuilder::new().with_honor_ps1(true).build();
+    block.prompt_only_precmd(PromptMetadata::default());
+    assert!(!block.should_display_rprompt(&block.size()));
+    let mut processor = ansi::Processor::new();
+    processor.parse_bytes(
+        &mut block,
+        b"\x1b]133;A\x07L>\x1b]133;B\x07\x1b]133;P;k=r;warp_margin=100\x07R\x1b]133;B\x07",
+        &mut std::io::sink(),
+    );
+    assert!(!block.should_display_rprompt(&block.size()));
+}
+
 impl float_cmp::ApproxEq for BlockSection {
     type Margin = float_cmp::F64Margin;
 

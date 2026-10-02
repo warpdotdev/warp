@@ -622,7 +622,11 @@ fn parse_sgr_color(params: &mut dyn Iterator<Item = u16>) -> Option<Color> {
 pub enum PromptMarker {
     /// A marker indicating that the shell is starting to write out
     /// a prompt of the given kind.
-    StartPrompt { kind: PromptKind },
+    StartPrompt {
+        kind: PromptKind,
+        /// Right-edge padding in cells; omitted by older shell integrations.
+        right_margin: Option<usize>,
+    },
     /// A marker indicating that the shell has finished writing out
     /// the in-progress prompt.
     EndPrompt,
@@ -649,11 +653,13 @@ impl TryFrom<&[&[u8]]> for PromptMarker {
         match params.first() {
             Some(&b"A") => Ok(PromptMarker::StartPrompt {
                 kind: PromptKind::Initial,
+                right_margin: None,
             }),
             Some(&b"B") => Ok(PromptMarker::EndPrompt),
             Some(&b"P") => {
                 // Default to "Initial" as the kind, if one is not specified as an option.
                 let mut kind = PromptKind::Initial;
+                let mut right_margin = None;
                 // Loop through and parse out any options, which are expected to be of the form
                 // "key=value".  We ignore unknown options, but return an error for any malformed
                 // ones.
@@ -673,8 +679,13 @@ impl TryFrom<&[&[u8]]> for PromptMarker {
                     {
                         kind = k;
                     }
+                    if key == b"warp_margin" {
+                        right_margin = str::from_utf8(value)
+                            .ok()
+                            .and_then(|value| value.parse().ok());
+                    }
                 }
-                Ok(PromptMarker::StartPrompt { kind })
+                Ok(PromptMarker::StartPrompt { kind, right_margin })
             }
             _ => Err(Self::Error::UnknownParam),
         }

@@ -16,6 +16,41 @@ use crate::terminal::model::{TerminalModel, test_utils};
 use crate::terminal::view::{InlineBannerItem, InlineBannerType};
 use crate::terminal::{BlockListSettings, SizeUpdateReason};
 
+#[test]
+fn cached_right_prompt_keeps_its_margin_until_the_next_redraw() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, Some(true), ChannelEventListener::new_for_test());
+    let mut processor = Processor::new();
+    processor.parse_bytes(
+        &mut block_list,
+        b"\x1b]133;A\x07L>\x1b]133;B\x07\x1b]133;P;k=r;warp_margin=0\x07R\x1b]133;B\x07",
+        &mut io::sink(),
+    );
+    let offset = block_list
+        .active_block()
+        .rprompt_render_offset(block_list.size());
+    block_list.start_active_block_for_in_band_command();
+    command_finished_and_precmd(&mut block_list);
+    let redraw = b"\x1b]133;P;k=r;warp_margin=3\x07new\x1b]133;B\x07";
+    processor.parse_bytes(&mut block_list, redraw, &mut io::sink());
+    assert_eq!(
+        block_list
+            .active_block()
+            .rprompt_render_offset(block_list.size()),
+        offset
+    );
+    processor.parse_bytes(&mut block_list, redraw, &mut io::sink());
+    assert_eq!(block_list.active_block().rprompt_margin(), 3);
+    assert_eq!(
+        block_list
+            .active_block()
+            .rprompt_grid()
+            .contents_to_string(false, None)
+            .trim(),
+        "new"
+    );
+}
+
 pub fn input_string(block_list: &mut BlockList, input: &str) {
     for c in input.chars() {
         block_list.input(c);
@@ -97,6 +132,7 @@ pub fn insert_block_with_prompt(
 
     block_list.prompt_marker(ansi::PromptMarker::StartPrompt {
         kind: ansi::PromptKind::Initial,
+        right_margin: None,
     });
     // Fill the prompt grid.  This logic splits on newlines, adding a
     // CR/LF only when a `\n` character actually appears in the input
