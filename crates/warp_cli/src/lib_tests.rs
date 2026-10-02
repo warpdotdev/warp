@@ -2769,6 +2769,7 @@ fn environment_update_accepts_description() {
         id,
         description,
         remove_description,
+        default_runner,
         ..
     }) = boxed_cmd.as_ref()
     else {
@@ -2778,6 +2779,61 @@ fn environment_update_accepts_description() {
     assert_eq!(id, "env-id");
     assert_eq!(description.as_deref(), Some("Updated description"));
     assert!(!remove_description);
+    assert!(default_runner.is_none());
+}
+
+#[test]
+fn environment_update_accepts_default_runner_uid() {
+    let args = Args::try_parse_from([
+        "warp",
+        "environment",
+        "update",
+        "env-id",
+        "--default-runner",
+        "runner-uid",
+        "--force",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp environment update` command");
+    };
+    let CliCommand::Environment(EnvironmentCommand::Update {
+        default_runner,
+        repo,
+        setup_command,
+        remove_repo,
+        remove_setup_command,
+        force,
+        ..
+    }) = boxed_cmd.as_ref()
+    else {
+        panic!("Expected `warp environment update` command");
+    };
+
+    assert_eq!(default_runner.as_deref(), Some("runner-uid"));
+    assert!(repo.is_empty());
+    assert!(setup_command.is_empty());
+    assert!(remove_repo.is_empty());
+    assert!(remove_setup_command.is_empty());
+    assert!(force);
+}
+
+#[test]
+fn environment_update_rejects_blank_default_runner() {
+    for uid in ["", " \t"] {
+        assert!(
+            Args::try_parse_from([
+                "warp",
+                "environment",
+                "update",
+                "env-id",
+                "--default-runner",
+                uid,
+            ])
+            .is_err()
+        );
+    }
 }
 
 #[test]
