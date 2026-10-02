@@ -285,18 +285,16 @@ impl RequestInput {
         app: &AppContext,
     ) -> Self {
         let llm_prefs = LLMPreferences::as_ref(app);
-        let model_id = llm_prefs
-            .get_active_base_model(scope, app, Some(terminal_surface_id))
-            .id
-            .clone();
-        let coding_model_id = llm_prefs
-            .get_active_coding_model(scope, app, Some(terminal_surface_id))
-            .id
-            .clone();
-        let cli_agent_model_id = llm_prefs
-            .get_active_cli_agent_model(scope, app, Some(terminal_surface_id))
-            .id
-            .clone();
+        let base_model = llm_prefs.get_active_base_model(scope, app, Some(terminal_surface_id));
+        let model_id = base_model.id.clone();
+        let coding_model_id = llm_prefs.requestable_or_custom_base(
+            llm_prefs.get_active_coding_model(scope, app, Some(terminal_surface_id)),
+            base_model,
+        );
+        let cli_agent_model_id = llm_prefs.requestable_or_custom_base(
+            llm_prefs.get_active_cli_agent_model(scope, app, Some(terminal_surface_id)),
+            base_model,
+        );
         let computer_use_model_id = llm_prefs
             .get_active_computer_use_model(scope, app, Some(terminal_surface_id))
             .id
