@@ -2018,31 +2018,18 @@ impl Block {
     /// Returns the offset, in pixels, at which the rprompt should be rendered
     /// relative to the prompt.
     pub fn rprompt_render_offset(&self, size: &SizeInfo) -> Vector2F {
-        self.rprompt_offset_for_grid(
-            size,
-            self.prompt_grid_columns(),
-            self.prompt_number_of_rows(),
-            &self.rprompt_grid,
-        )
-    }
-
-    pub(in crate::terminal) fn rprompt_offset_for_grid(
-        &self,
-        size: &SizeInfo,
-        prompt_columns: usize,
-        prompt_rows: usize,
-        rprompt_grid: &BlockGrid,
-    ) -> Vector2F {
         let right_margin = match self.shell_host.as_ref().map(|shell| shell.shell_type) {
             Some(ShellType::Fish | ShellType::PowerShell) => 0,
+            // TODO: Honor ZLE_RPROMPT_INDENT instead of assuming zsh's default.
             Some(ShellType::Zsh | ShellType::Bash) | None => 1,
         };
-        let rprompt_width_cells = rprompt_grid.grid_storage().max_cursor_point.col;
+        let rprompt_width_cells = self.rprompt_grid.grid_storage().max_cursor_point.col;
         let rprompt_width_px = rprompt_width_cells as f32 * size.cell_width_px.as_f32();
         Vector2F::new(
-            (prompt_columns.saturating_sub(right_margin) as f32 * size.cell_width_px().as_f32())
+            (self.prompt_grid_columns().saturating_sub(right_margin) as f32
+                * size.cell_width_px().as_f32())
                 - rprompt_width_px,
-            prompt_rows.saturating_sub(1) as f32 * size.cell_height_px().as_f32(),
+            self.prompt_number_of_rows().saturating_sub(1) as f32 * size.cell_height_px().as_f32(),
         )
     }
 

@@ -3170,6 +3170,7 @@ impl Input {
             // Clone used in keymap_context_modifier closure below.
             let terminal_model_for_keymap_context = model.clone();
             let has_prompt_suggestion_banner_for_keymap = has_prompt_suggestion_banner.clone();
+            let input_render_state_model_handle_clone = input_render_state_model_handle.clone();
 
             let ai_context_model_clone = ai_context_model.clone();
             let ai_input_model = ai_input_model.clone();
@@ -3203,6 +3204,9 @@ impl Input {
                     render_decorator_elements: Some(Box::new(
                         move |app| -> EditorDecoratorElements {
                             let terminal_model = model_clone.lock();
+                            let prompt_block = terminal_model
+                                .prompt_block()
+                                .unwrap_or_else(|| terminal_model.block_list().active_block());
 
                             let mut editor_decorator_elements = EditorDecoratorElements::default();
 
@@ -3222,7 +3226,6 @@ impl Input {
                                     lprompt_top,
                                     lprompt_bottom,
                                     rprompt,
-                                    rprompt_offset,
                                 } = prompt_render_helper_clone.render_same_line_prompt_areas(
                                     &terminal_model,
                                     Appearance::as_ref(app),
@@ -3232,7 +3235,13 @@ impl Input {
                                 editor_decorator_elements.top_section = lprompt_top;
                                 editor_decorator_elements.left_notch = lprompt_bottom;
                                 editor_decorator_elements.right_notch = rprompt;
-                                editor_decorator_elements.right_notch_offset_px = rprompt_offset;
+                                editor_decorator_elements.right_notch_offset_px = Some(
+                                    prompt_block.rprompt_render_offset(
+                                        &input_render_state_model_handle_clone
+                                            .as_ref(app)
+                                            .size_info,
+                                    ),
+                                )
                             }
 
                             // Render the AI mode indicator to the left of the editor if we're in AI mode or the AI suggested a command.
@@ -16095,7 +16104,7 @@ impl Input {
     pub fn prompt_and_rprompt_text(&self, app: &AppContext) -> (String, Option<String>) {
         let model = self.model.lock();
         let appearance = Appearance::as_ref(app);
-        let (lprompt_top, lprompt_bottom, rprompt, _) = self
+        let (lprompt_top, lprompt_bottom, rprompt) = self
             .prompt_render_helper
             .render_prompt(&model, appearance, app);
         // Separate this into a helper (follow-up PR?)

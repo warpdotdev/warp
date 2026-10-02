@@ -56,6 +56,32 @@ fn create_default_serialized_block() -> SerializedBlock {
     }
 }
 
+#[test]
+fn previous_prompt_keeps_its_shell_placement_before_precmd() {
+    let mut model = TerminalModel::mock(None, None);
+    model.block_list_mut().set_honor_ps1(true);
+    model
+        .block_list_mut()
+        .prompt_only_precmd(PromptMetadata::default());
+    model.block_list_mut().set_active_shell_host(ShellHost {
+        shell_type: ShellType::Fish,
+        user: "user".into(),
+        hostname: "host".into(),
+    });
+    model.process_bytes("\x1b]133;A\x07top\r\nL>\x1b]133;B\x07\x1b]133;P;k=r\x07─╯\x1b]133;B\x07");
+    model.block_list_mut().command_finished(Default::default());
+
+    assert!(model.block_list().active_block().shell_host().is_none());
+    let prompt_block = model.prompt_block().unwrap();
+    let size = model.block_list().size();
+    let offset = prompt_block.rprompt_render_offset(size);
+    assert_eq!(
+        offset.x(),
+        (prompt_block.prompt_grid_columns() - 2) as f32 * size.cell_width_px().as_f32()
+    );
+    assert_eq!(offset.y(), size.cell_height_px().as_f32());
+}
+
 fn report_shell_typeahead(model: &mut TerminalModel, text: &str) {
     model.input_buffer(InputBufferValue {
         buffer: text.to_owned(),
