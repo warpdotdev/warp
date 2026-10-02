@@ -247,7 +247,7 @@ impl TerminalView {
                     Some(_) => FileTreeSource::CLIAgentView,
                     None => FileTreeSource::AgentToolbelt,
                 };
-                self.toggle_file_tree(source, cli_agent.map(|agent| agent.telemetry_name()), ctx);
+                self.toggle_file_tree(source, *cli_agent, ctx);
             }
             UseAgentToolbarEvent::StartRemoteControl { scrollback_type } => {
                 self.auto_stop_sharing_on_cli_end =
@@ -548,7 +548,7 @@ impl TerminalView {
         if let Some(session) = CLIAgentSessionsModel::as_ref(ctx).session(self.view_id) {
             send_telemetry_from_ctx!(
                 TelemetryEvent::CLIAgentToolbarShown {
-                    cli_agent: session.agent.telemetry_name(),
+                    cli_agent: session.agent,
                 },
                 ctx
             );
@@ -611,7 +611,7 @@ impl TerminalView {
 
         let cli_agent = CLIAgentSessionsModel::as_ref(ctx)
             .session(self.view_id)
-            .map(|s| s.agent.telemetry_name());
+            .map(|s| s.agent);
         if let Some(cli_agent) = cli_agent {
             send_telemetry_from_ctx!(
                 TelemetryEvent::CLIAgentRichInputClosed { cli_agent, reason },
@@ -664,7 +664,7 @@ impl TerminalView {
         let prompt_length = text.chars().count();
         let cli_agent = CLIAgentSessionsModel::as_ref(ctx)
             .session(self.view_id)
-            .map(|s| s.agent.telemetry_name());
+            .map(|s| s.agent);
         if let Some(cli_agent) = cli_agent {
             send_telemetry_from_ctx!(
                 TelemetryEvent::CLIAgentRichInputSubmitted {
@@ -1102,7 +1102,7 @@ impl TerminalView {
 
         send_telemetry_from_ctx!(
             TelemetryEvent::CLIAgentRichInputOpened {
-                cli_agent: cli_agent.telemetry_name(),
+                cli_agent,
                 entrypoint,
             },
             ctx

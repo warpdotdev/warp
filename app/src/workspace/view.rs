@@ -9862,9 +9862,7 @@ impl Workspace {
                             .map(LocalOrRemotePath::is_local),
                         entrypoint: panel_update_params.entrypoint.unwrap_or_default(),
                         is_code_mode_v2: true,
-                        cli_agent: panel_update_params
-                            .cli_agent
-                            .map(|agent| agent.telemetry_name()),
+                        cli_agent: panel_update_params.cli_agent,
                     },
                     ctx
                 );
