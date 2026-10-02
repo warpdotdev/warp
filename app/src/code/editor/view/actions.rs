@@ -24,7 +24,7 @@ use warpui::{AppContext, TypedActionView, ViewContext, WeakViewHandle};
 
 use crate::cmd_or_ctrl_shift;
 use crate::code::editor::line::EditorLineLocation;
-use crate::code::editor::model::CodeEditorModel;
+use crate::code::editor::model::{CodeEditorModel, CopyOutcome};
 use crate::code::editor::view::{CodeEditorEvent, CodeEditorView, VimMode};
 use crate::code_review::comments::CommentId;
 use crate::editor::InteractionState;
@@ -1001,13 +1001,12 @@ impl TypedActionView for CodeEditorView {
             // The owner of the editor can also perform a copy by accessing the selected text and copying it to the clipboard.
             // This is the case when the code block is owned by an AIBlock and unfocused.
             Copy => {
-                self.model.update(ctx, |model, ctx| {
-                    model.copy(ctx);
-                });
+                let outcome = self.model.update(ctx, |model, ctx| model.copy(ctx));
                 // It's possible that the copy action was dispatched to the focused editor even when
                 // the user intended to copy selected text from a parent view (i.e. an `AIBlock`).
                 // The `CopiedEmptyText` event gives the parent view a signal to attempt a copy action.
-                if self.selected_text(ctx).is_none() {
+                // An editor that took the cursor's line has handled the copy itself, so it stays quiet.
+                if outcome == CopyOutcome::EmptySelection {
                     ctx.emit(CodeEditorEvent::CopiedEmptyText);
                 }
             }
