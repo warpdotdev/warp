@@ -1,3 +1,5 @@
+use std::io::{self, Write};
+
 use serde_json::json;
 
 use super::*;
@@ -106,4 +108,32 @@ fn multiple_teams_include_workspace_and_repeat_pretty_team_labels() {
         output.pretty(PrincipalType::User),
         "User ID: user-1\nDisplay Name: Ada\nEmail: ada@example.com\nWorkspace UID: workspace_uid123456789\nWorkspace Name: Acme\nTeams:\n  Team ID: test_uid00000000000001\n  Team Name: Platform\n  Team ID: test_uid00000000000002\n  Team Name: Product"
     );
+}
+
+#[test]
+fn whoami_output_preserves_its_trailing_newline() {
+    let mut output = Vec::new();
+
+    write_whoami_output(&mut output, "service_account:abc").unwrap();
+
+    assert_eq!(output, b"service_account:abc\n");
+}
+
+#[test]
+fn whoami_output_returns_broken_pipe_instead_of_panicking() {
+    struct ClosedPipe;
+
+    impl Write for ClosedPipe {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let error = write_whoami_output(ClosedPipe, "service_account:abc").unwrap_err();
+
+    assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
 }
