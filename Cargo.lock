@@ -347,6 +347,7 @@ dependencies = [
  "notify-debouncer-full",
  "persistence",
  "priority-queue",
+ "prost",
  "prost-types",
  "rand 0.8.6",
  "rayon",

@@ -33,7 +33,7 @@ fn terminal_with_startup_path(startup_path: Option<&str>) -> TerminalModel {
 
 fn prebootstrap_terminal_with_startup_path(startup_path: &str) -> TerminalModel {
     let mut terminal = terminal_with_startup_path(Some(startup_path));
-    terminal.block_list_mut().reinit_shell();
+    terminal.block_list_mut().reinit_shell(None);
     terminal
 }
 

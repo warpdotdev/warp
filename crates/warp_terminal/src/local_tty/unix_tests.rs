@@ -70,6 +70,7 @@ fn docker_sandbox_command_sets_history_size_sentinels() {
     let command = build_docker_sandbox_command(
         &docker_starter,
         None,
+        None,
         HashMap::new(),
         false,
         false,

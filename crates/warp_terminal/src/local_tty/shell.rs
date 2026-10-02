@@ -68,6 +68,93 @@ pub enum ShellStarter {
 }
 
 impl ShellStarter {
+    /// Creates a fresh shell session in the same execution environment.
+    pub fn replacement(&self) -> Self {
+        match self {
+            Self::Direct(starter) => {
+                let mut starter = starter.clone();
+                starter.session_id = generate_session_id();
+                starter.args = arguments_for_session_spawning_command(
+                    &starter.shell_path.to_string_lossy(),
+                    starter.shell_type,
+                    starter.session_id,
+                );
+                Self::Direct(starter)
+            }
+            Self::Wsl(starter) => {
+                let mut starter = starter.clone();
+                starter.session_id = generate_session_id();
+                starter.args = wsl_arguments_for_session_spawning_command(
+                    &starter.distribution,
+                    &starter.shell_path,
+                    starter.shell_type,
+                    starter.session_id,
+                );
+                Self::Wsl(starter)
+            }
+            Self::MSYS2(starter) => {
+                let mut starter = starter.clone();
+                starter.session_id = generate_session_id();
+                Self::MSYS2(starter)
+            }
+            Self::DockerSandbox(starter) => Self::DockerSandbox(starter.replacement()),
+        }
+    }
+
+    pub fn session_id(&self) -> SessionId {
+        match self {
+            Self::Direct(starter) | Self::MSYS2(starter) => starter.session_id(),
+            Self::Wsl(starter) => starter.session_id(),
+            Self::DockerSandbox(starter) => starter.session_id(),
+        }
+    }
+
+    pub fn launch_data(&self) -> ShellLaunchData {
+        match self {
+            Self::Direct(starter) => ShellLaunchData::Executable {
+                executable_path: starter.logical_shell_path().to_owned(),
+                shell_type: starter.shell_type(),
+            },
+            Self::DockerSandbox(starter) => ShellLaunchData::Executable {
+                executable_path: starter.logical_shell_path().to_owned(),
+                shell_type: starter.shell_type(),
+            },
+            Self::Wsl(starter) => ShellLaunchData::WSL {
+                distro: starter.distribution().to_owned(),
+            },
+            Self::MSYS2(starter) => ShellLaunchData::MSYS2 {
+                executable_path: starter.logical_shell_path().to_owned(),
+                shell_type: starter.shell_type(),
+            },
+        }
+    }
+
+    /// Returns a shell-side recovery directory and whether the home fallback was needed.
+    pub fn recovery_working_directory(
+        &self,
+        requested: Option<&str>,
+        home_directory: Option<&str>,
+    ) -> anyhow::Result<(String, bool)> {
+        match self {
+            Self::DockerSandbox(starter) => Ok(starter.recovery_working_directory(requested)),
+            Self::Direct(_) | Self::Wsl(_) | Self::MSYS2(_) => {
+                let launch_data = self.launch_data();
+                let is_directory = |path| {
+                    launch_data
+                        .maybe_convert_absolute_path(path)
+                        .is_some_and(|path| path.is_absolute() && path.is_dir())
+                };
+                if let Some(requested) = requested.filter(|path| is_directory(path)) {
+                    return Ok((requested.to_owned(), false));
+                }
+                let fallback = home_directory
+                    .filter(|path| is_directory(path))
+                    .context("no accessible home directory for shell recovery")?;
+                Ok((fallback.to_owned(), true))
+            }
+        }
+    }
+
     /// Constructs a `ShellStarter` represent the shell binary (and corresponding arguments) to be
     /// used to spawn a shell process for a new top-level Warp session. If a WSL Distribution is
     /// given, then it will always construct a `ShellStarter` starting the default shell for that
@@ -453,6 +540,9 @@ impl From<ShellStarterSource> for ShellStarterSourceOrWslName {
 }
 
 impl DirectShellStarter {
+    pub(crate) fn set_session_id(&mut self, session_id: SessionId) {
+        self.session_id = session_id;
+    }
     #[cfg(any(test, feature = "test-util"))]
     pub fn new_for_test(shell_type: ShellType, shell_path: PathBuf, args: Vec<OsString>) -> Self {
         Self {

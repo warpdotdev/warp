@@ -23,7 +23,9 @@ use session_sharing_protocol::sharer::{
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::send_telemetry_from_ctx;
 use warp_errors::report_error;
-use warpui::{AppContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle, WindowId};
+use warpui::{
+    AppContext, ModelContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle, WindowId,
+};
 
 use super::terminal_manager::{TerminalManager, TerminalSurfaceInit, TerminalSurfaceResult};
 use crate::NetworkStatus;
@@ -2205,6 +2207,21 @@ impl TerminalManager<TerminalView> {
 impl TerminalManagerTrait for TerminalManager<TerminalView> {
     fn model(&self) -> Arc<FairMutex<TerminalModel>> {
         self.model.clone()
+    }
+    fn recover_cloud_shell(
+        &mut self,
+        request: crate::terminal::shell_recovery::CloudShellRecoveryRequest,
+        ctx: &mut ModelContext<Box<dyn TerminalManagerTrait>>,
+    ) -> bool {
+        TerminalManager::recover_cloud_shell(self, request, ctx)
+    }
+
+    fn on_session_bootstrapped(
+        &mut self,
+        session_id: crate::terminal::model::session::SessionId,
+        ctx: &mut ModelContext<Box<dyn TerminalManagerTrait>>,
+    ) {
+        TerminalManager::on_session_bootstrapped(self, session_id, ctx);
     }
 
     fn on_view_detached(

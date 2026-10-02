@@ -54,6 +54,9 @@ enum PtyWrite {
         /// The bytes to be written.
         bytes: Cow<'static, [u8]>,
     },
+    BootstrapBytes {
+        bytes: Cow<'static, [u8]>,
+    },
     AgentInput {
         /// The bytes to be written.
         bytes: Cow<'static, [u8]>,
@@ -346,9 +349,9 @@ impl<T: EventLoopSender> PtyController<T> {
     fn write_terminating_bootstrap_bytes(&mut self, ctx: &mut ModelContext<PtyController<T>>) {
         cfg_if::cfg_if! {
             if #[cfg(unix)] {
-                self.write_bytes(&b"\n"[..], ctx);
+                self.write_bootstrap_bytes(&b"\n"[..], ctx);
             } else if #[cfg(target_os = "windows")] {
-                self.write_bytes(&b"\r"[..], ctx);
+                self.write_bootstrap_bytes(&b"\r"[..], ctx);
             }
         }
     }
@@ -396,10 +399,10 @@ impl<T: EventLoopSender> PtyController<T> {
                     self.bootstrap_file = Some(file);
                 }
                 _ => {
-                    self.write_bytes(&b" "[..], ctx);
-                    self.write_bytes(escape_sequences::BRACKETED_PASTE_START, ctx);
-                    self.write_bytes(bootstrap, ctx);
-                    self.write_bytes(escape_sequences::BRACKETED_PASTE_END, ctx);
+                    self.write_bootstrap_bytes(&b" "[..], ctx);
+                    self.write_bootstrap_bytes(escape_sequences::BRACKETED_PASTE_START, ctx);
+                    self.write_bootstrap_bytes(bootstrap, ctx);
+                    self.write_bootstrap_bytes(escape_sequences::BRACKETED_PASTE_END, ctx);
                     self.write_terminating_bootstrap_bytes(ctx);
                 }
             }
@@ -413,11 +416,11 @@ impl<T: EventLoopSender> PtyController<T> {
             for (i, chunk) in chunks.into_iter().enumerate() {
                 ctx.spawn(
                     warpui::r#async::Timer::after(std::time::Duration::from_millis(i as u64 * 50)),
-                    move |me, _, ctx| me.write_bytes(chunk, ctx),
+                    move |me, _, ctx| me.write_bootstrap_bytes(chunk, ctx),
                 );
             }
         } else {
-            self.write_bytes(bootstrap, ctx);
+            self.write_bootstrap_bytes(bootstrap, ctx);
         }
     }
 
@@ -437,13 +440,13 @@ impl<T: EventLoopSender> PtyController<T> {
             ShellType::PowerShell => {
                 let path_str = String::from_utf8_lossy(&path_to_script);
                 let escaped = ShellFamily::PowerShell.escape(&path_str).into_owned();
-                self.write_bytes(b" . ", ctx);
-                self.write_bytes(escaped.into_bytes(), ctx);
+                self.write_bootstrap_bytes(b" . ", ctx);
+                self.write_bootstrap_bytes(escaped.into_bytes(), ctx);
             }
             _ => {
-                self.write_bytes(b" source '", ctx);
-                self.write_bytes(path_to_script, ctx);
-                self.write_bytes(b"'", ctx);
+                self.write_bootstrap_bytes(b" source '", ctx);
+                self.write_bootstrap_bytes(path_to_script, ctx);
+                self.write_bootstrap_bytes(b"'", ctx);
             }
         }
         self.write_terminating_bootstrap_bytes(ctx);
@@ -457,7 +460,7 @@ impl<T: EventLoopSender> PtyController<T> {
         _shell_type: ShellType,
         bootstrap: Cow<'static, [u8]>,
     ) {
-        self.write_bytes(bootstrap, ctx);
+        self.write_bootstrap_bytes(bootstrap, ctx);
     }
 
     /// Handles the shell having finished bootstrapping.
@@ -587,6 +590,19 @@ impl<T: EventLoopSender> PtyController<T> {
         );
     }
 
+    fn write_bootstrap_bytes<B: Into<Cow<'static, [u8]>>>(
+        &mut self,
+        bytes: B,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.send_write_to_event_loop(
+            PtyWrite::BootstrapBytes {
+                bytes: bytes.into(),
+            },
+            ctx,
+        );
+    }
+
     /// Writes user input to the PTY.
     ///
     /// This should only be called for non-command input (e.g. input that should be passed through
@@ -614,6 +630,7 @@ impl<T: EventLoopSender> PtyController<T> {
     /// If the write corresponds to a command, this also calls
     /// [`LineEditorStatus::did_execute_command()`].
     fn send_write_to_event_loop(&mut self, write: PtyWrite, ctx: &mut ModelContext<Self>) -> bool {
+        let is_bootstrap = matches!(&write, PtyWrite::BootstrapBytes { .. });
         let (bytes_to_write, is_for_command, on_write_fn, shell_type_for_split) = match write {
             PtyWrite::Command {
                 command,
@@ -635,7 +652,9 @@ impl<T: EventLoopSender> PtyController<T> {
                     mode.decorate_bytes(bytes.into_owned(), self.is_bracketed_paste_enabled);
                 (decorated_bytes.into(), false, None, None)
             }
-            PtyWrite::Bytes { bytes } => (bytes, false, None, None),
+            PtyWrite::Bytes { bytes } | PtyWrite::BootstrapBytes { bytes } => {
+                (bytes, false, None, None)
+            }
             PtyWrite::RunNativeShellCompletions {
                 command,
                 shell_type,
@@ -686,7 +705,12 @@ impl<T: EventLoopSender> PtyController<T> {
             return true;
         }
 
-        self.send_message_to_event_loop(Message::Input(bytes_to_write), ctx);
+        let message = Message::Input(bytes_to_write);
+        if is_bootstrap {
+            self.send_bootstrap_message_to_event_loop(message, ctx);
+        } else {
+            self.send_message_to_event_loop(message, ctx);
+        }
         true
     }
 
@@ -701,6 +725,18 @@ impl<T: EventLoopSender> PtyController<T> {
                 log::warn!("Unable to send event loop msg {e:?}");
             }
             _ => (),
+        }
+    }
+
+    fn send_bootstrap_message_to_event_loop(&self, message: Message, ctx: &mut ModelContext<Self>) {
+        match self.event_loop_tx.send_bootstrap(message) {
+            Err(EventLoopSendError::Disconnected) => {
+                ctx.emit(PtyControllerEvent::PtyDisconnected);
+            }
+            Err(error) => {
+                log::warn!("Unable to send bootstrap event loop msg {error:?}");
+            }
+            Ok(()) => {}
         }
     }
 
@@ -853,4 +889,8 @@ pub enum EventLoopSendError {
 
 pub trait EventLoopSender: 'static {
     fn send(&self, message: Message) -> Result<(), EventLoopSendError>;
+
+    fn send_bootstrap(&self, message: Message) -> Result<(), EventLoopSendError> {
+        self.send(message)
+    }
 }

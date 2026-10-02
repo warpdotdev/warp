@@ -2652,7 +2652,10 @@ fn footer_model_label_is_a_bounded_click_target() {
         // Force the bootstrap (Disabled) state so the footer — and its
         // clickable model label — render deterministically.
         view.update(&mut app, |view, _| {
-            view.terminal_model.lock().block_list_mut().reinit_shell();
+            view.terminal_model
+                .lock()
+                .block_list_mut()
+                .reinit_shell(None);
         });
 
         let model_name = view.read(&app, |view, ctx| {
@@ -3285,7 +3288,10 @@ fn bootstrap_renders_starting_shell_above_input() {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
         view.update(&mut app, |view, _| {
-            view.terminal_model.lock().block_list_mut().reinit_shell();
+            view.terminal_model
+                .lock()
+                .block_list_mut()
+                .reinit_shell(None);
         });
 
         let lines = render_session(&mut app, &view, 80, 40);
@@ -3320,7 +3326,10 @@ fn zero_state_position_stays_stable_across_shell_bootstrap() {
         );
 
         view.update(&mut app, |view, _| {
-            view.terminal_model.lock().block_list_mut().reinit_shell();
+            view.terminal_model
+                .lock()
+                .block_list_mut()
+                .reinit_shell(None);
         });
         let bootstrap_lines = render_session(&mut app, &view, 80, 40);
         assert!(
@@ -3425,7 +3434,10 @@ fn submit_is_blocked_during_bootstrap_and_allowed_at_prompt() {
             view.input_view.update(ctx, |input, ctx| {
                 input.set_text("draft", ctx);
             });
-            view.terminal_model.lock().block_list_mut().reinit_shell();
+            view.terminal_model
+                .lock()
+                .block_list_mut()
+                .reinit_shell(None);
             view.handle_submitted("draft".to_owned(), None, ctx);
         });
 
@@ -4094,7 +4106,7 @@ fn visible_startup_script_shows_no_running_command_hint() {
         view.update(&mut app, |view, ctx| {
             {
                 let mut terminal_model = view.terminal_model.lock();
-                terminal_model.block_list_mut().reinit_shell();
+                terminal_model.block_list_mut().reinit_shell(None);
                 terminal_model
                     .update_blockheight_items(TRANSCRIPT_BLOCK_SPACING.block_padding, 0.0);
                 // Advance past WarpInput, then leave an unfinished startup-script
@@ -4141,7 +4153,7 @@ fn zero_state_renders_with_only_zero_height_bootstrap_blocks() {
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
         view.update(&mut app, |view, _| {
             let mut terminal_model = view.terminal_model.lock();
-            terminal_model.block_list_mut().reinit_shell();
+            terminal_model.block_list_mut().reinit_shell(None);
             terminal_model.update_blockheight_items(TRANSCRIPT_BLOCK_SPACING.block_padding, 0.0);
             terminal_model.simulate_block("bootstrap", "");
             terminal_model.simulate_long_running_block("shell init", "");
@@ -4422,7 +4434,7 @@ fn zero_state_transitions_through_bootstrap_lifecycle() {
         // routed to the block, so the zero state must stay hidden while the block runs.
         view.update(&mut app, |view, _| {
             let mut terminal_model = view.terminal_model.lock();
-            terminal_model.block_list_mut().reinit_shell();
+            terminal_model.block_list_mut().reinit_shell(None);
             terminal_model.update_blockheight_items(TRANSCRIPT_BLOCK_SPACING.block_padding, 0.0);
             // Advance past WarpInput to ScriptExecution.
             terminal_model.simulate_block("bootstrap", "");
