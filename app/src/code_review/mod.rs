@@ -76,8 +76,7 @@ pub fn init(app: &mut AppContext) {
             CodeReviewAction::ShowFindBar,
         )
         .with_context_predicate(id!("CodeReviewView"))
-        .with_key_binding("cmdorctrl-f")
-        .with_enabled(|| crate::features::FeatureFlag::CodeReviewFind.is_enabled()),
+        .with_key_binding("cmdorctrl-f"),
         EditableBinding::new(
             "code_review:toggle_file_navigation",
             "Toggle file navigation in code review",

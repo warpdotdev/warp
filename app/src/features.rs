@@ -297,8 +297,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::DiscardPerFileAndAllChanges,
         #[cfg(feature = "summarization_cancellation_confirmation")]
         FeatureFlag::SummarizationCancellationConfirmation,
-        #[cfg(feature = "code_review_find")]
-        FeatureFlag::CodeReviewFind,
         #[cfg(feature = "ui_zoom")]
         FeatureFlag::UIZoom,
         #[cfg(feature = "auto_open_code_review_pane")]
