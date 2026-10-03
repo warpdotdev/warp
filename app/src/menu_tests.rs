@@ -1,6 +1,8 @@
 use warp_core::ui::appearance::Appearance;
+use warpui::elements::{ParentElement, Stack};
 use warpui::platform::WindowStyle;
-use warpui::{App, TypedActionView};
+use warpui::presenter::ChildView;
+use warpui::{App, AppContext, Element, Entity, Event, TypedActionView, View, ViewHandle};
 
 use super::{Menu, MenuAction, MenuItem, MenuItemFields, SelectAction, SubMenu};
 
@@ -232,5 +234,141 @@ fn test_right_is_a_noop_for_leaf_items() {
                 "root"
             );
         });
-    })
+    });
+}
+
+/// A minimal host view whose only job is to embed a [`Menu`] inside a
+/// [`Stack`]. `SavePosition` (which every menu row wraps itself in) only
+/// records a position while a `Stack` layer is active on the paint stack;
+/// without one, the row positions this test reads back would silently no-op.
+struct MenuDragTestHost {
+    menu: ViewHandle<Menu<TestAction>>,
+}
+
+impl Entity for MenuDragTestHost {
+    type Event = ();
+}
+
+impl View for MenuDragTestHost {
+    fn ui_name() -> &'static str {
+        "MenuDragTestHost"
+    }
+
+    fn render(&self, _app: &AppContext) -> Box<dyn Element> {
+        let mut stack = Stack::new();
+        stack.add_child(ChildView::new(&self.menu).finish());
+        stack.finish()
+    }
+}
+
+impl TypedActionView for MenuDragTestHost {
+    type Action = ();
+}
+
+/// A held left-mouse drag from one row onto another must move the row
+/// highlight (`Hoverable`'s own hover state, opted into drag-tracking via
+/// `with_hover_tracks_drag`) and `hovered_row_index` (which feeds a sidecar
+/// preview panel) together. If they disagree, the menu visibly contradicts
+/// itself: one visual driven by the drag position, the other stuck.
+#[test]
+fn test_drag_across_rows_keeps_highlight_and_hovered_index_in_agreement() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+
+        let (window_id, host) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let menu = ctx.add_typed_action_view(|ctx| {
+                let mut menu = Menu::<TestAction>::new().with_hover_tracks_drag();
+                menu.set_items(
+                    vec![
+                        MenuItemFields::new("item one")
+                            .with_on_select_action(TestAction::Root)
+                            .into_item(),
+                        MenuItemFields::new("item two")
+                            .with_on_select_action(TestAction::ChildOne)
+                            .into_item(),
+                    ],
+                    ctx,
+                );
+                menu
+            });
+            MenuDragTestHost { menu }
+        });
+        let menu = host.read(&app, |host, _| host.menu.clone());
+
+        // `App::add_window` doesn't itself flush pending effects, so the
+        // window's initial invalidation is still queued at this point. In
+        // unit tests, `on_window_invalidated` eagerly builds the scene on the
+        // window's own auto-registered presenter (see
+        // `AppContext::insert_window_internal`) once a flush actually runs;
+        // that's what promotes each row's `SavePosition` into the "last
+        // frame" cache. Force that flush here rather than driving a
+        // `Presenter` by hand.
+        menu.update(&mut app, |_menu, ctx| ctx.notify());
+
+        let (row0_center, row1_center) = app.read(|ctx| {
+            let row0 = ctx
+                .element_position_by_id_at_last_frame(window_id, "item one")
+                .expect("expected a saved position for the first row");
+            let row1 = ctx
+                .element_position_by_id_at_last_frame(window_id, "item two")
+                .expect("expected a saved position for the second row");
+            (row0.center(), row1.center())
+        });
+        let presenter = app
+            .presenter(window_id)
+            .expect("window should have a presenter");
+
+        app.update(move |ctx| {
+            let hover_event = Event::MouseMoved {
+                position: row0_center,
+                cmd: false,
+                shift: false,
+                is_synthetic: false,
+            };
+            ctx.simulate_window_event(hover_event.clone(), window_id, presenter.clone());
+            ctx.set_last_mouse_move_event(window_id, hover_event);
+
+            ctx.simulate_window_event(
+                Event::LeftMouseDown {
+                    position: row0_center,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                },
+                window_id,
+                presenter.clone(),
+            );
+
+            // Drag, while still holding, from the first row onto the second.
+            ctx.simulate_window_event(
+                Event::LeftMouseDragged {
+                    position: row1_center,
+                    modifiers: Default::default(),
+                },
+                window_id,
+                presenter,
+            );
+        });
+
+        menu.read(&app, |menu, _| {
+            assert_eq!(
+                menu.hovered_index(),
+                Some(1),
+                "hovered_row_index (which feeds the sidecar) should track the drag position"
+            );
+
+            let is_row_hovered = |index: usize| match &menu.items()[index] {
+                MenuItem::Item(fields) => fields.mouse_state.lock().unwrap().is_hovered(),
+                other => panic!("expected a plain item, got {other:?}"),
+            };
+            assert!(
+                !is_row_hovered(0),
+                "the origin row's highlight should have moved off during the drag"
+            );
+            assert!(
+                is_row_hovered(1),
+                "the highlight should track the drag onto the newly hovered row, matching hovered_row_index"
+            );
+        });
+    });
 }
