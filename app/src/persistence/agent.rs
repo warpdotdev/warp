@@ -141,6 +141,22 @@ pub(super) fn upsert_agent_conversation<'a>(
     Ok(())
 }
 
+/// Updates `conversation_data` for an existing `agent_conversations` row without
+/// touching `agent_tasks`.
+pub(super) fn update_agent_conversation_data(
+    conn: &mut SqliteConnection,
+    conversation_id_param: &str,
+    conversation_data_param: AgentConversationData,
+) -> Result<(), UpsertConversationError> {
+    use schema::agent_conversations::dsl::*;
+
+    let serialized_conversation_data = serde_json::to_string(&conversation_data_param)?;
+    diesel::update(agent_conversations.filter(conversation_id.eq(conversation_id_param)))
+        .set(conversation_data.eq(serialized_conversation_data))
+        .execute(conn)?;
+    Ok(())
+}
+
 /// Evicts whole orchestration trees so the remaining set fits within `limit`.
 /// Trees are sorted freshest-first by `max(member.last_modified_at)` (ties
 /// broken by `root_id` ASC); the freshest tree is always retained, every

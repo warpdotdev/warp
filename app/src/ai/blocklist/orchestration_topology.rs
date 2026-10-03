@@ -87,11 +87,8 @@ pub fn resolve_orchestration_participant(
     let Some(conversation_id) = conversation_id else {
         return ResolvedOrchestrationParticipant::unknown();
     };
-    let Some(conversation) = history.conversation(&conversation_id) else {
-        return ResolvedOrchestrationParticipant::unknown();
-    };
-    let name = conversation
-        .agent_name()
+    let name = history
+        .agent_name_for_conversation(&conversation_id)
         .filter(|name| !name.is_empty())
         .unwrap_or("Agent")
         .to_string();
@@ -101,24 +98,31 @@ pub fn resolve_orchestration_participant(
     }
 }
 
-/// Returns the topmost loaded conversation in an orchestration tree.
+/// Returns the topmost conversation in an orchestration tree.
 ///
-/// Conversations without descendants are not orchestration roots. Malformed
-/// parent cycles and missing ancestors fail closed.
+/// Walks loaded conversations and startup overlay identities so it works before
+/// a child's task body is loaded. Conversations without descendants are not
+/// orchestration roots. Malformed parent cycles and missing ancestors fail closed.
 pub fn orchestration_root_conversation_id(
     history: &BlocklistAIHistoryModel,
     conversation_id: AIConversationId,
 ) -> Option<AIConversationId> {
-    history.conversation(&conversation_id)?;
     let mut current = conversation_id;
     let mut visited = HashSet::new();
     while visited.insert(current) {
-        let conversation = history.conversation(&current)?;
-        let Some(parent) = history.resolved_parent_conversation_id_for_conversation(conversation)
-        else {
-            return (!history.child_conversation_ids_of(&current).is_empty()).then_some(current);
-        };
-        current = parent;
+        match history.resolved_parent_conversation_id(&current) {
+            Some(parent) if history.is_known_conversation(&parent) => {
+                current = parent;
+            }
+            Some(_) => return None,
+            None => {
+                if !history.is_known_conversation(&current) {
+                    return None;
+                }
+                return (!history.child_conversation_ids_of(&current).is_empty())
+                    .then_some(current);
+            }
+        }
     }
     None
 }
@@ -251,23 +255,24 @@ fn conversations_in_pill_order(
     let mut descendants = conversation_ids
         .into_iter()
         .enumerate()
-        .filter_map(|(spawn_index, conversation_id)| {
-            history.conversation(&conversation_id).map(|conversation| {
-                let status_key = pill_status_sort_key(Some(conversation.status()));
-                let secondary_key = pill_secondary_sort_key(
-                    status_key,
+        .map(|(spawn_index, conversation_id)| {
+            let conversation = history.conversation(&conversation_id);
+            let status_key = pill_status_sort_key(conversation.map(AIConversation::status));
+            let secondary_key = pill_secondary_sort_key(
+                status_key,
+                conversation.and_then(|conversation| {
                     conversation
                         .last_modified_at()
-                        .map(|time| time.timestamp_millis()),
-                );
-                (
-                    !conversation.is_pinned(),
-                    status_key,
-                    secondary_key,
-                    spawn_index,
-                    conversation_id,
-                )
-            })
+                        .map(|time| time.timestamp_millis())
+                }),
+            );
+            (
+                !history.is_pinned_conversation(&conversation_id),
+                status_key,
+                secondary_key,
+                spawn_index,
+                conversation_id,
+            )
         })
         .collect::<Vec<_>>();
 

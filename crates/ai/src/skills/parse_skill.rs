@@ -1,5 +1,7 @@
 use std::fmt::Display;
 use std::fs;
+use std::hash::{Hash, Hasher};
+use std::io::Read;
 use std::ops::Range;
 use std::path::Path;
 
@@ -13,6 +15,11 @@ use super::parser::parse_markdown_content;
 use super::skill_provider::{SkillProvider, SkillScope, get_provider_for_path, get_scope_for_path};
 
 const MAX_SKILL_DESCRIPTION_CHARS: usize = 512;
+
+/// Per-file cap for local skill listing, aligned with remote context file reads (1 MiB).
+pub const LOCAL_SKILL_MAX_FILE_BYTES: u64 = 1024 * 1024;
+/// Aggregate cap for one local project skill ingest, aligned with remote context batches (5 MiB).
+pub const LOCAL_SKILL_MAX_BATCH_BYTES: u64 = 5 * 1024 * 1024;
 
 lazy_static! {
     static ref BLOCK_SEPARATOR: Regex =
@@ -48,16 +55,15 @@ pub fn parse_skill_content_at_location(
         .filter(|value| !value.is_empty())
     {
         Some(description) => description.to_string(),
-        None => truncate_skill_description(
-            &derive_description_from_content(&parsed.content, parsed.line_range.as_ref())
-                .unwrap_or_default(),
-        ),
+        None => derive_description_from_content(&parsed.content, parsed.line_range.as_ref())
+            .unwrap_or_default(),
     };
 
     Ok(ParsedSkill {
         path,
         name,
-        description,
+        description: truncate_skill_description(&description),
+        content_hash: Some(hash_skill_content(&parsed.content)),
         content: parsed.content,
         line_range: parsed.line_range,
         provider,
@@ -71,6 +77,8 @@ pub enum ParseSkillError {
     /// file to begin with if the path didn't have a valid parent directory.
     #[error("Could not derive skill name from path")]
     CouldNotDeriveSkillNameFromPath,
+    #[error("Skill file exceeds the maximum size of {max_bytes} bytes")]
+    FileTooLarge { max_bytes: u64 },
 }
 
 /// Represents a parsed skill with validated fields
@@ -79,6 +87,8 @@ pub struct ParsedSkill {
     pub path: LocalOrRemotePath,
     pub name: String,
     pub description: String,
+    /// Hash of the original file body, retained after [`Self::drop_listing_body`].
+    pub content_hash: Option<u64>,
     /// The entire content of the file (including front matter)
     pub content: String,
     /// The line range where the markdown content (without front matter) is located (1-indexed)
@@ -94,6 +104,32 @@ impl ParsedSkill {
     /// Returns true if this skill is bundled with Warp (not a user-editable file).
     pub fn is_bundled(&self) -> bool {
         self.scope == SkillScope::Bundled
+    }
+
+    /// Drops the in-memory markdown body after listing. The file stays on disk for invocation.
+    pub fn drop_listing_body(&mut self) {
+        if self.content_hash.is_none() {
+            self.content_hash = Some(hash_skill_content(&self.content));
+        }
+        self.content.clear();
+        self.content.shrink_to_fit();
+    }
+
+    pub fn listing_content_hash(&self) -> u64 {
+        self.content_hash
+            .unwrap_or_else(|| hash_skill_content(&self.content))
+    }
+
+    /// Reloads a local file-backed skill from disk so invocation uses current content and line range.
+    pub fn refresh_local_file_for_invocation(&mut self) -> Result<()> {
+        if self.scope == SkillScope::Bundled {
+            return Ok(());
+        }
+        let Some(path) = self.path.to_local_path() else {
+            return Ok(());
+        };
+        *self = parse_skill(path)?;
+        Ok(())
     }
 }
 
@@ -129,7 +165,13 @@ pub fn parse_skill(path: &Path) -> Result<ParsedSkill> {
 /// # Returns
 /// * `Result<ParsedSkill>` - Parsed skill with validated name and description
 pub fn parse_bundled_skill(path: &Path) -> Result<ParsedSkill> {
-    parse_local_skill_internal(path, SkillProvider::Warp, SkillScope::Bundled)
+    let content = fs::read_to_string(path)?;
+    parse_skill_content_at_location(
+        LocalOrRemotePath::Local(path.to_path_buf()),
+        &content,
+        SkillProvider::Warp,
+        SkillScope::Bundled,
+    )
 }
 
 fn parse_local_skill_internal(
@@ -137,13 +179,30 @@ fn parse_local_skill_internal(
     provider: SkillProvider,
     scope: SkillScope,
 ) -> Result<ParsedSkill> {
-    let content = fs::read_to_string(path)?;
+    let content = read_bounded_local_skill_content(path)?;
     parse_skill_content_at_location(
         LocalOrRemotePath::Local(path.to_path_buf()),
         &content,
         provider,
         scope,
     )
+}
+
+/// Reads a local skill file, rejecting it if it exceeds [`LOCAL_SKILL_MAX_FILE_BYTES`].
+pub fn read_bounded_local_skill_content(path: &Path) -> Result<String> {
+    read_bounded_skill_reader(fs::File::open(path)?)
+}
+
+fn read_bounded_skill_reader(reader: impl Read) -> Result<String> {
+    let mut limited = reader.take(LOCAL_SKILL_MAX_FILE_BYTES.saturating_add(1));
+    let mut buf = Vec::new();
+    limited.read_to_end(&mut buf)?;
+    if buf.len() as u64 > LOCAL_SKILL_MAX_FILE_BYTES {
+        anyhow::bail!(ParseSkillError::FileTooLarge {
+            max_bytes: LOCAL_SKILL_MAX_FILE_BYTES,
+        });
+    }
+    Ok(String::from_utf8(buf)?)
 }
 
 fn derive_skill_name_from_path(path: &LocalOrRemotePath) -> Result<String> {
@@ -189,6 +248,12 @@ fn first_paragraph_from_markdown(markdown: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn hash_skill_content(content: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    content.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn truncate_skill_description(description: &str) -> String {

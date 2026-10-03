@@ -112,7 +112,8 @@ pub fn read_skills(path: &Path) -> Vec<ParsedSkill> {
 
         if skill_file_path.exists() {
             // Attempt to parse the skill file, ignoring errors
-            if let Ok(parsed_skill) = parse_skill(&skill_file_path) {
+            if let Ok(mut parsed_skill) = parse_skill(&skill_file_path) {
+                parsed_skill.drop_listing_body();
                 skills.push(parsed_skill);
             }
         }

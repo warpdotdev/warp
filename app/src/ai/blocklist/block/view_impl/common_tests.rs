@@ -37,6 +37,7 @@ fn query_prefix_highlight_len_highlights_invoke_skill_inputs() {
             path: LocalOrRemotePath::Local(PathBuf::from("/tmp/.agents/skills/review-pr/SKILL.md")),
             name: "review-pr".to_string(),
             description: "Review a pull request.".to_string(),
+            content_hash: None,
             content: String::new(),
             line_range: None,
             provider: SkillProvider::Agents,

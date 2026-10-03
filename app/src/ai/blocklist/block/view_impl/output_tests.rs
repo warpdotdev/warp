@@ -195,6 +195,7 @@ fn make_skill(name: &str) -> ParsedSkill {
                 .join(name)
                 .join("SKILL.md"),
         ),
+        content_hash: None,
         content: String::new(),
         line_range: None,
         provider: SkillProvider::Agents,
@@ -256,6 +257,7 @@ fn parsed_skill_for_common_locations_resolves_cached_remote_skill() {
         name: "deploy".to_string(),
         description: "Deploy skill".to_string(),
         path: remote_location(&host_id, "/repo/.agents/skills/deploy/SKILL.md"),
+        content_hash: None,
         content: "# Deploy".to_string(),
         line_range: None,
         provider: SkillProvider::Agents,
@@ -293,6 +295,7 @@ fn parsed_skill_for_common_locations_does_not_mix_remote_hosts() {
         name: "deploy".to_string(),
         description: "Deploy skill".to_string(),
         path: remote_location(&first_host, "/repo/.agents/skills/deploy/SKILL.md"),
+        content_hash: None,
         content: "# Deploy".to_string(),
         line_range: None,
         provider: SkillProvider::Agents,
