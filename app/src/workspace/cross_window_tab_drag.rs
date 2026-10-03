@@ -7,6 +7,7 @@ use warpui::platform::TerminationMode;
 use warpui::windowing::WindowManager;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};
 
+use crate::workspace::WorkspaceRegistry;
 /// Singleton model that owns all cross-window tab drag state.
 ///
 /// # Overview
@@ -87,15 +88,21 @@ use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};
 /// ```
 ///
 /// View transfers between windows are handled by `transfer_view_tree_to_window`.
-use crate::tab::tab_position_id;
-use crate::workspace::WorkspaceRegistry;
-use crate::workspace::view::{TAB_BAR_POSITION_ID, TransferredTab, tab_bar_rects_for_window};
+use crate::workspace::tab_group::TabGroupId;
+use crate::workspace::view::{
+    TAB_BAR_POSITION_ID, TransferredTab, drag_preview_element_rect_for_window,
+    tab_bar_rects_for_window,
+};
 
 /// Identifies a window and tab-bar index where a dragged tab can be attached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AttachTarget {
     pub window_id: WindowId,
     pub insertion_index: usize,
+}
+
+pub enum HandoffPayload {
+    Tab(TransferredTab),
 }
 
 /// Pixel margin added around a candidate window's tab-bar rect when hit-testing
@@ -135,7 +142,10 @@ enum DragSource {
     /// hold the detached tab, and the pane group + auxiliary views were transferred into it.
     MultiTabWindow {
         source_tab_index: usize,
+        source_tab_count: usize,
         preview_window_id: WindowId,
+        source_group_id: Option<TabGroupId>,
+        close_source_window: bool,
     },
 }
 
@@ -202,6 +212,34 @@ impl ActiveDrag {
 
     fn source_was_single_tab(&self) -> bool {
         matches!(self.source, DragSource::SingleTabWindow)
+    }
+
+    fn source_tab_count(&self) -> usize {
+        match &self.source {
+            DragSource::SingleTabWindow => 1,
+            DragSource::MultiTabWindow {
+                source_tab_count, ..
+            } => *source_tab_count,
+        }
+    }
+
+    fn source_group_id(&self) -> Option<TabGroupId> {
+        match &self.source {
+            DragSource::SingleTabWindow => None,
+            DragSource::MultiTabWindow {
+                source_group_id, ..
+            } => *source_group_id,
+        }
+    }
+
+    fn should_close_source_window(&self) -> bool {
+        match &self.source {
+            DragSource::SingleTabWindow => true,
+            DragSource::MultiTabWindow {
+                close_source_window,
+                ..
+            } => *close_source_window,
+        }
     }
 
     fn has_dedicated_preview_window(&self) -> bool {
@@ -279,6 +317,10 @@ pub struct GhostState {
     /// `tabs[0]` using the same code path the source layout uses, so the
     /// chip's contents match the source tab exactly.
     pub preview_window_id: WindowId,
+    /// Source tab group id when the payload is a whole group rather than a
+    /// single tab. The preview workspace keeps the same id so renderers can
+    /// draw the full group chip instead of only `tabs[0]`.
+    pub source_group_id: Option<TabGroupId>,
     /// Source layout (vertical tabs panel vs horizontal tab bar) at drag
     /// start. Determines which render path the ghost should mirror.
     pub was_vertical_layout: bool,
@@ -287,7 +329,7 @@ pub struct GhostState {
 /// Information returned to the calling workspace after a handoff back to the caller's
 /// own window, so it can insert the tab at the correct position.
 pub struct HandoffCallerInfo {
-    pub transferred_tab: TransferredTab,
+    pub payload: HandoffPayload,
     pub insertion_index: usize,
 }
 
@@ -322,15 +364,22 @@ pub enum DropResult {
     FocusSelf,
     /// The source window's only tab was transferred elsewhere.  The calling
     /// workspace should unsubscribe the pane group and close itself.
-    CloseSourceWindow { transferred_tab_index: usize },
+    CloseSourceWindow {
+        transferred_tab_index: usize,
+        transferred_tab_count: usize,
+    },
     /// One tab was transferred out of a multi-tab source.  The calling
     /// workspace should unsubscribe and remove the tab.
-    RemoveSourceTab { transferred_tab_index: usize },
+    RemoveSourceTab {
+        transferred_tab_index: usize,
+        transferred_tab_count: usize,
+    },
     /// One tab was transferred out of a multi-tab source via a handoff to
     /// a different window.  The calling workspace should unsubscribe, remove
     /// the tab, and close the now-unused preview window.
     RemoveSourceTabAndClosePreview {
         transferred_tab_index: usize,
+        transferred_tab_count: usize,
         preview_window_id: WindowId,
     },
     /// A `Floating` drop landed on empty space but a prior put-back had
@@ -501,6 +550,7 @@ impl CrossWindowTabDrag {
                 cursor_offset_in_element: d.initial_drag_center_offset,
                 source_element_size: d.source_element_size,
                 preview_window_id: d.preview_window_id(),
+                source_group_id: d.source_group_id(),
                 was_vertical_layout: d.was_vertical_layout,
             }),
             _ => None,
@@ -554,21 +604,27 @@ impl CrossWindowTabDrag {
         &mut self,
         source_window_id: WindowId,
         source_tab_index: usize,
+        source_tab_count: usize,
         initial_drag_center_offset: Vector2F,
         window_size: Vector2F,
         last_known_target_tab_origin_in_window: Vector2F,
         preview_window_id: WindowId,
         was_vertical_layout: bool,
         source_element_size: Vector2F,
+        source_group_id: Option<TabGroupId>,
+        close_source_window: bool,
     ) {
         log::info!(
-            "tab_drag: begin_multi_tab_drag source_wid={source_window_id} preview_wid={preview_window_id} source_tab_index={source_tab_index}"
+            "tab_drag: begin_multi_tab_drag source_wid={source_window_id} preview_wid={preview_window_id} source_tab_index={source_tab_index} source_tab_count={source_tab_count} source_group_id={source_group_id:?}"
         );
         self.active_drag = Some(ActiveDrag {
             source_window_id,
             source: DragSource::MultiTabWindow {
                 source_tab_index,
+                source_tab_count,
                 preview_window_id,
+                source_group_id,
+                close_source_window,
             },
             window_size,
             initial_drag_center_offset,
@@ -708,13 +764,17 @@ impl CrossWindowTabDrag {
 
         // Keep the preview window repositioned to follow the cursor so that it
         // is already in position if the cursor later moves off the target.
-        let target_tab_origin_in_window = ctx
-            .element_position_by_id_at_last_frame(preview_window_id, tab_position_id(0))
-            .or_else(|| {
-                ctx.element_position_by_id_at_last_frame(preview_window_id, TAB_BAR_POSITION_ID)
-            })
-            .map(|rect| vec2f(rect.min_x(), rect.min_y()))
-            .unwrap_or(drag.last_known_target_tab_origin_in_window);
+        let target_tab_origin_in_window = drag_preview_element_rect_for_window(
+            preview_window_id,
+            drag.source_group_id(),
+            drag.was_vertical_layout,
+            ctx,
+        )
+        .or_else(|| {
+            ctx.element_position_by_id_at_last_frame(preview_window_id, TAB_BAR_POSITION_ID)
+        })
+        .map(|rect| vec2f(rect.min_x(), rect.min_y()))
+        .unwrap_or(drag.last_known_target_tab_origin_in_window);
         drag.last_known_target_tab_origin_in_window = target_tab_origin_in_window;
         let new_window_origin = drag_origin_on_screen - target_tab_origin_in_window;
         let new_bounds = RectF::new(new_window_origin, drag.window_size);
@@ -917,13 +977,17 @@ impl CrossWindowTabDrag {
 
             if drag.has_dedicated_preview_window() {
                 let preview_wid = drag.preview_window_id();
-                let target_tab_origin_in_window = ctx
-                    .element_position_by_id_at_last_frame(preview_wid, tab_position_id(0))
-                    .or_else(|| {
-                        ctx.element_position_by_id_at_last_frame(preview_wid, TAB_BAR_POSITION_ID)
-                    })
-                    .map(|rect| vec2f(rect.min_x(), rect.min_y()))
-                    .unwrap_or_else(|| vec2f(0.0, 0.0));
+                let target_tab_origin_in_window = drag_preview_element_rect_for_window(
+                    preview_wid,
+                    drag.source_group_id(),
+                    drag.was_vertical_layout,
+                    ctx,
+                )
+                .or_else(|| {
+                    ctx.element_position_by_id_at_last_frame(preview_wid, TAB_BAR_POSITION_ID)
+                })
+                .map(|rect| vec2f(rect.min_x(), rect.min_y()))
+                .unwrap_or_else(|| vec2f(0.0, 0.0));
                 let new_window_origin = drag_origin_on_screen - target_tab_origin_in_window;
                 let new_bounds = RectF::new(new_window_origin, drag.window_size);
                 ctx.set_and_cache_window_bounds(preview_wid, new_bounds);
@@ -962,13 +1026,17 @@ impl CrossWindowTabDrag {
         };
         let preview_window_id = drag.preview_window_id();
 
-        let target_tab_origin_in_window = ctx
-            .element_position_by_id_at_last_frame(preview_window_id, tab_position_id(0))
-            .or_else(|| {
-                ctx.element_position_by_id_at_last_frame(preview_window_id, TAB_BAR_POSITION_ID)
-            })
-            .map(|rect| vec2f(rect.min_x(), rect.min_y()))
-            .unwrap_or(drag.last_known_target_tab_origin_in_window);
+        let target_tab_origin_in_window = drag_preview_element_rect_for_window(
+            preview_window_id,
+            drag.source_group_id(),
+            drag.was_vertical_layout,
+            ctx,
+        )
+        .or_else(|| {
+            ctx.element_position_by_id_at_last_frame(preview_window_id, TAB_BAR_POSITION_ID)
+        })
+        .map(|rect| vec2f(rect.min_x(), rect.min_y()))
+        .unwrap_or(drag.last_known_target_tab_origin_in_window);
 
         drag.last_known_target_tab_origin_in_window = target_tab_origin_in_window;
 
@@ -1034,6 +1102,9 @@ impl CrossWindowTabDrag {
             let Some(drag) = self.active_drag.as_mut() else {
                 return drag_result;
             };
+            if drag.source_group_id().is_some() && target.window_id == drag.source_window_id {
+                return drag_result;
+            }
 
             // Re-entering the source window's own tab bar during a multi-tab
             // drag: instead of a deferred ghost slot (which would sit on top of
@@ -1221,12 +1292,16 @@ impl CrossWindowTabDrag {
                         ctx,
                     );
                     if let Some(target) = resolved {
-                        log::info!(
-                            "tab_drag: on_drop -> DropResult::DropInto target_wid={} insertion_index={}",
-                            target.window_id,
-                            target.insertion_index
-                        );
-                        return DropResult::DropInto { target };
+                        if !(drag.source_group_id().is_some()
+                            && target.window_id == source_window_id)
+                        {
+                            log::info!(
+                                "tab_drag: on_drop -> DropResult::DropInto target_wid={} insertion_index={}",
+                                target.window_id,
+                                target.insertion_index
+                            );
+                            return DropResult::DropInto { target };
+                        }
                     }
                 } else {
                     log::warn!(
@@ -1428,13 +1503,15 @@ impl CrossWindowTabDrag {
         ctx.windows().show_window_and_focus_app(preview_window_id);
         Self::deferred_focus(preview_window_id, ctx);
 
-        if drag.source_was_single_tab() {
+        if drag.should_close_source_window() {
             DropResult::CloseSourceWindow {
                 transferred_tab_index: drag.source_tab_index(),
+                transferred_tab_count: drag.source_tab_count(),
             }
         } else {
             DropResult::RemoveSourceTab {
                 transferred_tab_index: drag.source_tab_index(),
+                transferred_tab_count: drag.source_tab_count(),
             }
         }
     }
@@ -1474,22 +1551,25 @@ impl CrossWindowTabDrag {
             return DropResult::NoOp;
         }
 
-        if drag.source_was_single_tab() {
+        if drag.should_close_source_window() {
             log::info!(
                 "tab_drag: finalize_handoff -> CloseSourceWindow transferred_tab_index={}",
                 drag.source_tab_index()
             );
             DropResult::CloseSourceWindow {
                 transferred_tab_index: drag.source_tab_index(),
+                transferred_tab_count: drag.source_tab_count(),
             }
         } else {
             log::info!(
-                "tab_drag: finalize_handoff -> RemoveSourceTabAndClosePreview transferred_tab_index={} preview_wid={}",
+                "tab_drag: finalize_handoff -> RemoveSourceTabAndClosePreview transferred_tab_index={} transferred_tab_count={} preview_wid={}",
                 drag.source_tab_index(),
+                drag.source_tab_count(),
                 drag.preview_window_id()
             );
             DropResult::RemoveSourceTabAndClosePreview {
                 transferred_tab_index: drag.source_tab_index(),
+                transferred_tab_count: drag.source_tab_count(),
                 preview_window_id: drag.preview_window_id(),
             }
         }
@@ -1622,7 +1702,9 @@ impl CrossWindowTabDrag {
         ctx.transfer_view_tree_to_window(pane_group_id, preview_window_id, caller_window_id);
 
         let insertion_index = if target.insertion_index > drag.source_tab_index() {
-            target.insertion_index - 1
+            target
+                .insertion_index
+                .saturating_sub(drag.source_tab_count())
         } else {
             target.insertion_index
         };
@@ -1640,7 +1722,7 @@ impl CrossWindowTabDrag {
         );
 
         Some(HandoffCallerInfo {
-            transferred_tab,
+            payload: HandoffPayload::Tab(transferred_tab),
             insertion_index,
         })
     }
@@ -1683,29 +1765,66 @@ impl CrossWindowTabDrag {
             self.reset_to_floating();
             return;
         };
-        let Some(mut transferred_tab) = preview_workspace.read(ctx, |workspace, ctx| {
-            workspace.get_tab_transfer_info_for_attach(0, ctx)
-        }) else {
-            log::warn!(
-                "tab_drag: execute_handoff_multi_tab_to_other preview has no tab at index 0 for preview_wid={preview_window_id} (reset_to_floating)"
-            );
-            self.reset_to_floating();
-            return;
-        };
-        transferred_tab.draggable_state = DraggableState::default();
-
-        preview_workspace.update(ctx, |workspace, ctx| {
-            workspace.prepare_for_transferred_tab_attach(&transferred_tab.pane_group, ctx);
-        });
-
-        let pane_group_id = transferred_tab.pane_group.id();
-        ctx.transfer_view_tree_to_window(pane_group_id, preview_window_id, target.window_id);
 
         let target_insertion_index = target.insertion_index;
-        target_workspace.update(ctx, move |workspace, ctx| {
-            workspace.insert_transferred_tab_at_index(transferred_tab, target_insertion_index, ctx);
-            workspace.current_workspace_state.is_tab_being_dragged = true;
-        });
+        if let Some(group_id) = drag.source_group_id() {
+            let Some(mut transferred_group) = preview_workspace.read(ctx, |workspace, ctx| {
+                workspace.get_tab_group_transfer_info_for_attach(group_id, ctx)
+            }) else {
+                log::warn!(
+                    "tab_drag: execute_handoff_multi_tab_to_other preview has no group {group_id:?} for preview_wid={preview_window_id} (reset_to_floating)"
+                );
+                self.reset_to_floating();
+                return;
+            };
+            transferred_group.group.draggable_state = DraggableState::default();
+            preview_workspace.update(ctx, |workspace, ctx| {
+                workspace.prepare_for_transferred_tab_group_attach(&transferred_group, ctx);
+            });
+            for transferred_tab in &transferred_group.tabs {
+                let pane_group_id = transferred_tab.pane_group.id();
+                ctx.transfer_view_tree_to_window(
+                    pane_group_id,
+                    preview_window_id,
+                    target.window_id,
+                );
+            }
+            target_workspace.update(ctx, move |workspace, ctx| {
+                workspace.insert_transferred_tab_group_at_index(
+                    transferred_group,
+                    target_insertion_index,
+                    ctx,
+                );
+                workspace.current_workspace_state.is_tab_being_dragged = true;
+            });
+        } else {
+            let Some(mut transferred_tab) = preview_workspace.read(ctx, |workspace, ctx| {
+                workspace.get_tab_transfer_info_for_attach(0, ctx)
+            }) else {
+                log::warn!(
+                    "tab_drag: execute_handoff_multi_tab_to_other preview has no tab at index 0 for preview_wid={preview_window_id} (reset_to_floating)"
+                );
+                self.reset_to_floating();
+                return;
+            };
+            transferred_tab.draggable_state = DraggableState::default();
+
+            preview_workspace.update(ctx, |workspace, ctx| {
+                workspace.prepare_for_transferred_tab_attach(&transferred_tab.pane_group, ctx);
+            });
+
+            let pane_group_id = transferred_tab.pane_group.id();
+            ctx.transfer_view_tree_to_window(pane_group_id, preview_window_id, target.window_id);
+
+            target_workspace.update(ctx, move |workspace, ctx| {
+                workspace.insert_transferred_tab_at_index(
+                    transferred_tab,
+                    target_insertion_index,
+                    ctx,
+                );
+                workspace.current_workspace_state.is_tab_being_dragged = true;
+            });
+        }
 
         ctx.windows().hide_window(preview_window_id);
         ctx.windows().show_window_and_focus_app(target.window_id);
