@@ -1822,12 +1822,9 @@ fn launch_command(
                     parent_span.clone(),
                 );
             }
-            IapManagerEvent::AccessUnavailable => {
+            IapManagerEvent::AccessUnavailable { message } => {
                 handled = true;
-                report_fatal_error(
-                    anyhow::anyhow!("Timed out establishing IAP access to warp-server."),
-                    ctx,
-                );
+                report_fatal_error(anyhow::anyhow!(message.clone()), ctx);
             }
             _ => {}
         }
