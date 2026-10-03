@@ -1,3 +1,4 @@
 *.pdb filter=lfs diff=lfs merge=lfs -text
 crates/input_classifier/models/** filter=lfs diff=lfs merge=lfs -text
 crates/input_classifier/models/**/*tokenizer.json -filter -diff -merge text linguist-generated=true
+vendor/arborium-sql/grammar/src/parser.c linguist-generated=true
