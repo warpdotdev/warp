@@ -2323,11 +2323,11 @@ pub(super) async fn build_fragments_from_metadata(
     let mut file_contents = HashMap::new();
     for path in metadatas
         .iter()
-        .map(|(_, metadata)| metadata.absolute_path.clone())
+        .map(|(_, metadata)| Arc::clone(&metadata.absolute_path))
         .collect::<HashSet<_>>()
     {
-        if let Ok(file_content) = async_fs::read_to_string(&path).await {
-            file_contents.insert(path, file_content);
+        if let Ok(file_content) = async_fs::read_to_string(path.as_ref()).await {
+            file_contents.insert(path.to_path_buf(), file_content);
         }
     }
     build_fragments_from_file_contents(metadatas, &file_contents)
