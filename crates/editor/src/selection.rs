@@ -156,27 +156,70 @@ impl SelectionModel {
         offset: CharOffset,
         ctx: &impl ModelAsRef,
     ) -> CharOffset {
-        if !self.has_rendered_mermaid(ctx) {
+        // Normalize for Mermaid code blocks (existing behavior).
+        let offset = if self.has_rendered_mermaid(ctx) {
+            let content = self.content.as_ref(ctx);
+            let max_offset = content.max_charoffset();
+            match direction {
+                TextDirection::Forwards
+                    if offset < max_offset && self.is_mermaid_code_block_offset(offset, ctx) =>
+                {
+                    content.block_or_line_end(offset).min(max_offset)
+                }
+                TextDirection::Backwards
+                    if offset > CharOffset::from(1)
+                        && self.is_mermaid_code_block_offset(offset, ctx) =>
+                {
+                    content.block_or_line_start(offset)
+                }
+                _ => offset,
+            }
+        } else {
+            offset
+        };
+
+        // Skip over collapsed hidden sections so the cursor lands on the first
+        // visible line on the far side rather than getting stuck inside them.
+        self.skip_hidden_ranges(direction, offset, ctx)
+    }
+
+    /// If `offset` falls inside a hidden range, advance to the nearest visible
+    /// offset in `direction`. Loops to handle back-to-back hidden ranges.
+    fn skip_hidden_ranges(
+        &self,
+        direction: TextDirection,
+        mut offset: CharOffset,
+        ctx: &impl ModelAsRef,
+    ) -> CharOffset {
+        let Some(hidden_lines) = &self.hidden_lines else {
             return offset;
-        }
+        };
+        let buffer_version = self.content.as_ref(ctx).buffer_version();
+        let hidden_ranges = hidden_lines
+            .as_ref(ctx)
+            .hidden_ranges_at_version(buffer_version);
 
-        let content = self.content.as_ref(ctx);
-        let max_offset = content.max_charoffset();
-
-        match direction {
-            TextDirection::Forwards
-                if offset < max_offset && self.is_mermaid_code_block_offset(offset, ctx) =>
-            {
-                content.block_or_line_end(offset).min(max_offset)
+        loop {
+            let in_hidden = hidden_ranges
+                .iter()
+                .find(|r| offset >= r.start && offset < r.end);
+            match (in_hidden, direction) {
+                (Some(range), TextDirection::Forwards) => {
+                    offset = range.end;
+                }
+                (Some(range), TextDirection::Backwards) => {
+                    // Jump to just before the hidden range. range.start is the first hidden
+                    // offset; subtracting one lands on the last visible character above.
+                    if range.start > CharOffset::from(1) {
+                        offset = range.start.saturating_sub(&CharOffset::from(1));
+                    } else {
+                        break;
+                    }
+                }
+                (None, _) => break,
             }
-            TextDirection::Backwards
-                if offset > CharOffset::from(1)
-                    && self.is_mermaid_code_block_offset(offset, ctx) =>
-            {
-                content.block_or_line_start(offset)
-            }
-            _ => offset,
         }
+        offset
     }
 
     fn normalize_selection_offsets(
