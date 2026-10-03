@@ -27,7 +27,7 @@ pub struct Keymap {
     editable_bindings: Vec<Tracked<EditableBinding>>,
     /// A mapping from binding name to indices in `editable_bindings` of bindings with
     /// that name, stored in the order they were registered.
-    editable_bindings_by_name: HashMap<&'static str, Vec<usize>>,
+    editable_bindings_by_name: HashMap<Cow<'static, str>, Vec<usize>>,
 
     // We store a copy of the bindings, filtered down to only ones that are
     // triggered by a custom action.  This is done to optimize the lookups
@@ -35,6 +35,12 @@ pub struct Keymap {
     // a `[WarpDelegate menuNeedsUpdate]` selector.
     fixed_custom_action_bindings: Vec<FixedBinding>,
     editable_custom_action_bindings: Vec<Tracked<EditableBinding>>,
+
+    /// Custom triggers keyed by binding name, including names with no registered binding yet.
+    /// Bindings registered later (e.g. derived from launch configurations, which load
+    /// asynchronously after `keybindings.yaml` is applied) pick their custom trigger up from
+    /// here at registration time.
+    custom_triggers: HashMap<String, Trigger>,
 }
 
 // Custom actions should be identified by a unique integer called their tag.
@@ -291,7 +297,7 @@ pub struct FixedBinding {
 /// for `custom_trigger`.
 #[derive(Clone)]
 pub struct EditableBinding {
-    name: &'static str,
+    name: Cow<'static, str>,
     description: BindingDescription,
     action: Arc<dyn Action>,
     context_predicate: ContextPredicate,
@@ -305,7 +311,7 @@ pub struct EditableBinding {
 
 /// A lens into an editable binding, allowing for the trigger to be updated where necessary
 pub struct EditableBindingLens<'a> {
-    pub name: &'static str,
+    pub name: &'a str,
     pub description: &'a BindingDescription,
     pub action: &'a Arc<dyn Action>,
     context: &'a ContextPredicate,
@@ -404,22 +410,64 @@ impl Keymap {
     /// via the `set_custom_trigger` method.
     fn register_editable_bindings<A: IntoIterator<Item = EditableBinding>>(&mut self, actions: A) {
         let start_idx = self.editable_bindings.len();
-        self.editable_bindings
-            .extend(actions.into_iter().map(Tracked::new));
+        let new_bindings: Vec<_> = actions
+            .into_iter()
+            .map(|mut binding| {
+                if let Some(trigger) = self.custom_triggers.get(&*binding.name) {
+                    binding.custom_trigger = Some(trigger.clone());
+                }
+                Tracked::new(binding)
+            })
+            .collect();
+        self.editable_bindings.extend(new_bindings);
         for (idx, binding) in self.editable_bindings.iter().enumerate().skip(start_idx) {
             if matches!(binding.trigger, Trigger::Custom(_)) {
                 self.editable_custom_action_bindings
                     .push(Tracked::new((*binding).clone()));
             }
             self.editable_bindings_by_name
-                .entry(binding.name)
+                .entry(binding.name.clone())
                 .or_default()
                 .push(idx);
         }
     }
 
+    /// Removes every editable binding whose name starts with `prefix`, then registers
+    /// `bindings` in their place. Used for bindings derived from user-editable state (saved
+    /// launch configurations and tab configs) that must be re-registered whenever that state
+    /// reloads.
+    fn replace_editable_bindings_with_prefix<A: IntoIterator<Item = EditableBinding>>(
+        &mut self,
+        prefix: &str,
+        bindings: A,
+    ) {
+        self.editable_bindings
+            .retain(|binding| !binding.name.starts_with(prefix));
+        self.editable_custom_action_bindings
+            .retain(|binding| !binding.name.starts_with(prefix));
+        // Removal shifts indices in `editable_bindings`, so the by-name index is rebuilt from
+        // scratch rather than patched.
+        self.editable_bindings_by_name.clear();
+        for (idx, binding) in self.editable_bindings.iter().enumerate() {
+            self.editable_bindings_by_name
+                .entry(binding.name.clone())
+                .or_default()
+                .push(idx);
+        }
+        self.register_editable_bindings(bindings);
+    }
+
     /// Updates the custom trigger for a given editable binding.
     fn update_custom_trigger(&mut self, name: &str, trigger: Option<Trigger>) {
+        match &trigger {
+            Some(trigger) => {
+                self.custom_triggers
+                    .insert(name.to_string(), trigger.clone());
+            }
+            None => {
+                self.custom_triggers.remove(name);
+            }
+        }
         for binding in self
             .editable_custom_action_bindings
             .iter_mut()
@@ -643,15 +691,16 @@ impl FixedBinding {
 }
 
 impl EditableBinding {
-    pub fn new<D, A>(name: &'static str, description: D, action: A) -> Self
+    pub fn new<N, D, A>(name: N, description: D, action: A) -> Self
     where
+        N: Into<Cow<'static, str>>,
         D: Into<BindingDescription>,
         A: Action,
     {
         // Note: Explicitly not supporting registering legacy actions, as they will be removed
         // when the conversion to editable bindings is complete
         EditableBinding {
-            name,
+            name: name.into(),
             description: description.into(),
             action: Arc::new(action),
             context_predicate: ContextPredicate::Just(true),
@@ -661,6 +710,11 @@ impl EditableBinding {
             custom_trigger: None,
             id: BindingId::new(),
         }
+    }
+
+    /// The unique name this binding is registered and persisted under.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     pub fn with_context_predicate(mut self, context: ContextPredicate) -> Self {
@@ -746,7 +800,7 @@ impl EditableBinding {
             (&self.trigger, None)
         };
         EditableBindingLens {
-            name: self.name,
+            name: &self.name,
             description: &self.description,
             action: &self.action,
             context: &self.context_predicate,

@@ -58,11 +58,12 @@ impl AgentToastStack {
         ctx.subscribe_to_model(
             &KeybindingChangedNotifier::handle(ctx),
             move |me, _, event, ctx| {
-                let KeybindingChangedEvent::BindingChanged {
+                if let KeybindingChangedEvent::BindingChanged {
                     binding_name,
                     new_trigger,
-                } = event;
-                if binding_name == "workspace:jump_to_latest_toast" {
+                } = event
+                    && binding_name == "workspace:jump_to_latest_toast"
+                {
                     me.jump_to_toast_shortcut = new_trigger.clone();
                     ctx.notify();
                 }
