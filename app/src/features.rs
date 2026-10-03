@@ -421,8 +421,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::OrchestrationLaunchModal,
         #[cfg(feature = "agent_cli_launch_modal")]
         FeatureFlag::AgentCliLaunchModal,
-        #[cfg(feature = "new_tab_styling")]
-        FeatureFlag::NewTabStyling,
         #[cfg(feature = "skill_arguments")]
         FeatureFlag::SkillArguments,
         #[cfg(feature = "active_conversation_requires_interaction")]
