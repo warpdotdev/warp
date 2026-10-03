@@ -58,6 +58,8 @@ pub enum TextUnit {
     Line,
     /// Move to the paragraph boundaries (the start or end of a hard-wrapped line).
     ParagraphBoundary,
+    /// Move to the start or end of the buffer.
+    BufferBoundary,
 }
 
 /// The mode for selection dragging.
@@ -818,6 +820,10 @@ impl SelectionModel {
             TextUnit::Line => self.navigate_line(start, direction, step_size, goal_x, ctx),
             TextUnit::LineBoundary => self.navigate_line_boundary(start, direction, ctx),
             TextUnit::ParagraphBoundary => self.navigate_paragraph_boundary(start, direction, ctx),
+            TextUnit::BufferBoundary => NavigationResult::for_offset(match direction {
+                TextDirection::Backwards => CharOffset::from(1),
+                TextDirection::Forwards => self.content.as_ref(ctx).max_charoffset(),
+            }),
         }
     }
 
