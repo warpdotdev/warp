@@ -65,10 +65,6 @@ impl PricingInfoModel {
             .as_ref()
             .map(|info| info.addon_credits_options.as_slice())
     }
-
-    pub fn promotion_message(&self) -> Option<&str> {
-        self.pricing_info.as_ref()?.promotion_message.as_deref()
-    }
 }
 
 impl Default for PricingInfoModel {
@@ -87,7 +83,3 @@ impl Entity for PricingInfoModel {
 }
 
 impl SingletonEntity for PricingInfoModel {}
-
-#[cfg(test)]
-#[path = "pricing_tests.rs"]
-mod tests;

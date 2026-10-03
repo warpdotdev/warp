@@ -19,9 +19,7 @@ use crate::ai::agent::{
     AIAgentExchangeId, AIAgentOutputStatus, FinishedAIAgentOutput, RenderableAIError,
 };
 use crate::ai::blocklist::agent_view::shortcuts::AgentShortcutViewModel;
-use crate::ai::blocklist::agent_view::zero_state_block::{
-    render_ambient_credits_banner, render_dismissible_promo_pill,
-};
+use crate::ai::blocklist::agent_view::zero_state_block::render_ambient_credits_banner;
 use crate::ai::blocklist::agent_view::{
     AgentViewController, AgentViewControllerEvent, is_in_cloud_context,
 };
@@ -32,13 +30,9 @@ use crate::ai::blocklist::{
 use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentModelEvent};
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::ai::mcp::templatable_manager::{FigmaMcpStatus, TemplatableMCPServerManagerEvent};
-use crate::ai::pricing_promotion::{
-    PricingPromotionState, PricingPromotionStateEvent, PricingPromotionSurface,
-};
 use crate::ai::request_usage_model::{
     AIRequestUsageModel, AIRequestUsageModelEvent, AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD,
 };
-use crate::auth::auth_manager::AuthManager;
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::settings::AISettings;
 use crate::terminal::input::buffer_model::{InputBufferModel, InputBufferUpdateEvent};
@@ -83,8 +77,6 @@ pub struct AgentMessageBarMouseStates {
     pub figma_enable_button: MouseStateHandle,
     /// Mouse state handle for dismissing the ambient credits banner.
     pub ambient_credits_banner_close: MouseStateHandle,
-    pub pricing_promotion: MouseStateHandle,
-    pub pricing_promotion_close: MouseStateHandle,
 }
 
 /// Renders contextual hint text at the bottom of the agent view status bar.
@@ -111,8 +103,6 @@ impl Entity for AgentMessageBar {
 #[derive(Clone, Debug)]
 pub enum AgentMessageBarAction {
     DismissAmbientCreditsBanner,
-    UpgradePricingPromotion,
-    DismissPricingPromotion,
 }
 
 impl AgentMessageBar {
@@ -130,13 +120,12 @@ impl AgentMessageBar {
         terminal_model: Arc<FairMutex<TerminalModel>>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(&agent_view_controller, |me, _, event, ctx| {
+        ctx.subscribe_to_model(&agent_view_controller, |_, _, event, ctx| {
             if matches!(
                 event,
                 AgentViewControllerEvent::EnteredAgentView { .. }
                     | AgentViewControllerEvent::ExitedAgentView { .. }
             ) {
-                me.record_visible_promotion(ctx);
                 ctx.notify();
             }
         });
@@ -183,7 +172,6 @@ impl AgentMessageBar {
                     me.ephemeral_message_model
                         .update(ctx, |m, ctx| m.try_dismiss_explicit_message(ctx));
                 }
-                me.record_visible_promotion(ctx);
                 ctx.notify();
             }
         });
@@ -200,12 +188,6 @@ impl AgentMessageBar {
                 event,
                 BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
             ) {
-                ctx.notify();
-            }
-        });
-        ctx.subscribe_to_model(&PricingPromotionState::handle(ctx), |me, _, event, ctx| {
-            if matches!(event, PricingPromotionStateEvent::Updated) {
-                me.record_visible_promotion(ctx);
                 ctx.notify();
             }
         });
@@ -255,7 +237,7 @@ impl AgentMessageBar {
             }
         });
 
-        let message_bar = Self {
+        Self {
             agent_view_controller,
             ephemeral_message_model,
             shortcut_view_model,
@@ -268,9 +250,7 @@ impl AgentMessageBar {
             terminal_model,
             mouse_states: AgentMessageBarMouseStates::default(),
             figma_detected: false,
-        };
-        message_bar.record_visible_promotion(ctx);
-        message_bar
+        }
     }
 }
 
@@ -309,27 +289,6 @@ impl AgentMessageBar {
         } else {
             None
         }
-    }
-
-    fn record_visible_promotion(&self, ctx: &mut ViewContext<Self>) {
-        if cfg!(target_family = "wasm")
-            || !self.agent_view_controller.as_ref(ctx).is_active()
-            || self
-                .input_suggestions_model
-                .as_ref(ctx)
-                .is_inline_menu_open()
-        {
-            return;
-        }
-        if PricingPromotionState::as_ref(ctx)
-            .visible_message(PricingPromotionSurface::AgentMessageBar, ctx)
-            .is_none()
-        {
-            return;
-        }
-        PricingPromotionState::handle(ctx).update(ctx, |state, ctx| {
-            state.record_displayed(PricingPromotionSurface::AgentMessageBar, ctx);
-        });
     }
 }
 
@@ -403,18 +362,6 @@ impl View for AgentMessageBar {
 
         let right_element = if cfg!(target_family = "wasm") {
             None
-        } else if let Some(message) = PricingPromotionState::as_ref(app)
-            .visible_message(PricingPromotionSurface::AgentMessageBar, app)
-        {
-            Some(render_dismissible_promo_pill(
-                message,
-                appearance.theme().ansi_fg_green(),
-                Some(self.mouse_states.pricing_promotion.clone()),
-                Some(AgentMessageBarAction::UpgradePricingPromotion),
-                self.mouse_states.pricing_promotion_close.clone(),
-                AgentMessageBarAction::DismissPricingPromotion,
-                app,
-            ))
         } else {
             let request_usage_model = AIRequestUsageModel::as_ref(app);
             request_usage_model
@@ -475,20 +422,6 @@ impl TypedActionView for AgentMessageBar {
                 AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
                     model.dismiss_ambient_credits_banner(ctx);
                 });
-            }
-            AgentMessageBarAction::UpgradePricingPromotion => {
-                PricingPromotionState::handle(ctx).update(ctx, |state, ctx| {
-                    state.record_clicked(PricingPromotionSurface::AgentMessageBar, ctx);
-                });
-                let upgrade_url = AuthManager::handle(ctx)
-                    .update(ctx, |auth_manager, _| auth_manager.upgrade_url());
-                ctx.open_url(&upgrade_url);
-            }
-            AgentMessageBarAction::DismissPricingPromotion => {
-                PricingPromotionState::handle(ctx).update(ctx, |state, ctx| {
-                    state.dismiss(PricingPromotionSurface::AgentMessageBar, ctx);
-                });
-                ctx.notify();
             }
         }
     }
