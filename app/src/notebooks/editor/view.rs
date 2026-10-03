@@ -907,7 +907,9 @@ impl EditorViewAction {
 #[derive(Default)]
 struct LayoutAffectingAssetLoads {
     loading: HashSet<AssetHandle>,
-    loaded_needs_relayout: bool,
+    /// Buffer ranges (in `Buffer`'s own `CharOffset` space) of blocks whose asset just finished
+    /// loading in a way that requires relayout.
+    needs_relayout_ranges: Vec<Range<CharOffset>>,
 }
 
 enum LayoutAffectingAssetLoad {
@@ -1310,11 +1312,17 @@ impl RichTextEditorView {
     ) {
         match event {
             FallbackFontEvent::Loaded => {
-                // TODO(PLAT-748): We could potentially check if the notebook needs to
-                // be rebuilt, by checking if the TextFrames have missing chars.
-                self.model.update(ctx, |model, ctx| {
-                    model.rebuild_layout(ctx);
-                });
+                // A newly loaded fallback font can only change how this document looks if it
+                // currently has glyphs that couldn't be resolved. Since this model subscribes to
+                // the app-wide `FallbackFontModel`, most firings are for a family this document
+                // never referenced (e.g. another tab's content), so skip the full-document
+                // layout rebuild unless it could actually help.
+                let render_state = self.model.as_ref(ctx).render_state().clone();
+                if render_state.as_ref(ctx).content().has_missing_glyphs() {
+                    self.model.update(ctx, |model, ctx| {
+                        model.rebuild_layout(ctx);
+                    });
+                }
             }
         }
     }
@@ -1325,19 +1333,31 @@ impl RichTextEditorView {
         let asset_cache = AssetCache::as_ref(ctx);
         let mut loads = LayoutAffectingAssetLoads::default();
 
-        render_state
-            .content()
-            .block_items()
-            .filter_map(|block| Self::layout_affecting_asset_load(block, asset_cache))
-            .for_each(|load| match load {
-                LayoutAffectingAssetLoad::Loading(handle) => {
-                    loads.loading.insert(handle);
+        let mut block_start = CharOffset::zero();
+        for block in render_state.content().block_items() {
+            let block_end = block_start + block.content_length();
+            if let Some(load) = Self::layout_affecting_asset_load(block, asset_cache) {
+                match load {
+                    LayoutAffectingAssetLoad::Loading(handle) => {
+                        loads.loading.insert(handle);
+                    }
+                    LayoutAffectingAssetLoad::LoadedNeedsRelayout => {
+                        loads
+                            .needs_relayout_ranges
+                            .push(Self::render_range_to_buffer_range(block_start..block_end));
+                    }
                 }
-                LayoutAffectingAssetLoad::LoadedNeedsRelayout => {
-                    loads.loaded_needs_relayout = true;
-                }
-            });
+            }
+            block_start = block_end;
+        }
         loads
+    }
+
+    /// Converts a block range from `RenderState`'s content tree (indexed from zero) into
+    /// `Buffer`'s own `CharOffset` space, which is one higher (see
+    /// `RenderState::layout_pending_edit`'s `-1` translation in the other direction).
+    fn render_range_to_buffer_range(range: Range<CharOffset>) -> Range<CharOffset> {
+        (range.start + 1)..(range.end + 1)
     }
 
     fn layout_affecting_asset_load(
@@ -1375,9 +1395,9 @@ impl RichTextEditorView {
 
     fn watch_layout_affecting_asset_loads(&mut self, ctx: &mut ViewContext<Self>) {
         let loads = self.layout_affecting_asset_loads(ctx);
-        if loads.loaded_needs_relayout {
+        if let Some(range) = Self::merge_ranges(&loads.needs_relayout_ranges) {
             self.model.update(ctx, |model, ctx| {
-                model.rebuild_layout(ctx);
+                model.rebuild_layout_for_range(range, ctx);
             });
         }
 
@@ -1391,13 +1411,20 @@ impl RichTextEditorView {
                     Some(future) => {
                         ctx.spawn(future, move |me, (), ctx| {
                             me.pending_layout_affecting_asset_loads.remove(&handle);
-                            me.model.update(ctx, |model, ctx| {
-                                if Self::should_rebuild_layout_after_layout_affecting_asset_load(
-                                    model.interaction_state(ctx),
-                                ) {
-                                    model.rebuild_layout(ctx);
-                                }
-                            });
+                            // Recompute which block(s) actually need relaying out now that this
+                            // asset resolved, rather than rebuilding the whole document.
+                            let range = Self::merge_ranges(
+                                &me.layout_affecting_asset_loads(ctx).needs_relayout_ranges,
+                            );
+                            if let Some(range) = range {
+                                me.model.update(ctx, |model, ctx| {
+                                    if Self::should_rebuild_layout_after_layout_affecting_asset_load(
+                                        model.interaction_state(ctx),
+                                    ) {
+                                        model.rebuild_layout_for_range(range, ctx);
+                                    }
+                                });
+                            }
                             ctx.notify();
                         });
                     }
@@ -1407,6 +1434,13 @@ impl RichTextEditorView {
                 }
             }
         }
+    }
+
+    /// The smallest range covering every range in `ranges`, or `None` if it's empty.
+    fn merge_ranges(ranges: &[Range<CharOffset>]) -> Option<Range<CharOffset>> {
+        let start = ranges.iter().map(|range| range.start).min()?;
+        let end = ranges.iter().map(|range| range.end).max()?;
+        Some(start..end)
     }
 
     fn should_rebuild_layout_after_layout_affecting_asset_load(state: InteractionState) -> bool {

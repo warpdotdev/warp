@@ -14,6 +14,7 @@ use warp_util::user_input::UserInput;
 use warpui::assets::asset_cache::{AssetCache, AssetState};
 use warpui::r#async::block_on;
 use warpui::event::ModifiersState;
+use warpui::fonts::{FallbackFontEvent, FallbackFontModel};
 use warpui::image_cache::ImageType;
 use warpui::platform::WindowStyle;
 use warpui::presenter::ChildView;
@@ -226,6 +227,83 @@ fn test_loaded_mermaid_diagram_with_placeholder_height_needs_relayout() {
             ));
         });
     })
+}
+
+#[test]
+fn test_render_range_to_buffer_range_shifts_by_one() {
+    // Matches the empirically-verified relationship between `RenderState`'s block-tree
+    // `CharOffset`s (indexed from zero) and `Buffer`'s own `CharOffset` space (indexed from
+    // one): a mermaid block reported by `RenderState` as `7..24` corresponds to `8..25` in
+    // `Buffer`'s coordinate space (see `RenderState::layout_pending_edit`'s `-1` translation
+    // in the other direction).
+    assert_eq!(
+        RichTextEditorView::render_range_to_buffer_range(CharOffset::from(7)..CharOffset::from(24)),
+        CharOffset::from(8)..CharOffset::from(25)
+    );
+    assert_eq!(
+        RichTextEditorView::render_range_to_buffer_range(CharOffset::zero()..CharOffset::from(3)),
+        CharOffset::from(1)..CharOffset::from(4)
+    );
+}
+
+#[test]
+fn test_fallback_font_loaded_does_not_rebuild_layout_without_missing_glyphs() {
+    App::test((), |mut app| async move {
+        let (_, editor_view, _) = initialize_editor(&mut app);
+        reset_editor_with_markdown(&mut app, &editor_view, "Hello world").await;
+
+        let render_state = editor_view.read(&app, |editor, ctx| {
+            editor.model.as_ref(ctx).render_state().clone()
+        });
+
+        // Sanity-check the premise: this document has no missing glyphs to begin with, so
+        // `handle_fallback_font_event` should have nothing to gain from a rebuild.
+        app.read(|ctx| {
+            assert!(!render_state.as_ref(ctx).content().has_missing_glyphs());
+        });
+
+        let layouts = {
+            let (tx, rx) = async_channel::unbounded();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&render_state, move |_, event, _| {
+                    if let RenderEvent::LayoutUpdated = event {
+                        block_on(tx.send(*event)).unwrap();
+                    }
+                })
+            });
+            rx
+        };
+
+        // Simulate an external fallback font family finishing loading, exactly as
+        // `App::load_fallback_family_and_redraw` does after a successful load.
+        FallbackFontModel::handle(&app).update(&mut app, |_, ctx| {
+            ctx.emit(FallbackFontEvent::Loaded);
+        });
+
+        assert_eq!(
+            layouts.try_recv().unwrap_err(),
+            TryRecvError::Empty,
+            "a FallbackFontEvent::Loaded with no missing glyphs in this document should not \
+             trigger a layout rebuild"
+        );
+    });
+}
+
+#[test]
+fn test_merge_ranges() {
+    assert_eq!(RichTextEditorView::merge_ranges(&[]), None);
+    assert_eq!(
+        RichTextEditorView::merge_ranges(&[CharOffset::from(5)..CharOffset::from(10)]),
+        Some(CharOffset::from(5)..CharOffset::from(10))
+    );
+    assert_eq!(
+        RichTextEditorView::merge_ranges(&[
+            CharOffset::from(10)..CharOffset::from(15),
+            CharOffset::from(2)..CharOffset::from(6),
+            CharOffset::from(20)..CharOffset::from(25),
+        ]),
+        Some(CharOffset::from(2)..CharOffset::from(25))
+    );
 }
 
 #[test]
