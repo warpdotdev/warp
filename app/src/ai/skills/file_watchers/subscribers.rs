@@ -38,11 +38,10 @@ impl RepositorySubscriber for ProjectSkillSubscriber {
     fn on_files_updated(
         &mut self,
         _repository: &Repository,
-        update: &RepositoryUpdate,
+        update: RepositoryUpdate,
         _ctx: &mut ModelContext<Repository>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         let tx = self.message_tx.clone();
-        let update = update.clone();
 
         Box::pin(async move {
             let _ = tx
@@ -72,11 +71,10 @@ impl RepositorySubscriber for SymlinkSkillSubscriber {
     fn on_files_updated(
         &mut self,
         _repository: &Repository,
-        update: &RepositoryUpdate,
+        update: RepositoryUpdate,
         _ctx: &mut ModelContext<Repository>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         let tx = self.message_tx.clone();
-        let update = update.clone();
 
         Box::pin(async move {
             let _ = tx
@@ -125,11 +123,10 @@ impl RepositorySubscriber for HomeSkillSubscriber {
     fn on_files_updated(
         &mut self,
         _repository: &Repository,
-        update: &RepositoryUpdate,
+        update: RepositoryUpdate,
         _ctx: &mut ModelContext<Repository>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         let tx = self.message_tx.clone();
-        let update = update.clone();
 
         Box::pin(async move {
             let _ = tx
