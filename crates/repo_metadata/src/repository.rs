@@ -7,8 +7,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::future::ready;
-#[cfg(feature = "local_fs")]
-use ignore::gitignore::Gitignore;
 use warp_util::standardized_path::StandardizedPath;
 #[cfg(feature = "local_fs")]
 use warpui_core::SingletonEntity;
@@ -18,12 +16,9 @@ use warpui_core::{Entity, ModelContext, ModelHandle};
 #[cfg(feature = "local_fs")]
 use crate::watcher::DirectoryWatcher;
 use crate::watcher::TaskQueue;
-use crate::{RepoMetadataError, RepositoryUpdate};
 #[cfg(feature = "local_fs")]
-use crate::{
-    entry::{matches_gitignores, should_ignore_git_path},
-    gitignores_for_directory,
-};
+use crate::{GitignoreRules, entry::should_ignore_git_path, gitignore_cache::GitignoreOperation};
+use crate::{RepoMetadataError, RepositoryUpdate};
 
 /// Trait for entities that want to subscribe to repository file changes.
 pub trait RepositorySubscriber: Send + Sync {
@@ -84,9 +79,9 @@ pub struct Repository {
     subscribers: HashMap<SubscriberId, RepositorySubscription>,
     /// Counter for generating unique subscriber IDs.
     next_subscriber_id: SubscriberId,
-    /// Cached gitignore patterns for this repository.
+    /// Source-backed Gitignore rules for this repository.
     #[cfg(feature = "local_fs")]
-    gitignores: Vec<Arc<Gitignore>>,
+    gitignore_rules: GitignoreRules,
     /// Cached loose remote-tracking ref tracked by the active branch.
     #[cfg(feature = "local_fs")]
     tracked_remote_ref: Option<TrackedRemoteRef>,
@@ -137,9 +132,9 @@ impl Repository {
         task_queue: ModelHandle<TaskQueue>,
     ) -> Self {
         #[cfg(feature = "local_fs")]
-        let gitignores = {
+        let gitignore_rules = {
             let local_path = root_dir.to_local_path_lossy();
-            gitignores_for_directory(&local_path)
+            GitignoreRules::for_directory(&local_path)
         };
 
         let common_git_directory = external_git_directory
@@ -153,7 +148,7 @@ impl Repository {
             subscribers: HashMap::new(),
             next_subscriber_id: 0,
             #[cfg(feature = "local_fs")]
-            gitignores,
+            gitignore_rules,
             #[cfg(feature = "local_fs")]
             tracked_remote_ref: None,
             #[cfg(test)]
@@ -218,10 +213,10 @@ impl Repository {
         if self.has_git_repository_subscribers() {
             let git_paths = self.git_watch_paths();
             if !git_paths.is_empty() {
-                let gitignores = self.gitignores.clone();
+                let gitignore_rules = self.gitignore_rules.clone();
                 let registration_future =
                     DirectoryWatcher::handle(ctx).update(ctx, move |watcher, ctx| {
-                        watcher.start_watching_directories(git_paths, gitignores, ctx)
+                        watcher.start_watching_directories(git_paths, gitignore_rules, ctx)
                     });
                 ctx.spawn(registration_future, |_, _, _| {});
             }
@@ -416,13 +411,15 @@ impl Repository {
             if directories_to_watch.is_empty() {
                 Box::pin(ready(Ok(())))
             } else {
-                // Reuse the gitignores we already built at construction so the
-                // watch descend filter doesn't re-read `.gitignore` from disk.
-                let gitignores = self.gitignores.clone();
+                let gitignore_rules = self.gitignore_rules.clone();
 
                 Box::pin(
                     DirectoryWatcher::handle(ctx).update(ctx, move |watcher, ctx| {
-                        watcher.start_watching_directories(directories_to_watch, gitignores, ctx)
+                        watcher.start_watching_directories(
+                            directories_to_watch,
+                            gitignore_rules,
+                            ctx,
+                        )
                     }),
                 )
             }
@@ -559,14 +556,24 @@ impl Repository {
     /// Checks if a path is gitignored within this repository.
     #[cfg(feature = "local_fs")]
     pub fn check_gitignore_status(&self, path: &Path) -> bool {
+        Self::check_gitignore_status_with_operation(path, &self.gitignore_rules.operation())
+    }
+
+    #[cfg(feature = "local_fs")]
+    pub(crate) fn gitignore_operation(&self) -> GitignoreOperation {
+        self.gitignore_rules.operation()
+    }
+
+    #[cfg(feature = "local_fs")]
+    pub(crate) fn check_gitignore_status_with_operation(
+        path: &Path,
+        gitignore_operation: &GitignoreOperation,
+    ) -> bool {
         // Check if path is a .git internal file
         if should_ignore_git_path(path) {
             return true;
         }
-
-        // Check if path matches gitignore patterns
-        let is_dir = path.is_dir();
-        matches_gitignores(path, is_dir, &self.gitignores, true)
+        gitignore_operation.matches(path, path.is_dir(), true)
     }
 }
 
