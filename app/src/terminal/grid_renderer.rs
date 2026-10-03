@@ -591,7 +591,7 @@ fn render_grid_without_ligatures<'a>(
         }
 
         if !foreground_image_ids.is_empty() {
-            ctx.scene.start_layer(warpui::ClipBounds::ActiveLayer);
+            start_foreground_image_layer(ctx.scene);
             for image_placement in foreground_image_ids {
                 if let Some((image_metadata, image_placement_data)) = image_metadata
                     .get(&image_placement.image_id)
@@ -1100,7 +1100,7 @@ fn render_grid_with_ligatures<'a>(
         }
 
         if !foreground_image_ids.is_empty() {
-            ctx.scene.start_layer(warpui::ClipBounds::ActiveLayer);
+            start_foreground_image_layer(ctx.scene);
             for image_placement in foreground_image_ids {
                 if let Some((image_metadata, image_placement_data)) = image_metadata
                     .get(&image_placement.image_id)
@@ -1847,6 +1847,19 @@ fn render_glyph_svg(
             log::warn!("Icon image should be static");
         }
     }
+}
+
+/// Starts the layer that foreground (non-negative z-index) image placements are painted
+/// into.
+///
+/// The layer sits above the layer the grid was painted into, so without opting out of hit
+/// testing its recorded hit rects would make the cells underneath an image look covered and
+/// every pointer event landing on them would be dropped before it reached the grid. Image
+/// placements are decorative, so the layer is marked click-through and pointer events pass
+/// through to the grid below.
+fn start_foreground_image_layer(scene: &mut Scene) {
+    scene.start_layer(warpui::ClipBounds::ActiveLayer);
+    scene.set_active_layer_click_through();
 }
 
 #[allow(clippy::too_many_arguments)]
