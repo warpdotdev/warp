@@ -35,6 +35,8 @@ pub struct BonusGrantSpendingInfo {
 pub enum BonusGrantType {
     AmbientOnly,
     Any,
+    #[cynic(fallback)]
+    Other,
 }
 
 #[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]
