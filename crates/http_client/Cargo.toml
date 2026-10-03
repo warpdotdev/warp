@@ -44,3 +44,5 @@ wasm-bindgen-futures.workspace = true
 # valid span context for the trace-link header.
 opentelemetry_sdk.workspace = true
 tracing-subscriber.workspace = true
+# A ready-made prost::Message for exercising RequestBuilder::proto() in tests.
+prost-types.workspace = true
