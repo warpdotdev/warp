@@ -698,6 +698,181 @@ fn test_combining_marks_are_placed_with_gpos_offsets() -> Result<()> {
     Ok(())
 }
 
+/// Regression test for a right-to-left (e.g. Arabic) filename rendering blank in
+/// the Project Explorer and completion rows, even though the row's icon and
+/// background paint normally.
+///
+/// A `Text::new_inline`/`Text::new` element placed as a non-flexible child of a
+/// `Flex` row (as the completion row's filename label is; see
+/// `input_suggestions.rs`) is laid out with an unbounded main-axis constraint --
+/// `f32::INFINITY` -- per `SizeConstraint::child_constraint_along_axis`, and that
+/// constraint flows straight into `layout_line`'s `max_width`. cosmic-text's
+/// right-to-left alignment math computes `line_width - (line_width -
+/// content_width)`, where `line_width` is `max_width`; for an infinite `max_width`
+/// that subtraction is `INFINITY - INFINITY`, which is `NaN` in IEEE 754, so every
+/// glyph in the line ends up at a NaN position and silently fails to paint.
+/// Left-to-right text is unaffected, since its equivalent term is always zero,
+/// independent of `line_width`.
+///
+/// This does not require a font with actual Arabic glyph coverage: the broken
+/// alignment math runs purely from the text's Unicode bidi properties, before
+/// glyph shaping is consulted, so the bundled Roboto font (which lacks Arabic
+/// glyphs) still reproduces it.
+#[test]
+fn test_layout_line_rtl_with_unbounded_width_does_not_produce_nan_positions() -> Result<()> {
+    let (font_db, roboto) = init_fonts();
+
+    let text = "التعرف على خط اليد في المخطوطات العربية التاريخية.pdf";
+    let line_style = LineStyle {
+        font_size: FONT_SIZE,
+        line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
+        baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+        fixed_width_tab_size: None,
+    };
+    let style_runs = [(
+        0..text.chars().count(),
+        StyleAndFont::new(roboto, Properties::default(), TextStyle::new()),
+    )];
+
+    let line = font_db.text_layout_system().layout_line(
+        text,
+        line_style,
+        &style_runs,
+        f32::INFINITY,
+        crate::text_layout::ClipConfig::default(),
+    );
+
+    assert!(
+        line.width.is_finite() && line.width > 0.,
+        "line width should be a positive finite value, got {}",
+        line.width
+    );
+
+    let glyphs = line
+        .runs
+        .iter()
+        .flat_map(|run| run.glyphs.iter())
+        .collect_vec();
+    assert!(!glyphs.is_empty(), "expected at least one glyph");
+
+    // Allow a small tolerance around [0, line.width] for ordinary floating-point
+    // rounding; the bug this guards against places every glyph at NaN or at a
+    // wildly out-of-bounds position, not merely a fraction of a pixel off.
+    const TOLERANCE: f32 = 1.0;
+    for glyph in glyphs {
+        let x = glyph.position_along_baseline.x();
+        assert!(
+            x.is_finite(),
+            "glyph {} at char index {} should have a finite x position, got {x}",
+            glyph.id,
+            glyph.index
+        );
+        assert!(
+            x >= -TOLERANCE && x <= line.width + TOLERANCE,
+            "glyph {} at char index {} should be within the line's bounds \
+             [0, {}], got x = {x}",
+            glyph.id,
+            glyph.index,
+            line.width
+        );
+    }
+
+    Ok(())
+}
+
+/// Regression probe for the Project Explorer row half of REV-26: does an overflowing
+/// right-to-left filename under a *finite*, realistic row width (as opposed to the
+/// unbounded-width completion row fixed above) ever get a visible glyph painted at all?
+///
+/// The Explorer row's label is `Shrinkable`-wrapped inside a `Flex::row`, so under
+/// normal (non-drag) layout it always receives a finite main-axis width -- this does
+/// NOT reproduce the `NaN` bug fixed by `finite_line_layout_width`. This test instead
+/// checks the *painting* side: `Line::paint`'s glyph-truncation loop walks
+/// `run.glyphs` in storage order and stops once a `remaining_width` budget (seeded from
+/// the available width) is exhausted. For left-to-right text that walk is in
+/// increasing-x order, so the prefix that fits the budget is exactly the prefix that's
+/// visually inside `[0, available_width)`. For right-to-left text, storage order is
+/// *not* sorted by x (this line's first character sits at the highest x, near
+/// `line.width`), so budget-based truncation can spend the whole budget on glyphs whose
+/// real positions are already beyond `available_width`, and stop before ever reaching
+/// the glyphs that would actually fall inside the visible window.
+#[test]
+fn test_line_paint_rtl_overflow_under_finite_width() -> Result<()> {
+    use pathfinder_color::ColorU;
+    use pathfinder_geometry::rect::RectF;
+
+    use crate::Scene;
+    use crate::fonts::Cache as FontCache;
+    use crate::rendering::Config;
+    use crate::text_layout::PaintStyleOverride;
+
+    let (font_db, roboto) = init_fonts();
+    let font_cache = FontCache::new(Box::new(font_db));
+
+    let text = "التعرف على خط اليد في المخطوطات العربية التاريخية.pdf";
+    let line_style = LineStyle {
+        font_size: FONT_SIZE,
+        line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
+        baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+        fixed_width_tab_size: None,
+    };
+    let style_runs = [(
+        0..text.chars().count(),
+        StyleAndFont::new(roboto, Properties::default(), TextStyle::new()),
+    )];
+
+    // A realistic, *finite* width for the Explorer row's filename label -- narrower
+    // than the text's natural content width, so it must be clipped/faded, exactly as
+    // it would be in the real Project Explorer panel for a long filename.
+    let available_width = 180.0_f32;
+
+    let line = font_cache.text_layout_system().layout_line(
+        text,
+        line_style,
+        &style_runs,
+        available_width,
+        crate::text_layout::ClipConfig::default(),
+    );
+
+    assert!(
+        line.width > available_width,
+        "expected the text to overflow the available width in this test (line.width = {}, \
+         available_width = {available_width})",
+        line.width
+    );
+
+    let mut scene = Scene::new(1.0, Config::default());
+    let bounds = RectF::new(vec2f(0., 0.), vec2f(available_width, line.height()));
+    line.paint(
+        bounds,
+        &PaintStyleOverride::default(),
+        ColorU::white(),
+        &font_cache,
+        &mut scene,
+    );
+
+    let glyph_positions: Vec<f32> = scene
+        .layers()
+        .flat_map(|layer| layer.glyphs.iter())
+        .map(|glyph| glyph.position.x())
+        .collect();
+
+    assert!(
+        !glyph_positions.is_empty(),
+        "expected at least one glyph to be painted"
+    );
+    assert!(
+        glyph_positions
+            .iter()
+            .any(|&x| x >= 0.0 && x < available_width),
+        "expected at least one glyph to be painted within the visible row bounds \
+         [0, {available_width}), but none were -- every attempted glyph draw landed \
+         outside the row, which is indistinguishable from a blank label: {glyph_positions:?}"
+    );
+
+    Ok(())
+}
+
 /// Checks that the head indent and first line's width don't exceed the frame's width.
 fn first_line_bounded(frame: &TextFrame, first_line_indent: f32, frame_width: f32) -> bool {
     let first_line_width = frame.lines().first().unwrap().width;
