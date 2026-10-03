@@ -381,8 +381,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::NativeShellCompletions,
         #[cfg(feature = "agent_view_conversation_list_view")]
         FeatureFlag::AgentViewConversationListView,
-        #[cfg(feature = "inline_history_menu")]
-        FeatureFlag::InlineHistoryMenu,
         #[cfg(feature = "inline_repo_menu")]
         FeatureFlag::InlineRepoMenu,
         #[cfg(feature = "cloud_mode")]
