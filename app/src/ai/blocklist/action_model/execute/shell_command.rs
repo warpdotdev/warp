@@ -243,17 +243,35 @@ impl ShellCommandExecutor {
     }
 
     /// Decorate the command so that we can turn off pager.
+    ///
+    /// Two properties matter here, both covered by regression tests:
+    /// - The closing group syntax must land on its own line, so a command whose
+    ///   last line is a bare heredoc terminator (e.g. `EOF`) isn't corrupted by
+    ///   trailing characters on that line (CSAT-10167).
+    /// - The command's own exit status must survive the pipe to `cat`, which
+    ///   would otherwise always report success as the last stage of the pipe.
     fn turn_off_pager_for_command(&self, command: &String, ctx: &mut ModelContext<Self>) -> String {
         match self.active_session.as_ref(ctx).shell_type(ctx) {
-            // If it's a posix shell, we can use parentheses as the grouping character. Add command to
-            // avoid cases with aliases.
-            Some(ShellType::Zsh) | Some(ShellType::Bash) => format!("({command}) | command cat"),
-            // Fish doesn't have grouping characters. We need to use begin; and end; to ensure the command
-            // gets evaluated first.
-            Some(ShellType::Fish) => format!("begin; {command} ;end | command cat"),
+            // Use parentheses as the grouping character, with `command` to avoid cases with
+            // aliases. The trailing `(exit "$...")` subshell re-asserts the original command's
+            // exit status (via `PIPESTATUS`/`pipestatus`), since it would otherwise be masked
+            // by `cat`'s own (successful) exit status as the last stage of the pipe.
+            Some(ShellType::Bash) => {
+                format!("({command}\n) | command cat; (exit \"${{PIPESTATUS[0]}}\")")
+            }
+            Some(ShellType::Zsh) => {
+                format!("({command}\n) | command cat; (exit \"${{pipestatus[1]}}\")")
+            }
+            // Fish doesn't have grouping characters or real subshells, so we use begin/end to
+            // ensure the command gets evaluated first. Fish has no bare `exit` we can safely
+            // invoke from the current shell (it would exit the interactive session), so
+            // re-assert the exit status via a nested `fish -c` process instead.
+            Some(ShellType::Fish) => {
+                format!("begin\n{command}\nend | command cat\nfish -c \"exit $pipestatus[1]\"")
+            }
             // For powershell, we use Out-Host to send paged output to the
             // console. Add a backslash to avoid executing an alias.
-            Some(ShellType::PowerShell) => format!("({command}) | \\Out-Host"),
+            Some(ShellType::PowerShell) => format!("({command}\n) | \\Out-Host"),
             // If we can't determine a shell type, run command as it is.
             None => command.clone(),
         }
@@ -304,9 +322,14 @@ impl ShellCommandExecutor {
                         RequestCommandOutputResult::CancelledBeforeExecution,
                     ));
                 }
-                // If the command might use pager and can't be interacted with,
-                // we pipe its output to cat so we can prevent activating the altscreen.
-                // The parentheses here ensures the command always gets evaluated first.
+                // If the command might use a pager and the client is waiting synchronously
+                // for it to complete, we pipe its output to `cat` so we can prevent
+                // activating the altscreen. We only do this for `wait`-style commands
+                // (`wait_until_completion`): an `interact`-mode command hands off to a CLI
+                // subagent that may need live PTY control (e.g. a REPL, dev server, or a
+                // pager it intends to page through interactively), so decorating it would
+                // take that control away. The parentheses ensure the command always gets
+                // evaluated first.
                 let decorated_command =
                     if uses_pager.is_some_and(|uses_pager| uses_pager) && *wait_until_completion {
                         self.turn_off_pager_for_command(command, ctx)
