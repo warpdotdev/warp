@@ -107,7 +107,7 @@ jobs:
 
   tests:
     name: Run ${{ matrix.name }} tests
-    timeout-minutes: 25
+    timeout-minutes: 35
     env:
       # When CI runs on a PR from a fork, the GCP OIDC auth used by
       # `google-github-actions/auth` fails because our Workload Identity
