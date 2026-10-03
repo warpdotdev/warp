@@ -279,12 +279,12 @@ where
         self.items.len()
     }
 
-    #[expect(dead_code)]
     pub fn reset_selection(&mut self, ctx: &mut ViewContext<Self>) {
         self.dropdown.update(ctx, |dropdown, ctx| {
             dropdown.reset_selection(ctx);
-            ctx.notify();
         });
+        self.selected_item = None;
+        ctx.notify();
     }
 
     /// Select the item with the given name. If no such item exists, this clears the selection.
@@ -392,6 +392,19 @@ where
             Some(MenuItem::Item(fields)) => Some(fields.label().to_string()),
             _ => None,
         }
+    }
+
+    /// Returns a clone of the concrete item action for the currently selected item, if any.
+    pub fn selected_action(&self) -> Option<A>
+    where
+        A: Clone,
+    {
+        let DropdownAction::SelectActionAndClose(action) =
+            self.selected_item.as_ref()?.item_on_select_action()?
+        else {
+            return None;
+        };
+        (**action).as_any().downcast_ref::<A>().cloned()
     }
 
     fn focus(&mut self, _delta: usize, ctx: &mut ViewContext<Self>) {
