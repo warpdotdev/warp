@@ -20,8 +20,8 @@ use serde_yaml::Value;
 use crate::{
     CodeBlockText, CustomWeight, FormattedImage, FormattedIndentTextInline, FormattedTable,
     FormattedTaskList, FormattedText, FormattedTextFragment, FormattedTextHeader,
-    FormattedTextInline, FormattedTextLine, FormattedTextStyles, Hyperlink,
-    OrderedFormattedIndentTextInline, TableAlignment,
+    FormattedTextInline, FormattedTextLine, FormattedTextStyles, Hyperlink, MarkdownSourceAnchor,
+    MarkdownSourceMap, OrderedFormattedIndentTextInline, ParsedMarkdown, TableAlignment,
 };
 
 const HEADER_TAG_MIN_COUNT: usize = 1;
@@ -109,20 +109,44 @@ impl ListIndentationContext {
 }
 
 pub fn parse_markdown(markdown: &str) -> Result<FormattedText> {
-    parse_markdown_impl(markdown, false)
+    parse_markdown_impl(markdown, false, SourceMapMode::Skip).map(|parsed| parsed.text)
 }
 
 pub fn parse_markdown_with_gfm_tables(markdown: &str) -> Result<FormattedText> {
-    parse_markdown_impl(markdown, true)
+    parse_markdown_impl(markdown, true, SourceMapMode::Skip).map(|parsed| parsed.text)
 }
 
-fn parse_markdown_impl(markdown: &str, parse_gfm_tables: bool) -> Result<FormattedText> {
-    parse_markdown_internal::<'_, nom::error::Error<_>>(markdown, parse_gfm_tables)
-        .map(|(_, mut res)| {
-            if let Some(FormattedTextLine::LineBreak) = res.last() {
-                res.pop();
+pub fn parse_markdown_with_source_map(markdown: &str) -> Result<ParsedMarkdown> {
+    parse_markdown_impl(markdown, false, SourceMapMode::Build)
+}
+
+pub fn parse_markdown_with_gfm_tables_and_source_map(markdown: &str) -> Result<ParsedMarkdown> {
+    parse_markdown_impl(markdown, true, SourceMapMode::Build)
+}
+
+fn parse_markdown_impl(
+    markdown: &str,
+    parse_gfm_tables: bool,
+    source_map_mode: SourceMapMode,
+) -> Result<ParsedMarkdown> {
+    parse_markdown_internal::<'_, nom::error::Error<_>>(markdown, parse_gfm_tables, source_map_mode)
+        .map(|(_, mut parsed)| {
+            if let Some(FormattedTextLine::LineBreak) = parsed.lines.last() {
+                parsed.lines.pop();
+                // Source lines anchored to the line just dropped no longer render at all.
+                let dropped_line_index = parsed.lines.len();
+                for anchor in &mut parsed.anchors {
+                    if anchor.is_some_and(|anchor| anchor.line_index >= dropped_line_index) {
+                        *anchor = None;
+                    }
+                }
             }
-            FormattedText { lines: res.into() }
+            ParsedMarkdown {
+                text: FormattedText {
+                    lines: parsed.lines.into(),
+                },
+                source_map: MarkdownSourceMap::new(parsed.anchors),
+            }
         })
         .map_err(|err| {
             if cfg!(debug_assertions) {
@@ -138,74 +162,157 @@ pub fn parse_markdown_to_raw_text(markdown: &str) -> Result<String> {
     Ok(formatted_text.raw_text())
 }
 
+struct ParsedMarkdownInternal {
+    lines: Vec<FormattedTextLine>,
+    anchors: Vec<Option<MarkdownSourceAnchor>>,
+}
+
+/// Whether a parse should pay for building a source map. Most callers only want the rendered text,
+/// and some of them (agent output) reparse on every streamed chunk.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SourceMapMode {
+    Build,
+    Skip,
+}
+
+#[derive(Clone, Copy)]
+enum SourceLineMapping {
+    SingleLine,
+    FencedRows,
+    FencedBlock,
+    GfmTable,
+}
+
+struct ParsedBlock {
+    line: FormattedTextLine,
+    source_line_mapping: SourceLineMapping,
+}
+
 fn parse_markdown_internal<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     markdown: &'a str,
     parse_gfm_tables: bool,
-) -> IResult<&'a str, Vec<FormattedTextLine>, E> {
+    source_map_mode: SourceMapMode,
+) -> IResult<&'a str, ParsedMarkdownInternal, E> {
     let indentation_context = RefCell::new(ListIndentationContext::new());
 
     let mut block = context(
         "block",
         alt((
-            parse_blank_line,
-            parse_horizontal_rule,
+            map(parse_blank_line, |line| ParsedBlock {
+                line,
+                source_line_mapping: SourceLineMapping::SingleLine,
+            }),
+            map(parse_horizontal_rule, |line| ParsedBlock {
+                line,
+                source_line_mapping: SourceLineMapping::SingleLine,
+            }),
             map(parse_code_block, |(lang, content)| {
                 if lang == EMBED_BLOCK_MARKDOWN_LANG
                     && let Ok(Value::Mapping(mapping)) = serde_yaml::from_str(&content)
                 {
-                    return FormattedTextLine::Embedded(mapping);
+                    return ParsedBlock {
+                        line: FormattedTextLine::Embedded(mapping),
+                        source_line_mapping: SourceLineMapping::FencedBlock,
+                    };
                 }
                 if lang == TABLE_BLOCK_MARKDOWN_LANG {
-                    return FormattedTextLine::Table(FormattedTable::from_internal_format(
-                        &content,
-                    ));
+                    return ParsedBlock {
+                        line: FormattedTextLine::Table(FormattedTable::from_internal_format(
+                            &content,
+                        )),
+                        source_line_mapping: SourceLineMapping::FencedRows,
+                    };
                 }
 
-                FormattedTextLine::CodeBlock(CodeBlockText {
-                    lang: lang.to_string(),
-                    code: content,
-                })
+                ParsedBlock {
+                    line: FormattedTextLine::CodeBlock(CodeBlockText {
+                        lang: lang.to_string(),
+                        code: content,
+                    }),
+                    source_line_mapping: SourceLineMapping::FencedRows,
+                }
             }),
-            map(parse_header, FormattedTextLine::Heading),
-            map(parse_image, FormattedTextLine::Image),
+            map(parse_header, |header| ParsedBlock {
+                line: FormattedTextLine::Heading(header),
+                source_line_mapping: SourceLineMapping::SingleLine,
+            }),
+            map(parse_image, |image| ParsedBlock {
+                line: FormattedTextLine::Image(image),
+                source_line_mapping: SourceLineMapping::SingleLine,
+            }),
             |i| {
-                parse_task_list(i, &indentation_context)
-                    .map(|(s, t)| (s, FormattedTextLine::TaskList(t)))
+                parse_task_list(i, &indentation_context).map(|(remaining, task)| {
+                    (
+                        remaining,
+                        ParsedBlock {
+                            line: FormattedTextLine::TaskList(task),
+                            source_line_mapping: SourceLineMapping::SingleLine,
+                        },
+                    )
+                })
             },
             |i| {
-                parse_ordered_list(i, &indentation_context)
-                    .map(|(s, o)| (s, FormattedTextLine::OrderedList(o)))
+                parse_ordered_list(i, &indentation_context).map(|(remaining, ordered)| {
+                    (
+                        remaining,
+                        ParsedBlock {
+                            line: FormattedTextLine::OrderedList(ordered),
+                            source_line_mapping: SourceLineMapping::SingleLine,
+                        },
+                    )
+                })
             },
             |i| {
-                parse_unordered_list(i, &indentation_context)
-                    .map(|(s, u)| (s, FormattedTextLine::UnorderedList(u)))
+                parse_unordered_list(i, &indentation_context).map(|(remaining, unordered)| {
+                    (
+                        remaining,
+                        ParsedBlock {
+                            line: FormattedTextLine::UnorderedList(unordered),
+                            source_line_mapping: SourceLineMapping::SingleLine,
+                        },
+                    )
+                })
             },
             |i| {
                 if !parse_gfm_tables {
                     return Err(nom::Err::Error(E::from_error_kind(i, ErrorKind::Alt)));
                 }
-                map(parse_table, FormattedTextLine::Table)(i)
+                map(parse_table, |table| ParsedBlock {
+                    line: FormattedTextLine::Table(table),
+                    source_line_mapping: SourceLineMapping::GfmTable,
+                })(i)
             },
-            parse_paragraph,
+            map(parse_paragraph, |line| ParsedBlock {
+                line,
+                source_line_mapping: SourceLineMapping::SingleLine,
+            }),
         )),
     );
 
+    let build_source_map = source_map_mode == SourceMapMode::Build;
     let mut remaining = markdown;
     let mut lines = Vec::new();
+    let mut anchors = Vec::new();
     while !remaining.is_empty() {
         // Block-level comments produce no line at all, so they are handled outside `block`, which
         // must yield a `FormattedTextLine`. This runs first because a comment can only start at
         // `<!--`, which no other block construct claims.
         if let Ok((remaining_after_comment, _)) = parse_html_comment_block::<E>(remaining) {
+            if build_source_map {
+                let consumed = &remaining[..remaining.len() - remaining_after_comment.len()];
+                anchors.extend(std::iter::repeat_n(None, source_line_count(consumed)));
+            }
             remaining = remaining_after_comment;
             continue;
         }
 
-        let (remaining_after_block, mut line) = block(remaining)?;
+        let block_start = remaining;
+        let (remaining_after_block, mut parsed_block) = block(remaining)?;
+        let consumed = &block_start[..block_start.len() - remaining_after_block.len()];
         remaining = remaining_after_block;
 
         // Clear indentation context for non-list content and handle ordered list numbering
-        match &mut line {
+        match &mut parsed_block.line {
             FormattedTextLine::LineBreak => {
                 // Line breaks don't reset context
             }
@@ -228,10 +335,83 @@ fn parse_markdown_internal<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
                 indentation_context.borrow_mut().clear();
             }
         }
-        lines.push(line);
+        if build_source_map {
+            anchors.extend(source_anchors_for_block(
+                consumed,
+                &parsed_block.line,
+                parsed_block.source_line_mapping,
+                lines.len(),
+            ));
+        }
+        lines.push(parsed_block.line);
     }
 
-    Ok((remaining, lines))
+    Ok((remaining, ParsedMarkdownInternal { lines, anchors }))
+}
+
+/// Anchors every source line consumed by one block onto the [`FormattedTextLine`] it produced.
+///
+/// `row_in_line` stays 0 except for fenced code blocks and tables, whose rows are internal to the
+/// line and so can be counted from the line itself.
+fn source_anchors_for_block(
+    source: &str,
+    line: &FormattedTextLine,
+    mapping: SourceLineMapping,
+    line_index: usize,
+) -> Vec<Option<MarkdownSourceAnchor>> {
+    let source_line_count = source_line_count(source);
+    let anchor = |row_in_line| {
+        Some(MarkdownSourceAnchor {
+            line_index,
+            row_in_line,
+        })
+    };
+
+    match mapping {
+        // The whole construct renders as a single row, so every source line points at it.
+        SourceLineMapping::SingleLine | SourceLineMapping::FencedBlock => {
+            vec![anchor(0); source_line_count]
+        }
+        // Opening fence -> first content row, closing fence -> last content row, and each content
+        // line to its own row.
+        SourceLineMapping::FencedRows => {
+            let last_row = rows_within_line(line) - 1;
+            (0..source_line_count)
+                .map(|source_line| {
+                    if source_line == 0 {
+                        anchor(0)
+                    } else if source_line + 1 == source_line_count {
+                        anchor(last_row)
+                    } else {
+                        anchor((source_line - 1).min(last_row))
+                    }
+                })
+                .collect()
+        }
+        // The separator row is not rendered, so it shares the header's row with the header line.
+        SourceLineMapping::GfmTable => {
+            let last_row = rows_within_line(line) - 1;
+            (0..source_line_count)
+                .map(|source_line| {
+                    if source_line <= 1 {
+                        anchor(0)
+                    } else {
+                        anchor((source_line - 1).min(last_row))
+                    }
+                })
+                .collect()
+        }
+    }
+}
+
+fn source_line_count(source: &str) -> usize {
+    source.lines().count()
+}
+
+/// How many rows a single [`FormattedTextLine`] renders as *internally*. Only meaningful for code
+/// blocks and tables; every other line is a single row.
+fn rows_within_line(line: &FormattedTextLine) -> usize {
+    line.raw_text().lines().count().max(1)
 }
 
 /// Parse a single paragraph of Markdown text.

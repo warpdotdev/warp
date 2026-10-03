@@ -15,7 +15,10 @@ use warp_files::FileModel;
 use warpui::platform::WindowStyle;
 use warpui::{App, SingletonEntity, View};
 
-use super::{FileNotebookAction, FileNotebookView, FileState, MarkdownDisplayMode, SourceFile};
+use super::{
+    FileNotebookAction, FileNotebookView, FileState, MarkdownDisplayMode, SourceFile,
+    SourceScrollTarget,
+};
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -311,6 +314,28 @@ fn test_load_static() {
 
             // Rendering should not panic.
             file_notebook.render(ctx);
+        });
+    });
+}
+
+#[test]
+fn test_loaded_source_target_uses_source_map() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        let (_, handle) = app.add_window(WindowStyle::NotStealFocus, FileNotebookView::new);
+
+        handle.update(&mut app, |file_notebook, ctx| {
+            file_notebook.open_static("Test Title", "Here's a markdown comment.\n", ctx);
+            file_notebook.scroll_to_source_target(SourceScrollTarget { source_line: 1 }, ctx);
+
+            assert!(
+                file_notebook
+                    .editor
+                    .as_ref(ctx)
+                    .model()
+                    .as_ref(ctx)
+                    .has_pending_scroll_for_test()
+            );
         });
     });
 }
