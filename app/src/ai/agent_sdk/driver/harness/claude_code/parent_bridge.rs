@@ -30,7 +30,7 @@ use crate::ai::agent_events::{
 use crate::ai::agent_sdk::driver::{AgentDriver, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ServerApi;
-use crate::server::server_api::ai::{AIClient, AgentRunEvent};
+use crate::server::server_api::ai::{AGENT_RUN_EVENT_TYPE_NEW_MESSAGE, AIClient, AgentRunEvent};
 
 const LEGACY_MESSAGE_LISTENER_STATE_ROOT_ENV: &str = "OZ_PARENT_STATE_ROOT";
 const PARENT_BRIDGE_DEFAULT_STATE_ROOT: &str = ".claude-code/oz-parent-bridge";
@@ -77,7 +77,7 @@ impl AgentEventConsumer for MessageBridgeEventConsumer {
         &mut self,
         event: AgentRunEvent,
     ) -> anyhow::Result<AgentEventConsumerControlFlow> {
-        if event.event_type != "new_message" || event.run_id != self.run_id {
+        if event.event_type != AGENT_RUN_EVENT_TYPE_NEW_MESSAGE || event.run_id != self.run_id {
             return Ok(AgentEventConsumerControlFlow::Continue);
         }
 
