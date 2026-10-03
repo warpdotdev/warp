@@ -46,6 +46,21 @@ fn html_extensions_resolve_to_html() {
 }
 
 #[test]
+fn solidity_extension_resolves_to_solidity() {
+    let path = StandardizedPath::try_new("/tmp/contracts/Token.sol")
+        .expect("test path should be absolute");
+    let language = language_by_filename(&path).expect("`.sol` files should resolve to a language");
+    assert_eq!(language.display_name(), "Solidity");
+}
+
+#[test]
+fn local_solidity_extension_resolves_to_solidity() {
+    let language = language_by_local_filename(Path::new("Token.sol"))
+        .expect("`.sol` files should resolve to a language");
+    assert_eq!(language.display_name(), "Solidity");
+}
+
+#[test]
 fn local_html_extensions_resolve_to_html() {
     for filename in ["index.html", "index.htm"] {
         let path = Path::new(filename);
