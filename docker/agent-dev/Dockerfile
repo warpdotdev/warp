@@ -143,6 +143,48 @@ RUN set -eux; \
   tfenv use 1.15.5; \
   terraform version
 
+# Tools needed to run and test the oz-local local development stack
+# (warp-server/script/oz-local): a local Postgres + Redis backing store, the
+# Docker CLI/daemon for the docker worker backend, a JRE for the GCP Pub/Sub
+# emulator, and small Go/Rust binaries used by the stack's process supervisor
+# and dev hot-reload.
+RUN set -eux; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends \
+    docker.io \
+    postgresql postgresql-contrib postgresql-16-pgvector \
+    redis-server \
+    openjdk-17-jre-headless google-cloud-cli-pubsub-emulator \
+    jq; \
+  rm -rf /var/lib/apt/lists/*
+
+# process-compose: supervises the oz-local stack's processes.
+RUN set -eux; \
+  curl -fsSL https://raw.githubusercontent.com/F1bonacc1/process-compose/main/scripts/get-pc.sh \
+    | sh -s -- -d -b /usr/local/bin; \
+  process-compose version
+
+# watchexec: powers warp-server's script/server hot-reload.
+RUN set -eux; \
+  dpkgArch="$(dpkg --print-architecture)"; \
+  case "$dpkgArch" in \
+    amd64) WATCHEXEC_ARCH=x86_64-unknown-linux-gnu ;; \
+    arm64) WATCHEXEC_ARCH=aarch64-unknown-linux-gnu ;; \
+  esac; \
+  curl -fsSL "https://github.com/watchexec/watchexec/releases/download/v2.3.2/watchexec-2.3.2-$WATCHEXEC_ARCH.tar.xz" -o /tmp/watchexec.tar.xz; \
+  mkdir -p /tmp/watchexec-extract; \
+  tar -xJf /tmp/watchexec.tar.xz -C /tmp/watchexec-extract; \
+  cp "$(find /tmp/watchexec-extract -name watchexec -type f | head -1)" /usr/local/bin/watchexec; \
+  chmod +x /usr/local/bin/watchexec; \
+  rm -rf /tmp/watchexec.tar.xz /tmp/watchexec-extract; \
+  watchexec --version
+
+# Temporal CLI: runs oz-local's local Temporal dev server for agent dispatch.
+RUN set -eux; \
+  curl -sSf https://temporal.download/cli.sh | sh; \
+  ln -s /root/.temporalio/bin/temporal /usr/local/bin/temporal; \
+  temporal --version
+
 # Coding Agent CLIs (optional, makes image significantly larger)
 ARG INSTALL_CODING_AGENTS=false
 RUN if [ "$INSTALL_CODING_AGENTS" = "true" ]; then \
