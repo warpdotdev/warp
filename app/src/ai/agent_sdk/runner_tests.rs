@@ -2,15 +2,17 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use warp_cli::agent::OutputFormat;
-use warp_cli::runner::UpdateRunnerArgs;
+use warp_cli::runner::{RunnerMacosVersionArg, UpdateRunnerArgs};
 use warp_cli::scope::{ObjectScope, TeamSelection};
 use warp_graphql::object::{Space, SpaceType};
-use warp_graphql::queries::get_runners::{Runner, RunnerConfig, RunnerOs};
+use warp_graphql::queries::get_runners::{
+    MacOsConfig, Runner, RunnerConfig, RunnerMacOsVersion, RunnerOs,
+};
 use warpui::App;
 
 use super::{
-    RunnerArch, RunnerArchArg, RunnerOsArg, confirm_delete, execute_update, merge_instance_shape,
-    resolve_arch, resolve_create_request_scope, resolve_updated_name,
+    RunnerArch, RunnerArchArg, RunnerOsArg, build_update_input, confirm_delete, execute_update,
+    merge_instance_shape, resolve_arch, resolve_create_request_scope, resolve_updated_name,
 };
 use crate::server::ids::ServerId;
 use crate::server::server_api::factory::{MockFactoryClient, UpsertedRunner};
@@ -277,6 +279,107 @@ fn merge_instance_shape_updates_dimensions_independently() {
 fn merge_instance_shape_errors_on_partial_shape_without_existing() {
     assert!(merge_instance_shape(Some(8), None, None).is_err());
     assert!(merge_instance_shape(None, Some(16), None).is_err());
+}
+
+fn config_with(mutate: impl FnOnce(&mut RunnerConfig)) -> RunnerConfig {
+    let mut config = runner("runner-1", "runner-name").config;
+    mutate(&mut config);
+    config
+}
+
+#[test]
+fn update_never_resends_a_runner_value_this_client_does_not_recognize() {
+    struct Case {
+        name: &'static str,
+        existing: RunnerConfig,
+        args: UpdateRunnerArgs,
+        refused_field: Option<&'static str>,
+    }
+    let args = || update_args(Some("runner-1"), None);
+    let unknown_os = || config_with(|config| config.os = RunnerOs::Unknown);
+    let unknown_arch = || config_with(|config| config.arch = RunnerArch::Unknown);
+    let unknown_macos_version = || {
+        config_with(|config| {
+            config.os = RunnerOs::Macos;
+            config.mac = Some(MacOsConfig {
+                version: Some(RunnerMacOsVersion::Unknown),
+            });
+        })
+    };
+
+    let cases = [
+        Case {
+            name: "an unrecognized OS is refused",
+            existing: unknown_os(),
+            args: args(),
+            refused_field: Some("OS"),
+        },
+        Case {
+            name: "an unrecognized OS can be replaced explicitly",
+            existing: unknown_os(),
+            args: UpdateRunnerArgs {
+                os: Some(RunnerOsArg::Linux),
+                ..args()
+            },
+            refused_field: None,
+        },
+        Case {
+            name: "an unrecognized architecture is refused",
+            existing: unknown_arch(),
+            args: args(),
+            refused_field: Some("architecture"),
+        },
+        Case {
+            name: "an unrecognized architecture can be replaced explicitly",
+            existing: unknown_arch(),
+            args: UpdateRunnerArgs {
+                arch: Some(RunnerArchArg::X8664),
+                ..args()
+            },
+            refused_field: None,
+        },
+        Case {
+            name: "an unrecognized macOS version is refused",
+            existing: unknown_macos_version(),
+            args: args(),
+            refused_field: Some("macOS version"),
+        },
+        Case {
+            name: "an unrecognized macOS version can be replaced explicitly",
+            existing: unknown_macos_version(),
+            args: UpdateRunnerArgs {
+                macos_version: Some(RunnerMacosVersionArg::Macos26),
+                ..args()
+            },
+            refused_field: None,
+        },
+        Case {
+            name: "an unrecognized macOS version is dropped when switching to Linux",
+            existing: unknown_macos_version(),
+            args: UpdateRunnerArgs {
+                os: Some(RunnerOsArg::Linux),
+                ..args()
+            },
+            refused_field: None,
+        },
+    ];
+
+    for case in cases {
+        match (
+            build_update_input(&case.args, &case.existing),
+            case.refused_field,
+        ) {
+            (Err(error), Some(field)) => {
+                assert!(error.to_string().contains(field), "{}: {error}", case.name);
+            }
+            (Ok(_), None) => {}
+            (result, expected) => panic!(
+                "{}: expected refusal of {expected:?}, got {:?}",
+                case.name,
+                result.map(|_| ())
+            ),
+        }
+    }
 }
 
 #[test]
