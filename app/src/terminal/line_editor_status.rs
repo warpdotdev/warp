@@ -61,6 +61,15 @@ impl LineEditorStatus {
         self.is_line_editor_active
     }
 
+    /// Marks the line editor active immediately and emits
+    /// [`LineEditorStatusEvent::Active`], bypassing the real precmd-driven
+    /// [`LINE_EDITOR_ACTIVATION_DELAY`] timer so tests don't need to wait on it.
+    #[cfg(test)]
+    pub(crate) fn set_active_for_test(&mut self, ctx: &mut ModelContext<Self>) {
+        self.is_line_editor_active = true;
+        ctx.emit(LineEditorStatusEvent::Active);
+    }
+
     /// Marks the line editor as inactive.
     ///
     /// This is meant to be called when a command is written to the PTY.

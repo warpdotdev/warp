@@ -15,8 +15,24 @@ use crate::env_vars::{EnvVar, EnvVarExt};
 use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::shell::ShellType;
 
+/// Returns `true` for any session whose pty traffic passes through a
+/// `docker`/`podman exec` relay: either a subshell the user spawned by typing
+/// `docker exec`/`podman exec` inside an existing session, or a top-level Dev
+/// Container session (which attaches via `docker exec`; see
+/// `local_tty::unix::prepare_dev_container`). Both relays share the same
+/// reliability characteristics for large writes, so callers use this to
+/// decide when to chunk pty writes instead of sending them in one shot.
 #[cfg(feature = "local_fs")]
-pub fn is_container_subshell(session_info: &SessionInfo) -> bool {
+pub fn is_container_exec_relayed_session(session_info: &SessionInfo) -> bool {
+    use super::ShellLaunchData;
+
+    if matches!(
+        session_info.launch_data,
+        Some(ShellLaunchData::DevContainer { .. })
+    ) {
+        return true;
+    }
+
     session_info.subshell_info.as_ref().is_some_and(|info| {
         let first_token = info
             .spawning_command
@@ -59,7 +75,7 @@ pub fn should_use_rc_file_bootstrap_method(
 
     // Container subshells cannot access host temp files, so the RC-file
     // method is never viable for them.
-    if is_container_subshell(session_info) {
+    if is_container_exec_relayed_session(session_info) {
         return false;
     }
 
@@ -170,3 +186,7 @@ fn init_subshell_script_for_unknown_shell(
         .replace("HOOK_NAME", "InitSubshell")
         .replace(SESSION_ID_PLACEHOLDER, &session_id.as_u64().to_string())
 }
+
+#[cfg(all(test, feature = "local_fs"))]
+#[path = "bootstrap_tests.rs"]
+mod tests;
