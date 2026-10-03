@@ -6288,23 +6288,36 @@ impl CodeReviewView {
     /// Flush-saves every unsaved file in the review, marking each save as an
     /// auto-save so it stays silent (no "File saved." toast). Used when
     /// auto-save is enabled so closing the review doesn't prompt.
-    pub fn auto_save_all_unsaved_files(&mut self, ctx: &mut ViewContext<Self>) {
-        let paths = self.get_unsaved_file_paths(ctx);
-        let editors: Vec<_> = if let CodeReviewViewState::Loaded(state) = self.state() {
-            paths
-                .iter()
-                .filter_map(|path| state.file_states.get(path))
-                .filter_map(|file_state| {
-                    file_state.editor_state.as_ref().map(|s| s.editor().clone())
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+    ///
+    /// Files whose on-disk version changed since they were loaded are not saved, so that
+    /// external changes are never overwritten implicitly. Returns their paths.
+    pub fn auto_save_all_unsaved_files(&mut self, ctx: &mut ViewContext<Self>) -> Vec<String> {
+        let mut paths_to_save = Vec::new();
+        let mut conflicted_paths = Vec::new();
+        let mut editors = Vec::new();
+        if let CodeReviewViewState::Loaded(state) = self.state() {
+            for path in self.get_unsaved_file_paths(ctx) {
+                let Some(editor) = state
+                    .file_states
+                    .get(&path)
+                    .and_then(|file_state| file_state.editor_state.as_ref())
+                    .map(|editor_state| editor_state.editor().clone())
+                else {
+                    continue;
+                };
+                if editor.as_ref(ctx).has_version_conflicts(ctx) {
+                    conflicted_paths.push(path);
+                } else {
+                    editors.push(editor);
+                    paths_to_save.push(path);
+                }
+            }
+        }
         for editor in editors {
             editor.update(ctx, |editor, _| editor.mark_next_save_as_auto_save());
         }
-        self.save_files(&paths, ctx);
+        self.save_files(&paths_to_save, ctx);
+        conflicted_paths
     }
 
     fn save_file(&mut self, repo_relative_path: &str, ctx: &mut ViewContext<CodeReviewView>) {
@@ -7613,14 +7626,17 @@ impl BackingView for CodeReviewView {
     }
 
     fn close(&mut self, ctx: &mut ViewContext<Self>) {
-        let unsaved_file_paths = self.get_unsaved_file_paths(ctx);
+        let mut unsaved_file_paths = self.get_unsaved_file_paths(ctx);
 
         if !unsaved_file_paths.is_empty() && ChannelState::channel() != Channel::Integration {
-            // With auto-save on, flush the edits silently and close without prompting.
+            // With auto-save on, flush the edits silently and close without prompting, unless
+            // some files conflict with changes on disk; those still need the user's decision.
             if *CodeSettings::as_ref(ctx).auto_save {
-                self.auto_save_all_unsaved_files(ctx);
-                ctx.emit(CodeReviewViewEvent::Pane(PaneEvent::Close));
-                return;
+                unsaved_file_paths = self.auto_save_all_unsaved_files(ctx);
+                if unsaved_file_paths.is_empty() {
+                    ctx.emit(CodeReviewViewEvent::Pane(PaneEvent::Close));
+                    return;
+                }
             }
             let file_names = unsaved_file_paths
                 .iter()

@@ -5,11 +5,12 @@ use warp_editor::render::model::{
     BlockItem, HitTestOptions, LineCount, Location, RenderLineLocation,
 };
 use warpui::units::Pixels;
-use warpui::{AppContext, ViewContext};
+use warpui::{AppContext, TypedActionView, ViewContext, ViewHandle};
 
 use super::{CodeReviewView, CodeReviewViewState, FILE_HEADER_HEIGHT};
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::editor::line::EditorLineLocation;
+use crate::code::local_code_editor::{LocalCodeEditorAction, LocalCodeEditorView};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodeReviewVisibleAnchorForTest {
@@ -355,21 +356,65 @@ impl CodeReviewView {
         self.all_editors_loaded()
     }
 
+    fn editor_for_test(
+        &self,
+        path: &str,
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<LocalCodeEditorView>> {
+        // Test helper: probe by both the raw path (wrapped as a local
+        // `LocalOrRemotePath`) and by the repo-joined absolute path.
+        let local_path = LocalOrRemotePath::Local(PathBuf::from(path));
+        if let Some(editor) = self.editor_for_path(&local_path, ctx) {
+            return Some(editor);
+        }
+        let absolute_path = self.repo_path()?.join(path);
+        self.editor_for_path(&absolute_path, ctx)
+    }
+
+    pub fn focus_editor_for_test(&self, path: &str, ctx: &mut ViewContext<Self>) -> bool {
+        let Some(editor) = self.editor_for_test(path, ctx) else {
+            return false;
+        };
+        let code_editor = editor.as_ref(ctx).editor().clone();
+        code_editor.update(ctx, |code_editor, ctx| code_editor.focus(ctx));
+        true
+    }
+
+    pub fn discard_unsaved_changes_for_test(
+        &self,
+        path: &str,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let Some(editor) = self.editor_for_test(path, ctx) else {
+            return false;
+        };
+        editor.update(ctx, |editor, ctx| {
+            editor.handle_action(&LocalCodeEditorAction::DiscardUnsavedChanges, ctx)
+        });
+        true
+    }
+
+    pub fn has_version_conflicts_for_test(&self, path: &str, ctx: &AppContext) -> Option<bool> {
+        let editor = self.editor_for_test(path, ctx)?;
+        Some(editor.as_ref(ctx).has_version_conflicts(ctx))
+    }
+
+    pub fn conflict_banner_position_id_for_test(
+        &self,
+        path: &str,
+        ctx: &AppContext,
+    ) -> Option<String> {
+        let editor = self.editor_for_test(path, ctx)?;
+        Some(editor.as_ref(ctx).conflict_banner_position_id().to_string())
+    }
+
     pub fn line_text_for_test(
         &self,
         path: &str,
         line_number: usize,
         ctx: &AppContext,
     ) -> Option<String> {
-        // Test helper: probe by both the raw path (wrapped as a local
-        // `LocalOrRemotePath`) and by the repo-joined absolute path.
-        let local_path = LocalOrRemotePath::Local(PathBuf::from(path));
-        let editor = if let Some(editor) = self.editor_for_path(&local_path, ctx) {
-            editor
-        } else {
-            let absolute_path = self.repo_path()?.join(path);
-            self.editor_for_path(&absolute_path, ctx)?
-        };
+        let editor = self.editor_for_test(path, ctx)?;
         let text = editor
             .as_ref(ctx)
             .editor()

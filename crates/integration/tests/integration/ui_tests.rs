@@ -162,6 +162,7 @@ integration_tests! {
     #[ignore = "Flaking on CI - KC looking into 3/31/26"]
     test_code_review_scroll_preserved_footer_range,
     test_code_review_double_click_fully_expands_hidden_section,
+    test_code_review_surfaces_external_rewrite_over_unsaved_edits,
     test_pane_group_state_single_pane,
     test_pane_group_state_multi_pane,
     test_pane_group_state_close_pane,

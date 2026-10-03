@@ -122,6 +122,80 @@ pub fn assert_code_review_line_text(
     })
 }
 
+pub fn focus_code_review_editor(file_path: impl Into<String>) -> TestStep {
+    let file_path = file_path.into();
+
+    TestStep::new("Focus a code review editor").with_action(move |app, window_id, _| {
+        let code_review_view = single_code_review_view(app, window_id);
+        code_review_view.update(app, |code_review_view, ctx| {
+            assert!(
+                code_review_view.focus_editor_for_test(&file_path, ctx),
+                "expected a code review editor for {file_path:?}"
+            );
+        });
+    })
+}
+
+pub fn discard_code_review_editor_changes(file_path: impl Into<String>) -> TestStep {
+    let file_path = file_path.into();
+
+    TestStep::new("Discard unsaved changes in a code review editor").with_action(
+        move |app, window_id, _| {
+            let code_review_view = single_code_review_view(app, window_id);
+            code_review_view.update(app, |code_review_view, ctx| {
+                assert!(
+                    code_review_view.discard_unsaved_changes_for_test(&file_path, ctx),
+                    "expected a code review editor for {file_path:?}"
+                );
+            });
+        },
+    )
+}
+
+pub fn assert_code_review_has_unsaved_changes() -> AssertionCallback {
+    Box::new(|app, window_id| {
+        let code_review_view = single_code_review_view(app, window_id);
+        code_review_view.read(app, |code_review_view, ctx| {
+            async_assert!(
+                code_review_view.has_unsaved_changes(ctx),
+                "expected code review editors to have unsaved changes"
+            )
+        })
+    })
+}
+
+pub fn assert_code_review_editor_version_conflict(
+    file_path: impl Into<String>,
+    expected: bool,
+) -> AssertionCallback {
+    let file_path = file_path.into();
+
+    Box::new(move |app, window_id| {
+        let code_review_view = single_code_review_view(app, window_id);
+        let (has_conflict, banner_position_id) =
+            code_review_view.read(app, |code_review_view, ctx| {
+                (
+                    code_review_view.has_version_conflicts_for_test(&file_path, ctx),
+                    code_review_view.conflict_banner_position_id_for_test(&file_path, ctx),
+                )
+            });
+        let Some(banner_position_id) = banner_position_id else {
+            return AssertionOutcome::failure(format!(
+                "expected a code review editor for {file_path:?}"
+            ));
+        };
+        let banner_rendered = app.read(|ctx| {
+            ctx.element_position_by_id_at_last_frame(window_id, &banner_position_id)
+                .is_some()
+        });
+        async_assert!(
+            has_conflict == Some(expected) && banner_rendered == expected,
+            "expected {file_path:?} to have version conflict = {expected} with the banner rendered \
+             accordingly, got conflict = {has_conflict:?}, banner rendered = {banner_rendered}"
+        )
+    })
+}
+
 fn assert_anchor(
     anchor: &CodeReviewVisibleAnchorForTest,
     expected_file_path: &str,
