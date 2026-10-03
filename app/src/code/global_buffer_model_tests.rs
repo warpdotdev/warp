@@ -1,15 +1,25 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use futures::channel::oneshot;
 use lsp::LspManagerModel;
 use remote_server::proto::TextEdit;
 use repo_metadata::RepoMetadataModel;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
-use warp_files::FileModel;
+use warp_editor::content::buffer::Buffer;
+use warp_files::{FileModel, FileModelEvent};
 use warp_util::content_version::ContentVersion;
+use warp_util::file::{FileId, FileLoadError};
 use warp_util::host_id::HostId;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::{App, ModelHandle, SingletonEntity};
 
-use super::{BufferSource, CharOffsetEdit, GlobalBufferModel, PendingEditBatch};
+use super::{
+    BufferSource, CharOffsetEdit, GlobalBufferModel, GlobalBufferModelEvent, InternalBufferState,
+    LocalOrRemotePath, MAX_EDITOR_BUFFER_CONTENT_BYTES, MAX_EDITOR_BUFFER_NEWLINE_COUNT,
+    PendingEditBatch, SyncClock, editor_buffer_load_error_for_metrics,
+};
 use crate::test_util::settings::initialize_settings_for_tests;
 
 // ── Test-only helpers on GlobalBufferModel ────────────────────────
@@ -122,6 +132,304 @@ fn test_path() -> StandardizedPath {
     StandardizedPath::try_new("/test/file.txt").unwrap()
 }
 
+fn seed_local_buffer(
+    app: &mut App,
+    content: &str,
+    loaded: bool,
+) -> (FileId, ModelHandle<Buffer>, ContentVersion) {
+    let buffer = app.add_model(|_| Buffer::default());
+    let version = ContentVersion::new();
+    if !content.is_empty() {
+        buffer.update(app, |buffer, ctx| {
+            buffer.replace_all(content, ctx);
+            buffer.set_version(version);
+        });
+    }
+
+    let file_id = FileId::new();
+    gbm(app).update(app, |model, _| {
+        model.buffers.insert(
+            file_id,
+            InternalBufferState {
+                buffer: buffer.downgrade(),
+                latest_buffer_version: None,
+                pending_diff_parse: None,
+                source: BufferSource::Local {
+                    base_content_version: loaded.then_some(version),
+                    initial_content_version: loaded.then_some(version),
+                },
+            },
+        );
+    });
+    (file_id, buffer, version)
+}
+
+fn seed_server_local_buffer(
+    app: &mut App,
+    path: std::path::PathBuf,
+    content: &str,
+) -> (FileId, ModelHandle<Buffer>, ContentVersion) {
+    let buffer = app.add_model(|_| Buffer::default());
+    let version = ContentVersion::new();
+    buffer.update(app, |buffer, ctx| {
+        buffer.replace_all(content, ctx);
+        buffer.set_version(version);
+    });
+
+    let file_id = FileId::new();
+    gbm(app).update(app, |model, _| {
+        model
+            .location_to_id
+            .insert(LocalOrRemotePath::Local(path), file_id);
+        model.buffers.insert(
+            file_id,
+            InternalBufferState {
+                buffer: buffer.downgrade(),
+                latest_buffer_version: None,
+                pending_diff_parse: None,
+                source: BufferSource::ServerLocal {
+                    sync_clock: SyncClock::from_wire(7, 3),
+                    base_content_version: Some(version),
+                    initial_content_version: Some(version),
+                },
+            },
+        );
+    });
+    (file_id, buffer, version)
+}
+
+fn record_load_failures(
+    app: &mut App,
+    global_buffer: &ModelHandle<GlobalBufferModel>,
+) -> Rc<RefCell<Vec<FileId>>> {
+    let failed_file_ids = Rc::new(RefCell::new(Vec::new()));
+    app.update(|ctx| {
+        let failed_file_ids = failed_file_ids.clone();
+        ctx.subscribe_to_model(global_buffer, move |_, event, _| {
+            if let GlobalBufferModelEvent::FailedToLoad { file_id, error } = event {
+                assert!(matches!(
+                    error.as_ref(),
+                    FileLoadError::TooManyLineBreaks { limit }
+                        if *limit == MAX_EDITOR_BUFFER_NEWLINE_COUNT as u64
+                ));
+                failed_file_ids.borrow_mut().push(*file_id);
+            }
+        });
+    });
+    failed_file_ids
+}
+
+fn excessive_newline_content() -> String {
+    "\n".repeat(MAX_EDITOR_BUFFER_NEWLINE_COUNT + 1)
+}
+
+#[test]
+fn editor_buffer_admits_exact_limit_boundaries() {
+    assert!(editor_buffer_load_error_for_metrics(MAX_EDITOR_BUFFER_CONTENT_BYTES, 0).is_none());
+    assert!(editor_buffer_load_error_for_metrics(0, MAX_EDITOR_BUFFER_NEWLINE_COUNT).is_none());
+}
+
+#[test]
+fn editor_buffer_rejects_values_over_limit_boundaries() {
+    assert!(matches!(
+        editor_buffer_load_error_for_metrics(MAX_EDITOR_BUFFER_CONTENT_BYTES + 1, 0),
+        Some(FileLoadError::TooLarge {
+            size_estimate: Some(size_estimate),
+            limit_bytes,
+        }) if size_estimate == (MAX_EDITOR_BUFFER_CONTENT_BYTES + 1) as u64
+            && limit_bytes == MAX_EDITOR_BUFFER_CONTENT_BYTES as u64
+    ));
+    assert!(matches!(
+        editor_buffer_load_error_for_metrics(0, MAX_EDITOR_BUFFER_NEWLINE_COUNT + 1),
+        Some(FileLoadError::TooManyLineBreaks { limit })
+            if limit == MAX_EDITOR_BUFFER_NEWLINE_COUNT as u64
+    ));
+}
+
+#[test]
+fn file_update_preserves_buffer_when_content_exceeds_editor_limits() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        app.add_singleton_model(GlobalBufferModel::new);
+        let (file_id, buffer, base_version) = seed_local_buffer(&mut app, "preserved", true);
+        let global_buffer = gbm(&app);
+        let failed_file_ids = record_load_failures(&mut app, &global_buffer);
+        let event = FileModelEvent::FileUpdated {
+            id: file_id,
+            content: excessive_newline_content(),
+            base_version,
+            new_version: ContentVersion::new(),
+        };
+        let files = FileModel::handle(&app);
+
+        global_buffer.update(&mut app, |model, ctx| {
+            model.handle_file_model_events(files, &event, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(buffer.as_ref(ctx).text().into_string(), "preserved");
+            assert!(global_buffer.as_ref(ctx).buffer_loaded(file_id));
+        });
+        assert_eq!(failed_file_ids.borrow().as_slice(), &[file_id]);
+    })
+}
+
+#[test]
+fn rejected_initial_load_recovers_when_file_update_is_within_limits() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        app.add_singleton_model(GlobalBufferModel::new);
+        let (file_id, buffer, base_version) = seed_local_buffer(&mut app, "", false);
+        let files = FileModel::handle(&app);
+        let global_buffer = gbm(&app);
+        let failed_file_ids = record_load_failures(&mut app, &global_buffer);
+
+        let rejected_event = FileModelEvent::FileLoaded {
+            content: excessive_newline_content(),
+            id: file_id,
+            version: base_version,
+        };
+        global_buffer.update(&mut app, |model, ctx| {
+            model.handle_file_model_events(files.clone(), &rejected_event, ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(buffer.as_ref(ctx).text().into_string(), "");
+            assert!(!global_buffer.as_ref(ctx).buffer_loaded(file_id));
+        });
+        assert_eq!(failed_file_ids.borrow().as_slice(), &[file_id]);
+
+        let new_version = ContentVersion::new();
+        let recovered_event = FileModelEvent::FileUpdated {
+            id: file_id,
+            content: "now loadable".to_string(),
+            base_version,
+            new_version,
+        };
+        global_buffer.update(&mut app, |model, ctx| {
+            model.handle_file_model_events(files, &recovered_event, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(buffer.as_ref(ctx).text().into_string(), "now loadable");
+            assert_eq!(buffer.as_ref(ctx).version(), new_version);
+            assert!(global_buffer.as_ref(ctx).buffer_loaded(file_id));
+        });
+    })
+}
+
+#[test]
+fn remote_open_response_preserves_state_when_content_exceeds_editor_limits() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        app.add_singleton_model(GlobalBufferModel::new);
+        let global_buffer = gbm(&app);
+        let failed_file_ids = record_load_failures(&mut app, &global_buffer);
+        let buffer_state = global_buffer.update(&mut app, |model, ctx| {
+            model.seed_remote_buffer_for_test(test_host_id(), test_path(), "preserved", 7, ctx)
+        });
+        let file_id = buffer_state.file_id;
+        let buffer_version = app.read(|ctx| buffer_state.buffer.as_ref(ctx).version());
+        let client_version = ContentVersion::from_raw(3);
+        global_buffer.update(&mut app, |model, _| {
+            model.insert_pending_batch_for_test(
+                file_id,
+                7,
+                vec![text_edit(1, 1, "pending")],
+                client_version,
+            );
+        });
+
+        global_buffer.update(&mut app, |model, ctx| {
+            model.apply_open_buffer_response(
+                file_id,
+                Ok(remote_server::proto::OpenBufferResponse {
+                    result: Some(remote_server::proto::open_buffer_response::Result::Success(
+                        remote_server::proto::OpenBufferSuccess {
+                            content: excessive_newline_content(),
+                            server_version: 8,
+                        },
+                    )),
+                }),
+                ctx,
+            );
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                buffer_state.buffer.as_ref(ctx).text().into_string(),
+                "preserved"
+            );
+            assert_eq!(buffer_state.buffer.as_ref(ctx).version(), buffer_version);
+            assert!(
+                global_buffer
+                    .as_ref(ctx)
+                    .has_pending_batch_for_test(file_id)
+            );
+            let clock = global_buffer
+                .as_ref(ctx)
+                .sync_clock_for_remote_test(file_id)
+                .unwrap();
+            assert_eq!(clock.server_version, ContentVersion::from_raw(7));
+            assert_eq!(clock.client_version, client_version);
+        });
+        assert_eq!(failed_file_ids.borrow().as_slice(), &[file_id]);
+    })
+}
+
+#[test]
+fn force_reload_preserves_state_when_content_exceeds_editor_limits() {
+    let temp_file = tempfile::NamedTempFile::new().expect("temporary file should be created");
+    std::fs::write(temp_file.path(), excessive_newline_content())
+        .expect("oversized test content should be written");
+
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        app.add_singleton_model(GlobalBufferModel::new);
+        let global_buffer = gbm(&app);
+        let failed_file_ids = record_load_failures(&mut app, &global_buffer);
+        let (file_id, buffer, buffer_version) =
+            seed_server_local_buffer(&mut app, temp_file.path().to_path_buf(), "preserved");
+        let (sender, receiver) = oneshot::channel();
+        let mut sender = Some(sender);
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&global_buffer, move |_, event, _| {
+                if matches!(
+                    event,
+                    GlobalBufferModelEvent::FailedToLoad {
+                        file_id: failed_file_id,
+                        ..
+                    } if *failed_file_id == file_id
+                ) && let Some(sender) = sender.take()
+                {
+                    let _ = sender.send(());
+                }
+            });
+        });
+
+        global_buffer
+            .update(&mut app, |model, ctx| {
+                model.force_reload_server_local(file_id, ctx)
+            })
+            .expect("force reload should start");
+        receiver.await.expect("force reload should be rejected");
+
+        app.read(|ctx| {
+            assert_eq!(buffer.as_ref(ctx).text().into_string(), "preserved");
+            assert_eq!(buffer.as_ref(ctx).version(), buffer_version);
+            assert_eq!(
+                global_buffer.as_ref(ctx).base_version(file_id),
+                Some(buffer_version)
+            );
+            let clock = global_buffer
+                .as_ref(ctx)
+                .sync_clock_for_server_local(file_id)
+                .unwrap();
+            assert_eq!(clock.server_version, ContentVersion::from_raw(7));
+            assert_eq!(clock.client_version, ContentVersion::from_raw(3));
+        });
+        assert_eq!(failed_file_ids.borrow().as_slice(), &[file_id]);
+    })
+}
 // ── Pending edit batch: discard on server push ───────────────────
 
 #[test]
