@@ -5,6 +5,7 @@ use warp::features::FeatureFlag;
 use warp::integration_testing::pane_group::assert_focused_pane_index;
 use warp::integration_testing::settings::set_window_custom_size;
 use warp::integration_testing::step::new_step_with_default_assertions;
+use warp::integration_testing::tab::assert_pane_custom_name;
 use warp::integration_testing::terminal::{
     validate_block_output, wait_until_bootstrapped_single_pane_for_tab,
 };
@@ -182,6 +183,7 @@ pub fn test_launch_config_single_child_branch() -> Builder {
                             commands: Vec::new(),
                             pane_mode: PaneMode::Terminal,
                             shell: None,
+                            title: None,
                         }],
                     },
                     commands: Vec::new(),
@@ -314,6 +316,7 @@ pub fn test_with_launch_config_with_active_tab_index() -> Builder {
                                 commands: Vec::new(),
                                 pane_mode: PaneMode::Terminal,
                                 shell: None,
+                                title: None,
                             }],
                         },
                         commands: Vec::new(),
@@ -376,6 +379,7 @@ pub fn test_with_launch_config_with_active_pane() -> Builder {
                                 commands: Vec::new(),
                                 pane_mode: PaneMode::Terminal,
                                 shell: None,
+                                title: None,
                             },
                             PaneTemplateType::PaneBranchTemplate {
                                 split_direction: SplitDirection::Vertical,
@@ -386,6 +390,7 @@ pub fn test_with_launch_config_with_active_pane() -> Builder {
                                         commands: Vec::new(),
                                         pane_mode: PaneMode::Terminal,
                                         shell: None,
+                                        title: None,
                                     },
                                     PaneTemplateType::PaneTemplate {
                                         is_focused: Some(true),
@@ -393,6 +398,7 @@ pub fn test_with_launch_config_with_active_pane() -> Builder {
                                         commands: Vec::new(),
                                         pane_mode: PaneMode::Terminal,
                                         shell: None,
+                                        title: None,
                                     },
                                 ],
                             },
@@ -457,6 +463,7 @@ pub fn test_with_launch_config_with_no_active_pane() -> Builder {
                                 commands: Vec::new(),
                                 pane_mode: PaneMode::Terminal,
                                 shell: None,
+                                title: None,
                             },
                             PaneTemplateType::PaneBranchTemplate {
                                 split_direction: SplitDirection::Vertical,
@@ -467,6 +474,7 @@ pub fn test_with_launch_config_with_no_active_pane() -> Builder {
                                         commands: Vec::new(),
                                         pane_mode: PaneMode::Terminal,
                                         shell: None,
+                                        title: None,
                                     },
                                     PaneTemplateType::PaneTemplate {
                                         is_focused: Some(false),
@@ -474,6 +482,7 @@ pub fn test_with_launch_config_with_no_active_pane() -> Builder {
                                         commands: Vec::new(),
                                         pane_mode: PaneMode::Terminal,
                                         shell: None,
+                                        title: None,
                                     },
                                 ],
                             },
@@ -545,6 +554,7 @@ pub fn test_launch_config_restores_tab_groups() -> Builder {
                 commands: Vec::new(),
                 pane_mode: PaneMode::Terminal,
                 shell: None,
+                title: None,
             },
             commands: Vec::new(),
             color: None,
@@ -653,6 +663,7 @@ pub fn test_launch_config_restores_tab_groups_into_active_window() -> Builder {
                 commands: Vec::new(),
                 pane_mode: PaneMode::Terminal,
                 shell: None,
+                title: None,
             },
             commands: Vec::new(),
             color: None,
@@ -778,6 +789,7 @@ pub fn test_launch_config_restores_pinned_tab_group_into_pinned_prefix() -> Buil
                 commands: Vec::new(),
                 pane_mode: PaneMode::Terminal,
                 shell: None,
+                title: None,
             },
             commands: Vec::new(),
             color: None,
@@ -908,6 +920,7 @@ pub fn test_launch_config_restore_keeps_existing_group_contiguous() -> Builder {
                 commands: Vec::new(),
                 pane_mode: PaneMode::Terminal,
                 shell: None,
+                title: None,
             },
             commands: Vec::new(),
             color: None,
@@ -993,5 +1006,72 @@ pub fn test_launch_config_restore_keeps_existing_group_contiguous() -> Builder {
                 // The config's active tab is "first", which the move carried
                 // past the group.
                 .add_assertion(assert_focused_tab_index(2)),
+        )
+}
+
+/// Opening a launch config whose panes carry names must restore those names on
+/// the live panes, and must leave panes without a name unnamed.
+pub fn test_launch_config_restores_pane_names() -> Builder {
+    use warp::launch_configs::launch_config::{
+        LaunchConfig, PaneMode, PaneTemplateType, SplitDirection, TabTemplate, WindowTemplate,
+    };
+
+    fn named_pane(title: Option<&str>) -> PaneTemplateType {
+        PaneTemplateType::PaneTemplate {
+            is_focused: Some(false),
+            cwd: PathBuf::from("/some/path"),
+            commands: Vec::new(),
+            pane_mode: PaneMode::Terminal,
+            shell: None,
+            title: title.map(str::to_owned),
+        }
+    }
+
+    fn create_launch_config() -> LaunchConfig {
+        LaunchConfig {
+            name: "Named panes".to_owned(),
+            active_window_index: Some(0),
+            windows: vec![WindowTemplate {
+                active_tab_index: Some(0),
+                tab_groups: vec![],
+                tabs: vec![TabTemplate {
+                    group: None,
+                    title: None,
+                    layout: PaneTemplateType::PaneBranchTemplate {
+                        split_direction: SplitDirection::Horizontal,
+                        panes: vec![
+                            named_pane(Some("Build")),
+                            named_pane(None),
+                            named_pane(Some("Logs")),
+                        ],
+                    },
+                    commands: Vec::new(),
+                    color: None,
+                }],
+            }],
+        }
+    }
+
+    new_builder()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            new_step_with_default_assertions("Opening a configuration template with named panes")
+                .with_action(move |app, _, _| {
+                    app.dispatch_global_action(
+                        "root_view:open_launch_config",
+                        warp::root_view::OpenLaunchConfigArg {
+                            launch_config: create_launch_config(),
+                            ui_location: get_launch_config_ui_location(),
+                            open_in_active_window: false,
+                        },
+                    );
+                }),
+        )
+        .with_step(
+            new_step_with_default_assertions("Assert each pane kept its own name")
+                .add_assertion(assert_tab_count(1))
+                .add_assertion(assert_pane_custom_name(0, 0, Some("Build")))
+                .add_assertion(assert_pane_custom_name(0, 1, None))
+                .add_assertion(assert_pane_custom_name(0, 2, Some("Logs"))),
         )
 }

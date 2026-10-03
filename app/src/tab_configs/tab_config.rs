@@ -234,6 +234,7 @@ pub fn render_tab_config(
                 is_focused: Some(true),
                 pane_mode: PaneMode::Terminal,
                 shell: None,
+                title: None,
             }
         }
     };
@@ -400,6 +401,9 @@ fn resolve_pane_node(
                 is_focused: Some(is_focused),
                 pane_mode,
                 shell: node.shell.clone(),
+                // Tab configs have no pane-name field of their own; panes they
+                // open fall back to their generated label.
+                title: None,
             },
             explicitly_focused || did_consume,
         ))

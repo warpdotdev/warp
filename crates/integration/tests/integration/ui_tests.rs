@@ -129,6 +129,7 @@ integration_tests! {
     test_launch_config_restores_tab_groups_into_active_window,
     test_launch_config_restores_pinned_tab_group_into_pinned_prefix,
     test_launch_config_restore_keeps_existing_group_contiguous,
+    test_launch_config_restores_pane_names,
     test_find_query_not_evaluated_on_terminal_mode_change,
     test_custom_open_completions_menu_binding,
     test_ssh_with_shell_override,
