@@ -1377,6 +1377,7 @@ fn test_update_file_tree_entry_respects_gitignore() {
         // Compute mutations on the "background thread" then apply on the "main thread".
         let standing_query_definitions = Default::default();
         let (mutations, _, _) = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+            repo_path,
             &update,
             &gitignores,
             &[],
@@ -1877,6 +1878,7 @@ fn added_symlinked_skill_directory_refreshes_provider_without_canonical_tree_mut
         };
         let (mutations, discovered, removed_roots) =
             block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                &repo,
                 &update,
                 &[],
                 &[],
@@ -1919,6 +1921,7 @@ fn unrelated_skill_support_file_does_not_refresh_project_skills() {
             ..Default::default()
         };
         let (_, discovered, _) = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+            &repo,
             &update,
             &[],
             &[],
@@ -1930,11 +1933,66 @@ fn unrelated_skill_support_file_does_not_refresh_project_skills() {
     });
 }
 
+/// A watcher event for a rule file created under a directory that only a nested `.gitignore`
+/// ignores (e.g. `yarn install` populating `client/node_modules`) must not surface a project
+/// rule, and the ignored directory itself stays an unloaded placeholder.
+#[test]
+fn watcher_added_rule_below_nested_gitignored_directory_is_not_recorded() {
+    VirtualFS::test("watcher_nested_gitignored_rule", |dirs, mut vfs| {
+        vfs.mkdir("repo/client/node_modules/pkg").with_files(vec![
+            Stub::FileWithContent("repo/.gitignore", "/dist/\n"),
+            Stub::FileWithContent("repo/client/.gitignore", "/node_modules\n"),
+            Stub::FileWithContent("repo/client/AGENTS.md", "client rules"),
+            Stub::FileWithContent("repo/client/node_modules/pkg/AGENTS.md", "dependency"),
+        ]);
+        let repo = dirs.tests().join("repo");
+        let pkg_dir = repo.join("client/node_modules/pkg");
+        let dependency_rule = pkg_dir.join("AGENTS.md");
+        let client_rule = repo.join("client/AGENTS.md");
+
+        let gitignores = crate::gitignores_for_directory(&repo);
+        let definitions = StandingQueryDefinitions::default();
+        let update = RepoUpdate {
+            added: vec![
+                pkg_dir.clone(),
+                dependency_rule.clone(),
+                client_rule.clone(),
+            ],
+            ..Default::default()
+        };
+        let (mutations, discovered, _) =
+            block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                &repo,
+                &update,
+                &gitignores,
+                &[],
+                &definitions,
+                false,
+            ));
+
+        let rule_paths = discovered
+            .project_rules()
+            .map(|content| content.path.clone())
+            .collect::<Vec<_>>();
+        assert!(rule_paths.contains(&StandardizedPath::try_from_local(&client_rule).unwrap()));
+        assert!(!rule_paths.contains(&StandardizedPath::try_from_local(&dependency_rule).unwrap()));
+
+        assert!(
+            mutations.iter().any(|mutation| matches!(
+                mutation,
+                FileTreeMutation::AddUnloadedDirectory { path, is_ignored: true } if path == &pkg_dir
+            )),
+            "nested-gitignored directory should be an ignored placeholder, got {mutations:?}"
+        );
+    });
+}
+
 #[test]
 fn removed_direct_skill_child_refreshes_provider_for_possible_symlink_removal() {
     VirtualFS::test("removed_direct_skill_child", |dirs, mut vfs| {
         vfs.mkdir("repo/.agents/skills");
-        let provider = dirs.tests().join("repo/.agents/skills");
+        let repo = dirs.tests().join("repo");
+        let provider = repo.join(".agents/skills");
 
         let mut definitions = StandingQueryDefinitions::default();
         definitions.set_project_skill_provider_paths([PathBuf::from(".agents/skills")]);
@@ -1943,6 +2001,7 @@ fn removed_direct_skill_child_refreshes_provider_for_possible_symlink_removal() 
             ..Default::default()
         };
         let (_, discovered, _) = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+            &repo,
             &update,
             &[],
             &[],
@@ -3165,6 +3224,7 @@ fn incremental_force_included_dir_under_ignored_parent_matches_initial_index() {
             };
             let (mutations, _standing_results, _removed) =
                 block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                    &repo_local,
                     &update,
                     &gitignores,
                     &force_included,
@@ -3245,6 +3305,7 @@ fn incremental_deep_event_under_unloaded_ignored_dir_is_collapsed() {
             };
             let (mutations, _standing_results, _removed) =
                 block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                    &repo_local,
                     &update,
                     &gitignores,
                     &[], /* force_included_paths */
@@ -3324,6 +3385,7 @@ fn incremental_event_under_expanded_ignored_dir_keeps_it_loaded() {
             };
             let (mutations, _standing_results, _removed) =
                 block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                    &repo_local,
                     &update,
                     &gitignores,
                     &[], /* force_included_paths */
@@ -3634,6 +3696,7 @@ fn lazy_root_created_directory_inserted_as_placeholder() {
         // subtree is not materialized.
         let mut lazy_root = make_root();
         let (lazy_mutations, _, _) = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+            repo_path,
             &update,
             &[],
             &[],
@@ -3663,6 +3726,7 @@ fn lazy_root_created_directory_inserted_as_placeholder() {
         let mut eager_root = make_root();
         let (eager_mutations, _, _) =
             block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                repo_path,
                 &update,
                 &[],
                 &[],
