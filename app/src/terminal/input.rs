@@ -77,9 +77,7 @@ use warp_errors::{report_error, report_if_error};
 use warp_util::path::ShellFamily;
 pub use warpui::WindowId;
 use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use warpui::r#async::FutureExt as _;
-use warpui::r#async::SpawnedFutureHandle;
+use warpui::r#async::{FutureExt as _, SpawnedFutureHandle};
 use warpui::clipboard::{ClipboardContent, ImageData};
 use warpui::clipboard_utils::CLIPBOARD_IMAGE_MIME_TYPES;
 use warpui::color::ColorU;
@@ -522,6 +520,8 @@ const COMPLETIONS_START_OF_REPLACEMENT_SPAN_POSITION_ID: &str =
 const HISTORY_DETAILS_VIEW_WIDTH_REQUIREMENT: f32 = 1100.;
 
 const MIN_BUFFER_LEN_TO_SHOW_COMPLETIONS_WHILE_TYPING: usize = 2;
+const NATIVE_COMPLETIONS_TIMEOUT: Duration = Duration::from_secs(2);
+const NATIVE_COMPLETIONS_FALLBACK_TIMEOUT: Duration = Duration::from_secs(2);
 
 const AI_COMMAND_SEARCH_TRIGGER: &str = "#";
 const QUEUED_PROMPT_INLINE_EDITOR_OPEN_CONTEXT: &str = "QueuedPromptInlineEditorOpen";
@@ -12925,7 +12925,14 @@ impl Input {
         let abort_handle = ctx
             .spawn_abortable(
                 async move {
-                    let native_suggestions = results_rx.recv().await.ok().map(|(results, span)| {
+                    let native_results = results_rx
+                        .recv()
+                        .with_timeout(NATIVE_COMPLETIONS_TIMEOUT)
+                        .await
+                        .ok()
+                        .and_then(Result::ok);
+                    results_rx.close();
+                    let native_suggestions = native_results.map(|(results, span)| {
                         native_shell_suggestion_results(
                             results,
                             span,
@@ -12934,22 +12941,25 @@ impl Input {
                         )
                     });
                     let suggestions = match native_suggestions {
-                        Some(suggestions) if suggestions.suggestions.is_empty() => {
-                            completer::suggestions(
-                                &buffer_text[..cursor_position],
-                                cursor_position,
-                                session_env_vars.as_ref(),
-                                CompleterOptions {
-                                    match_strategy: matcher,
-                                    fallback_strategy: CompletionsFallbackStrategy::FilePaths,
-                                    suggest_file_path_completions_only: true,
-                                    parse_quotes_as_literals: false,
-                                },
-                                &completion_context,
-                            )
-                            .await
+                        Some(suggestions) if !suggestions.suggestions.is_empty() => {
+                            Some(suggestions)
                         }
-                        suggestions => suggestions,
+                        Some(_) | None => completer::suggestions(
+                            &buffer_text[..cursor_position],
+                            cursor_position,
+                            session_env_vars.as_ref(),
+                            CompleterOptions {
+                                match_strategy: matcher,
+                                fallback_strategy: CompletionsFallbackStrategy::FilePaths,
+                                suggest_file_path_completions_only: true,
+                                parse_quotes_as_literals: false,
+                            },
+                            &completion_context,
+                        )
+                        .with_timeout(NATIVE_COMPLETIONS_FALLBACK_TIMEOUT)
+                        .await
+                        .ok()
+                        .flatten(),
                     };
                     (suggestions, completions_trigger, editor_snapshot)
                 },

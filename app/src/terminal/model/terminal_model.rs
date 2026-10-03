@@ -968,6 +968,10 @@ impl TerminalModel {
     pub fn set_is_input_dirty(&mut self, value: bool) {
         self.is_input_dirty = value;
     }
+
+    pub(crate) fn discard_completions_output(&mut self) {
+        self.is_receiving_completions_output = IsReceivingCompletionsOutput::No;
+    }
     #[cfg(any(test, feature = "test-util"))]
     #[allow(clippy::too_many_arguments)]
     /// Returns a bootstrapped `TerminalModel` with no restored blocks

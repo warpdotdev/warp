@@ -107,7 +107,11 @@ impl<T: EventLoopSender> PtyController<T> {
             ModelEvent::Handler(AnsiHandlerEvent::InitShell {
                 pending_session_info,
             }) => {
+                me.finish_native_completions();
                 me.initialize_shell(pending_session_info.as_ref(), ctx);
+            }
+            ModelEvent::Handler(AnsiHandlerEvent::InBandCommandFinished) => {
+                me.finish_native_completions();
             }
             ModelEvent::Handler(AnsiHandlerEvent::Bootstrapped { is_subshell, .. }) => {
                 me.shell_bootstrapped(*is_subshell);
@@ -129,11 +133,10 @@ impl<T: EventLoopSender> PtyController<T> {
                 }
             }
             ModelEvent::CompletionsFinished(data, replacement_span) => {
-                let Some(results_tx) = me.in_flight_native_completions_results_tx.take() else {
-                    log::warn!("Received CompletionsFinished event but didn't have a channel to send results over!");
+                let Some(results_tx) = &me.in_flight_native_completions_results_tx else {
                     return;
                 };
-                let _ = block_on(results_tx.send((data.clone(), *replacement_span)));
+                let _ = results_tx.try_send((data.clone(), *replacement_span));
             }
             _ => (),
         });
@@ -641,9 +644,19 @@ impl<T: EventLoopSender> PtyController<T> {
                 shell_type,
                 results_tx,
             } => {
+                if results_tx.is_closed() {
+                    return false;
+                }
+                if !self
+                    .terminal_model
+                    .lock()
+                    .start_in_band_command_execution()
+                    .is_accepted()
+                {
+                    results_tx.close();
+                    return false;
+                }
                 self.in_flight_native_completions_results_tx = Some(results_tx);
-
-                let terminal_model = self.terminal_model.clone();
                 (
                     Cow::Owned(bytes_to_execute_command(
                         command.as_str(),
@@ -651,10 +664,7 @@ impl<T: EventLoopSender> PtyController<T> {
                         self.is_bracketed_paste_enabled,
                     )),
                     true,
-                    Some(
-                        Box::new(move || terminal_model.lock().start_in_band_command_execution())
-                            as Box<dyn Fn() -> StartCommandOutcome + Send + 'static>,
-                    ),
+                    None,
                     Some(shell_type),
                 )
             }
@@ -710,6 +720,12 @@ impl<T: EventLoopSender> PtyController<T> {
         results_tx: async_channel::Sender<(Vec<ShellCompletion>, Option<Span>)>,
         ctx: &mut ModelContext<Self>,
     ) {
+        // OSC completion frames have no request ID. Keep ownership through the foreground
+        // command's ordered completion boundary, even if its response receiver has timed out.
+        if self.in_flight_native_completions_results_tx.is_some() {
+            results_tx.close();
+            return;
+        }
         let Some(shell_type) = self
             .model_event_dispatcher
             .as_ref(ctx)
@@ -735,6 +751,13 @@ impl<T: EventLoopSender> PtyController<T> {
                 results_tx,
             });
         self.execute_next_queued_write(ctx);
+    }
+
+    fn finish_native_completions(&mut self) {
+        if let Some(results_tx) = self.in_flight_native_completions_results_tx.take() {
+            self.terminal_model.lock().discard_completions_output();
+            results_tx.close();
+        }
     }
 }
 

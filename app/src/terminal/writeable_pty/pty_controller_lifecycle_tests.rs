@@ -1,17 +1,36 @@
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use parking_lot::{FairMutex, Mutex};
+use warp_core::telemetry::testing::MockTelemetryContextProvider;
 use warpui::App;
+use warpui::r#async::FutureExt as _;
 
 use super::*;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::StartCommandOutcome;
-use crate::terminal::model::ansi::{Handler, PreexecValue};
+use crate::terminal::model::ansi::{Handler, PreexecValue, PromptMarker};
 use crate::terminal::model::session::{SessionId, SessionInfo, Sessions};
+use crate::test_util::assert_eventually;
 
 #[derive(Clone, Default)]
 struct TestEventLoopSender {
     messages: Arc<Mutex<Vec<Message>>>,
+}
+impl TestEventLoopSender {
+    fn written_bytes(&self) -> Vec<u8> {
+        self.messages
+            .lock()
+            .iter()
+            .filter_map(|message| match message {
+                Message::Input(bytes) => Some(&bytes[..]),
+                _ => None,
+            })
+            .flatten()
+            .copied()
+            .collect()
+    }
 }
 
 impl EventLoopSender for TestEventLoopSender {
@@ -202,6 +221,271 @@ fn native_shell_completions_reports_no_matches_without_an_active_session() {
         assert!(sender.messages.lock().is_empty());
 
         drop(model_events_tx);
+    });
+}
+
+struct NativeCompletionController {
+    controller: ModelHandle<PtyController<TestEventLoopSender>>,
+    model: Arc<FairMutex<TerminalModel>>,
+    sender: TestEventLoopSender,
+    model_events: ModelHandle<ModelEventDispatcher>,
+}
+
+fn native_completion_controller(app: &mut App) -> NativeCompletionController {
+    let (model_events_tx, model_events_rx) = async_channel::unbounded();
+    let event_proxy = ChannelEventListener::builder_for_test()
+        .with_terminal_events_tx(model_events_tx)
+        .build();
+    let model = Arc::new(FairMutex::new(TerminalModel::mock(None, Some(event_proxy))));
+    while model_events_rx.try_recv().is_ok() {}
+    let (_executor_command_tx, executor_command_rx) = async_channel::unbounded();
+    let sessions = app.add_model(|_| {
+        let mut sessions = Sessions::new_for_test();
+        sessions
+            .register_session_for_test(SessionInfo::new_for_test().with_shell_type(ShellType::Zsh));
+        sessions
+    });
+    let model_events = app.add_model(|ctx| {
+        let mut dispatcher = ModelEventDispatcher::new(model_events_rx, sessions.clone(), ctx);
+        dispatcher.set_active_session_id(SessionInfo::new_for_test().session_id);
+        dispatcher
+    });
+    let line_editor_status =
+        app.add_model(|ctx| LineEditorStatus::new(model_events.clone(), sessions.clone(), ctx));
+    let sender = TestEventLoopSender::default();
+    let controller = app.add_model(|ctx| {
+        PtyController::new(
+            sender.clone(),
+            model_events.clone(),
+            line_editor_status,
+            sessions,
+            executor_command_rx,
+            model.clone(),
+            ctx,
+        )
+    });
+    NativeCompletionController {
+        controller,
+        model,
+        sender,
+        model_events,
+    }
+}
+
+fn native_completion_prompt(model: &mut TerminalModel) {
+    model.simulate_cmd("initial prompt");
+    model.finish_block();
+    model.prompt_marker(PromptMarker::EndPrompt);
+}
+
+#[test]
+fn retired_native_completion_cannot_deliver_a_late_reply_to_another_request() {
+    App::test((), |mut app| async move {
+        app.update(MockTelemetryContextProvider::register);
+        let NativeCompletionController {
+            controller,
+            model,
+            sender,
+            model_events,
+        } = native_completion_controller(&mut app);
+        let NativeCompletionController {
+            controller: other_controller,
+            model: other_model,
+            sender: other_sender,
+            ..
+        } = native_completion_controller(&mut app);
+        let late_reply_dispatched = Rc::new(Cell::new(false));
+        let command_finished = Rc::new(Cell::new(false));
+        let late_reply_dispatched_for_subscription = late_reply_dispatched.clone();
+        let command_finished_for_subscription = command_finished.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&model_events, move |_, event, _| match event {
+                ModelEvent::CompletionsFinished(..) => {
+                    late_reply_dispatched_for_subscription.set(true);
+                }
+                ModelEvent::Handler(AnsiHandlerEvent::InBandCommandFinished) => {
+                    command_finished_for_subscription.set(true);
+                }
+                _ => (),
+            });
+        });
+        let (first_tx, first_rx) = async_channel::unbounded();
+        controller.update(&mut app, |controller, ctx| {
+            controller.run_native_shell_completions("first ".to_owned(), first_tx, ctx);
+        });
+        assert!(sender.written_bytes().is_empty());
+        native_completion_prompt(&mut model.lock());
+        assert_eventually!(
+            String::from_utf8_lossy(&sender.written_bytes())
+                .contains("warp_run_generator_command_native_completions 666972737420"),
+            "the prompt should dispatch the first native command"
+        );
+        sender.messages.lock().clear();
+        first_rx.close();
+
+        let (second_tx, second_rx) = async_channel::unbounded();
+        controller.update(&mut app, |controller, ctx| {
+            controller.run_native_shell_completions("second ".to_owned(), second_tx, ctx);
+        });
+        assert!(second_rx.is_closed());
+        assert!(sender.messages.lock().is_empty());
+        model
+            .lock()
+            .process_bytes(b"\x1b]9280;A\x07\x1b]9280;C;7374616c65\x07\x1b]9280;B\x07" as &[u8]);
+        assert_eventually!(
+            late_reply_dispatched.get(),
+            "the late completion event should reach the controller before the next request"
+        );
+        let (blocked_tx, blocked_rx) = async_channel::unbounded();
+        controller.update(&mut app, |controller, ctx| {
+            controller.run_native_shell_completions("still blocked ".to_owned(), blocked_tx, ctx);
+        });
+        assert!(blocked_rx.is_closed());
+        assert!(sender.written_bytes().is_empty());
+
+        let (other_tx, other_rx) = async_channel::unbounded();
+        other_controller.update(&mut app, |controller, ctx| {
+            controller.run_native_shell_completions("other ".to_owned(), other_tx, ctx);
+        });
+        native_completion_prompt(&mut other_model.lock());
+        assert_eventually!(
+            String::from_utf8_lossy(&other_sender.written_bytes())
+                .contains("warp_run_generator_command_native_completions 6f7468657220"),
+            "quarantine should not block another PTY"
+        );
+        assert!(!other_rx.is_closed());
+
+        model
+            .lock()
+            .process_bytes(b"\x1b]9280;A\x07\x1b]9280;C;7374616c65\x07" as &[u8]);
+        model.lock().finish_block();
+        assert_eventually!(
+            command_finished.get(),
+            "the completed native command should release quarantine"
+        );
+
+        let (fresh_tx, fresh_rx) = async_channel::unbounded();
+        controller.update(&mut app, |controller, ctx| {
+            controller.run_native_shell_completions("fresh ".to_owned(), fresh_tx, ctx);
+        });
+        assert!(sender.written_bytes().is_empty());
+        model.lock().process_bytes(b"\x1b]9280;B\x07" as &[u8]);
+        model.lock().prompt_marker(PromptMarker::EndPrompt);
+        assert_eventually!(
+            String::from_utf8_lossy(&sender.written_bytes())
+                .contains("warp_run_generator_command_native_completions 667265736820"),
+            "the next prompt should dispatch the fresh native command"
+        );
+        model
+            .lock()
+            .process_bytes(b"\x1b]9280;A\x07\x1b]9280;C;6672657368\x07\x1b]9280;B\x07" as &[u8]);
+        let (completions, span) = fresh_rx
+            .recv()
+            .with_timeout(std::time::Duration::from_secs(5))
+            .await
+            .unwrap()
+            .unwrap();
+        let completions = completions
+            .into_iter()
+            .map(|completion| {
+                warp_completer::completer::MatchedSuggestion::from(completion)
+                    .suggestion
+                    .display
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(completions, vec!["fresh"]);
+        assert_eq!(span, None);
+    });
+}
+
+#[test]
+fn native_command_finished_without_a_reply_closes_the_receiver_and_allows_another_request() {
+    App::test((), |mut app| async move {
+        app.update(MockTelemetryContextProvider::register);
+        let NativeCompletionController {
+            controller,
+            model,
+            sender,
+            ..
+        } = native_completion_controller(&mut app);
+        let (first_tx, first_rx) = async_channel::unbounded();
+        controller.update(&mut app, |controller, ctx| {
+            controller.run_native_shell_completions("first ".to_owned(), first_tx, ctx);
+        });
+        native_completion_prompt(&mut model.lock());
+        assert_eventually!(
+            String::from_utf8_lossy(&sender.written_bytes())
+                .contains("warp_run_generator_command_native_completions 666972737420"),
+            "the prompt should dispatch the first native command"
+        );
+        model.lock().finish_block();
+        assert_eventually!(
+            first_rx.is_closed(),
+            "the missing response should not wait after command completion"
+        );
+
+        let (second_tx, second_rx) = async_channel::unbounded();
+        controller.update(&mut app, |controller, ctx| {
+            controller.run_native_shell_completions("second ".to_owned(), second_tx, ctx);
+        });
+        first_rx.close();
+        model.lock().prompt_marker(PromptMarker::EndPrompt);
+        assert_eventually!(
+            String::from_utf8_lossy(&sender.written_bytes())
+                .contains("warp_run_generator_command_native_completions 7365636f6e6420"),
+            "a completed command should not leave the next request quarantined"
+        );
+        model
+            .lock()
+            .process_bytes(b"\x1b]9280;A\x07\x1b]9280;C;76616c6964\x07\x1b]9280;B\x07" as &[u8]);
+        let (completions, _) = second_rx
+            .recv()
+            .with_timeout(std::time::Duration::from_secs(5))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(completions.len(), 1);
+    });
+}
+
+#[test]
+fn retired_queued_native_completion_does_not_write_to_the_pty() {
+    App::test((), |mut app| async move {
+        app.update(MockTelemetryContextProvider::register);
+        let NativeCompletionController {
+            controller,
+            model,
+            sender,
+            ..
+        } = native_completion_controller(&mut app);
+        let (results_tx, results_rx) = async_channel::unbounded();
+        controller.update(&mut app, |controller, ctx| {
+            controller.run_native_shell_completions("expired ".to_owned(), results_tx, ctx);
+        });
+        results_rx.close();
+        native_completion_prompt(&mut model.lock());
+        assert_eventually!(
+            controller.read(&app, |controller, ctx| controller
+                .line_editor_status
+                .as_ref(ctx)
+                .is_line_editor_active()),
+            "the prompt should drain expired native writes without consuming line-editor readiness"
+        );
+        assert!(
+            !String::from_utf8_lossy(&sender.written_bytes())
+                .contains("warp_run_generator_command_native_completions")
+        );
+
+        let (fresh_tx, fresh_rx) = async_channel::unbounded();
+        controller.update(&mut app, |controller, ctx| {
+            controller.run_native_shell_completions("fresh ".to_owned(), fresh_tx, ctx);
+        });
+        assert!(!fresh_rx.is_closed());
+        assert!(
+            String::from_utf8_lossy(&sender.written_bytes())
+                .contains("warp_run_generator_command_native_completions 667265736820")
+        );
     });
 }
 

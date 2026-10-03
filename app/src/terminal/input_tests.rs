@@ -96,7 +96,9 @@ use crate::terminal::model::block::{BlockId, SerializedBlock};
 use crate::terminal::model::blocks::{BlockListPoint, insert_block};
 use crate::terminal::model::grid::Dimensions as _;
 use crate::terminal::model::index::Side;
-use crate::terminal::model::session::command_executor::{CommandExecutor, ExecuteCommandOptions};
+use crate::terminal::model::session::command_executor::{
+    CommandExecutor, ExecuteCommandOptions, ExecutorCommandEvent, InBandCommandExecutor,
+};
 use crate::terminal::model::session::{BootstrapSessionType, SessionInfo};
 use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::model_events::ModelEvent;
@@ -3858,6 +3860,218 @@ fn combined_completions_show_file_paths_after_empty_native_results() {
                 })
             }),
             "gave up waiting for file paths after empty bundled and native completions"
+        );
+    });
+}
+
+#[test]
+fn combined_completions_show_file_paths_when_native_response_times_out() {
+    let _native_completions_flag = FeatureFlag::NativeShellCompletions.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.update(|ctx| {
+            InputSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .warp_completions_enabled
+                    .set_value(true, ctx)
+                    .unwrap();
+                settings
+                    .native_shell_completions_enabled
+                    .set_value(true, ctx)
+                    .unwrap();
+            });
+        });
+
+        let working_directory = tempfile::TempDir::new().unwrap();
+        std::fs::write(working_directory.path().join("alpha.dart"), "").unwrap();
+        std::fs::write(working_directory.path().join("beta.dart"), "").unwrap();
+        let session_info = SessionInfo::new_for_test();
+        let session_id = session_info.session_id;
+        let terminal =
+            add_window_with_bootstrapped_terminal(&mut app, None, Some(session_info)).await;
+        simulate_directory_for_completion(
+            session_id,
+            &terminal,
+            &mut app,
+            working_directory.path().to_string_lossy(),
+        );
+        let native_reply = Rc::new(RefCell::new(None));
+        let native_reply_for_subscription = native_reply.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event: &TerminalViewEvent, _| {
+                if let TerminalViewEvent::RunNativeShellCompletions { results_tx, .. } = event {
+                    *native_reply_for_subscription.borrow_mut() = Some(results_tx.clone());
+                }
+            });
+        });
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("warptool ./", ctx);
+            input.input_tab(ctx);
+        });
+
+        assert_eventually!(
+            2000 => input.read(&app, |input, ctx| {
+                let items = input.input_suggestions.as_ref(ctx).items();
+                items.len() == 2
+                    && items.iter().any(|item| item.text().ends_with("alpha.dart"))
+                    && items.iter().any(|item| item.text().ends_with("beta.dart"))
+            }),
+            "file paths should appear even when the native sender never responds"
+        );
+        assert!(native_reply.borrow().as_ref().unwrap().is_closed());
+    });
+}
+
+#[test]
+fn native_completions_cancel_filepath_fallback_waiting_for_in_band_executor() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        let (executor_command_tx, executor_command_rx) = async_channel::unbounded();
+        let (cancel_tx, _cancel_rx) = async_channel::unbounded();
+        let session = Arc::new(Session::new(
+            SessionInfo::new_for_test()
+                .with_session_type(BootstrapSessionType::WarpifiedRemote)
+                .with_shell_type(ShellType::Zsh),
+            Arc::new(InBandCommandExecutor::new(executor_command_tx, cancel_tx)),
+        ));
+        let native_reply = Rc::new(RefCell::new(None));
+        let native_reply_for_subscription = native_reply.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event: &TerminalViewEvent, _| {
+                if let TerminalViewEvent::RunNativeShellCompletions { results_tx, .. } = event {
+                    *native_reply_for_subscription.borrow_mut() = Some(results_tx.clone());
+                }
+            });
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("warptool ./", ctx);
+            input.handle_completion_suggestions_results(
+                build_suggestion_results(
+                    vec![file_suggestion("./alpha"), file_suggestion("./beta")],
+                    (9, 11),
+                    MatchStrategy::CaseInsensitive,
+                ),
+                CompletionsTrigger::Keybinding,
+                editor_model_snapshot(input, ctx),
+                ctx,
+            );
+            input.dispatch_native_shell_completions(
+                "warptool ./".to_owned(),
+                11,
+                MatchStrategy::Fuzzy,
+                SessionContext::new(
+                    session,
+                    Arc::new(CommandRegistry::empty()),
+                    typed_path::TypedPathBuf::from_unix("/uncached-remote-directory"),
+                    ctx,
+                ),
+                None,
+                CompletionsTrigger::Keybinding,
+                editor_model_snapshot(input, ctx),
+                ctx,
+            );
+        });
+        input.read(&app, |input, ctx| {
+            assert!(matches!(
+                input.suggestions_mode_model.as_ref(ctx).mode(),
+                InputSuggestionsMode::CompletionSuggestions { .. }
+            ));
+        });
+
+        let ExecutorCommandEvent::ExecuteCommand { command, .. } = executor_command_rx
+            .recv()
+            .with_timeout(Duration::from_secs(10))
+            .await
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("expected an in-band directory listing");
+        };
+        assert!(command.command.contains("/uncached-remote-directory"));
+        assert!(native_reply.borrow().as_ref().unwrap().is_closed());
+
+        let ExecutorCommandEvent::CancelCommand { id } = executor_command_rx
+            .recv()
+            .with_timeout(Duration::from_secs(10))
+            .await
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("the unavailable listing should be cancelled");
+        };
+        assert_eq!(id, command.command_id);
+        assert_eventually!(
+            input.read(&app, |input, ctx| matches!(
+                input.suggestions_mode_model.as_ref(ctx).mode(),
+                InputSuggestionsMode::Closed
+            )),
+            "an unavailable cold in-band listing should finish without suggestions"
+        );
+    });
+}
+
+#[test]
+fn native_only_completions_show_file_paths_when_response_channel_closes() {
+    let _native_completions_flag = FeatureFlag::NativeShellCompletions.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.update(|ctx| {
+            InputSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .warp_completions_enabled
+                    .set_value(false, ctx)
+                    .unwrap();
+                settings
+                    .native_shell_completions_enabled
+                    .set_value(true, ctx)
+                    .unwrap();
+            });
+        });
+        let working_directory = tempfile::TempDir::new().unwrap();
+        std::fs::write(working_directory.path().join("alpha.dart"), "").unwrap();
+        std::fs::write(working_directory.path().join("beta.dart"), "").unwrap();
+        let session_info = SessionInfo::new_for_test();
+        let session_id = session_info.session_id;
+        let terminal =
+            add_window_with_bootstrapped_terminal(&mut app, None, Some(session_info)).await;
+        simulate_directory_for_completion(
+            session_id,
+            &terminal,
+            &mut app,
+            working_directory.path().to_string_lossy(),
+        );
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, |_, event: &TerminalViewEvent, _| {
+                if let TerminalViewEvent::RunNativeShellCompletions { results_tx, .. } = event {
+                    results_tx.close();
+                }
+            });
+        });
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("warptool ./", ctx);
+            input.input_tab(ctx);
+        });
+
+        assert_eventually!(
+            600 => input.read(&app, |input, ctx| {
+                let items = input.input_suggestions.as_ref(ctx).items();
+                items.len() == 2
+                    && items.iter().any(|item| item.text().ends_with("alpha.dart"))
+                    && items.iter().any(|item| item.text().ends_with("beta.dart"))
+            }),
+            "a closed native channel should fall back to file paths"
         );
     });
 }
