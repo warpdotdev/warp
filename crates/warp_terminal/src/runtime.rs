@@ -14,6 +14,17 @@ const MIN_ROWS: usize = 1;
 ///
 /// A minimum of 2 is necessary to hold fullwidth unicode characters.
 const MIN_COLUMNS: usize = 2;
+
+/// Maximum number of visible rows/columns [`SizeInfo::new`] will ever report.
+///
+/// `rows`/`columns` become the capacity of the terminal grid's underlying `Vec<Row>` allocation
+/// (see `Storage::with_capacity`), so an implausible `pane_size_px` — e.g. one computed before
+/// real window geometry is established — must not translate into an unbounded allocation. These
+/// values comfortably exceed what any real display could need (an 8K-wide, multi-monitor span
+/// with a 2px cell would still be well under this), while capping worst-case grid memory at a
+/// few hundred MB instead of many GB (see APP-5808).
+const MAX_ROWS: usize = 2_000;
+const MAX_COLUMNS: usize = 2_000;
 /// Terminal size info.
 ///
 /// Note that this implements Serialize/Deserialize for ref tests.
@@ -88,8 +99,8 @@ impl SizeInfo {
         SizeInfo {
             pane_width_px: pane_size_px.x(),
             pane_height_px: pane_size_px.y(),
-            columns: max(columns as usize, MIN_COLUMNS),
-            rows: max(rows as usize, MIN_ROWS),
+            columns: max(columns as usize, MIN_COLUMNS).min(MAX_COLUMNS),
+            rows: max(rows as usize, MIN_ROWS).min(MAX_ROWS),
             cell_width_px,
             cell_height_px,
             padding_x_px: padding_x_px.floor(),
@@ -187,14 +198,19 @@ impl SizeInfo {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
 pub enum ClipboardType {
     Clipboard,
     Selection,
 }
+
 #[derive(Clone, Copy, Debug, Serialize)]
 pub enum ImageProtocol {
     Kitty,
     ITerm,
 }
+
+#[cfg(test)]
+#[path = "runtime_tests.rs"]
+mod tests;
