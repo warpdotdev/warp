@@ -35,6 +35,12 @@ allow = [
     "Zlib",
 ]
 
+# winx is a Windows-only cap-std dependency; its LLVM exception relaxes Apache-2.0 obligations.
+[[licenses.exceptions]]
+name = "winx"
+version = "=0.36.4"
+allow = ["Apache-2.0 WITH LLVM-exception"]
+
 [bans]
 # We allow dependencies on multiple versions of crates.
 multiple-versions = "allow"

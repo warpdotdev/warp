@@ -38,6 +38,7 @@ use warp_core::safe_info;
 use warp_errors::{ErrorExt, register_error};
 
 mod discovery;
+pub mod metadata;
 pub mod spacectl;
 
 #[cfg(test)]
@@ -337,6 +338,7 @@ pub struct CacheSetupReport {
     pub plan: Option<CacheSetupPlan>,
     pub invocations: Vec<CachePreparationReport>,
     pub add_envs: BTreeMap<String, String>,
+    pub mounted_paths: Vec<spacectl::Mount>,
 }
 
 impl CacheSetupReport {
@@ -646,6 +648,7 @@ where
         };
 
         if let Some(response) = &invocation.response {
+            report.mounted_paths.extend(response.output.mounts.clone());
             tracing::info!(cache_result = ?response.output, modes = ?response.input.modes, scope = ?configuration.scope, "Mounted cache paths");
 
             match &configuration.scope {

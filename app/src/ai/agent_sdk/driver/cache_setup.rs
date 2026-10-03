@@ -73,13 +73,18 @@ pub(super) async fn setup_caches(
         })
         .collect();
     let report = build_cache::setup_cache(
-        cache_root,
+        cache_root.clone(),
         repositories,
         build_cache::global_cache_modes(),
         build_cache::default_run_command,
     )
     .await;
 
+    if let Err(error) =
+        build_cache::metadata::write_cache_metadata(&cache_root, &report.mounted_paths, [])
+    {
+        log::warn!("Namespace cache usage metadata was not updated: {error}");
+    }
     let mut degraded = report_degradations(&report);
 
     if !report.add_envs.is_empty() {

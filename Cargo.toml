@@ -134,6 +134,9 @@ blocking = "1.6.2"
 bounded-vec-deque = "0.1"
 bytemuck = { version = "1.13.1" }
 bytes = { version = "1.11.1", features = ["serde"] }
+cap-fs-ext = "4.0.3"
+cap-std = "4.0.3"
+cap-tempfile = "4.0.3"
 command-corrections = { git = "https://github.com/warpdotdev/command-corrections.git", rev = "eae08c8c51d9bc9741fcb17eef2c21f696aebbeb" }
 core-foundation = "0.10.1"
 concat-idents = "1.1.4"

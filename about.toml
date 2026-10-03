@@ -47,3 +47,6 @@ workarounds = [
 #   - warp-completion-metadata
 #   - warp-workflows
 #   - warp-workflows-types
+
+[winx]
+accepted = ["Apache-2.0 WITH LLVM-exception"]

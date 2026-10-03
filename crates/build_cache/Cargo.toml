@@ -8,6 +8,10 @@ license.workspace = true
 
 [dependencies]
 async-io.workspace = true
+cap-fs-ext.workspace = true
+cap-std.workspace = true
+cap-tempfile.workspace = true
+chrono.workspace = true
 command.workspace = true
 futures.workspace = true
 futures-lite.workspace = true
@@ -29,4 +33,5 @@ warp_errors.workspace = true
 walkdir.workspace = true
 
 [dev-dependencies]
+nix = { workspace = true, features = ["fs"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
