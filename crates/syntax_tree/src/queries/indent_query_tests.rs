@@ -216,6 +216,64 @@ fn test_indent_query_on_go() {
 }
 
 #[test]
+fn test_indent_query_on_dart_widget_tree() {
+    App::test((), |mut app| async move {
+        let language = language_by_filename(&test_path("main.dart"))
+            .expect("Should contain language rule for Dart");
+        let text_content = r#"class Probe {
+  Widget build() {
+    return Column(
+      children: [
+        Text('hello'),
+      ],
+    );
+  }
+}"#;
+
+        let buffer_handle = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer_handle.clone()));
+
+        buffer_handle.update(&mut app, |buffer, ctx| {
+            *buffer = Buffer::from_plain_text(
+                text_content,
+                None,
+                Box::new(|_, _| IndentBehavior::Ignore),
+                selection,
+                ctx,
+            );
+        });
+
+        let buffer_snapshot = buffer_handle.read(&app, |buffer, _| buffer.buffer_snapshot());
+        let tree = SyntaxTreeState::parse_text(buffer_snapshot, None, &language)
+            .await
+            .expect("test buffer is small and should parse");
+        let query = language
+            .indents_query
+            .as_ref()
+            .expect("Dart should provide an indentation query");
+
+        buffer_handle.read(&app, |buffer, _| {
+            for (row, column, expected_delta) in [
+                (1, 0, 1),
+                (2, 0, 2),
+                (3, 0, 3),
+                (4, 0, 4),
+                (5, 6, 3),
+                (6, 4, 2),
+            ] {
+                assert_eq!(
+                    indentation_delta(buffer, &tree, Point { row, column }, query)
+                        .expect("indentation should be available")
+                        .delta,
+                    expected_delta,
+                    "unexpected Dart indentation on row {row}",
+                );
+            }
+        });
+    });
+}
+
+#[test]
 fn test_indent_query_on_go_bracket_expansion() {
     let language =
         language_by_filename(&test_path("test.go")).expect("Should contain language rule for go");
