@@ -298,6 +298,11 @@ pub trait Handler {
     /// ssh tunnel starts tearing down, so its ControlMaster can exit cleanly
     /// rather than hanging on orphaned multiplexed channels.
     fn exit_shell(&mut self, _data: ExitShellValue) {}
+    fn powershell_table_begin(&mut self, _data: PowerShellTableBeginValue) {}
+
+    fn powershell_table_rows(&mut self, _data: PowerShellTableRowsValue) {}
+
+    fn powershell_table_end(&mut self, _data: PowerShellTableEndValue) {}
 
     /// Callback for the terminal to when user executes `clear` command.
     fn clear(&mut self, _data: ClearValue) {}

@@ -161,6 +161,73 @@ fn classifies_next_block_ids_relative_to_the_active_block() {
         NextBlockIdDisposition::ActiveDuplicate
     );
 }
+
+#[test]
+fn powershell_rich_table_stays_between_command_and_following_output() {
+    let block_sizes = BlockSize {
+        size: SizeInfo::new_without_font_metrics(80, 20),
+        ..test_utils::block_size()
+    };
+    let mut block_list = new_bootstrapped_block_list(
+        Some(block_sizes),
+        None,
+        ChannelEventListener::new_for_test(),
+    );
+
+    block_list.start_active_block();
+    input_string(&mut block_list, "Get-Thing");
+    block_list.preexec(Default::default());
+    let command_block_index = block_list.active_block_index();
+
+    block_list.split_active_block_for_powershell_rich_table();
+    let continuation_block_index = block_list.active_block_index();
+    let table_view_id = EntityId::new();
+    block_list.append_rich_content(
+        RichContentItem::new_for_test(Some(RichContentType::PowerShellTable), table_view_id, None),
+        false,
+    );
+    input_string(&mut block_list, "after-table");
+
+    let table_total_index = block_list
+        .removable_blocklist_item_positions
+        .get(&RemovableBlocklistItem::RichContent(table_view_id))
+        .copied()
+        .expect("PowerShell table should be in the block list");
+    assert_eq!(
+        command_block_index.to_total_index(&block_list),
+        TotalIndex(2)
+    );
+    assert_eq!(table_total_index, TotalIndex(3));
+    assert_eq!(
+        continuation_block_index.to_total_index(&block_list),
+        TotalIndex(4)
+    );
+    let continuation_block = block_list
+        .block_at(continuation_block_index)
+        .expect("continuation block should exist");
+    assert_eq!(continuation_block.output_to_string(), "after-table");
+    assert!(continuation_block.should_hide_command_grid());
+
+    block_list.complete_active_block_and_advance(CompletionMetadata {
+        exit_code: 7.into(),
+        next_block_id: BlockId::new(),
+    });
+
+    assert_eq!(
+        block_list
+            .block_at(command_block_index)
+            .expect("command block should exist")
+            .exit_code(),
+        7.into()
+    );
+    assert_eq!(
+        block_list
+            .block_at(continuation_block_index)
+            .expect("continuation block should exist")
+            .exit_code(),
+        7.into()
+    );
+}
 fn drain_terminal_events(events_rx: &async_channel::Receiver<Event>) -> Vec<Event> {
     let mut events = Vec::new();
     while let Ok(event) = events_rx.try_recv() {
