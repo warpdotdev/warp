@@ -1,7 +1,7 @@
 pub mod iap;
 
 use std::future::Future;
-use std::pin::Pin;
+use std::pin::{Pin, pin};
 use std::sync::Arc;
 use std::time::Duration;
 use std::{fmt, future};
@@ -22,7 +22,7 @@ use serde::de::DeserializeOwned;
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::execution_mode;
 use warp_core::operating_system_info::OperatingSystemInfo;
-use warp_errors::report_error;
+use warp_errors::{ReportErrorLogMode, report_error};
 
 use crate::iap::{IapTokenProvider, proxy_auth_header};
 
@@ -762,6 +762,52 @@ impl Response {
         self.0.bytes_stream()
     }
 
+    /// Reads the full response body, aborting as soon as more than `limit` bytes have been
+    /// received, rather than buffering the whole body unconditionally like [`Self::bytes`].
+    /// Chunks are accumulated as they arrive via [`Self::bytes_stream`], so an oversized body is
+    /// never fully materialized in memory -- *on native targets*.
+    ///
+    /// On `wasm32`, `reqwest`'s `bytes_stream()` copies each browser-delivered chunk into an
+    /// owned buffer (`Uint8Array::copy_to`) before this method ever sees it, so a single
+    /// oversized chunk can already be materialized in memory before the length check below
+    /// runs; this method only bounds the *running total* across chunks there, not each
+    /// individual chunk. This method's only current caller (the `oauth2::AsyncHttpClient`
+    /// adapter below, used exclusively by the OAuth device-code flow) never runs on wasm --
+    /// `AuthManager::authorize_device` and `on_device_code_received` in
+    /// `app/src/auth/auth_manager.rs` are both `#[cfg_attr(target_family = "wasm", allow(dead_code))]`
+    /// -- so this is not a live gap today, but a future wasm caller must not assume the
+    /// per-chunk bound holds there.
+    ///
+    /// Because `reqwest` transparently decompresses the response body, `limit` applies to
+    /// *decompressed* bytes as they stream in, which also bounds decompression-bomb
+    /// amplification (again, subject to the wasm caveat above).
+    ///
+    /// The `Content-Length` header, when present, is used only as a cheap early-rejection hint:
+    /// a hostile or misconfigured peer controls that header, so it is never trusted to size an
+    /// allocation.
+    pub async fn bytes_limited(self, limit: usize) -> Result<Bytes, BodyReadError> {
+        if let Some(content_length) = self
+            .headers()
+            .get(http::header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            && content_length > limit as u64
+        {
+            return Err(BodyReadError::TooLarge { limit });
+        }
+
+        let mut body = Vec::new();
+        let mut stream = pin!(self.bytes_stream());
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            if body.len().saturating_add(chunk.len()) > limit {
+                return Err(BodyReadError::TooLarge { limit });
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(Bytes::from(body))
+    }
+
     pub fn headers(&self) -> &http::HeaderMap {
         self.0.headers()
     }
@@ -770,6 +816,53 @@ impl Response {
         self.0.url()
     }
 }
+
+/// Error returned by [`Response::bytes_limited`].
+#[derive(Debug)]
+pub enum BodyReadError {
+    /// The response body (after decompression) exceeded `limit` bytes before it could be fully
+    /// read.
+    TooLarge { limit: usize },
+    /// A transport-level error occurred while streaming the body.
+    Transport(reqwest::Error),
+}
+
+impl fmt::Display for BodyReadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TooLarge { limit } => {
+                write!(f, "response body exceeded the {limit}-byte limit")
+            }
+            Self::Transport(err) => err.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for BodyReadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::TooLarge { .. } => None,
+            Self::Transport(err) => Some(err),
+        }
+    }
+}
+
+impl From<reqwest::Error> for BodyReadError {
+    fn from(err: reqwest::Error) -> Self {
+        Self::Transport(err)
+    }
+}
+
+/// Maximum size, in bytes, of a response body read from Warp's OAuth device-authorization and
+/// token endpoints, applied to *decompressed* bytes as they stream in (see
+/// [`Response::bytes_limited`]).
+///
+/// A real response from these endpoints -- success or error -- is a few hundred bytes of JSON.
+/// This limit is several orders of magnitude larger than that, so no legitimate response is ever
+/// at risk of being rejected, while still bounding worst-case memory use to a single-digit-MiB
+/// allocation if the token endpoint, an intermediary, or a compromised peer ever returns an
+/// oversized or maliciously-compressed body (see APP-5394).
+const OAUTH_HTTP_RESPONSE_BODY_LIMIT: usize = 4 * 1024 * 1024;
 
 /// Adapter to use our HTTP client wrapper with [`oauth2`]. This is modeled on the [`reqwest`]
 /// implementation of [`oauth2::AsyncHttpClient`].
@@ -786,7 +879,7 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Client {
         Box::pin(async move {
             let uri = request.uri().to_string();
             let include_warp_headers = Self::include_warp_http_headers(uri.clone());
-            let iap_token = self.iap_token_for(uri);
+            let iap_token = self.iap_token_for(uri.clone());
             let builder = reqwest::RequestBuilder::from_parts(
                 self.wrapped.clone(),
                 request.try_into().map_err(Box::new)?,
@@ -809,7 +902,32 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Client {
                 builder = builder.header(name, value);
             }
 
-            let response_body = response.bytes().await.map_err(Box::new)?.to_vec();
+            let response_body = match response.bytes_limited(OAUTH_HTTP_RESPONSE_BODY_LIMIT).await {
+                Ok(bytes) => bytes.to_vec(),
+                Err(BodyReadError::TooLarge { limit }) => {
+                    // Programming against an external system (the OAuth token/device-
+                    // authorization endpoint, or any intermediary in front of it) whose behavior
+                    // here is not fully understood: an oversized response could mean a
+                    // misbehaving proxy, a compromised peer, or a bug on our end in how we drive
+                    // the device-code flow. Worth an engineer's eyes if it ever fires.
+                    //
+                    // Device-token polling treats every HTTP-client error (including this one)
+                    // as retryable, backing off and retrying for minutes, so report at most once
+                    // per run to avoid flooding Sentry with dozens of events from one bad
+                    // endpoint/proxy.
+                    report_error!(
+                        "OAuth HTTP response body exceeded size limit",
+                        extra: { "limit_bytes" => %limit, "uri" => %uri },
+                        ReportErrorLogMode::OncePerRun
+                    );
+                    return Err(oauth2::HttpClientError::Other(format!(
+                        "response body exceeded the {limit}-byte limit"
+                    )));
+                }
+                Err(BodyReadError::Transport(err)) => {
+                    return Err(oauth2::HttpClientError::Reqwest(Box::new(err)));
+                }
+            };
             builder
                 .body(response_body)
                 .map_err(oauth2::HttpClientError::Http)
