@@ -1,10 +1,14 @@
+use std::any::Any;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
 use ai::LLMProvider;
 use ai::api_keys::ApiKeyManager;
+use anyhow::Result;
+use async_trait::async_trait;
 use chrono::NaiveDate;
 use instant::Instant;
 use string_offset::CharOffset;
@@ -17,6 +21,11 @@ use warp::settings::{
     TuiThemeSettings, TuiUsageDisplayMode, TuiVoiceInputHoldKey, TuiZeroStateObject,
 };
 use warp::terminal::model::ansi::{Handler, InputBufferValue, Mode};
+use warp::terminal::model::session::SessionInfo;
+use warp::terminal::model::session::command_executor::{
+    CommandExecutor, ExecuteCommandOptions, LocalCommandExecutor,
+};
+use warp::terminal::shell::Shell;
 use warp::tui_export::{
     AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId, AIAgentInput,
     AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentTodo, AIAgentTodoList,
@@ -34,6 +43,7 @@ use warp::tui_export::{
     register_tui_session_view_test_singletons, set_tui_default_team_admin_for_test,
     set_tui_workspace_teams_for_test, slash_commands,
 };
+use warp_completer::completer::CommandOutput;
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting as _;
@@ -42,7 +52,7 @@ use warpui::platform::WindowStyle;
 use warpui::{
     AddWindowOptions, EntityIdMap, ModelHandle, ReadModel, SingletonEntity, UpdateModel, ViewHandle,
 };
-use warpui_core::r#async::Timer;
+use warpui_core::r#async::{FutureExt as _, Timer};
 use warpui_core::elements::tui::{
     Color, TuiBuffer, TuiBufferExt, TuiConstrainedBox, TuiConstraint, TuiContainer, TuiElement,
     TuiEvent, TuiEventContext, TuiFlex, TuiLayoutContext, TuiPaintContext, TuiPaintSurface,
@@ -1042,25 +1052,150 @@ fn shell_mode_reserves_tab_even_when_attachments_render() {
     assert!(!attachment_focus_available(true, true));
     assert!(!attachment_focus_available(false, false));
 }
+
+#[derive(Debug)]
+struct ShellCompletionFixtureExecutor {
+    inner: LocalCommandExecutor,
+    environment: HashMap<String, String>,
+}
+
+#[async_trait]
+impl CommandExecutor for ShellCompletionFixtureExecutor {
+    async fn execute_command(
+        &self,
+        command: &str,
+        shell: &Shell,
+        current_directory_path: Option<&str>,
+        environment_variables: Option<HashMap<String, String>>,
+        execute_command_options: ExecuteCommandOptions,
+    ) -> Result<CommandOutput> {
+        let mut environment_variables = environment_variables.unwrap_or_default();
+        environment_variables.extend(self.environment.clone());
+        // PowerShell appends host module paths at startup, even when PSModulePath is supplied.
+        #[cfg(windows)]
+        let command = format!(
+            "$env:PSModulePath = '{}'; {command}",
+            self.environment["PSModulePath"].replace('\'', "''"),
+        );
+        #[cfg(windows)]
+        let command = command.as_str();
+        self.inner
+            .execute_command(
+                command,
+                shell,
+                current_directory_path,
+                Some(environment_variables),
+                execute_command_options,
+            )
+            .await
+    }
+
+    fn cancel_active_commands(&self) {
+        self.inner.cancel_active_commands();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn supports_parallel_command_execution(&self) -> bool {
+        self.inner.supports_parallel_command_execution()
+    }
+}
+
 #[test]
 fn shell_completion_source_warmup_loads_path_executables() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
-        let session = Arc::new(Session::test());
+        let command_dir = TempDir::new().unwrap();
+        #[cfg(unix)]
+        let shell_path = std::path::PathBuf::from("/bin/bash");
+        #[cfg(windows)]
+        let shell_path = std::path::PathBuf::from(
+            std::env::var_os("SystemRoot").expect("Windows must have a SystemRoot"),
+        )
+        .join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let executable = command_dir.path().join("warp-completion-fixture");
+            std::fs::write(&executable, "#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        #[cfg(windows)]
+        std::fs::write(
+            command_dir.path().join("warp-completion-fixture.cmd"),
+            "@exit /b 0\r\n",
+        )
+        .unwrap();
+
+        let path = command_dir.path().to_str().unwrap().to_owned();
+        let session_info = SessionInfo::new_for_test().with_path(Some(path.clone()));
+        let environment = HashMap::from([("PATH".to_owned(), path)]);
+        #[cfg(windows)]
+        let environment = {
+            let mut environment = environment;
+            environment.insert(
+                "PSModulePath".to_owned(),
+                shell_path
+                    .parent()
+                    .unwrap()
+                    .join("Modules")
+                    .to_str()
+                    .unwrap()
+                    .to_owned(),
+            );
+            environment
+        };
+        let executor = Arc::new(ShellCompletionFixtureExecutor {
+            inner: LocalCommandExecutor::new(Some(shell_path), session_info.shell.shell_type()),
+            environment,
+        });
+        let session = Arc::new(Session::new(session_info, executor));
 
         view.update(&mut app, |view, ctx| {
             view.warm_shell_completion_sources(session.clone(), ctx);
         });
 
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !session.has_loaded_external_commands() && Instant::now() < deadline {
-            Timer::after(Duration::from_millis(10)).await;
+        async {
+            while !session.has_attempted_to_load_external_commands() {
+                Timer::after(Duration::from_millis(10)).await;
+            }
         }
+        .with_timeout(Duration::from_secs(5))
+        .await
+        .expect("Completion warmup must start external command discovery");
 
-        assert!(session.has_attempted_to_load_external_commands());
+        let (external_commands, functions, builtins) = futures::future::join3(
+            session
+                .load_external_commands()
+                .with_timeout(Duration::from_secs(5)),
+            session
+                .load_all_function_names()
+                .with_timeout(Duration::from_secs(5)),
+            session
+                .load_all_builtins()
+                .with_timeout(Duration::from_secs(5)),
+        )
+        .await;
+        external_commands.expect("External command discovery must finish");
+        functions.expect("Function discovery must finish");
+        builtins.expect("Builtin discovery must finish");
         assert!(session.has_loaded_external_commands());
-        assert!(session.executable_names().any(|command| command == "git"));
+        assert!(
+            session
+                .executable_names()
+                .any(|command| command == "warp-completion-fixture")
+        );
+        #[cfg(windows)]
+        assert!(
+            session
+                .builtin_names()
+                .any(|command| command == "Get-Command")
+        );
     });
 }
 

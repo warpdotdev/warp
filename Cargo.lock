@@ -16176,6 +16176,7 @@ dependencies = [
  "arboard",
  "async-channel",
  "async-fs",
+ "async-trait",
  "base64 0.22.1",
  "blocking",
  "channel_versions",
