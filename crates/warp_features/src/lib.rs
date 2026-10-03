@@ -143,9 +143,6 @@ pub enum FeatureFlag {
     /// a shell other than the default shell.
     ShellSelector,
 
-    /// Enables writing to long-running commands in shared sessions.
-    SharedSessionWriteToLongRunningCommands,
-
     /// Lazily builds scenes at render time instead of eagerly when a view
     /// changes.
     LazySceneBuilding,

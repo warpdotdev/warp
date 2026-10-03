@@ -1289,9 +1289,7 @@ impl TerminalModel {
     }
 
     pub fn send_write_to_pty_events_for_shared_session(&mut self, bytes: Vec<u8>) {
-        if !FeatureFlag::SharedSessionWriteToLongRunningCommands.is_enabled()
-            || !self.shared_session_status().is_executor()
-        {
+        if !self.shared_session_status().is_executor() {
             return;
         }
 
