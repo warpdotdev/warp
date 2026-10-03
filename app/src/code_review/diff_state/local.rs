@@ -144,6 +144,10 @@ struct FileInvalidationState {
     merge_base_handle: Option<SpawnedFutureHandle>,
     /// Queue for per-file invalidation tasks
     queue: SyncQueue<FileInvalidationTask>,
+    /// Files (relative to the repo root) with an outstanding invalidation
+    /// task already queued. Used to dedupe repeated invalidation requests
+    /// for the same file without an O(n) scan of `queue`'s task map.
+    queued_files: HashSet<PathBuf>,
 }
 
 #[cfg(feature = "local_fs")]
@@ -154,11 +158,13 @@ impl FileInvalidationState {
             merge_base: None,
             merge_base_handle: None,
             queue,
+            queued_files: HashSet::new(),
         }
     }
 
     fn cancel_all(&mut self) {
         self.queue.cancel_all();
+        self.queued_files.clear();
         self.merge_base = None;
         if let Some(handle) = self.merge_base_handle.take() {
             handle.abort();
@@ -240,7 +246,23 @@ impl LocalDiffStateModel {
 
         ctx.spawn_stream_local(
             rx,
-            |me, broadcast_result: Result<_, Arc<DiffStateError>>, ctx| {
+            |me,
+             broadcast_result: warp_core::sync_queue::BroadcastResult<FileInvalidationTask>,
+             ctx| {
+                // The task has finished either way, so its dedup slot is free
+                // regardless of whether the result is stale (full reload
+                // in-flight) or an error. Remove by the exact `PathBuf` on
+                // both branches: the success path's `String` is guaranteed
+                // valid UTF-8 (retrieve_diff_state rejects non-UTF-8 paths
+                // before producing a result) so converting it back to a
+                // `Path` is lossless, and the error path already carries the
+                // exact `PathBuf` for this reason.
+                let completed_path: PathBuf = match &broadcast_result {
+                    Ok(arc_value) => PathBuf::from(&arc_value.0),
+                    Err(err) => err.path.clone(),
+                };
+                me.file_invalidation.queued_files.remove(&completed_path);
+
                 if me.file_invalidation.invalidate_all_pending {
                     return;
                 }
@@ -257,13 +279,13 @@ impl LocalDiffStateModel {
                         ctx.emit(DiffStateModelEvent::SingleFileUpdated { path, diff });
                     }
                     Err(err) => {
-                        err.report_and_log();
+                        err.error.report_and_log();
                         send_telemetry_from_ctx!(
                             CodeReviewTelemetryEvent::LoadDiffFailed {
                                 backend_origin: me.backend_origin,
                                 operation: DiffOperation::FileInvalidation,
                                 mode: me.mode.clone(),
-                                error: err.to_string(),
+                                error: err.error.to_string(),
                                 // Per-file invalidation errors are not tied to a full
                                 // tracked load, so `load_duration` is intentionally `None`.
                                 load_duration: None,
@@ -1142,18 +1164,88 @@ impl LocalDiffStateModel {
             return;
         }
 
+        if Self::should_full_reload_for_burst(
+            files.len(),
+            self.file_invalidation.queued_files.len(),
+        ) {
+            // A burst this large (or a backlog already this large) shells out to git
+            // far fewer times with one full reload than with this many serial
+            // per-file invalidations — and a burst this size is usually a branch
+            // switch or checkout, where a full reload is the correct outcome anyway.
+            self.load_diffs_for_current_repo(false, false, ctx);
+            return;
+        }
+
+        let files = Self::filter_new_files_for_invalidation(
+            &repo_path,
+            &mut self.file_invalidation.queued_files,
+            files,
+        );
+        if files.is_empty() {
+            return;
+        }
+
         let mode = self.mode.clone();
         let merge_base = self.file_invalidation.merge_base.clone();
         let queue = self.file_invalidation.queue.clone();
         for file in files {
+            let relative = file.strip_prefix(&repo_path).unwrap_or(&file).to_path_buf();
             let task = FileInvalidationTask {
                 file,
                 repo_path: repo_path.clone(),
                 mode: mode.clone(),
                 merge_base: merge_base.clone(),
             };
-            queue.enqueue(task, None, "file-invalidation");
+            if !queue.enqueue(task, None, "file-invalidation") {
+                // The channel was full and the task was dropped before ever
+                // running, so no completion will ever be broadcast for it
+                // to free this slot. Free it here instead, or the file
+                // would be permanently stuck deduplicated until the next
+                // full reload.
+                self.file_invalidation.queued_files.remove(&relative);
+            }
         }
+    }
+
+    /// A single filesystem event reporting more files than this (a large git
+    /// checkout, branch switch, etc.) is serviced with one full reload
+    /// instead of this many serial per-file invalidation tasks: each
+    /// per-file task shells out to git multiple times, so past a few hundred
+    /// files a full reload is both cheaper and, since a burst this size
+    /// usually means a checkout/branch-switch, more correct. The same
+    /// fallback applies once this many per-file invalidations are already
+    /// queued, so a steady trickle of individual file events doesn't pile up
+    /// into an equivalent backlog one file at a time.
+    #[cfg(feature = "local_fs")]
+    const LARGE_FILE_BURST_THRESHOLD: usize = 200;
+
+    /// Decides whether `enqueue_file_invalidations` should fall back to a
+    /// full reload instead of enqueuing `new_file_count` per-file tasks,
+    /// given `currently_queued_count` files already have an outstanding
+    /// invalidation.
+    #[cfg(feature = "local_fs")]
+    fn should_full_reload_for_burst(new_file_count: usize, currently_queued_count: usize) -> bool {
+        new_file_count > Self::LARGE_FILE_BURST_THRESHOLD
+            || currently_queued_count >= Self::LARGE_FILE_BURST_THRESHOLD
+    }
+
+    /// Filters `files` down to those that don't already have an outstanding
+    /// invalidation task, inserting the survivors' repo-relative paths into
+    /// `queued_files` so a burst that repeatedly touches the same file
+    /// enqueues at most one pending task for it.
+    #[cfg(feature = "local_fs")]
+    fn filter_new_files_for_invalidation(
+        repo_path: &Path,
+        queued_files: &mut HashSet<PathBuf>,
+        files: Vec<PathBuf>,
+    ) -> Vec<PathBuf> {
+        files
+            .into_iter()
+            .filter(|file| {
+                let relative = file.strip_prefix(repo_path).unwrap_or(file).to_path_buf();
+                queued_files.insert(relative)
+            })
+            .collect()
     }
 
     /// Flushes deferred file invalidations that accumulated during a full reload.
