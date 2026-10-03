@@ -17,6 +17,7 @@ parking_lot.workspace = true
 pathdiff = "0.2.1"
 rand.workspace = true
 dirs.workspace = true
+futures-lite.workspace = true
 hex.workspace = true
 lazy_static.workspace = true
 mime_guess.workspace = true
