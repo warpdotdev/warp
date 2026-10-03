@@ -112,6 +112,7 @@ impl TryFrom<&proto::DiffMetadataAgainstBase> for DiffMetadataAgainstBase {
                 .map(DiffStats::from)
                 .ok_or_else(|| "missing aggregate_stats in DiffMetadataAgainstBase".to_string())?,
             files: base.files.iter().map(FileChangeEntry::from).collect(),
+            files_truncated: base.files_truncated,
         })
     }
 }
@@ -410,6 +411,7 @@ impl From<&DiffMetadataAgainstBase> for proto::DiffMetadataAgainstBase {
         proto::DiffMetadataAgainstBase {
             aggregate_stats: Some((&m.aggregate_stats).into()),
             files: m.files.iter().map(proto::FileChangeEntry::from).collect(),
+            files_truncated: m.files_truncated,
         }
     }
 }
