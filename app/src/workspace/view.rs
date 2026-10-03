@@ -361,7 +361,7 @@ use crate::settings_view::handoff_environment_creation_modal::{
 };
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
-use crate::settings_view::pane_manager::SettingsPaneManager;
+use crate::settings_view::pane_manager::{SettingsPaneManager, SettingsPaneManagerEvent};
 use crate::settings_view::{SettingsSection, SettingsView, SettingsViewEvent, flags};
 #[cfg(all(target_os = "windows", feature = "local_tty"))]
 use crate::shell_indicator::ShellIndicatorType;
@@ -1834,11 +1834,82 @@ impl Workspace {
         });
 
         let window_id = ctx.window_id();
+        ctx.subscribe_to_model(
+            &SettingsPaneManager::handle(ctx),
+            |workspace, _, event, ctx| {
+                workspace.handle_settings_manager_event(event, ctx);
+            },
+        );
         SettingsPaneManager::handle(ctx).update(ctx, |manager, _| {
             manager.register_view(window_id, settings_pane.clone());
         });
 
         (settings_pane, theme_chooser_view)
+    }
+
+    fn adopt_settings_view(&mut self, view: ViewHandle<SettingsView>, ctx: &mut ViewContext<Self>) {
+        ctx.unsubscribe_to_view(&self.settings_pane);
+        self.settings_pane = view;
+        ctx.subscribe_to_view(&self.settings_pane, |workspace, _, event, ctx| {
+            workspace.handle_settings_pane_event(event, ctx);
+        });
+        self.sync_settings_error_state_into_settings_pane(ctx);
+    }
+
+    fn handle_settings_manager_event(
+        &mut self,
+        event: &SettingsPaneManagerEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            SettingsPaneManagerEvent::ViewAdopted { window_id, view }
+                if *window_id == ctx.window_id() =>
+            {
+                self.adopt_settings_view(view.clone(), ctx);
+            }
+            SettingsPaneManagerEvent::ViewDeparted {
+                window_id,
+                view,
+                retain_live_source,
+            } if *window_id == ctx.window_id() && self.settings_pane == *view => {
+                if *retain_live_source {
+                    // The transfer walk is collected before its hooks run. Move the shared subtree
+                    // back only after that walk finishes so a hidden alias cannot steal a live pane.
+                    let transferred_window = view.window_id(ctx);
+                    ctx.transfer_view_tree_to_window(view.id(), transferred_window, *window_id);
+                } else {
+                    let view = ctx.add_typed_action_view(|ctx| SettingsView::new(None, ctx));
+                    SettingsPaneManager::handle(ctx).update(ctx, |manager, _| {
+                        manager.register_view(*window_id, view.clone());
+                    });
+                    self.adopt_settings_view(view, ctx);
+                }
+            }
+            SettingsPaneManagerEvent::PaneCollision {
+                window_id,
+                keep,
+                discard,
+            } if *window_id == ctx.window_id() => {
+                if let Some(index) = self
+                    .tabs
+                    .iter()
+                    .position(|tab| tab.pane_group.id() == discard.pane_group_id)
+                {
+                    let group = self.tabs[index].pane_group.clone();
+                    if group.as_ref(ctx).visible_pane_ids().len() == 1 {
+                        self.remove_tab_without_undo(index, ctx);
+                    } else {
+                        group.update(ctx, |group, ctx| {
+                            group.discard_duplicate_settings_pane(discard.pane_id, ctx);
+                        });
+                    }
+                }
+                self.focus_pane(*keep, ctx);
+            }
+            SettingsPaneManagerEvent::ViewAdopted { .. }
+            | SettingsPaneManagerEvent::ViewDeparted { .. }
+            | SettingsPaneManagerEvent::PaneCollision { .. } => {}
+        }
     }
 
     fn build_require_login_modal(ctx: &mut ViewContext<Self>) -> ViewHandle<AuthView> {
@@ -29921,3 +29992,7 @@ fn set_opencode_warp_plugin(new_entry: &str) -> String {
         Err(e) => format!("Failed to serialize opencode.json: {e}"),
     }
 }
+
+#[cfg(test)]
+#[path = "settings_transfer_tests.rs"]
+mod settings_transfer_tests;
