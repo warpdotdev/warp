@@ -4178,12 +4178,9 @@ impl CodeReviewView {
         is_in_split_pane: bool,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let has_menu_flags = FeatureFlag::DiscardPerFileAndAllChanges.is_enabled()
-            || FeatureFlag::DiffSetAsContext.is_enabled()
-            || FeatureFlag::FileAndDiffSetComments.is_enabled();
         let has_changes = matches!(self.state(), CodeReviewViewState::Loaded(loaded) if !loaded.to_diff_stats().has_no_changes());
         let has_header_menu_items =
-            has_menu_flags && (!FeatureFlag::GitOperationsInCodeReview.is_enabled() || has_changes);
+            !FeatureFlag::GitOperationsInCodeReview.is_enabled() || has_changes;
 
         let code_review_header_fields = CodeReviewHeaderFields {
             is_in_split_pane,
@@ -4998,18 +4995,16 @@ impl CodeReviewView {
             .with_cross_axis_alignment(CrossAxisAlignment::Center);
 
         // Add file diff as context button (before remove button)
-        if FeatureFlag::DiffSetAsContext.is_enabled() {
-            right_row.add_child(
-                EventHandler::new(
-                    Container::new(ChildView::new(&file.add_context_button).finish())
-                        .with_margin_left(4.)
-                        .finish(),
-                )
-                .on_left_mouse_up(|_, _, _| DispatchEventResult::StopPropagation)
-                .on_left_mouse_down(|_, _, _| DispatchEventResult::StopPropagation)
-                .finish(),
-            );
-        }
+        right_row.add_child(
+            EventHandler::new(
+                Container::new(ChildView::new(&file.add_context_button).finish())
+                    .with_margin_left(4.)
+                    .finish(),
+            )
+            .on_left_mouse_up(|_, _, _| DispatchEventResult::StopPropagation)
+            .on_left_mouse_down(|_, _, _| DispatchEventResult::StopPropagation)
+            .finish(),
+        );
 
         if FeatureFlag::DiscardPerFileAndAllChanges.is_enabled() {
             right_row.add_child(
@@ -6804,7 +6799,7 @@ impl CodeReviewView {
             has_changes = !loaded.to_diff_stats().has_no_changes();
         }
 
-        if FeatureFlag::DiffSetAsContext.is_enabled() && has_changes {
+        if has_changes {
             items.push(
                 MenuItemFields::new("Add diff set as context")
                     .with_icon(Icon::Paperclip)
@@ -6839,7 +6834,7 @@ impl CodeReviewView {
         let has_changes = matches!(self.state(), CodeReviewViewState::Loaded(loaded) if !loaded.to_diff_stats().has_no_changes());
 
         let is_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
-        if is_ai_enabled && FeatureFlag::DiffSetAsContext.is_enabled() && has_changes {
+        if is_ai_enabled && has_changes {
             items.push(
                 MenuItemFields::new("Add diff set as context")
                     .with_icon(Icon::Paperclip)
