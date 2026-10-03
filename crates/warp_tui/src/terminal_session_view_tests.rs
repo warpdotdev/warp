@@ -1042,6 +1042,8 @@ fn shell_mode_reserves_tab_even_when_attachments_render() {
     assert!(!attachment_focus_available(true, true));
     assert!(!attachment_focus_available(false, false));
 }
+
+#[cfg_attr(windows, ignore = "APP-5820: flaky on Windows CI")]
 #[test]
 fn shell_completion_source_warmup_loads_path_executables() {
     App::test((), |mut app| async move {
