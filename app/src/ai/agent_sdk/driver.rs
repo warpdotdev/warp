@@ -1156,10 +1156,17 @@ impl AgentDriver {
             parent_run_id.as_deref(),
             selected_harness,
         ));
-        env_vars.extend(harness_model_env_vars(
-            selected_harness,
-            third_party_harness_model_config.as_ref(),
-        ));
+        // Worker-injected process env and managed secrets both outrank the task's model config,
+        // matching the precedence `build_secret_env_vars` documents.
+        for (name, value) in
+            harness_model_env_vars(selected_harness, third_party_harness_model_config.as_ref())
+        {
+            if env_vars.contains_key(&name) || std::env::var(&name).is_ok_and(|v| !v.is_empty()) {
+                log::warn!("Skipping harness model env var {name:?}: already set");
+                continue;
+            }
+            env_vars.insert(name, value);
+        }
         if let Err(error) = git_credentials::prepend_azure_cli_wrapper_to_path(&mut env_vars) {
             safe_warn!(
                 safe: ("Failed to add the Azure CLI authentication wrapper to PATH"),

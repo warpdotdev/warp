@@ -49,6 +49,7 @@ use crate::ai::agent::{
 use crate::ai::agent_sdk::driver::environment::PrepareEnvironmentError;
 use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::blocklist::orchestration_events::{
     OrchestrationEventService, PendingEvent, PendingEventDetail,
 };
@@ -111,6 +112,78 @@ fn driver_keeps_uninterpreted_factory_experiments() {
         let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
         driver.read(&app, |driver, _| {
             assert_eq!(driver.experimental, Some(experimental));
+        });
+    });
+}
+
+fn claude_model_driver_options(model_id: &str) -> super::AgentDriverOptions {
+    let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
+    options.selected_harness = Harness::Claude;
+    options.third_party_harness_model_config = Some(HarnessModelConfig {
+        model_id: model_id.to_string(),
+        reasoning_level: None,
+    });
+    options
+}
+
+fn driver_env_var(driver: &AgentDriver, name: &str) -> Option<OsString> {
+    driver.resolved_env_vars.get(&OsString::from(name)).cloned()
+}
+
+#[test]
+#[serial_test::serial]
+fn harness_model_config_sets_anthropic_model() {
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("ANTHROPIC_MODEL") };
+    App::test((), |mut app| async move {
+        initialize_workspace_test_app(&mut app);
+        let options = claude_model_driver_options("config-model");
+        let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
+        driver.read(&app, |driver, _| {
+            assert_eq!(
+                driver_env_var(driver, "ANTHROPIC_MODEL"),
+                Some(OsString::from("config-model"))
+            );
+        });
+    });
+}
+
+#[test]
+#[serial_test::serial]
+fn worker_injected_anthropic_model_wins_over_harness_model_config() {
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("ANTHROPIC_MODEL", "worker-model") };
+    App::test((), |mut app| async move {
+        initialize_workspace_test_app(&mut app);
+        let options = claude_model_driver_options("config-model");
+        let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
+        driver.read(&app, |driver, _| {
+            // The child inherits ANTHROPIC_MODEL from the process env.
+            assert_eq!(driver_env_var(driver, "ANTHROPIC_MODEL"), None);
+        });
+    });
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("ANTHROPIC_MODEL") };
+}
+
+#[test]
+#[serial_test::serial]
+fn managed_anthropic_model_secret_wins_over_harness_model_config() {
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("ANTHROPIC_MODEL") };
+    App::test((), |mut app| async move {
+        initialize_workspace_test_app(&mut app);
+        let mut options = claude_model_driver_options("config-model");
+        options.secrets = HashMap::from([(
+            "ANTHROPIC_MODEL".to_string(),
+            ManagedSecretValue::raw_value("secret-model"),
+        )]);
+        let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
+        driver.read(&app, |driver, _| {
+            assert_eq!(
+                driver_env_var(driver, "ANTHROPIC_MODEL"),
+                Some(OsString::from("secret-model"))
+            );
         });
     });
 }
