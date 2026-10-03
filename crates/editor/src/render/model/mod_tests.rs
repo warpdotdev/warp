@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use markdown_parser::{FormattedTextStyles, Hyperlink};
@@ -927,6 +928,163 @@ fn test_multiselect_autoscroll_bounding_box() {
     );
 }
 
+/// Labels a tree's item kinds in order, so a test can pin a sequence.
+fn tree_item_kinds(tree: &SumTree<BlockItem>) -> Vec<&'static str> {
+    tree.cursor::<CharOffset, CharOffset>()
+        .map(|item| match item {
+            BlockItem::Hidden(_) => "hidden",
+            BlockItem::Paragraph(_) => "paragraph",
+            _ => "other",
+        })
+        .collect()
+}
+
+#[test]
+fn dedupe_hidden_ranges_packs_the_items_ahead_of_a_hidden_block() {
+    // Every paragraph here sits inside the hidden range and ahead of its hidden block, which is
+    // the sequence that used to be pushed an item at a time.
+    let mut tree = SumTree::new();
+    for _ in 0..200 {
+        tree.push(mock_paragraph(18.2, 0., 1));
+    }
+    tree.push(BlockItem::Hidden(HiddenBlockConfig::new(
+        LineCount(1),
+        CharOffset::from(1),
+        BlockLocation::End,
+    )));
+
+    let mut hidden_ranges = RangeSet::new();
+    hidden_ranges.insert(CharOffset::from(1)..CharOffset::from(202));
+
+    let resulting = RenderState::dedupe_hidden_ranges(tree, hidden_ranges);
+
+    let stats = resulting.node_stats();
+    assert!(
+        stats.items >= stats.leaves * (stats.slots_per_leaf - 1),
+        "deduped tree should fill its leaves, got {stats:?}"
+    );
+}
+
+#[test]
+fn dedupe_hidden_ranges_keeps_items_either_side_of_the_hidden_block() {
+    // Two paragraphs, then two adjacent hidden blocks to merge, then two more paragraphs: the
+    // items after the hidden block are buffered separately from the ones before it, so this pins
+    // that they come back in the original order around a single merged block.
+    let mut tree = SumTree::new();
+    tree.push(mock_paragraph(18.2, 0., 1));
+    tree.push(mock_paragraph(18.2, 0., 1));
+    tree.push(BlockItem::Hidden(HiddenBlockConfig::new(
+        LineCount(1),
+        CharOffset::from(1),
+        BlockLocation::Middle,
+    )));
+    tree.push(BlockItem::Hidden(HiddenBlockConfig::new(
+        LineCount(1),
+        CharOffset::from(1),
+        BlockLocation::Middle,
+    )));
+    tree.push(mock_paragraph(18.2, 0., 1));
+    tree.push(mock_paragraph(18.2, 0., 1));
+
+    let mut hidden_ranges = RangeSet::new();
+    hidden_ranges.insert(CharOffset::from(1)..CharOffset::from(7));
+
+    let resulting = RenderState::dedupe_hidden_ranges(tree, hidden_ranges);
+
+    assert_eq!(
+        tree_item_kinds(&resulting),
+        vec!["paragraph", "paragraph", "hidden", "paragraph", "paragraph",],
+        "the two adjacent hidden blocks should merge into one, with the paragraphs unmoved"
+    );
+}
+
+/// A temporary block, the kind `reset_temporary_block` drops and re-inserts.
+fn temporary_block() -> BlockItem {
+    BlockItem::TemporaryBlock {
+        paragraph_block: ParagraphBlock::new(vec1![layout_paragraph(
+            "\n",
+            &TEST_STYLES,
+            &BufferBlockStyle::PlainText,
+            80.
+        )]),
+        text_decoration: Vec::new(),
+        decoration: None,
+    }
+}
+
+/// Labels the item kinds in tree order, so a test can pin the interleaving.
+fn item_kinds(render_state: &RenderState) -> Vec<&'static str> {
+    render_state
+        .content()
+        .block_items()
+        .map(|item| match item {
+            BlockItem::TemporaryBlock { .. } => "temporary",
+            BlockItem::Paragraph(_) => "paragraph",
+            BlockItem::TrailingNewLine(_) => "trailing_newline",
+            _ => "other",
+        })
+        .collect()
+}
+
+#[test]
+fn reset_temporary_block_packs_the_rebuilt_tree() {
+    let mut render_state =
+        RenderState::new_for_test(TEST_STYLES.clone(), 40.0.into_pixels(), 60.0.into_pixels());
+
+    // Built with per-item pushes, so the tree going in is as unpacked as the old rebuild left it.
+    let mut content = SumTree::new();
+    for _ in 0..200 {
+        content.push(mock_paragraph(18.2, 0., 5));
+    }
+    render_state.set_content(content);
+
+    // No temporary blocks: this is the rebuild on its own.
+    render_state.reset_temporary_block(HashMap::new());
+
+    let stats = render_state.content.borrow().node_stats();
+    assert!(
+        stats.items >= stats.leaves * (stats.slots_per_leaf - 1),
+        "rebuilt tree should fill its leaves, got {stats:?}"
+    );
+}
+
+#[test]
+fn reset_temporary_block_keeps_interleaved_order() {
+    let mut render_state =
+        RenderState::new_for_test(TEST_STYLES.clone(), 40.0.into_pixels(), 60.0.into_pixels());
+
+    // One line per paragraph, and temporary blocks contribute no lines, so the line position at
+    // the end of each paragraph is its 1-based index.
+    let mut content = SumTree::new();
+    content.push(mock_paragraph(18.2, 0., 5));
+    // A stale temporary block, which the rebuild drops.
+    content.push(temporary_block());
+    content.push(mock_paragraph(18.2, 0., 6));
+    content.push(mock_paragraph(18.2, 0., 7));
+    render_state.set_content(content);
+
+    // Insert at the start, in the middle and at the end, which is where an off-by-one in the
+    // batched collection would show up.
+    let mut blocks = HashMap::new();
+    blocks.insert(LineCount::zero(), vec![temporary_block()]);
+    blocks.insert(LineCount(2), vec![temporary_block()]);
+    blocks.insert(LineCount(3), vec![temporary_block()]);
+    render_state.reset_temporary_block(blocks);
+
+    assert_eq!(
+        item_kinds(&render_state),
+        vec![
+            "temporary",
+            "paragraph",
+            "paragraph",
+            "temporary",
+            "paragraph",
+            "temporary",
+            "trailing_newline",
+        ]
+    );
+}
+
 // 18:09:15 [INFO] [warp_editor::render::model] Initial tree:
 // -------- 0.00px / 0 characters --------
 // Hidden (3067 characters, 87 lines, 20.00px tall)
@@ -1470,6 +1628,55 @@ fn test_first_hidden_section_line_range_none_without_hidden_sections() {
         None,
         "a diff with no hidden sections should resolve to None"
     );
+}
+
+#[test]
+fn every_replacement_item_is_retained_without_hidden_ranges() {
+    let items = vec![mock_paragraph(24., 1., 5), mock_paragraph(24., 1., 5)];
+
+    let retained = RenderState::retained_replacement_items(items, CharOffset::from(1), None);
+
+    assert_eq!(retained.len(), 2);
+}
+
+#[test]
+fn a_dropped_replacement_item_does_not_advance_the_offset() {
+    // Three 5-character items starting at offset 1 would occupy offsets 1, 6 and 11. Hiding
+    // offset 6 drops the second item, and since a dropped item never enters the tree, the third
+    // one takes offset 6 in its place and is dropped as well. An implementation that advanced the
+    // offset past the dropped item would place the third at 11 and keep it.
+    let items = vec![
+        mock_paragraph(24., 1., 5),
+        mock_paragraph(24., 1., 5),
+        mock_paragraph(24., 1., 5),
+    ];
+    let mut hidden_ranges = RangeSet::new();
+    hidden_ranges.insert(CharOffset::from(6)..CharOffset::from(7));
+
+    let retained =
+        RenderState::retained_replacement_items(items, CharOffset::from(1), Some(&hidden_ranges));
+
+    assert_eq!(
+        retained.len(),
+        1,
+        "only the item before the hidden offset should survive"
+    );
+}
+
+#[test]
+fn a_hidden_block_survives_a_hidden_range_that_covers_it() {
+    let items = vec![BlockItem::Hidden(HiddenBlockConfig::new(
+        LineCount(3),
+        CharOffset::from(5),
+        BlockLocation::Middle,
+    ))];
+    let mut hidden_ranges = RangeSet::new();
+    hidden_ranges.insert(CharOffset::from(1)..CharOffset::from(50));
+
+    let retained =
+        RenderState::retained_replacement_items(items, CharOffset::from(1), Some(&hidden_ranges));
+
+    assert_eq!(retained.len(), 1);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
