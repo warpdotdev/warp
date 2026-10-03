@@ -154,6 +154,9 @@ struct InternalBufferState {
     latest_buffer_version: Option<usize>,
     /// Tracks any active background diff parsing for auto-reload.
     pending_diff_parse: Option<PendingDiffParse>,
+    /// Nothing existed at this path when the buffer was opened, so the buffer starts empty and
+    /// the file is only created once the user saves.
+    opened_as_new_file: bool,
     source: BufferSource,
 }
 
@@ -698,6 +701,13 @@ impl GlobalBufferModel {
                 self.populate_buffer_with_read_content(*id, content, *version, *version, true, ctx);
             }
             FileModelEvent::FailedToLoad { id, error } => {
+                // A path with nothing at it is not a failure: the user asked to open a file they
+                // intend to create, so adopt it as an empty buffer that saves to that path. A path
+                // that exists but cannot be read is still a failure.
+                if matches!(**error, FileLoadError::DoesNotExist) {
+                    self.adopt_as_new_file(*id, ctx);
+                    return;
+                }
                 ctx.emit(GlobalBufferModelEvent::FailedToLoad {
                     file_id: *id,
                     error: error.clone(),
@@ -782,6 +792,10 @@ impl GlobalBufferModel {
                 // This avoids us flagging the incoming update from file watcher as conflict changes.
                 if let Some(state) = self.buffers.get_mut(id) {
                     state.set_base_content_version(*version);
+                    // The file exists on disk now. Clearing this here rather than per subscribing
+                    // view matters: an editor that attaches to this buffer later would otherwise
+                    // read a stale "new file" and treat an emptied buffer as clean.
+                    state.opened_as_new_file = false;
                 }
                 ctx.emit(GlobalBufferModelEvent::FileSaved {
                     file_id: *id,
@@ -795,6 +809,33 @@ impl GlobalBufferModel {
                 });
             }
         }
+    }
+
+    /// Adopts a path that does not exist as an empty buffer, as if an empty file had been read.
+    ///
+    /// Marking the buffer loaded is what makes it behave like any other file: it gets a base
+    /// content version, so edits register as unsaved changes and the close path can warn about
+    /// them, and saving writes to the path (creating it, and any missing parents).
+    #[cfg(feature = "local_fs")]
+    fn adopt_as_new_file(&mut self, file_id: FileId, ctx: &mut ModelContext<Self>) {
+        let version = ContentVersion::new();
+        let Some(state) = self.buffers.get_mut(&file_id) else {
+            return;
+        };
+        state.opened_as_new_file = true;
+        state.set_initial_content_version(version);
+        FileModel::handle(ctx).update(ctx, |file_model, _ctx| {
+            file_model.set_version(file_id, version);
+        });
+        self.populate_buffer_with_read_content(file_id, "", version, version, true, ctx);
+    }
+
+    /// Whether this buffer was opened at a path that did not exist, so the file has not been
+    /// written yet.
+    pub fn opened_as_new_file(&self, file_id: FileId) -> bool {
+        self.buffers
+            .get(&file_id)
+            .is_some_and(|state| state.opened_as_new_file)
     }
 
     /// Save the content of a tracked buffer.
@@ -840,8 +881,12 @@ impl GlobalBufferModel {
             let handle = manager.as_ref(ctx).host_request_handle(&host_id);
             ctx.spawn(
                 async move { handle.save_buffer(path).await },
-                move |_me, result, ctx| match result {
+                move |me, result, ctx| match result {
                     Ok(()) => {
+                        // The remote file exists now, so it is no longer a new file.
+                        if let Some(state) = me.buffers.get_mut(&file_id) {
+                            state.opened_as_new_file = false;
+                        }
                         ctx.emit(GlobalBufferModelEvent::FileSaved {
                             file_id,
                             content_version: version,
@@ -859,10 +904,19 @@ impl GlobalBufferModel {
             return Ok(());
         }
 
+        // The first write of a file that did not exist must not clobber one that appeared in the
+        // meantime: nothing watches a path with no file at it, so there would be no reload or
+        // conflict to warn us.
+        let create_new = self.opened_as_new_file(file_id);
+
         // Completion is observed via `FileModelEvent`s; drop the save future.
         FileModel::handle(ctx)
             .update(ctx, |file_model, ctx| {
-                file_model.save(file_id, content, version, ctx)
+                if create_new {
+                    file_model.create_new_file(file_id, content, version, ctx)
+                } else {
+                    file_model.save(file_id, content, version, ctx)
+                }
             })
             .map(drop)
     }
@@ -1063,6 +1117,7 @@ impl GlobalBufferModel {
                 buffer: buffer.downgrade(),
                 latest_buffer_version: None,
                 pending_diff_parse: None,
+                opened_as_new_file: false,
                 source: BufferSource::Local {
                     base_content_version,
                     initial_content_version,
@@ -1321,6 +1376,7 @@ impl GlobalBufferModel {
                 buffer: buffer.downgrade(),
                 latest_buffer_version: None,
                 pending_diff_parse: None,
+                opened_as_new_file: false,
                 source,
             },
         );
@@ -1778,6 +1834,7 @@ impl GlobalBufferModel {
                 buffer: buffer.downgrade(),
                 latest_buffer_version: None,
                 pending_diff_parse: None,
+                opened_as_new_file: false,
                 source: BufferSource::Remote {
                     remote_path,
                     sync_clock: None,
@@ -1824,6 +1881,7 @@ impl GlobalBufferModel {
                 remote_server::proto::OpenBufferSuccess {
                     content,
                     server_version,
+                    opened_as_new_file,
                 },
             )) => {
                 log::debug!(
@@ -1838,6 +1896,9 @@ impl GlobalBufferModel {
                     );
                     return;
                 };
+                // A remote path that did not exist is a new file for the same reasons a local one
+                // is, so auto-save must hold back for it too.
+                state.opened_as_new_file = opened_as_new_file;
                 if let BufferSource::Remote {
                     sync_clock,
                     pending_batch,
@@ -2450,6 +2511,7 @@ impl GlobalBufferModel {
                 buffer: buffer.downgrade(),
                 latest_buffer_version: None,
                 pending_diff_parse: None,
+                opened_as_new_file: false,
                 source: BufferSource::Remote {
                     remote_path,
                     sync_clock: Some(SyncClock::from_wire(server_version, 0)),

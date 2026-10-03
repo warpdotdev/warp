@@ -391,11 +391,18 @@ fn test_reload_and_discard_after_failed_open() {
         init_app(&mut app);
         let (_, handle) = app.add_window(WindowStyle::NotStealFocus, FileNotebookView::new);
 
-        // A path that cannot be read, mirroring the `Could not read ...` treatment the reporter hit.
-        let first_id = await_open(&mut app, &handle, |view, ctx| {
-            view.open_local("app-5243-does-not-exist.md", None, ctx)
-        })
-        .await;
+        // A path that cannot be read, mirroring the `Could not read ...` treatment the reporter
+        // hit. A directory is used because a merely *missing* path now opens as an empty buffer
+        // (APP-5266); this test is about the genuine-error treatment.
+        let directory = tempfile::tempdir().expect("temp dir");
+        let unreadable = directory.path().to_path_buf();
+        let first_id = {
+            let unreadable = unreadable.clone();
+            await_open(&mut app, &handle, move |view, ctx| {
+                view.open_local(&unreadable, None, ctx)
+            })
+            .await
+        };
 
         handle.read(&app, |view, _| {
             assert!(
@@ -436,6 +443,79 @@ fn test_reload_and_discard_after_failed_open() {
             assert!(
                 FileModel::as_ref(ctx).file_path(second_id).is_none(),
                 "discarding the pane should release the open file id"
+            );
+        });
+    });
+}
+
+/// APP-5266: a markdown path that does not exist opens as an empty note, not the "Could not read"
+/// error treatment — the reporter's complaint was that the error made it look like something broke.
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_missing_markdown_file_opens_empty_without_an_error() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        let (_, handle) = app.add_window(WindowStyle::NotStealFocus, FileNotebookView::new);
+
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("not-written-yet.md");
+
+        handle
+            .update(&mut app, |file_notebook, ctx| {
+                file_notebook.open_local(&path, None, ctx);
+                let file_id = file_notebook.file_id.expect("File should have a file_id");
+                let future_handle = FileModel::as_ref(ctx)
+                    .get_future_handle(file_id)
+                    .expect("Loading future should be present");
+                ctx.await_spawned_future(future_handle.future_id())
+            })
+            .await;
+
+        handle.read(&app, |view, ctx| {
+            assert!(
+                matches!(view.file_state, FileState::Loaded(_)),
+                "a missing file should load empty, got {:?}",
+                view.file_state
+            );
+            assert!(
+                view.editor.as_ref(ctx).markdown(ctx).trim().is_empty(),
+                "the buffer should be empty"
+            );
+        });
+
+        // Opening must not create the file; only saving does.
+        assert!(!path.exists());
+    });
+}
+
+/// A markdown path that exists but cannot be read still gets the error treatment.
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_unreadable_markdown_file_still_shows_an_error() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        let (_, handle) = app.add_window(WindowStyle::NotStealFocus, FileNotebookView::new);
+
+        // A directory exists, so reading it is a genuine failure rather than a new file.
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().to_path_buf();
+
+        handle
+            .update(&mut app, |file_notebook, ctx| {
+                file_notebook.open_local(&path, None, ctx);
+                let file_id = file_notebook.file_id.expect("File should have a file_id");
+                let future_handle = FileModel::as_ref(ctx)
+                    .get_future_handle(file_id)
+                    .expect("Loading future should be present");
+                ctx.await_spawned_future(future_handle.future_id())
+            })
+            .await;
+
+        handle.read(&app, |view, _| {
+            assert!(
+                matches!(view.file_state, FileState::Error(_)),
+                "an unreadable path should still error, got {:?}",
+                view.file_state
             );
         });
     });
