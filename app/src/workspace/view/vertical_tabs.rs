@@ -994,13 +994,7 @@ fn resolve_vertical_tabs_mode(app: &AppContext) -> VerticalTabsResolvedMode {
         VerticalTabsDisplayGranularity::Tabs => match *settings.vertical_tabs_tab_item_mode.value()
         {
             VerticalTabsTabItemMode::FocusedSession => VerticalTabsResolvedMode::FocusedSession,
-            VerticalTabsTabItemMode::Summary => {
-                if FeatureFlag::VerticalTabsSummaryMode.is_enabled() {
-                    VerticalTabsResolvedMode::Summary
-                } else {
-                    VerticalTabsResolvedMode::FocusedSession
-                }
-            }
+            VerticalTabsTabItemMode::Summary => VerticalTabsResolvedMode::Summary,
         },
     }
 }
@@ -5927,8 +5921,7 @@ pub(super) fn render_settings_popup(
     let show_details_on_hover = *TabSettings::as_ref(app)
         .vertical_tabs_show_details_on_hover
         .value();
-    let show_tab_item_section = matches!(current_granularity, VerticalTabsDisplayGranularity::Tabs)
-        && FeatureFlag::VerticalTabsSummaryMode.is_enabled();
+    let show_tab_item_section = matches!(current_granularity, VerticalTabsDisplayGranularity::Tabs);
     let show_focused_session_controls = !matches!(
         resolve_vertical_tabs_mode(app),
         VerticalTabsResolvedMode::Summary
@@ -6018,18 +6011,14 @@ pub(super) fn render_settings_popup(
         theme,
     );
 
-    let summary_option = if FeatureFlag::VerticalTabsSummaryMode.is_enabled() {
-        Some(render_tab_item_mode_option(
-            "Summary",
-            matches!(current_tab_item_mode, VerticalTabsTabItemMode::Summary),
-            state.summary_option_mouse_state.clone(),
-            VerticalTabsTabItemMode::Summary,
-            appearance,
-            theme,
-        ))
-    } else {
-        None
-    };
+    let summary_option = render_tab_item_mode_option(
+        "Summary",
+        matches!(current_tab_item_mode, VerticalTabsTabItemMode::Summary),
+        state.summary_option_mouse_state.clone(),
+        VerticalTabsTabItemMode::Summary,
+        appearance,
+        theme,
+    );
 
     let density_header = Container::new(
         Text::new_inline(
@@ -6161,9 +6150,7 @@ pub(super) fn render_settings_popup(
         popup_col.add_child(make_divider(theme));
         popup_col.add_child(tab_item_header);
         popup_col.add_child(focused_session_option);
-        if let Some(summary_option) = summary_option {
-            popup_col.add_child(summary_option);
-        }
+        popup_col.add_child(summary_option);
     }
 
     if show_focused_session_controls {
