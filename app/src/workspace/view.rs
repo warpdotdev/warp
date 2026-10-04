@@ -10228,6 +10228,10 @@ impl Workspace {
                 self.show_tab_group_right_click_menu = None;
                 self.show_tab_selection_right_click_menu = None;
                 self.hide_move_to_group_sidecar(ctx);
+                // Menu actions can transfer focus to an inline editor or dialog before closing.
+                if self.tab_right_click_menu.is_self_or_child_focused(ctx) {
+                    self.focus_active_tab(ctx);
+                }
                 ctx.notify();
             }
             MenuEvent::ItemHovered | MenuEvent::ItemSelected => {
