@@ -158,18 +158,32 @@ fn wgpu_backend_options() -> wgpu::Backends {
 /// Returns the set of wgpu backends to use when recreating the wgpu instance while recovering
 /// from a lost device or surface.
 ///
-/// On Windows, initializing the GL backend creates a throwaway WGL context and reads `GL_VERSION`
-/// from it. Right after a GPU device loss (e.g. `DXGI_ERROR_DEVICE_REMOVED`) the driver can be in
-/// a state where that context isn't usable, which makes glow panic with "Reading GL_VERSION
-/// failed". That panic happens on the thread that holds the `WGPU_INSTANCE` lock, so it poisons the
-/// lock and leaves the app without any wgpu instance, i.e. with a window that never renders again.
-/// Skipping GL while recovering avoids that; DX12 and Vulkan are still available.
+/// On Windows, initializing the GL backend (wgpu-hal's WGL `Instance::init`) creates a throwaway
+/// WGL context and reads `GL_VERSION` from it. Right after a GPU device loss (e.g.
+/// `DXGI_ERROR_DEVICE_REMOVED`) the driver can be in a state where that context isn't usable, which
+/// makes glow panic with "Reading GL_VERSION failed". That panic happens on the thread that holds the
+/// `WGPU_INSTANCE` lock, so it poisons the lock and leaves the app without any wgpu instance, i.e.
+/// with a window that never renders again. Skipping GL while recovering avoids that; DX12 and Vulkan
+/// are still available.
+///
+/// The recreated instance is kept for the rest of the session, so windows opened after a recovery
+/// won't be offered GL adapters either.
 fn wgpu_recovery_backend_options() -> wgpu::Backends {
-    let backends = wgpu_backend_options();
-    if cfg!(windows) {
-        backends - wgpu::Backends::GL
-    } else {
+    recovery_backends(wgpu_backend_options())
+}
+
+fn recovery_backends(backends: wgpu::Backends) -> wgpu::Backends {
+    if !cfg!(windows) {
+        return backends;
+    }
+
+    let without_gl = backends - wgpu::Backends::GL;
+    // If GL is the only enabled backend (e.g. `WGPU_BACKEND=gl`), keep it: an instance without any
+    // backend can't render at all.
+    if without_gl.is_empty() {
         backends
+    } else {
+        without_gl
     }
 }
 
