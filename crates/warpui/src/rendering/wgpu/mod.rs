@@ -26,11 +26,18 @@ pub fn reset_wgpu_instance(display_handle: Box<dyn wgpu::wgt::WgpuHasDisplayHand
     }
 
     // Create a new one.
-    init_wgpu_instance(display_handle);
+    init_wgpu_instance_with_backends(display_handle, wgpu_recovery_backend_options());
 }
 
 /// Initializes the global wgpu instance.  This MUST be called before [`get_wgpu_instance()`].
 pub fn init_wgpu_instance(display_handle: Box<dyn WgpuHasDisplayHandle>) {
+    init_wgpu_instance_with_backends(display_handle, wgpu_backend_options());
+}
+
+fn init_wgpu_instance_with_backends(
+    display_handle: Box<dyn WgpuHasDisplayHandle>,
+    backends: wgpu::Backends,
+) {
     // Check whether DirectComposition should be explicitly disabled on Windows.
     let disable_dcomp = std::env::var("WARP_USE_DIRECT_COMPOSITION")
         .ok()
@@ -43,7 +50,7 @@ pub fn init_wgpu_instance(display_handle: Box<dyn WgpuHasDisplayHandle>) {
     let create_instance = move || {
         let dx12_shader_compiler = get_dx12_shader_compiler();
         Arc::new(wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu_backend_options(),
+            backends,
             backend_options: wgpu::BackendOptions {
                 dx12: wgpu::Dx12BackendOptions {
                     presentation_system: if disable_dcomp {
@@ -148,6 +155,24 @@ fn wgpu_backend_options() -> wgpu::Backends {
     wgpu::Backends::from_env().unwrap_or(wgpu::Backends::all())
 }
 
+/// Returns the set of wgpu backends to use when recreating the wgpu instance while recovering
+/// from a lost device or surface.
+///
+/// On Windows, initializing the GL backend creates a throwaway WGL context and reads `GL_VERSION`
+/// from it. Right after a GPU device loss (e.g. `DXGI_ERROR_DEVICE_REMOVED`) the driver can be in
+/// a state where that context isn't usable, which makes glow panic with "Reading GL_VERSION
+/// failed". That panic happens on the thread that holds the `WGPU_INSTANCE` lock, so it poisons the
+/// lock and leaves the app without any wgpu instance, i.e. with a window that never renders again.
+/// Skipping GL while recovering avoids that; DX12 and Vulkan are still available.
+fn wgpu_recovery_backend_options() -> wgpu::Backends {
+    let backends = wgpu_backend_options();
+    if cfg!(windows) {
+        backends - wgpu::Backends::GL
+    } else {
+        backends
+    }
+}
+
 #[cfg(not(target_family = "wasm"))]
 pub async fn print_wgpu_adapters(
     gpu_power_preference: GPUPowerPreference,
@@ -248,3 +273,7 @@ pub(crate) fn to_wgpu_backend(backend: GraphicsBackend) -> wgpu::Backend {
         GraphicsBackend::BrowserWebGpu => wgpu::Backend::BrowserWebGpu,
     }
 }
+
+#[cfg(test)]
+#[path = "mod_test.rs"]
+mod tests;
