@@ -2497,6 +2497,72 @@ fn test_closing_tab_context_menu_restores_active_tab_focus() {
         });
     });
 }
+
+#[test]
+fn test_selecting_rename_from_tab_context_menu_preserves_editor_focus() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let (window_id, editor_id) = workspace.update(&mut app, |workspace, ctx| {
+            workspace.show_tab_right_click_menu =
+                Some((0, TabContextMenuAnchor::Pointer(Vector2F::zero())));
+            ctx.focus(&workspace.tab_right_click_menu);
+
+            workspace.handle_action(&WorkspaceAction::RenameTab(0), ctx);
+            assert!(workspace.current_workspace_state.is_tab_being_renamed());
+
+            workspace.handle_tab_right_click_menu_event(
+                &MenuEvent::Close {
+                    via_select_item: true,
+                },
+                ctx,
+            );
+
+            (ctx.window_id(), workspace.tab_rename_editor.id())
+        });
+
+        assert_eq!(app.focused_view_id(window_id), Some(editor_id));
+    });
+}
+
+#[test]
+fn test_selecting_rename_from_tab_group_context_menu_preserves_editor_focus() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let (window_id, editor_id) = workspace.update(&mut app, |workspace, ctx| {
+            let group = TabGroup::new();
+            let group_id = group.id;
+            workspace.tab_groups.insert(group_id, group);
+            workspace.tabs[0].group_id = Some(group_id);
+            workspace.show_tab_group_right_click_menu =
+                Some((group_id, TabContextMenuAnchor::Pointer(Vector2F::zero())));
+            ctx.focus(&workspace.tab_right_click_menu);
+
+            workspace.handle_action(&WorkspaceAction::RenameTabGroup(group_id), ctx);
+            assert!(
+                workspace
+                    .current_workspace_state
+                    .is_any_tab_group_being_renamed()
+            );
+
+            workspace.handle_tab_right_click_menu_event(
+                &MenuEvent::Close {
+                    via_select_item: true,
+                },
+                ctx,
+            );
+
+            (ctx.window_id(), workspace.tab_group_rename_editor.id())
+        });
+
+        assert_eq!(app.focused_view_id(window_id), Some(editor_id));
+    });
+}
 #[test]
 fn test_close_tabs_right_confirmation_dialog() {
     let _guard = FeatureFlag::CreatingSharedSessions.override_enabled(true);
