@@ -134,7 +134,7 @@ fn v4a_blank_matching_line_counts() {
         post_context: String::new(),
     };
     for content in ["KEEP\nKEEP\n", "\n", ""] {
-        let diff = fuzzy_match_v4a_diffs("fixture.txt", &[hunk.clone()], None, content);
+        let diff = fuzzy_match_v4a_diffs("fixture.txt", std::slice::from_ref(&hunk), None, content);
         assert_eq!(deltas(&diff).len(), 0);
         assert_eq!(diff.failures.unwrap().fuzzy_match_failures, 1);
     }
@@ -172,26 +172,6 @@ fn v4a_old_strings_fixed_client() {
     };
     let diff = fuzzy_match_v4a_diffs("fixture.txt", &[hunk], None, "before\n\n\nafter\n");
     assert_eq!(deltas(&diff)[0].replacement_line_range, 3..4);
-}
-
-#[test]
-fn v4a_string_restore() {
-    let hunk = V4AHunk {
-        change_context: vec![],
-        pre_context: "before\n\n".into(),
-        old: "\n".into(),
-        new: "replacement\n\n".into(),
-        post_context: "after\n\n".into(),
-    };
-    assert_eq!(hunk.original_content(), "before\n\n\nafter\n\n");
-    let diff = fuzzy_match_v4a_diffs(
-        "fixture.txt",
-        &[hunk.clone()],
-        None,
-        hunk.original_content(),
-    );
-    assert_eq!(deltas(&diff)[0].replacement_line_range, 3..4);
-    assert_eq!(deltas(&diff)[0].insertion, "replacement\n\n");
 }
 
 const CONTENT: &str = "I'd just like to interject

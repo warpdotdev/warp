@@ -476,6 +476,7 @@
     },
     "initial": "x\n",
     "final": "y\r\n",
+    "gui_final": "y\n",
     "range": [
       1,
       2

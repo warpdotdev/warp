@@ -17,7 +17,7 @@ use warpui::r#async::executor::Background;
 
 use super::telemetry::{
     DiffInvalidFileEvent, DiffMatchFailedEvent, MissingLineNumbersEvent,
-    RequestFileEditsTelemetryEvent,
+    RequestFileEditsTelemetryEvent, V4AMatchFinishedEvent, V4AMatchOutcomes,
 };
 use crate::ai::agent::{AIIdentifiers, FileEdit};
 use crate::ai::blocklist::SessionContext;
@@ -194,6 +194,17 @@ where
     Fut: Future<Output = FileReadResult>,
 {
     let result = apply_edits_internal(edits, session_context, &read_file).await;
+    if let Some(outcomes) = result.v4a_outcomes {
+        send_telemetry_on_executor!(
+            auth_state,
+            RequestFileEditsTelemetryEvent::V4AMatchFinished(V4AMatchFinishedEvent {
+                identifiers: ai_identifiers.clone(),
+                executor_type: warp_core::execution_mode::current_client_id().unwrap_or("unknown"),
+                outcomes,
+            }),
+            background_executor
+        );
+    }
 
     // Send telemetry for all diff application errors.
 
@@ -285,6 +296,7 @@ struct DiffResult {
     errors: Vec<DiffApplicationError>,
     /// All warnings that occurred while applying diffs.
     warnings: Vec<DiffWarning>,
+    v4a_outcomes: Option<V4AMatchOutcomes>,
 }
 
 /// A pending file-creation request. Allow content replacement on existing file when
@@ -816,6 +828,7 @@ async fn apply_v4a_update<F, Fut>(
 
         // First, match the V4A diffs against the source file (without rename)
         let source_diffs = fuzzy_match_v4a_diffs(&file_path, &deltas, None, file_content.clone());
+        record_v4a_match_outcomes(&source_diffs, result);
         if source_diffs.warrants_failure() {
             if let Some(failures) = source_diffs.failures.as_ref() {
                 safe_warn!(
@@ -882,6 +895,7 @@ async fn apply_v4a_update<F, Fut>(
     } else {
         // Normal case: no rename or rename to non-existent file
         let diffs = fuzzy_match_v4a_diffs(&file_path, &deltas, rename_to, file_content);
+        record_v4a_match_outcomes(&diffs, result);
         if diffs.warrants_failure()
             && let Some(failures) = diffs.failures.as_ref()
         {
@@ -900,6 +914,22 @@ async fn apply_v4a_update<F, Fut>(
             });
         }
         result.diffs.push(diffs);
+    }
+}
+fn record_v4a_match_outcomes(diffs: &AIRequestedCodeDiff, result: &mut DiffResult) {
+    let outcomes = result.v4a_outcomes.get_or_insert_with(Default::default);
+    if diffs.warrants_failure() {
+        if diffs
+            .failures
+            .as_ref()
+            .is_some_and(|failures| failures.fuzzy_match_failures > 0)
+        {
+            outcomes.unmatched += 1;
+        } else {
+            outcomes.noop += 1;
+        }
+    } else {
+        outcomes.success += 1;
     }
 }
 

@@ -3078,3 +3078,7 @@ fn editor_range_to_file_context_range(range: Range<usize>) -> Range<usize> {
 fn file_context_range_to_editor_range(range: Range<usize>) -> Range<usize> {
     range.start.saturating_sub(1)..range.end.saturating_sub(1)
 }
+
+#[cfg(test)]
+#[path = "code_diff_view_tests.rs"]
+mod tests;

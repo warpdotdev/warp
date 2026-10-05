@@ -62,8 +62,16 @@ fn test_apply_v4a_final_bytes() {
             editor.update(&mut app, |editor, ctx| editor.apply_diffs(deltas, ctx));
             editor.read(&app, |editor, ctx| {
                 assert_eq!(
-                    editor.content().as_ref(ctx).text().as_str(),
-                    fixture["final"].as_str().unwrap(),
+                    editor
+                        .content()
+                        .as_ref(ctx)
+                        .text_with_line_ending()
+                        .as_str(),
+                    fixture
+                        .get("gui_final")
+                        .unwrap_or(&fixture["final"])
+                        .as_str()
+                        .unwrap(),
                     "{}",
                     fixture["name"]
                 );
