@@ -9,8 +9,10 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use futures::channel::oneshot;
+use instant::Instant;
 use session_sharing_protocol::common::{Role, SessionId};
 use session_sharing_protocol::sharer::SessionRetentionReason;
+use uuid::Uuid;
 use warp_cli::share::{ShareAccessLevel, ShareRequest, ShareSubject};
 use warp_completer::completer::CommandOutput;
 use warp_core::command::ExitCode;
@@ -38,7 +40,7 @@ use crate::terminal::model::terminal_model::ShellProcessInfo;
 use crate::terminal::shared_session::{self, IsSharedSessionCreator, SharedSessionSource};
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::{ConversationRestorationInNewPaneType, Event};
-use crate::workspaces::user_workspaces::{TeamScope, TeamScopeForCli, UserWorkspaces};
+use crate::workspaces::user_workspaces::{HeadlessTeamScope, TeamScope, UserWorkspaces};
 
 /// Describes why a terminal session bootstrap failed.
 #[derive(Debug)]
@@ -109,13 +111,13 @@ const TERMINAL_SESSION_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(60);
 const TERMINAL_SESSION_SHARE_DELAY: Duration = Duration::from_secs(20);
 
 /// Options for creating the terminal view before constructing a [`TerminalDriver`].
-pub(crate) struct TerminalDriverOptions {
+pub(crate) struct TerminalDriverOptions<'a> {
     pub working_dir: PathBuf,
     pub env_vars: HashMap<OsString, OsString>,
     pub should_share: bool,
     pub task_id: Option<AmbientAgentTaskId>,
     pub conversation_restoration: Option<ConversationRestorationInNewPaneType>,
-    pub team_scope: Option<TeamScopeForCli>,
+    pub team_scope: Option<&'a HeadlessTeamScope>,
 }
 
 /// Events emitted by [`TerminalDriver`] for [`super::AgentDriver`] to react to.
@@ -191,7 +193,7 @@ impl Entity for TerminalDriver {
 /// This is separate from [`TerminalDriver::new`] because [`AppContext::add_model`]
 /// requires an infallible constructor; the fallible window/view creation must happen first.
 fn create_terminal_view(
-    options: TerminalDriverOptions,
+    options: TerminalDriverOptions<'_>,
     ctx: &mut AppContext,
 ) -> Result<ViewHandle<TerminalView>, AgentDriverError> {
     let is_shared_session_creator = if options.should_share {
@@ -202,7 +204,7 @@ fn create_terminal_view(
         IsSharedSessionCreator::No
     };
 
-    let initial_team_uid = options.team_scope.as_ref().and_then(TeamScope::team_uid);
+    let initial_team_uid = options.team_scope.and_then(TeamScope::team_uid);
     let (_, root_view) = open_new_with_workspace_source(
         NewWorkspaceSource::Session {
             options: Box::new(NewTerminalOptions {
@@ -231,7 +233,7 @@ fn create_terminal_view(
 impl TerminalDriver {
     /// Create a terminal view from the given options and wrap it in a new `TerminalDriver` model.
     pub(crate) fn create(
-        options: TerminalDriverOptions,
+        options: TerminalDriverOptions<'_>,
         ctx: &mut AppContext,
     ) -> Result<ModelHandle<Self>, AgentDriverError> {
         let should_share = options.should_share;
@@ -556,6 +558,12 @@ impl TerminalDriver {
         }
 
         let command_string = command.to_string();
+        let command_id = Uuid::new_v4();
+        let submitted_at = Instant::now();
+        let session_id = self.shared_session_id;
+        log::info!(
+            "Terminal command lifecycle: event=submitted command_id={command_id} session_id={session_id:?}"
+        );
         // Store a secret-redacted copy for shell-exit attribution: the text
         // flows into error reports (server task status, Sentry) if the shell
         // dies, so never retain the raw command here.
@@ -572,9 +580,16 @@ impl TerminalDriver {
             let block_id = start_rx
                 .await
                 .map_err(|_| AgentDriverError::InvalidRuntimeState)??;
+            log::info!(
+                "Terminal command lifecycle: event=started command_id={command_id} session_id={session_id:?} block_id={block_id:?} elapsed_ms={}",
+                submitted_at.elapsed().as_millis()
+            );
             Ok(CommandHandle {
                 exit_status_rx: exit_rx,
                 block_id,
+                command_id,
+                submitted_at,
+                session_id,
             })
         })
     }
@@ -773,6 +788,9 @@ pub(crate) struct BlockOutputMatch {
 pub(crate) struct CommandHandle {
     exit_status_rx: oneshot::Receiver<Result<ExitCode, AgentDriverError>>,
     block_id: BlockId,
+    command_id: Uuid,
+    submitted_at: Instant,
+    session_id: Option<SessionId>,
 }
 
 impl CommandHandle {
@@ -786,12 +804,24 @@ impl Future for CommandHandle {
     type Output = Result<ExitCode, AgentDriverError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.exit_status_rx)
+        let result = Pin::new(&mut self.exit_status_rx)
             .poll(cx)
             .map(|result| match result {
                 Ok(exit_status) => exit_status,
                 Err(_) => Err(AgentDriverError::InvalidRuntimeState),
-            })
+            });
+        if let Poll::Ready(status) = &result {
+            log::info!(
+                "Terminal command lifecycle: event=finished command_id={} session_id={:?} block_id={:?} elapsed_ms={} exit_code={:?} exit_status_received={}",
+                self.command_id,
+                self.session_id,
+                self.block_id,
+                self.submitted_at.elapsed().as_millis(),
+                status.as_ref().ok().map(|code| code.value()),
+                status.is_ok()
+            );
+        }
+        result
     }
 }
 
@@ -823,6 +853,12 @@ impl TerminalDriver {
                 }
             }
             crate::terminal::view::Event::Exited => {
+                log::warn!(
+                    "Terminal command lifecycle: event=shell_exited session_id={:?} pending_start={} waiting_exit={}",
+                    self.shared_session_id,
+                    self.pending_command_start.is_some(),
+                    self.waiting_command.is_some()
+                );
                 // The shell process exited before bootstrap completed —
                 // cancel the wait immediately rather than sitting out the
                 // full 60 s timeout. No specific reason is known at this

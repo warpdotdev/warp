@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use ai::api_keys::ApiKeyManager;
+use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
@@ -8,6 +8,7 @@ use warp_util::sync::Condition;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};
 
 use super::hoa_onboarding;
+use super::view::chatgpt_plan_modal::ChatGPTPlanModalTelemetryEvent;
 use super::view::feature_intro_modal::{FEATURE_INTROS, FeatureIntroId};
 use super::view::free_ai_removal_modal::{
     FreeAiRemovalModalTelemetryEvent, FreeAiRemovalModalVariant,
@@ -15,9 +16,9 @@ use super::view::free_ai_removal_modal::{
 use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
 use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
 use crate::auth::auth_manager::AuthManagerEvent;
-use crate::auth::{AuthManager, AuthStateProvider};
+use crate::auth::{AuthManager, AuthStateProvider, UserUid};
 use crate::channel::{Channel, ChannelState};
-use crate::root_view::has_completed_local_onboarding;
+use crate::root_view::{RootView, has_completed_local_onboarding};
 use crate::settings::cloud_preferences_syncer::{
     CloudPreferencesSyncer, CloudPreferencesSyncerEvent,
 };
@@ -53,6 +54,11 @@ pub struct OneTimeModalModel {
     is_free_ai_removal_modal_open: bool,
     /// Whether the HOA onboarding flow is currently being shown.
     is_hoa_onboarding_open: bool,
+    /// Whether the "You're using your ChatGPT plan" modal is currently being shown.
+    is_chatgpt_plan_modal_open: bool,
+    /// Whether the guided onboarding tutorial callout is in progress. The ChatGPT plan modal
+    /// waits for it to finish rather than covering it.
+    is_onboarding_tutorial_active: bool,
     /// The feature-intro popover currently being shown, if any. Unlike the other
     /// one-time modals this is a non-blocking bottom-right popover, so it is
     /// intentionally excluded from `is_any_modal_open` (which suppresses terminal
@@ -66,6 +72,12 @@ pub struct OneTimeModalModel {
     /// data reflects more than the local cache and "no workspace" can be trusted to
     /// mean a solo (Free) user rather than not-yet-loaded data.
     has_fetched_workspaces: bool,
+    /// The user whose cloud preferences have completed an initial load this session. A
+    /// re-login of the same user (e.g. the Sign in with ChatGPT handoff) resets the syncer's
+    /// loaded state without necessarily re-emitting `InitialLoadCompleted`, but the synced
+    /// markers already loaded for that user remain trustworthy. A full logout wipes the local
+    /// copies of those markers, so it clears this too.
+    cloud_preferences_loaded_for: Option<UserUid>,
     /// The window ID where the currently open one-time modal should be displayed.
     /// This is captured when a modal is first opened and ensures the modal stays on that window.
     target_window_id: Option<WindowId>,
@@ -100,6 +112,19 @@ impl OneTimeModalModel {
             }
         });
 
+        if FeatureFlag::ChatGPTSubscription.is_enabled() {
+            ctx.subscribe_to_model(
+                &ApiKeyManager::handle(ctx),
+                |me, _, event, ctx| match event {
+                    ApiKeyManagerEvent::ChatGPTConnectionUpdated => {
+                        me.maybe_trigger_chatgpt_plan_modal(ctx);
+                    }
+                    ApiKeyManagerEvent::KeysUpdated
+                    | ApiKeyManagerEvent::ChatGPTConnectFailed(_) => {}
+                },
+            );
+        }
+
         // Subscribe to auth manager events to automatically trigger modal when user becomes onboarded
         ctx.subscribe_to_model(&AuthManager::handle(ctx), |_, _, event, ctx| {
             let AuthManagerEvent::AuthComplete = event else {
@@ -116,6 +141,7 @@ impl OneTimeModalModel {
                     move |me, _, event, ctx| {
                         if let CloudPreferencesSyncerEvent::InitialLoadCompleted = event {
                             ctx.unsubscribe_from_model(&CloudPreferencesSyncer::handle(ctx));
+                            me.record_cloud_preferences_loaded(ctx);
                             me.has_completed_initial_modal_checks = true;
                             me.check_and_trigger_all_modals(ctx);
                             maybe_ensure_handoff_chip_in_toolbar(ctx);
@@ -160,6 +186,21 @@ impl OneTimeModalModel {
                         log::warn!("Failed to mark OpenWarp launch modal as dismissed: {e}");
                     }
                 });
+                // New signups skip the launch-modal queue, but the ChatGPT plan modal is
+                // aimed at them and its seen marker is cloud-synced like the others, so it
+                // still waits for the initial preferences load.
+                if FeatureFlag::ChatGPTSubscription.is_enabled() {
+                    ctx.subscribe_to_model(
+                        &CloudPreferencesSyncer::handle(ctx),
+                        move |me, _, event, ctx| {
+                            if let CloudPreferencesSyncerEvent::InitialLoadCompleted = event {
+                                ctx.unsubscribe_from_model(&CloudPreferencesSyncer::handle(ctx));
+                                me.record_cloud_preferences_loaded(ctx);
+                                me.maybe_trigger_chatgpt_plan_modal(ctx);
+                            }
+                        },
+                    );
+                }
             }
         });
 
@@ -178,11 +219,35 @@ impl OneTimeModalModel {
             auto_handoff_sleep_modal_closed,
             is_free_ai_removal_modal_open: false,
             is_hoa_onboarding_open: false,
+            is_chatgpt_plan_modal_open: false,
+            is_onboarding_tutorial_active: false,
             active_feature_intro: None,
             has_completed_initial_modal_checks: false,
             has_fetched_workspaces: false,
+            cloud_preferences_loaded_for: None,
             target_window_id: None,
         }
+    }
+
+    fn record_cloud_preferences_loaded(&mut self, ctx: &ModelContext<Self>) {
+        self.cloud_preferences_loaded_for = AuthStateProvider::as_ref(ctx).get().user_id();
+    }
+
+    /// Forgets that the current user's cloud preferences were loaded. Logout clears the local
+    /// copies of the synced markers, so the next login must wait for a fresh initial load
+    /// before trusting them again.
+    pub fn on_log_out(&mut self) {
+        self.cloud_preferences_loaded_for = None;
+    }
+
+    /// Whether the current user's cloud-synced markers can be trusted: either the syncer is in
+    /// its loaded state, or it completed a load for this same user earlier in the session.
+    fn are_cloud_preferences_loaded(&self, ctx: &ModelContext<Self>) -> bool {
+        if CloudPreferencesSyncer::as_ref(ctx).has_completed_initial_load() {
+            return true;
+        }
+        self.cloud_preferences_loaded_for.is_some()
+            && self.cloud_preferences_loaded_for == AuthStateProvider::as_ref(ctx).get().user_id()
     }
 
     /// Returns whether the Oz launch modal is currently open.
@@ -367,8 +432,117 @@ impl OneTimeModalModel {
             || self.is_auto_handoff_sleep_modal_open
             || self.is_build_plan_migration_modal_open
             || self.is_free_ai_removal_modal_open
-            || self.is_hoa_onboarding_open)
+            || self.is_hoa_onboarding_open
+            || self.is_chatgpt_plan_modal_open)
             && self.target_window_id.is_some()
+    }
+
+    /// Returns whether the "You're using your ChatGPT plan" modal is currently open.
+    pub fn is_chatgpt_plan_modal_open(&self) -> bool {
+        self.is_chatgpt_plan_modal_open && self.target_window_id.is_some()
+    }
+
+    pub fn mark_chatgpt_plan_modal_dismissed(&mut self, ctx: &mut ModelContext<Self>) {
+        self.set_chatgpt_plan_modal_open(false, ctx);
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn force_open_chatgpt_plan_modal(&mut self, ctx: &mut ModelContext<Self>) {
+        self.set_chatgpt_plan_modal_open(true, ctx);
+    }
+
+    fn set_chatgpt_plan_modal_open(&mut self, is_open: bool, ctx: &mut ModelContext<Self>) -> bool {
+        if self.is_chatgpt_plan_modal_open != is_open {
+            self.is_chatgpt_plan_modal_open = is_open;
+            ctx.emit(OneTimeModalEvent::VisibilityChanged { is_open });
+            return true;
+        }
+        false
+    }
+
+    /// Records whether the guided onboarding tutorial is in progress. When it ends, the
+    /// ChatGPT plan modal is re-evaluated so a connection that arrived mid-tutorial is
+    /// still surfaced.
+    pub fn set_onboarding_tutorial_active(
+        &mut self,
+        is_active: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.is_onboarding_tutorial_active == is_active {
+            return;
+        }
+        self.is_onboarding_tutorial_active = is_active;
+        if !is_active && FeatureFlag::ChatGPTSubscription.is_enabled() {
+            self.maybe_trigger_chatgpt_plan_modal(ctx);
+        }
+    }
+
+    /// Re-evaluates the ChatGPT plan modal after the workspace in `window_id` becomes
+    /// visible, e.g. once onboarding finishes. Callers are expected to be inside a `RootView`
+    /// update, so this trusts `window_id` rather than reading the root view back.
+    pub fn on_workspace_shown(&mut self, window_id: WindowId, ctx: &mut ModelContext<Self>) {
+        if !FeatureFlag::ChatGPTSubscription.is_enabled() {
+            return;
+        }
+        self.check_and_trigger_chatgpt_plan_modal(window_id, ctx);
+    }
+
+    /// Event-driven re-check that first confirms the target window is actually showing its
+    /// workspace, since the connection status usually arrives while onboarding is still up.
+    /// Returns true when the modal was opened.
+    fn maybe_trigger_chatgpt_plan_modal(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        let Some(window_id) = self
+            .target_window_id
+            .or_else(|| ctx.windows().active_window())
+        else {
+            return false;
+        };
+        if !is_workspace_shown_in_window(window_id, ctx) {
+            return false;
+        }
+        self.check_and_trigger_chatgpt_plan_modal(window_id, ctx)
+    }
+
+    /// Shows the ChatGPT plan modal once per connection: the subscription must be active, the
+    /// cloud-synced seen marker must be loaded and unset, and no other one-time modal may be
+    /// open. Returns true when the modal was opened.
+    fn check_and_trigger_chatgpt_plan_modal(
+        &mut self,
+        window_id: WindowId,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        if cfg!(target_family = "wasm") || !FeatureFlag::ChatGPTSubscription.is_enabled() {
+            return false;
+        }
+        if self.is_chatgpt_plan_modal_open
+            || self.is_any_modal_open()
+            || self.active_feature_intro.is_some()
+            || self.is_onboarding_tutorial_active
+        {
+            return false;
+        }
+        if !ApiKeyManager::as_ref(ctx).has_chatgpt_subscription() {
+            return false;
+        }
+        if !self.are_cloud_preferences_loaded(ctx)
+            || *AISettings::as_ref(ctx).did_show_chatgpt_plan_modal
+        {
+            return false;
+        }
+
+        AISettings::handle(ctx).update(ctx, |settings, ctx| {
+            if let Err(e) = settings.did_show_chatgpt_plan_modal.set_value(true, ctx) {
+                log::warn!("Failed to mark ChatGPT plan modal as shown: {e}");
+            }
+        });
+
+        let should_show = !matches!(ChannelState::channel(), Channel::Integration);
+        if should_show {
+            send_telemetry_from_ctx!(ChatGPTPlanModalTelemetryEvent::Shown, ctx);
+            self.target_window_id = Some(window_id);
+        }
+        self.set_chatgpt_plan_modal_open(should_show, ctx);
+        should_show
     }
 
     #[cfg(debug_assertions)]
@@ -475,6 +649,13 @@ impl OneTimeModalModel {
                 log::warn!("Failed to mark code toolbelt new feature popup as dismissed: {e}");
             }
         });
+
+        // The ChatGPT plan modal may already have opened from a connection-status event;
+        // either way, don't stack launch modals on top of it. They keep their unseen
+        // markers and show on a later startup.
+        if self.is_chatgpt_plan_modal_open || self.maybe_trigger_chatgpt_plan_modal(ctx) {
+            return;
+        }
 
         // The OpenWarp launch modal takes priority over the Oz launch modal
         // when both are enabled.
@@ -914,6 +1095,13 @@ fn maybe_ensure_handoff_chip_in_toolbar(ctx: &mut ModelContext<OneTimeModalModel
             log::warn!("Failed to add handoff chip to toolbar: {e}");
         }
     });
+}
+
+/// Whether `window_id`'s root view is past auth/onboarding and rendering its workspace.
+fn is_workspace_shown_in_window(window_id: WindowId, app: &AppContext) -> bool {
+    app.views_of_type::<RootView>(window_id)
+        .and_then(|root_views| root_views.into_iter().next())
+        .is_some_and(|root_view| root_view.as_ref(app).workspace_view().is_some())
 }
 
 /// Marks the free-AI-removal notice as seen without showing it.

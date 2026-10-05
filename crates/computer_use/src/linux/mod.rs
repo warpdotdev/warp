@@ -6,7 +6,7 @@ mod x11;
 use std::sync::OnceLock;
 
 use async_trait::async_trait;
-pub use recording::{Recorder, post_process_recording};
+pub use recording::Recorder;
 use warp_errors::report_error;
 
 use crate::{ActionResult, Options, TargetedAction};

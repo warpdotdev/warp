@@ -953,6 +953,9 @@ impl Network {
             server_conversation_token,
             prompt,
             attachments,
+            // Viewer-typed prompts carry only text and attachments; warp-server fills this in for
+            // the follow-ups it injects.
+            user_query_b64: None,
         };
         self.send_message_to_server(UpstreamMessage::SendAgentPrompt(request));
     }

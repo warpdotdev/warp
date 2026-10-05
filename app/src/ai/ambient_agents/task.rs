@@ -463,6 +463,19 @@ impl AmbientAgentTask {
                 + u.platform_cost.unwrap_or(0.0)) as f32
         })
     }
+    /// Total server-reported run cost, in US cents.
+    pub fn cost_in_cents(&self) -> Option<f32> {
+        let usage = self.active_run_execution().request_usage?;
+        let costs = [
+            usage.inference_cost_usd,
+            usage.compute_cost_usd,
+            usage.platform_cost_usd,
+        ];
+        costs
+            .iter()
+            .any(Option::is_some)
+            .then(|| (costs.into_iter().flatten().sum::<f64>() * 100.0) as f32)
+    }
 
     /// Server-reported run duration.
     pub fn run_time(&self) -> Option<ChronoDuration> {
@@ -666,6 +679,9 @@ pub struct RequestUsage {
     pub inference_cost: Option<f64>,
     pub compute_cost: Option<f64>,
     pub platform_cost: Option<f64>,
+    pub inference_cost_usd: Option<f64>,
+    pub compute_cost_usd: Option<f64>,
+    pub platform_cost_usd: Option<f64>,
 }
 
 /// Cancel an ambient agent task and show a toast with the result.

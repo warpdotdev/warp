@@ -15,7 +15,7 @@ use warpui::{AppContext, ModelContext, SingletonEntity};
 use super::response_stream::ResponseStreamId;
 use super::{BlocklistAIController, RequestInput, SessionContext};
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus, TaskSyncMode};
-use crate::ai::agent::{AIAgentActionId, AIAgentAttachment, EntrypointType};
+use crate::ai::agent::{AIAgentActionId, AIAgentAttachment, BaseUserQuery, EntrypointType};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::attachment_utils::{
@@ -735,6 +735,7 @@ impl BlocklistAIController {
         server_conversation_token: Option<ServerConversationToken>,
         attachments: Vec<AgentAttachment>,
         participant_id: ParticipantId,
+        base: Option<BaseUserQuery>,
         ctx: &mut ModelContext<Self>,
     ) {
         // Route through the bound native conversation, if any -- see
@@ -745,6 +746,7 @@ impl BlocklistAIController {
             server_conversation_token.as_ref(),
             &attachments,
             &participant_id,
+            base.as_ref(),
             ctx,
         ) {
             return;
@@ -807,6 +809,7 @@ impl BlocklistAIController {
                 conversation_id,
                 participant_id,
                 HashMap::new(),
+                base,
                 ctx,
             );
             return;
@@ -822,6 +825,7 @@ impl BlocklistAIController {
                 conversation_id,
                 participant_id,
                 HashMap::new(),
+                base,
                 ctx,
             );
             return;
@@ -833,6 +837,7 @@ impl BlocklistAIController {
                 conversation_id,
                 participant_id,
                 HashMap::new(),
+                base,
                 ctx,
             );
             return;
@@ -856,6 +861,7 @@ impl BlocklistAIController {
                     conversation_id,
                     participant_id,
                     file_attachments,
+                    base,
                     ctx,
                 );
             },
@@ -923,6 +929,7 @@ impl BlocklistAIController {
         conversation_id: Option<AIConversationId>,
         participant_id: ParticipantId,
         file_attachments: HashMap<String, AIAgentAttachment>,
+        base: Option<BaseUserQuery>,
         ctx: &mut ModelContext<Self>,
     ) {
         if let Some(conversation_id) = conversation_id {
@@ -942,6 +949,7 @@ impl BlocklistAIController {
                 conversation_id,
                 Some(participant_id),
                 file_attachments,
+                base,
                 ctx,
             );
         } else {
@@ -1008,16 +1016,21 @@ impl BlocklistAIController {
                     conversation_id,
                     Some(participant_id),
                     file_attachments,
+                    base,
                     ctx,
                 );
                 return;
             }
 
-            self.send_user_query_in_new_conversation(
+            self.send_user_query_in_new_conversation_internal(
                 prompt,
                 None,
                 EntrypointType::SharedSession,
                 Some(participant_id),
+                /*is_queued_prompt*/ false,
+                /*queued_query_id*/ None,
+                base,
+                file_attachments,
                 ctx,
             );
 

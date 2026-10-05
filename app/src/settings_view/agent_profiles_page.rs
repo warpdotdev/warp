@@ -1074,6 +1074,7 @@ impl AgentProfilesPageView {
                 None,
                 None,
                 CollapsedModelVariants::default(),
+                None,
                 &scope,
                 ctx,
             );
@@ -1119,6 +1120,7 @@ impl AgentProfilesPageView {
                 None,
                 None,
                 CollapsedModelVariants::default(),
+                None,
                 &scope,
                 ctx,
             );

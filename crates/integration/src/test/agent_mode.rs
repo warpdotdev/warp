@@ -133,6 +133,7 @@ fn restored_user_query_message(task_id: &str, request_id: &str, directory: &str)
             referenced_attachments: HashMap::new(),
             mode: None,
             intended_agent: Default::default(),
+            ..Default::default()
         })),
         request_id: request_id.to_string(),
         timestamp: None,

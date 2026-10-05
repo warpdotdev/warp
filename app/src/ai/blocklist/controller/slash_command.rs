@@ -290,6 +290,7 @@ impl SlashCommandRequest {
                         InvokeSkillUserQuery {
                             referenced_attachments,
                             query,
+                            base: None,
                         }
                     })
                 } else {

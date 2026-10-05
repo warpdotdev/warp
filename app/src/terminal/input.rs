@@ -102,7 +102,8 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::units::IntoPixels;
 use warpui::{
     AppContext, Entity, EntityId, FocusContext, ModelAsRef, ModelHandle, SingletonEntity,
-    TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle, end_trace, start_trace,
+    TypedActionView, View, ViewContext, ViewHandle, ViewUpdateError, WeakViewHandle, end_trace,
+    start_trace,
 };
 
 use self::decorations::InputBackgroundJobOptions;
@@ -442,6 +443,7 @@ fn effective_default_host(
 
 pub const COMPLETIONS_MENU_WIDTH: f32 = 330.;
 pub const OPEN_COMPLETIONS_KEYBINDING_NAME: &str = "input:open_completion_suggestions";
+pub(crate) const EXTERNAL_ALT_C_BINDING_CONTEXT: &str = "ExternalAltCDirectorySearch";
 pub const INPUT_A11Y_LABEL: &str = "Command Input.";
 pub const INPUT_A11Y_HELPER: &str = "Input your shell command, press enter to execute. Press cmd-up to navigate to output of previously executed commands. Press cmd-l to re-focus command input.";
 pub const AI_COMMAND_SEARCH_HINT_TEXT: &str = "Type '#' for AI command suggestions";
@@ -1182,6 +1184,10 @@ pub enum InputAction {
     CtrlR,
     CtrlD,
     Up,
+    /// Deferred so Up does not update InlineHistoryMenuView while it is already checked out.
+    SelectPreviousInlineHistoryItem,
+    /// Deferred so Down does not update InlineHistoryMenuView while it is already checked out.
+    SelectNextInlineHistoryItem,
     PageUp,
     PageDown,
     ClearScreen,
@@ -2248,6 +2254,14 @@ pub fn init(app: &mut AppContext) {
         .with_enabled(|| FeatureFlag::ShellWidgetHandoff.is_enabled())
         .with_context_predicate(id!("Input") & !id!("VoltronActive") & !id!("LongRunningCommand"))
         .with_key_binding("ctrl-t"),
+        EditableBinding::new(
+            "workspace:trigger_external_alt_c_directory_search",
+            "External Directory Search",
+            WorkspaceAction::TriggerExternalAltCDirectorySearch,
+        )
+        .with_enabled(|| FeatureFlag::ShellWidgetHandoff.is_enabled())
+        .with_context_predicate(id!(EXTERNAL_ALT_C_BINDING_CONTEXT))
+        .with_key_binding("alt-c"),
     ]);
 
     if let Some(custom_action) = workflows::CategoriesView::custom_action() {
@@ -3194,7 +3208,9 @@ impl Input {
                     render_decorator_elements: Some(Box::new(
                         move |app| -> EditorDecoratorElements {
                             let terminal_model = model_clone.lock();
-                            let active_block = terminal_model.block_list().active_block();
+                            let prompt_block = terminal_model
+                                .prompt_block()
+                                .unwrap_or_else(|| terminal_model.block_list().active_block());
 
                             let mut editor_decorator_elements = EditorDecoratorElements::default();
 
@@ -3224,7 +3240,7 @@ impl Input {
                                 editor_decorator_elements.left_notch = lprompt_bottom;
                                 editor_decorator_elements.right_notch = rprompt;
                                 editor_decorator_elements.right_notch_offset_px = Some(
-                                    active_block.rprompt_render_offset(
+                                    prompt_block.rprompt_render_offset(
                                         &input_render_state_model_handle_clone
                                             .as_ref(app)
                                             .size_info,
@@ -5693,13 +5709,19 @@ impl Input {
         let has_input = !self.editor.as_ref(ctx).buffer_text(ctx).is_empty();
         let should_clear_prompt_for_search =
             has_input && FeatureFlag::RestorePromptOnInlineModelSelectorSearch.is_enabled();
-        self.inline_model_selector_view.update(ctx, |view, ctx| {
-            if has_input && !should_clear_prompt_for_search {
-                view.set_filter_results_by_input(false);
-            }
-            view.set_prompt_parked_for_search(should_clear_prompt_for_search);
-            view.set_active_tab(initial_tab, ctx);
-        });
+        match self
+            .inline_model_selector_view
+            .try_update(ctx, |view, ctx| {
+                if has_input && !should_clear_prompt_for_search {
+                    view.set_filter_results_by_input(false);
+                }
+                view.set_prompt_parked_for_search(should_clear_prompt_for_search);
+                view.set_active_tab(initial_tab, ctx);
+            }) {
+            Ok(()) => {}
+            Err(ViewUpdateError::WindowClosed) => return,
+            Err(ViewUpdateError::CircularUpdate) => panic!("Circular view update"),
+        }
         self.suggestions_mode_model.update(ctx, |model, ctx| {
             model.set_mode(InputSuggestionsMode::ModelSelector, ctx);
         });
@@ -9542,6 +9564,44 @@ impl Input {
         ctx.notify();
     }
 
+    fn select_previous_inline_history_item(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self
+            .suggestions_mode_model
+            .as_ref(ctx)
+            .is_inline_history_menu()
+        {
+            return;
+        }
+
+        if self.is_cloud_mode_input_v2_composing(ctx) {
+            if let Some(view) = self.cloud_mode_v2_history_menu_view.clone() {
+                view.update(ctx, |view, ctx| view.select_up(ctx));
+            }
+        } else {
+            self.inline_history_menu_view
+                .update(ctx, |view, ctx| view.select_up(ctx));
+        }
+    }
+
+    fn select_next_inline_history_item(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self
+            .suggestions_mode_model
+            .as_ref(ctx)
+            .is_inline_history_menu()
+        {
+            return;
+        }
+
+        if self.is_cloud_mode_input_v2_composing(ctx) {
+            if let Some(view) = self.cloud_mode_v2_history_menu_view.clone() {
+                view.update(ctx, |view, ctx| view.select_down(ctx));
+            }
+        } else {
+            self.inline_history_menu_view
+                .update(ctx, |view, ctx| view.select_down(ctx));
+        }
+    }
+
     fn editor_up(&mut self, ctx: &mut ViewContext<Self>) {
         if self.should_show_auth_secret_ftux(ctx) {
             if let Some(ftux_view) = self.auth_secret_ftux_view().cloned() {
@@ -9647,17 +9707,7 @@ impl Input {
                 true
             }
             InputSuggestionsMode::InlineHistoryMenu { .. } => {
-                if self.is_cloud_mode_input_v2_composing(ctx) {
-                    if let Some(view) = self.cloud_mode_v2_history_menu_view.clone() {
-                        view.update(ctx, |view, ctx| {
-                            view.select_up(ctx);
-                        });
-                    }
-                } else {
-                    self.inline_history_menu_view.update(ctx, |view, ctx| {
-                        view.select_up(ctx);
-                    });
-                }
+                ctx.dispatch_typed_action_deferred(InputAction::SelectPreviousInlineHistoryItem);
                 true
             }
             InputSuggestionsMode::IndexedReposMenu => {
@@ -10041,17 +10091,7 @@ impl Input {
             .as_ref(ctx)
             .is_inline_history_menu()
         {
-            if self.is_cloud_mode_input_v2_composing(ctx) {
-                if let Some(view) = self.cloud_mode_v2_history_menu_view.clone() {
-                    view.update(ctx, |view, ctx| {
-                        view.select_down(ctx);
-                    });
-                }
-            } else {
-                self.inline_history_menu_view.update(ctx, |view, ctx| {
-                    view.select_down(ctx);
-                });
-            }
+            ctx.dispatch_typed_action_deferred(InputAction::SelectNextInlineHistoryItem);
             return;
         }
 
@@ -12748,9 +12788,23 @@ impl Input {
                             &completion_context,
                         )
                         .await;
-                        (spec_suggestions, completions_trigger, editor_snapshot)
+                        (
+                            spec_suggestions,
+                            completions_trigger,
+                            editor_snapshot,
+                            completion_context,
+                            session_env_vars,
+                        )
                     },
-                    move |input, (spec_suggestions, completions_trigger, editor_snapshot), ctx| {
+                    move |input,
+                          (
+                        spec_suggestions,
+                        completions_trigger,
+                        editor_snapshot,
+                        completion_context,
+                        session_env_vars,
+                    ),
+                          ctx| {
                         let bundled_specs_empty = match &spec_suggestions {
                             Some(spec_suggestions) => spec_suggestions.suggestions.is_empty(),
                             None => true,
@@ -12760,6 +12814,9 @@ impl Input {
                             input.dispatch_native_shell_completions(
                                 buffer_text,
                                 cursor_position,
+                                matcher,
+                                completion_context,
+                                session_env_vars,
                                 completions_trigger,
                                 editor_snapshot,
                                 ctx,
@@ -12804,6 +12861,38 @@ impl Input {
         let abort_handle = ctx
             .spawn_abortable(
                 async move {
+                    if comp_sources == CompletionSources::NativeOnly {
+                        let native_suggestions =
+                            native_results_fut
+                                .await
+                                .map(|(results, shell_replacement_span)| {
+                                    native_shell_suggestion_results(
+                                        results,
+                                        shell_replacement_span,
+                                        &buffer_text,
+                                        cursor_position,
+                                    )
+                                });
+                        let suggestions = match native_suggestions {
+                            Some(suggestions) if suggestions.suggestions.is_empty() => {
+                                completer::suggestions(
+                                    before_cursor_text.as_str(),
+                                    cursor_position,
+                                    session_env_vars.as_ref(),
+                                    CompleterOptions {
+                                        match_strategy: matcher,
+                                        fallback_strategy: CompletionsFallbackStrategy::FilePaths,
+                                        suggest_file_path_completions_only: true,
+                                        parse_quotes_as_literals: false,
+                                    },
+                                    &completion_context,
+                                )
+                                .await
+                            }
+                            suggestions => suggestions,
+                        };
+                        return (suggestions, completions_trigger, editor_snapshot);
+                    }
                     let suggestions = completer::suggestions(
                         before_cursor_text.as_str(),
                         cursor_position,
@@ -12819,12 +12908,7 @@ impl Input {
                     .await;
 
                     let suggestions = match suggestions {
-                        Some(s)
-                            if !s.suggestions.is_empty()
-                                && comp_sources != CompletionSources::NativeOnly =>
-                        {
-                            Some(s)
-                        }
+                        Some(s) if !s.suggestions.is_empty() => Some(s),
                         _ => native_results_fut
                             .await
                             .map(|(results, shell_replacement_span)| {
@@ -12856,10 +12940,14 @@ impl Input {
         self.completions_abort_handle = Some(abort_handle);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn dispatch_native_shell_completions(
         &mut self,
         buffer_text: String,
         cursor_position: usize,
+        matcher: MatchStrategy,
+        completion_context: SessionContext,
+        session_env_vars: Option<HashMap<String, String>>,
         completions_trigger: CompletionsTrigger,
         editor_snapshot: EditorSnapshot,
         ctx: &mut ViewContext<Self>,
@@ -12880,11 +12968,12 @@ impl Input {
             buffer_text: buffer_text[0..cursor_position].to_owned(),
             results_tx,
         });
+        let completion_session = completion_context.session.clone();
 
         let abort_handle = ctx
-            .spawn(
+            .spawn_abortable(
                 async move {
-                    let suggestions = results_rx.recv().await.ok().map(|(results, span)| {
+                    let native_suggestions = results_rx.recv().await.ok().map(|(results, span)| {
                         native_shell_suggestion_results(
                             results,
                             span,
@@ -12892,6 +12981,24 @@ impl Input {
                             cursor_position,
                         )
                     });
+                    let suggestions = match native_suggestions {
+                        Some(suggestions) if suggestions.suggestions.is_empty() => {
+                            completer::suggestions(
+                                &buffer_text[..cursor_position],
+                                cursor_position,
+                                session_env_vars.as_ref(),
+                                CompleterOptions {
+                                    match_strategy: matcher,
+                                    fallback_strategy: CompletionsFallbackStrategy::FilePaths,
+                                    suggest_file_path_completions_only: true,
+                                    parse_quotes_as_literals: false,
+                                },
+                                &completion_context,
+                            )
+                            .await
+                        }
+                        suggestions => suggestions,
+                    };
                     (suggestions, completions_trigger, editor_snapshot)
                 },
                 |input, (suggestions, completions_trigger, editor_model), ctx| {
@@ -12901,6 +13008,9 @@ impl Input {
                         editor_model,
                         ctx,
                     );
+                },
+                move |_, _| {
+                    completion_session.cancel_active_commands();
                 },
             )
             .abort_handle();
@@ -16568,6 +16678,10 @@ impl Input {
         InputSettings::as_ref(app).is_universal_developer_input_enabled(app)
     }
 
+    pub(crate) fn is_voltron_open(&self) -> bool {
+        self.is_voltron_open
+    }
+
     fn handle_prompt_suggestions_event(
         &mut self,
         event: &PromptSuggestionsEvent,
@@ -16627,6 +16741,10 @@ impl TypedActionView for Input {
         match action {
             InputAction::FocusInputBox => self.focus_input_box(ctx),
             InputAction::Up => self.editor_up(ctx),
+            InputAction::SelectPreviousInlineHistoryItem => {
+                self.select_previous_inline_history_item(ctx)
+            }
+            InputAction::SelectNextInlineHistoryItem => self.select_next_inline_history_item(ctx),
             InputAction::PageUp => self.editor_page_up(ctx),
             InputAction::PageDown => self.editor_page_down(ctx),
             InputAction::CtrlD => self.ctrl_d(ctx),

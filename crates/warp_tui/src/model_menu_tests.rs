@@ -98,9 +98,15 @@ fn provider_key_controls_key_connected_callout() {
             .unwrap();
         let connected_row = app.read(|ctx| {
             let scope = (scope)(ctx);
-            let choice =
-                query_model_picker_choices(LLMPreferences::as_ref(ctx), [&llm], "", &scope, ctx)
-                    .remove(0);
+            let choice = query_model_picker_choices(
+                LLMPreferences::as_ref(ctx),
+                [&llm],
+                "",
+                None,
+                &scope,
+                ctx,
+            )
+            .remove(0);
             model_menu_row(choice, &LLMId::from("profile-default"), &scope, ctx)
         });
         assert_eq!(
@@ -115,9 +121,15 @@ fn provider_key_controls_key_connected_callout() {
             .unwrap();
         let disconnected_row = app.read(|ctx| {
             let scope = (scope)(ctx);
-            let choice =
-                query_model_picker_choices(LLMPreferences::as_ref(ctx), [&llm], "", &scope, ctx)
-                    .remove(0);
+            let choice = query_model_picker_choices(
+                LLMPreferences::as_ref(ctx),
+                [&llm],
+                "",
+                None,
+                &scope,
+                ctx,
+            )
+            .remove(0);
             model_menu_row(choice, &LLMId::from("profile-default"), &scope, ctx)
         });
         assert_eq!(snapshot_row(&disconnected_row).state_suffix, None);

@@ -1,15 +1,19 @@
 use std::sync::Arc;
 
 use mockall::predicate::eq;
-use warp_core::features::FeatureFlag;
 use warpui::App;
 
 use super::*;
 use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
+use crate::ai::agent::{
+    AIAgentExchange, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputStatus,
+    FinishedAIAgentOutput, MessageId, ReceivedMessageDisplay, Shared,
+};
 use crate::ai::agent_events::{
     AgentEventConsumerControlFlow, DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS,
     agent_event_backoff, agent_event_failures_exceeded_threshold,
 };
+use crate::ai::llms::LLMId;
 use crate::persistence::ModelEvent;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::MockAIClient;
@@ -518,6 +522,7 @@ fn ai_conversation_new_restored_preserves_last_event_sequence() {
         autoexecute_override: None,
         last_event_sequence: Some(42),
         pinned: false,
+        use_warp_credits_instead_of_chatgpt: false,
     };
     let conversation =
         AIConversation::new_restored(AIConversationId::new(), vec![task], Some(data))
@@ -1613,7 +1618,7 @@ fn on_conversation_removed_prunes_killed_child_run_id_from_parent_but_keeps_tomb
 // viewer-mode ancestor SSE path: `conversation_status_from_lifecycle_event_type`,
 // `is_known_child`, the `register_viewer_mode_consumer` /
 // `unregister_viewer_mode_consumer` refcount, and the
-// `is_remote_run_view` flag-gated relaxation. These tests drive the
+// `is_remote_run_view` eligibility rule. These tests drive the
 // bookkeeping directly via pure-function calls or short App fixtures.
 
 #[test]
@@ -2919,37 +2924,6 @@ fn wait_registration_fetch_error_does_not_register() {
     });
 }
 
-#[test]
-fn register_parent_on_wait_flag_off_is_noop() {
-    // With the gating flag off, `register_parent_on_wait` does not fetch.
-    App::test((), |mut app| async move {
-        let history_model =
-            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
-        let own_run_id = "550e8400-e29b-41d4-a716-446655440523";
-        let mut conversation = AIConversation::new(false, false);
-        conversation.set_run_id(own_run_id.to_string());
-        let conversation_id = conversation.id();
-        let terminal_view_id = warpui::EntityId::new();
-        history_model.update(&mut app, |model, ctx| {
-            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
-            model.update_conversation_status(
-                terminal_view_id,
-                conversation_id,
-                ConversationStatus::InProgress,
-                ctx,
-            );
-        });
-
-        let poller = streamer_with_no_fetch_expected(&mut app);
-        poller.update(&mut app, |me, ctx| {
-            me.register_parent_on_wait(conversation_id, ctx);
-        });
-        poller.read(&app, |me, _| {
-            assert!(connected_filter(me, conversation_id).is_none());
-        });
-    });
-}
-
 // ---- classify_family_event ----------------------------------------------
 
 #[test]
@@ -3207,8 +3181,6 @@ fn wait_registration_eligibility_child_conversation_is_eligible() {
     // A child conversation must be eligible: with multi-level orchestration
     // a mid-tree node can have children of its own to discover.
     App::test((), |mut app| async move {
-        let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
-
         let history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let mut conversation = AIConversation::new(false, false);
@@ -3228,46 +3200,19 @@ fn wait_registration_eligibility_child_conversation_is_eligible() {
 }
 
 #[test]
-fn wait_registration_eligibility_requires_the_flag() {
-    App::test((), |mut app| async move {
-        let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(false);
-
-        let history_model =
-            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
-        let mut conversation = AIConversation::new(false, false);
-        conversation.set_run_id("550e8400-e29b-41d4-a716-446655440527".to_string());
-        let conversation_id = conversation.id();
-        let terminal_view_id = warpui::EntityId::new();
-        history_model.update(&mut app, |model, ctx| {
-            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
-        });
-
-        let poller = streamer_with_no_fetch_expected(&mut app);
-        poller.read(&app, |me, ctx| {
-            assert!(!me.should_register_parent_on_wait(conversation_id, ctx));
-        });
-    });
-}
-
-#[test]
 fn wait_registration_eligibility_excludes_remote_run_views() {
     // A remote-child placeholder is a passive view of a run executing in
     // another process; that process owns the inbox and the registration.
     App::test((), |mut app| async move {
-        let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
-
-        // `mark_conversation_as_remote_child` persists the conversation,
-        // which needs the settings + persistence singletons wired up.
-        crate::test_util::settings::initialize_history_persistence_for_tests(&mut app);
         let history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let mut conversation = AIConversation::new(false, false);
         conversation.set_run_id("550e8400-e29b-41d4-a716-446655440528".to_string());
+        conversation.mark_as_remote_child();
         let conversation_id = conversation.id();
         let terminal_view_id = warpui::EntityId::new();
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
-            model.mark_conversation_as_remote_child(conversation_id, ctx);
         });
 
         let poller = streamer_with_no_fetch_expected(&mut app);
@@ -3282,8 +3227,6 @@ fn wait_registration_eligibility_excludes_established_parents() {
     // Once the parent role exists (a watched child run_id), the live
     // ancestor stream discovers new children; no wait-time re-fetch.
     App::test((), |mut app| async move {
-        let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
-
         let history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let own_run_id = "550e8400-e29b-41d4-a716-446655440529";
@@ -3379,8 +3322,6 @@ fn register_parent_on_wait_already_parent_is_idempotent() {
     // A second call when the conversation is already a known parent must not
     // re-fetch or churn the open ancestor stream.
     App::test((), |mut app| async move {
-        let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
-
         let history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let own_run_id = "550e8400-e29b-41d4-a716-446655440525";
@@ -3429,8 +3370,6 @@ fn register_parent_on_wait_without_self_run_id_is_noop() {
     // No run_id yet means there is nothing to query the server with; the call
     // is a no-op and the next wait re-checks.
     App::test((), |mut app| async move {
-        let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
-
         let history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         // Intentionally leave run_id unset.
@@ -3454,5 +3393,111 @@ fn register_parent_on_wait_without_self_run_id_is_noop() {
         poller.read(&app, |me, _| {
             assert!(connected_filter(me, conversation_id).is_none());
         });
+    });
+}
+
+/// A finished exchange whose output echoes `message_id` in a `MessagesReceivedFromAgents` chunk.
+fn exchange_echoing_message(message_id: &str) -> AIAgentExchange {
+    let output = AIAgentOutput {
+        messages: vec![AIAgentOutputMessage::messages_received_from_agents(
+            MessageId::new("output-message".to_string()),
+            vec![ReceivedMessageDisplay {
+                message_id: message_id.to_string(),
+                sender_agent_id: "parent-run".to_string(),
+                addresses: vec!["child-run".to_string()],
+                subject: "subject".to_string(),
+                message_body: "body".to_string(),
+            }],
+        )],
+        ..Default::default()
+    };
+    AIAgentExchange {
+        id: AIAgentExchangeId::new(),
+        input: vec![],
+        output_status: AIAgentOutputStatus::Finished {
+            finished_output: FinishedAIAgentOutput::Success {
+                output: Shared::new(output),
+            },
+        },
+        added_message_ids: Default::default(),
+        start_time: chrono::Local::now(),
+        finish_time: None,
+        time_to_first_token_ms: None,
+        working_directory: None,
+        model_id: LLMId::from("test-model"),
+        request_cost: None,
+        coding_model_id: LLMId::from("test-model"),
+        cli_agent_model_id: LLMId::from("test-model"),
+        computer_use_model_id: LLMId::from("test-model"),
+        response_initiator: None,
+    }
+}
+
+/// Gives `conversation` one exchange that echoes `message_id`, then reports that exchange as
+/// updated `updates` times. The returned receiver sees every resulting delivery confirmation.
+fn report_echoed_message(
+    app: &mut App,
+    mut conversation: AIConversation,
+    message_id: &'static str,
+    updates: usize,
+) -> std::sync::mpsc::Receiver<String> {
+    let history_model =
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+    let exchange = exchange_echoing_message(message_id);
+    let exchange_id = exchange.id;
+    conversation.append_root_exchange_for_test(exchange);
+    let conversation_id = conversation.id();
+    history_model.update(app, |model, ctx| {
+        model.restore_conversations(warpui::EntityId::new(), vec![conversation], ctx);
+    });
+
+    let (sender, receiver) = std::sync::mpsc::channel::<String>();
+    let mut mock = MockAIClient::new();
+    mock.expect_mark_message_delivered().returning(move |id| {
+        sender.send(id.to_string()).unwrap();
+        Ok(())
+    });
+    let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+    let server_api = ServerApiProvider::new_for_test().get();
+    let streamer = app.add_singleton_model(|ctx| {
+        OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+    });
+
+    streamer.update(app, |me, ctx| {
+        for _ in 0..updates {
+            me.on_streaming_exchange_updated(conversation_id, exchange_id, ctx);
+        }
+    });
+    receiver
+}
+
+#[test]
+fn echoed_message_is_confirmed_delivered_once_across_repeated_exchange_updates() {
+    App::test((), |mut app| async move {
+        let receiver =
+            report_echoed_message(&mut app, AIConversation::new(false, false), "message-1", 2);
+
+        assert_eq!(
+            receiver.recv_timeout(Duration::from_secs(5)),
+            Ok("message-1".to_string()),
+            "an echoed message must be confirmed delivered even though this streamer never hydrated it"
+        );
+        assert!(
+            receiver.recv_timeout(Duration::from_millis(200)).is_err(),
+            "a second update of the same exchange must not confirm the same id again"
+        );
+    });
+}
+
+#[test]
+fn shared_session_viewer_does_not_confirm_delivery_for_echoed_messages() {
+    App::test((), |mut app| async move {
+        let receiver =
+            report_echoed_message(&mut app, AIConversation::new(true, false), "message-1", 1);
+
+        assert!(
+            receiver.recv_timeout(Duration::from_millis(200)).is_err(),
+            "only the recipient's own process confirms delivery, never a viewer"
+        );
     });
 }

@@ -10,7 +10,9 @@ use chrono::Local;
 use cloud_object_models::CodeForge;
 use futures::channel::oneshot;
 use futures::executor::block_on;
+use futures::poll;
 use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
+use serde_json::json;
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 use tempfile::TempDir;
 use warp_cli::agent::Harness;
@@ -21,6 +23,7 @@ use warp_cli::{
 };
 use warp_core::channel::ChannelState;
 use warp_graphql::ai::AgentTaskState;
+use warp_graphql::platform_error::PlatformErrorMessageFormat;
 use warp_managed_secrets::ManagedSecretValue;
 use warp_multi_agent_api::response_event;
 use warp_util::standardized_path::StandardizedPath;
@@ -28,12 +31,13 @@ use warpui::r#async::Timer;
 use warpui::{App, SingletonEntity as _};
 
 use super::{
-    AgentDriver, AgentRunPrompt, CLIAgentSessionStatus, DebugWindowController, IdleTimeoutSender,
-    LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
-    OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
-    PlatformErrorCode, SDKConversationOutputStatus, WARP_MESSAGE_LISTENER_STATE_ROOT_ENV,
-    build_secret_env_vars, debug_turn_task_state, idle_window_for_cli_session_status,
-    idle_window_for_terminal_status, setup_failure_status_update, terminal_status_log_outcome,
+    AgentDriver, AgentDriverError, AgentRunPrompt, CLIAgentSessionStatus, DebugWindowController,
+    IdleTimeoutSender, LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
+    LEGACY_OZ_PARENT_STATE_ROOT_ENV, OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
+    OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, PlatformErrorCode, SDKConversationOutputStatus,
+    WARP_MESSAGE_LISTENER_STATE_ROOT_ENV, build_secret_env_vars, debug_turn_task_state,
+    idle_window_for_cli_session_status, idle_window_for_terminal_status,
+    setup_failure_status_update, terminal_status_log_outcome,
 };
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::task::TaskId;
@@ -42,6 +46,7 @@ use crate::ai::agent::{
     AIAgentOutputMessage, ArtifactCreatedData, CancellationReason, MessageId, RenderableAIError,
     UploadArtifactResult,
 };
+use crate::ai::agent_sdk::driver::environment::PrepareEnvironmentError;
 use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::orchestration_events::{
@@ -56,8 +61,59 @@ use crate::ai::llms::LLMId;
 use crate::ai::skills::SkillManager;
 use crate::test_util::assert_eventually;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
+use crate::workspace::view::tests::initialize_app as initialize_workspace_test_app;
 
 // ── IdleTimeoutSender tests ──────────────────────────────────────────────────────
+
+#[test]
+fn setup_timeout_does_not_retain_a_potentially_running_command() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal, ctx);
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.idle_on_fail = Some(Duration::from_secs(30 * 60));
+            driver
+        });
+        let spawner = driver.update(&mut app, |_, ctx| ctx.spawner());
+        let error = AgentDriverError::SetupCommandTimedOut {
+            message: "Setup command #1 timed out after 1800s: ./setup.sh".to_string(),
+        };
+        let mut linger = Box::pin(AgentDriver::linger_after_failure(
+            &spawner,
+            "environment_setup",
+            &error,
+        ));
+        assert!(poll!(linger.as_mut()).is_ready());
+        assert_eq!(
+            setup_failure_status_update(&error).error_code,
+            Some(PlatformErrorCode::EnvironmentSetupFailed)
+        );
+    });
+}
+
+#[test]
+fn driver_keeps_uninterpreted_factory_experiments() {
+    App::test((), |mut app| async move {
+        initialize_workspace_test_app(&mut app);
+        let experimental: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_value(json!({
+                "identityOnlySystemPrompt": true,
+                "private-uid-sentinel": "secret-value-sentinel"
+            }))
+            .unwrap();
+        let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
+        options.experimental = Some(experimental.clone());
+        let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
+        driver.read(&app, |driver, _| {
+            assert_eq!(driver.experimental, Some(experimental));
+        });
+    });
+}
 
 #[test]
 fn idle_timeout_sender_send_now_delivers_value() {
@@ -440,11 +496,36 @@ fn setup_failure_is_reported_as_an_environment_setup_failure() {
     // alone, and the cloud-continuation resolver uses it to decide that a setup failure with no
     // conversation gets a tombstone with no continue CTA. A generic code silently reroutes those
     // runs into continuation handling that has nothing to continue.
-    let status = setup_failure_status_update("Environment setup failed: bad command".to_string());
+    let status = setup_failure_status_update(&AgentDriverError::EnvironmentSetupFailed(
+        "bad command".to_string(),
+    ));
 
     assert_eq!(
         status.error_code,
         Some(PlatformErrorCode::EnvironmentSetupFailed)
+    );
+}
+
+#[test]
+fn retained_setup_failure_includes_markdown_output_and_recovery_hint() {
+    let error = AgentDriverError::from(PrepareEnvironmentError::SetupCommand {
+        command: "./setup.sh".to_string(),
+        output: Some("permission denied".to_string()),
+    });
+    let status = setup_failure_status_update(&error);
+    let messages = &status.platform_error.as_ref().unwrap().user_facing_messages;
+
+    assert_eq!(
+        status.message,
+        "Environment setup failed: Failed to run setup command: ./setup.sh\nCommand output:\npermission denied. Check your repository URLs and setup commands."
+    );
+    assert_eq!(
+        messages[&PlatformErrorMessageFormat::PlainText],
+        status.message
+    );
+    assert_eq!(
+        messages[&PlatformErrorMessageFormat::Markdown],
+        "Failed to run setup command `./setup.sh`:\n\n    permission denied\n\nCheck your repository URLs and setup commands."
     );
 }
 
@@ -1634,6 +1715,7 @@ fn native_startup_queue_prevents_exit_until_pending_rows_are_removed() {
                     "followup".into(),
                     ParticipantId::new(),
                     vec![],
+                    None,
                 ),
                 ctx,
             )
@@ -1688,6 +1770,7 @@ fn prepared_native_followup_starts_before_the_last_queued_row_allows_exit() {
                         attachment_id: "attachment-id".into(),
                         file_name: "event-payload.json".into(),
                     }],
+                    None,
                 ),
                 ctx,
             )
@@ -1801,6 +1884,7 @@ fn native_promptless_setup_dispatches_only_the_head_queued_prompt() {
                 None,
                 vec![],
                 ParticipantId::new(),
+                None,
                 ctx,
             );
             controller.execute_warp_agent_prompt_from_shared_session_injection(
@@ -1808,6 +1892,7 @@ fn native_promptless_setup_dispatches_only_the_head_queued_prompt() {
                 None,
                 vec![],
                 ParticipantId::new(),
+                None,
                 ctx,
             );
             id

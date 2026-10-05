@@ -3,6 +3,7 @@ pub(crate) mod conversation_yaml;
 pub(crate) mod todos;
 
 pub(crate) mod api;
+pub(crate) mod base_user_query;
 pub(crate) mod comment;
 pub(crate) mod icons;
 pub(crate) mod linearization;
@@ -42,6 +43,7 @@ use warp_editor::render::model::LineCount;
 use warp_multi_agent_api::{AgentEvent, AgentType, diff_hunk as diff_hunk_api};
 
 pub use self::api::{MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError};
+pub use self::base_user_query::BaseUserQuery;
 use super::llms::LLMId;
 use crate::TelemetryEvent;
 use crate::ai::block_context::BlockContext;
@@ -72,6 +74,9 @@ impl std::fmt::Display for ServerOutputId {
 pub struct InvokeSkillUserQuery {
     pub query: String,
     pub referenced_attachments: HashMap<String, AIAgentAttachment>,
+    /// Attribution carried over from the message this invocation was restored from, so a
+    /// resent skill query keeps its original author; `None` for a locally typed one.
+    pub base: Option<BaseUserQuery>,
 }
 
 impl ServerOutputId {
@@ -742,6 +747,75 @@ pub enum RenderableAIError {
     /// GUI error card (`render_cloud_mode_error_screen`) which shows the
     /// message directly.
     CloudStartupFailed(String),
+    /// A request funded by the user's ChatGPT subscription was rejected by OpenAI's
+    /// token-sharing checks. The server authors the copy and the recovery actions; the client
+    /// renders them generically and never branches on `code`. Always a terminal failure (FAILED).
+    ChatGPTSubscriptionError {
+        /// The raw OpenAI error code, for telemetry only.
+        code: String,
+        title: String,
+        message: String,
+        /// Recovery actions in display order.
+        actions: Vec<ChatGPTSubscriptionErrorAction>,
+    },
+}
+
+/// A recovery action offered on a [`RenderableAIError::ChatGPTSubscriptionError`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChatGPTSubscriptionErrorAction {
+    pub kind: ChatGPTSubscriptionErrorActionKind,
+    /// Server-authored button label.
+    pub label: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChatGPTSubscriptionErrorActionKind {
+    /// Re-issue the turn unchanged, still funded by the ChatGPT subscription.
+    Retry,
+    /// Switch the rest of the conversation to Warp-funded inference, then resume.
+    ContinueWithWarpCredits,
+    /// Open an external page in the browser without changing the conversation.
+    OpenUrl { url: String },
+}
+
+impl From<warp_multi_agent_api::response_event::stream_finished::chat_gpt_subscription_error::action::Kind>
+    for ChatGPTSubscriptionErrorActionKind
+{
+    fn from(
+        kind: warp_multi_agent_api::response_event::stream_finished::chat_gpt_subscription_error::action::Kind,
+    ) -> Self {
+        use warp_multi_agent_api::response_event::stream_finished::chat_gpt_subscription_error::action::Kind;
+        match kind {
+            Kind::Retry(_) => Self::Retry,
+            Kind::ContinueWithWarpCredits(_) => Self::ContinueWithWarpCredits,
+            Kind::OpenUrl(open_url) => Self::OpenUrl { url: open_url.url },
+        }
+    }
+}
+
+impl RenderableAIError {
+    /// Builds a [`Self::ChatGPTSubscriptionError`] from the server's finish reason, dropping
+    /// actions whose kind this client does not understand (decoded as an unset `kind`).
+    pub fn from_chatgpt_subscription_error(
+        error: warp_multi_agent_api::response_event::stream_finished::ChatGptSubscriptionError,
+    ) -> Self {
+        let actions = error
+            .actions
+            .into_iter()
+            .filter_map(|action| {
+                Some(ChatGPTSubscriptionErrorAction {
+                    kind: action.kind?.into(),
+                    label: action.label,
+                })
+            })
+            .collect();
+        Self::ChatGPTSubscriptionError {
+            code: error.code,
+            title: error.title,
+            message: error.message,
+            actions,
+        }
+    }
 }
 
 impl RenderableAIError {
@@ -774,6 +848,10 @@ impl RenderableAIError {
 
     pub fn is_aws_bedrock_credentials_error(&self) -> bool {
         matches!(self, Self::AwsBedrockCredentialsExpiredOrInvalid { .. })
+    }
+
+    pub fn is_chatgpt_subscription_error(&self) -> bool {
+        matches!(self, Self::ChatGPTSubscriptionError { .. })
     }
 
     /// Returns true if an automatic resume will be attempted for this error.
@@ -932,6 +1010,20 @@ impl Display for RenderableAIError {
                  scripts that can exit the shell."
             ),
             Self::CloudStartupFailed(msg) => write!(f, "{msg}"),
+            Self::ChatGPTSubscriptionError {
+                title,
+                message,
+                actions,
+                ..
+            } => {
+                write!(f, "{title}\n\n{message}")?;
+                for action in actions {
+                    if let ChatGPTSubscriptionErrorActionKind::OpenUrl { url } = &action.kind {
+                        write!(f, "\n\n{}: {url}", action.label)?;
+                    }
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -2190,6 +2282,9 @@ pub struct MCPServer {
     pub id: String,
     pub name: String,
     pub description: String,
+    /// Managed MCP server uid or well-known integration id the server was
+    /// resolved from; empty for local servers. Mirrors `MCPServerConfig.warp_id`.
+    pub warp_id: String,
     pub resources: Vec<rmcp::model::Resource>,
     pub tools: Vec<rmcp::model::Tool>,
 }
@@ -2893,6 +2988,12 @@ pub enum AIAgentInput {
         user_query_mode: UserQueryMode,
         running_command: Option<RunningCommand>,
         intended_agent: Option<AgentType>,
+        /// The `Request.Input.UserQuery` this input starts from, when warp-server injected one
+        /// with a shared-session prompt. `query`, `user_query_mode`, and `intended_agent` were
+        /// seeded from it (see [`BaseUserQuery::seed_input_fields`]) and `convert_to` writes
+        /// them back over it, so fields this client does not model travel through untouched.
+        /// `None` for everything typed locally.
+        base: Option<BaseUserQuery>,
     },
 
     AutoCodeDiffQuery {
@@ -2995,6 +3096,10 @@ pub enum AIAgentInput {
         config: OrchestrationConfig,
         status: OrchestrationConfigStatus,
     },
+
+    /// Reports that the run was woken; the server injects any pending agent messages into the
+    /// turn.
+    AgentWake,
 }
 
 /// Data for a single message received by an agent from another agent.
@@ -3088,6 +3193,7 @@ impl Display for AIAgentInput {
             }
             Self::PassiveSuggestionResult { .. } => write!(f, "PassiveSuggestionResult"),
             Self::OrchestrationConfigUpdate { .. } => write!(f, "OrchestrationConfigUpdate"),
+            Self::AgentWake => write!(f, "AgentWake"),
         }
     }
 }
@@ -3149,7 +3255,8 @@ impl AIAgentInput {
             | Self::MessagesReceivedFromAgents { .. }
             | Self::EventsFromAgents { .. }
             | Self::PassiveSuggestionResult { .. }
-            | Self::OrchestrationConfigUpdate { .. } => None,
+            | Self::OrchestrationConfigUpdate { .. }
+            | Self::AgentWake => None,
         }
     }
 
@@ -3254,7 +3361,8 @@ impl AIAgentInput {
             Self::SummarizeConversation { context, .. } => Some(context),
             Self::MessagesReceivedFromAgents { .. }
             | Self::EventsFromAgents { .. }
-            | Self::OrchestrationConfigUpdate { .. } => None,
+            | Self::OrchestrationConfigUpdate { .. }
+            | Self::AgentWake => None,
         }
     }
 
@@ -3285,7 +3393,8 @@ impl AIAgentInput {
             | Self::MessagesReceivedFromAgents { .. }
             | Self::EventsFromAgents { .. }
             | Self::PassiveSuggestionResult { .. }
-            | Self::OrchestrationConfigUpdate { .. } => None,
+            | Self::OrchestrationConfigUpdate { .. }
+            | Self::AgentWake => None,
         }
     }
 

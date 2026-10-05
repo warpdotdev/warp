@@ -53,8 +53,9 @@ use crate::ai::agent::icons::red_stop_icon;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionType, AIAgentInput, AIAgentOutputMessageType, AIAgentTextSection,
     AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram, AgentOutputTable,
-    AgentOutputTableRendering, MessageId, ProgrammingLanguage, RenderableAIError,
-    ShellCommandDelay, SummarizationType, UserQueryMode, WebSearchStatus, icons,
+    AgentOutputTableRendering, ChatGPTSubscriptionErrorAction, ChatGPTSubscriptionErrorActionKind,
+    MessageId, ProgrammingLanguage, RenderableAIError, ShellCommandDelay, SummarizationType,
+    UserQueryMode, WebSearchStatus, icons,
 };
 use crate::ai::blocklist::block::find::FindState;
 use crate::ai::blocklist::block::status_bar::BlocklistAIStatusBarAction;
@@ -78,7 +79,8 @@ use crate::ai::blocklist::inline_action::requested_action::RenderableAction;
 use crate::ai::blocklist::model::{AIBlockModel, AIBlockModelHelper};
 use crate::ai::blocklist::secret_redaction::{SecretRedactionState, redact_secrets_in_element};
 use crate::ai::blocklist::view_util::{
-    FailedOutputPresentation, OUT_OF_CREDITS_SUBSCRIBE_LABEL, error_color,
+    CHATGPT_CONTINUED_WITH_WARP_CREDITS_TEXT, FailedOutputPresentation,
+    OUT_OF_CREDITS_SUBSCRIBE_LABEL, chatgpt_subscription_message_with_links, error_color,
     failed_output_presentation,
 };
 use crate::ai::blocklist::{BlocklistAIActionModel, ShellCommandExecutor, TextLocation};
@@ -3065,6 +3067,14 @@ pub(crate) fn resolve_absolute_file_path(
     })
 }
 
+/// Wiring for the recovery buttons on a ChatGPT subscription error. `None` renders the error
+/// without buttons, for surfaces that cannot resume the conversation themselves.
+pub struct ChatGPTSubscriptionActionProps<'a> {
+    /// One handle per action, in server order.
+    pub handles: &'a [MouseStateHandle],
+    pub on_click: fn(&ChatGPTSubscriptionErrorActionKind, &mut EventContext, &AppContext),
+}
+
 pub struct FailedOutputProps<'a> {
     pub error: &'a RenderableAIError,
     pub invalid_api_key_button_handle: &'a MouseStateHandle,
@@ -3072,13 +3082,19 @@ pub struct FailedOutputProps<'a> {
     pub aws_bedrock_credentials_error_view: Option<&'a ViewHandle<AwsBedrockCredentialsErrorView>>,
     pub gemini_enterprise_credentials_error_view:
         Option<&'a ViewHandle<GeminiEnterpriseCredentialsErrorView>>,
+    pub chatgpt_subscription_actions: Option<ChatGPTSubscriptionActionProps<'a>>,
+    pub conversation_uses_warp_credits_instead_of_chatgpt: bool,
     pub is_ai_input_enabled: bool,
     pub icon_right_margin: f32,
 }
 
 pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
-    let Some(presentation) = failed_output_presentation(props.error, app) else {
+    let Some(presentation) = failed_output_presentation(
+        props.error,
+        props.conversation_uses_warp_credits_instead_of_chatgpt,
+        app,
+    ) else {
         return Empty::new().finish();
     };
 
@@ -3123,6 +3139,25 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
                 return ChildView::new(view).finish();
             }
             fallback_message
+        }
+        FailedOutputPresentation::ChatGPTSubscription {
+            title,
+            message,
+            actions,
+        } => {
+            return render_chatgpt_subscription_error(
+                &title,
+                &message,
+                &actions,
+                props.chatgpt_subscription_actions,
+                app,
+            );
+        }
+        FailedOutputPresentation::ChatGPTSubscriptionContinuedWithWarpCredits => {
+            return render_informational_footer(
+                app,
+                CHATGPT_CONTINUED_WITH_WARP_CREDITS_TEXT.to_string(),
+            );
         }
     };
 
@@ -3195,6 +3230,27 @@ fn out_of_credits_cta_button(
         })
         .with_clicked_styles(UiComponentStyles {
             background: Some(internal_colors::fg_overlay_3(theme).into()),
+            ..Default::default()
+        })
+        .with_text_label(label.to_string())
+        .with_cursor(Some(Cursor::PointingHand))
+}
+
+/// Builds the filled primary CTA button for an error card, paired with
+/// [`out_of_credits_cta_button`] for the remaining actions.
+fn error_primary_cta_button(
+    label: &str,
+    state_handle: &MouseStateHandle,
+    app: &AppContext,
+) -> Button {
+    Appearance::as_ref(app)
+        .ui_builder()
+        .button(
+            warpui::ui_components::button::ButtonVariant::Basic,
+            state_handle.clone(),
+        )
+        .with_style(UiComponentStyles {
+            font_size: Some(14.),
             ..Default::default()
         })
         .with_text_label(label.to_string())
@@ -3357,6 +3413,98 @@ fn render_invalid_api_key_error(
                 .finish(),
         )
         .finish()
+}
+
+/// Renders a ChatGPT subscription error: alert icon + title, the server's message, and one
+/// button per action in server order, with the first action styled as the primary CTA. Without
+/// `action_props`, URL actions are listed as plain text so the link is still reachable.
+fn render_chatgpt_subscription_error(
+    title: &str,
+    message: &str,
+    actions: &[ChatGPTSubscriptionErrorAction],
+    action_props: Option<ChatGPTSubscriptionActionProps>,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let message = if action_props.is_some() {
+        message.to_string()
+    } else {
+        chatgpt_subscription_message_with_links(message, actions)
+    };
+
+    let alert_icon = ConstrainedBox::new(
+        Icon::AlertTriangle
+            .to_warpui_icon(error_color(appearance.theme()).into())
+            .finish(),
+    )
+    .with_width(icon_size(app))
+    .with_height(icon_size(app))
+    .finish();
+
+    let title_text = Text::new(title.to_string(), appearance.ui_font_family(), 14.)
+        .with_color(error_color(appearance.theme()))
+        .with_selectable(false)
+        .finish();
+
+    let message_text = Text::new(message, appearance.ui_font_family(), 14.)
+        .with_color(blended_colors::text_sub(
+            appearance.theme(),
+            appearance.theme().surface_1(),
+        ))
+        .with_selectable(false)
+        .finish();
+
+    let mut column = Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_spacing(16.)
+        .with_child(
+            Flex::row()
+                .with_spacing(8.)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(alert_icon)
+                .with_child(title_text)
+                .finish(),
+        )
+        .with_child(
+            Flex::row()
+                .with_child(Shrinkable::new(1., message_text).finish())
+                .finish(),
+        );
+
+    let buttons = action_props
+        .map(|action_props| {
+            actions
+                .iter()
+                .zip(action_props.handles)
+                .enumerate()
+                .map(|(index, (action, handle))| {
+                    let kind = action.kind.clone();
+                    let on_click = action_props.on_click;
+                    let button = if index == 0 {
+                        error_primary_cta_button(&action.label, handle, app)
+                    } else {
+                        out_of_credits_cta_button(&action.label, handle, app)
+                    };
+                    button
+                        .build()
+                        .on_click(move |ctx, app, _| on_click(&kind, ctx, app))
+                        .finish()
+                })
+                .collect_vec()
+        })
+        .unwrap_or_default();
+    if !buttons.is_empty() {
+        column.add_child(
+            Flex::row()
+                .with_spacing(8.)
+                .with_main_axis_size(MainAxisSize::Min)
+                .with_main_axis_alignment(MainAxisAlignment::Start)
+                .with_children(buttons)
+                .finish(),
+        );
+    }
+
+    column.finish()
 }
 
 pub fn render_informational_footer(app: &AppContext, text: String) -> Box<dyn Element> {
@@ -3655,7 +3803,8 @@ pub(super) fn query_prefix_highlight_len(
             | AIAgentInput::MessagesReceivedFromAgents { .. }
             | AIAgentInput::EventsFromAgents { .. }
             | AIAgentInput::PassiveSuggestionResult { .. }
-            | AIAgentInput::OrchestrationConfigUpdate { .. } => None,
+            | AIAgentInput::OrchestrationConfigUpdate { .. }
+            | AIAgentInput::AgentWake => None,
         }
     }
 }

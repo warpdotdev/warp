@@ -24,8 +24,9 @@ use vim::vim::{
 };
 use vim::{
     find_next_paragraph_end, find_previous_paragraph_start, vim_a_block, vim_a_paragraph,
-    vim_a_quote, vim_a_word, vim_find_char_on_line, vim_find_matching_bracket, vim_inner_block,
-    vim_inner_paragraph, vim_inner_quote, vim_inner_word, vim_word_iterator_from_offset,
+    vim_a_quote, vim_a_word, vim_all_lines, vim_find_char_on_line, vim_find_matching_bracket,
+    vim_inner_block, vim_inner_line, vim_inner_paragraph, vim_inner_quote, vim_inner_word,
+    vim_word_iterator_from_offset,
 };
 use warp_core::platform::SessionPlatform;
 use warp_core::semantic_selection::SemanticSelection;
@@ -3341,6 +3342,10 @@ impl CodeEditorModel {
                     paragraph_range
                 }
             }
+            TextObjectType::Line => match text_object.inclusion {
+                TextObjectInclusion::Inner => vim_inner_line(buffer, cursor_pos),
+                TextObjectInclusion::Around => vim_all_lines(buffer),
+            },
             TextObjectType::Quote(quote_type) => match text_object.inclusion {
                 TextObjectInclusion::Inner => vim_inner_quote(buffer, cursor_pos, quote_type),
                 TextObjectInclusion::Around => vim_a_quote(buffer, cursor_pos, quote_type),
@@ -3388,10 +3393,13 @@ impl CodeEditorModel {
                         }
 
                         let buffer = self.content().as_ref(ctx);
-                        // For visual text objects, start the selection at the beginning of the line
-                        // (column = 0) of the computed range end.
-                        let end_point = range.end.to_buffer_point(buffer);
-                        let new_head = Point::new(end_point.row, 0).to_buffer_char_offset(buffer);
+                        let new_head = match (&text_object.object_type, text_object.inclusion) {
+                            (TextObjectType::Line, TextObjectInclusion::Inner) => range.end,
+                            _ => {
+                                let end_point = range.end.to_buffer_point(buffer);
+                                Point::new(end_point.row, 0).to_buffer_char_offset(buffer)
+                            }
+                        };
                         SelectionOffsets {
                             head: new_head,
                             tail: new_head,
@@ -3428,7 +3436,11 @@ impl CodeEditorModel {
                 });
 
                 self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
-                if let TextObjectType::Paragraph = text_object.object_type {
+                if matches!(
+                    (&text_object.object_type, text_object.inclusion),
+                    (TextObjectType::Paragraph, _)
+                        | (TextObjectType::Line, TextObjectInclusion::Around)
+                ) {
                     let include_newline = op.includes_trailing_newline();
                     self.vim_extend_selection_linewise(
                         include_newline,

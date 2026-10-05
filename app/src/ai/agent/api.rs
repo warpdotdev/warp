@@ -3,12 +3,14 @@ mod convert_from;
 mod convert_to;
 mod r#impl;
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 
 pub use ai::agent::convert::ConvertToAPITypeError;
 use ai::api_keys::ApiKeyManager;
+pub(crate) use convert_from::convert_user_query_mode;
 pub use convert_from::{
     ConversionParams, ConvertAPIMessageToClientOutputMessage, MaybeAIAgentOutputMessage,
     MessageToAIAgentOutputMessageError, user_inputs_from_messages,
@@ -31,7 +33,9 @@ use crate::ai::execution_profiles::AIExecutionProfileAppExt;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::mcp::TemplatableMCPServerManager;
+use crate::send_telemetry_from_app_ctx;
 use crate::server::server_api::AIApiError;
+use crate::server::telemetry::TelemetryEvent;
 use crate::settings::AISettings;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
@@ -101,6 +105,10 @@ impl std::fmt::Display for ServerConversationToken {
 #[cfg(test)]
 #[path = "api_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "api/injected_attribution_tests.rs"]
+mod injected_attribution_tests;
 impl From<ServerConversationToken> for String {
     fn from(value: ServerConversationToken) -> Self {
         value.0
@@ -161,6 +169,9 @@ pub struct RequestParams {
     /// registry. `None` when no custom router is selected.
     pub custom_model_routers: Option<warp_multi_agent_api::request::settings::CustomModelRouters>,
     pub allow_use_of_warp_credits: bool,
+    /// Asks the server not to attach the user's delegated ChatGPT token, so OpenAI requests run
+    /// on Warp's key. Set for the rest of a conversation after a token-sharing failure.
+    pub skip_chatgpt_subscription: bool,
     pub autonomy_level: warp_multi_agent_api::AutonomyLevel,
     pub isolation_level: warp_multi_agent_api::IsolationLevel,
     pub web_search_enabled: bool,
@@ -194,6 +205,7 @@ pub struct ConversationData {
     pub forked_from_conversation_token: Option<ServerConversationToken>,
     pub ambient_agent_task_id: Option<AmbientAgentTaskId>,
     pub existing_suggestions: Option<Suggestions>,
+    pub use_warp_credits_instead_of_chatgpt: bool,
 }
 
 impl RequestParams {
@@ -223,6 +235,7 @@ impl RequestParams {
             custom_model_providers: None,
             custom_model_routers: None,
             allow_use_of_warp_credits: false,
+            skip_chatgpt_subscription: false,
             autonomy_level: Default::default(),
             isolation_level: Default::default(),
             web_search_enabled: false,
@@ -286,6 +299,7 @@ impl RequestParams {
                     name: server.name().to_string(),
                     description: server.description().unwrap_or_default().to_string(),
                     id: server.installation_id().to_string(),
+                    warp_id: server.warp_id().unwrap_or_default().to_string(),
                     resources: server.resources().to_vec(),
                     tools: server.tools().to_vec(),
                 })
@@ -372,12 +386,19 @@ impl RequestParams {
             .and_then(|s| s.parse().ok())
             .unwrap_or_default();
         let is_ambient_agent = conversation.ambient_agent_task_id.is_some();
-        let computer_use_enabled = FeatureFlag::AgentModeComputerUse.is_enabled()
+        let computer_use_requested = FeatureFlag::AgentModeComputerUse.is_enabled()
             && BlocklistAIPermissions::as_ref(app)
                 .get_computer_use_setting(terminal_view_id, scope, app)
                 .is_enabled()
-            && computer_use::is_supported_on_current_platform()
             && (FeatureFlag::LocalComputerUse.is_enabled() || is_ambient_agent);
+        let computer_use_supported = computer_use::is_supported_on_current_platform();
+        let computer_use_enabled = computer_use_requested && computer_use_supported;
+        if computer_use_requested
+            && !computer_use_supported
+            && let Some(task_id) = conversation.ambient_agent_task_id
+        {
+            report_computer_use_unavailable(task_id, app_execution_mode.is_sandboxed(), app);
+        }
         let ask_user_question_enabled = BlocklistAIPermissions::as_ref(app)
             .get_ask_user_question_setting(app, terminal_view_id)
             != crate::ai::execution_profiles::AskUserQuestionPermission::Never;
@@ -426,6 +447,7 @@ impl RequestParams {
             custom_model_providers,
             custom_model_routers,
             allow_use_of_warp_credits,
+            skip_chatgpt_subscription: conversation.use_warp_credits_instead_of_chatgpt,
             autonomy_level,
             isolation_level,
             web_search_enabled,
@@ -438,4 +460,25 @@ impl RequestParams {
             agent_name: None,
         }
     }
+}
+
+/// Reports that computer use was enabled for a run but is unavailable on this host, at most once
+/// per run for the lifetime of the process. Request params are rebuilt for every request, so
+/// emitting unconditionally would produce one event per turn.
+fn report_computer_use_unavailable(task_id: AmbientAgentTaskId, sandboxed: bool, app: &AppContext) {
+    static REPORTED_TASKS: LazyLock<Mutex<HashSet<AmbientAgentTaskId>>> =
+        LazyLock::new(Default::default);
+    let newly_reported = REPORTED_TASKS
+        .lock()
+        .is_ok_and(|mut reported| reported.insert(task_id));
+    if !newly_reported {
+        return;
+    }
+    send_telemetry_from_app_ctx!(
+        TelemetryEvent::ComputerUseUnavailable {
+            ambient_agent_task_id: task_id,
+            sandboxed,
+        },
+        app
+    );
 }

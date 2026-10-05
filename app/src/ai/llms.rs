@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
-use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, CustomEndpoint, CustomEndpointModel};
+use ai::api_keys::{
+    ApiKeyManager, ApiKeyManagerEvent, ChatGPTConnectionStatus, CustomEndpoint, CustomEndpointModel,
+};
 pub use ai::{LLMId, LLMProvider};
 use parking_lot::FairMutex;
 use serde::{Deserialize, Serialize, de};
@@ -11,28 +13,44 @@ use warp_errors::report_error;
 use warp_multi_agent_api as api;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
+use super::agent::conversation::AIConversation;
 use super::custom_model_routers::{self, CustomModelRouter, ModelConfigError};
 use super::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::auth::AuthStateProvider;
 use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApiProvider;
 use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
+use crate::workspaces::update_manager::TeamUpdateManager;
 #[cfg(feature = "agent_mode_evals")]
 use crate::workspaces::user_workspaces::ResolvedTeamScope;
 use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces, UserWorkspacesEvent};
 
 /// Checks if a user's' API key is being used for the given provider.
 /// Returns `true` if BYO API key is enabled and a key exists for the provider.
-/// For xAI, a connected Grok subscription counts: its OAuth access token is
-/// sent like a BYO key (see `ApiKeyManager::api_keys_for_request`).
+/// Connected subscriptions count as BYO credentials: a Grok subscription's OAuth
+/// access token is sent like a BYO key (see `ApiKeyManager::api_keys_for_request`),
+/// and a ChatGPT subscription's delegated token is attached by the server.
 pub fn is_using_api_key_for_provider(provider: &LLMProvider, app: &AppContext) -> bool {
+    is_using_api_key_for_provider_in_conversation(provider, None, app)
+}
+
+/// Like [`is_using_api_key_for_provider`], but for requests in `conversation`: a connected
+/// ChatGPT subscription does not count once that conversation has switched to Warp credits.
+pub fn is_using_api_key_for_provider_in_conversation(
+    provider: &LLMProvider,
+    conversation: Option<&AIConversation>,
+    app: &AppContext,
+) -> bool {
     if !UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app) {
         return false;
     }
     let manager = ApiKeyManager::as_ref(app);
 
     match provider {
-        LLMProvider::OpenAI => manager.keys().openai.is_some(),
+        LLMProvider::OpenAI => {
+            manager.keys().openai.is_some()
+                || is_chatgpt_subscription_active_in_conversation(manager, conversation)
+        }
         LLMProvider::Anthropic => manager.keys().anthropic.is_some(),
         LLMProvider::Google => manager.keys().google.is_some(),
         LLMProvider::Xai => manager.grok_tokens().is_some(),
@@ -40,17 +58,62 @@ pub fn is_using_api_key_for_provider(provider: &LLMProvider, app: &AppContext) -
     }
 }
 
+fn is_chatgpt_subscription_active_in_conversation(
+    manager: &ApiKeyManager,
+    conversation: Option<&AIConversation>,
+) -> bool {
+    manager.has_chatgpt_subscription()
+        && !conversation.is_some_and(AIConversation::use_warp_credits_instead_of_chatgpt)
+}
+
+/// Whether requests to `provider` in `conversation` are billed to the user's connected ChatGPT
+/// subscription. A pasted OpenAI API key takes precedence over the subscription.
+fn is_using_chatgpt_subscription_for_provider_in_conversation(
+    provider: &LLMProvider,
+    conversation: Option<&AIConversation>,
+    app: &AppContext,
+) -> bool {
+    if !matches!(provider, LLMProvider::OpenAI)
+        || !UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app)
+    {
+        return false;
+    }
+    let manager = ApiKeyManager::as_ref(app);
+    manager.keys().openai.is_none()
+        && is_chatgpt_subscription_active_in_conversation(manager, conversation)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ByoKeySource {
     UserProvided,
     TeamProvided,
+    ChatGPTSubscription,
 }
+
+/// Where a user with a connected ChatGPT subscription can review that subscription's usage.
+pub const CHATGPT_USAGE_URL: &str = "https://chatgpt.com/settings/usage";
 
 impl ByoKeySource {
     pub fn inference_label(self) -> &'static str {
         match self {
             ByoKeySource::UserProvided => "Inference via User-provided API key",
             ByoKeySource::TeamProvided => "Inference via Team-provided API key",
+            ByoKeySource::ChatGPTSubscription => "Using ChatGPT plan",
+        }
+    }
+
+    pub fn manage_button_label(self) -> &'static str {
+        match self {
+            ByoKeySource::UserProvided | ByoKeySource::TeamProvided => "Manage",
+            ByoKeySource::ChatGPTSubscription => "Manage usage",
+        }
+    }
+
+    /// External page the manage button opens instead of the API keys settings page, if any.
+    pub fn manage_url(self) -> Option<&'static str> {
+        match self {
+            ByoKeySource::UserProvided | ByoKeySource::TeamProvided => None,
+            ByoKeySource::ChatGPTSubscription => Some(CHATGPT_USAGE_URL),
         }
     }
 }
@@ -58,15 +121,30 @@ impl ByoKeySource {
 /// Returns the first-party key source that will be used for this provider.
 /// Member-provided keys win when team policy allows them; otherwise a
 /// configured team-managed key is used when available.
+///
+/// `conversation` is the conversation the answer applies to, when known; see
+/// [`is_using_api_key_for_provider_in_conversation`].
 pub fn first_party_key_source_for_provider(
     provider: &LLMProvider,
+    conversation: Option<&AIConversation>,
     scope: &dyn TeamScope,
     app: &AppContext,
 ) -> Option<ByoKeySource> {
     let workspaces = UserWorkspaces::as_ref(app);
-    if workspaces.are_member_byo_keys_allowed(scope) && is_using_api_key_for_provider(provider, app)
+    if workspaces.are_member_byo_keys_allowed(scope)
+        && is_using_api_key_for_provider_in_conversation(provider, conversation, app)
     {
-        return Some(ByoKeySource::UserProvided);
+        return Some(
+            if is_using_chatgpt_subscription_for_provider_in_conversation(
+                provider,
+                conversation,
+                app,
+            ) {
+                ByoKeySource::ChatGPTSubscription
+            } else {
+                ByoKeySource::UserProvided
+            },
+        );
     }
     if workspaces.has_team_first_party_key(scope, *provider) {
         return Some(ByoKeySource::TeamProvided);
@@ -76,6 +154,7 @@ pub fn first_party_key_source_for_provider(
 
 pub fn byo_key_source_for_model(
     llm: &LLMInfo,
+    conversation: Option<&AIConversation>,
     scope: &dyn TeamScope,
     app: &AppContext,
 ) -> Option<ByoKeySource> {
@@ -89,15 +168,28 @@ pub fn byo_key_source_for_model(
     if workspaces.has_team_byo_endpoint(scope, &llm.id) {
         return Some(ByoKeySource::TeamProvided);
     }
-    first_party_key_source_for_provider(&llm.provider, scope, app)
+    first_party_key_source_for_provider(&llm.provider, conversation, scope, app)
 }
 
 pub fn should_show_key_icon_for_model(
     llm: &LLMInfo,
+    conversation: Option<&AIConversation>,
     scope: &dyn TeamScope,
     app: &AppContext,
 ) -> bool {
-    byo_key_source_for_model(llm, scope, app).is_some()
+    byo_key_source_for_model(llm, conversation, scope, app).is_some()
+}
+
+/// Whether requests for `llm` in `conversation` are billed to the user's connected ChatGPT
+/// subscription.
+pub fn is_using_chatgpt_subscription_for_model(
+    llm: &LLMInfo,
+    conversation: Option<&AIConversation>,
+    scope: &dyn TeamScope,
+    app: &AppContext,
+) -> bool {
+    byo_key_source_for_model(llm, conversation, scope, app)
+        == Some(ByoKeySource::ChatGPTSubscription)
 }
 
 /// Whether `scope`'s team lets this member reach `llm` at all.
@@ -741,6 +833,9 @@ pub struct LLMPreferences {
     custom_llms: Vec<LLMInfo>,
     /// All custom model routers, including both local and cloud-backed.
     custom_model_routers: Vec<CustomModelRouter>,
+    /// Whether the server held delegated ChatGPT credentials as of the last observed
+    /// connection update. `None` until the server has reported a status at least once.
+    last_seen_chatgpt_subscription_connected: Option<bool>,
 }
 
 impl LLMPreferences {
@@ -757,10 +852,13 @@ impl LLMPreferences {
         // immediately flow through to the model picker.
         ctx.subscribe_to_model(
             &ApiKeyManager::handle(ctx),
-            |me, _, _event: &ApiKeyManagerEvent, ctx| {
+            |me, _, event: &ApiKeyManagerEvent, ctx| {
                 me.rebuild_custom_llms(ctx);
                 me.reconcile_disabled_model_preferences_for_known_scopes(ctx);
                 ctx.emit(LLMPreferencesEvent::UpdatedAvailableLLMs);
+                if matches!(event, ApiKeyManagerEvent::ChatGPTConnectionUpdated) {
+                    me.refresh_models_if_chatgpt_subscription_changed(ctx);
+                }
             },
         );
 
@@ -784,6 +882,7 @@ impl LLMPreferences {
             base_llm_for_terminal_view,
             custom_llms,
             custom_model_routers: Vec::new(),
+            last_seen_chatgpt_subscription_connected: None,
         };
 
         // Seed from any already-loaded local config (the async load emits
@@ -824,7 +923,7 @@ impl LLMPreferences {
             let raw_override = self.base_llm_for_terminal_view.get(&terminal_view_id);
             if let Some(llm_id) = raw_override
                 && let Some(llm_info) =
-                    self.model_info_for_id(&models_by_feature.agent_mode, llm_id, app)
+                    self.usable_model_info_for_id(&models_by_feature.agent_mode, llm_id, app)
             {
                 return llm_info;
             }
@@ -834,7 +933,7 @@ impl LLMPreferences {
             .data()
             .base_model
             .clone()
-            .and_then(|id| self.model_info_for_id(&models_by_feature.agent_mode, &id, app))
+            .and_then(|id| self.usable_model_info_for_id(&models_by_feature.agent_mode, &id, app))
             .unwrap_or_else(|| self.fallback_llm_info(&models_by_feature.agent_mode, app))
     }
 
@@ -850,7 +949,7 @@ impl LLMPreferences {
             let raw_override = self.base_llm_for_terminal_view.get(&terminal_view_id);
             if let Some(llm_id) = raw_override
                 && let Some(llm_info) =
-                    self.model_info_for_id(&models_by_feature.agent_mode, llm_id, app)
+                    self.usable_model_info_for_id(&models_by_feature.agent_mode, llm_id, app)
             {
                 return llm_info;
             }
@@ -884,7 +983,7 @@ impl LLMPreferences {
             .data()
             .base_model
             .clone()
-            .and_then(|id| self.model_info_for_id(&models_by_feature.agent_mode, &id, app))
+            .and_then(|id| self.usable_model_info_for_id(&models_by_feature.agent_mode, &id, app))
             .unwrap_or_else(|| self.fallback_llm_info(&models_by_feature.agent_mode, app))
     }
 
@@ -917,6 +1016,18 @@ impl LLMPreferences {
         app: &'a AppContext,
     ) -> Option<&'a LLMInfo> {
         Self::server_info_for_id_router_gated(available, id)
+            .or_else(|| self.custom_llm_info_for_id_if_enabled(id, app))
+            .or_else(|| self.custom_router_llm_info_for_id_if_enabled(id))
+    }
+
+    fn usable_model_info_for_id<'a>(
+        &'a self,
+        available: &'a AvailableLLMs,
+        id: &LLMId,
+        app: &'a AppContext,
+    ) -> Option<&'a LLMInfo> {
+        Self::server_info_for_id_router_gated(available, id)
+            .filter(|info| is_usable_llm(info, app))
             .or_else(|| self.custom_llm_info_for_id_if_enabled(id, app))
             .or_else(|| self.custom_router_llm_info_for_id_if_enabled(id))
     }
@@ -980,14 +1091,12 @@ impl LLMPreferences {
         team_uid: Option<ServerId>,
         app: &'a AppContext,
     ) -> impl Iterator<Item = &'a LLMInfo> + use<'a> {
-        // Don't show admin-disabled models in the dropdown
         let routers_enabled = FeatureFlag::CustomModelRouters.is_enabled();
         UserWorkspaces::as_ref(app)
             .feature_model_choice_for_team_uid(team_uid)
             .agent_mode
             .choices
             .iter()
-            .filter(|llm| !matches!(llm.disable_reason, Some(DisableReason::AdminDisabled)))
             // Gate cloud/team routers behind the same flag as local routers so
             // the entire custom-router feature is controlled by one flag.
             .filter(move |llm| {
@@ -1854,12 +1963,19 @@ impl LLMPreferences {
         scope: &(impl TeamScope + ?Sized),
         ctx: &mut ModelContext<Self>,
     ) {
+        self.refresh_authed_models_for_team_uid(scope.team_uid(), ctx);
+    }
+
+    fn refresh_authed_models_for_team_uid(
+        &self,
+        team_uid: Option<ServerId>,
+        ctx: &mut ModelContext<Self>,
+    ) {
         // Don't try to fetch auth'd models if the user is not logged in yet.
         if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
             return;
         }
 
-        let team_uid = scope.team_uid();
         let ai_api_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         ctx.spawn(
             async move { ai_api_client.get_feature_model_choices().await },
@@ -1914,6 +2030,37 @@ impl LLMPreferences {
         } else {
             self.refresh_public_models(ctx);
         }
+    }
+
+    /// Refetches the server's model catalogs when the connected ChatGPT subscription starts or
+    /// stops funding OpenAI requests, since the server derives the agent-mode default and the
+    /// tier gating of OpenAI models from that state. The first status the server reports after
+    /// login is only recorded: the login user fetch already delivered a catalog computed from it.
+    /// A connect attempt that starts before any status was reported is the exception: the
+    /// catalog predates whatever the attempt produces, so it is treated as a not-connected
+    /// baseline.
+    fn refresh_models_if_chatgpt_subscription_changed(&mut self, ctx: &mut ModelContext<Self>) {
+        let manager = ApiKeyManager::as_ref(ctx);
+        if matches!(
+            manager.chatgpt_connection_status(),
+            ChatGPTConnectionStatus::Unknown
+        ) {
+            self.last_seen_chatgpt_subscription_connected =
+                manager.chatgpt_oauth_pending().then_some(false);
+            return;
+        }
+        let connected = manager.has_chatgpt_subscription();
+        let previous = self
+            .last_seen_chatgpt_subscription_connected
+            .replace(connected);
+        if previous.is_none_or(|previous| previous == connected) {
+            return;
+        }
+        // Team-scoped catalogs live on the workspace metadata, so refresh both.
+        self.refresh_authed_models_for_team_uid(None, ctx);
+        TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
+            drop(manager.refresh_workspace_metadata(ctx));
+        });
     }
 
     pub fn update_feature_model_choices(
@@ -1977,9 +2124,11 @@ impl LLMPreferences {
         ctx.emit(LLMPreferencesEvent::UpdatedAvailableLLMs);
     }
 
-    /// Clear any model selections where the model is no longer supported
-    /// or effectively disabled, and clear orphaned context window limits
-    /// for non-configurable or unusable models.
+    /// Reconcile stored model selections with the current model catalog and credentials.
+    ///
+    /// An `AdminDisabled` base-model selection and its context limit are preserved because
+    /// profiles are shared across teams. Other unusable base, coding, CLI agent, and computer use
+    /// selections are cleared.
     ///
     /// Called both when the model list is refreshed from the server and when
     /// BYOK API keys change (since `RequiresUpgrade` usability is BYOK-aware).
@@ -2007,21 +2156,18 @@ impl LLMPreferences {
                     let effective_base_model_id = preferred_base_model
                         .as_ref()
                         .unwrap_or(&models_by_feature.agent_mode.default_id);
-
-                    // Only reconcile a preferred model when this device recognizes its ID.
-                    // If neither the server catalog nor local custom endpoints know it, the ID
-                    // likely belongs to a custom endpoint configured on another device. Clearing
-                    // it here would sync the removal back to cloud and erase the user's setting
-                    // on every other device.
+                    let preferred_base_model_info = models_by_feature
+                        .agent_mode
+                        .info_for_id(effective_base_model_id);
                     let preferred_base_model_is_recognized = preferred_base_model.is_none()
-                        || models_by_feature
-                            .agent_mode
-                            .info_for_id(effective_base_model_id)
-                            .is_some()
+                        || preferred_base_model_info.is_some()
                         || self
                             .custom_llm_info_for_id(effective_base_model_id)
                             .is_some();
-
+                    let preferred_base_model_is_admin_disabled = preferred_base_model_info
+                        .is_some_and(|info| {
+                            info.disable_reason == Some(DisableReason::AdminDisabled)
+                        });
                     let effective_base_model_usable = models_by_feature
                         .agent_mode
                         .usable_info_for_id(effective_base_model_id, ctx)
@@ -2035,18 +2181,19 @@ impl LLMPreferences {
 
                     if preferred_base_model.is_some()
                         && preferred_base_model_is_recognized
+                        && !preferred_base_model_is_admin_disabled
                         && effective_base_model_unusable
                     {
                         profiles.set_base_model(&profile_id, None, ctx);
                     }
                     if has_context_window_limit
                         && preferred_base_model_is_recognized
+                        && !preferred_base_model_is_admin_disabled
                         && (effective_base_model_unusable || !effective_base_model_is_configurable)
                     {
                         profiles.set_context_window_limit(&profile_id, None, ctx);
                     }
                     if let Some(preferred_llm_id) = &profile.data().coding_model {
-                        // Same guard: only clear recognized IDs.
                         let is_recognized = models_by_feature
                             .coding
                             .info_for_id(preferred_llm_id)
@@ -2065,7 +2212,6 @@ impl LLMPreferences {
                         }
                     }
                     if let Some(preferred_llm_id) = &profile.data().cli_agent_model {
-                        // Same guard: only clear recognized IDs.
                         let is_recognized = self
                             .get_cli_agent_available(team_uid, ctx)
                             .info_for_id(preferred_llm_id)
@@ -2161,6 +2307,7 @@ impl LLMPreferences {
             base_llm_for_terminal_view: HashMap::new(),
             custom_llms,
             custom_model_routers: Vec::new(),
+            last_seen_chatgpt_subscription_connected: None,
         }
     }
 }

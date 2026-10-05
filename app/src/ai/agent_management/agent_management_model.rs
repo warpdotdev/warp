@@ -145,6 +145,7 @@ impl AgentNotificationsModel {
                 agent,
                 status,
                 session_context,
+                ..
             } => match status {
                 // When the agent resumes its work we can assume that the previous notification is stale.
                 CLIAgentSessionStatus::InProgress => {

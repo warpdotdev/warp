@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 
+use ai::api_keys::{ChatGPTConnection, ChatGPTConnectionStatus};
 use ai::index::full_source_code_embedding::store_client::{IntermediateNode, StoreClient};
 use ai::index::full_source_code_embedding::{
     self, CodebaseContextConfig, ContentHash, EmbeddingConfig, NodeHash, RepoMetadata,
@@ -39,6 +40,9 @@ use warp_graphql::mutations::delete_ai_conversation::{
     DeleteAIConversation, DeleteAIConversationVariables, DeleteConversationInput,
     DeleteConversationResult,
 };
+use warp_graphql::mutations::disconnect_chatgpt::{
+    DisconnectChatGPT, DisconnectChatGPTResult, DisconnectChatGPTVariables,
+};
 use warp_graphql::mutations::generate_code_embeddings::{
     GenerateCodeEmbeddings, GenerateCodeEmbeddingsInput, GenerateCodeEmbeddingsResult,
     GenerateCodeEmbeddingsVariables,
@@ -64,6 +68,9 @@ use warp_graphql::mutations::request_bonus::{
     ProvideNegativeFeedbackResponseForAiConversationInput,
     ProvideNegativeFeedbackResponseForAiConversationVariables, RequestsRefundedResult,
 };
+use warp_graphql::mutations::start_chatgpt_link::{
+    StartChatGPTLink, StartChatGPTLinkResult, StartChatGPTLinkVariables,
+};
 use warp_graphql::mutations::update_agent_task::{
     AgentTaskStatusMessageInput, UpdateAgentTask, UpdateAgentTaskInput, UpdateAgentTaskResult,
     UpdateAgentTaskVariables,
@@ -86,6 +93,9 @@ use warp_graphql::queries::get_ai_credit_availability::{
 };
 use warp_graphql::queries::get_available_harnesses::{
     GetAvailableHarnesses, GetAvailableHarnessesVariables,
+};
+use warp_graphql::queries::get_chatgpt_connection::{
+    GetChatGPTConnection, GetChatGPTConnectionVariables,
 };
 use warp_graphql::queries::get_conversation_usage::{
     ConversationUsage, GetConversationUsage, GetConversationUsageVariables, UserResult,
@@ -1264,6 +1274,17 @@ pub trait AIClient: 'static + Send + Sync {
     /// user can start an interactive AI request.
     async fn get_ai_credit_availability(&self) -> Result<AICreditAvailability, anyhow::Error>;
 
+    /// Fetches the ChatGPT account linked to the authenticated user, if any.
+    async fn get_chatgpt_connection(&self) -> Result<ChatGPTConnectionStatus, anyhow::Error>;
+
+    /// Unlinks the authenticated user's ChatGPT account on the server.
+    async fn disconnect_chatgpt(&self) -> Result<(), anyhow::Error>;
+
+    /// Returns the browser URL that links a ChatGPT account to the authenticated user. The
+    /// browser flow finishes by opening `continue_url` with `chatgpt_linked=1` or
+    /// `chatgpt_error=<code>` appended.
+    async fn start_chatgpt_link(&self, continue_url: String) -> Result<String, anyhow::Error>;
+
     /// Returns conversation usage history for the current user over the requested number of days.
     ///
     /// If `last_updated_end_timestamp` is provided, only conversations updated before that timestamp are returned.
@@ -2128,6 +2149,59 @@ impl AIClient for ServerApi {
             warp_graphql::queries::get_ai_credit_availability::UserResult::Unknown => {
                 Err(anyhow!("failed to get AI credit availability"))
             }
+        }
+    }
+
+    async fn get_chatgpt_connection(&self) -> Result<ChatGPTConnectionStatus, anyhow::Error> {
+        use warp_graphql::queries::get_chatgpt_connection::UserResult;
+
+        let operation = GetChatGPTConnection::build(GetChatGPTConnectionVariables {
+            request_context: get_request_context(),
+        });
+        let response = self.send_graphql_request(operation, None).await?;
+
+        match response.user {
+            UserResult::UserOutput(output) => Ok(match output.user.chatgpt_connection {
+                Some(connection) => ChatGPTConnectionStatus::Connected(ChatGPTConnection {
+                    email: connection.email,
+                    connected_at: connection.connected_at.utc().into(),
+                    token_sharing_active: connection.token_sharing_active,
+                }),
+                None => ChatGPTConnectionStatus::NotConnected,
+            }),
+            UserResult::UserFacingError(e) => Err(anyhow!(get_user_facing_error_message(e))),
+            UserResult::Unknown => Err(anyhow!("failed to get ChatGPT connection")),
+        }
+    }
+
+    async fn disconnect_chatgpt(&self) -> Result<(), anyhow::Error> {
+        let operation = DisconnectChatGPT::build(DisconnectChatGPTVariables {
+            request_context: get_request_context(),
+        });
+        let response = self.send_graphql_request(operation, None).await?;
+
+        match response.disconnect_chatgpt {
+            DisconnectChatGPTResult::DisconnectChatGPTOutput(_) => Ok(()),
+            DisconnectChatGPTResult::UserFacingError(e) => {
+                Err(anyhow!(get_user_facing_error_message(e)))
+            }
+            DisconnectChatGPTResult::Unknown => Err(anyhow!("failed to disconnect ChatGPT")),
+        }
+    }
+
+    async fn start_chatgpt_link(&self, continue_url: String) -> Result<String, anyhow::Error> {
+        let operation = StartChatGPTLink::build(StartChatGPTLinkVariables {
+            request_context: get_request_context(),
+            continue_url,
+        });
+        let response = self.send_graphql_request(operation, None).await?;
+
+        match response.start_chatgpt_link {
+            StartChatGPTLinkResult::StartChatGPTLinkOutput(output) => Ok(output.authorization_url),
+            StartChatGPTLinkResult::UserFacingError(e) => {
+                Err(anyhow!(get_user_facing_error_message(e)))
+            }
+            StartChatGPTLinkResult::Unknown => Err(anyhow!("failed to start ChatGPT link")),
         }
     }
 

@@ -427,11 +427,14 @@ impl AuthRefreshCoordinator {
         ctx.spawn(
             async move {
                 client
-                    .issue_task_identity_token(IdentityTokenOptions {
-                        audience: COLLECTOR_AUDIENCE.to_owned(),
-                        requested_duration: REFRESHED_TOKEN_DURATION,
-                        subject_template: vec1::vec1!["principal".to_owned()],
-                    })
+                    .issue_task_identity_token(
+                        None,
+                        IdentityTokenOptions {
+                            audience: COLLECTOR_AUDIENCE.to_owned(),
+                            requested_duration: REFRESHED_TOKEN_DURATION,
+                            subject_template: vec1::vec1!["principal".to_owned()],
+                        },
+                    )
                     .with_timeout(REFRESH_REQUEST_TIMEOUT)
                     .await
                     .map_err(|_| anyhow!("Cloud-agent OTLP authorization refresh timed out"))?

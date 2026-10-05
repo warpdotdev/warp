@@ -80,7 +80,7 @@ use crate::workflows::{CloudWorkflow, CloudWorkflowModel};
 use crate::workspaces::gql_convert::{
     PLACEHOLDER_WORKSPACE_UID, workspaces_metadata_response_from_gql,
 };
-use crate::workspaces::team::{Team, TeamMember, TeamVisibility};
+use crate::workspaces::team::{DiscoverableWorkspace, Team, TeamMember, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -965,7 +965,7 @@ fn cli_scope_without_selection_is_teamless_without_teams() {
             let scope = UserWorkspaces::as_ref(ctx)
                 .team_scope_for_cli(&team_selection(None))
                 .expect("no selection should be teamless when the user has no teams");
-            assert!(matches!(scope, TeamScopeForCli::Personal));
+            assert!(matches!(scope, HeadlessTeamScope::Personal));
         });
     })
 }
@@ -981,7 +981,7 @@ fn cli_scope_without_selection_uses_the_sole_team() {
             let scope = UserWorkspaces::as_ref(ctx)
                 .team_scope_for_cli(&team_selection(None))
                 .expect("no selection should use the sole team");
-            assert!(matches!(scope, TeamScopeForCli::Team(uid) if uid == team_uid));
+            assert!(matches!(scope, HeadlessTeamScope::Team(uid) if uid == team_uid));
         });
     })
 }
@@ -1020,7 +1020,7 @@ fn cli_object_scope_personal_is_teamless_with_multiple_teams() {
             let scope = UserWorkspaces::as_ref(ctx)
                 .team_scope_for_cli_object(&object_scope(None, true))
                 .expect("explicit personal scope should not require a team");
-            assert!(matches!(scope, TeamScopeForCli::Personal));
+            assert!(matches!(scope, HeadlessTeamScope::Personal));
         });
     })
 }
@@ -1053,7 +1053,7 @@ fn cli_scope_bare_team_uses_the_sole_team() {
             let scope = UserWorkspaces::as_ref(ctx)
                 .team_scope_for_cli(&team_selection(Some(None)))
                 .expect("bare --team should use the sole team");
-            assert!(matches!(scope, TeamScopeForCli::Team(uid) if uid == team_uid));
+            assert!(matches!(scope, HeadlessTeamScope::Team(uid) if uid == team_uid));
         });
     })
 }
@@ -1095,7 +1095,7 @@ fn cli_scope_explicit_team_validates_the_uid_and_membership() {
             let scope = user_workspaces
                 .team_scope_for_cli(&team_selection(Some(Some(second_team_uid.to_string()))))
                 .expect("an explicit member team should resolve");
-            assert!(matches!(scope, TeamScopeForCli::Team(uid) if uid == second_team_uid));
+            assert!(matches!(scope, HeadlessTeamScope::Team(uid) if uid == second_team_uid));
 
             let invalid =
                 user_workspaces.team_scope_for_cli(&team_selection(Some(Some("invalid".into()))));
@@ -4557,6 +4557,141 @@ fn gql_user(
         experiments: None,
         discoverable_teams: vec![],
     }
+}
+
+fn discovery_options_for_test() -> DiscoveryOptions {
+    DiscoveryOptions {
+        workspaces: vec![DiscoverableWorkspace {
+            workspace_uid: ServerId::from(10).into(),
+            name: "Discoverable Workspace".to_string(),
+            open_teams: vec![DiscoverableTeam {
+                team_uid: ServerId::from(11).to_string(),
+                num_members: 2,
+                name: "Open Team".to_string(),
+                team_accepting_invites: true,
+            }],
+            member_count: 4,
+        }],
+        legacy_teams: vec![DiscoverableTeam {
+            team_uid: ServerId::from(12).to_string(),
+            num_members: 3,
+            name: "Legacy Team".to_string(),
+            team_accepting_invites: true,
+        }],
+    }
+}
+
+#[test]
+fn test_fetch_discovery_options_success_updates_model_and_emits_event() {
+    App::test((), |mut app| async move {
+        let returned_options = discovery_options_for_test();
+        let mut team_client = MockTeamClient::new();
+        team_client
+            .expect_get_discovery_options()
+            .times(1)
+            .return_once(move || Ok(returned_options));
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(team_client),
+                Arc::new(MockWorkspaceClient::new()),
+                vec![],
+                ctx,
+            )
+        });
+
+        let user_workspaces = UserWorkspaces::handle(&app);
+        let (sender, receiver) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&user_workspaces, move |_, event, _| {
+                if let UserWorkspacesEvent::FetchDiscoveryOptionsSuccess(options) = event {
+                    let _ = sender.try_send(options.clone());
+                }
+            });
+        });
+
+        user_workspaces.update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.fetch_discovery_options(ctx);
+        });
+
+        let options = receiver
+            .recv()
+            .await
+            .expect("expected discovery-options success event");
+        assert_eq!(options.workspaces.len(), 1);
+        assert_eq!(options.workspaces[0].name, "Discoverable Workspace");
+        assert_eq!(options.legacy_teams.len(), 1);
+        app.read(|ctx| {
+            assert_eq!(UserWorkspaces::as_ref(ctx).joinable_teams.len(), 1);
+        });
+    })
+}
+
+#[test]
+fn test_join_workspace_from_discovery_with_team_forwards_target_and_updates_workspace() {
+    App::test((), |mut app| async move {
+        let workspace_uid: WorkspaceUid = ServerId::from(10).into();
+        let team_uid = ServerId::from(11);
+        let mut team_client = MockTeamClient::new();
+        team_client
+            .expect_join_workspace_from_discovery()
+            .withf(move |actual_workspace_uid, actual_team_uid| {
+                *actual_workspace_uid == workspace_uid && *actual_team_uid == Some(team_uid)
+            })
+            .times(1)
+            .return_once(move |_, _| {
+                Ok(WorkspacesMetadataWithPricing {
+                    metadata: WorkspacesMetadataResponse {
+                        workspaces: vec![Workspace::from_local_cache(
+                            workspace_uid,
+                            "Joined Workspace".to_string(),
+                            None,
+                            None,
+                        )],
+                        joinable_teams: vec![],
+                        experiments: None,
+                        ai_credit_availability: None,
+                        user_purchase_policy: None,
+                    },
+                    pricing_info: None,
+                })
+            });
+        app.add_singleton_model(PrivacySettings::mock);
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(team_client),
+                Arc::new(MockWorkspaceClient::new()),
+                vec![],
+                ctx,
+            )
+        });
+
+        let user_workspaces = UserWorkspaces::handle(&app);
+        let (sender, receiver) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&user_workspaces, move |_, event, _| {
+                if let UserWorkspacesEvent::JoinWorkspaceFromDiscoverySuccess = event {
+                    let _ = sender.try_send(());
+                }
+            });
+        });
+
+        user_workspaces.update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.join_workspace_from_discovery(workspace_uid, Some(team_uid), ctx);
+        });
+
+        receiver
+            .recv()
+            .await
+            .expect("expected workspace discovery join success event");
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx)
+                    .current_workspace()
+                    .map(|workspace| workspace.uid),
+                Some(workspace_uid)
+            );
+        });
+    })
 }
 
 #[test]

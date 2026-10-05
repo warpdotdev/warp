@@ -35,6 +35,7 @@ const clientMutations = [
   'grabNotebookEditAccess',
   'issueTaskIdentityToken',
   'joinTeamWithTeamDiscovery',
+  'joinWorkspaceFromDiscovery',
   'leaveObject',
   'markAcceptedIntelligentAutosuggestion',
   'mintCustomToken',

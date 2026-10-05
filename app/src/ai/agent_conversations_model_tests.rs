@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::{DateTime, Duration, Utc};
 use instant::Instant;
 use parking_lot::Mutex;
-use persistence::model::{AgentConversationData, ConversationUsageMetadata};
+use persistence::model::{AgentConversationData, ChargedUsageTotals, ConversationUsageMetadata};
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warpui::{App, EntityId, ModelHandle, SingletonEntity};
@@ -246,6 +246,7 @@ fn test_title_update_refreshes_shadowing_task_title() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -353,6 +354,7 @@ fn test_display_status_uses_matching_conversation_for_in_progress_task() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -410,6 +412,7 @@ fn test_display_status_uses_active_execution_over_previous_conversation_status()
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -474,6 +477,7 @@ fn test_display_status_updates_when_blocked_conversation_resumes() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -554,6 +558,7 @@ fn test_display_status_terminal_task_state_overrides_matching_conversation() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -609,6 +614,7 @@ fn test_status_filter_uses_display_status_for_task_backed_conversations() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -1044,6 +1050,32 @@ fn test_get_entries_includes_task_only_entry() {
 }
 
 #[test]
+fn test_task_entry_includes_server_reported_dollar_cost() {
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+
+        let mut model = create_test_model();
+        let mut task = create_test_task(&make_uuid(8104), "user-a", Utc::now());
+        task.request_usage = Some(crate::ai::ambient_agents::task::RequestUsage {
+            inference_cost: Some(10.0),
+            compute_cost: Some(2.0),
+            platform_cost: Some(3.0),
+            inference_cost_usd: Some(0.18),
+            compute_cost_usd: Some(0.036),
+            platform_cost_usd: Some(0.054),
+        });
+        model.tasks.insert(task.task_id, task);
+
+        app.update(|ctx| {
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
+
+            assert_eq!(entries[0].display.request_usage, Some(15.0));
+            assert_eq!(entries[0].display.cost_in_cents, Some(27.0));
+        });
+    });
+}
+
+#[test]
 fn test_task_entry_preserves_execution_location_independently_of_task_backing() {
     App::test((), |mut app| async move {
         add_entry_projection_test_models(&mut app);
@@ -1148,6 +1180,40 @@ fn test_get_entries_includes_local_only_entry() {
 }
 
 #[test]
+fn test_local_conversation_entry_uses_charged_usage_dollar_total() {
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_credits_spent_for_test(20.0);
+        conversation.set_charged_usage_for_test(Some(ChargedUsageTotals {
+            input_cost_in_cents: 10.0,
+            output_cost_in_cents: 12.0,
+            platform_cost_in_cents: 8.0,
+            web_search_cost_in_cents: 6.0,
+            ..Default::default()
+        }));
+        let conversation_id = conversation.id();
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.restore_conversations(EntityId::new(), vec![conversation], ctx);
+        });
+
+        let mut model = create_test_model();
+        model.conversations.insert(
+            conversation_id,
+            create_test_conversation_metadata(conversation_id, "Local conversation"),
+        );
+
+        app.update(|ctx| {
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
+
+            assert_eq!(entries[0].display.request_usage, Some(20.0));
+            assert_eq!(entries[0].display.cost_in_cents, Some(36.0));
+        });
+    });
+}
+
+#[test]
 fn test_get_entries_excludes_child_agent_task() {
     App::test((), |mut app| async move {
         add_entry_projection_test_models(&mut app);
@@ -1206,6 +1272,7 @@ fn test_get_entries_excludes_conversation_shadowed_by_child_task() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
         history_model.update(&mut app, |model, ctx| {
@@ -1358,6 +1425,7 @@ fn test_get_entries_merges_task_and_local_conversation_by_run_id() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -1413,6 +1481,7 @@ fn test_get_entries_merges_task_and_local_conversation_by_server_token() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -1708,6 +1777,7 @@ fn test_resolve_open_action_returns_none_for_active_unattachable_session() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -2066,6 +2136,7 @@ fn test_server_token_assignment_updates_copy_link_resolution() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -2228,6 +2299,7 @@ fn test_resolve_copy_link_uses_attached_synced_conversation_for_task_without_tok
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -2608,6 +2680,7 @@ fn test_get_entries_prefers_task_when_task_id_matches_conversation_run_id() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -2669,6 +2742,7 @@ fn test_get_entries_prefers_task_when_server_token_matches() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 

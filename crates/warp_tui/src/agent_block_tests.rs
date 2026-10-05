@@ -15,13 +15,13 @@ use warp::tui_export::{
     AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AIAgentTodo, AIAgentTodoList,
     AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType, ActiveSession,
     AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram, AgentOutputTable,
-    Appearance, AuthStateProvider, BlocklistAIActionModel, FailedOutputPresentation,
-    GetRelevantFilesController, LLMId, MessageId, ModelEventDispatcher, OutputStatusUpdateCallback,
-    ReceivedMessageDisplay, RenderableAIError, RequestCommandOutputResult, ServerOutputId,
-    Sessions, Shared, SummarizationType, TaskId, TerminalModel, TodoOperation, TodoStatus,
-    TuiOnboardingMarker, TuiOnboardingMarkers, UserQueryMode, UserWorkspaces,
-    queue_tui_permission_action, register_tui_session_view_test_singletons,
-    should_show_failed_output_usage_notice,
+    Appearance, AuthStateProvider, BlocklistAIActionModel, ChatGPTSubscriptionErrorAction,
+    ChatGPTSubscriptionErrorActionKind, FailedOutputPresentation, GetRelevantFilesController,
+    LLMId, MessageId, ModelEventDispatcher, OutputStatusUpdateCallback, ReceivedMessageDisplay,
+    RenderableAIError, RequestCommandOutputResult, ServerOutputId, Sessions, Shared,
+    SummarizationType, TaskId, TerminalModel, TodoOperation, TodoStatus, TuiOnboardingMarker,
+    TuiOnboardingMarkers, UserQueryMode, UserWorkspaces, queue_tui_permission_action,
+    register_tui_session_view_test_singletons, should_show_failed_output_usage_notice,
 };
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
@@ -470,6 +470,51 @@ fn out_of_credits_failure_matches_tui_design_and_opens_upgrade() {
         });
 
         assert_eq!(&*opened_urls.borrow(), &[expected_upgrade_url]);
+    });
+}
+
+#[test]
+fn chatgpt_subscription_failure_lists_url_actions_as_text() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            let presentation = FailedOutputPresentation::ChatGPTSubscription {
+                title: "You've reached your ChatGPT usage limit".to_owned(),
+                message: "Continue with Warp credits to keep going.".to_owned(),
+                actions: vec![
+                    ChatGPTSubscriptionErrorAction {
+                        kind: ChatGPTSubscriptionErrorActionKind::ContinueWithWarpCredits,
+                        label: "Continue with Warp credits".to_owned(),
+                    },
+                    ChatGPTSubscriptionErrorAction {
+                        kind: ChatGPTSubscriptionErrorActionKind::OpenUrl {
+                            url: "https://chatgpt.com/#settings/Usage".to_owned(),
+                        },
+                        label: "Manage usage".to_owned(),
+                    },
+                ],
+            };
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                render_failure_section(&presentation, &MouseStateHandle::default(), ctx),
+                TuiRect::new(0, 0, 80, 4),
+                ctx,
+            );
+            assert_eq!(
+                frame
+                    .buffer
+                    .to_lines()
+                    .into_iter()
+                    .map(|line| line.trim_end().to_owned())
+                    .collect::<Vec<_>>(),
+                vec![
+                    "⚠ You've reached your ChatGPT usage limit".to_owned(),
+                    "  Continue with Warp credits to keep going.".to_owned(),
+                    String::new(),
+                    "  Manage usage: https://chatgpt.com/#settings/Usage".to_owned(),
+                ]
+            );
+        });
     });
 }
 
@@ -2878,5 +2923,6 @@ fn query_input(query: &str) -> AIAgentInput {
         user_query_mode: UserQueryMode::default(),
         running_command: None,
         intended_agent: None,
+        base: None,
     }
 }

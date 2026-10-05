@@ -55,10 +55,10 @@ use crate::ai::agent_sdk::setup_observability::{
     OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::ambient_agents::task::{HarnessConfig, TaskScope};
+use crate::ai::ambient_agents::task::HarnessConfig;
 use crate::ai::attachment_utils::attachments_download_dir;
 #[cfg(not(target_family = "wasm"))]
-use crate::ai::aws_credentials::refresh_aws_credentials;
+use crate::ai::aws_credentials::{BedrockOidcCredentialsConfig, refresh_aws_credentials_oidc};
 use crate::ai::cloud_environments::{
     AmbientAgentEnvironment, CloudAmbientAgentEnvironment, SourceRepo,
 };
@@ -81,7 +81,7 @@ use crate::server::server_api::managed_secrets::AppManagedSecretManager as Manag
 use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::workflows::workflow::Workflow;
-use crate::workspaces::user_workspaces::TeamScopeForCli;
+use crate::workspaces::user_workspaces::HeadlessTeamScope;
 
 mod admin;
 mod agent_config;
@@ -149,6 +149,24 @@ fn validated_driver_repositories_for_preparation(
         &options.repository_preparation_overrides,
     )?;
     Ok(source_repos)
+}
+
+fn bedrock_oidc_credentials_config(
+    options: &AgentDriverOptions,
+    role_arn: String,
+    region: String,
+) -> Result<BedrockOidcCredentialsConfig, AgentDriverError> {
+    let task_id = options.task_id.ok_or_else(|| {
+        AgentDriverError::AwsBedrockCredentialsFailed(
+            "AWS Bedrock inference requires an ambient task ID before credentials can be minted"
+                .to_string(),
+        )
+    })?;
+    Ok(BedrockOidcCredentialsConfig {
+        task_id: task_id.to_string(),
+        role_arn,
+        region,
+    })
 }
 
 /// Run a Warp CLI command.
@@ -383,7 +401,7 @@ fn build_merged_config_and_task(
     args: &RunAgentArgs,
     resolved_skill: &Option<ResolvedSkill>,
     prompt: &Option<Prompt>,
-    local_run_team_scope: Option<&TeamScopeForCli>,
+    local_run_team_scope: Option<&HeadlessTeamScope>,
     ctx: &mut AppContext,
 ) -> anyhow::Result<(AgentConfigSnapshot, Task)> {
     // Server-side prompt resolution (task_id is set): the task config already lives on the
@@ -436,6 +454,7 @@ fn build_merged_config_and_task(
     };
 
     let mut merged_config = AgentConfigSnapshot {
+        experimental: None,
         // CLI name > skill name > file name
         name: args.name.clone().or(skill_name).or(file_merged.name),
         environment_id: args.environment.clone().or(file_merged.environment_id),
@@ -543,6 +562,7 @@ fn build_server_side_task(
     let environment = args.environment.clone();
 
     let config = AgentConfigSnapshot {
+        experimental: None,
         name: args.name.clone().or(skill_name),
         environment_id: environment.clone(),
         runner_id: None,
@@ -659,7 +679,7 @@ impl warpui::SingletonEntity for AgentDriverRunner {}
 fn resolve_agent_driver_team_scope(
     args: &RunAgentArgs,
     ctx: &AppContext,
-) -> anyhow::Result<Option<TeamScopeForCli>> {
+) -> anyhow::Result<Option<HeadlessTeamScope>> {
     // We need a team scope if either:
     // 1. This is a local team-visible task that doesn't exist on the server yet.
     // 2. This task is authenticated as a service account
@@ -668,30 +688,6 @@ fn resolve_agent_driver_team_scope(
     }
     let scope = common::resolve_team_scope(&args.team_selection, ctx)?;
     Ok(Some(scope))
-}
-
-/// Converts a server-reported [`TaskScope`] into the [`TeamScopeForCli`] the driver's headless
-/// window should be registered under.
-///
-/// This is the task's *actual* ownership, as recorded on the server, and takes precedence over
-/// any scope resolved from CLI args or the caller's team memberships: a service-account worker
-/// resuming an existing `--task-id` run may belong to zero, one, or many teams that have nothing
-/// to do with the specific task it was asked to continue, so only the task's own scope can say
-/// which team (if any) actually owns it.
-fn team_scope_for_task_scope(scope: &TaskScope) -> TeamScopeForCli {
-    if !scope.is_team() {
-        return TeamScopeForCli::Personal;
-    }
-    match ServerId::try_from(scope.uid.as_str()) {
-        Ok(team_uid) => TeamScopeForCli::Team(team_uid),
-        Err(err) => {
-            log::warn!(
-                "Task reported an invalid team scope uid '{}': {err}",
-                scope.uid
-            );
-            TeamScopeForCli::Personal
-        }
-    }
 }
 
 impl AgentDriverRunner {
@@ -800,7 +796,6 @@ impl AgentDriverRunner {
             // needed here. Just merge the task's linked conversation id into the resume target.
             let resume_conversation_id = resume_conversation_id.or(task_conversation_id);
 
-            let bedrock_task_id = driver_options.task_id.map(|id| id.to_string());
 
             #[cfg(not(target_family = "wasm"))]
             if let Some(role_arn) = bedrock_inference_role {
@@ -814,6 +809,13 @@ impl AgentDriverRunner {
                             .to_string(),
                     )
                 })?;
+                let config =
+                    bedrock_oidc_credentials_config(&driver_options, role_arn, role_region)?;
+                let request_scope = driver_options
+                    .team_scope
+                    .as_ref()
+                    .map(RequestTeamScope::from_scope);
+                driver_options.bedrock_oidc_credentials = Some(config.clone());
                 // Set the OIDC strategy on the UI thread and kick off the refresh; the
                 // returned future resolves when credentials are committed to the model.
                 let refresh_future = foreground
@@ -821,13 +823,10 @@ impl AgentDriverRunner {
                         ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
                             // From here on, refresh credentials via OIDC federation only.
                             manager.set_aws_credentials_refresh_strategy(
-                                AwsCredentialsRefreshStrategy::OidcManaged {
-                                    task_id: bedrock_task_id,
-                                    role_arn,
-                                    region: role_region,
-                                },
+                                AwsCredentialsRefreshStrategy::OidcManaged,
+                                ctx,
                             );
-                            refresh_aws_credentials(manager, ctx)
+                            refresh_aws_credentials_oidc(config, request_scope, manager, ctx)
                         })
                     })
                     .await?;
@@ -1133,7 +1132,7 @@ impl AgentDriverRunner {
     async fn build_driver_options_and_task(
         foreground: &ModelSpawner<Self>,
         args: RunAgentArgs,
-        agent_driver_team_scope: Option<TeamScopeForCli>,
+        agent_driver_team_scope: Option<HeadlessTeamScope>,
         server_api: &Arc<dyn AIClient>,
         setup_events: &SetupClientEventReporter,
     ) -> Result<(AgentDriverOptions, Task, Option<String>), AgentDriverError> {
@@ -1180,6 +1179,7 @@ impl AgentDriverRunner {
                 let driver_options = driver::AgentDriverOptions {
                     working_dir: working_dir.clone(),
                     task_id,
+                    experimental: None,
                     parent_run_id: None,
                     should_share,
                     idle_on_complete: args.idle_on_complete.map(|d| d.into()),
@@ -1194,6 +1194,7 @@ impl AgentDriverRunner {
                     selected_harness: args.harness,
                     third_party_harness_model_config,
                     team_scope: None,
+                    bedrock_oidc_credentials: None,
                     snapshot_disabled: args.snapshot.no_snapshot.then_some(true),
                     snapshot_upload_timeout: args
                         .snapshot
@@ -1226,6 +1227,7 @@ impl AgentDriverRunner {
                     SetupStep::TaskDataFetch,
                     Self::fetch_secrets_and_attachments(
                         foreground,
+                        server_api,
                         task_id_str,
                         &mut driver_options,
                         &mut task,
@@ -1276,7 +1278,7 @@ impl AgentDriverRunner {
         server_api: &Arc<dyn AIClient>,
         prompt: String,
         merged_config: AgentConfigSnapshot,
-        team_scope: TeamScopeForCli,
+        team_scope: HeadlessTeamScope,
         driver_options: &mut AgentDriverOptions,
     ) -> Result<(), AgentDriverError> {
         let request_team_scope = RequestTeamScope::from_scope(&team_scope);
@@ -1322,23 +1324,20 @@ impl AgentDriverRunner {
     /// transcript rehydration without a separate `--conversation` CLI arg.
     async fn fetch_secrets_and_attachments(
         foreground: &ModelSpawner<Self>,
+        ai_client: &Arc<dyn AIClient>,
         task_id_str: String,
         driver_options: &mut AgentDriverOptions,
         task: &mut Task,
     ) -> Result<Option<String>, AgentDriverError> {
-        let (task_secrets, ai_client, server_api) = foreground
+        let (task_secrets, server_api) = foreground
             .spawn({
                 let task_id_str = task_id_str.clone();
                 move |_, ctx| {
                     let task_secrets = ManagedSecretManager::handle(ctx)
                         .as_ref(ctx)
                         .get_task_secrets(task_id_str);
-                    let ai_client = ServerApiProvider::handle(ctx)
-                        .as_ref(ctx)
-                        .get_ai_client()
-                        .clone();
                     let server_api = ServerApiProvider::handle(ctx).as_ref(ctx).get();
-                    (task_secrets, ai_client, server_api)
+                    (task_secrets, server_api)
                 }
             })
             .await?;
@@ -1449,6 +1448,7 @@ impl AgentDriverRunner {
             task_harness_model_config,
             additional_source_repos,
             task_team_scope,
+            experimental,
         ) = match task_metadata_result {
             Ok(Some(task_metadata)) => {
                 // The task's harness is stored on the snapshot; if absent, it's the default Oz.
@@ -1460,10 +1460,16 @@ impl AgentDriverRunner {
                     .map(|h| h.harness_type)
                     .unwrap_or(Harness::Oz);
                 let task_harness_model_config = task_harness_config.and_then(|h| h.model_config());
+                let experimental = agent_config_snapshot
+                    .as_ref()
+                    .and_then(|config| config.experimental.clone());
                 let additional_source_repos = agent_config_snapshot
                     .and_then(|config| config.additional_source_repos)
                     .unwrap_or_default();
-                let task_team_scope = task_metadata.scope.as_ref().map(team_scope_for_task_scope);
+                let task_team_scope = task_metadata
+                    .scope
+                    .as_ref()
+                    .map(HeadlessTeamScope::from_task_scope);
                 (
                     task_metadata.parent_run_id,
                     task_metadata.conversation_id,
@@ -1471,11 +1477,22 @@ impl AgentDriverRunner {
                     task_harness_model_config,
                     additional_source_repos,
                     task_team_scope,
+                    experimental,
                 )
             }
-            Ok(None) => (None, None, None, None, Vec::new(), None),
+            Ok(None) => (None, None, None, None, Vec::new(), None, None),
             Err(err) => return Err(AgentDriverError::TaskMetadataFetchFailed(err)),
         };
+        match experimental.as_ref() {
+            Some(values) => warp_core::safe_info!(
+                safe: ("factory_experimental_config state=read_uninterpreted key_count={}", values.len()),
+                full: ("factory_experimental_config state=read_uninterpreted key_count={}", values.len())
+            ),
+            None => warp_core::safe_info!(
+                safe: ("factory_experimental_config state=absent key_count=0"),
+                full: ("factory_experimental_config state=absent key_count=0")
+            ),
+        }
 
         // Validate the requested `--harness` against the task's harness setting. This avoids the
         // extra conversation-metadata roundtrip that would otherwise be needed downstream when the
@@ -1491,12 +1508,12 @@ impl AgentDriverRunner {
 
         driver_options.task_id = parsed_task_id;
         driver_options.parent_run_id = parent_run_id;
+        driver_options.experimental = experimental;
         driver_options.additional_source_repos = additional_source_repos;
         driver_options.secrets = secrets;
         // The server-reported task scope is authoritative for the headless window this run
-        // creates (see `team_scope_for_task_scope`); it supersedes whatever scope was resolved
-        // from CLI args before the task was fetched. Older servers that don't send `scope` fall
-        // back to that earlier resolution.
+        // creates; it supersedes whatever scope was resolved from CLI args before the task was
+        // fetched. Older servers that don't send `scope` fall back to that earlier resolution.
         if let Some(task_team_scope) = task_team_scope {
             driver_options.team_scope = Some(task_team_scope);
         }

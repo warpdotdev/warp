@@ -1,4 +1,5 @@
 use std::io::Read as _;
+use std::os::windows::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -8,7 +9,13 @@ use instant::Instant;
 use tokio::process::{Child, Command};
 
 use super::*;
-use crate::{Action, Actor as _, Options, Recorder as _, Target, TargetedAction, Vector2I};
+use crate::{
+    Action, ActionLogEntry, Actor as _, MouseButton, Options, PointerEventKind, PointerSession,
+    PointerSink, Recorder as _, RecordingGeometry, ScrollDirection, ScrollDistance, Target,
+    TargetedAction, Vector2I,
+};
+const FILE_SHARE_READ: u32 = 0x00000001;
+const FILE_SHARE_WRITE: u32 = 0x00000002;
 
 fn temp_path(name: &str, extension: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
@@ -41,6 +48,7 @@ fn handle_for(process: Child, path: PathBuf) -> RecordingHandle {
     RecordingHandle {
         width: 320,
         height: 240,
+        capture_origin: Vector2I::new(0, 0),
         exit_state: Arc::new(Mutex::new(None)),
         path,
         started_at: Instant::now(),
@@ -75,6 +83,27 @@ async fn decoded_frame(path: &Path, seek_from_end: bool) -> Vec<u8> {
         String::from_utf8_lossy(&output.stderr)
     );
     output.stdout
+}
+
+async fn validate_recording(path: &Path, width: u32, height: u32) {
+    let expected_frame_bytes = width as usize * height as usize * 3;
+    let first_frame = decoded_frame(path, false).await;
+    let last_frame = decoded_frame(path, true).await;
+    assert_eq!(first_frame.len(), expected_frame_bytes);
+    assert_eq!(last_frame.len(), expected_frame_bytes);
+    assert_ne!(first_frame, last_frame);
+    let decode = Command::new("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(path)
+        .args(["-f", "null", "-"])
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        decode.status.success(),
+        "{}",
+        String::from_utf8_lossy(&decode.stderr)
+    );
 }
 
 #[test]
@@ -136,7 +165,7 @@ fn builds_full_virtual_desktop_capture_command() {
             "-video_size",
             "3838x2158",
             "-draw_mouse",
-            "1",
+            "0",
             "-t",
             "12.345",
             "-i",
@@ -154,6 +183,74 @@ fn builds_full_virtual_desktop_capture_command() {
         ]
     );
     assert!(!args.iter().any(|arg| arg.contains("setpts")));
+}
+
+#[test]
+fn maps_virtual_screen_points_into_even_recording_frame() {
+    let geometry = normalize_virtual_screen_geometry(-1921, -1079, 3839, 2159).unwrap();
+    let recording_geometry = RecordingGeometry::new(
+        Vector2I::new(geometry.origin_x, geometry.origin_y),
+        geometry.width,
+        geometry.height,
+    );
+
+    assert_eq!(
+        recording_geometry.frame_point(Vector2I::new(-1921, -1079)),
+        Vector2I::new(0, 0)
+    );
+    assert_eq!(
+        recording_geometry.frame_point(Vector2I::new(-900, 21)),
+        Vector2I::new(1021, 1100)
+    );
+    assert_eq!(
+        recording_geometry.frame_point(Vector2I::new(-5000, -5000)),
+        Vector2I::new(0, 0)
+    );
+    assert_eq!(
+        recording_geometry.frame_point(Vector2I::new(5000, 5000)),
+        Vector2I::new(3837, 2157)
+    );
+}
+
+#[test]
+fn records_pointer_events_using_capture_start_geometry() {
+    let captured = RecordingGeometry::new(Vector2I::new(-1921, -1079), 3838, 2158);
+    let current = RecordingGeometry::new(Vector2I::new(0, 0), 1920, 1080);
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = PointerSink {
+        started_at: Instant::now(),
+        recording_target: Target::Screen,
+        recording_geometry: captured,
+        events: events.clone(),
+        session: PointerSession::new(),
+    };
+
+    super::super::record_positioned_event(
+        Some(&sink),
+        PointerEventKind::Down,
+        Some(MouseButton::Left),
+        Vector2I::new(-1900, -1000),
+    );
+    super::super::record_positioned_event(
+        Some(&sink),
+        PointerEventKind::Move,
+        None,
+        Vector2I::new(5000, 5000),
+    );
+    super::super::record_up(Some(&sink), MouseButton::Left);
+
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0].kind, PointerEventKind::Down);
+    assert_eq!(events[0].point, Vector2I::new(21, 79));
+    assert_ne!(
+        events[0].point,
+        current.frame_point(Vector2I::new(-1900, -1000))
+    );
+    assert_eq!(events[1].kind, PointerEventKind::Move);
+    assert_eq!(events[1].point, Vector2I::new(3837, 2157));
+    assert_eq!(events[2].kind, PointerEventKind::Up);
+    assert_eq!(events[2].point, Vector2I::new(3837, 2157));
 }
 
 #[tokio::test]
@@ -284,60 +381,103 @@ async fn records_real_virtual_desktop_when_requested() {
         })
         .await
         .unwrap();
+    let started_at = Instant::now();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let group_offset = started_at.elapsed();
     let mut actor = super::super::Actor::new();
     let width = i32::try_from(geometry.width).unwrap();
     let height = i32::try_from(geometry.height).unwrap();
-    for point in [
-        Vector2I::new(
-            geometry.origin_x + width / 4,
-            geometry.origin_y + height / 4,
-        ),
-        Vector2I::new(
-            geometry.origin_x + width * 3 / 4,
-            geometry.origin_y + height * 3 / 4,
-        ),
-    ] {
-        actor
-            .perform_actions(
-                &[TargetedAction::screen(Action::MouseMove { to: point })],
-                Options {
-                    screenshot_params: None,
-                    background_enabled: false,
-                    pointer_sink: None,
-                },
-            )
-            .await
-            .unwrap();
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
+    let first = Vector2I::new(
+        geometry.origin_x + width / 4,
+        geometry.origin_y + height / 4,
+    );
+    let second = Vector2I::new(
+        geometry.origin_x + width * 3 / 4,
+        geometry.origin_y + height * 3 / 4,
+    );
+    let click = Vector2I::new(
+        geometry.origin_x + width / 2,
+        geometry.origin_y + height / 4,
+    );
+    let actions = vec![
+        TargetedAction::screen(Action::MouseMove { to: first }),
+        TargetedAction::screen(Action::MouseDown {
+            button: MouseButton::Left,
+            at: first,
+        }),
+        TargetedAction::screen(Action::Wait(Duration::from_millis(500))),
+        TargetedAction::screen(Action::MouseMove { to: second }),
+        TargetedAction::screen(Action::Wait(Duration::from_millis(500))),
+        TargetedAction::screen(Action::MouseUp {
+            button: MouseButton::Left,
+        }),
+        TargetedAction::screen(Action::MouseDown {
+            button: MouseButton::Left,
+            at: click,
+        }),
+        TargetedAction::screen(Action::Wait(Duration::from_millis(250))),
+        TargetedAction::screen(Action::MouseUp {
+            button: MouseButton::Left,
+        }),
+        TargetedAction::screen(Action::MouseWheel {
+            at: second,
+            direction: ScrollDirection::Down,
+            distance: ScrollDistance::Clicks(1),
+        }),
+        TargetedAction::screen(Action::TypeText {
+            text: "overlay verification".to_string(),
+        }),
+    ];
+    let events = Arc::new(Mutex::new(Vec::new()));
+    actor
+        .perform_actions(
+            &actions,
+            Options {
+                screenshot_params: None,
+                background_enabled: false,
+                pointer_sink: Some(PointerSink {
+                    started_at,
+                    recording_target: Target::Screen,
+                    recording_geometry: handle.geometry(),
+                    events: events.clone(),
+                    session: PointerSession::new(),
+                }),
+            },
+        )
+        .await
+        .unwrap();
+    let finish_offset = started_at.elapsed();
+    tokio::time::sleep(Duration::from_secs(1)).await;
     let output = recorder.stop(handle).await.unwrap();
     assert_eq!(
         (output.width, output.height),
         (geometry.width, geometry.height)
     );
-    let expected_frame_bytes = output.width as usize * output.height as usize * 3;
-    let first_frame = decoded_frame(&output.path, false).await;
-    let last_frame = decoded_frame(&output.path, true).await;
-    assert_eq!(first_frame.len(), expected_frame_bytes);
-    assert_eq!(last_frame.len(), expected_frame_bytes);
-    assert_ne!(first_frame, last_frame);
-    let decode = Command::new("ffmpeg")
-        .args(["-v", "error", "-i"])
-        .arg(&output.path)
-        .args(["-f", "null", "-"])
-        .output()
-        .await
-        .unwrap();
-    assert!(
-        decode.status.success(),
-        "{}",
-        String::from_utf8_lossy(&decode.stderr)
-    );
+    validate_recording(&output.path, output.width, output.height).await;
+    let pointer_events = std::mem::take(&mut *events.lock().unwrap());
+    let entries = [ActionLogEntry {
+        offset: group_offset,
+        finish_offset,
+        labels: crate::overlay_labels_for(&actions, "Windows overlay verification"),
+        pointer_events,
+    }];
+    let overlay_path = crate::recording_post_process::post_process_recording(
+        &output.path,
+        &entries,
+        (output.width, output.height),
+        output.duration,
+        15,
+    )
+    .await
+    .unwrap();
+    validate_recording(&overlay_path, output.width, output.height).await;
     std::fs::create_dir_all(&output_dir).unwrap();
-    let artifact = Path::new(&output_dir).join("windows_raw_recording.mp4");
-    std::fs::copy(&output.path, &artifact).unwrap();
+    let raw_artifact = Path::new(&output_dir).join("windows_raw_recording.mp4");
+    let overlay_artifact = Path::new(&output_dir).join("windows_overlay_recording.mp4");
+    std::fs::copy(&output.path, &raw_artifact).unwrap();
+    std::fs::copy(&overlay_path, &overlay_artifact).unwrap();
     eprintln!(
-        "origin=({}, {}) dimensions={}x{} duration={:?} size={} completion={:?} artifact={}",
+        "origin=({}, {}) dimensions={}x{} duration={:?} size={} completion={:?} raw={} overlay={}",
         geometry.origin_x,
         geometry.origin_y,
         output.width,
@@ -345,20 +485,30 @@ async fn records_real_virtual_desktop_when_requested() {
         output.duration,
         output.size_bytes,
         output.completion_status,
-        artifact.display()
+        raw_artifact.display(),
+        overlay_artifact.display()
     );
     let log_path = output.path.with_extension("log");
     std::fs::remove_file(&output.path).unwrap();
+    std::fs::remove_file(&overlay_path).unwrap();
     assert!(!output.path.exists());
+    assert!(!overlay_path.exists());
     assert!(!log_path.exists());
 }
 #[test]
 fn dropping_non_cooperative_live_handle_is_non_blocking_and_cleans_after_exit() {
     let path = temp_path("drop-live", "mp4");
     let log_path = path.with_extension("log");
+    let lock_ready_path = path.with_extension("lock-ready");
     std::fs::write(&path, b"video").unwrap();
     std::fs::write(&log_path, b"log").unwrap();
     let process = recording_process("stalled", &path, Stdio::null());
+    let mut lock_process = recording_process("lock-output", &path, Stdio::null());
+    let lock_deadline = Instant::now() + Duration::from_secs(5);
+    while !lock_ready_path.exists() && Instant::now() < lock_deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(lock_ready_path.exists());
 
     let started = Instant::now();
     drop(handle_for(process, path.clone()));
@@ -370,6 +520,12 @@ fn dropping_non_cooperative_live_handle_is_non_blocking_and_cleans_after_exit() 
     }
     assert!(!path.exists());
     assert!(!log_path.exists());
+    let lock_deadline = Instant::now() + Duration::from_secs(5);
+    while lock_process.try_wait().unwrap().is_none() && Instant::now() < lock_deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(lock_process.try_wait().unwrap().is_some());
+    std::fs::remove_file(lock_ready_path).unwrap();
 }
 
 #[test]
@@ -408,6 +564,16 @@ fn recording_process_helper() {
         "exit-23" => std::process::exit(23),
         "exit-0" => {}
         "stalled" => std::thread::sleep(Duration::from_secs(30)),
+        "lock-output" => {
+            let _file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .open(&path)
+                .unwrap();
+            std::fs::write(path.with_extension("lock-ready"), []).unwrap();
+            std::thread::sleep(Duration::from_millis(500));
+        }
         "read-stdin" => {
             let mut bytes = Vec::new();
             std::io::stdin().read_to_end(&mut bytes).unwrap();

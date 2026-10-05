@@ -262,23 +262,24 @@ impl<'s> Flatten<'s> {
                 match positional.item.expression() {
                     Expression::Unknown => {
                         let unknown = positional.span.slice(self.line);
-                        let location = if unknown.starts_with('-') {
-                            LocationType::Flag {
-                                command_name: command.name.clone().spanned(command.name_span),
-                                flag_name: Some(unknown.to_string().spanned(positional.span)),
-                            }
-                        } else {
-                            LocationType::Argument {
-                                command_name: command.name.clone().spanned(command.name_span),
-                                argument_name: argument_name_at_index_for_command(
-                                    command.name_span.slice(self.line),
-                                    idx,
-                                    self.context,
-                                    command_case_sensitivity,
-                                ),
-                                parsed_token: positional.item.value().clone(),
-                            }
-                        };
+                        let location =
+                            if unknown.starts_with('-') && !command.args.options_terminated {
+                                LocationType::Flag {
+                                    command_name: command.name.clone().spanned(command.name_span),
+                                    flag_name: Some(unknown.to_string().spanned(positional.span)),
+                                }
+                            } else {
+                                LocationType::Argument {
+                                    command_name: command.name.clone().spanned(command.name_span),
+                                    argument_name: argument_name_at_index_for_command(
+                                        command.name_span.slice(self.line),
+                                        idx,
+                                        self.context,
+                                        command_case_sensitivity,
+                                    ),
+                                    parsed_token: positional.item.value().clone(),
+                                }
+                            };
 
                         vec![location.spanned(positional.span)]
                     }
@@ -394,6 +395,10 @@ pub fn completion_location(
             ];
         }
     };
+    let options_terminated = match command {
+        Command::Classified(command) => command.args.options_terminated,
+        Command::Unclassified(_) => false,
+    };
 
     let completion_engine = Flatten::new(
         line,
@@ -426,7 +431,7 @@ pub fn completion_location(
                         ..
                     } => {
                         let cmd = cmd.clone();
-                        if loc.span.slice(line) == "-" {
+                        if !options_terminated && loc.span.slice(line) == "-" {
                             let span = loc.span;
                             return vec![
                                 loc,
@@ -480,7 +485,11 @@ pub fn completion_location(
                 }
                 .spanned(Span::new(line.len(), line.len()));
 
-                vec![arg_location, flag_location]
+                if options_terminated {
+                    vec![arg_location]
+                } else {
+                    vec![arg_location, flag_location]
+                }
             } else {
                 vec![]
             }

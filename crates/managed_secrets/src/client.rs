@@ -107,6 +107,7 @@ pub trait ManagedSecretsClient: 'static + Send + Sync {
     /// (see the `ServerApi` implementation).
     async fn issue_task_identity_token(
         &self,
+        request_scope: Option<&Self::RequestScope>,
         options: IdentityTokenOptions,
     ) -> Result<TaskIdentityToken>;
 }

@@ -561,26 +561,13 @@ function warp_external_ctrl_r_widget
     if string match --quiet -- 'bind --preset *' "$binding"
       continue
     end
-    # Strip the leading `bind [-M <mode>] <key>`, leaving just the widget/command.
-    set widget (string replace --regex -- '^bind (-M \S+ +)?\S+ +' '' "$binding")
+    # Strip `bind`'s options and key, leaving just the widget/command.
+    set widget (string replace --regex -- '^bind ((-M|--mode) \S+ +|--user +|--preset +)*\S+ +' '' "$binding")
   end
   test -n "$widget"; or return 1
   echo "$widget"
 end
 
-# Reports the widget `^T` is bound to, if the user has rebound it away from fish's default (no
-# binding at all). Returns non-zero when `^T` has no non-preset binding.
-function warp_external_ctrl_t_widget
-  set -l widget ""
-  for binding in (bind \ct 2>/dev/null)
-    if string match --quiet -- 'bind --preset *' "$binding"
-      continue
-    end
-    set widget (string replace --regex -- '^bind (-M \S+ +)?\S+ +' '' "$binding")
-  end
-  test -n "$widget"; or return 1
-  echo "$widget"
-end
 
 # Runs the shell's own ctrl-r history tool as a foreground command.
 function warp_run_external_ctrl_r_widget
@@ -607,27 +594,46 @@ function warp_ctrl_t_widget_result
   test "$argv[1]" = "$argv[2]"; or string collect -- "$argv[2]"
 end
 
-# Runs fzf directly against a find-style command as a foreground command.
+# Runs fzf's ctrl-t file-search widget as a foreground command.
 function warp_run_external_ctrl_t_widget
   set -l result ""
-  switch "$_WARP_EXTERNAL_CTRL_T_WIDGET"
-    case 'fzf-file-widget'
-      set -l warp_ctrl_t_parts (string split -m 1 -- ':' "$argv[1]")
-      set -l char_cursor $warp_ctrl_t_parts[1]
-      set -l original_line (warp_hex_decode_string $warp_ctrl_t_parts[2] | string collect --no-trim-newlines --allow-empty)
-      commandline -r -- $original_line
-      commandline -C -- $char_cursor
+  set -l warp_ctrl_t_parts (string split -m 1 -- ':' "$argv[1]")
+  set -l char_cursor $warp_ctrl_t_parts[1]
+  set -l original_line (warp_hex_decode_string $warp_ctrl_t_parts[2] | string collect --no-trim-newlines --allow-empty)
+  commandline -r -- $original_line
+  commandline -C -- $char_cursor
+  switch "$_WARP_EXTERNAL_CTRL_R_WIDGET"
+    case 'fzf-history-widget'
       fzf-file-widget
-      set -l cl_readback (commandline | string collect)
-      set result (warp_ctrl_t_widget_result "$original_line" "$cl_readback")
-      commandline -r ''
+    case '_fzf_search_history'
+      _fzf_search_directory
   end
+  set -l cl_readback (commandline | string collect)
+  set result (warp_ctrl_t_widget_result "$original_line" "$cl_readback")
+  commandline -r ''
   set -l warp_escaped_selection (warp_escape_json "$result")
   warp_send_json_message "{ \"hook\": \"ExternalShellWidgetSelection\", \"value\": { \"buffer\": \"$warp_escaped_selection\", \"session_id\": $WARP_SESSION_ID } }"
 end
 
-# Exclude the ctrl-r/ctrl-t external handoff helpers (see warp_run_external_ctrl_r_widget/
-# warp_run_external_ctrl_t_widget above) from the user's history.
+function warp_run_external_alt_c_widget
+  set -l warp_alt_c_parts (string split -m 1 -- ':' "$argv[1]")
+  set -l char_cursor $warp_alt_c_parts[1]
+  set -l original_line (warp_hex_decode_string $warp_alt_c_parts[2] | string collect --no-trim-newlines --allow-empty)
+  commandline -r -- $original_line
+  commandline -C -- $char_cursor
+  switch "$_WARP_EXTERNAL_CTRL_R_WIDGET"
+    case 'fzf-history-widget'
+      fzf-cd-widget
+    case '_fzf_search_history'
+      set -l fd_cmd (command -v fdfind || command -v fd || echo fd)
+      set -l result ($fd_cmd --type d --color=always $fzf_fd_opts 2>/dev/null |
+        _fzf_wrapper --ansi --no-multi --query=(commandline --current-token) $fzf_directory_opts)
+      and cd -- $result
+  end
+  commandline -r ''
+end
+
+# Exclude the external handoff helpers from the user's history.
 #
 # fish only supports a single fish_should_add_to_history function (unlike zsh's array of
 # zshaddhistory hooks or bash's PROMPT_COMMAND-style stacking), so compose with any
@@ -656,6 +662,7 @@ end
 function fish_should_add_to_history
   string match --quiet -- '*warp_run_external_ctrl_r_widget*' $argv[1]; and return 1
   string match --quiet -- '*warp_run_external_ctrl_t_widget*' $argv[1]; and return 1
+  string match --quiet -- '*warp_run_external_alt_c_widget*' $argv[1]; and return 1
   warp_original_fish_should_add_to_history $argv
 end
 
@@ -676,20 +683,15 @@ function warp_bootstrapped
   set -g _WARP_EXTERNAL_CTRL_R_WIDGET ""
   set -l warp_ctrl_r_widget (warp_external_ctrl_r_widget)
   switch "$warp_ctrl_r_widget"
-    case 'fzf-history-widget' '_atuin_search' '_fzf_search_history'
+    case 'fzf-history-widget' '_fzf_search_history'
       if functions -q $warp_ctrl_r_widget
         set -g _WARP_EXTERNAL_CTRL_R_WIDGET "$warp_ctrl_r_widget"
-        set -a shell_plugins external_ctrl_r_history
+        set -a shell_plugins fzf
       end
-  end
-
-  set -g _WARP_EXTERNAL_CTRL_T_WIDGET ""
-  set -l warp_ctrl_t_widget (warp_external_ctrl_t_widget)
-  switch "$warp_ctrl_t_widget"
-    case 'fzf-file-widget'
-      if functions -q fzf-file-widget
-        set -g _WARP_EXTERNAL_CTRL_T_WIDGET "$warp_ctrl_t_widget"
-        set -a shell_plugins external_ctrl_t_file
+    case '_atuin_search'
+      if functions -q $warp_ctrl_r_widget
+        set -g _WARP_EXTERNAL_CTRL_R_WIDGET "$warp_ctrl_r_widget"
+        set -a shell_plugins atuin
       end
   end
   set -l escaped_shell_plugins (warp_escape_json $shell_plugins)

@@ -31,9 +31,10 @@ use websocket::{Error as WebsocketError, Message, Sink, Stream, WebsocketMessage
 
 use super::{
     AMBIENT_CREATE_SESSION_MAX_ATTEMPTS, ConfirmedReconnection, MAX_PRE_RECONNECT_BYTES,
-    MAX_PRE_RECONNECT_MESSAGES, Network, PTY_READS_BATCH_THRESHOLD, PtyBytesBatchStatus,
-    SERVER_MAX_WEBSOCKET_MESSAGE_BYTES, Stage, StartupFailure, StartupRetryState,
-    confirm_reconnection, share_with_team_uid_for_init_payload, startup_max_attempts,
+    MAX_PRE_RECONNECT_MESSAGES, Network, NetworkEvent, PTY_READS_BATCH_THRESHOLD,
+    PtyBytesBatchStatus, RECONNECT_ATTEMPT_TIMEOUT, RECONNECT_CYCLE_TIMEOUT, Stage, StartupFailure,
+    SERVER_MAX_WEBSOCKET_MESSAGE_BYTES, StartupRetryState, confirm_reconnection,
+    share_with_team_uid_for_init_payload, startup_max_attempts,
 };
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
@@ -326,17 +327,40 @@ fn test_reconnect_attempt_budget_exhaustion_finishes_session() {
 #[test]
 fn test_reconnect_cycle_deadline_includes_backoff() {
     App::test((), |mut app| async move {
-        let (network, attempts) = start_scripted_reconnect(
-            &mut app,
-            vec![mock_reconnect(stream::empty())],
-            RetryOption::linear(Duration::from_secs(1), 18),
-            Duration::from_secs(1),
-            Duration::from_millis(20),
-        );
-        assert_eventually!(
-            network.read(&app, |network, _| matches!(network.stage, Stage::Finished)),
-            "Cycle deadline should end reconnect during backoff"
-        );
+        let (network, _) = create_network(&mut app, true);
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let (failure_tx, failure_rx) = async_channel::bounded(1);
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&network, move |_, event, _| {
+                if matches!(event, NetworkEvent::FailedToReconnect) {
+                    failure_tx.try_send(()).unwrap();
+                }
+            });
+        });
+        network.update(&mut app, |network, ctx| {
+            let attempts = attempts.clone();
+            network.start_reconnect_task(
+                move || {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    mock_reconnect(stream::empty())
+                },
+                RetryOption::linear(Duration::from_secs(30), 18),
+                Duration::from_secs(1),
+                Duration::from_millis(20),
+                ctx,
+            );
+        });
+
+        // Allow delayed background scheduling, but require completion before backoff can finish.
+        failure_rx
+            .recv()
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("Cycle deadline should end reconnect during backoff")
+            .unwrap();
+        network.read(&app, |network, _| {
+            assert!(matches!(network.stage, Stage::Finished))
+        });
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
     });
 }
@@ -474,13 +498,28 @@ fn test_explicit_rejection_does_not_retry() {
                 response.to_json().unwrap(),
             ))]))],
             RetryOption::linear(Duration::from_millis(1), 18),
-            Duration::from_secs(1),
-            Duration::from_secs(2),
+            RECONNECT_ATTEMPT_TIMEOUT,
+            RECONNECT_CYCLE_TIMEOUT,
         );
-        assert_eventually!(
-            network.read(&app, |network, _| matches!(network.stage, Stage::Finished)),
-            "Explicit rejection must be terminal"
-        );
+        let (failure_tx, failure_rx) = async_channel::bounded(1);
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&network, move |_, event, _| {
+                if matches!(event, NetworkEvent::FailedToReconnect) {
+                    failure_tx.try_send(()).unwrap();
+                }
+            });
+        });
+
+        failure_rx
+            .recv()
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("Explicit rejection must be terminal")
+            .unwrap();
+        network.read(&app, |network, _| {
+            assert!(matches!(network.stage, Stage::Finished));
+            assert!(network.ws_proxy_tx.is_closed());
+        });
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
     });
 }
@@ -497,13 +536,29 @@ fn test_explicit_termination_does_not_retry() {
                 response.to_json().unwrap(),
             ))]))],
             RetryOption::linear(Duration::from_millis(1), 18),
-            Duration::from_secs(1),
-            Duration::from_secs(2),
+            RECONNECT_ATTEMPT_TIMEOUT,
+            RECONNECT_CYCLE_TIMEOUT,
         );
-        assert_eventually!(
-            network.read(&app, |network, _| matches!(network.stage, Stage::Finished)),
-            "Explicit termination must be terminal"
-        );
+        let (termination_tx, termination_rx) = async_channel::bounded(1);
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&network, move |_, event, _| {
+                if let NetworkEvent::SessionTerminated { reason } = event {
+                    termination_tx.try_send(reason.clone()).unwrap();
+                }
+            });
+        });
+
+        let reason = termination_rx
+            .recv()
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("Explicit termination must be terminal")
+            .unwrap();
+        assert!(matches!(reason, SessionTerminatedReason::ExceededSizeLimit));
+        network.read(&app, |network, _| {
+            assert!(matches!(network.stage, Stage::Finished));
+            assert!(network.ws_proxy_tx.is_closed());
+        });
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
     });
 }
@@ -1031,11 +1086,15 @@ fn test_handle_pty_read_event_while_batching() {
             .try_send(event)
             .expect("Can send event over ordered_events_tx");
 
-        // The batching status should reflect the accumulated bytes.
+        // The batching status should reflect the accumulated bytes. Use the same generous tick
+        // budget as `test_handle_pty_read_event_while_not_batching`: the event is handled on the
+        // test executor, and the default budget flaked under coarse scheduling on Windows CI.
         assert_eventually!(
+            200 =>
             network.read(&app, |network, _ctx| {
                 matches!(&network.pty_bytes_batch_status, PtyBytesBatchStatus::Batching { accumulated, .. } if accumulated == b"aa" )
-            }), "Batching status should reflect accumulated bytes"
+            }),
+            "Batching status should reflect accumulated bytes"
         );
 
         // Technically, we didn't start a task to send the event to the server after a timer. So let's do it manually.

@@ -26,6 +26,10 @@ fn converts_every_documented_denial_reason() {
             AICreditDenialReason::EnterprisePerUserSpendLimitHit,
         ),
         (
+            GqlDenialReason::EnterprisePerUnassignedUserSpendLimitHit,
+            AICreditDenialReason::EnterprisePerUnassignedUserSpendLimitHit,
+        ),
+        (
             GqlDenialReason::EnterpriseWorkspaceSpendLimitHit,
             AICreditDenialReason::EnterpriseWorkspaceSpendLimitHit,
         ),

@@ -12,6 +12,7 @@ use cfg_if::cfg_if;
 use cloud_object_models::{StaticEnvVar, TransportType};
 use futures::FutureExt as _;
 use rmcp::ServiceExt as _;
+use rmcp::model::{ClientConfig, Implementation};
 use rmcp::transport::ConfigureCommandExt as _;
 use simple_logger::SimpleLogger;
 use tokio::io::AsyncBufReadExt as _;
@@ -188,6 +189,7 @@ pub async fn spawn_server(
     server_name: String,
     description: Option<String>,
     uuid: Uuid,
+    warp_id: Option<String>,
     transport_type: TransportType,
     logger: SimpleLogger,
     auth_context: Option<crate::oauth::AuthContext>,
@@ -405,7 +407,7 @@ pub async fn spawn_server(
     let server_info = service.peer_info();
     logger.log(format!("[info] MCP: Connected to server: {server_info:#?}"));
 
-    let capabilities = server_info.map(|info| &info.capabilities);
+    let capabilities = server_info.as_ref().map(|info| &info.capabilities);
 
     let resources =
         query_resources_for(capabilities, &server_name, || service.list_all_resources()).await;
@@ -417,6 +419,7 @@ pub async fn spawn_server(
         resources,
         tools,
         installation_id: uuid,
+        warp_id,
         description,
         is_authenticated_transport,
     })
@@ -583,13 +586,13 @@ async fn send_initialize_request(
     })
 }
 
-/// Creates a [`ClientInfo`] for the MCP client.
+/// Creates a [`ClientConfig`] for the MCP client.
 ///
 /// This tells the MCP server who we are and what capabilities we have.
-fn make_client_info() -> rmcp::model::ClientInfo {
-    rmcp::model::ClientInfo::new(
+fn make_client_info() -> ClientConfig {
+    ClientConfig::new(
         Default::default(),
-        rmcp::model::Implementation::new(
+        Implementation::new(
             warp_core::channel::ChannelState::app_id().to_string(),
             warp_core::channel::ChannelState::app_version()
                 .map(|v| v.to_string())

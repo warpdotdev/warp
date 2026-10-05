@@ -4,7 +4,7 @@ use warp_core::channel::Channel;
 use crate::completer::testing::FakeCompletionContext;
 use crate::completer::{CompletionContext, TopLevelCommandCaseSensitivity};
 use crate::signatures::registry::{MAX_CACHEABLE_COMMAND_LEN, SignatureResult};
-use crate::signatures::testing::{create_test_command_registry, test_signature};
+use crate::signatures::testing::{create_test_command_registry, git_signature, test_signature};
 
 /// A minimal signature with the given `name`, for exercising `SignatureCache` boundary
 /// conditions that don't care about arguments, subcommands, or options.
@@ -170,6 +170,21 @@ fn test_unrecognized_flag_skipped_before_subcommand() {
         .expect("test signature from line should exist");
     assert_eq!(found_signature.signature.name(), "one");
     assert_eq!(found_signature.token_index, 2);
+}
+
+#[test]
+fn test_end_of_options_stops_subcommand_resolution() {
+    let registry = create_test_command_registry([git_signature()]);
+
+    let found_signature = registry
+        .signature_from_line(
+            "git -- branch -",
+            TopLevelCommandCaseSensitivity::CaseSensitive,
+        )
+        .expect("git signature from line should exist");
+
+    assert_eq!(found_signature.signature.name(), "git");
+    assert_eq!(found_signature.token_index, 0);
 }
 
 #[test]

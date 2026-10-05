@@ -153,10 +153,6 @@ impl RichContent {
         matches!(self.metadata, Some(RichContentMetadata::UsageFooter))
     }
 
-    pub fn is_turn_panel(&self) -> bool {
-        matches!(self.metadata, Some(RichContentMetadata::TurnPanel))
-    }
-
     pub fn is_telemetry_banner(&self) -> bool {
         matches!(
             self.metadata,
@@ -234,7 +230,6 @@ pub enum RichContentMetadata {
         exchange_id: AIAgentExchangeId,
     },
     UsageFooter,
-    TurnPanel,
     InitStep {
         step_kind: InitStepKind,
         block_handle: ViewHandle<InitStepBlock>,

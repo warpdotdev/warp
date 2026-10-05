@@ -63,6 +63,7 @@ fn native_setup_barrier_blocks_dispatch_until_finished() {
                     "first".into(),
                     ParticipantId::new(),
                     vec![],
+                    None,
                 ),
                 ctx,
             );
@@ -97,6 +98,7 @@ fn clear_queue_removes_every_row_regardless_of_origin_in_fifo_order() {
                     "shared".into(),
                     ParticipantId::new(),
                     vec![],
+                    None,
                 ),
                 ctx,
             );
@@ -984,6 +986,7 @@ fn preparing_query() -> QueuedQuery {
             attachment_id: "file-id".into(),
             file_name: "event-payload.json".into(),
         }],
+        None,
     )
 }
 

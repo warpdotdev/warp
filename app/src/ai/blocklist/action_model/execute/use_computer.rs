@@ -66,11 +66,12 @@ impl UseComputerExecutor {
         // the sink and drained after the batch completes.
         let pointer_events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let (recording_started_at, pointer_sink) = match recording_context {
-            Some((started_at, recording_target, pointer_session)) => (
+            Some((started_at, recording_target, recording_geometry, pointer_session)) => (
                 Some(started_at),
                 Some(computer_use::PointerSink {
                     started_at,
                     recording_target,
+                    recording_geometry,
                     events: pointer_events.clone(),
                     session: pointer_session,
                 }),

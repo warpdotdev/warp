@@ -1458,7 +1458,7 @@ impl AgentInputFooter {
                 if result.is_ok() {
                     send_telemetry_from_ctx!(
                         TelemetryEvent::CLIAgentPluginOperationSucceeded {
-                            cli_agent: agent.into(),
+                            cli_agent: agent,
                             operation: operation_kind,
                         },
                         ctx
@@ -1467,7 +1467,7 @@ impl AgentInputFooter {
                 } else {
                     send_telemetry_from_ctx!(
                         TelemetryEvent::CLIAgentPluginOperationFailed {
-                            cli_agent: agent.into(),
+                            cli_agent: agent,
                             operation: operation_kind,
                         },
                         ctx
@@ -1931,9 +1931,7 @@ impl AgentInputFooter {
 
                         if let Some(agent) = self.cli_agent(ctx) {
                             send_telemetry_from_ctx!(
-                                TelemetryEvent::CLIAgentToolbarVoiceInputUsed {
-                                    cli_agent: agent.into(),
-                                },
+                                TelemetryEvent::CLIAgentToolbarVoiceInputUsed { cli_agent: agent },
                                 ctx
                             );
                         }
@@ -2692,9 +2690,7 @@ impl TypedActionView for AgentInputFooter {
             AgentInputFooterAction::InsertFilePath(path) => {
                 if let Some(agent) = self.cli_agent(ctx) {
                     send_telemetry_from_ctx!(
-                        TelemetryEvent::CLIAgentToolbarImageAttached {
-                            cli_agent: agent.into(),
-                        },
+                        TelemetryEvent::CLIAgentToolbarImageAttached { cli_agent: agent },
                         ctx
                     );
                 }
@@ -2740,7 +2736,7 @@ impl TypedActionView for AgentInputFooter {
                     if let Some(agent) = self.cli_agent(ctx) {
                         send_telemetry_from_ctx!(
                             TelemetryEvent::CLIAgentPluginChipClicked {
-                                cli_agent: agent.into(),
+                                cli_agent: agent,
                                 action: PluginChipTelemetryAction::Install,
                             },
                             ctx
@@ -2757,7 +2753,7 @@ impl TypedActionView for AgentInputFooter {
                     if let Some(agent) = self.cli_agent(ctx) {
                         send_telemetry_from_ctx!(
                             TelemetryEvent::CLIAgentPluginChipClicked {
-                                cli_agent: agent.into(),
+                                cli_agent: agent,
                                 action: PluginChipTelemetryAction::Update,
                             },
                             ctx
@@ -2773,7 +2769,7 @@ impl TypedActionView for AgentInputFooter {
                 if let Some(agent) = self.cli_agent(ctx) {
                     send_telemetry_from_ctx!(
                         TelemetryEvent::CLIAgentPluginChipClicked {
-                            cli_agent: agent.into(),
+                            cli_agent: agent,
                             action: PluginChipTelemetryAction::InstallInstructions,
                         },
                         ctx
@@ -2789,7 +2785,7 @@ impl TypedActionView for AgentInputFooter {
                 if let Some(agent) = self.cli_agent(ctx) {
                     send_telemetry_from_ctx!(
                         TelemetryEvent::CLIAgentPluginChipClicked {
-                            cli_agent: agent.into(),
+                            cli_agent: agent,
                             action: PluginChipTelemetryAction::UpdateInstructions,
                         },
                         ctx
@@ -2808,7 +2804,7 @@ impl TypedActionView for AgentInputFooter {
                 {
                     send_telemetry_from_ctx!(
                         TelemetryEvent::CLIAgentPluginChipDismissed {
-                            cli_agent: agent.into(),
+                            cli_agent: agent,
                             chip_kind: kind.into(),
                         },
                         ctx

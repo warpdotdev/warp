@@ -7,8 +7,8 @@ use warpui::{ModelContext, SingletonEntity};
 
 use super::BlocklistAIController;
 use super::shared_session::SharedSessionPromptTarget;
-use crate::ai::agent::AIAgentAttachment;
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::{AIAgentAttachment, BaseUserQuery};
 use crate::ai::attachment_utils::{
     build_file_attachment_map, download_task_file_attachments, resolve_agent_attachments,
 };
@@ -103,6 +103,7 @@ impl BlocklistAIController {
         token: Option<&ServerConversationToken>,
         attachments: &[AgentAttachment],
         participant_id: &ParticipantId,
+        base: Option<&BaseUserQuery>,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
         let Some(bound_id) = self.native_prompt_conversation_id else {
@@ -140,6 +141,7 @@ impl BlocklistAIController {
             prompt.to_owned(),
             participant_id.clone(),
             attachments.to_vec(),
+            base.cloned(),
         );
         let query_id = row.id();
         let needs_preparation = !row.is_ready();
@@ -227,6 +229,7 @@ impl BlocklistAIController {
         let Some(file_attachments) = row.prepared_files().cloned() else {
             return;
         };
+        let base = row.base_user_query().cloned();
 
         let (block_ids, selected_text_parts, _) = resolve_agent_attachments(attachments);
         self.context_model.update(ctx, |context_model, ctx| {
@@ -247,6 +250,7 @@ impl BlocklistAIController {
             text,
             participant_id,
             file_attachments,
+            base,
             ctx,
         );
     }
@@ -306,6 +310,7 @@ impl BlocklistAIController {
         text: String,
         participant_id: ParticipantId,
         file_attachments: HashMap<String, AIAgentAttachment>,
+        base: Option<BaseUserQuery>,
         ctx: &mut ModelContext<Self>,
     ) {
         if FeatureFlag::AgentView.is_enabled() {
@@ -322,6 +327,7 @@ impl BlocklistAIController {
             conversation_id,
             Some(participant_id),
             file_attachments,
+            base,
             ctx,
         );
     }

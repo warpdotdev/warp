@@ -20,6 +20,11 @@ mod single_instance_manager;
 pub enum StartupArgsForwardingError {
     #[error("should not forward arguments after an auto-update")]
     IgnoredAfterAutoUpdate,
+    /// The crash recovery watcher process, spawned by the main instance on
+    /// every launch, must not forward a new-window URL back to its parent,
+    /// which would open a duplicate window.
+    #[error("should not forward arguments from the crash recovery process")]
+    IgnoredForCrashRecoveryProcess,
     #[error("there is no other instance of Warp")]
     NoExistingInstance,
     #[error("failed to construct url")]
@@ -36,6 +41,9 @@ pub fn pass_startup_args_to_existing_instance(
 ) -> Result<(), StartupArgsForwardingError> {
     if args.finish_update {
         return Err(StartupArgsForwardingError::IgnoredAfterAutoUpdate);
+    }
+    if crate::crash_recovery::is_crash_recovery_process(args) {
+        return Err(StartupArgsForwardingError::IgnoredForCrashRecoveryProcess);
     }
     if SingleInstanceManager::is_sole_running_instance()? {
         return Err(StartupArgsForwardingError::NoExistingInstance);

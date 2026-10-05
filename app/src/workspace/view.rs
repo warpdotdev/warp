@@ -1,6 +1,7 @@
 pub(crate) mod agent_cli_launch_modal;
 pub(crate) mod auto_handoff_sleep_modal;
 mod build_plan_migration_modal;
+pub(crate) mod chatgpt_plan_modal;
 pub(crate) mod cloud_agent_capacity_modal;
 pub(crate) mod codex_modal;
 pub mod conversation_list;
@@ -55,6 +56,7 @@ use futures::Future;
 use instant::Instant;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use onboarding::DeferredOnboardingTutorial;
 pub(crate) use onboarding::OnboardingTutorial;
 use parking_lot::FairMutex;
 use pathfinder_color::ColorU;
@@ -156,7 +158,7 @@ use super::tab_settings::{
 };
 use super::util::{
     PaneViewLocator, TabMovement, TerminalSessionFallbackBehavior, WelcomeTipsViewState,
-    WorkspaceMouseStates, WorkspaceState,
+    WorkspaceMouseStates, WorkspaceState, team_switcher_menu_items,
 };
 use super::{ActiveSession, TabBarDropTargetData, TabBarLocation, WorkspaceRegistry, util};
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
@@ -397,7 +399,7 @@ use crate::terminal::enable_auto_reload_modal::{
 use crate::terminal::general_settings::GeneralSettings;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::input::slash_commands::fork_button_action;
-use crate::terminal::input::{Input, MenuPositioning};
+use crate::terminal::input::{EXTERNAL_ALT_C_BINDING_CONTEXT, Input, MenuPositioning};
 use crate::terminal::keys_settings::KeysSettings;
 use crate::terminal::ligature_settings::should_use_ligature_rendering;
 #[cfg(feature = "local_tty")]
@@ -515,6 +517,7 @@ use crate::workspace::view::auto_handoff_sleep_modal::{
 use crate::workspace::view::build_plan_migration_modal::{
     BuildPlanMigrationModal, BuildPlanMigrationModalEvent,
 };
+use crate::workspace::view::chatgpt_plan_modal::{ChatGPTPlanModal, ChatGPTPlanModalEvent};
 use crate::workspace::view::cloud_agent_capacity_modal::{
     CloudAgentCapacityModal, CloudAgentCapacityModalEvent, CloudAgentCapacityModalVariant,
 };
@@ -1109,6 +1112,7 @@ pub struct Workspace {
     show_session_config_tab_config_chip: bool,
     pending_session_config_tab_config_chip_tutorial:
         Option<PendingSessionConfigTabConfigChipTutorial>,
+    onboarding_tutorial_deferred_by_modal: Option<DeferredOnboardingTutorial>,
     new_worktree_modal: ModalViewState<Modal<NewWorktreeModal>>,
     close_session_confirmation_dialog: ViewHandle<CloseSessionConfirmationDialog>,
     rewind_confirmation_dialog: ViewHandle<RewindConfirmationDialog>,
@@ -1148,6 +1152,7 @@ pub struct Workspace {
     /// not re-show it elsewhere.
     feature_intro_tab_pane_group_id: Option<EntityId>,
     auto_handoff_sleep_modal: ViewHandle<AutoHandoffSleepModal>,
+    chatgpt_plan_modal: ViewHandle<ChatGPTPlanModal>,
     enable_auto_reload_modal: ViewHandle<EnableAutoReloadModal>,
     build_plan_migration_modal: ViewHandle<BuildPlanMigrationModal>,
     codex_modal: ViewHandle<CodexModal>,
@@ -2833,13 +2838,12 @@ impl Workspace {
         });
     }
 
-    /// Pushes the current settings-file error + banner-dismissal state into
-    /// the settings pane so its nav-rail footer ("Open settings file" button
-    /// or inline error alert) stays in sync with the workspace banner.
+    /// Mirrors the current settings-file error and banner-dismissal state into the settings pane's
+    /// nav-rail footer when the pane is available.
     fn sync_settings_error_state_into_settings_pane(&mut self, ctx: &mut ViewContext<Self>) {
         let error = self.settings_file_error.clone();
         let dismissed = self.settings_error_banner_dismissed;
-        self.settings_pane.update(ctx, |view, ctx| {
+        let _ = self.settings_pane.try_update(ctx, |view, ctx| {
             view.set_settings_error_state(error, dismissed, ctx);
         });
     }
@@ -3079,6 +3083,11 @@ impl Workspace {
         let auto_handoff_sleep_view = ctx.add_typed_action_view(AutoHandoffSleepModal::new);
         ctx.subscribe_to_view(&auto_handoff_sleep_view, |me, _, event, ctx| {
             me.handle_auto_handoff_sleep_modal_event(event, ctx);
+        });
+
+        let chatgpt_plan_view = ctx.add_typed_action_view(ChatGPTPlanModal::new);
+        ctx.subscribe_to_view(&chatgpt_plan_view, |me, _, event, ctx| {
+            me.handle_chatgpt_plan_modal_event(event, ctx);
         });
 
         let launch_config_save_modal = Self::build_launch_config_save_modal(ctx);
@@ -3407,6 +3416,8 @@ impl Workspace {
                         me.focus_agent_cli_launch_modal(ctx);
                     } else if model_ref.is_auto_handoff_sleep_modal_open() {
                         me.focus_auto_handoff_sleep_modal(ctx);
+                    } else if model_ref.is_chatgpt_plan_modal_open() {
+                        me.focus_chatgpt_plan_modal(ctx);
                     } else if model_ref.is_free_ai_removal_modal_open() {
                         me.focus_free_ai_removal_modal(ctx);
                     } else if model_ref.is_hoa_onboarding_open() {
@@ -3417,6 +3428,8 @@ impl Workspace {
                         me.show_feature_intro_modal(id, ctx);
                     }
                 }
+            } else {
+                me.resume_onboarding_tutorial_deferred_by_modal(ctx);
             }
             ctx.notify();
         });
@@ -3483,6 +3496,7 @@ impl Workspace {
             pending_session_config_tab_config_chip: false,
             show_session_config_tab_config_chip: false,
             pending_session_config_tab_config_chip_tutorial: None,
+            onboarding_tutorial_deferred_by_modal: None,
             new_worktree_modal,
             close_session_confirmation_dialog,
             rewind_confirmation_dialog,
@@ -3557,6 +3571,7 @@ impl Workspace {
             feature_intro_modal: feature_intro_view,
             feature_intro_tab_pane_group_id: None,
             auto_handoff_sleep_modal: auto_handoff_sleep_view,
+            chatgpt_plan_modal: chatgpt_plan_view,
             enable_auto_reload_modal,
             agent_management_view,
             notification_mailbox_view,
@@ -6318,25 +6333,7 @@ impl Workspace {
             return;
         }
         let current_team_uid = user_workspaces.team_uid_for_window(window_id);
-        let mut items: Vec<MenuItem<WorkspaceAction>> = vec![
-            MenuItem::Header {
-                fields: MenuItemFields::new("Teams"),
-                clickable: false,
-                right_side_fields: None,
-            },
-            MenuItem::Separator,
-        ];
-        items.extend(workspace.teams.iter().map(|team| {
-            let uid = team.uid;
-            let mut fields = MenuItemFields::new(team.name.clone())
-                .with_on_select_action(WorkspaceAction::OpenNewWindowForTeam { team_uid: uid });
-            fields = if Some(uid) == current_team_uid {
-                fields.with_icon(icons::Icon::Check)
-            } else {
-                fields.with_indent()
-            };
-            fields.into_item()
-        }));
+        let mut items = team_switcher_menu_items(&workspace.teams, current_team_uid);
         if joinable_team_count > 0 {
             items.push(MenuItem::Separator);
             items.push(
@@ -7423,7 +7420,9 @@ impl Workspace {
     fn save_current_tab_as_new_config(&mut self, tab_index: usize, ctx: &mut ViewContext<Self>) {
         use crate::tab_configs::session_config::{tab_config_from_pane_snapshot, write_tab_config};
 
-        let tab = &self.tabs[tab_index];
+        let Some(tab) = self.tabs.get(tab_index) else {
+            return;
+        };
         let snapshot = tab.pane_group.as_ref(ctx).snapshot(ctx);
         let custom_title = tab.pane_group.as_ref(ctx).custom_title(ctx);
         let color = tab.color();
@@ -9862,7 +9861,7 @@ impl Workspace {
                             .map(LocalOrRemotePath::is_local),
                         entrypoint: panel_update_params.entrypoint.unwrap_or_default(),
                         is_code_mode_v2: true,
-                        cli_agent: panel_update_params.cli_agent.map(Into::into),
+                        cli_agent: panel_update_params.cli_agent,
                     },
                     ctx
                 );
@@ -12188,6 +12187,7 @@ impl Workspace {
         } else {
             let matching = self.vertical_tabs_panel.matching_tab_indices(
                 &self.tabs,
+                &self.tab_groups,
                 self.active_tab_index,
                 ctx,
             );
@@ -12212,6 +12212,7 @@ impl Workspace {
         } else {
             let matching = self.vertical_tabs_panel.matching_tab_indices(
                 &self.tabs,
+                &self.tab_groups,
                 self.active_tab_index,
                 ctx,
             );
@@ -16358,6 +16359,9 @@ impl Workspace {
                 self.pending_session_config_tab_config_chip = false;
                 self.show_session_config_tab_config_chip = false;
                 self.pending_session_config_tab_config_chip_tutorial = None;
+                OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.set_onboarding_tutorial_active(false, ctx);
+                });
                 ctx.notify();
             }
             pane_group::Event::InvalidatedActiveConversation => {
@@ -17601,6 +17605,19 @@ impl Workspace {
             terminal_view_handle.update(ctx, |terminal_view, ctx| {
                 if !terminal_view.maybe_trigger_external_ctrl_t_file_search(ctx) {
                     terminal_view.write_user_bytes_to_pty(vec![C0::DC4], ctx);
+                }
+            });
+        }
+    }
+
+    fn trigger_external_alt_c_directory_search(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.is_readonly_shared_session_active(ctx) {
+            return;
+        }
+        if let Some(terminal_view_handle) = self.active_session_view(ctx) {
+            terminal_view_handle.update(ctx, |terminal_view, ctx| {
+                if !terminal_view.maybe_trigger_external_alt_c_directory_search(ctx) {
+                    terminal_view.write_user_bytes_to_pty(vec![C0::ESC, b'c'], ctx);
                 }
             });
         }
@@ -19360,6 +19377,22 @@ impl Workspace {
         });
         self.focus_active_tab(ctx);
         ctx.notify();
+    }
+
+    fn handle_chatgpt_plan_modal_event(
+        &mut self,
+        event: &ChatGPTPlanModalEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            ChatGPTPlanModalEvent::Close => {
+                OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.mark_chatgpt_plan_modal_dismissed(ctx);
+                });
+                self.focus_active_tab(ctx);
+                ctx.notify();
+            }
+        }
     }
 
     fn handle_oz_launch_modal_event(
@@ -23892,6 +23925,10 @@ impl Workspace {
         ctx.focus(&self.auto_handoff_sleep_modal);
     }
 
+    fn focus_chatgpt_plan_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        ctx.focus(&self.chatgpt_plan_modal);
+    }
+
     fn open_tab_and_focus_oz_launch_modal(&mut self, ctx: &mut ViewContext<Self>) {
         // Create a new tab with one terminal session titled "Introducing Oz"
         self.add_tab_with_pane_layout(
@@ -24658,6 +24695,7 @@ impl TypedActionView for Workspace {
                 init_content,
             }) => self.show_command_search(*filter, init_content, ctx),
             TriggerExternalCtrlTFileSearch => self.trigger_external_ctrl_t_file_search(ctx),
+            TriggerExternalAltCDirectorySearch => self.trigger_external_alt_c_directory_search(ctx),
             ImportToPersonalDrive => {
                 if let Some(personal_drive) = UserWorkspaces::as_ref(ctx).personal_drive(ctx) {
                     self.open_import_modal(personal_drive, &None, ctx);
@@ -26040,6 +26078,25 @@ impl TypedActionView for Workspace {
                 ctx.notify();
             }
             #[cfg(debug_assertions)]
+            OpenChatGPTPlanModal => {
+                OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.force_open_chatgpt_plan_modal(ctx);
+                });
+                ctx.notify();
+            }
+            #[cfg(debug_assertions)]
+            ResetChatGPTPlanModalState => {
+                AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
+                    if let Err(e) = ai_settings
+                        .did_show_chatgpt_plan_modal
+                        .set_value(false, ctx)
+                    {
+                        log::warn!("Failed to reset ChatGPT plan modal shown setting: {e}");
+                    }
+                });
+                log::info!("ChatGPT plan modal shown state has been reset");
+            }
+            #[cfg(debug_assertions)]
             ResetAutoHandoffSleepModalState => {
                 let old_value = *AISettings::as_ref(ctx).did_show_auto_handoff_sleep_modal;
                 AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
@@ -26772,6 +26829,9 @@ impl View for Workspace {
             .focused_session_view(app)
         {
             let terminal_view = terminal_view.as_ref(app);
+            if terminal_view.external_alt_c_binding_eligible(app) {
+                context.set.insert(EXTERNAL_ALT_C_BINDING_CONTEXT);
+            }
             if terminal_view.is_long_running() {
                 context.set.insert("LongRunningCommand");
             }
@@ -27574,6 +27634,10 @@ impl View for Workspace {
 
         if should_show_modal && one_time_modal_model.is_auto_handoff_sleep_modal_open() {
             stack.add_child(ChildView::new(&self.auto_handoff_sleep_modal).finish());
+        }
+
+        if should_show_modal && one_time_modal_model.is_chatgpt_plan_modal_open() {
+            stack.add_child(ChildView::new(&self.chatgpt_plan_modal).finish());
         }
 
         if should_show_modal && one_time_modal_model.is_free_ai_removal_modal_open() {

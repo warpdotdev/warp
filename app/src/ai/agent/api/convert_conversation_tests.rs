@@ -418,6 +418,7 @@ fn test_into_exchanges_basic() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                ..Default::default()
             })),
             request_id: "req1".to_string(),
             timestamp: None,
@@ -448,6 +449,7 @@ fn test_into_exchanges_basic() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                ..Default::default()
             })),
             request_id: "req2".to_string(),
             timestamp: None,
@@ -478,6 +480,7 @@ fn test_into_exchanges_basic() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                ..Default::default()
             })),
             request_id: "req3".to_string(),
             timestamp: None,
@@ -542,6 +545,7 @@ fn test_invoke_skill_arguments_round_trip() {
                         referenced_attachments: HashMap::new(),
                         mode: None,
                         intended_agent: Default::default(),
+                        ..Default::default()
                     }),
                 },
             )),
@@ -655,6 +659,7 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                ..Default::default()
             })),
             request_id: "req1".to_string(),
             timestamp: None,
@@ -857,6 +862,7 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                ..Default::default()
             })),
             request_id: "req3".to_string(),
             timestamp: None,
@@ -975,6 +981,7 @@ fn test_into_exchanges_with_code_diffs() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                ..Default::default()
             })),
             request_id: "req1".to_string(),
             timestamp: None,
@@ -1046,6 +1053,7 @@ fn test_into_exchanges_with_code_diffs() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                ..Default::default()
             })),
             request_id: "req2".to_string(),
             timestamp: None,
@@ -1143,6 +1151,7 @@ fn test_into_exchanges_with_code_diffs() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                ..Default::default()
             })),
             request_id: "req4".to_string(),
             timestamp: None,
@@ -1260,6 +1269,7 @@ fn test_user_query_mode_conversion() {
                 r#type: Some(api::user_query_mode::Type::Plan(())),
             }),
             intended_agent: Default::default(),
+            ..Default::default()
         })),
         request_id: String::new(),
         timestamp: None,
@@ -1305,6 +1315,7 @@ fn test_user_query_mode_conversion() {
             referenced_attachments: HashMap::new(),
             mode: Some(api::UserQueryMode { r#type: None }),
             intended_agent: Default::default(),
+            ..Default::default()
         })),
         request_id: String::new(),
         timestamp: None,
@@ -1350,6 +1361,7 @@ fn test_user_query_mode_conversion() {
             referenced_attachments: HashMap::new(),
             mode: None,
             intended_agent: Default::default(),
+            ..Default::default()
         })),
         request_id: String::new(),
         timestamp: None,
@@ -1424,6 +1436,7 @@ fn test_exchanges_grouped_by_request_id() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                ..Default::default()
             })),
         },
         // Message 2: Agent output with same request_id
@@ -1683,6 +1696,7 @@ fn test_multiple_create_documents_get_default_version() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                ..Default::default()
             })),
             request_id: "req1".to_string(),
             timestamp: None,
@@ -1900,6 +1914,7 @@ fn test_create_then_edit_then_create_version_tracking() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                ..Default::default()
             })),
             request_id: "req1".to_string(),
             timestamp: None,

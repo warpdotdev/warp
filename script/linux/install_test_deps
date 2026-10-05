@@ -22,6 +22,7 @@ if [[ "$(source /etc/os-release; echo $ID $ID_LIKE)" = *"debian"* ]]; then
   PACKAGES=(
     # Install the zsh and fish shells.
     zsh fish
+    shellcheck
     # We run vim in some integration tests to test the altscreen.
     vim
   )

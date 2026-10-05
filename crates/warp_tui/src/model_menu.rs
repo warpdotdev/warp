@@ -258,6 +258,7 @@ impl TuiModelMenuModel {
             preferences,
             preferences.get_base_llm_choices_for_agent_mode(&scope, ctx),
             &query,
+            None,
             &scope,
             ctx,
         );
@@ -282,7 +283,7 @@ fn model_menu_row(
     scope: &dyn TeamScope,
     app: &AppContext,
 ) -> TuiModelMenuRow {
-    let is_key_connected = should_show_key_icon_for_model(&choice.llm, scope, app);
+    let is_key_connected = should_show_key_icon_for_model(&choice.llm, None, scope, app);
     let uses_external_inference = is_key_connected
         || should_show_bedrock_icon_for_model(&choice.llm, scope, app)
         || should_show_gemini_enterprise_agent_platform_icon_for_model(&choice.llm, scope, app);

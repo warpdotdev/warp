@@ -70,6 +70,7 @@ pub enum LocalAgentTaskSyncModelEvent {}
 #[derive(Default)]
 struct LocalTaskUpdate {
     task_state: Option<AgentTaskState>,
+    force_task_state: bool,
     session_id: Option<SessionId>,
     server_conversation_token: Option<String>,
     status_message: Option<TaskStatusUpdate>,
@@ -280,9 +281,15 @@ impl LocalAgentTaskSyncModel {
             CLIAgentSessionsModelEvent::StatusChanged {
                 terminal_view_id,
                 status,
+                is_prompt_submit,
                 ..
             } => {
-                self.on_cli_session_status_changed(*terminal_view_id, status, ctx);
+                self.on_cli_session_status_changed(
+                    *terminal_view_id,
+                    status,
+                    *is_prompt_submit,
+                    ctx,
+                );
             }
             // Pane-scoped CLI agent sessions can end between preflight, the
             // harness, and follow-ups, but the mapping belongs to the driver run.
@@ -365,6 +372,7 @@ impl LocalAgentTaskSyncModel {
         &mut self,
         terminal_view_id: EntityId,
         status: &CLIAgentSessionStatus,
+        is_prompt_submit: bool,
         ctx: &mut ModelContext<Self>,
     ) {
         let Some(&task_id) = self.cli_session_task_ids.get(&terminal_view_id) else {
@@ -376,6 +384,7 @@ impl LocalAgentTaskSyncModel {
             task_id,
             LocalTaskUpdate {
                 task_state: Some(task_state),
+                force_task_state: is_prompt_submit,
                 status_message,
                 ..LocalTaskUpdate::default()
             },
@@ -409,6 +418,7 @@ impl LocalAgentTaskSyncModel {
             session_id,
             server_conversation_token,
             status_message,
+            force_task_state: _,
         } = update;
         ctx.spawn(
             async move {
@@ -680,6 +690,13 @@ pub(crate) fn classify_renderable_error(
             Some(TaskStatusUpdate::with_error_code(
                 msg,
                 PlatformErrorCode::InternalError,
+            )),
+        ),
+        RenderableAIError::ChatGPTSubscriptionError { .. } => (
+            AgentTaskState::Failed,
+            Some(TaskStatusUpdate::with_error_code(
+                error.to_string(),
+                PlatformErrorCode::InvalidRequest,
             )),
         ),
     }

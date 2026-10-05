@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use ::ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 use chrono::Local;
 use itertools::Itertools;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
@@ -32,6 +33,9 @@ use warpui::{
 
 use super::SettingsSection;
 use super::admin_actions::AdminActions;
+use super::billing_and_usage::chatgpt_usage_card::{
+    chatgpt_manage_usage_button, render_chatgpt_usage_card,
+};
 use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
 use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
 use super::billing_and_usage::usage_history_model::UsageHistoryModel;
@@ -281,6 +285,7 @@ pub struct BillingAndUsagePageView {
     ambient_trial_new_agent_button: MouseStateHandle,
     ambient_trial_buy_more_button: MouseStateHandle,
     ambient_trial_dismiss_button: MouseStateHandle,
+    chatgpt_manage_usage_button: ViewHandle<ActionButton>,
 }
 
 impl BillingAndUsagePageView {
@@ -325,6 +330,14 @@ impl BillingAndUsagePageView {
                 ctx.notify();
             }
         });
+
+        if FeatureFlag::ChatGPTSubscription.is_enabled() {
+            ctx.subscribe_to_model(&ApiKeyManager::handle(ctx), |_, _, event, ctx| {
+                if matches!(event, ApiKeyManagerEvent::ChatGPTConnectionUpdated) {
+                    ctx.notify();
+                }
+            });
+        }
 
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
 
@@ -391,6 +404,8 @@ impl BillingAndUsagePageView {
                 ctx.dispatch_typed_action(BillingAndUsagePageAction::RenderMoreUsageEntries);
             })
         });
+        let chatgpt_manage_usage_button =
+            ctx.add_typed_action_view(|_| chatgpt_manage_usage_button());
 
         let mut me = Self {
             self_handle: ctx.handle(),
@@ -436,6 +451,7 @@ impl BillingAndUsagePageView {
             ambient_trial_new_agent_button: MouseStateHandle::default(),
             ambient_trial_buy_more_button: MouseStateHandle::default(),
             ambient_trial_dismiss_button: MouseStateHandle::default(),
+            chatgpt_manage_usage_button,
         };
         me.update_addon_credits_options(ctx);
         me.refresh_addon_credits_settings(ctx);
@@ -2953,6 +2969,12 @@ impl BillingAndUsagePageView {
             self.render_ambient_agent_trial_widget(ai_request_usage_model, appearance, app)
         {
             usage.add_child(ambient_trial_widget);
+        }
+
+        if let Some(chatgpt_usage_card) =
+            render_chatgpt_usage_card(&self.chatgpt_manage_usage_button, appearance, app)
+        {
+            usage.add_child(chatgpt_usage_card);
         }
 
         let show_addon_credits_panel = workspace.is_some()

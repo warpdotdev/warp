@@ -26,9 +26,9 @@ const CODEX_CONFIG_DIR: &str = ".codex";
 const CODEX_HOME_ENV: &str = "CODEX_HOME";
 
 // Keep in sync with the plugin version in warpdotdev/codex-warp.
-const MINIMUM_PLUGIN_VERSION: &str = "0.4.0";
+const MINIMUM_PLUGIN_VERSION: &str = "0.4.2";
 // Keep in sync with the orchestration plugin version in warpdotdev/codex-warp.
-const MINIMUM_PLATFORM_PLUGIN_VERSION: &str = "0.4.0";
+const MINIMUM_PLATFORM_PLUGIN_VERSION: &str = "0.4.1";
 
 pub(super) struct CodexPluginManager {
     executor: LocalCommandExecutor,

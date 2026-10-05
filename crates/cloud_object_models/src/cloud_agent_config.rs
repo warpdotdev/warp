@@ -32,6 +32,7 @@ impl AgentConfig {
     /// while `AgentConfigSnapshot` is the runtime config format (e.g. `model_id`).
     pub fn to_ambient_config(&self) -> AgentConfigSnapshot {
         AgentConfigSnapshot {
+            experimental: None,
             name: Some(self.name.clone()),
             environment_id: None,
             runner_id: None,

@@ -374,6 +374,7 @@ pub mod testing {
             _execute_command_options: ExecuteCommandOptions,
         ) -> Result<CommandOutput> {
             let mut command_process = Command::new(match shell.shell_type() {
+                ShellType::PowerShell if cfg!(windows) => "powershell.exe",
                 ShellType::PowerShell => "pwsh",
                 _ => "bash",
             });

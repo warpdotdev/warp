@@ -18,7 +18,9 @@ use warpui::ui_components::text::Span;
 use warpui::{AppContext, Element, EntityId, EventContext, SingletonEntity};
 
 use crate::ai::AIRequestUsageModel;
-use crate::ai::agent::RenderableAIError;
+use crate::ai::agent::{
+    ChatGPTSubscriptionErrorAction, ChatGPTSubscriptionErrorActionKind, RenderableAIError,
+};
 use crate::settings::UsageDisplayUnit;
 use crate::themes::theme::{AnsiColorIdentifier, Fill, WarpTheme};
 use crate::ui_components::icons::Icon;
@@ -30,6 +32,10 @@ const ERROR_APOLOGY_TEXT: &str = "I'm sorry, I couldn't complete that request.";
 const INTERNAL_WARP_ERROR: &str = "Internal Warp error.";
 pub const FAILED_OUTPUT_USAGE_NOTICE_TEXT: &str = "This response won't count towards your usage.";
 pub const OUT_OF_CREDITS_SUBSCRIBE_LABEL: &str = "Subscribe";
+/// Disclosure shown in place of a ChatGPT subscription error once the user has switched the
+/// conversation to Warp-funded inference.
+pub const CHATGPT_CONTINUED_WITH_WARP_CREDITS_TEXT: &str = "Continued with Warp credits. Your \
+     ChatGPT subscription won't be used for the rest of this conversation.";
 /// Text to use as a label throughout the app for user interactions that will attach selected
 /// block(s) or text selections to a new AI query.
 pub static ATTACH_AS_AGENT_MODE_CONTEXT_TEXT: LazyLock<&'static str> =
@@ -83,14 +89,27 @@ pub enum FailedOutputPresentation {
     GeminiEnterpriseCredentialsExpiredOrInvalid {
         fallback_message: String,
     },
+    /// A ChatGPT token-sharing failure with server-authored copy and recovery actions.
+    ChatGPTSubscription {
+        title: String,
+        message: String,
+        actions: Vec<ChatGPTSubscriptionErrorAction>,
+    },
+    /// The conversation has since been switched to Warp-funded inference, so the failure is
+    /// shown as a disclosure line instead of an actionable error.
+    ChatGPTSubscriptionContinuedWithWarpCredits,
 }
 
 /// Returns the user-facing presentation for an Agent Mode request failure.
+///
+/// `conversation_uses_warp_credits_instead_of_chatgpt` is the owning conversation's
+/// per-conversation ChatGPT opt-out; it only affects ChatGPT subscription errors.
 ///
 /// Recovery-pending failures are intentionally suppressed so callers cannot accidentally render
 /// an alarming terminal error while an automatic resume is still in flight.
 pub fn failed_output_presentation(
     error: &RenderableAIError,
+    conversation_uses_warp_credits_instead_of_chatgpt: bool,
     app: &AppContext,
 ) -> Option<FailedOutputPresentation> {
     if error.should_suppress_during_recovery() {
@@ -173,7 +192,42 @@ pub fn failed_output_presentation(
         RenderableAIError::CloudStartupFailed(msg) => {
             FailedOutputPresentation::Message(msg.clone())
         }
+        RenderableAIError::ChatGPTSubscriptionError { .. }
+            if conversation_uses_warp_credits_instead_of_chatgpt =>
+        {
+            FailedOutputPresentation::ChatGPTSubscriptionContinuedWithWarpCredits
+        }
+        RenderableAIError::ChatGPTSubscriptionError {
+            title,
+            message,
+            actions,
+            ..
+        } => FailedOutputPresentation::ChatGPTSubscription {
+            title: title.clone(),
+            message: message.clone(),
+            actions: actions.clone(),
+        },
     })
+}
+
+/// Appends each `OpenUrl` recovery action of a ChatGPT subscription error to its message as a
+/// `label: url` line, for surfaces that cannot render the actions as buttons.
+pub fn chatgpt_subscription_message_with_links(
+    message: &str,
+    actions: &[ChatGPTSubscriptionErrorAction],
+) -> String {
+    actions
+        .iter()
+        .filter_map(|action| match &action.kind {
+            ChatGPTSubscriptionErrorActionKind::OpenUrl { url } => {
+                Some(format!("{}: {url}", action.label))
+            }
+            ChatGPTSubscriptionErrorActionKind::Retry
+            | ChatGPTSubscriptionErrorActionKind::ContinueWithWarpCredits => None,
+        })
+        .fold(message.to_string(), |text, link| {
+            format!("{text}\n\n{link}")
+        })
 }
 
 /// Whether a failed Agent Mode response should explain that it will not count towards usage.
@@ -188,6 +242,7 @@ pub fn should_show_failed_output_usage_notice(
         && !has_expanded_last_requested_command
         && !is_restored
         && !error.is_invalid_api_key()
+        && !error.is_chatgpt_subscription_error()
 }
 
 /// Whether to show the out-of-credits CTA: only for non-paid users. Paid users and the enterprise
@@ -284,9 +339,13 @@ pub fn get_ai_block_overflow_menu_element_position_id(view_id: EntityId) -> Stri
 }
 
 /// Formats credit count to display as whole numbers when the value is effectively a whole number,
-/// otherwise displays with one decimal place.
+/// otherwise displays with one decimal place. A non-zero amount below the displayed precision is
+/// shown as `<0.1 credits` rather than rounding to zero, which would read as no cost.
 /// Returns a formatted string with proper pluralization ("credit" vs "credits").
 pub fn format_credits(credits: f32) -> String {
+    if credits > 0.0 && credits < 0.1 {
+        return "<0.1 credits".to_string();
+    }
     // If the first part of the decimal is 0, we just display the whole number.
     if credits.fract() < 0.1 {
         let whole = credits.trunc() as i32;
@@ -297,6 +356,22 @@ pub fn format_credits(credits: f32) -> String {
         }
     } else {
         format!("{credits:.1} credits")
+    }
+}
+
+/// Formats a US-cent amount as dollars without rounding a positive charge down to zero.
+pub fn format_dollars(cost_in_cents: f32) -> String {
+    // Accumulated costs can produce negative zero, which would otherwise render as `$-0.00`.
+    let cost_in_cents = if cost_in_cents == 0.0 {
+        0.0
+    } else {
+        cost_in_cents
+    };
+    let dollars = cost_in_cents / 100.0;
+    if cost_in_cents > 0.0 && dollars < 0.01 {
+        "<$0.01".to_string()
+    } else {
+        format!("${dollars:.2}")
     }
 }
 
@@ -319,7 +394,7 @@ fn format_usage_unit_value(
     match unit {
         UsageDisplayUnit::Credits => format_credits(credits),
         UsageDisplayUnit::Dollars => cost_in_cents
-            .map(|cost_in_cents| format!("${:.2}", cost_in_cents / 100.0))
+            .map(format_dollars)
             .unwrap_or_else(|| format_credits(credits)),
     }
 }

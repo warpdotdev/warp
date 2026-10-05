@@ -41,3 +41,23 @@ fn additional_source_repos_make_snapshot_non_empty() {
     };
     assert!(!snapshot.is_empty());
 }
+
+#[test]
+fn experimental_values_remain_uninterpreted_across_versions() {
+    let raw = serde_json::json!({
+        "experimental": {
+            "identityOnlySystemPrompt": true,
+            "future": null,
+            "nestedFromNewerServer": {"value": [1, false]}
+        }
+    });
+    let snapshot: AgentConfigSnapshot = serde_json::from_value(raw.clone()).unwrap();
+    assert!(!snapshot.is_empty());
+    assert_eq!(serde_json::to_value(snapshot).unwrap(), raw);
+    assert!(
+        serde_json::from_value::<AgentConfigSnapshot>(serde_json::json!({}))
+            .unwrap()
+            .experimental
+            .is_none()
+    );
+}

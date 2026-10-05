@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use ai::project_context::model::ProjectContextModel;
@@ -59,6 +60,8 @@ use crate::server::cloud_objects::listener::Listener;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::experiments::ServerExperiments;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::team::{MockTeamClient, TeamClient};
+use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings::PrivacySettings;
@@ -91,6 +94,10 @@ use crate::{
     AgentNotificationsModel, GlobalResourceHandlesProvider, ObjectActions, experiments, workspace,
 };
 pub(crate) fn initialize_app(app: &mut App) {
+    initialize_app_with_team_client(app, Arc::new(MockTeamClient::new()));
+}
+
+pub(crate) fn initialize_app_with_team_client(app: &mut App, team_client: Arc<dyn TeamClient>) {
     initialize_settings_for_tests(app);
 
     // Add the necessary singleton models to the App
@@ -107,7 +114,14 @@ pub(crate) fn initialize_app(app: &mut App) {
     app.add_singleton_model(SyncQueue::mock);
     app.add_singleton_model(CloudModel::mock);
     app.add_singleton_model(CloudEnvironmentCatalog::new);
-    app.add_singleton_model(UserWorkspaces::default_mock);
+    app.add_singleton_model(|ctx| {
+        UserWorkspaces::mock(
+            team_client,
+            Arc::new(MockWorkspaceClient::new()),
+            vec![],
+            ctx,
+        )
+    });
     app.add_singleton_model(|_ctx| UserProfiles::new(Vec::new()));
     app.add_singleton_model(TeamTesterStatus::mock);
     app.add_singleton_model(TeamUpdateManager::mock);
@@ -2426,6 +2440,26 @@ fn test_close_other_tabs_confirmation_dialog() {
             );
             assert_eq!(workspace.tab_count(), 1);
             assert_eq!(workspace.get_pane_group_view(0).unwrap().id(), last_tab_id);
+        });
+    });
+}
+
+#[test]
+fn test_save_current_tab_as_new_config_ignores_stale_tab_index() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            for _ in 1..6 {
+                workspace.add_terminal_tab(false, ctx);
+            }
+
+            workspace.close_other_tabs(5, true, ctx);
+            workspace.handle_action(&WorkspaceAction::SaveCurrentTabAsNewConfig(5), ctx);
+
+            assert_eq!(workspace.tab_count(), 1);
         });
     });
 }

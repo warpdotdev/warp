@@ -1239,6 +1239,7 @@ impl ExecutionProfileEditorView {
                 None,
                 None,
                 CollapsedModelVariants::default(),
+                None,
                 &scope,
                 ctx,
             );
@@ -1295,6 +1296,7 @@ impl ExecutionProfileEditorView {
                 None,
                 None,
                 CollapsedModelVariants::default(),
+                None,
                 &scope,
                 ctx,
             );

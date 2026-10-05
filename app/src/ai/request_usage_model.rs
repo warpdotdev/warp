@@ -540,8 +540,9 @@ impl AIRequestUsageModel {
     ) -> bool {
         let user_workspaces = UserWorkspaces::as_ref(ctx);
         let api_keys = ApiKeyManager::as_ref(ctx);
-        let has_provider_key =
-            api_keys.keys().provider_key_count() > 0 || api_keys.has_grok_subscription();
+        let has_provider_key = api_keys.keys().provider_key_count() > 0
+            || api_keys.has_grok_subscription()
+            || api_keys.has_chatgpt_subscription();
         if user_workspaces.is_byo_api_key_enabled(ctx)
             && user_workspaces.are_member_byo_keys_allowed(scope)
             && has_provider_key
@@ -600,7 +601,7 @@ impl AIRequestUsageModel {
                     .is_some_and(|price| !workspace.would_addon_purchase_reach_limit(price))
         });
 
-        // If you have provided your own API key or connected a Grok
+        // If you have provided your own API key or connected a Grok or ChatGPT
         // subscription, it doesn't matter if you are out of warp-provided requests.
         let has_byo_credentials = Self::has_usable_member_byo_inference_path(scope, ctx);
 

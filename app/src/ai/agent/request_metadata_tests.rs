@@ -674,6 +674,7 @@ fn exchange_without_any_request_messages_is_not_eligible() {
             user_query_mode: UserQueryMode::Normal,
             running_command: None,
             intended_agent: None,
+            base: None,
         };
         history_model.update(&mut app, |_, ctx| {
             conversation

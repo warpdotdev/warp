@@ -38,7 +38,8 @@ pub mod text {
             | AIAgentInput::MessagesReceivedFromAgents { .. }
             | AIAgentInput::PassiveSuggestionResult { .. }
             | AIAgentInput::EventsFromAgents { .. }
-            | AIAgentInput::OrchestrationConfigUpdate { .. } => {
+            | AIAgentInput::OrchestrationConfigUpdate { .. }
+            | AIAgentInput::AgentWake => {
                 // Do not include the user query, since it's already provided as input to the agent.
                 Ok(())
             }
@@ -186,6 +187,7 @@ pub mod text {
                                     "{uri} ({})",
                                     mime_type.as_deref().unwrap_or("text/plain")
                                 )?,
+                                _ => writeln!(w, "unsupported resource contents")?,
                             }
                         }
                         Ok(())
@@ -200,14 +202,14 @@ pub mod text {
                         CallMCPToolResult::Success { result } => {
                             for content in &result.content {
                                 write!(w, "- ")?;
-                                match &content.raw {
-                                    rmcp::model::RawContent::Text(text_content) => {
+                                match content {
+                                    rmcp::model::ContentBlock::Text(text_content) => {
                                         writeln!(w, "{}", text_content.text)?;
                                     }
-                                    rmcp::model::RawContent::Image(image_content) => {
+                                    rmcp::model::ContentBlock::Image(image_content) => {
                                         writeln!(w, "{} image", image_content.mime_type)?;
                                     }
-                                    rmcp::model::RawContent::Resource(embedded_resource) => {
+                                    rmcp::model::ContentBlock::Resource(embedded_resource) => {
                                         match &embedded_resource.resource {
                                         rmcp::model::ResourceContents::TextResourceContents {
                                             uri,
@@ -224,23 +226,29 @@ pub mod text {
                                         } => {
                                             writeln!(w, "{uri} ({})", mime_type.as_deref().unwrap_or("text/plain"))?;
                                         }
+                                        _ => {
+                                            writeln!(w, "unsupported resource contents")?;
+                                        }
                                     };
                                     }
-                                    rmcp::model::RawContent::Audio(audio_content) => {
+                                    rmcp::model::ContentBlock::Audio(audio_content) => {
                                         writeln!(w, "{} audio", audio_content.mime_type)?;
                                     }
-                                    rmcp::model::RawContent::ResourceLink(raw_resource) => {
-                                        let rmcp::model::RawResource {
+                                    rmcp::model::ContentBlock::ResourceLink(resource) => {
+                                        let rmcp::model::Resource {
                                             uri,
                                             mime_type,
                                             name,
                                             ..
-                                        } = raw_resource;
+                                        } = resource;
                                         writeln!(
                                             w,
                                             "{name}: {uri} ({})",
                                             mime_type.as_deref().unwrap_or("unknown")
                                         )?;
+                                    }
+                                    _ => {
+                                        writeln!(w, "unsupported content block")?;
                                     }
                                 }
                             }
@@ -823,7 +831,8 @@ pub mod json {
                 | AIAgentInput::MessagesReceivedFromAgents { .. }
                 | AIAgentInput::EventsFromAgents { .. }
                 | AIAgentInput::PassiveSuggestionResult { .. }
-                | AIAgentInput::OrchestrationConfigUpdate { .. } => None,
+                | AIAgentInput::OrchestrationConfigUpdate { .. }
+                | AIAgentInput::AgentWake => None,
                 // These input types should not occur in a SDK-run agent.
                 AIAgentInput::ResumeConversation { .. }
                 | AIAgentInput::TriggerPassiveSuggestion { .. } => None,

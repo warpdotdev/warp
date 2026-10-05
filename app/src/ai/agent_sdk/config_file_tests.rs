@@ -95,6 +95,7 @@ fn merge_precedence_cli_over_file_and_merges_mcp() {
     let loaded = super::load_config_file(file.path()).unwrap();
 
     let cli = AgentConfigSnapshot {
+        experimental: None,
         name: Some("cli-name".to_string()),
         environment_id: None,
         runner_id: None,

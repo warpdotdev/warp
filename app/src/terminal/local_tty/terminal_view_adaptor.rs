@@ -28,6 +28,7 @@ use warpui::{AppContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle, 
 use super::terminal_manager::{TerminalManager, TerminalSurfaceInit, TerminalSurfaceResult};
 use crate::NetworkStatus;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::agent::BaseUserQuery;
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
@@ -180,6 +181,24 @@ fn accept_agent_prompt(
         return;
     }
 
+    // warp-server-injected follow-ups carry the query itself. Viewer-typed prompts and older
+    // relays leave it unset; those are attributed to the viewer from presence so the server
+    // never records them as the sharer's own input. A payload that does not decode is sent
+    // with an explicit unavailable origin and falls back to `prompt` + `attachments`.
+    let base = match request.user_query_b64.as_deref() {
+        Some(encoded) => BaseUserQuery::decode_b64(encoded)
+            .unwrap_or_else(|| BaseUserQuery::unattributed("user_query_unavailable")),
+        None => {
+            let presence = terminal_view
+                .as_ref(ctx)
+                .shared_session_presence_manager()
+                .map(|manager| manager.as_ref(ctx));
+            let profile =
+                presence.and_then(|presence| presence.participant_profile(&participant_id));
+            BaseUserQuery::for_viewer(profile)
+        }
+    };
+
     // Execute the agent prompt in the Oz-harness case.
     terminal_view.update(ctx, |view, ctx| {
         // Restore the sharer's frozen visual state. The buffer is cleared by
@@ -199,6 +218,7 @@ fn accept_agent_prompt(
                 request.server_conversation_token,
                 request.attachments.clone(),
                 participant_id.clone(),
+                Some(base),
                 ctx,
             );
         });

@@ -5,8 +5,8 @@ use std::time::Duration;
 use anyhow::anyhow;
 use session_sharing_protocol::common::SessionId;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
-use warpui::App;
 use warpui::r#async::FutureExt as _;
+use warpui::{App, EntityId, SingletonEntity};
 
 use super::super::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use super::{
@@ -24,8 +24,10 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::llms::LLMId;
 use crate::server::server_api::ai::{AIClient, MockAIClient, TaskStatusUpdate};
 use crate::terminal::CLIAgent;
+use crate::terminal::cli_agent_sessions::event::parse_event;
 use crate::terminal::cli_agent_sessions::{
-    CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
+    CLIAgentInputState, CLIAgentSession, CLIAgentSessionStatus, CLIAgentSessionsModel,
+    CLIAgentSessionsModelEvent,
 };
 
 /// Helper to assert a (state, Option<TaskStatusUpdate>) tuple.
@@ -580,6 +582,7 @@ fn cli_task_mapping_survives_cli_session_end() {
                 terminal_view_id,
                 agent: CLIAgent::Claude,
                 status: CLIAgentSessionStatus::Success,
+                is_prompt_submit: false,
                 session_context: Box::default(),
             });
         });
@@ -591,6 +594,7 @@ fn cli_task_mapping_survives_cli_session_end() {
                 terminal_view_id,
                 agent: CLIAgent::Claude,
                 status: CLIAgentSessionStatus::Success,
+                is_prompt_submit: false,
                 session_context: Box::default(),
             });
         });
@@ -643,9 +647,72 @@ fn emit_cli_status(
             terminal_view_id,
             agent: CLIAgent::Claude,
             status,
+            is_prompt_submit: false,
             session_context: Box::default(),
         });
     });
+}
+
+#[test]
+fn cli_prompt_submit_bypasses_cached_in_progress_for_claude_and_codex() {
+    for (agent, agent_name) in [(CLIAgent::Claude, "claude"), (CLIAgent::Codex, "codex")] {
+        App::test((), move |mut app| async move {
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+            let (model, counter) = install_model_with_call_counter(&mut app);
+            let cli_sessions_model = CLIAgentSessionsModel::handle(&app);
+            let terminal_view_id = EntityId::new();
+            let task_id = fixed_task_id();
+            cli_sessions_model.update(&mut app, |sessions, ctx| {
+                sessions.set_session(
+                    terminal_view_id,
+                    CLIAgentSession {
+                        agent,
+                        status: CLIAgentSessionStatus::InProgress,
+                        session_context: Default::default(),
+                        input_state: CLIAgentInputState::Closed,
+                        should_auto_toggle_input: false,
+                        listener: None,
+                        plugin_version: None,
+                        remote_host: None,
+                        draft_text: None,
+                        custom_command_prefix: None,
+                        received_rich_notification: false,
+                    },
+                    ctx,
+                );
+            });
+            model.update(&mut app, |model, ctx| {
+                model.register_cli_session(terminal_view_id, task_id, ctx);
+            });
+            model
+                .update(&mut app, |model, _| model.wait_for_idle(task_id))
+                .with_timeout(Duration::from_secs(5))
+                .await
+                .expect("initial progress update must finish");
+            assert_eq!(counter.load(Ordering::SeqCst), 1, "{agent_name}");
+
+            for expected_calls in 2..=3 {
+                let event = parse_event(
+                    Some("warp://cli-agent"),
+                    &format!(r#"{{"agent":"{agent_name}","event":"prompt_submit"}}"#),
+                )
+                .unwrap();
+                cli_sessions_model.update(&mut app, |sessions, ctx| {
+                    sessions.update_from_event(terminal_view_id, &event, ctx);
+                });
+                model
+                    .update(&mut app, |model, _| model.wait_for_idle(task_id))
+                    .with_timeout(Duration::from_secs(5))
+                    .await
+                    .expect("prompt progress update must finish");
+                assert_eq!(
+                    counter.load(Ordering::SeqCst),
+                    expected_calls,
+                    "{agent_name}"
+                );
+            }
+        });
+    }
 }
 
 #[test]

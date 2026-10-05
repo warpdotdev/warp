@@ -8,7 +8,7 @@
 //! transcript/loading-indicator usage row next — CODE-1832).
 
 use warp::settings::TuiUsageDisplayMode;
-use warp::tui_export::{ConversationUsageTotals, format_credits};
+use warp::tui_export::{ConversationUsageTotals, format_credits, format_dollars};
 use warp_core::features::FeatureFlag;
 use warpui_core::AppContext;
 use warpui_core::elements::MouseStateHandle;
@@ -83,14 +83,9 @@ fn entry_text(mode: TuiUsageDisplayMode, totals: ConversationUsageTotals) -> Str
         TuiUsageDisplayMode::Credits => format_credits(totals.credits_spent),
         TuiUsageDisplayMode::Cost => totals
             .cost_in_cents
-            .map(format_cost)
+            .map(format_dollars)
             .unwrap_or_else(|| "Cost unavailable".to_owned()),
     }
-}
-
-/// Formats an accumulated cost in US cents as dollars (`3.2` cents → `$0.03`).
-pub(crate) fn format_cost(cost_in_cents: f32) -> String {
-    format!("${:.2}", cost_in_cents / 100.0)
 }
 
 #[cfg(test)]

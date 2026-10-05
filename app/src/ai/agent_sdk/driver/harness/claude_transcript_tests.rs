@@ -4,8 +4,48 @@ use std::path::Path;
 
 use tempfile::TempDir;
 use uuid::Uuid;
+use warp_harness_usage::api::{CoverageStatus, HarnessUsageSnapshot};
+use warp_harness_usage::{ExtractionOutcome, JsonlReadStatus, extract_claude};
 
 use super::*;
+#[test]
+fn captured_metrics_and_raw_bytes_share_records_before_late_append() {
+    let tmp = TempDir::new().unwrap();
+    let cwd = Path::new("/synthetic/project");
+    let session = Uuid::new_v4();
+    let directory = tmp.path().join("projects").join(encode_cwd(cwd));
+    fs::create_dir_all(&directory).unwrap();
+    let filename = format!("{session}.jsonl");
+    write_file(
+        &directory,
+        &filename,
+        "{\"type\":\"assistant\",\"message\":{\"id\":\"a\",\"usage\":{\"input_tokens\":10}}}\n{\"type\":",
+    );
+    let (envelope, diagnostics) =
+        read_envelope_with_diagnostics(session, cwd, tmp.path(), true).unwrap();
+    let raw = serde_json::to_vec(&envelope).unwrap();
+    write_file(
+        &directory,
+        &filename,
+        "{\"type\":\"assistant\",\"message\":{\"id\":\"b\",\"usage\":{\"input_tokens\":999}}}\n",
+    );
+    let ExtractionOutcome::Usable(extracted) =
+        extract_claude(&session.to_string(), &envelope.entries, [], &diagnostics)
+    else {
+        panic!("expected observed tokens");
+    };
+    let HarnessUsageSnapshot::ClaudeCode(snapshot) = extracted.snapshot else {
+        unreachable!()
+    };
+    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
+    assert_eq!(
+        serde_json::to_value(snapshot.payload).unwrap()["usage"]["input_tokens"],
+        10
+    );
+    let uploaded: ClaudeTranscriptEnvelope = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(uploaded.entries, envelope.entries);
+    assert!(diagnostics.root.incomplete_trailing_record);
+}
 
 fn write_file(dir: &Path, name: &str, content: &str) {
     fs::write(dir.join(name), content).unwrap();
@@ -41,7 +81,7 @@ fn read_envelope_main_only() {
         "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n",
     );
 
-    let envelope = read_envelope(uuid, cwd, tmp.path(), false).unwrap();
+    let (envelope, _) = read_envelope_with_diagnostics(uuid, cwd, tmp.path(), false).unwrap();
     assert_eq!(
         envelope.entries,
         vec![
@@ -74,7 +114,7 @@ fn read_envelope_with_subagents() {
         "{\"type\":\"user\"}\n",
     );
 
-    let envelope = read_envelope(uuid, cwd, tmp.path(), false).unwrap();
+    let (envelope, _) = read_envelope_with_diagnostics(uuid, cwd, tmp.path(), false).unwrap();
     assert_eq!(
         envelope.subagents["agent-abc123def456"],
         vec![serde_json::json!({"type": "user"})]
@@ -87,11 +127,13 @@ fn read_envelope_missing_session_file() {
     let cwd = Path::new("/my/project");
     let uuid = Uuid::new_v4();
 
-    // No files created - should return Ok with empty entries rather than an error.
-    let envelope = read_envelope(uuid, cwd, tmp.path(), false).unwrap();
+    let (envelope, diagnostics) =
+        read_envelope_with_diagnostics(uuid, cwd, tmp.path(), false).unwrap();
     assert!(envelope.entries.is_empty());
     assert!(envelope.subagents.is_empty());
     assert!(envelope.todos.is_empty());
+    assert_eq!(diagnostics.root.status, JsonlReadStatus::Missing);
+    assert!(read_envelope_with_diagnostics(uuid, cwd, tmp.path(), true).is_err());
 }
 
 #[test]
@@ -124,7 +166,10 @@ fn write_envelope_creates_files() {
     // Main session JSONL.
     let session_file = projects_dir.join(format!("{uuid}.jsonl"));
     assert!(session_file.exists(), "session JSONL missing");
-    assert_eq!(read_jsonl(&session_file).unwrap(), envelope.entries);
+    assert_eq!(
+        read_jsonl_capture(&session_file).unwrap().entries,
+        envelope.entries
+    );
 
     // Subagent JSONL.
     let subagent_file = projects_dir
@@ -133,7 +178,7 @@ fn write_envelope_creates_files() {
         .join("agent-abc.jsonl");
     assert!(subagent_file.exists(), "subagent JSONL missing");
     assert_eq!(
-        read_jsonl(&subagent_file).unwrap(),
+        read_jsonl_capture(&subagent_file).unwrap().entries,
         envelope.subagents["agent-abc"]
     );
 
@@ -162,7 +207,7 @@ fn write_envelope_round_trip() {
 
     write_envelope(&original, tmp.path()).unwrap();
 
-    let decoded = read_envelope(uuid, cwd, tmp.path(), false).unwrap();
+    let (decoded, _) = read_envelope_with_diagnostics(uuid, cwd, tmp.path(), false).unwrap();
     assert_eq!(decoded, original);
 }
 

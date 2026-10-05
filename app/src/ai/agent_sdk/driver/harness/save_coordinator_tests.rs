@@ -9,10 +9,38 @@ use parking_lot::Mutex;
 use warpui::r#async::FutureExt as _;
 use warpui::r#async::executor::Background;
 
-use super::{
-    SaveCoordinator, SaveOperation, remaining_final_save_budget, save_transcript_and_block,
-};
+use super::{SaveCoordinator, SaveOperation, remaining_final_save_budget};
 use crate::ai::agent_sdk::driver::harness::SavePoint;
+use crate::ai::agent_sdk::driver::harness::harness_persistence::save_transcript_and_block;
+use crate::ai::agent_sdk::driver::harness::transcript_persistence::UploadedTranscriptUsage;
+
+#[tokio::test]
+async fn metrics_timeout_preserves_completed_persistence_and_drops_publication() {
+    let coordinator = SaveCoordinator::default();
+    let (release, released) = oneshot::channel::<()>();
+    let result = coordinator
+        .finalize(
+            future::ready(Ok(())),
+            async {
+                let _ = released.await;
+            },
+            Duration::from_millis(10),
+        )
+        .await;
+    assert!(result.is_ok());
+    assert!(release.send(()).is_err());
+    assert!(
+        coordinator
+            .finalize(
+                future::pending::<Result<()>>(),
+                future::pending(),
+                Duration::from_secs(30),
+            )
+            .now_or_never()
+            .unwrap()
+            .is_ok()
+    );
+}
 
 #[tokio::test]
 async fn coalesces_saves_without_blocking_other_work() {
@@ -34,11 +62,12 @@ async fn coalesces_saves_without_blocking_other_work() {
         })
     });
 
-    coordinator.request(SavePoint::Periodic, operation.clone(), &background);
+    coordinator.set_worker_operation(operation);
+    coordinator.enqueue(SavePoint::Periodic, &background);
     assert_eq!(starts.recv().await.unwrap(), SavePoint::Periodic);
-    coordinator.request(SavePoint::PostTurn, operation.clone(), &background);
-    coordinator.request(SavePoint::Periodic, operation.clone(), &background);
-    coordinator.request(SavePoint::PostTurn, operation, &background);
+    coordinator.enqueue(SavePoint::PostTurn, &background);
+    coordinator.enqueue(SavePoint::Periodic, &background);
+    coordinator.enqueue(SavePoint::PostTurn, &background);
     let (ping, pong) = oneshot::channel();
     background
         .spawn(async move { ping.send(()).unwrap() })
@@ -53,11 +82,12 @@ async fn coalesces_saves_without_blocking_other_work() {
     assert_eq!(starts.recv().await.unwrap(), SavePoint::PostTurn);
     release.send(()).await.unwrap();
     coordinator
-        .finish(
+        .finalize(
             async {
                 saved.lock().push(SavePoint::Final);
                 Ok(())
             },
+            future::ready(()),
             Duration::from_secs(5),
         )
         .await
@@ -77,14 +107,15 @@ async fn block_failure_does_not_cancel_raw_transcript() {
         async {
             released.await?;
             uploaded.store(true, Ordering::SeqCst);
-            Ok(())
+            Ok(UploadedTranscriptUsage::empty())
         },
         async {
             release.send(()).unwrap();
             Err(anyhow!("block unavailable"))
         },
     )
-    .await;
+    .await
+    .into_result();
 
     assert!(uploaded.load(Ordering::SeqCst));
     assert!(result.is_err());
@@ -105,10 +136,25 @@ async fn raw_failure_does_not_cancel_block_snapshot() {
             Ok(())
         },
     )
-    .await;
+    .await
+    .into_result();
 
     assert!(uploaded.load(Ordering::SeqCst));
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn simultaneous_failures_preserve_both_errors() {
+    let error = save_transcript_and_block(
+        future::ready(Err(anyhow!("raw unavailable"))),
+        future::ready(Err(anyhow!("block unavailable"))),
+    )
+    .await
+    .into_result()
+    .unwrap_err();
+    let message = format!("{error:#}");
+    assert!(message.contains("raw unavailable"));
+    assert!(message.contains("block unavailable"));
 }
 
 #[tokio::test]
@@ -135,21 +181,23 @@ async fn cancelled_blocking_capture_cannot_upload_after_final_save() {
             Ok(())
         })
     });
-    coordinator.request(SavePoint::Periodic, operation.clone(), &background);
+    coordinator.set_worker_operation(operation);
+    coordinator.enqueue(SavePoint::Periodic, &background);
     start.await.unwrap();
-    coordinator.request(SavePoint::PostTurn, operation.clone(), &background);
+    coordinator.enqueue(SavePoint::PostTurn, &background);
 
     coordinator
-        .finish(
+        .finalize(
             async {
                 uploaded.lock().push("final");
                 Ok(())
             },
+            future::ready(()),
             Duration::from_secs(1),
         )
         .await
         .unwrap();
-    coordinator.request(SavePoint::PostTurn, operation, &background);
+    coordinator.enqueue(SavePoint::PostTurn, &background);
     release.send(()).unwrap();
     read_finished.await.unwrap();
 
@@ -162,11 +210,12 @@ async fn expired_final_deadline_never_starts_or_rearms_a_save() {
     let captured = AtomicBool::new(false);
     assert!(
         coordinator
-            .finish(
+            .finalize(
                 async {
                     captured.store(true, Ordering::SeqCst);
                     Ok(())
                 },
+                future::ready(()),
                 Duration::ZERO,
             )
             .await
@@ -174,11 +223,12 @@ async fn expired_final_deadline_never_starts_or_rearms_a_save() {
     );
     assert!(
         coordinator
-            .finish(
+            .finalize(
                 async {
                     captured.store(true, Ordering::SeqCst);
                     Ok(())
                 },
+                future::ready(()),
                 Duration::from_secs(30),
             )
             .await
@@ -194,12 +244,13 @@ async fn final_timeout_cancels_future_before_returning() {
     let uploaded = AtomicBool::new(false);
     assert!(
         coordinator
-            .finish(
+            .finalize(
                 async {
                     released.await?;
                     uploaded.store(true, Ordering::SeqCst);
                     Ok(())
                 },
+                future::ready(()),
                 Duration::from_millis(10),
             )
             .await
@@ -224,21 +275,27 @@ async fn interrupted_finalizer_still_joins_the_cancelled_worker() {
             Ok(())
         })
     });
-    coordinator.request(SavePoint::Periodic, operation, &background);
+    coordinator.set_worker_operation(operation);
+    coordinator.enqueue(SavePoint::Periodic, &background);
     start.await.unwrap();
     assert!(
         coordinator
-            .finish(future::pending::<Result<()>>(), Duration::from_secs(5))
+            .finalize(
+                future::pending::<Result<()>>(),
+                future::ready(()),
+                Duration::from_secs(5)
+            )
             .now_or_never()
             .is_none()
     );
 
     coordinator
-        .finish(
+        .finalize(
             async {
                 assert!(release.send(()).is_err());
                 Ok(())
             },
+            future::ready(()),
             Duration::from_secs(5),
         )
         .await
@@ -249,15 +306,20 @@ async fn interrupted_finalizer_still_joins_the_cancelled_worker() {
 async fn final_failure_is_retained_without_repeating_writes() {
     let coordinator = SaveCoordinator::default();
     let result = coordinator
-        .finish(
+        .finalize(
             async { Err(anyhow!("upload failed")) },
+            future::ready(()),
             Duration::from_secs(5),
         )
         .await;
     assert!(result.is_err());
     assert!(
         coordinator
-            .finish(future::pending::<Result<()>>(), Duration::from_secs(5))
+            .finalize(
+                future::pending::<Result<()>>(),
+                future::ready(()),
+                Duration::from_secs(5)
+            )
             .now_or_never()
             .unwrap()
             .is_err()

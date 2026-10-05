@@ -406,6 +406,7 @@ fn entry_icon_uses_harness_and_execution_location() {
             creator: AgentConversationPrincipal::default(),
             executor: None,
             request_usage: None,
+            cost_in_cents: None,
             run_time: None,
             session_status: None,
             source: None,

@@ -2,9 +2,13 @@ use uuid::Uuid;
 use warpui::App;
 
 use super::*;
+use crate::ai::agent::base_user_query::warp_client_origin;
 use crate::ai::agent::conversation::ConversationStatus;
-use crate::ai::agent::{AIAgentContext, AIAgentInput};
+use crate::ai::agent::{AIAgentContext, AIAgentInput, CancellationReason};
 use crate::ai::blocklist::QueuedQueryOrigin;
+use crate::ai::blocklist::orchestration_events::{
+    OrchestrationEventService, PendingEvent, PendingEventDetail,
+};
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
 /// The text of every `UserQuery` input across `id`'s root-task exchanges, in the order they
@@ -22,7 +26,7 @@ fn user_queries_in_order(history: &BlocklistAIHistoryModel, id: AIConversationId
         .collect()
 }
 
-fn file_prompt(participant: ParticipantId) -> QueuedQuery {
+fn file_prompt(participant: ParticipantId, base: Option<BaseUserQuery>) -> QueuedQuery {
     QueuedQuery::new_shared_session_prompt(
         "file followup".into(),
         participant,
@@ -30,6 +34,7 @@ fn file_prompt(participant: ParticipantId) -> QueuedQuery {
             attachment_id: "attachment-id".into(),
             file_name: "event-payload.json".into(),
         }],
+        base,
     )
 }
 
@@ -51,11 +56,20 @@ fn prepared_file_prompt_steers_without_interrupting_or_redownloading() {
         let terminal = add_window_with_terminal(&mut app, None);
         let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
         let participant = ParticipantId::new();
+        let base = BaseUserQuery::from_proto(warp_multi_agent_api::request::input::UserQuery {
+            query: "server followup".into(),
+            origin: Some(warp_multi_agent_api::UserQueryOrigin::default()),
+            ..Default::default()
+        });
         let (id, query_id, streams) = controller.update(&mut app, |controller, ctx| {
             let id = controller.bind_native_prompt_conversation(None, ctx);
             controller.send_user_query_in_conversation("initial".into(), id, None, ctx);
             let query_id = QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
-                queue.append(id, file_prompt(participant.clone()), ctx)
+                queue.append(
+                    id,
+                    file_prompt(participant.clone(), Some(base.clone())),
+                    ctx,
+                )
             });
             let task_id = BlocklistAIHistoryModel::as_ref(ctx)
                 .conversation(&id)
@@ -85,10 +99,11 @@ fn prepared_file_prompt_steers_without_interrupting_or_redownloading() {
             let task_id = BlocklistAIHistoryModel::as_ref(ctx)
                 .conversation(&id).unwrap().get_root_task_id().clone();
             let input = controller.steer_head_prompt_for_request(id, &task_id, ctx).unwrap();
-            let AIAgentInput::UserQuery { query, referenced_attachments, .. } = &input else {
+            let AIAgentInput::UserQuery { query, referenced_attachments, base: input_base, .. } = &input else {
                 panic!("expected a user query");
             };
-            assert_eq!(query, "file followup");
+            assert_eq!(query, "server followup");
+            assert_eq!(input_base.as_ref(), Some(&base));
             assert!(matches!(
                 referenced_attachments.get("event-payload.json"),
                 Some(AIAgentAttachment::FilePathReference { file_id, file_path, .. })
@@ -131,7 +146,7 @@ fn ready_event_dispatches_only_when_the_conversation_is_idle_after_an_exchange()
             });
             let query_id = QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
                 queue.finish_native_setup(id, ctx);
-                queue.append(id, file_prompt(ParticipantId::new()), ctx)
+                queue.append(id, file_prompt(ParticipantId::new(), None), ctx)
             });
             QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
                 queue.complete_preparation(id, query_id, prepared_file(), ctx);
@@ -157,7 +172,7 @@ fn delayed_file_prompt_dispatches_after_promptless_startup_setup_finishes() {
         let (id, query_id) = controller.update(&mut app, |controller, ctx| {
             let id = controller.bind_native_prompt_conversation(None, ctx);
             let query_id = QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
-                queue.append(id, file_prompt(ParticipantId::new()), ctx)
+                queue.append(id, file_prompt(ParticipantId::new(), None), ctx)
             });
 
             QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
@@ -203,6 +218,7 @@ fn missing_download_configuration_settles_eagerly_without_waiting_for_dispatch()
                     file_name: "event-payload.json".into(),
                 }],
                 ParticipantId::new(),
+                None,
                 ctx,
             );
             let row = &QueuedQueryModel::as_ref(ctx).queue(id)[0];
@@ -228,6 +244,7 @@ fn startup_injections_queued_before_the_initial_prompt_are_dispatched_one_at_a_t
                 None,
                 vec![],
                 participant.clone(),
+                None,
                 ctx,
             );
             controller.execute_warp_agent_prompt_from_shared_session_injection(
@@ -235,6 +252,7 @@ fn startup_injections_queued_before_the_initial_prompt_are_dispatched_one_at_a_t
                 None,
                 vec![],
                 participant.clone(),
+                None,
                 ctx,
             );
             assert_eq!(
@@ -292,6 +310,267 @@ fn startup_injections_queued_before_the_initial_prompt_are_dispatched_one_at_a_t
     });
 }
 
+/// The fallback text the server sends with an agent wake.
+const WAKE_PROMPT: &str = "You have received new agent messages. Read all unread agent messages.";
+
+/// A base whose origin is the server's agent-message wake.
+fn agent_message_wake_base() -> BaseUserQuery {
+    BaseUserQuery::from_proto(warp_multi_agent_api::request::input::UserQuery {
+        origin: Some(warp_multi_agent_api::UserQueryOrigin {
+            variant: Some(
+                warp_multi_agent_api::user_query_origin::Variant::AgentMessageWake(
+                    warp_multi_agent_api::user_query_origin::AgentMessageWake { message_count: 1 },
+                ),
+            ),
+        }),
+        ..Default::default()
+    })
+}
+
+fn assert_wake_sent_as_input_not_query(history: &BlocklistAIHistoryModel, id: AIConversationId) {
+    let inputs: Vec<_> = history
+        .conversation(&id)
+        .unwrap()
+        .root_task_exchanges()
+        .flat_map(|exchange| exchange.input.iter())
+        .collect();
+    assert!(
+        inputs
+            .iter()
+            .any(|input| matches!(input, AIAgentInput::AgentWake)),
+        "expected an AgentWake input among: {inputs:?}"
+    );
+    assert!(
+        user_queries_in_order(history, id)
+            .iter()
+            .all(|query| query != WAKE_PROMPT),
+        "the wake's fallback text must never be relayed as literal query text"
+    );
+}
+
+#[test]
+fn agent_message_wake_origin_becomes_an_agent_wake_input_not_a_query() {
+    // The wake must be recognized even when it arrives through the startup-injection queue.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        let participant = ParticipantId::new();
+        let id = controller.update(&mut app, |controller, ctx| {
+            let id = controller.bind_native_prompt_conversation(None, ctx);
+            controller.execute_warp_agent_prompt_from_shared_session_injection(
+                WAKE_PROMPT.to_owned(),
+                None,
+                vec![],
+                participant,
+                Some(agent_message_wake_base()),
+                ctx,
+            );
+            id
+        });
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.enter_agent_view(None, Some(id), AgentViewEntryOrigin::Cli, ctx);
+        });
+
+        controller.update(&mut app, |controller, ctx| {
+            controller.send_user_query_in_conversation("prompt1".into(), id, None, ctx);
+            controller.dispatch_queued_warp_agent_prompt(id, None, ctx);
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_wake_sent_as_input_not_query(history, id);
+        });
+    });
+}
+
+#[test]
+fn agent_message_wake_origin_is_recognized_when_steered_into_a_follow_up() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        let participant = ParticipantId::new();
+        let id = controller.update(&mut app, |controller, ctx| {
+            let id = controller.bind_native_prompt_conversation(None, ctx);
+            // Sending the initial prompt first queues the wake behind it instead of dispatching it.
+            controller.send_user_query_in_conversation("prompt1".into(), id, None, ctx);
+            controller.execute_warp_agent_prompt_from_shared_session_injection(
+                WAKE_PROMPT.to_owned(),
+                None,
+                vec![],
+                participant,
+                Some(agent_message_wake_base()),
+                ctx,
+            );
+            assert_eq!(
+                QueuedQueryModel::as_ref(ctx)
+                    .queue(id)
+                    .iter()
+                    .map(QueuedQuery::text)
+                    .collect::<Vec<_>>(),
+                vec![WAKE_PROMPT],
+                "the wake should be queued behind the active prompt1 turn"
+            );
+            id
+        });
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.enter_agent_view(None, Some(id), AgentViewEntryOrigin::Cli, ctx);
+        });
+
+        // End prompt1's turn without draining the queue, so the follow-up steers the queued wake.
+        controller.update(&mut app, |controller, ctx| {
+            controller.cancel_conversation_progress(id, CancellationReason::ManuallyCancelled, ctx);
+            assert!(
+                !controller.has_active_stream_for_conversation(id, ctx),
+                "prompt1's stream must be cleared before steering can run"
+            );
+            controller.send_follow_up_for_conversation(id, ctx);
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_wake_sent_as_input_not_query(history, id);
+        });
+        QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+            assert!(
+                !queue.has_queue(id),
+                "the steered wake row must leave the queue"
+            );
+        });
+    });
+}
+
+#[test]
+fn wake_text_without_the_wake_origin_stays_a_user_query() {
+    for base in [
+        None,
+        Some(BaseUserQuery::from_proto(
+            warp_multi_agent_api::request::input::UserQuery {
+                origin: Some(warp_client_origin()),
+                ..Default::default()
+            },
+        )),
+    ] {
+        App::test((), move |mut app| async move {
+            initialize_app_for_terminal_view(&mut app);
+            let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+            let terminal = add_window_with_terminal(&mut app, None);
+            let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+            let id = controller.update(&mut app, |controller, ctx| {
+                let id = controller.bind_native_prompt_conversation(None, ctx);
+                controller.execute_warp_agent_prompt_from_shared_session_injection(
+                    WAKE_PROMPT.to_owned(),
+                    None,
+                    vec![],
+                    ParticipantId::new(),
+                    base,
+                    ctx,
+                );
+                id
+            });
+            terminal.update(&mut app, |terminal, ctx| {
+                terminal.enter_agent_view(None, Some(id), AgentViewEntryOrigin::Cli, ctx);
+            });
+
+            controller.update(&mut app, |controller, ctx| {
+                controller.send_user_query_in_conversation("prompt1".into(), id, None, ctx);
+                controller.dispatch_queued_warp_agent_prompt(id, None, ctx);
+            });
+
+            BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+                let inputs: Vec<_> = history
+                    .conversation(&id)
+                    .unwrap()
+                    .root_task_exchanges()
+                    .flat_map(|exchange| exchange.input.iter())
+                    .collect();
+                assert!(
+                    !inputs
+                        .iter()
+                        .any(|input| matches!(input, AIAgentInput::AgentWake)),
+                    "no AgentWake input expected among: {inputs:?}"
+                );
+                assert_eq!(
+                    user_queries_in_order(history, id),
+                    vec!["prompt1", WAKE_PROMPT]
+                );
+            });
+        });
+    }
+}
+
+#[test]
+fn orchestration_events_wait_for_the_native_setup_barrier_before_injecting() {
+    // The server folds pending inbox messages into the initial turn itself, so an event that
+    // arrives during setup must not become the run's opening turn.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        let id = controller.update(&mut app, |controller, ctx| {
+            controller.bind_native_prompt_conversation(None, ctx)
+        });
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.enter_agent_view(None, Some(id), AgentViewEntryOrigin::Cli, ctx);
+        });
+
+        OrchestrationEventService::handle(&app).update(&mut app, |service, ctx| {
+            service.enqueue_event_batch(
+                id,
+                vec![PendingEvent {
+                    event_id: "event-1".to_string(),
+                    source_agent_id: "child".to_string(),
+                    attempt_count: 0,
+                    detail: PendingEventDetail::Message {
+                        message_id: "message-1".to_string(),
+                        addresses: vec!["parent".to_string()],
+                        subject: "subject".to_string(),
+                        message_body: "body".to_string(),
+                    },
+                }],
+                ctx,
+            );
+        });
+
+        controller.read(&app, |controller, ctx| {
+            assert!(
+                QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(id),
+                "precondition: the native setup barrier must still be up"
+            );
+            assert!(
+                !controller.has_active_stream_for_conversation(id, ctx),
+                "the event must not have been injected while the barrier is up"
+            );
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                service.has_pending_events(id),
+                "the event must still be held, waiting for the barrier to lift"
+            );
+        });
+
+        controller.update(&mut app, |controller, ctx| {
+            controller.send_user_query_in_conversation("initial".into(), id, None, ctx);
+            assert!(!QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(id));
+        });
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                user_queries_in_order(history, id),
+                vec!["initial".to_owned()],
+                "the initial prompt must be the run's first turn"
+            );
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                service.has_pending_events(id),
+                "the event stays held behind the active initial-turn stream"
+            );
+        });
+    });
+}
+
 #[test]
 fn live_injection_while_a_turn_is_active_is_queued_instead_of_interrupting_it() {
     App::test((), |mut app| async move {
@@ -324,6 +603,7 @@ fn live_injection_while_a_turn_is_active_is_queued_instead_of_interrupting_it() 
                 None,
                 vec![],
                 ParticipantId::new(),
+                None,
                 ctx,
             );
         });
@@ -372,6 +652,7 @@ fn dispatch_queued_warp_agent_prompt_with_an_explicit_id_targets_that_row_not_th
                 None,
                 vec![],
                 participant.clone(),
+                None,
                 ctx,
             );
             controller.execute_warp_agent_prompt_from_shared_session_injection(
@@ -379,6 +660,7 @@ fn dispatch_queued_warp_agent_prompt_with_an_explicit_id_targets_that_row_not_th
                 None,
                 vec![],
                 participant.clone(),
+                None,
                 ctx,
             );
             let second_row_id = QueuedQueryModel::as_ref(ctx).queue(id)[1].id();
@@ -441,6 +723,7 @@ fn dispatch_queued_warp_agent_prompt_respects_fifo_order_across_mixed_row_kinds(
                 None,
                 vec![],
                 ParticipantId::new(),
+                None,
                 ctx,
             );
             id
@@ -503,6 +786,7 @@ fn route_native_startup_injection_rejects_a_prompt_targeting_a_different_convers
                     Some(other_token),
                     vec![],
                     ParticipantId::new(),
+                    None,
                     ctx,
                 );
                 assert!(!QueuedQueryModel::as_ref(ctx).has_queue(id));
@@ -546,6 +830,7 @@ fn unmapped_token_never_bootstraps_a_new_conversation_when_not_bound() {
                     Some(unmapped_token),
                     vec![],
                     ParticipantId::new(),
+                    None,
                     ctx,
                 );
             });
@@ -580,6 +865,7 @@ fn drained_injection_stages_attachments_and_attributes_the_exchange_to_its_parti
                     content: "remote context".into(),
                 }],
                 participant.clone(),
+                None,
                 ctx,
             );
             id
@@ -646,6 +932,7 @@ fn startup_injections_reuse_the_restored_conversation() {
                     None,
                     vec![],
                     ParticipantId::new(),
+                    None,
                     ctx,
                 );
                 let row = &QueuedQueryModel::as_ref(ctx).queue(restored)[0];
@@ -677,6 +964,7 @@ fn native_initial_prompt_uses_its_bound_conversation_without_agent_view() {
                     None,
                     vec![],
                     ParticipantId::new(),
+                    None,
                     ctx,
                 );
                 controller.send_ai_input_with_context(
@@ -743,6 +1031,7 @@ fn unbind_native_prompt_conversation_drops_any_prompts_still_queued() {
                     None,
                     vec![],
                     ParticipantId::new(),
+                    None,
                     ctx,
                 );
                 QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {

@@ -843,7 +843,8 @@ fn should_fork_from_last_known_good_state(
         | RenderableAIError::ContextWindowExceeded(_)
         | RenderableAIError::InvalidApiKey { .. }
         | RenderableAIError::AwsBedrockCredentialsExpiredOrInvalid { .. }
-        | RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid => false,
+        | RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid
+        | RenderableAIError::ChatGPTSubscriptionError { .. } => false,
         // A shell-exit failure can't resume in this (now-dead) pane, but the user
         // can fork from the last known good state to continue in a fresh one.
         RenderableAIError::InternalWarpError

@@ -150,6 +150,51 @@ fn ambient_agent_task_deserializes_run_time_iso8601() {
 }
 
 #[test]
+fn ambient_agent_task_deserializes_and_totals_request_usage() {
+    let mut task = task_json_with_run_time("run_time", json!("PT1S"));
+    task["request_usage"] = json!({
+        "inference_cost": 10.0,
+        "compute_cost": 2.0,
+        "platform_cost": 3.0,
+        "inference_cost_usd": 0.18,
+        "compute_cost_usd": 0.036,
+        "platform_cost_usd": 0.054
+    });
+
+    let task: AmbientAgentTask = serde_json::from_value(task).unwrap();
+
+    assert_eq!(task.credits_used(), Some(15.0));
+    assert_eq!(task.cost_in_cents(), Some(27.0));
+}
+
+#[test]
+fn ambient_agent_task_totals_available_request_usage_dollar_components() {
+    let mut task = task_json_with_run_time("run_time", json!("PT1S"));
+    task["request_usage"] = json!({
+        "inference_cost_usd": 0.18
+    });
+
+    let task: AmbientAgentTask = serde_json::from_value(task).unwrap();
+
+    assert_eq!(task.cost_in_cents(), Some(18.0));
+}
+
+#[test]
+fn ambient_agent_task_has_no_dollar_cost_when_usd_fields_are_missing() {
+    let mut task = task_json_with_run_time("run_time", json!("PT1S"));
+    task["request_usage"] = json!({
+        "inference_cost": 10.0,
+        "compute_cost": 2.0,
+        "platform_cost": 3.0
+    });
+
+    let task: AmbientAgentTask = serde_json::from_value(task).unwrap();
+
+    assert_eq!(task.credits_used(), Some(15.0));
+    assert_eq!(task.cost_in_cents(), None);
+}
+
+#[test]
 fn ambient_agent_task_deserializes_github_webhook_source() {
     let mut task = task_json_with_run_time("run_time", json!("PT1S"));
     task["source"] = json!("GITHUB_WEBHOOK");

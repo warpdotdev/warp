@@ -24,6 +24,7 @@ pub use login_failure_notification::LoginFailureReason;
 use url::Url;
 pub use user_uid::UserUid;
 use warp_core::channel::ChannelState;
+use warp_core::features::FeatureFlag;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warp_errors::{report_error, report_if_error};
 use warpui::modals::{AlertDialogWithCallbacks, ModalButton};
@@ -32,6 +33,7 @@ use warpui::{AppContext, SingletonEntity};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::OrchestrationPillBarModel;
+use crate::ai::chatgpt_subscription::ChatGPTSubscriptionModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::mcp::TemplatableMCPServerManager;
@@ -54,7 +56,7 @@ use crate::settings::{
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::shared_session::manager::Manager as SharedSessionManager;
 use crate::workflows::manager::WorkflowManager;
-use crate::workspace::{Workspace, WorkspaceAction};
+use crate::workspace::{OneTimeModalModel, Workspace, WorkspaceAction};
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::{
     GlobalResourceHandlesProvider, focus_running_window_and_show_native_modal, persistence,
@@ -292,6 +294,10 @@ pub fn log_out(app: &mut AppContext) {
     AIRequestUsageModel::handle(app).update(app, |usage_model, ctx| {
         usage_model.reset_server_availability(ctx);
     });
+    if FeatureFlag::ChatGPTSubscription.is_enabled() {
+        ChatGPTSubscriptionModel::handle(app).update(app, |model, ctx| model.reset(ctx));
+    }
+    OneTimeModalModel::handle(app).update(app, |model, _| model.on_log_out());
     BlocklistAIHistoryModel::handle(app).update(app, |history_model, _| {
         history_model.reset();
     });

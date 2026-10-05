@@ -1385,6 +1385,87 @@ fn test_vim_jump_to_end_and_beginning() {
 }
 
 #[test]
+fn test_vim_line_text_objects() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("one\n two words \nthree", &mut app);
+
+        set_cursor_position(&editor, 2, 4, &mut app);
+        vim_user_insert(&editor, "yil", &mut app);
+        VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
+            let register = registers.read_from_register('"', ctx).unwrap();
+            assert_eq!(register.text, "two words");
+            assert_eq!(register.motion_type, MotionType::Charwise);
+        });
+
+        set_cursor_position(&editor, 2, 4, &mut app);
+        vim_user_insert(&editor, "dil", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "one\n  \nthree");
+
+        editor.update(&mut app, |view, ctx| {
+            view.reset(InitialBufferState::plain_text("one\n \t \nthree"), ctx);
+            view.handle_action(&CodeEditorViewAction::CursorAtBufferStart, ctx);
+        });
+        set_cursor_position(&editor, 2, 1, &mut app);
+        vim_user_insert(&editor, "dil", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "one\n \t \nthree");
+        editor.update(&mut app, |view, ctx| {
+            view.reset(
+                InitialBufferState::plain_text("one\n two words \nthree"),
+                ctx,
+            );
+            view.handle_action(&CodeEditorViewAction::CursorAtBufferStart, ctx);
+        });
+        set_cursor_position(&editor, 2, 4, &mut app);
+        vim_user_insert(&editor, "cil", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "one\n  \nthree");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Insert));
+
+        editor.update(&mut app, |view, ctx| {
+            view.vim_keystroke(&Keystroke::parse("escape").unwrap(), ctx);
+            view.reset(InitialBufferState::plain_text(" αβ \n \nlast"), ctx);
+            view.handle_action(&CodeEditorViewAction::CursorAtBufferStart, ctx);
+        });
+        set_cursor_position(&editor, 3, 0, &mut app);
+        vim_user_insert(&editor, "yal", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 0));
+        VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
+            let register = registers.read_from_register('"', ctx).unwrap();
+            assert_eq!(register.text, " αβ \n \nlast\n");
+            assert_eq!(register.motion_type, MotionType::Linewise);
+        });
+        set_cursor_position(&editor, 3, 0, &mut app);
+
+        vim_user_insert(&editor, "Vily", &mut app);
+        VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
+            let register = registers.read_from_register('"', ctx).unwrap();
+            assert_eq!(register.text, "last");
+            assert_eq!(register.motion_type, MotionType::Charwise);
+        });
+
+        vim_user_insert(&editor, "valy", &mut app);
+        VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
+            let register = registers.read_from_register('"', ctx).unwrap();
+            assert_eq!(register.text, " αβ \n \nlast\n");
+            assert_eq!(register.motion_type, MotionType::Linewise);
+        });
+
+        vim_user_insert(&editor, "dal", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "");
+
+        editor.update(&mut app, |view, ctx| {
+            view.reset(InitialBufferState::plain_text("one\ntwo\nthree"), ctx);
+            view.handle_action(&CodeEditorViewAction::CursorAtBufferStart, ctx);
+        });
+        vim_user_insert(&editor, "cal", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Insert));
+    });
+}
+
+#[test]
 fn test_vim_begin_line_below() {
     let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
 

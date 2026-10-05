@@ -36,8 +36,9 @@ pub use crate::ai::agent::{
     AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentPtyWriteMode, AIAgentText,
     AIAgentTextSection, AIAgentTodo, AIAgentTodoId, AgentOutputImage, AgentOutputImageLayout,
     AgentOutputMermaidDiagram, AgentOutputTable, AskUserQuestionResult, CancellationReason,
-    FileGlobV2Result, GrepResult, ImageContext, MessageId, ReceivedMessageDisplay,
-    RenderableAIError, RequestCommandOutputResult, RunAgentsAgentOutcomeKind, RunAgentsResult,
+    ChatGPTSubscriptionErrorAction, ChatGPTSubscriptionErrorActionKind, FileGlobV2Result,
+    GrepResult, ImageContext, MessageId, ReceivedMessageDisplay, RenderableAIError,
+    RequestCommandOutputResult, RunAgentsAgentOutcomeKind, RunAgentsResult,
     SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId, Shared, ShellCommandDelay,
     StartAgentExecutionMode, StopRecordingResult, SuggestNewConversationResult, SummarizationType,
     TodoOperation, UserQueryMode,
@@ -104,8 +105,10 @@ pub use crate::ai::blocklist::telemetry::{
     RunAgentsCardDecision, run_agents_card_decision_event,
 };
 pub use crate::ai::blocklist::view_util::{
-    FAILED_OUTPUT_USAGE_NOTICE_TEXT, FailedOutputPresentation, OUT_OF_CREDITS_SUBSCRIBE_LABEL,
-    failed_output_presentation, format_credits, should_show_failed_output_usage_notice,
+    CHATGPT_CONTINUED_WITH_WARP_CREDITS_TEXT, FAILED_OUTPUT_USAGE_NOTICE_TEXT,
+    FailedOutputPresentation, OUT_OF_CREDITS_SUBSCRIBE_LABEL,
+    chatgpt_subscription_message_with_links, failed_output_presentation, format_credits,
+    format_dollars, should_show_failed_output_usage_notice,
 };
 pub use crate::ai::blocklist::{
     AIActionStatus, AskUserQuestionExecutor, AttachmentType, BlocklistAIActionEvent,

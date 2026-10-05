@@ -45,8 +45,9 @@ use vim::vim::{
     VimTextObject, WordBound, WordMotion, WordType,
 };
 use vim::{
-    vim_a_block, vim_a_paragraph, vim_a_quote, vim_a_word, vim_inner_block, vim_inner_paragraph,
-    vim_inner_quote, vim_inner_word, vim_word_iterator_from_offset,
+    vim_a_block, vim_a_paragraph, vim_a_quote, vim_a_word, vim_all_lines, vim_inner_block,
+    vim_inner_line, vim_inner_paragraph, vim_inner_quote, vim_inner_word,
+    vim_word_iterator_from_offset,
 };
 use warp_completer::completer::Description;
 use warp_core::semantic_selection::SemanticSelection;
@@ -2368,13 +2369,7 @@ impl VimHandler for EditorView {
 
         let motion_type = match operand {
             VimOperand::Motion { motion_type, .. } => *motion_type,
-            VimOperand::TextObject(text_object) => match text_object {
-                VimTextObject {
-                    object_type: TextObjectType::Paragraph,
-                    ..
-                } => MotionType::Linewise,
-                _ => MotionType::Charwise,
-            },
+            VimOperand::TextObject(text_object) => text_object.motion_type(),
             VimOperand::Line => MotionType::Linewise,
         };
 
@@ -2871,6 +2866,10 @@ impl VimHandler for EditorView {
                     (TextObjectType::Paragraph, TextObjectInclusion::Inner) => {
                         vim_inner_paragraph(buffer, offset).map(|range| range.start..range.end + 1)
                     }
+                    (TextObjectType::Line, TextObjectInclusion::Around) => vim_all_lines(buffer),
+                    (TextObjectType::Line, TextObjectInclusion::Inner) => {
+                        vim_inner_line(buffer, offset)
+                    }
                     (TextObjectType::Quote(quote_type), TextObjectInclusion::Around) => {
                         vim_a_quote(buffer, offset, *quote_type)
                     }
@@ -2893,8 +2892,11 @@ impl VimHandler for EditorView {
                 let Ok(mut end_point) = buffer.point_for_offset(end) else {
                     continue;
                 };
-                // Cursor always snaps to column 0 on paragraph text objects.
-                if let TextObjectType::Paragraph = text_object.object_type {
+                if matches!(
+                    (&text_object.object_type, text_object.inclusion),
+                    (TextObjectType::Paragraph, _)
+                        | (TextObjectType::Line, TextObjectInclusion::Around)
+                ) {
                     end_point.column = 0;
                 }
                 let Ok(new_head) = buffer.anchor_at(end_point, AnchorBias::Left) else {

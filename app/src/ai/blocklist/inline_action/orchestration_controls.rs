@@ -303,6 +303,7 @@ fn oz_model_menu_items<A: OrchestrationControlAction, V: View>(
         None,
         None,
         CollapsedModelVariants::default(),
+        None,
         &scope,
         ctx,
     )

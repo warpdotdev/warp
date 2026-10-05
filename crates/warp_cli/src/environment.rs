@@ -18,6 +18,14 @@ fn validate_description(s: &str) -> Result<String, String> {
     }
 }
 
+fn validate_runner_uid(s: &str) -> Result<String, String> {
+    if s.trim().is_empty() {
+        Err("Default runner UID must not be blank".to_string())
+    } else {
+        Ok(s.to_string())
+    }
+}
+
 /// Environment-related subcommands.
 #[derive(Debug, Clone, Subcommand)]
 #[command(group(ArgGroup::new("scope").required(false)))]
@@ -86,6 +94,9 @@ pub enum EnvironmentCommand {
         /// Docker image to use (optional, updates if present)
         #[arg(long = "docker-image", short = 'd')]
         docker_image: Option<String>,
+        /// Default runner UID (optional, updates if present)
+        #[arg(long = "default-runner", value_name = "RUNNER_UID", value_parser = validate_runner_uid)]
+        default_runner: Option<String>,
         /// Git repo in format "owner/repo" to add (can be specified multiple times)
         #[arg(long = "repo", short = 'r',  action = ArgAction::Append)]
         repo: Vec<String>,

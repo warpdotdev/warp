@@ -3,9 +3,10 @@ use std::collections::BTreeMap;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_graphql::platform_error::{PlatformErrorInfo, PlatformErrorMessageFormat};
 
-use super::classify_driver_error;
+use super::{classify_driver_error, markdown_code_span};
 use crate::ai::agent::{RenderableAIError, TransientNetworkErrorKind};
 use crate::ai::agent_sdk::driver::AgentDriverError;
+use crate::ai::agent_sdk::driver::environment::{PrepareEnvironmentError, SetupCommandPhase};
 use crate::ai::agent_sdk::driver::terminal::{BootstrapError, ShareSessionError};
 use crate::server::server_api::ai::TaskGitCredentialsError;
 
@@ -20,6 +21,34 @@ fn assert_state_and_code(
         update.error_code, expected_code,
         "unexpected error_code for {error}"
     );
+}
+
+#[test]
+fn setup_timeout_reports_failed_with_command_and_duration() {
+    for (phase, timeout_seconds) in [
+        (SetupCommandPhase::Execute, 1800),
+        (SetupCommandPhase::ResetWorkingDirectory, 30),
+    ] {
+        let error = AgentDriverError::from(PrepareEnvironmentError::SetupCommandTimedOut {
+            command_index: 2,
+            command: "./setup.sh".to_string(),
+            phase,
+            timeout_seconds,
+        });
+        assert!(matches!(
+            &error,
+            AgentDriverError::SetupCommandTimedOut { .. }
+        ));
+        let (state, update) = classify_driver_error(&error);
+        assert_eq!(state, AgentTaskState::Failed);
+        assert_eq!(
+            update.error_code,
+            Some(PlatformErrorCode::EnvironmentSetupFailed)
+        );
+        assert!(update.message.contains("Setup command #2"));
+        assert!(update.message.contains("./setup.sh"));
+        assert!(update.message.contains(&format!("{timeout_seconds}s")));
+    }
 }
 
 #[test]
@@ -278,6 +307,53 @@ fn environment_setup_failed_is_failed() {
         Some(PlatformErrorCode::EnvironmentSetupFailed),
     );
 }
+#[test]
+fn setup_command_failure_has_plain_text_and_markdown_status_messages() {
+    let error = AgentDriverError::from(PrepareEnvironmentError::SetupCommand {
+        command: "echo '```'".to_string(),
+        output: Some("```\npermission denied".to_string()),
+    });
+    let (state, update) = classify_driver_error(&error);
+
+    assert_eq!(state, AgentTaskState::Failed);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::EnvironmentSetupFailed)
+    );
+    let plain_text = "Environment setup failed: Failed to run setup command: echo '```'\nCommand output:\n```\npermission denied. Check your repository URLs and setup commands.";
+    assert_eq!(update.message, plain_text);
+    let messages = &update.platform_error.as_ref().unwrap().user_facing_messages;
+    assert_eq!(messages[&PlatformErrorMessageFormat::PlainText], plain_text);
+    assert_eq!(
+        messages[&PlatformErrorMessageFormat::Markdown],
+        "Failed to run setup command ````echo '```'````:\n\n    ```\n    permission denied\n\nCheck your repository URLs and setup commands."
+    );
+}
+
+#[test]
+fn setup_command_markdown_quotes_backticks_at_command_boundaries() {
+    assert_eq!(markdown_code_span("`echo`"), "`` `echo` ``");
+}
+
+#[test]
+fn setup_command_failure_without_output_retains_plain_text_fallback() {
+    let error = AgentDriverError::from(PrepareEnvironmentError::SetupCommand {
+        command: "./setup.sh".to_string(),
+        output: None,
+    });
+    let (_, update) = classify_driver_error(&error);
+    assert_eq!(
+        update.message,
+        "Environment setup failed: Failed to run setup command: ./setup.sh. Check your repository URLs and setup commands."
+    );
+    assert!(
+        update
+            .platform_error
+            .unwrap()
+            .user_facing_messages
+            .is_empty()
+    );
+}
 
 #[test]
 fn setup_command_exited_shell_is_failed_with_env_setup_and_names_command() {
@@ -513,19 +589,5 @@ fn sandbox_deadline_reached_on_free_plan_suggests_upgrading() {
     assert_eq!(
         update.message,
         "Sandbox maximum runtime reached. Upgrade to a paid plan to remove this limit."
-    );
-}
-
-// --- SIGTERM abort ---
-
-#[test]
-fn terminated_by_signal_is_failed_with_no_error_code() {
-    let (state, update) = classify_driver_error(&AgentDriverError::TerminatedBySignal);
-    assert_eq!(state, AgentTaskState::Failed);
-    assert!(update.error_code.is_none());
-    assert_eq!(
-        update.message,
-        "The agent process was terminated (SIGTERM) before the run completed, most likely \
-         because the instance or worker hosting the run was shut down."
     );
 }

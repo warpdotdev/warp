@@ -20,7 +20,7 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::AnsiColorIdentifier;
 use warp_errors::report_error;
 #[cfg(feature = "local_fs")]
-use warp_util::path::{CleanPathResult, LineAndColumnArg};
+use warp_util::path::{CleanPathResult, LineAndColumnArg, expand_session_home};
 use warpui::clipboard::ClipboardContent;
 use warpui::{AppContext, SingletonEntity, ViewContext};
 
@@ -226,12 +226,15 @@ fn open_file_command_path(
     // The argument may contain shell-escaped characters (e.g. `\ ` for spaces) from auto-suggest.
     // Unescape them so the path matches the actual filesystem entry.
     let unescaped_path = session.shell_family().unescape(&parsed_path.path);
-    // Expand `~` to the user's home directory.
-    let expanded_path = shellexpand::tilde(&unescaped_path);
+    let expanded_path = expand_session_home(
+        &unescaped_path,
+        session.home_dir(),
+        session.path_separators().all,
+    );
 
     let shell_path = session
         .convert_directory_to_typed_path_buf(current_dir.to_owned())
-        .join(session.convert_directory_to_typed_path_buf(expanded_path.into_owned()))
+        .join(expanded_path)
         .normalize();
     let file_path = session
         .maybe_convert_to_native_path(&shell_path.to_path())

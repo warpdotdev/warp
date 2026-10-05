@@ -1,6 +1,9 @@
 use warp_cli::agent::Harness;
 
-use super::{auth_check_command_for, validate_cli_installed};
+use super::{
+    HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER, auth_check_command_for,
+    prepare_harness_failure_output, validate_cli_installed,
+};
 use crate::ai::agent_sdk::driver::AgentDriverError;
 
 fn assert_harness_setup_failed(err: &AgentDriverError) -> (&str, &str) {
@@ -8,6 +11,14 @@ fn assert_harness_setup_failed(err: &AgentDriverError) -> (&str, &str) {
         AgentDriverError::HarnessSetupFailed { harness, reason } => (harness, reason),
         other => panic!("expected HarnessSetupFailed, got: {other}"),
     }
+}
+
+#[test]
+fn harness_failure_output_uses_harness_truncation_marker() {
+    let output = format!("START{}END", "x".repeat(4_096));
+
+    let prepared = prepare_harness_failure_output(&output);
+    assert!(prepared.contains(HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER));
 }
 
 #[cfg(not(windows))]

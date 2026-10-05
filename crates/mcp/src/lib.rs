@@ -4,6 +4,8 @@ pub mod oauth;
 pub mod runtime;
 #[cfg(not(target_family = "wasm"))]
 pub mod sse_transport;
+#[cfg(not(target_family = "wasm"))]
+pub mod tool_call;
 
 use uuid::Uuid;
 
@@ -17,6 +19,9 @@ pub struct TemplatableMCPServerInfo {
     resources: Vec<rmcp::model::Resource>,
     tools: Vec<rmcp::model::Tool>,
     installation_id: Uuid,
+    /// Warp-side id the installation was resolved from (managed uid or
+    /// well-known integration id); `None` for local servers.
+    warp_id: Option<String>,
     description: Option<String>,
     /// Whether the underlying transport uses authentication.
     ///
@@ -41,6 +46,10 @@ impl TemplatableMCPServerInfo {
 
     pub fn installation_id(&self) -> Uuid {
         self.installation_id
+    }
+
+    pub fn warp_id(&self) -> Option<&str> {
+        self.warp_id.as_deref()
     }
 
     pub fn description(&self) -> Option<&str> {

@@ -300,7 +300,7 @@ fn confirm_delete(uid: &str, is_terminal: bool) -> Result<bool> {
 }
 
 /// Resolve a runner by UID or (unambiguous) name from a fetched list.
-fn resolve_runner<'a>(
+pub(super) fn resolve_runner<'a>(
     runners: &'a [Runner],
     id: Option<&str>,
     name: Option<&str>,

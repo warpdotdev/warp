@@ -716,23 +716,12 @@ pub enum FeatureFlag {
     /// flows while the default behavior temporarily keeps them disabled.
     LocalClaudeCodexChildHarnesses,
 
-    /// On `wait_for_events`, confirms parent status against the server and
-    /// registers an orchestrator for the owner-side ancestor stream so it
-    /// receives events for children created out-of-band (Oz CLI / web API).
-    WaitForEventsParentRegistration,
-
     /// Gates the client-side multi-level orchestration surfaces: child
     /// conversations auto-executing their own `run_agents` calls and the
     /// confirmation-card disclosure that launched agents may start
     /// children of their own. When disabled, a child's `run_agents` call
     /// fails gracefully instead of presenting a card in a hidden pane.
     MultiLevelOrchestration,
-
-    /// Gates the unified orchestration child-tracking stack: a single
-    /// `OrchestrationChildTracker` as the sole entry point for child state,
-    /// one `include_self` ancestor SSE per parent family, and a single
-    /// `is_remote_child` placeholder flavor for both owner and viewer.
-    OrchestrationUnifiedStack,
 
     /// Shows a pending user query indicator during summarization when a follow-up
     /// prompt is queued via `/fork-and-compact` or `/compact-and`.
@@ -897,6 +886,10 @@ pub enum FeatureFlag {
     /// Gates the SuperGrok feature, which lets users
     /// connect a Grok subscription instead of pasting an API key.
     SuperGrok,
+
+    /// Gates connecting a ChatGPT subscription via Sign in with ChatGPT.
+    /// Account linking is server-side (iss+client_id+sub), not local tokens.
+    ChatGPTSubscription,
 
     /// Gates Gemini Enterprise (GEAP) BYOLLM, which lets users
     /// route eliglible models to GEAP instead of Warp-managed inference.
@@ -1092,6 +1085,7 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::Changelog,
     FeatureFlag::CrashReporting,
     FeatureFlag::VideoRecording,
+    FeatureFlag::WindowsVideoRecording,
     FeatureFlag::ImeMarkedText,
     // Remote server binary is not yet supported on Windows.
     #[cfg(not(windows))]

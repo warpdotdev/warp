@@ -1135,6 +1135,7 @@ impl TemplatableMCPServerManager {
                 server_name,
                 description,
                 installation_uuid,
+                installation.warp_id().map(str::to_owned),
                 server.transport_type.clone(),
                 logger.clone(),
                 auth_context,
