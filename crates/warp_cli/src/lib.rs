@@ -25,6 +25,7 @@ pub mod completions;
 pub mod config_file;
 mod date_time;
 pub mod environment;
+pub mod environment_checkout;
 pub mod federate;
 pub mod harness_support;
 pub mod integration;
@@ -549,6 +550,9 @@ pub enum CliCommand {
     #[command(subcommand)]
     Environment(crate::environment::EnvironmentCommand),
 
+    #[command(hide = true)]
+    EnvironmentCheckout(crate::environment_checkout::EnvironmentCheckoutArgs),
+
     /// Manage MCP servers.
     #[command(subcommand)]
     MCP(crate::mcp::MCPCommand),
@@ -618,6 +622,7 @@ impl CliCommand {
         match self {
             CliCommand::Agent(command) => command.as_str_for_tracing(),
             CliCommand::Environment(command) => command.as_str_for_tracing(),
+            CliCommand::EnvironmentCheckout(_) => "environment_checkout",
             CliCommand::MCP(command) => command.as_str_for_tracing(),
             CliCommand::Run(command) => command.as_str_for_tracing(),
             CliCommand::Model(command) => command.as_str_for_tracing(),

@@ -46,6 +46,19 @@ use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
 
+#[test]
+fn environment_checkout_requires_no_auth_and_has_no_telemetry_payload() {
+    let command =
+        CliCommand::EnvironmentCheckout(warp_cli::environment_checkout::EnvironmentCheckoutArgs {
+            requests_file: "private/requests.json".into(),
+            failure_report: "private/failures.json".into(),
+        });
+    assert!(!command_requires_auth(&command));
+    let event = command_to_telemetry_event(&command);
+    assert_eq!(event.name(), "CLI.Execute.EnvironmentCheckout");
+    assert!(event.payload().is_none());
+}
+
 fn parse_run_agent_args(args: &[&str]) -> RunAgentArgs {
     let parsed = Args::try_parse_from(std::iter::once("warp").chain(args.iter().copied()))
         .expect("agent run args should parse");

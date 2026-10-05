@@ -3,6 +3,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use build_cache::metadata::{CacheMetadataError, CacheUsage};
 use build_cache::{CacheSetupError, CacheSetupReport, RepoIdentity, RepositoryCacheSource};
 use cloud_object_models::SourceRepo;
 use warp_completer::completer::CommandExitStatus;
@@ -82,7 +83,7 @@ pub(super) async fn setup_caches(
 
     if let Err(error) = report
         .cache_usage(&cache_root)
-        .and_then(|usage| build_cache::metadata::write_cache_metadata(&cache_root, usage))
+        .and_then(|usage| record_cache_usage(&cache_root, usage))
     {
         log::warn!("Namespace cache usage metadata was not updated: {error}");
     }
@@ -117,6 +118,21 @@ pub(super) async fn setup_caches(
     }
 }
 
+fn record_cache_usage(
+    cache_root: &Path,
+    mut usage: Vec<CacheUsage>,
+) -> Result<(), CacheMetadataError> {
+    if std::fs::symlink_metadata(cache_root.join("git-mirrors"))
+        .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+    {
+        usage.push(CacheUsage {
+            path: "git-mirrors".into(),
+            cache_framework: Some("git".to_owned()),
+            mount_target: Vec::new(),
+        });
+    }
+    build_cache::metadata::write_cache_metadata(cache_root, usage)
+}
 /// Report any cache setup failures to Sentry.
 fn report_degradations(report: &CacheSetupReport) -> bool {
     let mut degraded = false;
