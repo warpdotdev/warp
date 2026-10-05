@@ -3702,13 +3702,23 @@ pub(crate) fn render_debug_footer<V: View>(
     debug_row.add_child(copy_button_with_tooltip);
 
     if let Some(submit_button) = stacked_submit_button {
-        let mut column = Flex::column();
-        column.add_child(Expanded::new(1.0, debug_row.finish()).finish());
-        column.add_child(Container::new(submit_button).with_margin_top(8.).finish());
-        column.finish()
+        stack_submit_button_below(debug_row.finish(), submit_button)
     } else {
         Container::new(Expanded::new(1.0, debug_row.finish()).finish()).finish()
     }
+}
+
+/// Stacks the feedback button below the debug row. The column is laid out with an unbounded
+/// height, so it must not contain flexible children.
+fn stack_submit_button_below(
+    debug_row: Box<dyn Element>,
+    submit_button: Box<dyn Element>,
+) -> Box<dyn Element> {
+    Flex::column()
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_child(debug_row)
+        .with_child(Container::new(submit_button).with_margin_top(8.).finish())
+        .finish()
 }
 
 #[derive(Copy, Clone, Debug)]
