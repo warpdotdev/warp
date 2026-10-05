@@ -594,9 +594,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.79"
+version = "1.0.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "080e9890a082662b09c1ad45f567faeeb47f22b5fb23895fbe1e651e718e25ca"
+checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "app-installation-detection"
@@ -1636,9 +1636,9 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-rs"
-version = "1.16.2"
+version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a054912289d18629dc78375ba2c3726a3afe3ff71b4edba9dedfca0e3446d1fc"
+checksum = "ce2b2dcc879c3bae0d371e77c99f2238400ef24ec001394befa67b6e543add9e"
 dependencies = [
  "aws-lc-sys",
  "zeroize",
@@ -1646,14 +1646,15 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-sys"
-version = "0.39.1"
+version = "0.44.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83a25cf98105baa966497416dbd42565ce3a8cf8dbfd59803ec9ad46f3126399"
+checksum = "f09fae7be8bb3174e05c6afdb34199e6dc0c7c04ba9fa237b1967adfbde27483"
 dependencies = [
  "cc",
  "cmake",
  "dunce",
  "fs_extra",
+ "pkg-config",
 ]
 
 [[package]]
@@ -2661,7 +2662,7 @@ dependencies = [
  "gemm",
  "half",
  "libm",
- "memmap2 0.9.7",
+ "memmap2",
  "num-traits",
  "num_cpus",
  "rand 0.9.4",
@@ -3724,15 +3725,11 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.15"
+version = "0.9.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae211234986c545741a7dc064309f67ee1e5ad243d0e48335adc0484d960bcc7"
+checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
 dependencies = [
- "autocfg",
- "cfg-if",
  "crossbeam-utils",
- "memoffset 0.9.0",
- "scopeguard",
 ]
 
 [[package]]
@@ -4893,11 +4890,10 @@ dependencies = [
 
 [[package]]
 name = "event-listener"
-version = "5.4.0"
+version = "5.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3492acde4c3fc54c845eaab3eed8bd00c7a7d881f78bfc801e43a93dec1331ae"
+checksum = "5a23add41df1562121a9393cb065eab5146a1242410f23a644851e90cfd669d2"
 dependencies = [
- "concurrent-queue",
  "parking",
  "pin-project-lite",
 ]
@@ -5260,7 +5256,7 @@ checksum = "457e789b3d1202543297a350643cf459f836cade38934e7a4cf6a39e7cde2905"
 dependencies = [
  "fontconfig-parser",
  "log",
- "memmap2 0.9.7",
+ "memmap2",
  "slotmap",
  "tinyvec",
  "ttf-parser",
@@ -6152,7 +6148,7 @@ dependencies = [
  "grep-matcher",
  "log",
  "memchr",
- "memmap2 0.9.7",
+ "memmap2",
 ]
 
 [[package]]
@@ -6168,9 +6164,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.4.15"
+version = "0.4.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cb093c84e8bd9b188d4c4a8cb6579fc016968d14c99882163cd3ff402a4f155"
+checksum = "a9f37a958b41b3b19ee2707c06439c0e9e547e847223eb791ecb0cb821c65e27"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -7305,7 +7301,7 @@ dependencies = [
  "jaq-core",
  "jaq-json",
  "jaq-std",
- "memmap2 0.9.7",
+ "memmap2",
  "num-bigint",
  "saphyr-parser",
  "toml-span",
@@ -8316,18 +8312,9 @@ dependencies = [
 
 [[package]]
 name = "memmap2"
-version = "0.8.0"
+version = "0.9.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43a5a03cefb0d953ec0be133036f14e109412fa594edc2f77227249db66cc3ed"
-dependencies = [
- "libc",
-]
-
-[[package]]
-name = "memmap2"
-version = "0.9.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "483758ad303d734cec05e5c12b41d7e93e6a6390c5e9dae6bdeb7c1259012d28"
+checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
 dependencies = [
  "libc",
  "stable_deref_trait",
@@ -8443,7 +8430,7 @@ dependencies = [
  "libc",
  "log",
  "mach2 0.4.2",
- "memmap2 0.9.7",
+ "memmap2",
  "memoffset 0.9.0",
  "minidump-common",
  "nix 0.28.0",
@@ -11924,9 +11911,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.39"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c2c118cb077cca2822033836dfb1b975355dfb784b5e8da48f7b6c5db74e60e"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -11998,9 +11985,9 @@ checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.13"
+version = "0.103.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
+checksum = "0527518605e68109d875e248ea259b6758801cf165e4b2c2733ae3b51f12535a"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -12171,7 +12158,7 @@ checksum = "b6277f0217056f77f1d8f49f2950ac6c278c0d607c45f5ee99328d792ede24ec"
 dependencies = [
  "ab_glyph",
  "log",
- "memmap2 0.9.7",
+ "memmap2",
  "smithay-client-toolkit",
  "tiny-skia 0.11.4",
 ]
@@ -13039,7 +13026,7 @@ dependencies = [
  "cursor-icon",
  "libc",
  "log",
- "memmap2 0.9.7",
+ "memmap2",
  "rustix 0.38.44",
  "thiserror 1.0.63",
  "wayland-backend",
@@ -13328,12 +13315,12 @@ dependencies = [
 
 [[package]]
 name = "symbolic-common"
-version = "12.6.0"
+version = "12.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "405af7bd5edd866cef462e22ef73f11cf9bf506c9d62824fef8364eb69d4d4ad"
+checksum = "aa62dd1423607f9149839169427f1d92ec1267318b42d36731d17e6f95beae04"
 dependencies = [
  "debugid",
- "memmap2 0.8.0",
+ "memmap2",
  "stable_deref_trait",
  "uuid",
 ]
@@ -13567,7 +13554,7 @@ dependencies = [
  "lru 0.16.3",
  "lz4_flex 0.13.0",
  "measure_time",
- "memmap2 0.9.7",
+ "memmap2",
  "once_cell",
  "oneshot",
  "rayon",
@@ -16328,7 +16315,7 @@ dependencies = [
  "libtest-mimic",
  "log",
  "markdown_parser",
- "memmap2 0.9.7",
+ "memmap2",
  "native-dialog",
  "nix 0.26.4",
  "notify-rust",
@@ -17546,7 +17533,7 @@ dependencies = [
  "dpi",
  "js-sys",
  "libc",
- "memmap2 0.9.7",
+ "memmap2",
  "ndk",
  "objc2 0.5.2",
  "objc2-app-kit 0.2.2",
