@@ -18,6 +18,60 @@ fn initialize_deps(app: &mut App) {
     initialize_settings_for_tests(app);
 }
 
+#[test]
+fn test_apply_v4a_final_bytes() {
+    use ai::agent::action::{AIAgentActionType, FileEdit};
+    use ai::diff_validation::{DiffType, ParsedDiff, V4AHunk, fuzzy_match_v4a_diffs};
+    use warp_multi_agent_api::message::tool_call::{ApplyFileDiffs, apply_file_diffs};
+
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let fixtures: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../../../crates/ai/src/diff_validation/testdata/blank_lines.json"
+        ))
+        .unwrap();
+        for fixture in fixtures {
+            let hunk: V4AHunk = serde_json::from_value(fixture["corrected"].clone()).unwrap();
+            let call = ApplyFileDiffs {
+                v4a_updates: vec![apply_file_diffs::V4aFileUpdate {
+                    file_path: "fixture.txt".into(),
+                    hunks: vec![apply_file_diffs::v4a_file_update::Hunk {
+                        change_context: hunk.change_context,
+                        pre_context: hunk.pre_context,
+                        old: hunk.old,
+                        new: hunk.new,
+                        post_context: hunk.post_context,
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            let AIAgentActionType::RequestFileEdits { file_edits, .. } = call.into() else {
+                panic!("expected file edits");
+            };
+            let FileEdit::Edit(ParsedDiff::V4AEdit { hunks, .. }) = &file_edits[0] else {
+                panic!("expected V4A edit");
+            };
+            let initial = fixture["initial"].as_str().unwrap();
+            let diff = fuzzy_match_v4a_diffs("fixture.txt", hunks, None, initial);
+            let DiffType::Update { deltas, .. } = diff.diff_type else {
+                panic!("expected update");
+            };
+            let editor = mock_model(&mut app, initial, ContentVersion::new());
+            layout_model(&mut app, &editor).await;
+            editor.update(&mut app, |editor, ctx| editor.apply_diffs(deltas, ctx));
+            editor.read(&app, |editor, ctx| {
+                assert_eq!(
+                    editor.content().as_ref(ctx).text().as_str(),
+                    fixture["final"].as_str().unwrap(),
+                    "{}",
+                    fixture["name"]
+                );
+            });
+        }
+    });
+}
+
 fn mock_model(app: &mut App, text: &str, version: ContentVersion) -> ModelHandle<CodeEditorModel> {
     app.add_model(|ctx| {
         let styles = code_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx), None);

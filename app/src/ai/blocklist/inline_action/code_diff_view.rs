@@ -2794,22 +2794,7 @@ pub fn convert_file_edits_to_file_diffs(
 
                             // Build dummy content from V4A hunks using pre_context + old + post_context
                             for hunk in hunks {
-                                let mut hunk_content = String::new();
-                                if !hunk.pre_context.is_empty() {
-                                    hunk_content.push_str(&hunk.pre_context);
-                                    if !hunk_content.ends_with('\n') {
-                                        hunk_content.push('\n');
-                                    }
-                                }
-                                if !hunk.old.is_empty() {
-                                    hunk_content.push_str(&hunk.old);
-                                    if !hunk_content.ends_with('\n') {
-                                        hunk_content.push('\n');
-                                    }
-                                }
-                                if !hunk.post_context.is_empty() {
-                                    hunk_content.push_str(&hunk.post_context);
-                                }
+                                let hunk_content = hunk.original_content();
                                 // We don't have line numbers for V4A hunks in restored state,
                                 // so use None for the range
                                 if !hunk_content.is_empty() {

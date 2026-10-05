@@ -245,6 +245,52 @@ pub struct V4AHunk {
     /// The context lines right after the change.
     pub post_context: String,
 }
+impl V4AHunk {
+    /// Constructs terminated original lines for a lossy restored preview.
+    pub fn original_content(&self) -> String {
+        let decoded = DecodedV4AHunk::new(self);
+        decoded
+            .pre
+            .iter()
+            .chain(&decoded.old)
+            .chain(&decoded.post)
+            .map(|line| format!("{line}\n"))
+            .collect()
+    }
+}
+
+fn decode_v4a_lines(text: &str) -> Vec<&str> {
+    text.lines().collect()
+}
+
+struct DecodedV4AHunk<'a> {
+    pre: Vec<&'a str>,
+    old: Vec<&'a str>,
+    new: Vec<&'a str>,
+    post: Vec<&'a str>,
+}
+
+impl<'a> DecodedV4AHunk<'a> {
+    fn new(hunk: &'a V4AHunk) -> Self {
+        Self {
+            pre: decode_v4a_lines(&hunk.pre_context),
+            old: decode_v4a_lines(&hunk.old),
+            new: decode_v4a_lines(&hunk.new),
+            post: decode_v4a_lines(&hunk.post_context),
+        }
+    }
+
+    fn insertion(&self, raw: &str) -> String {
+        if raw.contains('\r') {
+            return raw.to_owned();
+        }
+        let mut insertion = self.new.join("\n");
+        if self.new.last() == Some(&"") {
+            insertion.push('\n');
+        }
+        insertion
+    }
+}
 
 /// A customized version of [`str::lines`] which treats the empty string differenly.
 ///
@@ -409,21 +455,22 @@ pub fn fuzzy_match_v4a_diffs(
     let file_lines: Vec<&str> = file_content.lines().collect();
 
     for (block_index, diff) in diffs.iter().enumerate() {
+        let decoded = DecodedV4AHunk::new(diff);
         // Check for no-op diffs
-        if diff.old == diff.new {
+        if decoded.old == decoded.new {
             log::info!("Ignoring V4A diff with identical old and new content.");
             failures.noop_deltas += 1;
             continue;
         }
 
         // Find the location of the edit using context
-        let match_range = find_v4a_match(diff, &file_lines);
+        let match_range = find_v4a_match(&decoded, &diff.change_context, &file_lines);
 
         match match_range {
             Some(range) => {
                 // Check if the replacement is identical to what's already there
-                let matched_content = file_lines[range.start - 1..range.end - 1].join("\n");
-                if diff.new == matched_content {
+                let matched_content = &file_lines[range.start - 1..range.end - 1];
+                if decoded.new == matched_content {
                     log::info!(
                         "Ignoring V4A diff where new content is identical to matched file content"
                     );
@@ -433,7 +480,7 @@ pub fn fuzzy_match_v4a_diffs(
 
                 deltas.push(DiffDelta {
                     replacement_line_range: range.start..range.end,
-                    insertion: diff.new.clone(),
+                    insertion: decoded.insertion(&diff.new),
                 });
             }
             None => {
@@ -1179,74 +1226,110 @@ fn try_tuple2<A, B>(a: Option<A>, b: Option<B>) -> Option<(A, B)> {
 ///
 /// First attempts exact matching, then falls back to indentation-agnostic matching,
 /// and finally to JaroWinkler fuzzy matching.
-fn find_v4a_match(edit: &V4AHunk, file_lines: &[&str]) -> Option<Range<usize>> {
-    let pre_context_lines: Vec<&str> = edit.pre_context.lines().collect();
-    let old_lines: Vec<&str> = edit.old.lines().collect();
-    let post_context_lines: Vec<&str> = edit.post_context.lines().collect();
-
-    // If we have change_context (class/function markers), use them to narrow the search start
-    let search_start = if !edit.change_context.is_empty() {
-        find_change_context_start(&edit.change_context, file_lines)?
-    } else {
-        0
-    };
-
-    let search_lines = &file_lines[search_start..];
-
-    // Now search for the pattern: pre_context + old + post_context
-    let pattern_length = pre_context_lines.len() + old_lines.len() + post_context_lines.len();
-    if pattern_length == 0 {
-        return Some((search_start + 1)..(search_start + 1));
-    }
-    if pattern_length > search_lines.len() {
-        return None;
-    }
-
-    // Combine all three sections into a single search text for the scorers
-    let combined_search = [
-        pre_context_lines.as_slice(),
-        old_lines.as_slice(),
-        post_context_lines.as_slice(),
+fn find_v4a_match(
+    edit: &DecodedV4AHunk<'_>,
+    change_context: &[String],
+    file_lines: &[&str],
+) -> Option<Range<usize>> {
+    let search_start = find_change_context_start(change_context, file_lines)?;
+    let search_lines = file_lines.get(search_start..)?;
+    let pattern = [
+        edit.pre.as_slice(),
+        edit.old.as_slice(),
+        edit.post.as_slice(),
     ]
-    .concat()
-    .join("\n");
-
-    // Try exact match first
-    if let Some(range) = match_diff(
-        &combined_search,
-        None, // No expected line range
-        search_lines,
-        1.0, // Exact match requires perfect score
-        MakeExactMatch,
-    ) {
-        return calculate_old_range(search_start, range, &pre_context_lines, &old_lines);
+    .concat();
+    if pattern.is_empty() {
+        return Some(search_start + 1..search_start + 1);
     }
 
-    // Try indentation-agnostic match
-    if let Some(range) = match_diff(
-        &combined_search,
-        None,
-        search_lines,
-        1.0,
-        MakeIndentationAgnosticMatch,
-    ) {
-        log::debug!("V4A match found using indentation-agnostic matching");
-        return calculate_old_range(search_start, range, &pre_context_lines, &old_lines);
+    for strategy in [
+        V4AMatchStrategy::Exact,
+        V4AMatchStrategy::IndentationAgnostic,
+        V4AMatchStrategy::Fuzzy,
+    ] {
+        let scorer = V4AScorer {
+            pattern: &pattern,
+            strategy,
+            normalized_pattern: pattern.iter().map(|line| line.trim_start()).join("\n"),
+        };
+        let threshold = match strategy {
+            V4AMatchStrategy::Exact | V4AMatchStrategy::IndentationAgnostic => 1.0,
+            V4AMatchStrategy::Fuzzy => SECTION_MATCH_THRESHOLD,
+        };
+        if let Some(matched) =
+            score_matches(search_lines, pattern.len(), threshold, None, &scorer).first()
+        {
+            let range = calculate_old_range(
+                search_start,
+                matched.start_line..matched.end_line,
+                &edit.pre,
+                &edit.old,
+            )?;
+            if range.start > 0 && range.start <= range.end && range.end <= file_lines.len() + 1 {
+                return Some(range);
+            }
+        }
     }
-
-    // Try JaroWinkler fuzzy match as last resort
-    if let Some(range) = match_diff(
-        &combined_search,
-        None,
-        search_lines,
-        SECTION_MATCH_THRESHOLD,
-        MakeJaroWinklerMatch,
-    ) {
-        log::debug!("V4A match found using JaroWinkler fuzzy matching");
-        return calculate_old_range(search_start, range, &pre_context_lines, &old_lines);
-    }
-
     None
+}
+
+#[derive(Clone, Copy, Debug)]
+enum V4AMatchStrategy {
+    Exact,
+    IndentationAgnostic,
+    Fuzzy,
+}
+
+struct V4AScorer<'a> {
+    pattern: &'a [&'a str],
+    strategy: V4AMatchStrategy,
+    normalized_pattern: String,
+}
+
+impl fmt::Display for V4AScorer<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "V4A {:?}", self.strategy)
+    }
+}
+
+impl Scorer for V4AScorer<'_> {
+    fn score(&self, target: &[&str]) -> f64 {
+        if self.pattern.len() != target.len()
+            || self
+                .pattern
+                .iter()
+                .zip(target)
+                .any(|(pattern, line)| pattern.trim().is_empty() && !line.trim().is_empty())
+        {
+            return 0.0;
+        }
+        match self.strategy {
+            V4AMatchStrategy::Exact => {
+                if self.pattern == target {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            V4AMatchStrategy::IndentationAgnostic => {
+                if self
+                    .pattern
+                    .iter()
+                    .zip(target)
+                    .all(|(pattern, line)| pattern.trim_start() == line.trim_start())
+                {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            V4AMatchStrategy::Fuzzy => {
+                let target = target.iter().map(|line| line.trim_start()).join("\n");
+                jaro_winkler(&self.normalized_pattern, &target)
+            }
+        }
+    }
 }
 
 /// Calculate the line range for the old content (or insertion point if old is empty).
