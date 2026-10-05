@@ -833,6 +833,7 @@ impl Drop for HttpRemote {
 }
 
 fn serve_git_http(mut stream: TcpStream, root: &Path, authorization: &str, received: &AtomicBool) {
+    stream.set_nonblocking(false).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .unwrap();
