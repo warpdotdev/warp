@@ -774,7 +774,7 @@ pub struct RunCloudArgs {
 
     /// Path to a file to attach to the agent query.
     ///
-    /// Can be specified multiple times to attach multiple files (maximum 5).
+    /// Can be specified multiple times to attach multiple files (maximum 25).
     ///
     /// Example: --attach file1.png --attach file2.txt
     #[arg(
