@@ -7420,9 +7420,7 @@ impl Workspace {
     fn save_current_tab_as_new_config(&mut self, tab_index: usize, ctx: &mut ViewContext<Self>) {
         use crate::tab_configs::session_config::{tab_config_from_pane_snapshot, write_tab_config};
 
-        let Some(tab) = self.tabs.get(tab_index) else {
-            return;
-        };
+        let tab = &self.tabs[tab_index];
         let snapshot = tab.pane_group.as_ref(ctx).snapshot(ctx);
         let custom_title = tab.pane_group.as_ref(ctx).custom_title(ctx);
         let color = tab.color();
@@ -10228,7 +10226,6 @@ impl Workspace {
                 self.show_tab_group_right_click_menu = None;
                 self.show_tab_selection_right_click_menu = None;
                 self.hide_move_to_group_sidecar(ctx);
-                self.focus_active_tab(ctx);
                 ctx.notify();
             }
             MenuEvent::ItemHovered | MenuEvent::ItemSelected => {
