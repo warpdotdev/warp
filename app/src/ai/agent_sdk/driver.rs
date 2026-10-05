@@ -948,8 +948,6 @@ pub enum AgentDriverError {
         expected: String,
         got: String,
     },
-    #[error("Factory router model does not match the model selected for task {task_id}.")]
-    TaskModelMismatch { task_id: String },
     #[error(
         "Conversation {conversation_id} has no stored transcript for the {harness} harness. \
          The prior run may have crashed before saving any state."

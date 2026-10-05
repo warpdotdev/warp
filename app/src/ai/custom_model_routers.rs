@@ -32,7 +32,6 @@ pub const LOCAL_CUSTOM_ROUTER_PREFIX: &str = "custom-router:local:";
 
 /// The `config_key` prefix for cloud/team (server-synced) custom model routers.
 pub const CLOUD_CUSTOM_ROUTER_PREFIX: &str = "custom-router:cloud:";
-const FACTORY_CUSTOM_ROUTER_PREFIX: &str = "custom-router:factory:";
 
 /// The routing strategy for a custom model router.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -304,23 +303,6 @@ pub fn is_local_custom_router_id(id: &str) -> bool {
 /// feature flag as local routers so the whole feature is controlled by one flag.
 pub fn is_cloud_custom_router_id(id: &str) -> bool {
     id.starts_with(CLOUD_CUSTOM_ROUTER_PREFIX)
-}
-
-/// Recognizes a qualified Factory router key. The server validates its scope and definition.
-pub(crate) fn is_factory_custom_router_id(id: &str) -> bool {
-    let Some((factory_uid, slug)) = id
-        .strip_prefix(FACTORY_CUSTOM_ROUTER_PREFIX)
-        .and_then(|rest| rest.split_once(':'))
-    else {
-        return false;
-    };
-    !factory_uid.is_empty()
-        && id.len() <= 255
-        && slug.len() <= 64
-        && slug.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
-        && slug
-            .bytes()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_' || c == b'-')
 }
 
 // ── Serialization back to YAML ───────────────────────────────────────────────

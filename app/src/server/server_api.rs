@@ -538,6 +538,12 @@ impl ServerApi {
             .set_ambient_agent_task_id(task_id.map(|task_id| task_id.to_string()));
     }
 
+    pub fn ambient_agent_task_id(&self) -> Option<AmbientAgentTaskId> {
+        self.base_client
+            .ambient_agent_task_id()
+            .and_then(|id| id.parse().ok())
+    }
+
     /// Returns ambient agent headers to attach to requests.
     async fn ambient_agent_headers(&self) -> Result<Vec<(String, String)>> {
         self.ambient_headers(AmbientHeaderPolicy::inherit_all())

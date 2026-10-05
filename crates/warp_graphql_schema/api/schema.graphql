@@ -4702,6 +4702,7 @@ The User type is the primary way of interacting with our graph.
 Nearly all data is scoped to the currently logged-in user.
 """
 type User {
+  agentDriverModelChoices: FeatureModelChoice!
   aiCreditAvailability: AICreditAvailability!
   anonymousUserInfo: AnonymousUserInfo
   availableHarnesses: AvailableHarnesses!

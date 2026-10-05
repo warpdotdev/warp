@@ -285,8 +285,10 @@ impl RequestInput {
         app: &AppContext,
     ) -> Self {
         let llm_prefs = LLMPreferences::as_ref(app);
-        let model_id =
-            llm_prefs.get_active_base_model_id_for_request(scope, app, Some(terminal_surface_id));
+        let model_id = llm_prefs
+            .get_active_base_model(scope, app, Some(terminal_surface_id))
+            .id
+            .clone();
         let coding_model_id = llm_prefs
             .get_active_coding_model(scope, app, Some(terminal_surface_id))
             .id

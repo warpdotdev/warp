@@ -87,6 +87,10 @@ use warp_graphql::queries::free_available_models::{
     FreeAvailableModels, FreeAvailableModelsInput, FreeAvailableModelsResult,
     FreeAvailableModelsVariables,
 };
+use warp_graphql::queries::get_agent_driver_model_choices::{
+    GetAgentDriverModelChoices, GetAgentDriverModelChoicesVariables,
+    UserResult as AgentDriverModelChoicesUserResult,
+};
 #[cfg(not(feature = "agent_mode_evals"))]
 use warp_graphql::queries::get_ai_credit_availability::{
     GetAICreditAvailability, GetAICreditAvailabilityVariables,
@@ -1297,6 +1301,11 @@ pub trait AIClient: 'static + Send + Sync {
 
     async fn get_feature_model_choices(&self) -> Result<ModelsByFeature, anyhow::Error>;
 
+    async fn get_agent_driver_model_choices(
+        &self,
+        team_scope: RequestTeamScope,
+    ) -> Result<ModelsByFeature, anyhow::Error>;
+
     async fn get_available_harnesses(&self) -> Result<Vec<HarnessAvailability>, anyhow::Error>;
     async fn list_connected_self_hosted_workers(
         &self,
@@ -2221,6 +2230,26 @@ impl AIClient for ServerApi {
         match response.user {
             UserResult::UserOutput(output) => Ok(output.user.conversation_usage),
             UserResult::Unknown => Err(anyhow!("Unable to fetch conversation usage")),
+        }
+    }
+
+    async fn get_agent_driver_model_choices(
+        &self,
+        team_scope: RequestTeamScope,
+    ) -> Result<ModelsByFeature, anyhow::Error> {
+        let operation = GetAgentDriverModelChoices::build(GetAgentDriverModelChoicesVariables {
+            request_context: get_request_context(),
+        });
+        let response = self
+            .send_graphql_request_for_team(operation, team_scope)
+            .await?;
+        match response.user {
+            AgentDriverModelChoicesUserResult::UserOutput(output) => {
+                output.user.agent_driver_model_choices.try_into()
+            }
+            AgentDriverModelChoicesUserResult::Unknown => {
+                Err(anyhow!("Failed to get agent driver model choices"))
+            }
         }
     }
 
