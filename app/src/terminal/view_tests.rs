@@ -10,6 +10,8 @@ use chrono::{Local, Utc};
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::CLIAgentSessionState;
 use warp_cli::agent::Harness;
+use warp_files::FileModel;
+use warp_multi_agent_api as api;
 use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START, C0};
 use warpui::notification::UserNotification;
 use warpui::platform::WindowStyle;
@@ -51,6 +53,7 @@ use crate::code_review::comments::{
 use crate::context_chips::prompt::Prompt;
 use crate::editor::{AutosuggestionLocation, AutosuggestionType, CrdtOperation};
 use crate::features::FeatureFlag;
+use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::pane_group::focus_state::PaneGroupFocusState;
 use crate::pane_group::pane::PaneStack;
 use crate::pane_group::{BackingView, TerminalPaneId};
@@ -108,6 +111,120 @@ fn add_window_with_cloud_mode_terminal(app: &mut App) -> ViewHandle<TerminalView
         view.model.lock().set_is_dummy_cloud_mode_session(true);
     });
     terminal
+}
+
+#[test]
+fn v4a_string_restore_never_executes_history() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(NotebookKeybindings::new);
+        app.add_singleton_model(FileModel::new);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("restored.txt");
+        std::fs::write(&path, "before\n\nold\n").unwrap();
+        for complete in [false, true] {
+            let terminal = add_window_with_terminal(&mut app, None);
+            let mut messages = vec![api::Message {
+                id: "query".into(),
+                task_id: "root".into(),
+                request_id: "request".into(),
+                message: Some(api::message::Message::UserQuery(api::message::UserQuery {
+                    query: "edit files".into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }];
+            for (id, old, new) in [("corrected", "\n", ""), ("legacy", "old", "new")] {
+                messages.push(api::Message {
+                    id: id.into(),
+                    task_id: "root".into(),
+                    request_id: "request".into(),
+                    message: Some(api::message::Message::ToolCall(api::message::ToolCall {
+                        tool_call_id: id.into(),
+                        tool: Some(api::message::tool_call::Tool::ApplyFileDiffs(
+                            api::message::tool_call::ApplyFileDiffs {
+                                v4a_updates: vec![api::message::tool_call::apply_file_diffs::V4aFileUpdate {
+                                    file_path: path.to_string_lossy().into_owned(),
+                                    hunks: vec![api::message::tool_call::apply_file_diffs::v4a_file_update::Hunk {
+                                        pre_context: "before\n".into(),
+                                        old: old.into(),
+                                        new: new.into(),
+                                        ..Default::default()
+                                    }],
+                                    ..Default::default()
+                                }],
+                                ..Default::default()
+                            },
+                        )),
+                    })),
+                    ..Default::default()
+                });
+                if complete {
+                    messages.push(api::Message {
+                        id: format!("{id}-result"),
+                        task_id: "root".into(),
+                        request_id: "result-request".into(),
+                        message: Some(api::message::Message::ToolCallResult(
+                            api::message::ToolCallResult {
+                                tool_call_id: id.into(),
+                                result: Some(
+                                    api::message::tool_call_result::Result::ApplyFileDiffs(
+                                        api::ApplyFileDiffsResult {
+                                            result: Some(
+                                                api::apply_file_diffs_result::Result::Success(
+                                                    Default::default(),
+                                                ),
+                                            ),
+                                        },
+                                    ),
+                                ),
+                                ..Default::default()
+                            },
+                        )),
+                        ..Default::default()
+                    });
+                }
+            }
+            let tasks = vec![api::Task {
+                id: "root".into(),
+                messages,
+                ..Default::default()
+            }];
+            terminal.update(&mut app, |view, ctx| {
+                view.load_conversation_from_tasks(
+                    api::ConversationData {
+                        tasks: tasks.clone(),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+            });
+            futures_lite::future::yield_now().await;
+            terminal.read(&app, |view, ctx| {
+                let actions = view.ai_action_model().as_ref(ctx);
+                assert!(actions.get_pending_actions().is_empty());
+                let blocks: Vec<_> = view
+                    .rich_content_views
+                    .iter()
+                    .filter_map(|content| content.ai_block_metadata())
+                    .collect();
+                assert!(!blocks.is_empty());
+                for block in blocks {
+                    let block = block.ai_block_handle.as_ref(ctx);
+                    assert!(block.is_restored());
+                    assert!(!block.is_blocked_on_user_confirmation(ctx));
+                    assert!(
+                        !actions.has_unfinished_actions_for_conversation(block.conversation_id())
+                    );
+                    let restored = BlocklistAIHistoryModel::as_ref(ctx)
+                        .conversation(&block.conversation_id())
+                        .unwrap();
+                    assert_eq!(restored.compute_active_tasks(), tasks);
+                }
+            });
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "before\n\nold\n");
+        }
+    });
 }
 
 /// Builds a resumable, owned (created by the current test user) Oz cloud task so

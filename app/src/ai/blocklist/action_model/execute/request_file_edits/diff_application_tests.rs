@@ -3,8 +3,10 @@ use std::sync::Arc;
 
 use ai::diff_validation::{DiffDelta, ParsedDiff, V4AHunk};
 use async_io::block_on;
+use serde_json::json;
 use tempfile::NamedTempFile;
 use vec1::vec1;
+use warp_core::telemetry::TelemetryEvent;
 use warpui::App;
 
 use super::*;
@@ -17,6 +19,75 @@ fn update_deltas(diff: &AIRequestedCodeDiff) -> &[DiffDelta] {
         DiffType::Update { deltas, .. } => deltas,
         other => panic!("Expected Update diff_type, got {other:?}"),
     }
+}
+
+#[test]
+fn v4a_mixed_files_and_match_outcomes() {
+    block_on(async {
+        let edits = [
+            ("blank.txt", "before\n\n", "\n", ""),
+            ("ordinary.txt", "before\nold\n", "old\n", "new\n"),
+            ("noop.txt", "before\nsame\n", "same\n", "same\n"),
+            ("unmatched.txt", "before\nKEEP\n", "\n\n", ""),
+        ];
+        let requested = edits
+            .iter()
+            .map(|(file, _, old, new)| {
+                FileEdit::Edit(ParsedDiff::V4AEdit {
+                    file: Some((*file).into()),
+                    move_to: None,
+                    hunks: vec![V4AHunk {
+                        change_context: vec![],
+                        pre_context: "before\n".into(),
+                        old: (*old).into(),
+                        new: (*new).into(),
+                        post_context: String::new(),
+                    }],
+                })
+            })
+            .collect();
+        let result = apply_edits_internal(requested, &SessionContext::new_for_test(), &|path| {
+            let content = edits
+                .iter()
+                .find(|(file, _, _, _)| path.ends_with(file))
+                .unwrap()
+                .1;
+            async move { FileReadResult::Found(content.into()) }
+        })
+        .await;
+        let outcomes = result.v4a_outcomes.unwrap();
+        let event = RequestFileEditsTelemetryEvent::V4AMatchFinished(V4AMatchFinishedEvent {
+            identifiers: AIIdentifiers {
+                server_conversation_id: Some("conversation".into()),
+                ..Default::default()
+            },
+            executor_type: "warp-app",
+            outcomes,
+        });
+        assert_eq!(
+            event.payload(),
+            Some(json!({
+                "server_conversation_id": "conversation",
+                "executor_type": "warp-app",
+                "success": 2,
+                "unmatched": 1,
+                "noop": 1,
+            }))
+        );
+        let blank = result
+            .diffs
+            .iter()
+            .find(|diff| diff.file_name == "blank.txt")
+            .unwrap();
+        assert_eq!(update_deltas(blank)[0].replacement_line_range, 2..3);
+        assert_eq!(update_deltas(blank)[0].insertion, "");
+        let ordinary = result
+            .diffs
+            .iter()
+            .find(|diff| diff.file_name == "ordinary.txt")
+            .unwrap();
+        assert_eq!(update_deltas(ordinary)[0].insertion, "new");
+    });
 }
 
 #[test]

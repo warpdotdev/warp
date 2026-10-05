@@ -1,0 +1,556 @@
+[
+  {
+    "name": "blank_deletion_preceding_context",
+    "patch": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n before\n-\n*** End Patch",
+    "parsed": {
+      "pre_context": [
+        "before"
+      ],
+      "old": [
+        ""
+      ],
+      "new": [],
+      "post_context": []
+    },
+    "legacy": {
+      "pre_context": "before",
+      "old": "",
+      "new": "",
+      "post_context": "",
+      "change_context": []
+    },
+    "corrected": {
+      "pre_context": "before\n",
+      "old": "\n",
+      "new": "",
+      "post_context": "",
+      "change_context": []
+    },
+    "initial": "before\n\n",
+    "final": "before\n",
+    "range": [
+      2,
+      3
+    ]
+  },
+  {
+    "name": "trailing_blank_wrong_occurrence",
+    "patch": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n-x\n-\n+y\n*** End Patch",
+    "parsed": {
+      "pre_context": [],
+      "old": [
+        "x",
+        ""
+      ],
+      "new": [
+        "y"
+      ],
+      "post_context": []
+    },
+    "legacy": {
+      "pre_context": "",
+      "old": "x\n",
+      "new": "y",
+      "post_context": "",
+      "change_context": []
+    },
+    "corrected": {
+      "pre_context": "",
+      "old": "x\n\n",
+      "new": "y\n",
+      "post_context": "",
+      "change_context": []
+    },
+    "initial": "x\nKEEP\nx\n\nend\n",
+    "final": "x\nKEEP\ny\nend\n",
+    "range": [
+      3,
+      5
+    ]
+  },
+  {
+    "name": "empty_file_text",
+    "patch": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n+x\n*** End Patch",
+    "parsed": {
+      "pre_context": [],
+      "old": [],
+      "new": [
+        "x"
+      ],
+      "post_context": []
+    },
+    "legacy": {
+      "pre_context": "",
+      "old": "",
+      "new": "x",
+      "post_context": "",
+      "change_context": []
+    },
+    "corrected": {
+      "pre_context": "",
+      "old": "",
+      "new": "x\n",
+      "post_context": "",
+      "change_context": []
+    },
+    "initial": "",
+    "final": "x",
+    "range": [
+      1,
+      1
+    ]
+  },
+  {
+    "name": "empty_file_blank",
+    "patch": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n+\n*** End Patch",
+    "parsed": {
+      "pre_context": [],
+      "old": [],
+      "new": [
+        ""
+      ],
+      "post_context": []
+    },
+    "legacy": {
+      "pre_context": "",
+      "old": "",
+      "new": "",
+      "post_context": "",
+      "change_context": []
+    },
+    "corrected": {
+      "pre_context": "",
+      "old": "",
+      "new": "\n",
+      "post_context": "",
+      "change_context": []
+    },
+    "initial": "",
+    "final": "\n",
+    "range": [
+      1,
+      1
+    ]
+  },
+  {
+    "name": "empty_file_trailing_blank",
+    "patch": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n+x\n+\n*** End Patch",
+    "parsed": {
+      "pre_context": [],
+      "old": [],
+      "new": [
+        "x",
+        ""
+      ],
+      "post_context": []
+    },
+    "legacy": {
+      "pre_context": "",
+      "old": "",
+      "new": "x\n",
+      "post_context": "",
+      "change_context": []
+    },
+    "corrected": {
+      "pre_context": "",
+      "old": "",
+      "new": "x\n\n",
+      "post_context": "",
+      "change_context": []
+    },
+    "initial": "",
+    "final": "x\n\n",
+    "range": [
+      1,
+      1
+    ]
+  },
+  {
+    "name": "insert_both_contexts",
+    "patch": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n before\n+\n after\n*** End Patch",
+    "parsed": {
+      "pre_context": [
+        "before"
+      ],
+      "old": [],
+      "new": [
+        ""
+      ],
+      "post_context": [
+        "after"
+      ]
+    },
+    "legacy": {
+      "pre_context": "before",
+      "old": "",
+      "new": "",
+      "post_context": "after",
+      "change_context": []
+    },
+    "corrected": {
+      "pre_context": "before\n",
+      "old": "",
+      "new": "\n",
+      "post_context": "after\n",
+      "change_context": []
+    },
+    "initial": "before\nafter\n",
+    "final": "before\n\nafter\n",
+    "range": [
+      2,
+      2
+    ]
+  },
+  {
+    "name": "insert_preceding_context",
+    "patch": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n before\n+x\n+\n*** End Patch",
+    "parsed": {
+      "pre_context": [
+        "before"
+      ],
+      "old": [],
+      "new": [
+        "x",
+        ""
+      ],
+      "post_context": []
+    },
+    "legacy": {
+      "pre_context": "before",
+      "old": "",
+      "new": "x\n",
+      "post_context": "",
+      "change_context": []
+    },
+    "corrected": {
+      "pre_context": "before\n",
+      "old": "",
+      "new": "x\n\n",
+      "post_context": "",
+      "change_context": []
+    },
+    "initial": "before\nafter\n",
+    "final": "before\nx\n\nafter\n",
+    "range": [
+      2,
+      2
+    ]
+  },
+  {
+    "name": "insert_following_context",
+    "patch": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n+\n after\n*** End Patch",
+    "parsed": {
+      "pre_context": [],
+      "old": [],
+      "new": [
+        ""
+      ],
+      "post_context": [
+        "after"
+      ]
+    },
+    "legacy": {
+      "pre_context": "",
+      "old": "",
+      "new": "",
+      "post_context": "after",
+      "change_context": []
+    },
+    "corrected": {
+      "pre_context": "",
+      "old": "",
+      "new": "\n",
+      "post_context": "after\n",
+      "change_context": []
+    },
+    "initial": "before\nafter\n",
+    "final": "before\n\nafter\n",
+    "range": [
+      2,
+      2
+    ]
+  },
+  {
+    "name": "eof_blank_insertion",
+    "patch": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n before\n+\n*** End Patch",
+    "parsed": {
+      "pre_context": [
+        "before"
+      ],
+      "old": [],
+      "new": [
+        ""
+      ],
+      "post_context": []
+    },
+    "legacy": {
+      "pre_context": "before",
+      "old": "",
+      "new": "",
+      "post_context": "",
+      "change_context": []
+    },
+    "corrected": {
+      "pre_context": "before\n",
+      "old": "",
+      "new": "\n",
+      "post_context": "",
+      "change_context": []
+    },
+    "initial": "before\n",
+    "final": "before\n\n",
+    "range": [
+      2,
+      2
+    ]
+  },
+  {
+    "name": "eof_text_insertion",
+    "patch": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n before\n+x\n*** End Patch",
+    "parsed": {
+      "pre_context": [
+        "before"
+      ],
+      "old": [],
+      "new": [
+        "x"
+      ],
+      "post_context": []
+    },
+    "legacy": {
+      "pre_context": "before",
+      "old": "",
+      "new": "x",
+      "post_context": "",
+      "change_context": []
+    },
+    "corrected": {
+      "pre_context": "before\n",
+      "old": "",
+      "new": "x\n",
+      "post_context": "",
+      "change_context": []
+    },
+    "initial": "before\n",
+    "final": "before\nx\n",
+    "range": [
+      2,
+      2
+    ]
+  },
+  {
+    "name": "all_blank_deletion",
+    "patch": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n-\n-\n+\n*** End Patch",
+    "parsed": {
+      "pre_context": [],
+      "old": [
+        "",
+        ""
+      ],
+      "new": [
+        ""
+      ],
+      "post_context": []
+    },
+    "legacy": {
+      "pre_context": "",
+      "old": "\n",
+      "new": "",
+      "post_context": "",
+      "change_context": []
+    },
+    "corrected": {
+      "pre_context": "",
+      "old": "\n\n",
+      "new": "\n",
+      "post_context": "",
+      "change_context": []
+    },
+    "initial": "\n\n",
+    "final": "\n",
+    "range": [
+      1,
+      3
+    ]
+  },
+  {
+    "name": "pre_context_trailing_blank",
+    "patch": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n x\n \n-old\n+new\n*** End Patch",
+    "parsed": {
+      "pre_context": [
+        "x",
+        ""
+      ],
+      "old": [
+        "old"
+      ],
+      "new": [
+        "new"
+      ],
+      "post_context": []
+    },
+    "legacy": {
+      "pre_context": "x\n",
+      "old": "old",
+      "new": "new",
+      "post_context": "",
+      "change_context": []
+    },
+    "corrected": {
+      "pre_context": "x\n\n",
+      "old": "old\n",
+      "new": "new\n",
+      "post_context": "",
+      "change_context": []
+    },
+    "initial": "x\nKEEP\nold\nx\n\nold\n",
+    "final": "x\nKEEP\nold\nx\n\nnew\n",
+    "range": [
+      6,
+      7
+    ]
+  },
+  {
+    "name": "post_context_trailing_blank",
+    "patch": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n-old\n+new\n x\n \n*** End Patch",
+    "parsed": {
+      "pre_context": [],
+      "old": [
+        "old"
+      ],
+      "new": [
+        "new"
+      ],
+      "post_context": [
+        "x",
+        ""
+      ]
+    },
+    "legacy": {
+      "pre_context": "",
+      "old": "old",
+      "new": "new",
+      "post_context": "x\n",
+      "change_context": []
+    },
+    "corrected": {
+      "pre_context": "",
+      "old": "old\n",
+      "new": "new\n",
+      "post_context": "x\n\n",
+      "change_context": []
+    },
+    "initial": "old\nx\nKEEP\nold\nx\n\n",
+    "final": "old\nx\nKEEP\nnew\nx\n\n",
+    "range": [
+      4,
+      5
+    ]
+  },
+  {
+    "name": "cr_legacy_replacement",
+    "patch": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n-x\n+y\r\n*** End Patch",
+    "parsed": {
+      "pre_context": [],
+      "old": [
+        "x"
+      ],
+      "new": [
+        "y\r"
+      ],
+      "post_context": []
+    },
+    "legacy": {
+      "pre_context": "",
+      "old": "x",
+      "new": "y\r",
+      "post_context": "",
+      "change_context": []
+    },
+    "corrected": {
+      "pre_context": "",
+      "old": "x",
+      "new": "y\r",
+      "post_context": "",
+      "change_context": []
+    },
+    "initial": "x\n",
+    "final": "y\r\n",
+    "gui_final": "y\n",
+    "range": [
+      1,
+      2
+    ]
+  },
+  {
+    "name": "cr_empty_file",
+    "patch": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n+x\r\n*** End Patch",
+    "parsed": {
+      "pre_context": [],
+      "old": [],
+      "new": [
+        "x\r"
+      ],
+      "post_context": []
+    },
+    "legacy": {
+      "pre_context": "",
+      "old": "",
+      "new": "x\r",
+      "post_context": "",
+      "change_context": []
+    },
+    "corrected": {
+      "pre_context": "",
+      "old": "",
+      "new": "x\r",
+      "post_context": "",
+      "change_context": []
+    },
+    "initial": "",
+    "final": "x\r",
+    "range": [
+      1,
+      1
+    ]
+  },
+  {
+    "name": "unicode_tabs",
+    "patch": "*** Begin Patch\n*** Update File: fixture.txt\n@@\n \tpré\n-旧\n+新\n+\n fin\n*** End Patch",
+    "parsed": {
+      "pre_context": [
+        "\tpré"
+      ],
+      "old": [
+        "旧"
+      ],
+      "new": [
+        "新",
+        ""
+      ],
+      "post_context": [
+        "fin"
+      ]
+    },
+    "legacy": {
+      "pre_context": "\tpré",
+      "old": "旧",
+      "new": "新\n",
+      "post_context": "fin",
+      "change_context": []
+    },
+    "corrected": {
+      "pre_context": "\tpré\n",
+      "old": "旧\n",
+      "new": "新\n\n",
+      "post_context": "fin\n",
+      "change_context": []
+    },
+    "initial": "\tpré\n旧\nfin\n",
+    "final": "\tpré\n新\n\nfin\n",
+    "range": [
+      2,
+      3
+    ]
+  }
+]

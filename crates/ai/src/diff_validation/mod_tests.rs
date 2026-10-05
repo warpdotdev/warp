@@ -9,6 +9,171 @@ fn deltas(diff: &AIRequestedCodeDiff) -> &[DiffDelta] {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct BlankLineFixture {
+    name: String,
+    corrected: V4AHunk,
+    initial: String,
+    range: [usize; 2],
+}
+
+#[test]
+fn v4a_blank_line_fixture_ranges() {
+    let fixtures: Vec<BlankLineFixture> =
+        serde_json::from_str(include_str!("testdata/blank_lines.json")).unwrap();
+    for fixture in fixtures {
+        let diff =
+            fuzzy_match_v4a_diffs("fixture.txt", &[fixture.corrected], None, fixture.initial);
+        assert_eq!(deltas(&diff).len(), 1, "{}", fixture.name);
+        assert_eq!(
+            deltas(&diff)[0].replacement_line_range,
+            fixture.range[0]..fixture.range[1],
+            "{}",
+            fixture.name
+        );
+        assert_eq!(diff.failures, None, "{}", fixture.name);
+    }
+}
+
+#[test]
+fn v4a_string_codec() {
+    for length in 0..=4 {
+        for mut number in 0..3_usize.pow(length) {
+            let mut lines = Vec::new();
+            for _ in 0..length {
+                lines.push(["", "x", "y"][number % 3]);
+                number /= 3;
+            }
+            let wire = if lines.is_empty() {
+                String::new()
+            } else {
+                format!("{}\n", lines.join("\n"))
+            };
+            let hunk = V4AHunk {
+                change_context: vec![],
+                pre_context: wire.clone(),
+                old: wire.clone(),
+                new: wire.clone(),
+                post_context: wire,
+            };
+            let decoded = DecodedV4AHunk::new(&hunk);
+            assert_eq!(decoded.pre, lines);
+            assert_eq!(decoded.old, lines);
+            assert_eq!(decoded.new, lines);
+            assert_eq!(decoded.post, lines);
+        }
+    }
+    assert_eq!(decode_v4a_lines(" \n\t\n旧\n\n"), [" ", "\t", "旧", ""]);
+}
+
+#[test]
+fn v4a_existing_string_decoding() {
+    for (wire, expected) in [
+        ("", vec![]),
+        ("\n", vec![""]),
+        ("x", vec!["x"]),
+        ("x\n", vec!["x"]),
+        ("x\n\n", vec!["x", ""]),
+        ("x\r\n\r\n", vec!["x", ""]),
+        ("x\r", vec!["x\r"]),
+        ("x\ry\n", vec!["x\ry"]),
+    ] {
+        assert_eq!(decode_v4a_lines(wire), expected, "{wire:?}");
+    }
+}
+
+#[test]
+fn v4a_trailing_blank_wrong_occurrence() {
+    for (old, content) in [
+        (
+            "console.log('hello');\n\n",
+            "console.log('hello');\nKEEP\nconsole.log('hello');\n\nend\n",
+        ),
+        (
+            "console.log('hello');\n\n",
+            "    console.log('hello');\nKEEP\n    console.log('hello');\n\nend\n",
+        ),
+        (
+            "console.log('helo');\n\n",
+            "console.log('hello');\nKEEP\nconsole.log('hello');\n\nend\n",
+        ),
+    ] {
+        let hunk = V4AHunk {
+            change_context: vec![],
+            pre_context: String::new(),
+            old: old.into(),
+            new: "replacement\n".into(),
+            post_context: String::new(),
+        };
+        let diff = fuzzy_match_v4a_diffs("fixture.txt", &[hunk], None, content);
+        assert_eq!(deltas(&diff).len(), 1);
+        assert_eq!(deltas(&diff)[0].replacement_line_range, 3..5);
+    }
+}
+
+#[test]
+fn v4a_blank_matching_line_counts() {
+    for strategy in [
+        V4AMatchStrategy::Exact,
+        V4AMatchStrategy::IndentationAgnostic,
+        V4AMatchStrategy::Fuzzy,
+    ] {
+        let scorer = V4AScorer {
+            pattern: &["a long enough line", " \t"],
+            strategy,
+            normalized_pattern: "a long enough line\n".into(),
+        };
+        assert_eq!(scorer.score(&["a long enough line"]), 0.0);
+        assert_eq!(scorer.score(&["a long enough line", "KEEP"]), 0.0);
+    }
+    let hunk = V4AHunk {
+        change_context: vec![],
+        pre_context: String::new(),
+        old: "\n\n".into(),
+        new: "replacement\n".into(),
+        post_context: String::new(),
+    };
+    for content in ["KEEP\nKEEP\n", "\n", ""] {
+        let diff = fuzzy_match_v4a_diffs("fixture.txt", std::slice::from_ref(&hunk), None, content);
+        assert_eq!(deltas(&diff).len(), 0);
+        assert_eq!(diff.failures.unwrap().fuzzy_match_failures, 1);
+    }
+}
+
+#[test]
+fn v4a_genuine_noop() {
+    for (old, new, content) in [
+        ("x", "x\n", "x\n"),
+        ("\n", "\n", "\n"),
+        ("\n\n", "\n\n", "\n\n"),
+        (" x\n", "x\n", "x\n"),
+    ] {
+        let hunk = V4AHunk {
+            change_context: vec![],
+            pre_context: String::new(),
+            old: old.into(),
+            new: new.into(),
+            post_context: String::new(),
+        };
+        let diff = fuzzy_match_v4a_diffs("fixture.txt", &[hunk], None, content);
+        assert_eq!(deltas(&diff).len(), 0);
+        assert_eq!(diff.failures.unwrap().noop_deltas, 1);
+    }
+}
+
+#[test]
+fn v4a_old_strings_fixed_client() {
+    let hunk = V4AHunk {
+        change_context: vec![],
+        pre_context: "before\n\n".into(),
+        old: "\n".into(),
+        new: "".into(),
+        post_context: "after".into(),
+    };
+    let diff = fuzzy_match_v4a_diffs("fixture.txt", &[hunk], None, "before\n\n\nafter\n");
+    assert_eq!(deltas(&diff)[0].replacement_line_range, 3..4);
+}
+
 const CONTENT: &str = "I'd just like to interject
                         for a moment. What you're refering to as
                         Linux, is in fact, GNU/Linux, or as I've

@@ -16,6 +16,47 @@ fn add_tui_storage(
     app.add_model(|_| TuiDiffStorage::new(diffs, session_type))
 }
 
+#[test]
+fn tui_v4a_final_bytes() {
+    App::test((), |mut app| async move {
+        let dir = tempfile::tempdir().unwrap();
+        let fixtures: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../ai/src/diff_validation/testdata/blank_lines.json"
+        ))
+        .unwrap();
+        let mut diffs = Vec::new();
+        let mut expected = Vec::new();
+        for fixture in fixtures {
+            let path = dir.path().join(fixture["name"].as_str().unwrap());
+            let initial = fixture["initial"].as_str().unwrap();
+            fs::write(&path, initial).unwrap();
+            let hunk = serde_json::from_value(fixture["corrected"].clone()).unwrap();
+            let diff = ai::diff_validation::fuzzy_match_v4a_diffs(
+                &path.to_string_lossy(),
+                &[hunk],
+                None,
+                initial,
+            );
+            assert_eq!(diff.failures, None);
+            diffs.push(FileDiff::new(
+                initial.into(),
+                diff.file_name,
+                diff.diff_type,
+            ));
+            expected.push((path, fixture["final"].as_str().unwrap().to_owned()));
+        }
+        let result = accept_local(&mut app, diffs).await;
+        assert!(matches!(result, RequestFileEditsResult::Success { .. }));
+        for (path, final_content) in expected {
+            assert_eq!(
+                fs::read_to_string(&path).unwrap(),
+                final_content,
+                "{path:?}"
+            );
+        }
+    });
+}
+
 /// Runs the shared accept flow for local diffs on a fresh app and awaits the result.
 async fn accept_local(app: &mut App, diffs: Vec<FileDiff>) -> RequestFileEditsResult {
     let model = add_tui_storage(app, diffs, DiffSessionType::Local);
