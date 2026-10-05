@@ -6,7 +6,7 @@ use serial_test::serial;
 use session_sharing_protocol::sharer::SessionRetentionReason;
 use warpui::App;
 
-use super::TerminalDriver;
+use super::{ShareSessionError, TerminalDriver};
 use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::terminal::model::secrets::set_user_and_enterprise_secret_regexes;
 use crate::terminal::shared_session::SharedSessionStatus;
@@ -58,6 +58,35 @@ fn extend_shared_session_retention_emits_event_for_active_sharer() {
             emitted_reasons[0],
             SessionRetentionReason::SetupFailed
         ));
+    });
+}
+
+#[test]
+fn shared_session_failure_propagates_to_agent_driver_error() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let terminal_driver =
+            app.update(|ctx| TerminalDriver::create_from_existing_view(terminal_view.clone(), ctx));
+        let failure = terminal_driver.update(&mut app, |driver, _| {
+            driver.wait_for_session_share_failure()
+        });
+
+        let reason =
+            "Session sharing stopped after reconnecting five times without ordered event progress.";
+        terminal_view.update(&mut app, |_, ctx| {
+            ctx.emit(Event::SharedSessionFailed {
+                reason: reason.to_string(),
+            });
+        });
+
+        match failure.await {
+            AgentDriverError::ShareSessionFailed {
+                error: ShareSessionError::Failed(actual_reason),
+            } => assert_eq!(actual_reason, reason),
+            other => panic!("expected fatal session sharing failure, got {other:?}"),
+        }
     });
 }
 

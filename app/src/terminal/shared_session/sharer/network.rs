@@ -77,6 +77,9 @@ const CREATE_SESSION_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
 const AMBIENT_CREATE_SESSION_MAX_ATTEMPTS: usize = 3;
 const RECONNECT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
 const RECONNECT_CYCLE_TIMEOUT: Duration = Duration::from_secs(128);
+const MAX_NO_PROGRESS_RECONNECTS: usize = 5;
+const RECONNECT_LIMIT_REACHED_MESSAGE: &str =
+    "Session sharing stopped after reconnecting five times without ordered event progress.";
 const MAX_PRE_RECONNECT_MESSAGES: usize = 256;
 const MAX_PRE_RECONNECT_BYTES: usize = 1024 * 1024;
 #[cfg(not(test))]
@@ -406,6 +409,8 @@ pub struct Network {
     /// HashMap from event_no to the event. We keep these in memory to support reconnections
     /// until the server acks that they have been processed and are safe to remove.
     unacked_terminal_events: HashMap<usize, OrderedTerminalEvent>,
+    last_confirmed_event_no: Option<usize>,
+    no_progress_reconnects: usize,
 
     /// The parameters for the next input operation to send.
     next_buffer_seq_no: (BlockId, InputOperationSeqNo),
@@ -457,6 +462,8 @@ impl Network {
             startup_config: None,
             source: SharedSessionSource::default(),
             unacked_terminal_events: HashMap::new(),
+            last_confirmed_event_no: None,
+            no_progress_reconnects: 0,
             next_buffer_seq_no: (init_block_id, InputOperationSeqNo::zero()),
             pending_input_updates: Vec::new(),
         };
@@ -555,6 +562,8 @@ impl Network {
             startup_config: Some(startup_config),
             source,
             unacked_terminal_events: HashMap::new(),
+            last_confirmed_event_no: None,
+            no_progress_reconnects: 0,
             next_buffer_seq_no: (init_block_id.clone(), InputOperationSeqNo::zero()),
             pending_input_updates: Vec::new(),
         };
@@ -1296,7 +1305,16 @@ impl Network {
                             let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
                             network.ws_proxy_tx = ws_proxy_tx;
                             network.ws_proxy_rx = ws_proxy_rx.clone();
-                            network.process_websocket_message(connection.confirmation, ctx);
+                            let buffered_progress = connection
+                                .buffered_messages
+                                .iter()
+                                .filter_map(Self::processed_event_ack)
+                                .max();
+                            network.process_websocket_message_with_confirmed_progress(
+                                connection.confirmation,
+                                buffered_progress,
+                                ctx,
+                            );
                             if !matches!(network.stage, Stage::StartedSuccessfully { .. }) {
                                 return;
                             }
@@ -1480,6 +1498,15 @@ impl Network {
     }
 
     fn process_websocket_message(&mut self, message: Message, ctx: &mut ModelContext<Self>) {
+        self.process_websocket_message_with_confirmed_progress(message, None, ctx);
+    }
+
+    fn process_websocket_message_with_confirmed_progress(
+        &mut self,
+        message: Message,
+        additional_confirmed_event_no: Option<usize>,
+        ctx: &mut ModelContext<Self>,
+    ) {
         // Ignore non-text frames (e.g. ping frames sent by the server).
         let Some(text) = message.text() else {
             return;
@@ -1548,6 +1575,24 @@ impl Network {
                     );
                     return;
                 }
+                let confirmed_event_no = last_received_event_no.max(additional_confirmed_event_no);
+                if self.record_confirmed_event_progress(confirmed_event_no) {
+                    self.no_progress_reconnects = 0;
+                } else {
+                    self.no_progress_reconnects += 1;
+                    if self.no_progress_reconnects >= MAX_NO_PROGRESS_RECONNECTS {
+                        sharer_warn!(
+                            self,
+                            "Ending shared session after reconnecting without ordered event progress; reconnects={}",
+                            self.no_progress_reconnects
+                        );
+                        self.close_without_reconnection();
+                        ctx.emit(NetworkEvent::ReconnectLimitReached {
+                            reason: RECONNECT_LIMIT_REACHED_MESSAGE,
+                        });
+                        return;
+                    }
+                }
                 sharer_info!(
                     self,
                     "Successfully reconnected to shared session server as sharer."
@@ -1559,7 +1604,7 @@ impl Network {
                     startup_attempt: None,
                 };
 
-                let start_event_no = last_received_event_no
+                let start_event_no = confirmed_event_no
                     .map_or(0, |last_received_event_no| last_received_event_no + 1);
                 self.flush_terminal_events_to_server(start_event_no);
                 self.flush_pending_input_updates_to_server();
@@ -1590,6 +1635,9 @@ impl Network {
             DownstreamMessage::EventsProcessedAck {
                 latest_processed_event_no,
             } => {
+                if self.record_confirmed_event_progress(Some(latest_processed_event_no)) {
+                    self.no_progress_reconnects = 0;
+                }
                 let mut event_no = latest_processed_event_no;
                 // Remove all stored events before latest_processed_event_no to free up memory.
                 while self.unacked_terminal_events.remove(&event_no).is_some() && event_no > 0 {
@@ -1723,6 +1771,24 @@ impl Network {
                 });
             }
             DownstreamMessage::Pong { .. } => {}
+        }
+    }
+
+    fn record_confirmed_event_progress(&mut self, event_no: Option<usize>) -> bool {
+        if event_no <= self.last_confirmed_event_no {
+            return false;
+        }
+        self.last_confirmed_event_no = event_no;
+        true
+    }
+
+    fn processed_event_ack(message: &Message) -> Option<usize> {
+        let text = message.text()?;
+        match DownstreamMessage::from_json(text).ok()? {
+            DownstreamMessage::EventsProcessedAck {
+                latest_processed_event_no,
+            } => Some(latest_processed_event_no),
+            _ => None,
         }
     }
 
@@ -2028,6 +2094,9 @@ pub enum NetworkEvent {
     ParticipantPresenceUpdated(ParticipantPresenceUpdate),
     ReconnectedSuccessfully,
     FailedToReconnect,
+    ReconnectLimitReached {
+        reason: &'static str,
+    },
     RoleRequested {
         participant_id: ParticipantId,
         role_request_id: RoleRequestId,

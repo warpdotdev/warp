@@ -1831,6 +1831,9 @@ pub enum Event {
         reason: String,
         cause: Option<Arc<anyhow::Error>>,
     },
+    SharedSessionFailed {
+        reason: String,
+    },
     RejoinCurrentSession,
     StopSharingCurrentSession {
         reason: SessionEndedReason,

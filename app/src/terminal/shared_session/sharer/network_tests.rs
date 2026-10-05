@@ -32,9 +32,10 @@ use websocket::{Error as WebsocketError, Message, Sink, Stream, WebsocketMessage
 use super::{
     AMBIENT_CREATE_SESSION_MAX_ATTEMPTS, ConfirmedReconnection, MAX_PRE_RECONNECT_BYTES,
     MAX_PRE_RECONNECT_MESSAGES, Network, NetworkEvent, PTY_READS_BATCH_THRESHOLD,
-    PtyBytesBatchStatus, RECONNECT_ATTEMPT_TIMEOUT, RECONNECT_CYCLE_TIMEOUT, Stage, StartupFailure,
-    SERVER_MAX_WEBSOCKET_MESSAGE_BYTES, StartupRetryState, confirm_reconnection,
-    share_with_team_uid_for_init_payload, startup_max_attempts,
+    PtyBytesBatchStatus, RECONNECT_ATTEMPT_TIMEOUT, RECONNECT_CYCLE_TIMEOUT,
+    RECONNECT_LIMIT_REACHED_MESSAGE, SERVER_MAX_WEBSOCKET_MESSAGE_BYTES, Stage, StartupFailure,
+    StartupRetryState, confirm_reconnection, share_with_team_uid_for_init_payload,
+    startup_max_attempts,
 };
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
@@ -127,14 +128,38 @@ fn reconnect_payload() -> ReconnectPayload {
 }
 
 fn reconnected_message() -> Message {
+    reconnected_message_with_event_no(None)
+}
+
+fn reconnected_message_with_event_no(last_received_event_no: Option<usize>) -> Message {
     Message::new(
         DownstreamMessage::SessionReconnected {
-            last_received_event_no: None,
+            last_received_event_no,
             participant_list: Default::default(),
         }
         .to_json()
         .unwrap(),
     )
+}
+
+fn confirm_reconnect(
+    network: &ModelHandle<Network>,
+    app: &mut App,
+    last_received_event_no: Option<usize>,
+) -> async_channel::Receiver<UpstreamMessage> {
+    network.update(app, |network, ctx| {
+        network.stage = Stage::Reconnecting {
+            abort_handle: AbortHandle::new_pair().0,
+        };
+        let (tx, rx) = async_channel::unbounded();
+        network.ws_proxy_tx = tx;
+        network.ws_proxy_rx = rx.clone();
+        network.process_websocket_message(
+            reconnected_message_with_event_no(last_received_event_no),
+            ctx,
+        );
+        rx
+    })
 }
 
 type MockReconnection = ConfirmedReconnection<Pin<Box<dyn Sink>>, Pin<Box<dyn Stream>>>;
@@ -298,6 +323,124 @@ fn test_reconnect_send_timeout_is_retryable() {
             "A stalled reconnect send should time out and retry"
         );
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    });
+}
+
+#[test]
+fn test_fifth_reconnect_without_ordered_event_progress_finishes_session() {
+    App::test((), |mut app| async move {
+        let (network, _) = create_network(&mut app, true);
+        let (limit_tx, limit_rx) = async_channel::bounded(1);
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&network, move |_, event, _| {
+                if let NetworkEvent::ReconnectLimitReached { reason } = event {
+                    limit_tx.try_send(*reason).unwrap();
+                }
+            });
+        });
+
+        network.read(&app, |network, _| {
+            assert_eq!(network.no_progress_reconnects, 0);
+        });
+        for expected_reconnects in 1..5 {
+            let outbound = confirm_reconnect(&network, &mut app, None);
+            network.read(&app, |network, _| {
+                assert!(matches!(network.stage, Stage::StartedSuccessfully { .. }));
+                assert_eq!(network.no_progress_reconnects, expected_reconnects);
+            });
+            assert!(!outbound.is_empty());
+        }
+
+        let outbound = confirm_reconnect(&network, &mut app, None);
+        network.read(&app, |network, _| {
+            assert!(matches!(network.stage, Stage::Finished));
+            assert!(network.ws_proxy_tx.is_closed());
+            assert_eq!(network.no_progress_reconnects, 5);
+        });
+        assert!(outbound.is_empty());
+        assert_eq!(
+            limit_rx.recv().await.unwrap(),
+            RECONNECT_LIMIT_REACHED_MESSAGE
+        );
+    });
+}
+
+#[test]
+fn test_confirmed_ordered_event_progress_resets_reconnect_limit() {
+    App::test((), |mut app| async move {
+        let (network, _) = create_network(&mut app, true);
+
+        for _ in 0..4 {
+            confirm_reconnect(&network, &mut app, None);
+        }
+        confirm_reconnect(&network, &mut app, Some(0));
+        network.read(&app, |network, _| {
+            assert_eq!(network.no_progress_reconnects, 0);
+        });
+
+        for _ in 0..4 {
+            confirm_reconnect(&network, &mut app, Some(0));
+        }
+        network.update(&mut app, |network, ctx| {
+            network.process_websocket_message(
+                Message::new(
+                    DownstreamMessage::EventsProcessedAck {
+                        latest_processed_event_no: 1,
+                    }
+                    .to_json()
+                    .unwrap(),
+                ),
+                ctx,
+            );
+        });
+        network.read(&app, |network, _| {
+            assert_eq!(network.no_progress_reconnects, 0);
+        });
+
+        for expected_reconnects in 1..5 {
+            confirm_reconnect(&network, &mut app, Some(1));
+            network.read(&app, |network, _| {
+                assert!(matches!(network.stage, Stage::StartedSuccessfully { .. }));
+                assert_eq!(network.no_progress_reconnects, expected_reconnects);
+            });
+        }
+    });
+}
+#[test]
+fn test_buffered_processed_event_ack_resets_reconnect_limit() {
+    App::test((), |mut app| async move {
+        let (network, _) = create_network(&mut app, true);
+        let buffered_ack = Message::new(
+            DownstreamMessage::EventsProcessedAck {
+                latest_processed_event_no: 0,
+            }
+            .to_json()
+            .unwrap(),
+        );
+        let mut script = vec![mock_reconnect(stream::iter([
+            Ok(buffered_ack),
+            Ok(reconnected_message()),
+        ]))]
+        .into_iter();
+        network.update(&mut app, |network, ctx| {
+            network.no_progress_reconnects = 4;
+            network.start_reconnect_task(
+                move || script.next().expect("Unexpected reconnect attempt"),
+                RetryOption::linear(Duration::from_millis(1), 1),
+                Duration::from_secs(1),
+                Duration::from_secs(2),
+                ctx,
+            );
+        });
+
+        assert_eventually!(
+            network.read(&app, |network, _| network.is_connected()),
+            "Buffered acknowledgement progress should allow reconnect"
+        );
+        network.read(&app, |network, _| {
+            assert_eq!(network.last_confirmed_event_no, Some(0));
+            assert_eq!(network.no_progress_reconnects, 0);
+        });
     });
 }
 

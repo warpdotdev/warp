@@ -1433,7 +1433,8 @@ impl AgentDriver {
         Err(AgentDriverError::SandboxDeadlineReached { on_free_plan })
     }
 
-    /// Runs `task` until it completes, the sandbox shutdown window begins, or an interrupt arrives.
+    /// Runs `task` until it completes, session sharing fails, the sandbox shutdown window begins,
+    /// or an interrupt arrives.
     ///
     /// The returned [`InterruptWatch`] must stay alive through teardown: non-signal outcomes disarm
     /// it, while signal handling retains its registrations so a second signal can terminate a
@@ -1492,14 +1493,22 @@ impl AgentDriver {
         };
 
         let (finished, cause) = {
+            let session_share_failure = foreground
+                .spawn(|me, ctx| {
+                    me.terminal_driver
+                        .update(ctx, |driver, _| driver.wait_for_session_share_failure())
+                })
+                .await?
+                .fuse();
             let signal_fut = interrupt_watch.wait();
             let run = Self::run_internal(task, foreground.clone()).fuse();
             let timer = Self::sandbox_shutdown_timer(foreground).fuse();
             let signal = signal_fut.fuse();
-            futures::pin_mut!(run, timer, signal);
+            futures::pin_mut!(run, timer, signal, session_share_failure);
 
             futures::select_biased! {
                 signal = signal => (None, RunEndCause::Signal(signal)),
+                error = session_share_failure => (Some(Err(error)), RunEndCause::Completed),
                 result = run => (Some(result), RunEndCause::Completed),
                 result = timer => (
                     Some(result),

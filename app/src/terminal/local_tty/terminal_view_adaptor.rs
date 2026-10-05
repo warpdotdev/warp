@@ -1193,6 +1193,21 @@ impl TerminalManager<TerminalView> {
                     );
                 });
             }
+            NetworkEvent::ReconnectLimitReached { reason } => {
+                Self::shared_session_terminated(
+                    &terminal_view,
+                    shared_session_model_clone.clone(),
+                    model.clone(),
+                    ctx,
+                );
+
+                terminal_view.update(ctx, |view, ctx| {
+                    view.show_persistent_toast(reason.to_string(), ToastFlavor::Error, ctx);
+                    ctx.emit(TerminalViewEvent::SharedSessionFailed {
+                        reason: reason.to_string(),
+                    });
+                });
+            }
             NetworkEvent::ControlActionRequested {
                 participant_id,
                 request_id,

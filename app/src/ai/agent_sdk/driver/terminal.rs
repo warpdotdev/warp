@@ -154,6 +154,7 @@ pub(crate) struct TerminalDriver {
     /// Receiver for the session sharing result. Present when sharing is expected
     /// and `wait_for_session_shared` has not yet been called.
     session_share_rx: Option<oneshot::Receiver<Result<(), ShareSessionError>>>,
+    session_share_failure_rx: Option<oneshot::Receiver<ShareSessionError>>,
     pending_share_requests: Vec<ShareRequest>,
     /// Resolves the in-flight command's exit status. Sent `Ok` when the
     /// command's block completes, or
@@ -305,8 +306,15 @@ impl TerminalDriver {
             });
         }
 
+        let (session_share_failure_tx, session_share_failure_rx) = oneshot::channel();
+        let mut session_share_failure_tx = Some(session_share_failure_tx);
         ctx.subscribe_to_view(&terminal_view, move |me, _, event, ctx| {
-            me.handle_terminal_view_event(event, &mut session_share_tx, ctx);
+            me.handle_terminal_view_event(
+                event,
+                &mut session_share_tx,
+                &mut session_share_failure_tx,
+                ctx,
+            );
         });
 
         let (bootstrap_tx_inner, bootstrap_rx) = oneshot::channel::<Result<(), BootstrapError>>();
@@ -333,6 +341,7 @@ impl TerminalDriver {
             bootstrap_rx: Some(bootstrap_rx),
             shared_session_id: None,
             session_share_rx,
+            session_share_failure_rx: Some(session_share_failure_rx),
             pending_share_requests: Vec::new(),
             waiting_command: None,
             pending_command_start: None,
@@ -739,6 +748,22 @@ impl TerminalDriver {
         }
     }
 
+    pub fn wait_for_session_share_failure(
+        &mut self,
+    ) -> impl Future<Output = AgentDriverError> + use<> {
+        let rx = self.session_share_failure_rx.take();
+
+        async move {
+            let error = match rx {
+                Some(rx) => match rx.await {
+                    Ok(error) => error,
+                    Err(_) => std::future::pending().await,
+                },
+                None => std::future::pending().await,
+            };
+            AgentDriverError::ShareSessionFailed { error }
+        }
+    }
     pub fn extend_shared_session_retention(
         &mut self,
         reason: SessionRetentionReason,
@@ -831,6 +856,7 @@ impl TerminalDriver {
         &mut self,
         event: &crate::terminal::view::Event,
         session_share_tx: &mut Option<oneshot::Sender<Result<(), ShareSessionError>>>,
+        session_share_failure_tx: &mut Option<oneshot::Sender<ShareSessionError>>,
         ctx: &mut ModelContext<Self>,
     ) {
         match event {
@@ -903,6 +929,11 @@ impl TerminalDriver {
                         None => ShareSessionError::Failed(reason.clone()),
                     };
                     let _ = tx.send(Err(error));
+                }
+            }
+            crate::terminal::view::Event::SharedSessionFailed { reason } => {
+                if let Some(tx) = session_share_failure_tx.take() {
+                    let _ = tx.send(ShareSessionError::Failed(reason.clone()));
                 }
             }
             crate::terminal::view::Event::ExecuteCommand(event) => {
