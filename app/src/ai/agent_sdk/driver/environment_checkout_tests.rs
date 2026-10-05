@@ -46,6 +46,8 @@ fn absent_unwritable_and_non_namespace_roots_use_network_checkout() {
         |fixture| {
             for scenario in ["absent", "other-platform", "unusable"] {
                 let mut command = Command::new(std::env::current_exe().unwrap());
+                #[cfg(windows)]
+                command.creation_flags(0);
                 command.args(["--exact", "ai::agent_sdk::driver::environment_checkout::tests::absent_unwritable_and_non_namespace_roots_use_network_checkout", "--nocapture"])
                 .env("WARP_TEST_MIRROR_ROOT_EXPECTED", "absent");
                 match scenario {
@@ -286,6 +288,8 @@ fn fixture_test(name: &str, test: impl FnOnce(&Fixture)) {
         ],
     );
     let mut command = Command::new(std::env::current_exe().unwrap());
+    #[cfg(windows)]
+    command.creation_flags(0);
     command
         .args([
             "--exact",
