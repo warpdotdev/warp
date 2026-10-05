@@ -18,6 +18,24 @@ fn write_skill(dir: &Path, name: &str) -> PathBuf {
     skill_dir
 }
 
+#[test]
+fn resolved_skill_dirs_are_published_relative_to_workspace_root() {
+    let workspace = TempDir::new().unwrap();
+    let source_dir = workspace.path().join("repo/skills");
+    let skill = write_skill(&source_dir, "factory-skill");
+    let published_root = workspace.path().join("harness/skills");
+    let env = HashMap::from([(
+        OsString::from(WARP_SKILL_DIRS_ENV),
+        OsString::from("repo/skills"),
+    )]);
+
+    let published =
+        publish_skills_for_harness_with_env(&published_root, workspace.path(), false, &env);
+    let link = published_root.join("factory-skill");
+    assert!(published.contains(&link));
+    assert_eq!(fs::read_link(&link).unwrap(), skill);
+}
+
 fn publish_source_dirs(
     skill_root: &Path,
     source_dirs: &[PathBuf],

@@ -40,13 +40,16 @@
 //! helper script the skill invokes) pointing at the real, versioned skill
 //! tree.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use ai::skills::{parse_skills_dirs_env, resolve_skills_dirs};
+use ai::skills::{
+    WARP_SKILL_DIRS_ENV, parse_skills_dirs_env, parse_skills_dirs_value, resolve_skills_dirs,
+};
 use anyhow::{Context, Result};
 use warp_core::features::FeatureFlag;
 use warp_core::safe_warn;
@@ -67,12 +70,26 @@ pub(super) fn warp_skill_source_dirs(working_dir: &Path) -> Vec<PathBuf> {
     resolve_skills_dirs(working_dir, parse_skills_dirs_env())
 }
 
-pub(super) fn publish_skills_for_harness(
+pub(super) fn publish_skills_for_harness_with_env(
     skill_root: &Path,
     working_dir: &Path,
     is_sandbox: bool,
+    resolved_env_vars: &HashMap<OsString, OsString>,
 ) -> Vec<PathBuf> {
-    let source_dirs = warp_skill_source_dirs(working_dir);
+    let source_dirs = resolved_env_vars
+        .get(OsStr::new(WARP_SKILL_DIRS_ENV))
+        .and_then(|value| value.to_str())
+        .map(parse_skills_dirs_value)
+        .map(|dirs| resolve_skills_dirs(working_dir, dirs))
+        .unwrap_or_else(|| warp_skill_source_dirs(working_dir));
+    publish_skills_for_harness_from_source_dirs(skill_root, source_dirs, is_sandbox)
+}
+
+fn publish_skills_for_harness_from_source_dirs(
+    skill_root: &Path,
+    source_dirs: Vec<PathBuf>,
+    is_sandbox: bool,
+) -> Vec<PathBuf> {
     let bundled_skill_dirs =
         bundled_factory_mcp_skill_dirs(warp_core::paths::bundled_resources_dir());
     let configured_skill_dirs = skill_dirs_from_source_dirs(&source_dirs);

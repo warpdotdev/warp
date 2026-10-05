@@ -83,6 +83,10 @@ use warp_graphql::platform_error::PlatformErrorInfo;
 use warp_graphql::queries::codebase_context_config::{
     CodebaseContextConfigQuery, CodebaseContextConfigResult, CodebaseContextConfigVariables,
 };
+use warp_graphql::queries::execution_config::{
+    ExecutionConfig, ExecutionConfigInput, ExecutionConfigResult, ExecutionConfigVariables,
+    ExecutionConfiguration,
+};
 use warp_graphql::queries::free_available_models::{
     FreeAvailableModels, FreeAvailableModelsInput, FreeAvailableModelsResult,
     FreeAvailableModelsVariables,
@@ -1717,6 +1721,27 @@ fn into_file_artifact_record(
 }
 
 impl ServerApi {
+    pub(crate) async fn get_execution_config(
+        &self,
+        task_id: &str,
+        execution_id: &str,
+    ) -> anyhow::Result<ExecutionConfiguration> {
+        let operation = ExecutionConfig::build(ExecutionConfigVariables {
+            input: ExecutionConfigInput {
+                task_id: task_id.to_string().into(),
+                execution_id: execution_id.to_string().into(),
+            },
+            request_context: get_request_context(),
+        });
+        let response = self.send_graphql_request(operation, None).await?;
+        match response.execution_config {
+            ExecutionConfigResult::ExecutionConfigOutput(output) => Ok(output.config),
+            ExecutionConfigResult::UserFacingError(error) => {
+                Err(anyhow!(get_user_facing_error_message(error)))
+            }
+            ExecutionConfigResult::Unknown => Err(anyhow!("Unknown execution config response")),
+        }
+    }
     async fn get_public_api_with_team_scope<R>(
         &self,
         path: &str,

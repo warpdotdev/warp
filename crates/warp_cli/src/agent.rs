@@ -462,6 +462,18 @@ impl AgentCommand {
             .required(true)
             .multiple(true)
             .args(["prompt", "saved_prompt", "task_id", "skill"])
+    ),
+    group(
+        clap::ArgGroup::new("execution_semantics")
+            .multiple(true)
+            .args([
+                "prompt", "saved_prompt", "skill", "name", "model", "file", "team",
+                "environment", "share", "mcp_specs", "mcp_servers", "idle_on_complete",
+                "idle_on_fail", "no_snapshot", "bedrock_inference_role",
+                "bedrock_role_region", "computer_use", "no_computer_use", "conversation",
+                "profile", "harness", "skip_initial_turn", "repository_preparation_overrides",
+                "remove_repository_origins",
+            ])
     )
 )]
 pub struct RunAgentArgs {
@@ -556,12 +568,13 @@ pub struct RunAgentArgs {
     #[arg(
         long = "idle-on-fail",
         value_name = "DURATION",
-        env = "OZ_IDLE_ON_FAIL",
         num_args = 0..=1,
         default_missing_value = "15m",
         hide = true
     )]
     pub idle_on_fail: Option<humantime::Duration>,
+    #[arg(long = "legacy-idle-on-fail-env", env = "OZ_IDLE_ON_FAIL", hide = true)]
+    pub idle_on_fail_env: Option<humantime::Duration>,
 
     #[command(flatten)]
     pub snapshot: SnapshotArgs,
@@ -572,6 +585,14 @@ pub struct RunAgentArgs {
     /// accepting the compatibility shape until all producers have been updated.
     #[arg(long = "task-id", hide = true, conflicts_with_all = ["prompt", "saved_prompt", "file"])]
     pub task_id: Option<String>,
+    /// Execution whose server-owned settings configure this task launch.
+    #[arg(
+        long = "execution-id",
+        hide = true,
+        requires = "task_id",
+        conflicts_with = "execution_semantics"
+    )]
+    pub execution_id: Option<String>,
 
     /// Whether we are running the agent in a sandboxed environment.
     #[arg(long = "sandboxed", hide = true)]
@@ -648,6 +669,9 @@ pub struct RunAgentArgs {
 }
 
 impl RunAgentArgs {
+    pub fn effective_idle_on_fail(&self) -> Option<humantime::Duration> {
+        self.idle_on_fail.or(self.idle_on_fail_env)
+    }
     /// Combine `mcp_specs` with legacy `mcp_servers` (UUIDs) into a single list.
     pub fn all_mcp_specs(&self) -> Vec<MCPSpec> {
         let mut specs = self.mcp_specs.clone();

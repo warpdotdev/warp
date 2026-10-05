@@ -16,7 +16,10 @@ use crate::ai::blocklist::permissions::{
     FileWritePermissionAllowedReason, FileWritePermissionDeniedReason,
 };
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
-use crate::ai::execution_profiles::{ActionPermission, WriteToPtyPermission};
+use crate::ai::execution_profiles::{
+    ActionPermission, ComputerUsePermission, WriteToPtyPermission,
+};
+use crate::ai::llms::LLMId;
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -100,6 +103,51 @@ fn initialize_permissions_test_with_mode(
         user_workspaces,
         profile_model,
     }
+}
+
+#[test]
+fn execution_computer_use_is_scoped_to_the_terminal() {
+    App::test((), |mut app| async move {
+        let state = initialize_permissions_test(&mut app);
+        let other_terminal = EntityId::new();
+        let selected_model = LLMId::from("computer-use-model");
+        state.permissions.update(&mut app, |permissions, _| {
+            permissions.set_execution_computer_use(
+                state.terminal_view_id,
+                false,
+                Some(selected_model.clone()),
+            );
+        });
+        state.permissions.read(&app, |permissions, ctx| {
+            assert!(matches!(
+                permissions.get_computer_use_setting(
+                    Some(state.terminal_view_id),
+                    &test_scope(),
+                    ctx
+                ),
+                ComputerUsePermission::Never
+            ));
+            assert_eq!(
+                permissions.execution_computer_use_model(state.terminal_view_id),
+                Some(&selected_model)
+            );
+            assert!(
+                permissions
+                    .execution_computer_use_model(other_terminal)
+                    .is_none()
+            );
+        });
+        state.permissions.update(&mut app, |permissions, _| {
+            permissions.clear_execution_computer_use(state.terminal_view_id);
+        });
+        state.permissions.read(&app, |permissions, _| {
+            assert!(
+                permissions
+                    .execution_computer_use_model(state.terminal_view_id)
+                    .is_none()
+            );
+        });
+    })
 }
 
 #[test]

@@ -1,3 +1,4 @@
+use std::fs;
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -22,12 +23,13 @@ use warpui::{App, SingletonEntity, WindowId};
 use super::{
     AgentDriverRunner, CommandAuthentication, command_authentication, command_requires_auth,
     command_to_telemetry_event, reconcile_task_harness, resolve_agent_driver_team_scope,
-    validated_driver_repositories_for_preparation,
+    selected_execution_skills, validated_driver_repositories_for_preparation,
 };
 use crate::ai::agent_sdk::driver::harness::HarnessKind;
 use crate::ai::agent_sdk::driver::{AgentDriverError, AgentDriverOptions, AgentRunPrompt, Task};
 use crate::ai::ambient_agents::task::{AmbientAgentTask, AmbientAgentTaskState, TaskScope};
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
+use crate::ai::skills::ResolvedSkill;
 use crate::auth::AuthStateProvider;
 use crate::auth::user::{PrincipalType, User};
 use crate::network::NetworkStatus;
@@ -45,6 +47,51 @@ use crate::workspaces::user_workspaces::{HeadlessTeamScope, TeamScope, UserWorks
 use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
+
+#[test]
+fn ordered_execution_skills_attach_only_first_and_expose_all_for_discovery() {
+    let root = tempfile::TempDir::new().unwrap();
+    let (none, empty_dirs) = selected_execution_skills(Vec::new()).unwrap();
+    assert!(none.is_none());
+    assert!(empty_dirs.is_empty());
+    let skill_paths = ["first", "second"]
+        .into_iter()
+        .map(|name| {
+            let skill_path = root
+                .path()
+                .join(name)
+                .join("skills")
+                .join(name)
+                .join("SKILL.md");
+            fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+            fs::write(
+                &skill_path,
+                format!("---\nname: {name}\ndescription: example\n---\nInstructions for {name}"),
+            )
+            .unwrap();
+            let parsed_skill = ai::skills::parse_skill(&skill_path).unwrap();
+            ResolvedSkill {
+                skill_path,
+                name: name.to_owned(),
+                instructions: format!("Instructions for {name}"),
+                parsed_skill,
+            }
+        })
+        .collect::<Vec<_>>();
+    let (only, only_dirs) = selected_execution_skills(vec![skill_paths[0].clone()]).unwrap();
+    assert_eq!(only.unwrap().name, "first");
+    assert_eq!(only_dirs, vec![root.path().join("first").join("skills")]);
+
+    let (first, dirs) = selected_execution_skills(skill_paths).unwrap();
+    assert_eq!(first.unwrap().name, "first");
+    assert_eq!(
+        dirs,
+        ["first", "second"]
+            .into_iter()
+            .map(|name| root.path().join(name).join("skills"))
+            .collect::<Vec<_>>()
+    );
+}
 
 fn parse_run_agent_args(args: &[&str]) -> RunAgentArgs {
     let parsed = Args::try_parse_from(std::iter::once("warp").chain(args.iter().copied()))
@@ -159,6 +206,10 @@ pub(crate) fn agent_driver_options() -> AgentDriverOptions {
         additional_source_repos: vec![],
         repository_preparation_overrides: vec![],
         remove_repository_origins: false,
+        resolved_repositories: None,
+        resolved_setup_commands: None,
+        factory_skill_dirs: None,
+        computer_use_config: None,
         selected_harness: Harness::Oz,
         third_party_harness_model_config: None,
         team_scope: None,
@@ -332,6 +383,7 @@ fn factory_experiment_bootstrap_subprocess() {
             TASK_ID.to_string(),
             &mut options,
             &mut task,
+            true,
         )
         .await
         .unwrap();
