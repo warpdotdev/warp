@@ -461,7 +461,8 @@ fn partial_filtered_and_credential_bearing_mirrors_are_rebuilt() {
                     .unwrap()
                     .contains("fake-secret")
             );
-            assert_eq!(root.parent(), Some(fixture.root.join("cache").as_path()));
+            let cache = fs::canonicalize(fixture.root.join("cache")).unwrap();
+            assert_eq!(root.parent(), Some(cache.as_path()));
         },
     );
 }
