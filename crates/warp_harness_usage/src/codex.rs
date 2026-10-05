@@ -14,19 +14,21 @@ use crate::{
     identifier,
 };
 
-const PATHS: [&str; 5] = [
+const PATHS: [&str; 6] = [
     "/input_tokens",
     "/cached_input_tokens",
+    "/cache_write_input_tokens",
     "/output_tokens",
     "/reasoning_output_tokens",
     "/total_tokens",
 ];
 
-impl From<Counters<5>> for CodexUsage {
-    fn from(counts: Counters<5>) -> Self {
+impl From<Counters<6>> for CodexUsage {
+    fn from(counts: Counters<6>) -> Self {
         let [
             input_tokens,
             cached_input_tokens,
+            cache_write_input_tokens,
             output_tokens,
             reasoning_output_tokens,
             total_tokens,
@@ -34,6 +36,7 @@ impl From<Counters<5>> for CodexUsage {
         Self {
             input_tokens,
             cached_input_tokens,
+            cache_write_input_tokens,
             output_tokens,
             reasoning_output_tokens,
             total_tokens,
@@ -43,13 +46,13 @@ impl From<Counters<5>> for CodexUsage {
 
 #[derive(Default)]
 struct Segment {
-    latest: Option<Counters<5>>,
+    latest: Option<Counters<6>>,
     ambiguous: bool,
-    accounting: Accounting<5>,
+    accounting: Accounting<6>,
 }
 
 impl Segment {
-    fn finish(mut self, accounting: &mut Accounting<5>, findings: &mut Findings) {
+    fn finish(mut self, accounting: &mut Accounting<6>, findings: &mut Findings) {
         if let Some(total) = self.latest {
             self.accounting.total = total;
             accounting.merge(self.accounting, findings);
@@ -253,10 +256,11 @@ fn observe_checkpoint(
     segment.latest = Some(total);
 }
 
-fn parse_usage(value: &Value, findings: &mut Findings) -> Option<Counters<5>> {
+fn parse_usage(value: &Value, findings: &mut Findings) -> Option<Counters<6>> {
     let usage = Counters::parse(value, PATHS, findings)?;
-    let [input, cached, output, reasoning, total] = usage.values;
+    let [input, cached, cache_write, output, reasoning, total] = usage.values;
     let invalid = matches!((input, cached), (Some(input), Some(cached)) if cached > input)
+        || matches!((input, cache_write), (Some(input), Some(cache_write)) if cache_write > input)
         || matches!((output, reasoning), (Some(output), Some(reasoning)) if reasoning > output)
         || matches!((input, output, total), (Some(input), Some(output), Some(total)) if input.checked_add(output) != Some(total));
     if invalid {

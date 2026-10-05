@@ -10,6 +10,7 @@ use chrono::Local;
 use cloud_object_models::CodeForge;
 use futures::channel::oneshot;
 use futures::executor::block_on;
+use futures::poll;
 use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use serde_json::json;
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
@@ -63,6 +64,37 @@ use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_te
 use crate::workspace::view::tests::initialize_app as initialize_workspace_test_app;
 
 // ── IdleTimeoutSender tests ──────────────────────────────────────────────────────
+
+#[test]
+fn setup_timeout_does_not_retain_a_potentially_running_command() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal, ctx);
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.idle_on_fail = Some(Duration::from_secs(30 * 60));
+            driver
+        });
+        let spawner = driver.update(&mut app, |_, ctx| ctx.spawner());
+        let error = AgentDriverError::SetupCommandTimedOut {
+            message: "Setup command #1 timed out after 1800s: ./setup.sh".to_string(),
+        };
+        let mut linger = Box::pin(AgentDriver::linger_after_failure(
+            &spawner,
+            "environment_setup",
+            &error,
+        ));
+        assert!(poll!(linger.as_mut()).is_ready());
+        assert_eq!(
+            setup_failure_status_update(&error).error_code,
+            Some(PlatformErrorCode::EnvironmentSetupFailed)
+        );
+    });
+}
 
 #[test]
 fn driver_keeps_uninterpreted_factory_experiments() {

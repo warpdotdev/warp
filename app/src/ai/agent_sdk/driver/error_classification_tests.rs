@@ -6,7 +6,7 @@ use warp_graphql::platform_error::{PlatformErrorInfo, PlatformErrorMessageFormat
 use super::{classify_driver_error, markdown_code_span};
 use crate::ai::agent::{RenderableAIError, TransientNetworkErrorKind};
 use crate::ai::agent_sdk::driver::AgentDriverError;
-use crate::ai::agent_sdk::driver::environment::PrepareEnvironmentError;
+use crate::ai::agent_sdk::driver::environment::{PrepareEnvironmentError, SetupCommandPhase};
 use crate::ai::agent_sdk::driver::terminal::{BootstrapError, ShareSessionError};
 use crate::server::server_api::ai::TaskGitCredentialsError;
 
@@ -21,6 +21,34 @@ fn assert_state_and_code(
         update.error_code, expected_code,
         "unexpected error_code for {error}"
     );
+}
+
+#[test]
+fn setup_timeout_reports_failed_with_command_and_duration() {
+    for (phase, timeout_seconds) in [
+        (SetupCommandPhase::Execute, 1800),
+        (SetupCommandPhase::ResetWorkingDirectory, 30),
+    ] {
+        let error = AgentDriverError::from(PrepareEnvironmentError::SetupCommandTimedOut {
+            command_index: 2,
+            command: "./setup.sh".to_string(),
+            phase,
+            timeout_seconds,
+        });
+        assert!(matches!(
+            &error,
+            AgentDriverError::SetupCommandTimedOut { .. }
+        ));
+        let (state, update) = classify_driver_error(&error);
+        assert_eq!(state, AgentTaskState::Failed);
+        assert_eq!(
+            update.error_code,
+            Some(PlatformErrorCode::EnvironmentSetupFailed)
+        );
+        assert!(update.message.contains("Setup command #2"));
+        assert!(update.message.contains("./setup.sh"));
+        assert!(update.message.contains(&format!("{timeout_seconds}s")));
+    }
 }
 
 #[test]

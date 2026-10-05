@@ -241,6 +241,19 @@ echo hello
         )
         .await;
 
+        notebook
+            .read(&app, |notebook, ctx| {
+                notebook
+                    .input
+                    .as_ref(ctx)
+                    .model()
+                    .as_ref(ctx)
+                    .render_state()
+                    .as_ref(ctx)
+                    .layout_complete()
+            })
+            .await;
+
         // First, make sure the editor is focused.
         notebook.update(&mut app, |notebook, ctx| {
             notebook.focus_input(ctx);

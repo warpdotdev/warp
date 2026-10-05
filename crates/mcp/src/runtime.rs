@@ -12,6 +12,7 @@ use cfg_if::cfg_if;
 use cloud_object_models::{StaticEnvVar, TransportType};
 use futures::FutureExt as _;
 use rmcp::ServiceExt as _;
+use rmcp::model::{ClientConfig, Implementation};
 use rmcp::transport::ConfigureCommandExt as _;
 use simple_logger::SimpleLogger;
 use tokio::io::AsyncBufReadExt as _;
@@ -585,13 +586,13 @@ async fn send_initialize_request(
     })
 }
 
-/// Creates a [`ClientInfo`] for the MCP client.
+/// Creates a [`ClientConfig`] for the MCP client.
 ///
 /// This tells the MCP server who we are and what capabilities we have.
-fn make_client_info() -> rmcp::model::ClientInfo {
-    rmcp::model::ClientInfo::new(
+fn make_client_info() -> ClientConfig {
+    ClientConfig::new(
         Default::default(),
-        rmcp::model::Implementation::new(
+        Implementation::new(
             warp_core::channel::ChannelState::app_id().to_string(),
             warp_core::channel::ChannelState::app_version()
                 .map(|v| v.to_string())

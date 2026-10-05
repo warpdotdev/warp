@@ -11,14 +11,15 @@ use ai::index::full_source_code_embedding::manager::{
 use chrono::Utc;
 use cloud_object_models::CodeForge;
 use futures::channel::oneshot;
-use futures::future::join_all;
+use futures::future::{Either, join_all, select};
+use instant::Instant;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use uuid::Uuid;
 use warp_cli::agent::{RepositoryForge, RepositoryHeadRef, RepositoryPreparationOverride};
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
 use warp_core::command::ExitCode;
 use warp_core::{safe_info, safe_warn};
-use warpui::r#async::FutureExt;
+use warpui::r#async::{FutureExt, Timer};
 use warpui::{ModelContext, ModelSpawner, SingletonEntity};
 
 #[cfg(feature = "local_fs")]
@@ -30,6 +31,7 @@ use crate::ai::agent_sdk::environment_snapshot::{
 };
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::cloud_environments::SourceRepo;
+use crate::server::telemetry::secret_redaction::redact_secrets_in_string;
 use crate::terminal::model::BlockId;
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
@@ -39,6 +41,32 @@ const ENVIRONMENT_SNAPSHOT_CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
 const CLONE_FAILURE_IDENTITY_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 const CLONE_FAILURE_OUTPUT_TRUNCATION_MARKER: &str = "\n… clone output truncated …\n";
 const SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER: &str = "\n… setup command output truncated …\n";
+const SETUP_COMMAND_TIMEOUT: Duration = Duration::from_mins(30);
+const SETUP_COMMAND_CWD_RESET_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[derive(Clone, Copy, Debug)]
+pub enum SetupCommandPhase {
+    Execute,
+    ResetWorkingDirectory,
+}
+
+impl SetupCommandPhase {
+    fn timeout(self) -> Duration {
+        match self {
+            Self::Execute => SETUP_COMMAND_TIMEOUT,
+            Self::ResetWorkingDirectory => SETUP_COMMAND_CWD_RESET_TIMEOUT,
+        }
+    }
+}
+
+impl fmt::Display for SetupCommandPhase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Execute => "waiting for command to complete",
+            Self::ResetWorkingDirectory => "resetting the working directory after the command",
+        })
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum PrepareEnvironmentError {
@@ -70,6 +98,15 @@ pub enum PrepareEnvironmentError {
     SetupCommand {
         command: String,
         output: Option<String>,
+    },
+    #[error(
+        "Setup command #{command_index} timed out after {timeout_seconds}s while {phase}: `{command}`"
+    )]
+    SetupCommandTimedOut {
+        command_index: usize,
+        command: String,
+        phase: SetupCommandPhase,
+        timeout_seconds: u64,
     },
     #[error("Failed to change directory into {repo_name}")]
     ChangeDirectory { repo_name: String },
@@ -103,6 +140,44 @@ fn setup_command_failure(command: String, output: Option<String>) -> PrepareEnvi
         })
         .filter(|output| !output.is_empty());
     PrepareEnvironmentError::SetupCommand { command, output }
+}
+
+async fn await_setup_phase<T>(
+    command_index: usize,
+    command: &str,
+    phase: SetupCommandPhase,
+    operation: impl Future<Output = Result<T, PrepareEnvironmentError>>,
+    deadline: impl Future,
+) -> Result<T, PrepareEnvironmentError> {
+    let started_at = Instant::now();
+    log::info!(
+        "Environment setup lifecycle: event=phase_started command_index={command_index} phase={phase:?} timeout_seconds={}",
+        phase.timeout().as_secs()
+    );
+    match select(Box::pin(operation), Box::pin(deadline)).await {
+        Either::Left((result, _)) => {
+            log::info!(
+                "Environment setup lifecycle: event=phase_finished command_index={command_index} phase={phase:?} elapsed_ms={} result_ok={}",
+                started_at.elapsed().as_millis(),
+                result.is_ok()
+            );
+            result
+        }
+        Either::Right((_, _)) => {
+            log::warn!(
+                "Environment setup lifecycle: event=phase_timed_out command_index={command_index} phase={phase:?} elapsed_ms={}",
+                started_at.elapsed().as_millis()
+            );
+            let mut command = command.to_owned();
+            redact_secrets_in_string(&mut command);
+            Err(PrepareEnvironmentError::SetupCommandTimedOut {
+                command_index,
+                command,
+                phase,
+                timeout_seconds: phase.timeout().as_secs(),
+            })
+        }
+    }
 }
 
 fn clone_failure_output_suffix(output: Option<&str>) -> String {
@@ -394,15 +469,24 @@ const FACTORY_REPO_DIR_ENV_VAR: &str = "WARP_FACTORY_REPO_DIR";
 /// Prepends the setup command that clones a Factory's definition repository
 /// when the dispatch attached the clone variables to this run, so the checkout
 /// exists before user-declared setup commands run.
-pub(super) fn prepend_factory_definition_clone(setup_commands: &mut Vec<String>) {
+pub(super) fn prepend_factory_definition_clone(
+    setup_commands: &mut Vec<String>,
+    shell_type: Option<ShellType>,
+) {
     let clone_url = std::env::var(FACTORY_REPO_CLONE_URL_ENV_VAR).unwrap_or_default();
     let clone_dir = std::env::var(FACTORY_REPO_DIR_ENV_VAR).unwrap_or_default();
-    prepend_factory_definition_clone_for_values(&clone_url, &clone_dir, setup_commands);
+    prepend_factory_definition_clone_for_values(
+        &clone_url,
+        &clone_dir,
+        shell_type.unwrap_or(ShellType::Bash),
+        setup_commands,
+    );
 }
 
 fn prepend_factory_definition_clone_for_values(
     clone_url: &str,
     clone_dir: &str,
+    shell_type: ShellType,
     setup_commands: &mut Vec<String>,
 ) {
     if clone_url.trim().is_empty() || clone_dir.trim().is_empty() {
@@ -422,10 +506,21 @@ fn prepend_factory_definition_clone_for_values(
     // command text. There is deliberately no existence guard: a bare clone
     // into an already-present target directory fails, which is treated as a
     // fatal setup-command error upstream.
-    setup_commands.insert(
-        0,
-        format!("git clone \"${FACTORY_REPO_CLONE_URL_ENV_VAR}\" \"${FACTORY_REPO_DIR_ENV_VAR}\""),
-    );
+    setup_commands.insert(0, factory_definition_clone_command(shell_type));
+}
+
+fn factory_definition_clone_command(shell_type: ShellType) -> String {
+    // PowerShell reads environment variables through the `env:` drive; a bare `$NAME` there is
+    // an unset PowerShell variable that expands to an empty string.
+    let env_var_reference = |name: &str| match shell_type {
+        ShellType::PowerShell => format!("$env:{name}"),
+        ShellType::Zsh | ShellType::Bash | ShellType::Fish => format!("${name}"),
+    };
+    format!(
+        "git clone \"{}\" \"{}\"",
+        env_var_reference(FACTORY_REPO_CLONE_URL_ENV_VAR),
+        env_var_reference(FACTORY_REPO_DIR_ENV_VAR)
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -534,14 +629,22 @@ async fn prepare_environment_impl(
                 // environment variable.
                 execute_command("export CI=true".to_string(), spawner).await?;
 
-                for command in setup_commands {
+                for (index, command) in setup_commands.into_iter().enumerate() {
+                    let command_index = index + 1;
                     let command_for_error = command.clone();
                     safe_info!(
                         safe: ("Running setup command"),
                         full: ("Running setup command: {command}")
                     );
 
-                    let command_result = execute_command(command, spawner).await?;
+                    let command_result = await_setup_phase(
+                        command_index,
+                        &command_for_error,
+                        SetupCommandPhase::Execute,
+                        execute_command(command, spawner),
+                        Timer::after(SETUP_COMMAND_TIMEOUT),
+                    )
+                    .await?;
                     if command_result.exit_code != 0.into() {
                         let output =
                             fetch_block_output_plaintext(&command_result.block_id, spawner).await;
@@ -549,7 +652,20 @@ async fn prepare_environment_impl(
                     }
 
                     let working_dir_string = working_dir.to_string_lossy().to_string();
-                    if let Err(error) = cd_in_terminal(working_dir_string, spawner).await {
+                    let reset_result = await_setup_phase(
+                        command_index,
+                        &command_for_error,
+                        SetupCommandPhase::ResetWorkingDirectory,
+                        cd_in_terminal(working_dir_string, spawner),
+                        Timer::after(SETUP_COMMAND_CWD_RESET_TIMEOUT),
+                    )
+                    .await;
+                    if matches!(
+                        &reset_result,
+                        Err(PrepareEnvironmentError::SetupCommandTimedOut { .. })
+                    ) {
+                        reset_result?;
+                    } else if let Err(error) = reset_result {
                         log::warn!(
                             "Failed to reset working directory after setup command: {error}"
                         );
@@ -576,6 +692,12 @@ async fn prepare_environment_impl(
         Ok(())
     } else {
         Ok(())
+    };
+
+    // A timed-out command may still own the terminal; issuing cleanup commands can hang again.
+    let setup_result = match setup_result {
+        Err(error @ PrepareEnvironmentError::SetupCommandTimedOut { .. }) => return Err(error),
+        result => result,
     };
 
     // Fill in a forge-appropriate identity for any repo whose effective

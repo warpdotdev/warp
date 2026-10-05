@@ -3,6 +3,8 @@ use futures::future::BoxFuture;
 #[cfg(not(target_family = "wasm"))]
 use itertools::Itertools;
 #[cfg(not(target_family = "wasm"))]
+use uuid::Uuid;
+#[cfg(not(target_family = "wasm"))]
 use warpui::SingletonEntity;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle};
 
@@ -87,6 +89,8 @@ impl CallMCPToolExecutor {
         #[cfg(not(target_family = "wasm"))]
         {
             let server_output_id = get_server_output_id(input.conversation_id, ctx);
+            let conversation_id = input.conversation_id;
+            let action_id = input.action.id.clone();
             let AIAgentAction {
                 action:
                     AIAgentActionType::CallMCPTool {
@@ -140,16 +144,27 @@ impl CallMCPToolExecutor {
             };
 
             let name_owned_inner = name_owned.clone();
+            let operation_id = Uuid::new_v4();
+            log::info!(
+                "MCP tool action: event=started operation_id={operation_id} conversation_id={conversation_id:?} action_id={action_id:?} server_id={server_id:?} tool_name={name_owned:?}"
+            );
             ActionExecution::new_async(
                 async move {
                     reconnecting_peer
                         .call_tool(
                             rmcp::model::CallToolRequestParams::new(name_owned_inner)
                                 .with_arguments(arguments),
+                            operation_id,
                         )
                         .await
                 },
-                move |res, ctx| handle_call_tool_result(res, server_output_id, name_clone, ctx),
+                move |res, ctx| {
+                    let result = handle_call_tool_result(res, server_output_id, name_clone, ctx);
+                    log::info!(
+                        "MCP tool action: event=result_applied operation_id={operation_id} conversation_id={conversation_id:?} action_id={action_id:?}"
+                    );
+                    result
+                },
             )
         }
     }

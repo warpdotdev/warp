@@ -90,6 +90,146 @@ fn checkpoint(total: i64, last: i64) -> Value {
     }}})
 }
 
+fn cache_write_checkpoint(
+    total: i64,
+    last: i64,
+    cache_write_total: Option<i64>,
+    cache_write_last: Option<i64>,
+) -> Value {
+    let mut entry = checkpoint(total, last);
+    let info = &mut entry["payload"]["info"];
+    if let Some(count) = cache_write_total {
+        info["total_token_usage"]["cache_write_input_tokens"] = json!(count);
+    }
+    if let Some(count) = cache_write_last {
+        info["last_token_usage"]["cache_write_input_tokens"] = json!(count);
+    }
+    entry
+}
+
+#[test]
+fn cache_write_checkpoints_use_cumulative_totals() {
+    let snapshot = capture(&[
+        json!({"type":"turn_context","payload":{"model":"codex-a"}}),
+        cache_write_checkpoint(100, 100, Some(10), Some(10)),
+        cache_write_checkpoint(200, 100, Some(30), Some(20)),
+        cache_write_checkpoint(300, 100, Some(50), Some(20)),
+    ]);
+    let payload = serde_json::to_value(&snapshot.payload).unwrap();
+    assert_eq!(
+        payload["usage"],
+        json!({"total_tokens":300,"cache_write_input_tokens":50})
+    );
+    assert_eq!(
+        payload["attribution"],
+        json!([{"model":"codex-a","usage":{"total_tokens":300,"cache_write_input_tokens":50}}])
+    );
+    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Known);
+}
+
+#[test]
+fn repeated_cache_write_checkpoints_are_not_double_counted() {
+    let first = cache_write_checkpoint(100, 100, Some(10), Some(10));
+    let second = cache_write_checkpoint(200, 100, Some(30), Some(20));
+    let snapshot = capture(&[
+        json!({"type":"turn_context","payload":{"model":"codex-a"}}),
+        first.clone(),
+        first,
+        second.clone(),
+        second,
+    ]);
+    let payload = serde_json::to_value(&snapshot.payload).unwrap();
+    assert_eq!(
+        payload["usage"],
+        json!({"total_tokens":200,"cache_write_input_tokens":30})
+    );
+    assert_eq!(
+        payload["attribution"],
+        json!([{"model":"codex-a","usage":{"total_tokens":200,"cache_write_input_tokens":30}}])
+    );
+    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Known);
+}
+
+#[test]
+fn cache_write_deltas_follow_model_changes() {
+    let snapshot = capture(&[
+        json!({"type":"turn_context","payload":{"model":"codex-a"}}),
+        cache_write_checkpoint(100, 100, Some(10), Some(10)),
+        json!({"type":"turn_context","payload":{"model":"codex-b"}}),
+        cache_write_checkpoint(200, 100, Some(30), Some(20)),
+        json!({"type":"turn_context","payload":{"model":"codex-a"}}),
+        cache_write_checkpoint(300, 100, Some(50), Some(20)),
+    ]);
+    let payload = serde_json::to_value(&snapshot.payload).unwrap();
+    assert_eq!(
+        payload["usage"],
+        json!({"total_tokens":300,"cache_write_input_tokens":50})
+    );
+    assert_eq!(
+        payload["attribution"],
+        json!([
+            {"model":"codex-a","usage":{"total_tokens":200,"cache_write_input_tokens":30}},
+            {"model":"codex-b","usage":{"total_tokens":100,"cache_write_input_tokens":20}}
+        ])
+    );
+    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Known);
+}
+
+#[test]
+fn missing_cache_write_usage_stays_unknown_and_zero_stays_measured() {
+    for count in [None, Some(0)] {
+        let snapshot = capture(&[
+            json!({"type":"turn_context","payload":{"model":"codex-a"}}),
+            cache_write_checkpoint(100, 100, count, count),
+            cache_write_checkpoint(200, 100, count, count),
+        ]);
+        let usage = snapshot.payload.usage.as_ref().unwrap();
+        assert_eq!(usage.total_tokens, Some(200));
+        assert_eq!(usage.cache_write_input_tokens, count);
+        let attributed = &snapshot.payload.attribution;
+        assert_eq!(attributed.len(), 1);
+        assert_eq!(attributed[0].attribution.model.as_deref(), Some("codex-a"));
+        assert_eq!(attributed[0].usage, *usage);
+        let payload = serde_json::to_value(&snapshot.payload).unwrap();
+        for serialized_usage in [&payload["usage"], &payload["attribution"][0]["usage"]] {
+            assert_eq!(
+                serialized_usage.get("cache_write_input_tokens"),
+                count.map(|count| json!(count)).as_ref()
+            );
+        }
+        assert_eq!(snapshot.coverage.token_status, CoverageStatus::Known);
+    }
+}
+
+#[test]
+fn mismatched_or_missing_cache_write_deltas_remain_unattributed() {
+    for last_cache_write in [Some(5), None] {
+        let snapshot = capture(&[
+            json!({"type":"turn_context","payload":{"model":"codex-a"}}),
+            cache_write_checkpoint(100, 100, Some(10), Some(10)),
+            json!({"type":"turn_context","payload":{"model":"codex-b"}}),
+            cache_write_checkpoint(200, 100, Some(20), last_cache_write),
+        ]);
+        let payload = serde_json::to_value(&snapshot.payload).unwrap();
+        assert_eq!(
+            payload["usage"],
+            json!({"total_tokens":200,"cache_write_input_tokens":20})
+        );
+        assert_eq!(
+            payload["attribution"],
+            json!([
+                {"usage":{"total_tokens":100,"cache_write_input_tokens":10}},
+                {"model":"codex-a","usage":{"total_tokens":100,"cache_write_input_tokens":10}}
+            ])
+        );
+        assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
+        assert_eq!(
+            snapshot.diagnostics.reasons[&ReasonCode::AmbiguousAccounting],
+            1
+        );
+    }
+}
+
 #[test]
 fn cumulative_checkpoints_preserve_distinct_equal_sized_requests() {
     let entries = parse_jsonl(
@@ -203,6 +343,82 @@ fn counter_bounds_and_absence_survive_serialization() {
             .unwrap()
             .get("usage")
             .is_none()
+    );
+}
+
+#[test]
+fn excessive_cache_write_totals_preserve_the_valid_prefix() {
+    for input in [0, 100, i64::MAX - 1] {
+        let usage = json!({
+            "input_tokens": input,
+            "cache_write_input_tokens": input,
+            "output_tokens": 0,
+            "total_tokens": input,
+        });
+        let valid = json!({"type":"event_msg","payload":{"type":"token_count","info":{
+            "total_token_usage": usage,
+            "last_token_usage": usage,
+        }}});
+        let mut invalid = valid.clone();
+        invalid["payload"]["info"]["total_token_usage"]["cache_write_input_tokens"] =
+            json!(input + 1);
+        let snapshot = capture(&[
+            json!({"type":"turn_context","payload":{"model":"codex-a"}}),
+            valid,
+            invalid,
+        ]);
+        let payload = serde_json::to_value(&snapshot.payload).unwrap();
+        assert_eq!(payload["usage"], usage);
+        assert_eq!(
+            payload["attribution"],
+            json!([{"model":"codex-a","usage":usage}])
+        );
+        assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
+        assert_eq!(snapshot.diagnostics.reasons[&ReasonCode::InvalidData], 1);
+    }
+}
+
+#[test]
+fn excessive_last_cache_write_usage_cannot_confirm_attribution() {
+    let first_usage = json!({
+        "input_tokens": 100,
+        "cache_write_input_tokens": 60,
+        "output_tokens": 10,
+        "total_tokens": 110,
+    });
+    let total_usage = json!({
+        "input_tokens": 200,
+        "cache_write_input_tokens": 120,
+        "output_tokens": 20,
+        "total_tokens": 220,
+    });
+    let mut invalid_last = first_usage.clone();
+    invalid_last["cache_write_input_tokens"] = json!(101);
+    let snapshot = capture(&[
+        json!({"type":"turn_context","payload":{"model":"codex-a"}}),
+        json!({"type":"event_msg","payload":{"type":"token_count","info":{
+            "total_token_usage":first_usage,
+            "last_token_usage":first_usage,
+        }}}),
+        json!({"type":"event_msg","payload":{"type":"token_count","info":{
+            "total_token_usage":total_usage,
+            "last_token_usage":invalid_last,
+        }}}),
+    ]);
+    let payload = serde_json::to_value(&snapshot.payload).unwrap();
+    assert_eq!(payload["usage"], total_usage);
+    assert_eq!(
+        payload["attribution"],
+        json!([
+            {"usage":first_usage},
+            {"model":"codex-a","usage":first_usage},
+        ])
+    );
+    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
+    assert_eq!(snapshot.diagnostics.reasons[&ReasonCode::InvalidData], 1);
+    assert_eq!(
+        snapshot.diagnostics.reasons[&ReasonCode::AmbiguousAccounting],
+        1
     );
 }
 

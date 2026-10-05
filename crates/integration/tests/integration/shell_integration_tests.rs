@@ -63,6 +63,7 @@ integration_tests! {
     test_keyword_completions,
     // Native shell completions, driven against the user's real shell.
     test_native_shell_completions_menu,
+    test_zsh_native_completions_without_compinit_use_filepaths,
     test_command_runs_cleanly_after_native_shell_completion,
     test_native_shell_completions_used_when_no_bundled_spec,
     test_native_shell_completions_skipped_when_a_bundled_spec_answers,

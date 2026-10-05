@@ -2,7 +2,7 @@
 ///
 /// This module handles:
 /// - Writing provider credentials to `~/.git-credentials`, GitHub credentials
-///   to `~/.config/gh/hosts.yml`, and refresh-safe Azure CLI authentication.
+///   to the `gh` config directory, and refresh-safe Azure CLI authentication.
 /// - One-time git configuration (`credential.helper store`, SSH→HTTPS URL
 ///   rewrites).
 /// - Configuring the git user identity from the server-returned username/email.
@@ -87,7 +87,33 @@ pub(crate) fn ensure_workload_token_available() -> Result<(), TaskGitCredentials
 }
 
 fn home_dir() -> Result<PathBuf> {
-    dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
+    let home = if cfg!(windows) {
+        git_home_dir(|key| std::env::var_os(key))
+    } else {
+        None
+    };
+    home.or_else(dirs::home_dir)
+        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
+}
+
+/// Resolves `~` the way git does on Windows: from the environment, not from the profile of the
+/// account the process runs as. The credential files must land where git's `store` helper reads
+/// them, and `dirs::home_dir` disagrees with git when a process running as SYSTEM carries another
+/// user's `USERPROFILE`.
+fn git_home_dir(get_env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    let non_empty = |key: &str| get_env(key).filter(|value| !value.is_empty());
+    if let Some(home) = non_empty("HOME") {
+        return Some(PathBuf::from(home));
+    }
+    if let (Some(drive), Some(path)) = (non_empty("HOMEDRIVE"), non_empty("HOMEPATH")) {
+        let mut combined = drive;
+        combined.push(path);
+        let combined = PathBuf::from(combined);
+        if combined.is_dir() {
+            return Some(combined);
+        }
+    }
+    non_empty("USERPROFILE").map(PathBuf::from)
 }
 
 /// Write `content` to `path` using owner-only (0600) permissions.
@@ -393,7 +419,35 @@ fn write_git_credentials_file(credentials: &[GitCredential]) -> Result<()> {
     Ok(())
 }
 
-/// Write `~/.config/gh/hosts.yml` so the `gh` CLI is authenticated.
+/// The directory `gh` reads its config from, in `gh`'s own precedence order. On Windows `gh`
+/// ignores `~/.config/gh` whenever `APPDATA` is set.
+fn gh_config_dir(home: &Path) -> PathBuf {
+    resolve_gh_config_dir(home, cfg!(windows), |key| std::env::var_os(key))
+}
+
+fn resolve_gh_config_dir(
+    home: &Path,
+    is_windows: bool,
+    get_env: impl Fn(&str) -> Option<OsString>,
+) -> PathBuf {
+    let non_empty = |key: &str| {
+        get_env(key)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    if let Some(dir) = non_empty("GH_CONFIG_DIR") {
+        return dir;
+    }
+    if let Some(dir) = non_empty("XDG_CONFIG_HOME") {
+        return dir.join("gh");
+    }
+    if is_windows && let Some(app_data) = non_empty("APPDATA") {
+        return app_data.join("GitHub CLI");
+    }
+    home.join(".config").join("gh")
+}
+
+/// Write `hosts.yml` into `gh_config_dir` so the `gh` CLI is authenticated.
 ///
 /// The YAML format is stable for `gh` v2+:
 /// ```yaml
@@ -404,7 +458,7 @@ fn write_git_credentials_file(credentials: &[GitCredential]) -> Result<()> {
 /// ```
 ///
 /// The write is atomic: a temporary file is written then renamed.
-fn write_gh_hosts_yml(credentials: &[GitCredential], home: &std::path::Path) -> Result<()> {
+fn write_gh_hosts_yml(credentials: &[GitCredential], gh_config_dir: &Path) -> Result<()> {
     let github_credentials = credentials
         .iter()
         .filter(|credential| credential.host == GITHUB_HOST)
@@ -412,8 +466,7 @@ fn write_gh_hosts_yml(credentials: &[GitCredential], home: &std::path::Path) -> 
     if github_credentials.is_empty() {
         return Ok(());
     }
-    let gh_config_dir = home.join(".config").join("gh");
-    std::fs::create_dir_all(&gh_config_dir)
+    std::fs::create_dir_all(gh_config_dir)
         .with_context(|| format!("Failed to create {}", gh_config_dir.display()))?;
     let path = gh_config_dir.join(GH_HOSTS_FILENAME);
     let tmp_path = gh_config_dir.join(format!("{GH_HOSTS_FILENAME}.tmp"));
@@ -533,7 +586,7 @@ pub(crate) fn write_git_credentials_with_failures(
     let home = home_dir()?;
     let outcomes = [
         write_git_credentials_file(credentials),
-        write_gh_hosts_yml(credentials, &home),
+        write_gh_hosts_yml(credentials, &gh_config_dir(&home)),
         write_glab_config(credentials, &home),
         write_azure_cli_auth(credentials, &home),
     ];
@@ -885,8 +938,8 @@ async fn try_refresh(
 /// On each iteration:
 /// 1. Issue a short-lived workload token.
 /// 2. Call `taskGitCredentials` to get a fresh token from the server.
-/// 3. Overwrite `~/.git-credentials` and refresh GitHub credentials in
-///    `~/.config/gh/hosts.yml`.
+/// 3. Overwrite `~/.git-credentials` and refresh GitHub credentials in the
+///    `gh` `hosts.yml`.
 ///
 /// On transient failure, the refresh is retried up to three times with
 /// exponential backoff (1 min, 2 min, 4 min), keeping all retries within the

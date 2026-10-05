@@ -3,22 +3,28 @@ use std::path::{Path, PathBuf};
 
 use cloud_object_models::CodeForge;
 use command::blocking::Command;
+use futures::channel::oneshot;
+use futures::executor::block_on;
+use futures::future::{pending, ready};
+use futures::poll;
 use tempfile::TempDir;
 use warp_cli::agent::{
     RepositoryForge, RepositoryHeadRef, RepositoryIdentity, RepositoryPreparationOverride,
 };
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
+use warp_core::command::ExitCode;
 
 use super::{
     CloneFailureCredentialIdentity, CloneFailureIdentityDiagnostics, PrepareEnvironmentError,
-    RepositoryCloneRequest, SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER,
-    build_git_credential_query_command, build_parallel_clone_command,
+    RepositoryCloneRequest, SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER, SetupCommandPhase,
+    await_setup_phase, build_git_credential_query_command, build_parallel_clone_command,
     build_remove_repository_origins_command, build_resolved_head_command, checkout_command_for,
     clone_failure_identity_diagnostics, environment_snapshot, is_valid_git_object_id,
     merge_repos_deduped, parse_resolved_head_sha, parse_resolved_head_shas, read_failed_repo_names,
     repository_clone_requests, setup_command_failure, single_repo_name, unique_clone_hosts,
     validate_repository_preparation_overrides,
 };
+use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::terminal::shell::ShellType;
 
@@ -29,6 +35,144 @@ fn command_output(stdout: &str, stderr: &str, status: CommandExitStatus) -> Comm
         status,
         exit_code: None,
     }
+}
+
+#[test]
+fn setup_timeout_covers_command_start_and_exit_without_resetting_deadline() {
+    for command_started in [false, true] {
+        block_on(async {
+            let (start_tx, start_rx) = oneshot::channel::<()>();
+            let (exit_tx, exit_rx) = oneshot::channel::<ExitCode>();
+            let (deadline_tx, deadline_rx) = oneshot::channel::<()>();
+            let operation = async {
+                start_rx.await.unwrap();
+                Ok(exit_rx.await.unwrap())
+            };
+            let mut wait = Box::pin(await_setup_phase(
+                2,
+                "./setup.sh",
+                SetupCommandPhase::Execute,
+                operation,
+                deadline_rx,
+            ));
+            assert!(poll!(wait.as_mut()).is_pending());
+            let start_tx = if command_started {
+                start_tx.send(()).unwrap();
+                assert!(poll!(wait.as_mut()).is_pending());
+                None
+            } else {
+                Some(start_tx)
+            };
+            deadline_tx.send(()).unwrap();
+            let error = wait.await.unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "Setup command #2 timed out after 1800s while waiting for command to complete: `./setup.sh`"
+            );
+            if let Some(start_tx) = start_tx {
+                assert!(start_tx.is_canceled());
+            }
+            assert!(exit_tx.is_canceled());
+        });
+    }
+}
+
+#[test]
+fn setup_deadline_preserves_success_and_nonzero_exit_codes() {
+    for code in [0, 7] {
+        let result = block_on(await_setup_phase(
+            1,
+            "./setup.sh",
+            SetupCommandPhase::Execute,
+            ready(Ok(ExitCode::from(code))),
+            pending::<()>(),
+        ))
+        .unwrap();
+        assert_eq!(result, ExitCode::from(code));
+    }
+}
+
+#[test]
+fn setup_deadline_preserves_shell_exit_error() {
+    let result = block_on(await_setup_phase::<()>(
+        1,
+        "./setup.sh",
+        SetupCommandPhase::Execute,
+        ready(Err(PrepareEnvironmentError::TerminalDriver {
+            source: AgentDriverError::SetupCommandExitedShell {
+                command: "./setup.sh".to_string(),
+            },
+        })),
+        pending::<()>(),
+    ));
+    assert!(matches!(
+        result,
+        Err(PrepareEnvironmentError::TerminalDriver {
+            source: AgentDriverError::SetupCommandExitedShell { .. }
+        })
+    ));
+}
+
+#[test]
+fn setup_reset_timeout_is_distinct_and_names_the_configured_command() {
+    let error = block_on(await_setup_phase::<ExitCode>(
+        3,
+        "./setup.sh",
+        SetupCommandPhase::ResetWorkingDirectory,
+        pending(),
+        ready(()),
+    ))
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Setup command #3 timed out after 30s while resetting the working directory after the command: `./setup.sh`"
+    );
+}
+
+#[test]
+fn setup_timeout_redacts_command_before_constructing_error() {
+    let secret = "AKIAIOSFODNN7EXAMPLE";
+    let command = format!("./setup.sh {secret}");
+    let error = block_on(await_setup_phase::<()>(
+        1,
+        &command,
+        SetupCommandPhase::Execute,
+        pending(),
+        ready(()),
+    ))
+    .unwrap_err();
+    assert!(!error.to_string().contains(secret));
+    assert!(!format!("{error:?}").contains(secret));
+    assert!(error.to_string().contains(&"*".repeat(secret.len())));
+}
+
+#[test]
+fn setup_timeout_stops_following_work_and_drops_the_pending_command() {
+    block_on(async {
+        let (command_tx, command_rx) = oneshot::channel::<()>();
+        let (deadline_tx, deadline_rx) = oneshot::channel::<()>();
+        let mut reached_next_command = false;
+        let mut setup = Box::pin(async {
+            await_setup_phase(
+                1,
+                "./setup.sh",
+                SetupCommandPhase::Execute,
+                async {
+                    command_rx.await.unwrap();
+                    Ok(())
+                },
+                deadline_rx,
+            )
+            .await?;
+            reached_next_command = true;
+            Ok::<(), PrepareEnvironmentError>(())
+        });
+        assert!(poll!(setup.as_mut()).is_pending());
+        deadline_tx.send(()).unwrap();
+        assert!(setup.await.is_err());
+        assert!(!reached_next_command);
+        assert!(command_tx.is_canceled());
+    });
 }
 
 #[test]
@@ -2068,6 +2212,7 @@ fn factory_clone_is_prepended_when_clone_values_are_present() {
     super::prepend_factory_definition_clone_for_values(
         "https://t:token@definitions.example.com/team/factory.git",
         "acme_factory_repo",
+        ShellType::Bash,
         &mut setup_commands,
     );
     assert_eq!(
@@ -2080,11 +2225,48 @@ fn factory_clone_is_prepended_when_clone_values_are_present() {
 }
 
 #[test]
+fn factory_clone_references_env_vars_with_the_session_shells_syntax() {
+    let posix_command = "git clone \"$WARP_FACTORY_REPO_CLONE_URL\" \"$WARP_FACTORY_REPO_DIR\"";
+    let powershell_command =
+        "git clone \"$env:WARP_FACTORY_REPO_CLONE_URL\" \"$env:WARP_FACTORY_REPO_DIR\"";
+    for (shell_type, expected) in [
+        (ShellType::Bash, posix_command),
+        (ShellType::Zsh, posix_command),
+        (ShellType::Fish, posix_command),
+        (ShellType::PowerShell, powershell_command),
+    ] {
+        let mut setup_commands = Vec::new();
+        super::prepend_factory_definition_clone_for_values(
+            "https://t:token@definitions.example.com/team/factory.git",
+            "acme_factory_repo",
+            shell_type,
+            &mut setup_commands,
+        );
+        assert_eq!(setup_commands, vec![expected.to_string()], "{shell_type:?}");
+    }
+}
+
+#[test]
 fn factory_clone_is_skipped_without_clone_values() {
     let mut setup_commands = vec!["make setup".to_string()];
-    super::prepend_factory_definition_clone_for_values("", "", &mut setup_commands);
-    super::prepend_factory_definition_clone_for_values("url", "  ", &mut setup_commands);
-    super::prepend_factory_definition_clone_for_values("  ", "dir", &mut setup_commands);
+    super::prepend_factory_definition_clone_for_values(
+        "",
+        "",
+        ShellType::Bash,
+        &mut setup_commands,
+    );
+    super::prepend_factory_definition_clone_for_values(
+        "url",
+        "  ",
+        ShellType::Bash,
+        &mut setup_commands,
+    );
+    super::prepend_factory_definition_clone_for_values(
+        "  ",
+        "dir",
+        ShellType::Bash,
+        &mut setup_commands,
+    );
     assert_eq!(setup_commands, vec!["make setup".to_string()]);
 }
 
@@ -2100,6 +2282,7 @@ fn factory_clone_defers_to_a_persisted_environment_copy() {
     super::prepend_factory_definition_clone_for_values(
         "https://t:token@definitions.example.com/team/factory.git",
         "acme_factory_repo",
+        ShellType::Bash,
         &mut setup_commands,
     );
     assert_eq!(setup_commands, vec![persisted, "make setup".to_string()]);
@@ -2114,6 +2297,7 @@ fn factory_clone_defers_to_a_persisted_bare_clone_copy() {
     super::prepend_factory_definition_clone_for_values(
         "https://t:token@definitions.example.com/team/factory.git",
         "acme_factory_repo",
+        ShellType::Bash,
         &mut setup_commands,
     );
     assert_eq!(setup_commands, vec![persisted, "make setup".to_string()]);

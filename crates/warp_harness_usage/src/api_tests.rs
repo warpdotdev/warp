@@ -65,6 +65,7 @@ fn requests_match_contract_fixtures() {
             usage: Some(CodexUsage {
                 input_tokens: Some(10),
                 cached_input_tokens: Some(0),
+                cache_write_input_tokens: Some(0),
                 output_tokens: Some(4),
                 reasoning_output_tokens: Some(2),
                 total_tokens: Some(14),
@@ -78,6 +79,7 @@ fn requests_match_contract_fixtures() {
                 usage: CodexUsage {
                     input_tokens: Some(10),
                     cached_input_tokens: None,
+                    cache_write_input_tokens: Some(0),
                     output_tokens: Some(4),
                     reasoning_output_tokens: None,
                     total_tokens: None,

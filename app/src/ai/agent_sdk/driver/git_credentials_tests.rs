@@ -158,7 +158,7 @@ fn write_gh_hosts_yml_uses_gh_cli_filename() -> Result<()> {
             email: Some("octocat@example.com".to_string()),
             host: "github.com".to_string(),
         }],
-        temp_dir.path(),
+        &gh_config_dir,
     )?;
 
     let hosts_path = gh_config_dir.join(GH_HOSTS_FILENAME);
@@ -198,7 +198,7 @@ fn write_gh_hosts_yml_excludes_gitlab_credentials() -> Result<()> {
                 host: "gitlab.com".to_string(),
             },
         ],
-        temp_dir.path(),
+        &gh_config_dir,
     )?;
 
     let hosts = std::fs::read_to_string(gh_config_dir.join(GH_HOSTS_FILENAME))?;
@@ -212,6 +212,7 @@ fn write_gh_hosts_yml_excludes_gitlab_credentials() -> Result<()> {
 #[test]
 fn write_gh_hosts_yml_skips_gitlab_only_credentials() -> Result<()> {
     let temp_dir = tempfile::tempdir()?;
+    let gh_config_dir = temp_dir.path().join(".config").join("gh");
 
     write_gh_hosts_yml(
         &[GitCredential {
@@ -220,12 +221,78 @@ fn write_gh_hosts_yml_skips_gitlab_only_credentials() -> Result<()> {
             email: None,
             host: "gitlab.com".to_string(),
         }],
-        temp_dir.path(),
+        &gh_config_dir,
     )?;
 
-    assert!(!temp_dir.path().join(".config").join("gh").exists());
+    assert!(!gh_config_dir.exists());
 
     Ok(())
+}
+
+#[test]
+fn gh_config_dir_follows_gh_precedence() {
+    struct Case {
+        name: &'static str,
+        is_windows: bool,
+        env: Vec<(&'static str, &'static str)>,
+        expected: &'static str,
+    }
+    let cases = [
+        Case {
+            name: "GH_CONFIG_DIR wins over everything",
+            is_windows: true,
+            env: vec![
+                ("GH_CONFIG_DIR", "/gh-config-dir"),
+                ("XDG_CONFIG_HOME", "/xdg"),
+                ("APPDATA", "/appdata"),
+            ],
+            expected: "/gh-config-dir",
+        },
+        Case {
+            name: "XDG_CONFIG_HOME wins over APPDATA",
+            is_windows: true,
+            env: vec![("XDG_CONFIG_HOME", "/xdg"), ("APPDATA", "/appdata")],
+            expected: "/xdg/gh",
+        },
+        Case {
+            name: "Windows uses APPDATA",
+            is_windows: true,
+            env: vec![("APPDATA", "/appdata")],
+            expected: "/appdata/GitHub CLI",
+        },
+        Case {
+            name: "other platforms ignore APPDATA",
+            is_windows: false,
+            env: vec![("APPDATA", "/appdata")],
+            expected: "/home/user/.config/gh",
+        },
+        Case {
+            name: "empty variables are treated as unset",
+            is_windows: true,
+            env: vec![
+                ("GH_CONFIG_DIR", ""),
+                ("XDG_CONFIG_HOME", ""),
+                ("APPDATA", ""),
+            ],
+            expected: "/home/user/.config/gh",
+        },
+        Case {
+            name: "nothing set falls back to the home directory",
+            is_windows: true,
+            env: vec![],
+            expected: "/home/user/.config/gh",
+        },
+    ];
+
+    for case in cases {
+        let resolved = resolve_gh_config_dir(Path::new("/home/user"), case.is_windows, |key| {
+            case.env
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| OsString::from(value))
+        });
+        assert_eq!(resolved, PathBuf::from(case.expected), "{}", case.name);
+    }
 }
 
 fn github_credential() -> GitCredential {
@@ -733,4 +800,82 @@ fn refreshed_credentials_return_err_when_the_local_write_fails() {
     let message = format!("{error:#}");
     assert!(message.contains("Failed to write refreshed git credentials"));
     assert!(message.contains("github.com"));
+}
+
+#[test]
+fn git_home_dir_resolves_from_the_environment_in_git_order() -> Result<()> {
+    let existing_home = tempfile::tempdir()?;
+    let existing_home_path = existing_home.path().to_string_lossy().into_owned();
+    let missing_home_path = existing_home
+        .path()
+        .join("does-not-exist")
+        .to_string_lossy()
+        .into_owned();
+    // Splits a path into the non-empty drive and path halves whose concatenation is the original.
+    let split_drive = |path: &str| {
+        let (drive, rest) = path.split_at(1);
+        (drive.to_string(), rest.to_string())
+    };
+    let (existing_drive, existing_rest) = split_drive(&existing_home_path);
+    let (missing_drive, missing_rest) = split_drive(&missing_home_path);
+
+    struct Case {
+        name: &'static str,
+        env: Vec<(&'static str, String)>,
+        expected: Option<String>,
+    }
+    let cases = [
+        Case {
+            name: "HOME wins over every other variable",
+            env: vec![
+                ("HOME", "/from/home".to_string()),
+                ("HOMEDRIVE", existing_drive.clone()),
+                ("HOMEPATH", existing_rest.clone()),
+                ("USERPROFILE", "/from/userprofile".to_string()),
+            ],
+            expected: Some("/from/home".to_string()),
+        },
+        Case {
+            name: "an empty HOME is treated as unset",
+            env: vec![
+                ("HOME", String::new()),
+                ("USERPROFILE", "/from/userprofile".to_string()),
+            ],
+            expected: Some("/from/userprofile".to_string()),
+        },
+        Case {
+            name: "HOMEDRIVE and HOMEPATH win over USERPROFILE when the directory exists",
+            env: vec![
+                ("HOMEDRIVE", existing_drive),
+                ("HOMEPATH", existing_rest),
+                ("USERPROFILE", "/from/userprofile".to_string()),
+            ],
+            expected: Some(existing_home_path.clone()),
+        },
+        Case {
+            name: "a missing HOMEDRIVE and HOMEPATH directory falls back to USERPROFILE",
+            env: vec![
+                ("HOMEDRIVE", missing_drive),
+                ("HOMEPATH", missing_rest),
+                ("USERPROFILE", "/from/userprofile".to_string()),
+            ],
+            expected: Some("/from/userprofile".to_string()),
+        },
+        Case {
+            name: "nothing set resolves to nothing",
+            env: vec![],
+            expected: None,
+        },
+    ];
+
+    for case in cases {
+        let resolved = git_home_dir(|key| {
+            case.env
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| OsString::from(value))
+        });
+        assert_eq!(resolved, case.expected.map(PathBuf::from), "{}", case.name);
+    }
+    Ok(())
 }

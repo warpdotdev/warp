@@ -887,6 +887,8 @@ pub enum AgentDriverError {
         command: String,
         output: Option<String>,
     },
+    #[error("Environment setup failed: {message}")]
+    SetupCommandTimedOut { message: String },
     #[error("Cloud provider setup failed")]
     CloudProviderSetupFailed(#[from] cloud_provider::CloudProviderSetupError),
     #[error("Could not resolve working directory {}", path.display())]
@@ -1059,6 +1061,9 @@ impl From<PrepareEnvironmentError> for AgentDriverError {
                     command,
                     output,
                 }
+            }
+            PrepareEnvironmentError::SetupCommandTimedOut { .. } => {
+                AgentDriverError::SetupCommandTimedOut { message }
             }
             _ => AgentDriverError::EnvironmentSetupFailed(message),
         }
@@ -1660,6 +1665,7 @@ impl AgentDriver {
                     err,
                     AgentDriverError::EnvironmentSetupFailed(_)
                         | AgentDriverError::SetupCommandFailed { .. }
+                        | AgentDriverError::SetupCommandTimedOut { .. }
                         | AgentDriverError::SetupCommandExitedShell { .. }
                 ) {
                     let _ = foreground_for_error
@@ -2222,13 +2228,17 @@ impl AgentDriver {
                     additional_source_repos,
                     repository_preparation_overrides,
                     remove_repository_origins,
+                    session_shell_type,
                 ) = foreground
-                    .spawn(|me, _| {
+                    .spawn(|me, ctx| {
                         (
                             me.environment.clone(),
                             me.additional_source_repos.clone(),
                             me.repository_preparation_overrides.clone(),
                             me.remove_repository_origins,
+                            me.terminal_driver
+                                .as_ref(ctx)
+                                .active_session_shell_type(ctx),
                         )
                     })
                     .await?;
@@ -2239,7 +2249,10 @@ impl AgentDriver {
                 // The Factory definition checkout is run-scoped: the dispatch decides
                 // whether this run gets one by attaching the clone variables,
                 // independent of which environment the run executes in.
-                environment::prepend_factory_definition_clone(&mut setup_commands);
+                environment::prepend_factory_definition_clone(
+                    &mut setup_commands,
+                    session_shell_type,
+                );
                 let source_repos = environment::merge_repos_deduped(
                     environment_opt
                         .as_ref()
@@ -2531,6 +2544,13 @@ impl AgentDriver {
         stage: &str,
         error: &AgentDriverError,
     ) {
+        // The terminal may still be executing setup; do not retain it or accept debug turns.
+        if matches!(error, AgentDriverError::SetupCommandTimedOut { .. }) {
+            log::warn!(
+                "Environment setup lifecycle: event=timeout_teardown stage={stage} retention_skipped=true"
+            );
+            return;
+        }
         let idle_on_fail = match foreground.spawn(|me, _| me.idle_on_fail).await {
             Ok(idle_on_fail) => idle_on_fail,
             Err(spawn_error) => {

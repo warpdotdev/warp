@@ -51,6 +51,10 @@ pub struct MountOutput {
 pub struct Mount {
     #[serde(default)]
     pub mode: String,
+    #[serde(default)]
+    pub cache_path: PathBuf,
+    #[serde(default)]
+    pub mount_path: PathBuf,
     pub cache_hit: bool,
 }
 
