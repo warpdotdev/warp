@@ -19,9 +19,10 @@ pub(crate) enum ExitEscalationPhase {
 pub(crate) enum ExitEscalationEvent {
     CommandExited,
     /// CLI session reached a terminal state and asked the driver to stop the harness.
-    ShutdownRequested,
-    /// Same request, but the CLI session is blocked on user input.
-    ShutdownRequestedWhileAwaitingInput,
+    ShutdownRequested {
+        /// The session is blocked on user input, so typed text would answer the open prompt.
+        awaiting_input: bool,
+    },
     /// Runtime-failure scanner confirmed a hang/auth failure and asked the driver to stop.
     ScannerDetected,
     FollowupDeadlineElapsed,
@@ -69,14 +70,19 @@ impl ExitEscalation {
             }
             (
                 ExitEscalationPhase::Running,
-                ExitEscalationEvent::ShutdownRequested | ExitEscalationEvent::ScannerDetected,
+                ExitEscalationEvent::ShutdownRequested {
+                    awaiting_input: false,
+                }
+                | ExitEscalationEvent::ScannerDetected,
             ) => {
                 self.phase = ExitEscalationPhase::AwaitingGracefulExit;
                 ExitEscalationAction::SendExit
             }
             (
                 ExitEscalationPhase::Running,
-                ExitEscalationEvent::ShutdownRequestedWhileAwaitingInput,
+                ExitEscalationEvent::ShutdownRequested {
+                    awaiting_input: true,
+                },
             ) => {
                 self.phase = ExitEscalationPhase::Done;
                 ExitEscalationAction::ForceKillAndFinish
@@ -98,16 +104,14 @@ impl ExitEscalation {
             (
                 ExitEscalationPhase::Done,
                 ExitEscalationEvent::CommandExited
-                | ExitEscalationEvent::ShutdownRequested
-                | ExitEscalationEvent::ShutdownRequestedWhileAwaitingInput
+                | ExitEscalationEvent::ShutdownRequested { .. }
                 | ExitEscalationEvent::ScannerDetected
                 | ExitEscalationEvent::FollowupDeadlineElapsed
                 | ExitEscalationEvent::ForceKillDeadlineElapsed,
             )
             | (
                 ExitEscalationPhase::AwaitingGracefulExit | ExitEscalationPhase::AwaitingFollowup,
-                ExitEscalationEvent::ShutdownRequested
-                | ExitEscalationEvent::ShutdownRequestedWhileAwaitingInput
+                ExitEscalationEvent::ShutdownRequested { .. }
                 | ExitEscalationEvent::ScannerDetected,
             )
             | (

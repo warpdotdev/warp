@@ -3217,10 +3217,8 @@ impl AgentDriver {
                         .context("Failed to enqueue periodic harness conversation save"));
                 }
                 _ = harness_exit_rx => {
-                    let start_event = if Self::session_blocked_on_needs_input(foreground).await {
-                        ExitEscalationEvent::ShutdownRequestedWhileAwaitingInput
-                    } else {
-                        ExitEscalationEvent::ShutdownRequested
+                    let start_event = ExitEscalationEvent::ShutdownRequested {
+                        awaiting_input: Self::session_blocked_on_needs_input(foreground).await,
                     };
                     break Self::escalate_harness_exit(
                         runner.as_ref(),

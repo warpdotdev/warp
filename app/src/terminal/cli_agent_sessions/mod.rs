@@ -22,6 +22,14 @@ pub const CTRL_C_CANCEL_WINDOW: Duration = Duration::from_secs(2);
 
 const NEEDS_INPUT_STATUS_MESSAGE: &str = "Agent requires user input";
 
+/// What caused a session to become [`CLIAgentSessionStatus::Blocked`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockedSource {
+    PermissionRequest,
+    QuestionAsked,
+    NeedsInput,
+}
+
 /// Status of a tracked CLI agent session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CLIAgentSessionStatus {
@@ -33,6 +41,7 @@ pub enum CLIAgentSessionStatus {
     },
     Blocked {
         message: Option<String>,
+        source: BlockedSource,
     },
     /// The user interrupted the session with Ctrl-C and no further plugin
     /// activity was observed within the grace window (see
@@ -48,7 +57,7 @@ impl CLIAgentSessionStatus {
             CLIAgentSessionStatus::InProgress => ConversationStatus::InProgress,
             CLIAgentSessionStatus::Success => ConversationStatus::Success,
             CLIAgentSessionStatus::Failed { .. } => ConversationStatus::Error,
-            CLIAgentSessionStatus::Blocked { message } => ConversationStatus::Blocked {
+            CLIAgentSessionStatus::Blocked { message, .. } => ConversationStatus::Blocked {
                 blocked_action: message.clone().unwrap_or_default(),
             },
             CLIAgentSessionStatus::Cancelled => ConversationStatus::Cancelled,
@@ -67,8 +76,6 @@ pub struct CLIAgentSessionContext {
     pub summary: Option<String>,
     pub query: Option<String>,
     pub response: Option<String>,
-    /// Whether the latest status change was a `NeedsInput` event.
-    pub blocked_on_needs_input: bool,
 }
 
 /// State of the rich input editor for composing a prompt to send to a CLI agent.
@@ -190,8 +197,13 @@ impl CLIAgentSession {
     /// typed into its terminal.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn is_blocked_on_needs_input(&self) -> bool {
-        matches!(self.status, CLIAgentSessionStatus::Blocked { .. })
-            && self.session_context.blocked_on_needs_input
+        matches!(
+            self.status,
+            CLIAgentSessionStatus::Blocked {
+                source: BlockedSource::NeedsInput,
+                ..
+            }
+        )
     }
 
     /// Clears state populated by `PermissionRequest`. Called whenever the
@@ -254,6 +266,7 @@ impl CLIAgentSession {
                 self.session_context.tool_input_preview = event.payload.tool_input_preview.clone();
                 CLIAgentSessionStatus::Blocked {
                     message: event.payload.summary.clone(),
+                    source: BlockedSource::PermissionRequest,
                 }
             }
             CLIAgentEventType::QuestionAsked => CLIAgentSessionStatus::Blocked {
@@ -262,6 +275,7 @@ impl CLIAgentSession {
                     .summary
                     .clone()
                     .or_else(|| Some("Waiting for your answer".to_owned())),
+                source: BlockedSource::QuestionAsked,
             },
             CLIAgentEventType::NeedsInput => CLIAgentSessionStatus::Blocked {
                 message: event
@@ -269,6 +283,7 @@ impl CLIAgentSession {
                     .summary
                     .clone()
                     .or_else(|| Some(NEEDS_INPUT_STATUS_MESSAGE.to_owned())),
+                source: BlockedSource::NeedsInput,
             },
             CLIAgentEventType::PermissionReplied => {
                 if !matches!(self.status, CLIAgentSessionStatus::Blocked { .. }) {
@@ -287,8 +302,6 @@ impl CLIAgentSession {
             CLIAgentEventType::Unknown(_) => return None,
         };
 
-        self.session_context.blocked_on_needs_input =
-            matches!(event.event, CLIAgentEventType::NeedsInput);
         self.status = new_status.clone();
         Some(new_status)
     }

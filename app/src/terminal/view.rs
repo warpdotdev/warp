@@ -14117,7 +14117,7 @@ impl TerminalView {
             .or(session_context.summary.as_deref().filter(|s| !s.is_empty()))
             .unwrap_or(agent.command_prefix())
             .to_owned();
-        let description = if let CLIAgentSessionStatus::Blocked { message } = status {
+        let description = if let CLIAgentSessionStatus::Blocked { message, .. } = status {
             message.clone().unwrap_or_default()
         } else {
             session_context.response.clone().unwrap_or_default()

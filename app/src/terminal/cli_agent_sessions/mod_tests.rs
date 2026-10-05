@@ -8,8 +8,8 @@ use super::event::{
     CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventSource, CLIAgentEventType, parse_event,
 };
 use super::{
-    CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext,
-    CLIAgentSessionStatus, CLIAgentSessionsModel,
+    BlockedSource, CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentSession,
+    CLIAgentSessionContext, CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
 use crate::ai::blocklist::{InputConfig, InputType};
 use crate::terminal::CLIAgent;
@@ -516,6 +516,7 @@ fn blocked_claude_session_with_permission_state() -> CLIAgentSession {
         agent: CLIAgent::Claude,
         status: CLIAgentSessionStatus::Blocked {
             message: Some("Wants to run bash: rm -rf /tmp".to_owned()),
+            source: BlockedSource::PermissionRequest,
         },
         session_context: CLIAgentSessionContext {
             summary: Some("Wants to run bash: rm -rf /tmp".to_owned()),
@@ -729,6 +730,7 @@ fn needs_input_blocks_session_with_the_event_summary() {
 
     let expected = CLIAgentSessionStatus::Blocked {
         message: Some("Some dialog text".to_owned()),
+        source: BlockedSource::NeedsInput,
     };
     assert_eq!(new_status, Some(expected.clone()));
     assert_eq!(session.status, expected);
@@ -743,26 +745,37 @@ fn needs_input_without_a_summary_blocks_session_with_the_generic_message() {
 
     let expected = CLIAgentSessionStatus::Blocked {
         message: Some("Agent requires user input".to_owned()),
+        source: BlockedSource::NeedsInput,
     };
     assert_eq!(new_status, Some(expected));
     assert!(session.is_blocked_on_needs_input());
 }
 
 #[test]
-fn other_blocked_events_are_not_blocked_on_needs_input() {
-    for event in [
-        CLIAgentEventType::PermissionRequest,
-        CLIAgentEventType::QuestionAsked,
+fn blocked_status_records_the_event_that_caused_it() {
+    for (event, expected_source) in [
+        (
+            CLIAgentEventType::PermissionRequest,
+            BlockedSource::PermissionRequest,
+        ),
+        (
+            CLIAgentEventType::QuestionAsked,
+            BlockedSource::QuestionAsked,
+        ),
+        (CLIAgentEventType::NeedsInput, BlockedSource::NeedsInput),
     ] {
         let mut session = cli_agent_session(CLIAgentSessionStatus::InProgress, true);
 
         session.apply_event(&rich_event(event));
 
-        assert!(matches!(
-            session.status,
-            CLIAgentSessionStatus::Blocked { .. }
-        ));
-        assert!(!session.is_blocked_on_needs_input());
+        let CLIAgentSessionStatus::Blocked { source, .. } = session.status else {
+            panic!("expected a blocked status");
+        };
+        assert_eq!(source, expected_source);
+        assert_eq!(
+            session.is_blocked_on_needs_input(),
+            expected_source == BlockedSource::NeedsInput
+        );
     }
 }
 
