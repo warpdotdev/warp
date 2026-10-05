@@ -849,6 +849,7 @@ pub struct LLMPreferences {
 }
 
 impl LLMPreferences {
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn set_agent_driver_model_choices(
         &mut self,
         task_id: AmbientAgentTaskId,
