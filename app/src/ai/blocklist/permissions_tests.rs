@@ -15,10 +15,11 @@ use crate::ai::blocklist::permissions::{
     FileReadPermissionAllowedReason, FileReadPermissionDeniedReason, FileWritePermission,
     FileWritePermissionAllowedReason, FileWritePermissionDeniedReason,
 };
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::execution_profiles::ComputerUsePermission;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
-use crate::ai::execution_profiles::{
-    ActionPermission, ComputerUsePermission, WriteToPtyPermission,
-};
+use crate::ai::execution_profiles::{ActionPermission, WriteToPtyPermission};
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::llms::LLMId;
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
 use crate::auth::AuthStateProvider;
@@ -105,6 +106,7 @@ fn initialize_permissions_test_with_mode(
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn execution_computer_use_is_scoped_to_the_terminal() {
     App::test((), |mut app| async move {

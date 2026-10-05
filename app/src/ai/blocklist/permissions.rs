@@ -219,6 +219,7 @@ impl BlocklistAIPermissions {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn set_execution_computer_use(
         &mut self,
         terminal_view_id: EntityId,
@@ -229,6 +230,7 @@ impl BlocklistAIPermissions {
             .insert(terminal_view_id, (enabled, model_id));
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn clear_execution_computer_use(&mut self, terminal_view_id: EntityId) {
         self.execution_computer_use.remove(&terminal_view_id);
     }

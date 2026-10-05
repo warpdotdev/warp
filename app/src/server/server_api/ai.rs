@@ -83,6 +83,7 @@ use warp_graphql::platform_error::PlatformErrorInfo;
 use warp_graphql::queries::codebase_context_config::{
     CodebaseContextConfigQuery, CodebaseContextConfigResult, CodebaseContextConfigVariables,
 };
+#[cfg(not(target_family = "wasm"))]
 use warp_graphql::queries::execution_config::{
     ExecutionConfig, ExecutionConfigInput, ExecutionConfigResult, ExecutionConfigVariables,
     ExecutionConfiguration,
@@ -1721,6 +1722,7 @@ fn into_file_artifact_record(
 }
 
 impl ServerApi {
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) async fn get_execution_config(
         &self,
         task_id: &str,
