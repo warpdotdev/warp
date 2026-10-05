@@ -287,99 +287,98 @@ fn config_with(mutate: impl FnOnce(&mut RunnerConfig)) -> RunnerConfig {
     config
 }
 
+fn unrecognized_os_config() -> RunnerConfig {
+    config_with(|config| config.os = RunnerOs::Unknown)
+}
+
+fn unrecognized_arch_config() -> RunnerConfig {
+    config_with(|config| config.arch = RunnerArch::Unknown)
+}
+
+fn unrecognized_macos_version_config() -> RunnerConfig {
+    config_with(|config| {
+        config.os = RunnerOs::Macos;
+        config.mac = Some(MacOsConfig {
+            version: Some(RunnerMacOsVersion::Unknown),
+        });
+    })
+}
+
+fn assert_update_refused(existing: &RunnerConfig, args: &UpdateRunnerArgs, field: &str) {
+    let error = build_update_input(args, existing).expect_err("the update should be refused");
+    assert!(error.to_string().contains(field), "{error}");
+}
+
 #[test]
-fn update_never_resends_a_runner_value_this_client_does_not_recognize() {
-    struct Case {
-        name: &'static str,
-        existing: RunnerConfig,
-        args: UpdateRunnerArgs,
-        refused_field: Option<&'static str>,
-    }
-    let args = || update_args(Some("runner-1"), None);
-    let unknown_os = || config_with(|config| config.os = RunnerOs::Unknown);
-    let unknown_arch = || config_with(|config| config.arch = RunnerArch::Unknown);
-    let unknown_macos_version = || {
-        config_with(|config| {
-            config.os = RunnerOs::Macos;
-            config.mac = Some(MacOsConfig {
-                version: Some(RunnerMacOsVersion::Unknown),
-            });
-        })
+fn update_refuses_to_resend_an_unrecognized_os() {
+    let args = update_args(Some("runner-1"), None);
+
+    assert_update_refused(&unrecognized_os_config(), &args, "OS");
+}
+
+#[test]
+fn update_accepts_an_explicit_os_for_a_runner_with_an_unrecognized_one() {
+    let args = UpdateRunnerArgs {
+        os: Some(RunnerOsArg::Linux),
+        ..update_args(Some("runner-1"), None)
     };
 
-    let cases = [
-        Case {
-            name: "an unrecognized OS is refused",
-            existing: unknown_os(),
-            args: args(),
-            refused_field: Some("OS"),
-        },
-        Case {
-            name: "an unrecognized OS can be replaced explicitly",
-            existing: unknown_os(),
-            args: UpdateRunnerArgs {
-                os: Some(RunnerOsArg::Linux),
-                ..args()
-            },
-            refused_field: None,
-        },
-        Case {
-            name: "an unrecognized architecture is refused",
-            existing: unknown_arch(),
-            args: args(),
-            refused_field: Some("architecture"),
-        },
-        Case {
-            name: "an unrecognized architecture can be replaced explicitly",
-            existing: unknown_arch(),
-            args: UpdateRunnerArgs {
-                arch: Some(RunnerArchArg::X8664),
-                ..args()
-            },
-            refused_field: None,
-        },
-        Case {
-            name: "an unrecognized macOS version is refused",
-            existing: unknown_macos_version(),
-            args: args(),
-            refused_field: Some("macOS version"),
-        },
-        Case {
-            name: "an unrecognized macOS version can be replaced explicitly",
-            existing: unknown_macos_version(),
-            args: UpdateRunnerArgs {
-                macos_version: Some(RunnerMacosVersionArg::Macos26),
-                ..args()
-            },
-            refused_field: None,
-        },
-        Case {
-            name: "an unrecognized macOS version is dropped when switching to Linux",
-            existing: unknown_macos_version(),
-            args: UpdateRunnerArgs {
-                os: Some(RunnerOsArg::Linux),
-                ..args()
-            },
-            refused_field: None,
-        },
-    ];
+    let input = build_update_input(&args, &unrecognized_os_config()).unwrap();
 
-    for case in cases {
-        match (
-            build_update_input(&case.args, &case.existing),
-            case.refused_field,
-        ) {
-            (Err(error), Some(field)) => {
-                assert!(error.to_string().contains(field), "{}: {error}", case.name);
-            }
-            (Ok(_), None) => {}
-            (result, expected) => panic!(
-                "{}: expected refusal of {expected:?}, got {:?}",
-                case.name,
-                result.map(|_| ())
-            ),
-        }
-    }
+    assert_eq!(input.os, Some(RunnerOs::Linux));
+}
+
+#[test]
+fn update_refuses_to_resend_an_unrecognized_architecture() {
+    let args = update_args(Some("runner-1"), None);
+
+    assert_update_refused(&unrecognized_arch_config(), &args, "architecture");
+}
+
+#[test]
+fn update_accepts_an_explicit_architecture_for_a_runner_with_an_unrecognized_one() {
+    let args = UpdateRunnerArgs {
+        arch: Some(RunnerArchArg::X8664),
+        ..update_args(Some("runner-1"), None)
+    };
+
+    let input = build_update_input(&args, &unrecognized_arch_config()).unwrap();
+
+    assert_eq!(input.arch, Some(RunnerArch::X8664));
+}
+
+#[test]
+fn update_refuses_to_resend_an_unrecognized_macos_version() {
+    let args = update_args(Some("runner-1"), None);
+
+    assert_update_refused(&unrecognized_macos_version_config(), &args, "macOS version");
+}
+
+#[test]
+fn update_accepts_an_explicit_macos_version_for_a_runner_with_an_unrecognized_one() {
+    let args = UpdateRunnerArgs {
+        macos_version: Some(RunnerMacosVersionArg::Macos26),
+        ..update_args(Some("runner-1"), None)
+    };
+
+    let input = build_update_input(&args, &unrecognized_macos_version_config()).unwrap();
+
+    assert_eq!(
+        input.mac.and_then(|mac| mac.version),
+        Some(RunnerMacOsVersion::Macos26)
+    );
+}
+
+#[test]
+fn update_drops_an_unrecognized_macos_version_when_switching_to_linux() {
+    let args = UpdateRunnerArgs {
+        os: Some(RunnerOsArg::Linux),
+        ..update_args(Some("runner-1"), None)
+    };
+
+    let input = build_update_input(&args, &unrecognized_macos_version_config()).unwrap();
+
+    assert!(input.mac.is_none());
 }
 
 #[test]
