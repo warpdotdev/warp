@@ -184,7 +184,6 @@ fn test_reconnect_retries_ack_timeout() {
             Duration::from_secs(2),
         );
         assert_eventually!(
-            200 =>
             network.read(&app, |network, _| network.is_connected()),
             "Missing acknowledgement should time out and retry"
         );
@@ -203,7 +202,6 @@ fn test_reconnect_transport_timeout_retries_within_cycle() {
             Duration::from_secs(2),
         );
         assert_eventually!(
-            200 =>
             network.read(&app, |network, _| network.is_connected()),
             "A stalled transport connection should time out and retry"
         );
@@ -250,7 +248,6 @@ fn test_reconnect_send_timeout_is_retryable() {
             Duration::from_secs(2),
         );
         assert_eventually!(
-            200 =>
             network.read(&app, |network, _| network.is_connected()),
             "A stalled reconnect send should time out and retry"
         );
