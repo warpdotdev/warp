@@ -10228,7 +10228,6 @@ impl Workspace {
                 self.show_tab_group_right_click_menu = None;
                 self.show_tab_selection_right_click_menu = None;
                 self.hide_move_to_group_sidecar(ctx);
-                self.focus_active_tab(ctx);
                 ctx.notify();
             }
             MenuEvent::ItemHovered | MenuEvent::ItemSelected => {
