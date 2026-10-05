@@ -29,8 +29,6 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::attachment_utils::attachments_download_dir;
 use crate::pane_group::NewTerminalOptions;
 use crate::root_view::{NewWorkspaceSource, open_new_with_workspace_source};
-use crate::terminal::ShellLaunchData;
-use crate::terminal::TerminalView;
 use crate::terminal::model::RespectObfuscatedSecrets;
 use crate::terminal::model::block::{BlockId, SerializedBlock};
 use crate::terminal::model::find::RegexDFAs;
@@ -41,6 +39,7 @@ use crate::terminal::model::terminal_model::ShellProcessInfo;
 use crate::terminal::shared_session::{self, IsSharedSessionCreator, SharedSessionSource};
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::{ConversationRestorationInNewPaneType, Event};
+use crate::terminal::{ShellLaunchData, TerminalView};
 use crate::workspaces::user_workspaces::{HeadlessTeamScope, TeamScope, UserWorkspaces};
 
 /// Describes why a terminal session bootstrap failed.
