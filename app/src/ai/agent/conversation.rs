@@ -5,6 +5,7 @@ use ai::document::AIDocumentId;
 use ai::skills::SkillPathOrigin;
 use anyhow::Context as _;
 use chrono::{DateTime, Local, TimeZone};
+use indexmap::IndexMap;
 use itertools::Itertools as _;
 use vec1::{Size0Error, Vec1};
 use warp_cli::agent::Harness;
@@ -2150,7 +2151,11 @@ impl AIConversation {
             ..
         } = request_input;
 
-        for (task_id, inputs) in input_messages.into_iter() {
+        let mut inputs_by_task: IndexMap<TaskId, Vec<AIAgentInput>> = IndexMap::new();
+        for (task_id, inputs) in input_messages {
+            inputs_by_task.entry(task_id).or_default().extend(inputs);
+        }
+        for (task_id, inputs) in inputs_by_task {
             let should_hide = inputs
                 .iter()
                 .any(|input| input.is_passive_suggestion_trigger());
@@ -2177,13 +2182,16 @@ impl AIConversation {
             let new_exchange_id = new_exchange.id;
             self.append_exchange_to_task(&task_id, new_exchange)?;
 
-            self.added_exchanges_by_response.insert(
-                stream_id.clone(),
-                Vec1::new(AddedExchange {
-                    task_id: task_id.clone(),
-                    exchange_id: new_exchange_id,
-                }),
-            );
+            let added_exchange = AddedExchange {
+                task_id: task_id.clone(),
+                exchange_id: new_exchange_id,
+            };
+            if let Some(added_exchanges) = self.added_exchanges_by_response.get_mut(&stream_id) {
+                added_exchanges.push(added_exchange);
+            } else {
+                self.added_exchanges_by_response
+                    .insert(stream_id.clone(), Vec1::new(added_exchange));
+            }
 
             if should_hide {
                 self.hidden_exchanges.insert(new_exchange_id);

@@ -204,7 +204,9 @@ pub enum BlocklistAIControllerEvent {
 #[derive(Debug)]
 pub struct RequestInput {
     pub conversation_id: AIConversationId,
-    pub input_messages: HashMap<TaskId, Vec<AIAgentInput>>,
+    /// Ordered input batches; a task may appear more than once. Empty batches preserve history
+    /// exchanges for shared-session viewers without adding a wire input.
+    pub input_messages: Vec<(TaskId, Vec<AIAgentInput>)>,
     pub working_directory: Option<String>,
     pub model_id: LLMId,
     pub coding_model_id: LLMId,
@@ -235,7 +237,7 @@ impl RequestInput {
             scope,
             app,
         );
-        me.input_messages.insert(task_id, inputs);
+        me.input_messages.push((task_id, inputs));
         me
     }
 
@@ -259,19 +261,19 @@ impl RequestInput {
             app,
         );
         for result in action_results.into_iter() {
-            me.input_messages
-                .entry(result.task_id.clone())
-                .or_default()
-                .push(AIAgentInput::ActionResult {
+            me.input_messages.push((
+                result.task_id.clone(),
+                vec![AIAgentInput::ActionResult {
                     result,
                     context: context.clone(),
-                });
+                }],
+            ));
         }
         me
     }
 
     pub fn all_inputs(&self) -> impl Iterator<Item = &AIAgentInput> {
-        self.input_messages.values().flatten()
+        self.input_messages.iter().flat_map(|(_, inputs)| inputs)
     }
 
     pub fn with_supported_tools(mut self, tools: Vec<ToolType>) -> Self {
@@ -2130,9 +2132,7 @@ impl BlocklistAIController {
         if let (Some(steered_input), Some(root_task_id)) = (steered_input, root_task_id) {
             request_input
                 .input_messages
-                .entry(root_task_id)
-                .or_default()
-                .push(steered_input);
+                .push((root_task_id, vec![steered_input]));
         }
 
         // Include any pending orchestration events in this follow-up rather
@@ -2156,11 +2156,7 @@ impl BlocklistAIController {
             })
         {
             has_piggybacked_events = true;
-            request_input
-                .input_messages
-                .entry(task_id)
-                .or_default()
-                .extend(event_inputs);
+            request_input.input_messages.push((task_id, event_inputs));
         }
 
         let result = self.send_request_input(
@@ -2457,9 +2453,7 @@ impl BlocklistAIController {
         if let (Some(steered_input), Some(root_task_id)) = (steered_input, root_task_id) {
             request_input
                 .input_messages
-                .entry(root_task_id)
-                .or_default()
-                .push(steered_input);
+                .push((root_task_id, vec![steered_input]));
         }
         if self
             .send_request_input(

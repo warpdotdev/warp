@@ -620,11 +620,11 @@ fn injection_interrupt_initial_exit_130_continues_with_result_and_prompt() {
                 vec!["initial", "followup"]
             );
             let exchange = conversation.root_task_exchanges().last().unwrap();
-            assert!(exchange.input.iter().any(|input| matches!(input,
-                AIAgentInput::ActionResult { result, .. }
-                    if matches!(&result.result, AIAgentActionResultType::RequestCommandOutput(
+            assert!(matches!(exchange.input.as_slice(),
+                [AIAgentInput::ActionResult { result, .. }, AIAgentInput::UserQuery { query, .. }]
+                    if query == "followup" && matches!(&result.result, AIAgentActionResultType::RequestCommandOutput(
                         RequestCommandOutputResult::Completed { exit_code, output, .. }
-                    ) if exit_code.value() == 130 && output == "partial output"))));
+                    ) if exit_code.value() == 130 && output == "partial output")));
         });
     });
 }
