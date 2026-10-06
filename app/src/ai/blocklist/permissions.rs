@@ -213,6 +213,7 @@ impl BlocklistAIPermissions {
             context_window_limit: profile_data.context_window_limit,
             autosync_plans_to_warp_drive: profile_data.autosync_plans_to_warp_drive,
             web_search_enabled: profile_data.web_search_enabled,
+            web_fetch_enabled: profile_data.web_fetch_enabled,
         }
     }
 
@@ -604,6 +605,29 @@ impl BlocklistAIPermissions {
         let active_profile =
             AIExecutionProfilesModel::as_ref(ctx).active_profile(terminal_view_id, ctx);
         self.get_web_search_enabled_for_profile(ctx, active_profile.id())
+    }
+
+    pub fn get_web_fetch_enabled_for_profile(
+        &self,
+        ctx: &AppContext,
+        profile_id: &ExecutionProfileId,
+    ) -> bool {
+        let profiles_model = AIExecutionProfilesModel::as_ref(ctx);
+        profiles_model
+            .get_profile_by_id(profile_id, ctx)
+            .unwrap_or_else(|| profiles_model.default_profile(ctx))
+            .data()
+            .web_fetch_enabled
+    }
+
+    pub fn get_web_fetch_enabled(
+        &self,
+        ctx: &AppContext,
+        terminal_view_id: Option<EntityId>,
+    ) -> bool {
+        let active_profile =
+            AIExecutionProfilesModel::as_ref(ctx).active_profile(terminal_view_id, ctx);
+        self.get_web_fetch_enabled_for_profile(ctx, active_profile.id())
     }
 
     pub fn get_computer_use_setting_for_profile(

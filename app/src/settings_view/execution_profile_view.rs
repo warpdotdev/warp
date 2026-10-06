@@ -377,8 +377,17 @@ impl View for ExecutionProfileView {
                             permissions_column.add_child(with_standard_vertical_margin(
                                 render_bool_permission_line_with_icon(
                                     Icon::Globe,
-                                    "Call web tools:",
+                                    "Web search:",
                                     profile.web_search_enabled,
+                                    appearance,
+                                    is_any_ai_enabled,
+                                ),
+                            ));
+                            permissions_column.add_child(with_standard_vertical_margin(
+                                render_bool_permission_line_with_icon(
+                                    Icon::Link,
+                                    "Web fetch:",
+                                    profile.web_fetch_enabled,
                                     appearance,
                                     is_any_ai_enabled,
                                 ),

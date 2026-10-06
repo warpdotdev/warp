@@ -3,9 +3,10 @@ use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 
 use super::{
-    api_keys_with_warp_credit_fallback_setting, get_supported_cli_agent_tools, get_supported_tools,
-    supports_orchestration_v2,
+    api_keys_with_warp_credit_fallback_setting, build_request, get_supported_cli_agent_tools,
+    get_supported_tools, supports_orchestration_v2,
 };
+use crate::ai::agent::AIAgentInput;
 use crate::ai::agent::api::RequestParams;
 use crate::ai::blocklist::SessionContext;
 use crate::ai::llms::LLMId;
@@ -42,6 +43,7 @@ fn request_params_with_ask_user_question_enabled(ask_user_question_enabled: bool
         autonomy_level: api::AutonomyLevel::Supervised,
         isolation_level: api::IsolationLevel::None,
         web_search_enabled: false,
+        web_fetch_enabled: false,
         computer_use_enabled: false,
         ask_user_question_enabled,
         research_agent_enabled: false,
@@ -124,6 +126,28 @@ fn api_keys_skip_chatgpt_subscription_follows_conversation_flag_on_existing_keys
     let not_skipped = api_keys_with_warp_credit_fallback_setting(Some(existing), false, false)
         .expect("existing ApiKeys should be preserved");
     assert!(!not_skipped.skip_chatgpt_subscription);
+}
+
+#[test]
+fn request_sends_web_tool_settings_independently_with_explicit_fetch_presence() {
+    for web_search_enabled in [false, true] {
+        for web_fetch_enabled in [false, true] {
+            let mut params = request_params_with_ask_user_question_enabled(false);
+            params.input = vec![AIAgentInput::ResumeConversation {
+                context: Default::default(),
+            }];
+            params.web_search_enabled = web_search_enabled;
+            params.web_fetch_enabled = web_fetch_enabled;
+
+            let settings = build_request(params)
+                .expect("request should build")
+                .settings
+                .expect("request should include settings");
+
+            assert_eq!(settings.web_search_enabled, web_search_enabled);
+            assert_eq!(settings.web_fetch_enabled, Some(web_fetch_enabled));
+        }
+    }
 }
 
 #[test]

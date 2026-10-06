@@ -175,6 +175,7 @@ pub struct RequestParams {
     pub autonomy_level: warp_multi_agent_api::AutonomyLevel,
     pub isolation_level: warp_multi_agent_api::IsolationLevel,
     pub web_search_enabled: bool,
+    pub web_fetch_enabled: bool,
     pub computer_use_enabled: bool,
     pub ask_user_question_enabled: bool,
     pub research_agent_enabled: bool,
@@ -239,6 +240,7 @@ impl RequestParams {
             autonomy_level: Default::default(),
             isolation_level: Default::default(),
             web_search_enabled: false,
+            web_fetch_enabled: false,
             computer_use_enabled: false,
             ask_user_question_enabled: false,
             research_agent_enabled: false,
@@ -378,6 +380,8 @@ impl RequestParams {
 
         let web_search_enabled =
             BlocklistAIPermissions::as_ref(app).get_web_search_enabled(app, terminal_view_id);
+        let web_fetch_enabled =
+            BlocklistAIPermissions::as_ref(app).get_web_fetch_enabled(app, terminal_view_id);
         let research_agent_enabled = app
             .private_user_preferences()
             .read_value("ResearchAgentEnabled")
@@ -451,6 +455,7 @@ impl RequestParams {
             autonomy_level,
             isolation_level,
             web_search_enabled,
+            web_fetch_enabled,
             computer_use_enabled,
             ask_user_question_enabled,
             research_agent_enabled,

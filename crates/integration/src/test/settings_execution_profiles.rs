@@ -23,6 +23,7 @@ read_files = "always_allow"
 execute_commands = "always_ask"
 base_model = "disk-model"
 command_allowlist = ["git status"]
+web_search_enabled = false
 
 [agents.execution_profiles.code-review]
 name = "Code Review"
@@ -31,6 +32,7 @@ read_files = "always_ask"
 command_denylist = ["rm .*"]
 directory_allowlist = ["/repo"]
 web_search_enabled = true
+web_fetch_enabled = false
 "#;
 
 const RELOADED_PROFILES: &str = r#"
@@ -79,11 +81,14 @@ pub fn test_execution_profiles_load_from_settings_file() -> Builder {
                             && default.execute_commands_always_ask
                             && default.base_model.as_deref() == Some("disk-model")
                             && default.command_allowlist == ["git status"]
+                            && !default.web_search_enabled
+                            && !default.web_fetch_enabled
                             && review.as_ref().is_some_and(|profile| {
                                 profile.name == "Code Review"
                                     && profile.apply_code_diffs_always_allow
                                     && profile.directory_allowlist == [PathBuf::from("/repo")]
                                     && profile.web_search_enabled
+                                    && !profile.web_fetch_enabled
                             })
                             && has_multiple_execution_profiles(app),
                         "Expected the execution profile model to expose the complete collection loaded from settings.toml"

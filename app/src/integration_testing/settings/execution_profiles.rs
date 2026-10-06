@@ -15,6 +15,7 @@ pub struct ExecutionProfileSnapshot {
     pub command_allowlist: Vec<String>,
     pub directory_allowlist: Vec<PathBuf>,
     pub web_search_enabled: bool,
+    pub web_fetch_enabled: bool,
 }
 
 fn snapshot(profile: &AIExecutionProfile) -> ExecutionProfileSnapshot {
@@ -31,6 +32,7 @@ fn snapshot(profile: &AIExecutionProfile) -> ExecutionProfileSnapshot {
             .collect(),
         directory_allowlist: profile.directory_allowlist.clone(),
         web_search_enabled: profile.web_search_enabled,
+        web_fetch_enabled: profile.web_fetch_enabled,
     }
 }
 

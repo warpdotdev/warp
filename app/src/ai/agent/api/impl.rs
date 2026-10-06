@@ -13,12 +13,7 @@ use crate::server::server_api::{AIApiError, ServerApi};
 use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::model::session::SessionType;
 
-pub async fn generate_multi_agent_output(
-    server_api: Arc<ServerApi>,
-    mut params: RequestParams,
-    team_scope: RequestTeamScope,
-    cancellation_rx: futures::channel::oneshot::Receiver<()>,
-) -> Result<ResponseStream, ConvertToAPITypeError> {
+fn build_request(mut params: RequestParams) -> Result<api::Request, ConvertToAPITypeError> {
     let supported_tools = params
         .supported_tools_override
         .take()
@@ -96,6 +91,7 @@ pub async fn generate_multi_agent_output(
             autonomy_level: params.autonomy_level.into(),
             isolation_level: params.isolation_level.into(),
             web_search_enabled: params.web_search_enabled,
+            web_fetch_enabled: Some(params.web_fetch_enabled),
             supported_cli_agent_tools: supported_cli_agent_tools
                 .into_iter()
                 .map(Into::into)
@@ -147,7 +143,16 @@ pub async fn generate_multi_agent_output(
             .map(|suggestions| suggestions.into()),
         mcp_context: params.mcp_context.map(Into::into),
     };
+    Ok(request)
+}
 
+pub async fn generate_multi_agent_output(
+    server_api: Arc<ServerApi>,
+    params: RequestParams,
+    team_scope: RequestTeamScope,
+    cancellation_rx: futures::channel::oneshot::Receiver<()>,
+) -> Result<ResponseStream, ConvertToAPITypeError> {
+    let request = build_request(params)?;
     let response_stream = warp_multi_agent_client::generate_multi_agent_output(
         server_api.as_ref(),
         &request,
