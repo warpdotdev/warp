@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use async_channel::unbounded;
 use uuid::Uuid;
 use warp_core::command::ExitCode;
 use warp_multi_agent_api::request::input::UserQuery as ApiUserQuery;
@@ -16,10 +17,10 @@ use crate::ai::agent::{
     AIAgentActionId, AIAgentActionResult, AIAgentActionResultType, AIAgentContext, AIAgentInput,
     CancellationReason, RequestCommandOutputResult,
 };
-use crate::ai::blocklist::QueuedQueryOrigin;
 use crate::ai::blocklist::orchestration_events::{
     OrchestrationEventService, PendingEvent, PendingEventDetail,
 };
+use crate::ai::blocklist::{BlocklistAIControllerEvent, QueuedQueryOrigin};
 use crate::terminal::model::block::BlockId;
 use crate::terminal::view::Event as TerminalEvent;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
@@ -219,23 +220,14 @@ fn injection_interrupt_preserves_local_prompts_cli_wakes_and_other_owners() {
 }
 
 #[test]
-fn injection_interrupt_preserves_stream_and_waits_for_command_completion() {
+fn injection_interrupt_falls_back_after_grace_without_waiting_for_command_results() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let terminal = add_window_with_terminal(&mut app, None);
         let controller = terminal.read(&app, |view, _| view.ai_controller().clone());
         let (id, task_id, block_id, _) = controller.update(&mut app, start_injection_command);
-        controller.update(&mut app, |controller, _| {
-            controller
-                .terminal_model
-                .lock()
-                .block_list_mut()
-                .active_block_mut()
-                .set_agent_interaction_mode_for_agent_monitored_command(
-                    &TaskId::new("cli-task".into()),
-                    id,
-                )
-                .unwrap();
+        controller.update(&mut app, |controller, ctx| {
+            controller.send_user_query_in_conversation("monitor".into(), id, None, ctx);
         });
         let interrupts = Rc::new(RefCell::new(0));
         let observed_interrupts = interrupts.clone();
@@ -253,6 +245,20 @@ fn injection_interrupt_preserves_stream_and_waits_for_command_completion() {
                 .in_flight_response_streams
                 .stream_ids_for_conversation(id, ctx)
         });
+        let (sent, received) = unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&controller, move |_, event, _| {
+                if matches!(
+                    event,
+                    BlocklistAIControllerEvent::SentRequest {
+                        contains_user_query: true,
+                        ..
+                    }
+                ) {
+                    sent.try_send(()).unwrap();
+                }
+            });
+        });
         QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
             queue.append(
                 id,
@@ -266,6 +272,33 @@ fn injection_interrupt_preserves_stream_and_waits_for_command_completion() {
             );
         });
         assert_eq!(*interrupts.borrow(), 1);
+        assert!(received.is_empty());
+        controller.read(&app, |controller, ctx| {
+            assert_eq!(
+                controller
+                    .in_flight_response_streams
+                    .stream_ids_for_conversation(id, ctx),
+                streams
+            );
+        });
+        received.recv().await.unwrap();
+        let cli_task_id = controller.read(&app, |controller, _| {
+            controller
+                .terminal_model
+                .lock()
+                .block_list()
+                .active_block()
+                .cli_subagent_task_id()
+                .unwrap()
+                .clone()
+        });
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let exchange = history.conversation(&id).unwrap().get_task(&cli_task_id)
+                .unwrap().exchanges().last().unwrap();
+            assert!(matches!(exchange.input.as_slice(),
+                [AIAgentInput::UserQuery { query, intended_agent: Some(AgentType::Cli), running_command: Some(_), .. }]
+                    if query == "Exit the running shell command"));
+        });
         controller.update(&mut app, |controller, ctx| {
             controller.maybe_interrupt_command_for_injection(id, ctx);
             assert!(
@@ -273,7 +306,7 @@ fn injection_interrupt_preserves_stream_and_waits_for_command_completion() {
                     .steer_head_prompt_for_request(id, &task_id, ctx)
                     .is_none()
             );
-            assert_eq!(
+            assert_ne!(
                 controller
                     .in_flight_response_streams
                     .stream_ids_for_conversation(id, ctx),
@@ -332,6 +365,188 @@ fn injection_interrupt_preserves_stream_and_waits_for_command_completion() {
             );
         });
         assert_eq!(*interrupts.borrow(), 1);
+    });
+}
+
+#[test]
+fn injection_interrupt_fallback_starts_cli_before_the_first_command_result() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |view, _| view.ai_controller().clone());
+        let (id, root_task_id, block_id, action_id) =
+            controller.update(&mut app, start_injection_command);
+        controller.update(&mut app, |controller, _| {
+            controller
+                .terminal_model
+                .lock()
+                .block_list_mut()
+                .active_block_mut()
+                .set_was_long_running(false.into());
+        });
+        let (sent, received) = unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&controller, move |_, event, _| {
+                if matches!(
+                    event,
+                    BlocklistAIControllerEvent::SentRequest {
+                        contains_user_query: true,
+                        ..
+                    }
+                ) {
+                    sent.try_send(()).unwrap();
+                }
+            });
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "followup".into(),
+                    ParticipantId::new(),
+                    vec![],
+                    None,
+                ),
+                ctx,
+            );
+        });
+        assert!(received.is_empty());
+        received.recv().await.unwrap();
+        let cli_task_id = controller.read(&app, |controller, _| {
+            controller
+                .terminal_model
+                .lock()
+                .block_list()
+                .active_block()
+                .cli_subagent_task_id()
+                .unwrap()
+                .clone()
+        });
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let conversation = history.conversation(&id).unwrap();
+            let exchange = conversation
+                .get_task(&cli_task_id)
+                .unwrap()
+                .exchanges()
+                .last()
+                .unwrap();
+            assert!(matches!(exchange.input.as_slice(),
+                [AIAgentInput::UserQuery {
+                    query, intended_agent: Some(AgentType::Cli), base: Some(base),
+                    running_command: Some(command), referenced_attachments, ..
+                }] if query == "Exit the running shell command"
+                    && command.block_id == block_id
+                    && command.requested_command_id.as_ref() == Some(&action_id)
+                    && referenced_attachments.is_empty()
+                    && matches!(base.to_proto().origin.unwrap().variant,
+                        Some(UserQueryOriginVariant::ServerSynthesized(_)))
+            ));
+            assert_eq!(user_queries_in_order(history, id), vec!["initial"]);
+        });
+        controller.update(&mut app, |controller, ctx| {
+            let exchange_count = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&id)
+                .unwrap()
+                .exchange_count();
+            controller.maybe_interrupt_command_for_injection(id, ctx);
+            assert_eq!(
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&id)
+                    .unwrap()
+                    .exchange_count(),
+                exchange_count
+            );
+            assert_eq!(
+                controller.commands_interrupted_for_injection.get(&id),
+                Some(&block_id)
+            );
+            assert_eq!(
+                QueuedQueryModel::as_ref(ctx).ready_head(id).unwrap().text(),
+                "followup"
+            );
+            assert!(
+                controller
+                    .steer_head_prompt_for_request(id, &root_task_id, ctx)
+                    .is_none()
+            );
+        });
+    });
+}
+
+#[test]
+fn injection_exit_prompt_is_skipped_when_the_pty_interrupt_finished_the_command() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |view, _| view.ai_controller().clone());
+        let (id, task_id, block_id, _) = controller.update(&mut app, start_injection_command);
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "followup".into(),
+                    ParticipantId::new(),
+                    vec![],
+                    None,
+                ),
+                ctx,
+            );
+        });
+        controller.update(&mut app, |controller, ctx| {
+            controller.terminal_model.lock().finish_block();
+            let streams = controller
+                .in_flight_response_streams
+                .stream_ids_for_conversation(id, ctx);
+            controller.send_exit_prompt_to_long_running_command(id, &block_id, ctx);
+            assert_eq!(
+                controller
+                    .in_flight_response_streams
+                    .stream_ids_for_conversation(id, ctx),
+                streams
+            );
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            assert_eq!(history.conversation(&id).unwrap().exchange_count(), 1);
+            assert_eq!(user_queries_in_order(history, id), vec!["initial"]);
+            assert!(matches!(
+                controller.steer_head_prompt_for_request(id, &task_id, ctx),
+                Some(AIAgentInput::UserQuery { query, .. }) if query == "followup"
+            ));
+        });
+    });
+}
+
+#[test]
+fn injection_exit_prompt_rejects_a_primary_task_in_stale_cli_metadata() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |view, _| view.ai_controller().clone());
+        let (id, root_task_id, block_id, _) = controller.update(&mut app, start_injection_command);
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "followup".into(),
+                    ParticipantId::new(),
+                    vec![],
+                    None,
+                ),
+                ctx,
+            );
+        });
+        controller.update(&mut app, |controller, ctx| {
+            controller
+                .terminal_model
+                .lock()
+                .block_list_mut()
+                .active_block_mut()
+                .set_agent_interaction_mode_for_agent_monitored_command(&root_task_id, id)
+                .unwrap();
+            controller.send_exit_prompt_to_long_running_command(id, &block_id, ctx);
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            assert_eq!(history.conversation(&id).unwrap().exchange_count(), 1);
+            assert_eq!(user_queries_in_order(history, id), vec!["initial"]);
+        });
     });
 }
 

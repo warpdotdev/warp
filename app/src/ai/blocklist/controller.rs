@@ -91,6 +91,8 @@ use crate::workspaces::user_workspaces::{
     ResolvedTeamScope, TeamContext, TeamContextResolver, TeamScope, UserWorkspaces,
 };
 
+const AGENT_SHELL_INTERRUPT_GRACE_PERIOD: Duration = Duration::from_millis(250);
+
 #[derive(Debug, Clone)]
 pub struct SessionContext {
     session_type: Option<SessionType>,
@@ -1775,6 +1777,15 @@ impl BlocklistAIController {
             }
             block.id().clone()
         };
+        self.exit_running_agent_shell_command(conversation_id, block_id, ctx);
+    }
+
+    fn exit_running_agent_shell_command(
+        &mut self,
+        conversation_id: AIConversationId,
+        block_id: BlockId,
+        ctx: &mut ModelContext<Self>,
+    ) {
         if self
             .commands_interrupted_for_injection
             .get(&conversation_id)
@@ -1788,8 +1799,15 @@ impl BlocklistAIController {
             .as_ref(ctx)
             .shell_command_executor(ctx)
             .update(ctx, |executor, ctx| {
-                executor.interrupt_for_injected_followup(conversation_id, block_id, ctx);
+                executor.interrupt_for_injected_followup(conversation_id, block_id.clone(), ctx);
             });
+        // PTY writes are asynchronous; allow SIGINT to finish the command before asking the CLI.
+        ctx.spawn(
+            Timer::after(AGENT_SHELL_INTERRUPT_GRACE_PERIOD),
+            move |me, _, ctx| {
+                me.send_exit_prompt_to_long_running_command(conversation_id, &block_id, ctx);
+            },
+        );
     }
 
     fn is_injection_interrupt_completion(
@@ -1911,6 +1929,137 @@ impl BlocklistAIController {
         );
 
         Some(input)
+    }
+
+    fn send_exit_prompt_to_long_running_command(
+        &mut self,
+        conversation_id: AIConversationId,
+        block_id: &BlockId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self
+            .commands_interrupted_for_injection
+            .get(&conversation_id)
+            != Some(block_id)
+            || !self.has_ready_primary_injected_followup(conversation_id, ctx)
+            || OrchestrationEventService::as_ref(ctx).is_conversation_exiting(conversation_id)
+            || !BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .is_some_and(|conversation| {
+                    conversation.status().is_in_progress()
+                        && !conversation.is_viewing_shared_session()
+                })
+        {
+            return;
+        }
+        let (task_id, running_command) = {
+            let model = self.terminal_model.lock();
+            let block = model.block_list().active_block();
+            if block.id() != block_id
+                || block.ai_conversation_id() != Some(conversation_id)
+                || block.requested_command_action_id().is_none()
+                || !block.is_executing()
+                || block
+                    .long_running_control_state()
+                    .is_some_and(|state| state.is_user_in_control())
+            {
+                return;
+            }
+            (
+                block.cli_subagent_task_id().cloned(),
+                running_command_snapshot(&model),
+            )
+        };
+        let ai_input = AIAgentInput::UserQuery {
+            query: "Exit the running shell command".into(),
+            context: input_context_for_request(
+                false,
+                self.context_model.as_ref(ctx),
+                self.active_session.as_ref(ctx),
+                Some(conversation_id),
+                vec![],
+                ctx,
+            ),
+            static_query_type: None,
+            referenced_attachments: HashMap::new(),
+            user_query_mode: UserQueryMode::Normal,
+            // The explicit CLI envelope cannot be routed to the primary if the server has
+            // already completed its CLI task while this request was in flight.
+            running_command: Some(running_command),
+            intended_agent: Some(AgentType::Cli),
+            base: Some(BaseUserQuery::unattributed(
+                "injected_followup_command_exit",
+            )),
+        };
+        {
+            let model = self.terminal_model.lock();
+            let block = model.block_list().active_block();
+            if block.id() != block_id
+                || block.ai_conversation_id() != Some(conversation_id)
+                || !block.is_executing()
+                || block
+                    .long_running_control_state()
+                    .is_some_and(|state| state.is_user_in_control())
+            {
+                return;
+            }
+        }
+        let task_id = match task_id {
+            Some(task_id) => {
+                if !BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&conversation_id)
+                    .is_some_and(|conversation| {
+                        !matches!(conversation.is_subagent_task_finished(&task_id), Ok(true))
+                            && conversation.get_task(&task_id).is_some_and(|task| {
+                                task.is_cli_subagent()
+                                    && task.cli_subagent_block_id().as_ref() == Some(block_id)
+                            })
+                    })
+                {
+                    return;
+                }
+                task_id
+            }
+            None => {
+                let result = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.create_cli_subagent_task_for_conversation(
+                        block_id.clone(),
+                        conversation_id,
+                        self.terminal_surface_id,
+                        ctx,
+                    )
+                });
+                match result {
+                    Ok(task_id) => task_id,
+                    Err(error) => {
+                        report_error!(
+                            anyhow::Error::new(error)
+                                .context("Could not create CLI task to exit interrupted command")
+                        );
+                        return;
+                    }
+                }
+            }
+        };
+        self.send_query(
+            InputQuery {
+                which_task: WhichTask::Task {
+                    conversation_id,
+                    task_id,
+                },
+                input_query: InputQueryType::AIInputType { ai_input },
+                additional_attachments: HashMap::new(),
+                queued_query_id: None,
+            },
+            EntrypointType::AgentInitiated,
+            None,
+            /*is_queued_prompt*/ true,
+            ctx,
+        );
+        // Normal follow-up cancellation clears this marker, but the original injected prompt is
+        // still queued and must not interrupt the same command again.
+        self.commands_interrupted_for_injection
+            .insert(conversation_id, block_id.clone());
     }
 
     fn send_follow_up_for_conversation(
@@ -4056,8 +4205,13 @@ fn get_running_command(terminal_model: &TerminalModel) -> Option<RunningCommand>
     if !active_block.is_active_and_long_running() || active_block.is_agent_monitoring() {
         return None;
     }
+    Some(running_command_snapshot(terminal_model))
+}
+
+fn running_command_snapshot(terminal_model: &TerminalModel) -> RunningCommand {
+    let active_block = terminal_model.block_list().active_block();
     let is_alt_screen_active = terminal_model.is_alt_screen_active();
-    Some(RunningCommand {
+    RunningCommand {
         block_id: active_block.id().clone(),
         command: active_block.command_to_string(),
         grid_contents: if is_alt_screen_active {
@@ -4077,7 +4231,7 @@ fn get_running_command(terminal_model: &TerminalModel) -> Option<RunningCommand>
         cursor: CURSOR_MARKER.to_owned(),
         requested_command_id: active_block.requested_command_action_id().cloned(),
         is_alt_screen_active,
-    })
+    }
 }
 
 #[cfg(test)]
