@@ -107,6 +107,7 @@ pub enum ServiceAgreementType {
 pub struct Tier {
     pub name: String,
     pub description: String,
+    pub billed_in_dollars: bool,
     pub warp_ai_policy: Option<WarpAiPolicy>,
     pub team_size_policy: Option<TeamSizePolicy>,
     pub shared_notebooks_policy: Option<SharedNotebooksPolicy>,

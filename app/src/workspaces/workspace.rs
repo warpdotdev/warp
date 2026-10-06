@@ -446,6 +446,15 @@ impl PurchaseAddOnCreditsPolicy {
     }
 }
 
+/// Plan terms carried by the user's own tier rather than a workspace's. A teamless user's only
+/// workspace is the server's placeholder, which the client drops, so this is the only place
+/// their plan terms survive.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UserTier {
+    pub purchase_policy: Option<PurchaseAddOnCreditsPolicy>,
+    pub billed_in_dollars: bool,
+}
+
 #[derive(Clone, Debug, Copy, Serialize, Deserialize)]
 pub struct EnterprisePayAsYouGoPolicy {
     pub enabled: bool,
@@ -533,6 +542,10 @@ pub enum HostEnablementSetting {
 pub struct Tier {
     pub name: String,
     pub description: String,
+    /// Whether AI usage on this tier is billed in dollars rather than credits. The server's
+    /// rollout signal for dollars-first displays; the credit figures stay authoritative while it
+    /// is false, even when a response also carries cents.
+    pub billed_in_dollars: bool,
     pub warp_ai_policy: Option<WarpAiPolicy>,
     pub workspace_size_policy: Option<WorkspaceSizePolicy>,
     pub shared_notebooks_policy: Option<SharedNotebooksPolicy>,
