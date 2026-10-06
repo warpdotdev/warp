@@ -34,7 +34,7 @@ use futures_lite::future;
 use is_executable::IsExecutable as _;
 use itertools::Itertools;
 use sha2::{Digest, Sha256};
-use warp_core::safe_info;
+use warp_core::{safe_info, safe_warn};
 use warp_errors::{ErrorExt, register_error};
 
 mod discovery;
@@ -48,7 +48,7 @@ use metadata::{CacheMetadataError, CacheUsage, normalized_cache_root};
 use spacectl::{MountContext, MountResponse, run_spacectl_mount};
 
 const SPACECTL_TIMEOUT: Duration = Duration::from_secs(60);
-const MAX_CAPTURED_STDERR_BYTES: usize = 4 * 1024;
+const MAX_CAPTURED_OUTPUT_BYTES: usize = 4 * 1024;
 
 /// Identifiers for a code repository.
 ///
@@ -253,9 +253,12 @@ pub enum CacheSetupError {
     RootCreationFailed,
     #[error("failed to spawn spacectl")]
     SpawnFailed,
-    #[error("spacectl exited unsuccessfully")]
+    #[error(
+        "spacectl exited unsuccessfully (exit code {exit_code:?}): stdout: {stdout}; stderr: {stderr}"
+    )]
     NonzeroExit {
         exit_code: Option<i32>,
+        stdout: String,
         stderr: String,
     },
     #[error("failed to parse spacectl JSON output")]
@@ -468,11 +471,9 @@ where
         let mut mkdir = Command::new_with_process_group("sudo");
         mkdir.args(["-n", "mkdir", "-p"]).arg(path);
         if let Err(error) = run_command(mkdir).await {
-            tracing::warn!(
-                target: "build_cache",
-                operation = "sudo mkdir",
-                error = ?error,
-                "sudo cache directory creation failed"
+            safe_warn!(
+                safe: ("sudo cache directory creation failed"),
+                full: ("sudo cache directory creation failed: {error}")
             );
             return Err(CacheSetupError::RootCreationFailed);
         }
@@ -480,11 +481,9 @@ where
         let mut chown = Command::new_with_process_group("sudo");
         chown.args(["-n", "chown", &owner]).arg(path);
         if let Err(error) = run_command(chown).await {
-            tracing::warn!(
-                target: "build_cache",
-                operation = "sudo chown",
-                error = ?error,
-                "sudo cache directory ownership update failed"
+            safe_warn!(
+                safe: ("sudo cache directory ownership update failed"),
+                full: ("sudo cache directory ownership update failed: {error}")
             );
             return Err(CacheSetupError::RootCreationFailed);
         }
@@ -528,20 +527,21 @@ async fn run_command_with_timeout(
     if !output.status.success() {
         return Err(CacheSetupError::NonzeroExit {
             exit_code: output.status.code(),
-            stderr: bounded_stderr(&output.stderr),
+            stdout: bounded_output(&output.stdout, "stdout"),
+            stderr: bounded_output(&output.stderr, "stderr"),
         });
     }
     Ok(output.stdout)
 }
 
-fn bounded_stderr(stderr: &[u8]) -> String {
-    let truncated = stderr.len() > MAX_CAPTURED_STDERR_BYTES;
-    let stderr = &stderr[..stderr.len().min(MAX_CAPTURED_STDERR_BYTES)];
-    let mut stderr = String::from_utf8_lossy(stderr).trim_end().to_owned();
+fn bounded_output(output: &[u8], stream: &str) -> String {
+    let truncated = output.len() > MAX_CAPTURED_OUTPUT_BYTES;
+    let output = &output[..output.len().min(MAX_CAPTURED_OUTPUT_BYTES)];
+    let mut output = String::from_utf8_lossy(output).trim_end().to_owned();
     if truncated {
-        stderr.push_str("\n[stderr truncated]");
+        output.push_str(&format!("\n[{stream} truncated]"));
     }
-    stderr
+    output
 }
 
 /// Set up build caching on the current host. See the crate-level documentation for a description

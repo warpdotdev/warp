@@ -97,6 +97,7 @@ fn mount_response_deserializes_spacectl_output() {
 fn mount_error_diagnostic_prefers_spacectl_stderr() {
     let error = CacheSetupError::NonzeroExit {
         exit_code: Some(17),
+        stdout: String::new(),
         stderr: "mount failed: permission denied".to_owned(),
     };
     assert_eq!(
@@ -109,6 +110,7 @@ fn mount_error_diagnostic_prefers_spacectl_stderr() {
 fn mount_error_diagnostic_includes_exit_code_without_stderr() {
     let error = CacheSetupError::NonzeroExit {
         exit_code: Some(17),
+        stdout: String::new(),
         stderr: String::new(),
     };
 

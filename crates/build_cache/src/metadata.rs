@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::{ErrorKind, Write as _};
+use std::io::{self, ErrorKind, Write as _};
 use std::path::{Component, Path, PathBuf};
 
 use chrono::{SecondsFormat, Utc};
@@ -45,8 +45,15 @@ pub enum CacheMetadataError {
     Symlink,
     #[error("cache metadata path is not volume-relative")]
     InvalidPath,
-    #[error("cache metadata could not be written")]
-    Io,
+    #[error("failed to {operation} for cache metadata at {path:?}: {source}")]
+    Io {
+        operation: &'static str,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("cache metadata could not be serialized: {0}")]
+    Serialize(#[source] serde_json::Error),
 }
 
 /// Replace Namespace usage metadata with a complete snapshot for this instance.
@@ -61,7 +68,7 @@ pub fn write_cache_metadata(
         updated_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
         user_request: usage_entries(usages)?,
     };
-    let bytes = serde_json::to_vec_pretty(&document).map_err(|_| CacheMetadataError::Io)?;
+    let bytes = serde_json::to_vec_pretty(&document).map_err(CacheMetadataError::Serialize)?;
     let directory = normalized_cache_root(cache_root)?.join(".ns");
     match fs::symlink_metadata(&directory) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
@@ -69,17 +76,44 @@ pub fn write_cache_metadata(
         }
         Ok(_) => {}
         Err(error) if error.kind() == ErrorKind::NotFound => {}
-        Err(_) => return Err(CacheMetadataError::Io),
+        Err(source) => {
+            return Err(CacheMetadataError::Io {
+                operation: "inspect directory",
+                path: directory,
+                source,
+            });
+        }
     }
-    fs::create_dir_all(&directory).map_err(|_| CacheMetadataError::Io)?;
+    fs::create_dir_all(&directory).map_err(|source| CacheMetadataError::Io {
+        operation: "create directory",
+        path: directory.clone(),
+        source,
+    })?;
 
-    let mut file = NamedTempFile::new_in(&directory).map_err(|_| CacheMetadataError::Io)?;
+    let mut file = NamedTempFile::new_in(&directory).map_err(|source| CacheMetadataError::Io {
+        operation: "create temporary file",
+        path: directory.clone(),
+        source,
+    })?;
     file.write_all(&bytes)
-        .and_then(|()| file.flush())
-        .map_err(|_| CacheMetadataError::Io)?;
-    file.persist(directory.join(METADATA_FILE))
+        .map_err(|source| CacheMetadataError::Io {
+            operation: "write temporary file",
+            path: file.path().to_owned(),
+            source,
+        })?;
+    file.flush().map_err(|source| CacheMetadataError::Io {
+        operation: "flush temporary file",
+        path: file.path().to_owned(),
+        source,
+    })?;
+    let destination = directory.join(METADATA_FILE);
+    file.persist(&destination)
         .map(|_| ())
-        .map_err(|_| CacheMetadataError::Io)
+        .map_err(|error| CacheMetadataError::Io {
+            operation: "persist metadata file",
+            path: destination,
+            source: error.error,
+        })
 }
 
 fn relative_key(path: &Path) -> Result<String, CacheMetadataError> {
@@ -104,7 +138,11 @@ fn relative_key(path: &Path) -> Result<String, CacheMetadataError> {
 pub(crate) fn normalized_cache_root(path: &Path) -> Result<PathBuf, CacheMetadataError> {
     let mut normalized = PathBuf::new();
     for component in std::path::absolute(path)
-        .map_err(|_| CacheMetadataError::Io)?
+        .map_err(|source| CacheMetadataError::Io {
+            operation: "normalize cache root",
+            path: path.to_owned(),
+            source,
+        })?
         .components()
     {
         match component {

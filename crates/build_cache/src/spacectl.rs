@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use command::r#async::Command;
 use instant::Instant;
 use serde::Deserialize;
+use warp_core::safe_error;
 
 use crate::{
     CachePreparationReport, CacheScope, CacheSetupError, RepoCacheKey, aggregate_mode_stats,
@@ -188,8 +189,11 @@ where
             let diagnostic: &str = diagnostic.as_ref();
             span.record("mount_error", diagnostic);
             span.record("otel.status_code", "ERROR");
-            span.record("otel.status_description", err.to_string());
-            tracing::error!(error = ?err, "spacectl cache mount failed");
+            span.record("otel.status_description", err.kind());
+            safe_error!(
+                safe: ("spacectl cache mount failed: error_kind={}", err.kind()),
+                full: ("spacectl cache mount failed: {err}")
+            );
             failed_invocation(scope, modes, context.relative_cache_dir, err, duration)
         }
     }

@@ -395,6 +395,7 @@ fn repo_failure_continues_and_global_still_executes() {
                 if *calls == 1 {
                     futures::future::ready(Err(CacheSetupError::NonzeroExit {
                         exit_code: Some(1),
+                        stdout: String::new(),
                         stderr: "repository mount failed".to_owned(),
                     }))
                 } else {
@@ -948,13 +949,43 @@ fn process_runner_classifies_spawn_failed() {
 #[test]
 fn process_runner_classifies_nonzero_exit() {
     let mut nonzero = Command::new_with_process_group("sh");
-    nonzero.args(["-c", "printf 'mount failed' >&2; exit 17"]);
+    nonzero.args([
+        "-c",
+        "printf '\\377mount output\\n'; printf 'mount failed\\n' >&2; exit 17",
+    ]);
+    let error = block_on(run_command_with_timeout(nonzero, UNREACHABLE_TIMEOUT)).unwrap_err();
+
     assert_eq!(
-        block_on(run_command_with_timeout(nonzero, UNREACHABLE_TIMEOUT)),
-        Err(CacheSetupError::NonzeroExit {
+        error,
+        CacheSetupError::NonzeroExit {
             exit_code: Some(17),
+            stdout: "\u{fffd}mount output".to_owned(),
             stderr: "mount failed".to_owned(),
-        })
+        }
+    );
+    assert_eq!(
+        error.to_string(),
+        "spacectl exited unsuccessfully (exit code Some(17)): stdout: \u{fffd}mount output; stderr: mount failed"
+    );
+}
+
+#[test]
+fn process_runner_bounds_failure_output() {
+    let mut nonzero = Command::new_with_process_group("sh");
+    nonzero.args([
+        "-c",
+        "printf 'out%4097s' ''; printf 'err%4097s' '' >&2; exit 17",
+    ]);
+
+    let error = block_on(run_command_with_timeout(nonzero, UNREACHABLE_TIMEOUT)).unwrap_err();
+
+    assert_eq!(
+        error,
+        CacheSetupError::NonzeroExit {
+            exit_code: Some(17),
+            stdout: "out\n[stdout truncated]".to_owned(),
+            stderr: "err\n[stderr truncated]".to_owned(),
+        }
     );
 }
 
@@ -996,6 +1027,7 @@ fn cache_setup_error_variants_have_expected_is_actionable_classification() {
     assert!(
         !CacheSetupError::NonzeroExit {
             exit_code: Some(1),
+            stdout: String::new(),
             stderr: String::new(),
         }
         .is_actionable()
@@ -1013,6 +1045,7 @@ fn failure_categories_are_preserved() {
         CacheSetupError::SpawnFailed,
         CacheSetupError::NonzeroExit {
             exit_code: Some(17),
+            stdout: "mount output".to_owned(),
             stderr: "mount failed".to_owned(),
         },
         CacheSetupError::Timeout,

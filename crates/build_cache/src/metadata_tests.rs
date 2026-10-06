@@ -1,5 +1,6 @@
-use std::fs;
+use std::error::Error as _;
 use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 use chrono::DateTime;
 use serde_json::{Value, json};
@@ -25,6 +26,20 @@ fn existing_document(root: &Path, contents: &[u8]) {
 
 fn read_document(root: &Path) -> Value {
     serde_json::from_slice(&fs::read(metadata_path(root)).unwrap()).unwrap()
+}
+fn assert_io_diagnostics(
+    error: &CacheMetadataError,
+    operation: &str,
+    path: &Path,
+    expected_source: &io::Error,
+) {
+    let source = error.source().unwrap().downcast_ref::<io::Error>().unwrap();
+    assert_eq!(source.kind(), expected_source.kind());
+    assert_eq!(source.raw_os_error(), expected_source.raw_os_error());
+    let message = error.to_string();
+    assert!(message.contains(operation), "{message}");
+    assert!(message.contains(&format!("{path:?}")), "{message}");
+    assert!(message.contains(&source.to_string()), "{message}");
 }
 
 #[test]
@@ -188,16 +203,38 @@ fn empty_relative_key_is_rejected() {
 #[test]
 fn blocked_metadata_directory_returns_an_error() {
     let root = tempfile::tempdir().unwrap();
-    fs::write(root.path().join(".ns"), b"not a directory").unwrap();
+    let directory = root.path().join(".ns");
+    fs::write(&directory, b"not a directory").unwrap();
+    let expected_source = fs::create_dir_all(&directory).unwrap_err();
 
-    assert!(matches!(
-        write_cache_metadata(root.path(), []),
-        Err(CacheMetadataError::Io)
-    ));
+    let error = write_cache_metadata(root.path(), []).unwrap_err();
+
+    assert_io_diagnostics(&error, "create directory", &directory, &expected_source);
     assert_eq!(
         fs::read(root.path().join(".ns")).unwrap(),
         b"not a directory"
     );
+}
+
+#[test]
+fn blocked_cache_root_reports_directory_inspection_failure() {
+    let root = tempfile::NamedTempFile::new().unwrap();
+    let directory = root.path().join(".ns");
+    let expected_source = fs::symlink_metadata(&directory).unwrap_err();
+
+    let error = write_cache_metadata(root.path(), []).unwrap_err();
+
+    assert_io_diagnostics(&error, "inspect directory", &directory, &expected_source);
+}
+
+#[test]
+fn empty_cache_root_reports_normalization_failure() {
+    let path = Path::new("");
+    let expected_source = std::path::absolute(path).unwrap_err();
+
+    let error = write_cache_metadata(path, []).unwrap_err();
+
+    assert_io_diagnostics(&error, "normalize cache root", path, &expected_source);
 }
 
 #[test]
@@ -207,10 +244,17 @@ fn failed_replacement_removes_temporary_file() {
     let sentinel = metadata_path(root.path()).join("keep");
     fs::write(&sentinel, b"unchanged").unwrap();
 
-    assert!(matches!(
-        write_cache_metadata(root.path(), [usage("git-mirrors", "git", &[])]),
-        Err(CacheMetadataError::Io)
-    ));
+    let probe = tempfile::NamedTempFile::new_in(root.path().join(".ns")).unwrap();
+    let expected_source = probe.persist(metadata_path(root.path())).unwrap_err().error;
+
+    let error = write_cache_metadata(root.path(), [usage("git-mirrors", "git", &[])]).unwrap_err();
+
+    assert_io_diagnostics(
+        &error,
+        "persist metadata file",
+        &metadata_path(root.path()),
+        &expected_source,
+    );
 
     assert_eq!(fs::read(sentinel).unwrap(), b"unchanged");
     assert_eq!(fs::read_dir(root.path().join(".ns")).unwrap().count(), 1);
