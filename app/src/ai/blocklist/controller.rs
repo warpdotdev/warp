@@ -3,10 +3,6 @@
 //!
 //! The `BlocklistAIController` orchestrates state updates and service calls to power the
 //! Agent Mode UI.
-#[allow(
-    dead_code,
-    reason = "the ACP harness runner that drives these turns lands in a follow-up"
-)]
 pub(crate) mod external_harness;
 pub mod input_context;
 mod pending_response_streams;

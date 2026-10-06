@@ -901,16 +901,20 @@ fn reconcile_task_harness_rejects_explicit_mismatch() {
 #[test]
 fn reconcile_task_harness_keeps_the_requested_transport() {
     let mut selected_harness = Harness::Oz;
-    let err = reconcile_task_harness(
+    let harness = reconcile_task_harness(
         TASK_ID,
         &mut selected_harness,
         Harness::Claude,
         HarnessTransport::Acp,
     )
-    .expect_err("ACP transport is not wired up yet");
+    .expect("the task's harness should be driven over the requested transport");
 
     assert_eq!(selected_harness, Harness::Claude);
-    assert!(err.to_string().contains("ACP transport"), "{err}");
+    assert_eq!(harness.harness(), Harness::Claude);
+    let HarnessKind::ThirdParty(harness) = harness else {
+        panic!("ACP transport should produce a third-party harness");
+    };
+    assert!(!harness.drives_cli_agent_session());
 }
 
 #[test]
