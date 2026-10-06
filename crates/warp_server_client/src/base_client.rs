@@ -267,10 +267,6 @@ impl BaseClient {
     pub fn set_ambient_agent_task_id(&self, task_id: Option<String>) {
         *self.ambient_agent_task_id.write() = task_id;
     }
-    pub fn ambient_agent_task_id(&self) -> Option<String> {
-        self.ambient_agent_task_id.read().clone()
-    }
-
     #[cfg(any(test, feature = "test-util"))]
     pub fn set_ambient_workload_token_for_test(
         &self,

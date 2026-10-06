@@ -62,7 +62,7 @@ use crate::ai::aws_credentials::{BedrockOidcCredentialsConfig, refresh_aws_crede
 use crate::ai::cloud_environments::{
     AmbientAgentEnvironment, CloudAmbientAgentEnvironment, SourceRepo,
 };
-use crate::ai::llms::{LLMId, LLMPreferences};
+use crate::ai::llms::LLMId;
 use crate::ai::skills::{
     ResolveSkillError, ResolvedSkill, clone_repo_for_skill, resolve_skill_spec,
 };
@@ -81,7 +81,7 @@ use crate::server::server_api::managed_secrets::AppManagedSecretManager as Manag
 use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::workflows::workflow::Workflow;
-use crate::workspaces::user_workspaces::{HeadlessTeamScope, TeamScope, UserWorkspaces};
+use crate::workspaces::user_workspaces::HeadlessTeamScope;
 
 mod admin;
 mod agent_config;
@@ -731,14 +731,6 @@ impl AgentDriverRunner {
                 .spawn(move |_, ctx| resolve_agent_driver_team_scope(&args_for_team_scope, ctx))
                 .await?
                 .map_err(AgentDriverError::ConfigBuildFailed)?;
-            if let Some(task_id) = task_id {
-                Self::refresh_driver_model_choices(
-                    &foreground,
-                    &server_api,
-                    task_id,
-                    agent_driver_team_scope.as_ref(),
-                ).await?;
-            }
 
             // Wait for Warp Drive to sync before building the task config, since
             // prompt resolution (SavedPrompt -> workflow lookup) and environment
@@ -902,53 +894,6 @@ impl AgentDriverRunner {
             driver::report_driver_error(task_id, err, &server_api).await;
         }
         result
-    }
-
-    async fn refresh_driver_model_choices(
-        foreground: &ModelSpawner<Self>,
-        server_api: &Arc<dyn AIClient>,
-        task_id: AmbientAgentTaskId,
-        team_scope: Option<&HeadlessTeamScope>,
-    ) -> Result<(), AgentDriverError> {
-        let explicit_team_uid = team_scope.map(TeamScope::team_uid);
-        let (principal_uid, team_uid) = foreground
-            .spawn(move |_, ctx| {
-                let principal_uid = AuthStateProvider::as_ref(ctx)
-                    .get()
-                    .user_id()
-                    .ok_or(AgentDriverError::NotLoggedIn)?;
-                let team_uid = explicit_team_uid.unwrap_or_else(|| {
-                    UserWorkspaces::as_ref(ctx).inherited_or_default_team_uid(None)
-                });
-                Ok::<_, AgentDriverError>((principal_uid, team_uid))
-            })
-            .await??;
-        let request_scope = match team_uid {
-            Some(team_uid) => HeadlessTeamScope::Team(team_uid),
-            None => HeadlessTeamScope::Personal,
-        };
-        let choices = server_api
-            .get_agent_driver_model_choices(RequestTeamScope::from_scope(&request_scope))
-            .await
-            .map_err(AgentDriverError::TeamMetadataRefreshFailed)?;
-        foreground
-            .spawn(move |_, ctx| {
-                if AuthStateProvider::as_ref(ctx).get().user_id() != Some(principal_uid) {
-                    return Err(AgentDriverError::InvalidRuntimeState);
-                }
-                LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
-                    preferences.set_agent_driver_model_choices(
-                        task_id,
-                        principal_uid,
-                        team_uid,
-                        choices,
-                        ctx,
-                    );
-                });
-                Ok(())
-            })
-            .await??;
-        Ok(())
     }
 
     async fn refresh_team_metadata(

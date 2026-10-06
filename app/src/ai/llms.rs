@@ -16,8 +16,7 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 use super::agent::conversation::AIConversation;
 use super::custom_model_routers::{self, CustomModelRouter, ModelConfigError};
 use super::execution_profiles::profiles::AIExecutionProfilesModel;
-use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::auth::{AuthStateProvider, UserUid};
+use crate::auth::AuthStateProvider;
 use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApiProvider;
 use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
@@ -814,18 +813,9 @@ struct AvailableLLMsUpdate {
     popup_visibility_state: Arc<FairMutex<UpdatePopupVisibilityState>>,
 }
 
-struct AgentDriverModelCatalog {
-    task_id: AmbientAgentTaskId,
-    principal_uid: UserUid,
-    team_uid: Option<ServerId>,
-    models: AvailableLLMs,
-}
-
 /// Singleton model holding user/workspace LLM preferences, including the set of LLMs available for
 /// use as well as the user's preferred LLM for Agent Mode.
 pub struct LLMPreferences {
-    // Run catalogs must not enter the persisted workspace/team metadata cache.
-    agent_driver_catalog: Option<AgentDriverModelCatalog>,
     /// Whether the most recent authed agent-mode model-list fetch failed.
     agent_mode_models_unavailable: HashMap<Option<ServerId>, bool>,
     last_update: Option<AvailableLLMsUpdate>,
@@ -849,41 +839,6 @@ pub struct LLMPreferences {
 }
 
 impl LLMPreferences {
-    #[cfg(not(target_family = "wasm"))]
-    pub(crate) fn set_agent_driver_model_choices(
-        &mut self,
-        task_id: AmbientAgentTaskId,
-        principal_uid: UserUid,
-        team_uid: Option<ServerId>,
-        choices: ModelsByFeature,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        self.agent_driver_catalog = Some(AgentDriverModelCatalog {
-            task_id,
-            principal_uid,
-            team_uid,
-            models: choices.agent_mode,
-        });
-        ctx.emit(LLMPreferencesEvent::UpdatedAvailableLLMs);
-    }
-
-    fn base_models_for_team_uid<'a>(
-        &'a self,
-        team_uid: Option<ServerId>,
-        ctx: &'a AppContext,
-    ) -> &'a AvailableLLMs {
-        if let Some(catalog) = &self.agent_driver_catalog
-            && catalog.team_uid == team_uid
-            && Some(catalog.principal_uid) == AuthStateProvider::as_ref(ctx).get().user_id()
-            && ServerApiProvider::as_ref(ctx).get().ambient_agent_task_id() == Some(catalog.task_id)
-        {
-            return &catalog.models;
-        }
-        &UserWorkspaces::as_ref(ctx)
-            .feature_model_choice_for_team_uid(team_uid)
-            .agent_mode
-    }
-
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
             if let UserWorkspacesEvent::TeamsChanged = event {
@@ -922,7 +877,6 @@ impl LLMPreferences {
         let custom_llms = build_custom_llm_infos(ApiKeyManager::as_ref(ctx).custom_endpoints());
 
         let mut me = Self {
-            agent_driver_catalog: None,
             agent_mode_models_unavailable: HashMap::new(),
             last_update: None,
             base_llm_for_terminal_view,
@@ -963,11 +917,13 @@ impl LLMPreferences {
         app: &'a AppContext,
         terminal_view_id: Option<EntityId>,
     ) -> &'a LLMInfo {
-        let available = self.base_models_for_team_uid(team_uid, app);
+        let models_by_feature =
+            UserWorkspaces::as_ref(app).feature_model_choice_for_team_uid(team_uid);
         if let Some(terminal_view_id) = terminal_view_id {
             let raw_override = self.base_llm_for_terminal_view.get(&terminal_view_id);
             if let Some(llm_id) = raw_override
-                && let Some(llm_info) = self.usable_model_info_for_id(available, llm_id, app)
+                && let Some(llm_info) =
+                    self.usable_model_info_for_id(&models_by_feature.agent_mode, llm_id, app)
             {
                 return llm_info;
             }
@@ -977,8 +933,8 @@ impl LLMPreferences {
             .data()
             .base_model
             .clone()
-            .and_then(|id| self.usable_model_info_for_id(available, &id, app))
-            .unwrap_or_else(|| self.fallback_llm_info(available, app))
+            .and_then(|id| self.usable_model_info_for_id(&models_by_feature.agent_mode, &id, app))
+            .unwrap_or_else(|| self.fallback_llm_info(&models_by_feature.agent_mode, app))
     }
 
     /// Returns `LLMInfo` for the currently selected LLM to be used for Agent Mode.
@@ -988,11 +944,12 @@ impl LLMPreferences {
         app: &'a AppContext,
         terminal_view_id: Option<EntityId>,
     ) -> &'a LLMInfo {
-        let available = self.base_models_for_team_uid(scope.team_uid(), app);
+        let models_by_feature = UserWorkspaces::as_ref(app).feature_model_choice_for_scope(scope);
         if let Some(terminal_view_id) = terminal_view_id {
             let raw_override = self.base_llm_for_terminal_view.get(&terminal_view_id);
             if let Some(llm_id) = raw_override
-                && let Some(llm_info) = self.usable_model_info_for_id(available, llm_id, app)
+                && let Some(llm_info) =
+                    self.usable_model_info_for_id(&models_by_feature.agent_mode, llm_id, app)
             {
                 return llm_info;
             }
@@ -1019,14 +976,15 @@ impl LLMPreferences {
         terminal_view_id: Option<EntityId>,
     ) -> &'a LLMInfo {
         let profile = AIExecutionProfilesModel::as_ref(app).active_profile(terminal_view_id, app);
-        let available = self.base_models_for_team_uid(team_uid, app);
+        let models_by_feature =
+            UserWorkspaces::as_ref(app).feature_model_choice_for_team_uid(team_uid);
 
         profile
             .data()
             .base_model
             .clone()
-            .and_then(|id| self.usable_model_info_for_id(available, &id, app))
-            .unwrap_or_else(|| self.fallback_llm_info(available, app))
+            .and_then(|id| self.usable_model_info_for_id(&models_by_feature.agent_mode, &id, app))
+            .unwrap_or_else(|| self.fallback_llm_info(&models_by_feature.agent_mode, app))
     }
 
     /// Disable-aware fallback for when the user has no explicit (usable)
@@ -1134,7 +1092,9 @@ impl LLMPreferences {
         app: &'a AppContext,
     ) -> impl Iterator<Item = &'a LLMInfo> + use<'a> {
         let routers_enabled = FeatureFlag::CustomModelRouters.is_enabled();
-        self.base_models_for_team_uid(team_uid, app)
+        UserWorkspaces::as_ref(app)
+            .feature_model_choice_for_team_uid(team_uid)
+            .agent_mode
             .choices
             .iter()
             // Gate cloud/team routers behind the same flag as local routers so
@@ -1333,16 +1293,12 @@ impl LLMPreferences {
     /// id (e.g. when it's a `config_key` UUID).
     pub fn get_llm_info<'a>(&'a self, id: &LLMId, app: &'a AppContext) -> Option<&'a LLMInfo> {
         let workspaces = UserWorkspaces::as_ref(app);
-        self.base_models_for_team_uid(workspaces.inherited_or_default_team_uid(None), app)
-            .info_for_id(id)
-            .or_else(|| {
-                workspaces
-                    .current_workspace()
-                    .map(|workspace| workspace.teams.iter())
-                    .into_iter()
-                    .flatten()
-                    .find_map(|team| team.feature_model_choice.info_for_id(id))
-            })
+        workspaces
+            .current_workspace()
+            .map(|workspace| workspace.teams.iter())
+            .into_iter()
+            .flatten()
+            .find_map(|team| team.feature_model_choice.info_for_id(id))
             .or_else(|| {
                 workspaces
                     .feature_model_choice_for_team_uid(None)
@@ -1679,7 +1635,12 @@ impl LLMPreferences {
         scope: &(impl TeamScope + ?Sized),
         app: &'a AppContext,
     ) -> &'a LLMInfo {
-        self.fallback_llm_info(self.base_models_for_team_uid(scope.team_uid(), app), app)
+        self.fallback_llm_info(
+            &UserWorkspaces::as_ref(app)
+                .feature_model_choice_for_scope(scope)
+                .agent_mode,
+            app,
+        )
     }
 
     pub fn get_default_base_model_for_team_uid<'a>(
@@ -1687,7 +1648,12 @@ impl LLMPreferences {
         team_uid: Option<ServerId>,
         app: &'a AppContext,
     ) -> &'a LLMInfo {
-        self.fallback_llm_info(self.base_models_for_team_uid(team_uid, app), app)
+        self.fallback_llm_info(
+            &UserWorkspaces::as_ref(app)
+                .feature_model_choice_for_team_uid(team_uid)
+                .agent_mode,
+            app,
+        )
     }
 
     /// Returns the effective default coding model as a fallback
@@ -1707,11 +1673,13 @@ impl LLMPreferences {
 
     /// Returns the preferred Codex model, if set by the server.
     pub fn get_preferred_codex_model<'a>(
-        &'a self,
+        &self,
         scope: &(impl TeamScope + ?Sized),
         app: &'a AppContext,
     ) -> Option<&'a LLMInfo> {
-        let agent_mode = self.base_models_for_team_uid(scope.team_uid(), app);
+        let agent_mode = &UserWorkspaces::as_ref(app)
+            .feature_model_choice_for_scope(scope)
+            .agent_mode;
         agent_mode
             .preferred_codex_model_id
             .as_ref()
@@ -1751,7 +1719,9 @@ impl LLMPreferences {
         id: &LLMId,
         app: &AppContext,
     ) -> bool {
-        self.base_models_for_team_uid(scope.team_uid(), app)
+        UserWorkspaces::as_ref(app)
+            .feature_model_choice_for_scope(scope)
+            .agent_mode
             .info_for_id(id)
             .is_some()
     }
@@ -2332,7 +2302,6 @@ impl LLMPreferences {
     #[cfg(test)]
     fn for_test(custom_llms: Vec<LLMInfo>) -> Self {
         Self {
-            agent_driver_catalog: None,
             agent_mode_models_unavailable: HashMap::new(),
             last_update: None,
             base_llm_for_terminal_view: HashMap::new(),

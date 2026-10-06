@@ -20,16 +20,14 @@ use warp_graphql::ai::AgentTaskState;
 use warpui::{App, SingletonEntity, WindowId};
 
 use super::{
-    AgentDriverRunner, CommandAuthentication, build_server_side_task, command_authentication,
-    command_requires_auth, command_to_telemetry_event, reconcile_task_harness,
-    resolve_agent_driver_team_scope, validated_driver_repositories_for_preparation,
+    AgentDriverRunner, CommandAuthentication, command_authentication, command_requires_auth,
+    command_to_telemetry_event, reconcile_task_harness, resolve_agent_driver_team_scope,
+    validated_driver_repositories_for_preparation,
 };
-use crate::ai::agent::PassiveSuggestionTrigger;
 use crate::ai::agent_sdk::driver::harness::HarnessKind;
 use crate::ai::agent_sdk::driver::{AgentDriverError, AgentDriverOptions, AgentRunPrompt, Task};
 use crate::ai::ambient_agents::task::{AmbientAgentTask, AmbientAgentTaskState, TaskScope};
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
-use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, LLMPreferences, ModelsByFeature};
 use crate::auth::AuthStateProvider;
 use crate::auth::user::{PrincipalType, User};
 use crate::network::NetworkStatus;
@@ -40,9 +38,6 @@ use crate::server::server_api::ai::{AIClient, AgentConfigSnapshot, MockAIClient}
 use crate::server::server_api::managed_secrets::AppManagedSecretManager;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
-use crate::test_util::terminal::{
-    add_window_with_id_and_terminal, initialize_app_for_terminal_view,
-};
 use crate::workspaces::team::{Team, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
@@ -50,201 +45,6 @@ use crate::workspaces::user_workspaces::{HeadlessTeamScope, TeamScope, UserWorks
 use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
-
-#[test]
-fn driver_startup_selects_router_from_run_catalog() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let mut workspace = Workspace::from_local_cache(
-            WorkspaceUid::from(ServerId::from(1)),
-            "Workspace".to_string(),
-            None,
-            None,
-        );
-        workspace.teams = vec![team(7, "Factory team")];
-        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
-            *workspaces = UserWorkspaces::mock(
-                Arc::new(MockTeamClient::new()),
-                Arc::new(MockWorkspaceClient::new()),
-                vec![workspace],
-                ctx,
-            );
-        });
-        app.update(|ctx| {
-            let mut user = User::test();
-            user.principal_type = PrincipalType::ServiceAccount;
-            AuthStateProvider::as_ref(ctx).get().set_user(Some(user));
-        });
-        let scope = HeadlessTeamScope::Team(ServerId::from(7));
-        let router_id = "custom-router:factory:factory-a:balanced";
-        let args =
-            parse_run_agent_args(&["agent", "run", "--task-id", TASK_ID, "--model", router_id]);
-        app.update(|ctx| {
-            assert!(build_server_side_task(&args, &None, ctx).is_err());
-        });
-
-        let mut router = LLMInfo::new_for_test(router_id);
-        router.display_name = "Balanced".to_string();
-        router.context_window.default_max = 200_000;
-        let models = ModelsByFeature {
-            agent_mode: AvailableLLMs::new(
-                "auto".into(),
-                vec![LLMInfo::new_for_test("auto"), router],
-                None,
-            )
-            .unwrap(),
-            ..Default::default()
-        };
-        let mut ai_client = MockAIClient::new();
-        ai_client
-            .expect_get_agent_driver_model_choices()
-            .withf(|scope| scope.matches_scope(&HeadlessTeamScope::Team(ServerId::from(7))))
-            .times(1)
-            .return_once(move |_| Ok(models));
-        let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
-        let runner = app.add_singleton_model(|_| AgentDriverRunner);
-        let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
-        AgentDriverRunner::set_ambient_agent_task_id(&foreground, Some(TASK_ID.parse().unwrap()))
-            .await
-            .unwrap();
-        AgentDriverRunner::refresh_driver_model_choices(
-            &foreground,
-            &ai_client,
-            TASK_ID.parse().unwrap(),
-            Some(&scope),
-        )
-        .await
-        .unwrap();
-
-        let (_, task) = app
-            .update(|ctx| build_server_side_task(&args, &None, ctx))
-            .unwrap();
-        assert_eq!(task.model.as_ref().map(LLMId::as_str), Some(router_id));
-        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
-        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
-            workspaces.register_window(window_id, scope.team_uid(), ctx);
-        });
-        let surface_id = terminal.id();
-        LLMPreferences::handle(&app).update(&mut app, |preferences, ctx| {
-            preferences.set_agent_mode_llm_override(&scope, surface_id, task.model.unwrap(), ctx);
-        });
-        app.read(|ctx| {
-            let preferences = LLMPreferences::as_ref(ctx);
-            let model = preferences.get_active_base_model(&scope, ctx, Some(surface_id));
-            assert_eq!(model.id.as_str(), router_id);
-            assert_eq!(model.display_name, "Balanced");
-            assert_eq!(model.context_window.default_max, 200_000);
-            assert_eq!(
-                preferences
-                    .get_llm_info(&router_id.into(), ctx)
-                    .unwrap()
-                    .id
-                    .as_str(),
-                router_id
-            );
-            assert!(
-                UserWorkspaces::as_ref(ctx)
-                    .feature_model_choice_for_team_uid(scope.team_uid())
-                    .info_for_id(&router_id.into())
-                    .is_none()
-            );
-            assert!(
-                !preferences
-                    .get_base_llm_choices_for_agent_mode_for_team_uid(
-                        Some(ServerId::from(999)),
-                        ctx,
-                    )
-                    .any(|info| info.id.as_str() == router_id)
-            );
-            assert!(
-                super::common::validate_agent_mode_base_model_id(
-                    "custom-router:factory:factory-b:balanced",
-                    ctx,
-                )
-                .is_err()
-            );
-            assert!(
-                super::common::validate_agent_mode_base_model_id(
-                    "custom-router:factory:factory-a:unknown",
-                    ctx,
-                )
-                .is_err()
-            );
-        });
-
-        terminal.update(&mut app, |terminal, ctx| {
-            terminal.ai_controller().update(ctx, |controller, ctx| {
-                let (_, params) = controller
-                    .build_passive_suggestions_request_params(
-                        None,
-                        PassiveSuggestionTrigger::FilesChanged,
-                        vec![],
-                        ctx,
-                    )
-                    .unwrap();
-                assert_eq!(params.model.as_str(), router_id);
-                assert!(params.custom_model_routers.is_none());
-            });
-        });
-        app.update(|ctx| AuthStateProvider::as_ref(ctx).get().set_user(None));
-        app.read(|ctx| {
-            assert!(
-                LLMPreferences::as_ref(ctx)
-                    .get_llm_info(&router_id.into(), ctx)
-                    .is_none()
-            );
-        });
-        app.update(|ctx| {
-            AuthStateProvider::as_ref(ctx)
-                .get()
-                .set_user(Some(User::test()))
-        });
-
-        AgentDriverRunner::set_ambient_agent_task_id(
-            &foreground,
-            Some("00000000-0000-0000-0000-000000000002".parse().unwrap()),
-        )
-        .await
-        .unwrap();
-        app.update(|ctx| {
-            assert!(build_server_side_task(&args, &None, ctx).is_err());
-            assert_eq!(
-                LLMPreferences::as_ref(ctx)
-                    .get_active_base_model(&scope, ctx, Some(surface_id),)
-                    .id
-                    .as_str(),
-                "auto"
-            );
-        });
-    });
-}
-
-#[test]
-fn driver_catalog_response_is_rejected_after_auth_switch() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let auth = app.read(|ctx| AuthStateProvider::as_ref(ctx).get().clone());
-        let mut ai_client = MockAIClient::new();
-        ai_client
-            .expect_get_agent_driver_model_choices()
-            .times(1)
-            .return_once(move |_| {
-                auth.set_user(None);
-                Ok(ModelsByFeature::default())
-            });
-        let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
-        let runner = app.add_singleton_model(|_| AgentDriverRunner);
-        let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
-        let result = AgentDriverRunner::refresh_driver_model_choices(
-            &foreground,
-            &ai_client,
-            TASK_ID.parse().unwrap(),
-            Some(&HeadlessTeamScope::Personal),
-        )
-        .await;
-        assert!(matches!(result, Err(AgentDriverError::InvalidRuntimeState)));
-    });
-}
 
 fn parse_run_agent_args(args: &[&str]) -> RunAgentArgs {
     let parsed = Args::try_parse_from(std::iter::once("warp").chain(args.iter().copied()))
