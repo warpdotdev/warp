@@ -51,6 +51,7 @@ use warpui::{
 pub(crate) use self::environment_selector::{
     EnvironmentSelector, EnvironmentSelectorEvent, EnvironmentSelectorTarget,
 };
+use crate::ai::AIRequestUsageModel;
 use crate::ai::blocklist::BlocklistAIInputModel;
 use crate::ai::blocklist::agent_view::is_in_cloud_context;
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
@@ -61,7 +62,6 @@ use crate::ai::blocklist::usage::usage_popover_view::{
 };
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
-use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
 use crate::appearance::Appearance;
 use crate::auth::{AuthManager, AuthStateProvider};
 use crate::completer::SessionContext;
@@ -119,7 +119,7 @@ use crate::workspace::ToastStack;
 #[cfg(not(target_family = "wasm"))]
 use crate::workspace::WorkspaceAction;
 use crate::workspace::view::TOGGLE_PROJECT_EXPLORER_BINDING_NAME;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 const ENABLE_NLD_TOOLTIP: &str = "Enable terminal command autodetection";
 const DISABLE_NLD_TOOLTIP: &str = "Disable terminal command autodetection";
@@ -801,14 +801,17 @@ impl AgentInputFooter {
         ctx.subscribe_to_model(&NetworkStatus::handle(ctx), |_, _, _, ctx| {
             ctx.notify();
         });
-        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |_, _, _, ctx| {
-            ctx.notify();
-        });
-        ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |me, _, event, ctx| {
-            // The request-limit info carries the unit the usage tooltip renders in.
-            if matches!(event, AIRequestUsageModelEvent::RequestUsageUpdated) {
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            // The tier carries the unit the usage tooltip renders in.
+            if matches!(
+                event,
+                UserWorkspacesEvent::TeamsChanged | UserWorkspacesEvent::CurrentWorkspaceChanged
+            ) {
                 me.update_usage_button(ctx);
             }
+            ctx.notify();
+        });
+        ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |_, _, _, ctx| {
             ctx.notify()
         });
         ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {

@@ -22,8 +22,9 @@ use crate::terminal::cli_agent_sessions::{
 };
 use crate::terminal::shared_session::{SharedSessionSource, SharedSessionStatus};
 use crate::test_util::add_window_with_terminal;
-use crate::test_util::request_usage::set_billed_in_dollars;
+use crate::test_util::billing_unit::set_billed_in_dollars;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const CONVERSATION_TOKEN: &str = "server-conversation-token";
 
@@ -334,11 +335,11 @@ fn agent_footer_usage_tooltip_updates_on_usage_events() {
     });
 }
 
-/// A subject the server bills in dollars sees the tooltip's figure in dollars once the
+/// A viewer whose tier bills in dollars sees the tooltip's figure in dollars once the
 /// conversation has charged usage, even with the dogfood flag off, and the tooltip follows a
-/// request-limit refresh that flips the billing unit.
+/// workspaces-metadata refresh that flips the billing unit.
 #[test]
-fn agent_footer_usage_tooltip_follows_the_server_billing_unit() {
+fn agent_footer_usage_tooltip_follows_the_tier_billing_unit() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
         initialize_app_for_terminal_view(&mut app);
@@ -367,6 +368,12 @@ fn agent_footer_usage_tooltip_follows_the_server_billing_unit() {
         assert_eq!(tooltip.as_deref(), Some("Conversation usage: 4.5 credits"));
 
         set_billed_in_dollars(&mut app, true);
+        // A metadata refresh re-applies the workspaces after updating the tier, which is what
+        // tells subscribers to re-read it.
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            let current = workspaces.workspaces().clone();
+            workspaces.update_workspaces(current, ctx);
+        });
         let tooltip = terminal.update(&mut app, |view, ctx| {
             let footer = view.input().as_ref(ctx).agent_input_footer().as_ref(ctx);
             footer.usage_tooltip_for_test(ctx)

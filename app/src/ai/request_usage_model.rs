@@ -647,12 +647,6 @@ impl AIRequestUsageModel {
         self.request_limit_info.limit
     }
 
-    /// Whether the server bills this subject's included usage in dollars rather than credits,
-    /// which is also the signal to display usage as dollars.
-    pub fn is_billed_in_dollars(&self) -> bool {
-        self.request_limit_info.included_usage_cents.is_some()
-    }
-
     /// Returns the number of indices the user's tier allows them to create and the number of files
     /// the user's tier allows them to index. If the user is allowed unlimited indices, then the
     /// max_indices_allowed is None.

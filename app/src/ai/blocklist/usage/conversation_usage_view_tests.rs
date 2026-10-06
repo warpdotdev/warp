@@ -30,9 +30,9 @@ use warpui::platform::WindowStyle;
 
 use super::*;
 use crate::persistence::model::{ModelTokenUsage, PRIMARY_AGENT_CATEGORY};
-use crate::server::server_api::ServerApiProvider;
-use crate::test_util::request_usage::{add_request_usage_model, set_billed_in_dollars};
+use crate::test_util::billing_unit::set_billed_in_dollars;
 use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 fn placeholder_usage_info() -> ConversationUsageInfo {
     ConversationUsageInfo {
@@ -161,15 +161,14 @@ fn custom_endpoint_models_use_the_external_key_icon_bucket() {
     );
 }
 
-/// A subject billed in dollars sees each usage figure in dollars where a cents figure exists
-/// and in credits where none does, independent of the dogfood flag.
+/// A viewer whose tier bills in dollars sees each usage figure in dollars where a cents figure
+/// exists and in credits where none does, independent of the dogfood flag.
 #[test]
-fn usage_summary_follows_the_server_billing_unit_per_figure() {
+fn usage_summary_follows_the_tier_billing_unit_per_figure() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
         initialize_test_app(&mut app);
-        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-        add_request_usage_model(&mut app);
+        app.add_singleton_model(UserWorkspaces::default_mock);
         set_billed_in_dollars(&mut app, true);
 
         let view = ConversationUsageView::new(

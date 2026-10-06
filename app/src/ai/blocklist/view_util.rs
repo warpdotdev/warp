@@ -375,11 +375,13 @@ pub fn format_dollars(cost_in_cents: f32) -> String {
     }
 }
 
-/// Resolves the unit a usage figure is displayed in. A subject the server bills in dollars sees
-/// dollars whenever a cents figure exists, regardless of the client flag or preference; everyone
-/// else follows the dogfood `PricingTransparency` flag and the `usage_display_unit` setting.
+/// Resolves the unit a usage figure is displayed in. A viewer whose tier bills usage in dollars
+/// (`Tier.billedInDollars`, via [`UserWorkspaces::is_billed_in_dollars`]) sees dollars whenever
+/// the figure has a cents value, regardless of the client flag or preference; everyone else
+/// follows the dogfood `PricingTransparency` flag and the `usage_display_unit` setting. A cents
+/// value on its own never selects dollars.
 pub fn effective_usage_unit(cost_in_cents: Option<f32>, app: &AppContext) -> UsageDisplayUnit {
-    if cost_in_cents.is_some() && AIRequestUsageModel::as_ref(app).is_billed_in_dollars() {
+    if cost_in_cents.is_some() && UserWorkspaces::as_ref(app).is_billed_in_dollars() {
         return UsageDisplayUnit::Dollars;
     }
     if !FeatureFlag::PricingTransparency.is_enabled() {

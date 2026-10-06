@@ -36,10 +36,10 @@ impl UsageToggle {
     /// dispatch the typed action that flips the persisted display-mode
     /// setting (the element pass only has an immutable [`AppContext`]).
     ///
-    /// When `billed_in_dollars` (the server bills the subject's usage in
-    /// dollars) and the conversation has a billed total, the entry is that
-    /// total as a static, non-interactive figure: the server's unit wins over
-    /// the persisted mode, so there is nothing to toggle.
+    /// When `billed_in_dollars` (the viewer's tier bills usage in dollars) and
+    /// the conversation has a billed total, the entry is that total as a
+    /// static, non-interactive figure: the server's unit wins over the
+    /// persisted mode, so there is nothing to toggle.
     ///
     /// Otherwise the credits⇄dollars toggle is gated behind
     /// [`FeatureFlag::PricingTransparency`]. When the flag is disabled

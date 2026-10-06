@@ -5,16 +5,14 @@ use warpui::App;
 
 use super::*;
 use crate::ai::agent::ChatGPTSubscriptionErrorActionKind;
-use crate::server::server_api::ServerApiProvider;
 use crate::settings::UsageDisplayUnit;
-use crate::test_util::request_usage::{add_request_usage_model, set_billed_in_dollars};
+use crate::test_util::billing_unit::set_billed_in_dollars;
 use crate::test_util::settings::initialize_settings_for_tests;
 
-/// Registers the settings and request-usage model the unit resolver reads.
+/// Registers the settings and workspaces the unit resolver reads.
 fn initialize_usage_unit_test_app(app: &mut App) {
     initialize_settings_for_tests(app);
-    app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-    add_request_usage_model(app);
+    app.add_singleton_model(UserWorkspaces::default_mock);
 }
 
 fn set_usage_display_unit(app: &mut App, unit: UsageDisplayUnit) {
@@ -156,10 +154,10 @@ fn format_usage_floors_positive_sub_cent_dollar_amounts() {
     );
 }
 
-/// The server's billing unit decides between dollars and credits, so a subject billed in
-/// dollars sees dollars whichever way the dogfood flag and preference point.
+/// The tier's billing unit decides between dollars and credits, so a viewer billed in dollars
+/// sees dollars whichever way the dogfood flag and preference point.
 #[test]
-fn effective_usage_unit_prefers_the_server_billing_unit() {
+fn effective_usage_unit_prefers_the_tier_billing_unit() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
         initialize_usage_unit_test_app(&mut app);
@@ -175,7 +173,7 @@ fn effective_usage_unit_prefers_the_server_billing_unit() {
     });
 }
 
-/// Without a cents figure there is nothing to show in dollars, so a dollars-billed subject
+/// Without a cents figure there is nothing to show in dollars, so a dollars-billed viewer
 /// falls back to the credits string on a flag-off client.
 #[test]
 fn effective_usage_unit_falls_back_to_credits_without_a_cents_figure() {
@@ -191,10 +189,28 @@ fn effective_usage_unit_falls_back_to_credits_without_a_cents_figure() {
     });
 }
 
-/// A subject billed in credits keeps today's dogfood rule: the preference only applies while
+/// A cents figure is not a regime signal: a viewer whose tier bills in credits keeps credits
+/// even when the server sent cents for the figure.
+#[test]
+fn effective_usage_unit_ignores_cents_presence_for_credit_billed_viewers() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
+        initialize_usage_unit_test_app(&mut app);
+        set_billed_in_dollars(&mut app, false);
+
+        app.read(|ctx| {
+            assert_eq!(
+                effective_usage_unit(Some(36.0), ctx),
+                UsageDisplayUnit::Credits
+            );
+        });
+    });
+}
+
+/// A viewer billed in credits keeps today's dogfood rule: the preference only applies while
 /// the client flag is on.
 #[test]
-fn effective_usage_unit_follows_the_flag_and_preference_for_credit_billed_subjects() {
+fn effective_usage_unit_follows_the_flag_and_preference_for_credit_billed_viewers() {
     App::test((), |mut app| async move {
         initialize_usage_unit_test_app(&mut app);
         set_billed_in_dollars(&mut app, false);

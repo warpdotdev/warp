@@ -24,15 +24,15 @@ use crate::ai::agent::{
 };
 use crate::ai::skills::SkillManager;
 use crate::settings::AISettings;
-use crate::test_util::request_usage::set_billed_in_dollars;
+use crate::test_util::billing_unit::set_billed_in_dollars;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
 
-/// The pill shows a dollars-billed subject's figure in dollars whenever a cents figure exists
+/// The pill shows a dollars-billed viewer's figure in dollars whenever a cents figure exists
 /// and falls back to credits otherwise, independent of the dogfood flag; a credits-billed
-/// subject keeps today's prod display.
+/// viewer keeps today's prod display even when cents are present.
 #[test]
-fn usage_pill_text_follows_the_server_billing_unit() {
+fn usage_pill_text_follows_the_tier_billing_unit() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
         initialize_app_for_terminal_view(&mut app);
