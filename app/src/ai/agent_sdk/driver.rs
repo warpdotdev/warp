@@ -25,7 +25,7 @@ use repo_metadata::{RepoMetadataModel, RepositoryIdentifier};
 use session_sharing_protocol::sharer::SessionRetentionReason;
 use tracing::Instrument as _;
 use uuid::Uuid;
-use warp_cli::agent::{Harness, OutputFormat, RepositoryPreparationOverride};
+use warp_cli::agent::{Harness, HarnessTransport, OutputFormat, RepositoryPreparationOverride};
 use warp_cli::mcp::MCPSpec;
 use warp_cli::share::ShareRequest;
 use warp_cli::skill::SkillSpec;
@@ -52,7 +52,8 @@ use crate::ai::agent_sdk::driver::harness::exit_escalation::{
 };
 use crate::ai::agent_sdk::driver::harness::{
     HarnessCleanupDisposition, HarnessKind, HarnessRunner, ResumePayload, SavePoint,
-    ThirdPartyHarness, ThirdPartyHarnessTelemetryEvent, harness_model_env_vars, task_env_vars,
+    ThirdPartyHarness, ThirdPartyHarnessTelemetryEvent, harness_model_env_vars, renders_natively,
+    task_env_vars,
 };
 use crate::ai::agent_sdk::environment_snapshot::{
     EnvironmentSnapshot, EnvironmentSnapshotReporter,
@@ -632,6 +633,8 @@ pub struct AgentDriverOptions {
     pub remove_repository_origins: bool,
     /// Selected execution harness for this run.
     pub selected_harness: Harness,
+    /// How the selected harness is driven. Only used for non-Oz harnesses.
+    pub harness_transport: HarnessTransport,
     /// Model config for the selected harness. Only used for non-Oz harnesses.
     pub third_party_harness_model_config: Option<HarnessModelConfig>,
     /// Stable team scope assigned to this run and its headless window.
@@ -1098,6 +1101,7 @@ impl AgentDriver {
             repository_preparation_overrides,
             remove_repository_origins,
             selected_harness,
+            harness_transport,
             third_party_harness_model_config,
             team_scope,
             bedrock_oidc_credentials,
@@ -1190,11 +1194,12 @@ impl AgentDriver {
         )?;
 
         // Sharing starts asynchronously from terminal creation, before run_internal's setup waits.
+        let native_queue_enabled = renders_natively(selected_harness, harness_transport)
+            && (should_share || task_id.is_some());
         log::info!(
-            "event=driver_queue_configuration task_id={task_id:?} harness={selected_harness} sharing_requested={should_share} native_queue_enabled={}",
-            selected_harness == Harness::Oz && (should_share || task_id.is_some()),
+            "event=driver_queue_configuration task_id={task_id:?} harness={selected_harness} transport={harness_transport:?} sharing_requested={should_share} native_queue_enabled={native_queue_enabled}",
         );
-        if selected_harness == Harness::Oz && (should_share || task_id.is_some()) {
+        if native_queue_enabled {
             let terminal = terminal_driver.as_ref(ctx).terminal_view().clone();
             terminal.update(ctx, |terminal, ctx| {
                 terminal.ai_controller().update(ctx, |controller, ctx| {
