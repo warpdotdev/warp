@@ -5,7 +5,9 @@ use chrono::Utc;
 use ordered_float::OrderedFloat;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use warp_graphql::billing::{AddonCreditAutoReloadStatus, ServiceAgreement, ServiceAgreementType};
+use warp_graphql::billing::{
+    AddonCreditAutoReloadStatus, AddonCreditsOption, ServiceAgreement, ServiceAgreementType,
+};
 pub use warp_graphql::billing::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
     AiCreditsUsageSource,
@@ -199,21 +201,16 @@ impl Workspace {
         }
     }
 
-    /// Returns the price in cents for the selected auto-reload credit denomination,
+    /// Returns the price in cents for the selected auto-reload pack,
     /// including any plan surcharge (premium plans reload at the premium price).
-    /// Returns None if auto-reload is not configured or if the denomination can't be found in pricing options.
+    /// Returns None if auto-reload is not configured or if the pack can't be found in pricing options.
     pub fn get_auto_reload_price_cents(
         &self,
-        addon_credits_options: &[warp_graphql::billing::AddonCreditsOption],
+        addon_credits_options: &[AddonCreditsOption],
     ) -> Option<i32> {
-        let selected_credits = self
-            .settings
+        self.settings
             .addon_credits_settings
-            .selected_auto_reload_credit_denomination?;
-
-        addon_credits_options
-            .iter()
-            .find(|option| option.credits == selected_credits)
+            .selected_auto_reload_option(addon_credits_options)
             .map(|option| {
                 option.price_usd_cents_with_premium(
                     self.billing_metadata.addon_credits_price_premium_bps(),
@@ -1038,6 +1035,38 @@ pub struct AddonCreditsSettings {
     /// workspace is billed in credits.
     #[serde(default)]
     pub selected_auto_reload_usage_cents: Option<i32>,
+}
+
+impl AddonCreditsSettings {
+    /// Whether `option` is the catalog pack auto-reload is configured to buy. A pack sold in
+    /// dollars is matched by its list price, which survives the credit count a pack is listed
+    /// under changing; otherwise by credit denomination.
+    fn is_selected_auto_reload_option(&self, option: &AddonCreditsOption) -> bool {
+        match (self.selected_auto_reload_usage_cents, option.usage_cents) {
+            (Some(selected_usage_cents), Some(usage_cents)) => selected_usage_cents == usage_cents,
+            (None, _) | (_, None) => self
+                .selected_auto_reload_credit_denomination
+                .is_some_and(|credits| credits == option.credits),
+        }
+    }
+
+    pub fn selected_auto_reload_option<'a>(
+        &self,
+        options: &'a [AddonCreditsOption],
+    ) -> Option<&'a AddonCreditsOption> {
+        options
+            .iter()
+            .find(|option| self.is_selected_auto_reload_option(option))
+    }
+
+    pub fn selected_auto_reload_option_index(
+        &self,
+        options: &[AddonCreditsOption],
+    ) -> Option<usize> {
+        options
+            .iter()
+            .position(|option| self.is_selected_auto_reload_option(option))
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use ::ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 use chrono::Local;
-use itertools::Itertools;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
@@ -52,6 +51,7 @@ use crate::auth::auth_view_modal::AuthViewVariant;
 use crate::auth::{AuthManager, AuthStateProvider};
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::pricing::PricingInfoModel;
+use crate::pricing::addon_pack::{PackAmount, packs_are_sold_in_dollars};
 use crate::server::ids::ServerId;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::ai::{AISettings, AISettingsChangedEvent};
@@ -453,14 +453,8 @@ impl BillingAndUsagePageV2View {
         let addon_credits_settings = &workspace.settings.addon_credits_settings;
         if addon_credits_settings.auto_reload_enabled {
             self.addon_credits.selected_denomination = addon_credits_settings
-                .selected_auto_reload_credit_denomination
-                .and_then(|amount| {
-                    self.addon_credits
-                        .options
-                        .iter()
-                        .find_position(|option| option.credits == amount)
-                })
-                .map_or(0, |pair| pair.0);
+                .selected_auto_reload_option_index(&self.addon_credits.options)
+                .unwrap_or(0);
         }
         self.update_denomination_buttons_focus(ctx);
     }
@@ -629,23 +623,28 @@ impl BillingAndUsagePageV2View {
             .addon_credits_options()
             .map(|options| options.to_vec())
             .unwrap_or_default();
-        self.addon_credits.denomination_buttons = self
-            .addon_credits
-            .options
-            .iter()
-            .enumerate()
-            .map(|(i, option)| {
-                ctx.add_typed_action_view(move |_ctx| {
-                    ActionButton::new(option.credits.separate_with_commas(), SecondaryTheme)
-                        .with_icon(Icon::Credits)
-                        .on_click(move |ctx| {
-                            ctx.dispatch_typed_action(
-                                BillingAndUsagePageAction::SelectTopupDenomination(i),
-                            );
-                        })
+        self.addon_credits.denomination_buttons =
+            self.addon_credits
+                .options
+                .iter()
+                .enumerate()
+                .map(|(i, option)| {
+                    let amount = PackAmount::of(option);
+                    ctx.add_typed_action_view(move |_ctx| {
+                        let button = ActionButton::new(amount.short_label(), SecondaryTheme)
+                            .on_click(move |ctx| {
+                                ctx.dispatch_typed_action(
+                                    BillingAndUsagePageAction::SelectTopupDenomination(i),
+                                );
+                            });
+                        if amount.is_usage() {
+                            button
+                        } else {
+                            button.with_icon(Icon::Credits)
+                        }
+                    })
                 })
-            })
-            .collect();
+                .collect();
     }
 
     // ── Rendering ────────────────────────────────────────────────────────
@@ -1233,21 +1232,27 @@ impl BillingAndUsagePageV2View {
             || (!auto_reload_enabled && selected_credit_option.is_none());
         let price_label = selected_credit_option
             .map(|opt| {
-                let credits = opt.credits.separate_with_commas();
                 let dollars = format!(
                     "${:.2}",
                     opt.price_usd_cents_with_premium(premium_bps) as f64 / 100.0
                 );
-                format!("{credits} credits / {dollars}")
+                format!("{} / {dollars}", PackAmount::of(opt).label())
             })
             .unwrap_or_default();
         let auto_reload_credit_amount = selected_credit_option
-            .map(|o| format!("{} credits", o.credits.separate_with_commas()))
+            .map(|o| PackAmount::of(o).label())
             .unwrap_or_else(|| "selected credit amount".to_string());
-        let auto_reload_tooltip_text = format!(
-            "When any member on your team’s credit balance reaches 100 credits remaining, \
-            automatically purchase {auto_reload_credit_amount}."
-        );
+        let auto_reload_tooltip_text = if packs_are_sold_in_dollars(&self.addon_credits.options) {
+            format!(
+                "When any member on your team’s add-on balance runs low, automatically purchase \
+                {auto_reload_credit_amount}."
+            )
+        } else {
+            format!(
+                "When any member on your team’s credit balance reaches 100 credits remaining, \
+                automatically purchase {auto_reload_credit_amount}."
+            )
+        };
         let warning_text = if delinquent && has_admin_permissions {
             Some(ADDON_CREDITS_DELINQUENT_WARNING_STRING)
         } else if delinquent {
@@ -1287,24 +1292,18 @@ impl BillingAndUsagePageV2View {
                     workspace
                         .settings
                         .addon_credits_settings
-                        .selected_auto_reload_credit_denomination
-                })
-                .and_then(|credits| {
-                    self.addon_credits
-                        .options
-                        .iter()
-                        .find(|option| option.credits == credits)
+                        .selected_auto_reload_option(&self.addon_credits.options)
                 })
                 .or(selected_credit_option);
             let description_text = match configured_auto_reload_option {
                 Some(option) => {
-                    let credits = option.credits.separate_with_commas();
+                    let amount = PackAmount::of(option).label();
                     let price = format!(
                         "${:.2}",
                         option.price_usd_cents_with_premium(premium_bps) as f64 / 100.0
                     );
                     format!(
-                        "Your admin has enabled auto-reload for add-on credits. When your team's add-on credit balance runs low, Warp will automatically purchase {credits} credits for {price} and add them to your team's shared pool."
+                        "Your admin has enabled auto-reload for add-on credits. When your team's add-on credit balance runs low, Warp will automatically purchase {amount} for {price} and add them to your team's shared pool."
                     )
                 }
                 None => {
@@ -1536,9 +1535,13 @@ impl BillingAndUsagePageV2View {
                 .finish();
             upper_section.add_child(spend_row);
 
-            if let Some(purchased_row) = workspace
-                .and_then(|workspace| Self::render_purchased_this_month_row(workspace, appearance))
-            {
+            if let Some(purchased_row) = workspace.and_then(|workspace| {
+                Self::render_purchased_this_month_row(
+                    workspace,
+                    packs_are_sold_in_dollars(&self.addon_credits.options),
+                    appearance,
+                )
+            }) {
                 upper_section.add_child(purchased_row);
             }
         }
@@ -1570,6 +1573,7 @@ impl BillingAndUsagePageV2View {
 
     fn render_purchased_this_month_row(
         workspace: &Workspace,
+        packs_in_dollars: bool,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
         let bonus_grants = &workspace.bonus_grants_purchased_this_month;
@@ -1585,39 +1589,39 @@ impl BillingAndUsagePageV2View {
             .with_color(theme.active_ui_text_color().into())
             .finish();
 
-        let credits_text = if credits_purchased == 1 {
-            "1 credit".to_string()
-        } else {
-            format!("{} credits", credits_purchased.separate_with_commas())
-        };
-
-        let credits_component = Container::new(
-            Text::new_inline(credits_text, appearance.ui_font_family(), 12.)
-                .with_color(blended_colors::text_disabled(theme, theme.surface_1()))
+        let mut amounts = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+        // Packs sold in dollars are bought as usage, so the credit count they carry is not a
+        // figure the user was shown when buying them.
+        if !packs_in_dollars {
+            amounts.add_child(
+                Container::new(
+                    Text::new_inline(
+                        PackAmount::Credits(credits_purchased).label(),
+                        appearance.ui_font_family(),
+                        12.,
+                    )
+                    .with_color(blended_colors::text_disabled(theme, theme.surface_1()))
+                    .finish(),
+                )
+                .with_margin_right(8.)
                 .finish(),
-        )
-        .with_margin_right(8.)
-        .finish();
-
-        let cost_component = Text::new_inline(
-            format!("${cost_dollars:.2}"),
-            appearance.ui_font_family(),
-            12.,
-        )
-        .with_color(blended_colors::text_sub(theme, theme.surface_1()))
-        .finish();
+            );
+        }
+        amounts.add_child(
+            Text::new_inline(
+                format!("${cost_dollars:.2}"),
+                appearance.ui_font_family(),
+                12.,
+            )
+            .with_color(blended_colors::text_sub(theme, theme.surface_1()))
+            .finish(),
+        );
 
         Some(
             Container::new(
                 Flex::row()
                     .with_child(label)
-                    .with_child(
-                        Flex::row()
-                            .with_child(credits_component)
-                            .with_child(cost_component)
-                            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                            .finish(),
-                    )
+                    .with_child(amounts.finish())
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
                     .with_main_axis_size(MainAxisSize::Max)
@@ -2266,11 +2270,14 @@ impl TypedActionView for BillingAndUsagePageV2View {
                     ctx
                 );
                 self.pending_auto_reload_toast = Some(if *enabled {
-                    let credits = auto_reload_denomination_credits
-                        .map(|c| c.separate_with_commas())
-                        .unwrap_or_else(|| "your selected".to_string());
+                    let amount = self
+                        .addon_credits
+                        .options
+                        .get(self.addon_credits.selected_denomination)
+                        .map(|option| PackAmount::of(option).label())
+                        .unwrap_or_else(|| "your selected package".to_string());
                     format!(
-                        "Auto-reload enabled. We'll refill with {credits} credits when your balance runs low."
+                        "Auto-reload enabled. We'll refill with {amount} when your balance runs low."
                     )
                 } else {
                     "Auto-reload disabled.".to_string()

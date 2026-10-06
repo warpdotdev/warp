@@ -51,6 +51,7 @@ use crate::auth::auth_view_modal::AuthViewVariant;
 use crate::auth::{AuthManager, AuthStateProvider, UserUid};
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::modal::{Modal, ModalEvent, ModalViewState};
+use crate::pricing::addon_pack::{PackAmount, packs_are_sold_in_dollars};
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::server::ids::ServerId;
 use crate::server::telemetry::TelemetryEvent;
@@ -469,13 +470,8 @@ impl BillingAndUsagePageView {
         let addon_credits_settings = &workspace.settings.addon_credits_settings;
         if addon_credits_settings.auto_reload_enabled {
             self.selected_addon_denomination = addon_credits_settings
-                .selected_auto_reload_credit_denomination
-                .and_then(|amount| {
-                    self.addon_credits_options
-                        .iter()
-                        .find_position(|option| option.credits == amount)
-                })
-                .map_or(0, |pair| pair.0);
+                .selected_auto_reload_option_index(&self.addon_credits_options)
+                .unwrap_or(0);
         }
         self.update_denomination_buttons_focus(ctx);
     }
@@ -728,22 +724,27 @@ impl BillingAndUsagePageView {
             .addon_credits_options()
             .map(|opts| opts.to_vec())
             .unwrap_or_default();
-        self.addon_credit_denomination_buttons = self
-            .addon_credits_options
-            .iter()
-            .enumerate()
-            .map(|(i, option)| {
-                ctx.add_typed_action_view(move |_ctx| {
-                    ActionButton::new(option.credits.separate_with_commas(), SecondaryTheme)
-                        .with_icon(Icon::Credits)
-                        .on_click(move |ctx| {
-                            ctx.dispatch_typed_action(
-                                BillingAndUsagePageAction::SelectTopupDenomination(i),
-                            );
-                        })
+        self.addon_credit_denomination_buttons =
+            self.addon_credits_options
+                .iter()
+                .enumerate()
+                .map(|(i, option)| {
+                    let amount = PackAmount::of(option);
+                    ctx.add_typed_action_view(move |_ctx| {
+                        let button = ActionButton::new(amount.short_label(), SecondaryTheme)
+                            .on_click(move |ctx| {
+                                ctx.dispatch_typed_action(
+                                    BillingAndUsagePageAction::SelectTopupDenomination(i),
+                                );
+                            });
+                        if amount.is_usage() {
+                            button
+                        } else {
+                            button.with_icon(Icon::Credits)
+                        }
+                    })
                 })
-            })
-            .collect();
+                .collect();
     }
 
     fn update_prorated_mouse_states(&mut self, ctx: &mut ViewContext<Self>) {
@@ -1980,6 +1981,7 @@ impl BillingAndUsagePageView {
         let bonus_grants_purchased = UserWorkspaces::as_ref(app)
             .current_workspace()
             .map(|workspace| workspace.bonus_grants_purchased_this_month.clone());
+        let packs_in_dollars = packs_are_sold_in_dollars(addon_credits_options);
 
         let purchased_this_month_row = if let Some(bonus_grants) = bonus_grants_purchased {
             if bonus_grants.total_credits_purchased == 0 {
@@ -1994,39 +1996,41 @@ impl BillingAndUsagePageView {
                         .with_color(appearance.theme().active_ui_text_color().into())
                         .finish();
 
-                let credits_text = if credits_purchased == 1 {
-                    "1 credit".to_string()
-                } else {
-                    format!("{} credits", credits_purchased.separate_with_commas())
-                };
-
-                let credits_component = Container::new(
-                    Text::new_inline(credits_text, appearance.ui_font_family(), 12.)
-                        .with_color(blended_colors::text_disabled(
-                            appearance.theme(),
-                            appearance.theme().surface_1(),
-                        ))
+                let mut right_side =
+                    Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+                // Packs sold in dollars are bought as usage, so the credit count they carry is
+                // not a figure the user was shown when buying them.
+                if !packs_in_dollars {
+                    right_side.add_child(
+                        Container::new(
+                            Text::new_inline(
+                                PackAmount::Credits(credits_purchased).label(),
+                                appearance.ui_font_family(),
+                                12.,
+                            )
+                            .with_color(blended_colors::text_disabled(
+                                appearance.theme(),
+                                appearance.theme().surface_1(),
+                            ))
+                            .finish(),
+                        )
+                        .with_margin_right(8.)
                         .finish(),
-                )
-                .with_margin_right(8.)
-                .finish();
-
-                let cost_component = Text::new_inline(
-                    format!("${cost_dollars:.2}"),
-                    appearance.ui_font_family(),
-                    12.,
-                )
-                .with_color(blended_colors::text_sub(
-                    appearance.theme(),
-                    appearance.theme().surface_1(),
-                ))
-                .finish();
-
-                let right_side = Flex::row()
-                    .with_child(credits_component)
-                    .with_child(cost_component)
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .finish();
+                    );
+                }
+                right_side.add_child(
+                    Text::new_inline(
+                        format!("${cost_dollars:.2}"),
+                        appearance.ui_font_family(),
+                        12.,
+                    )
+                    .with_color(blended_colors::text_sub(
+                        appearance.theme(),
+                        appearance.theme().surface_1(),
+                    ))
+                    .finish(),
+                );
+                let right_side = right_side.finish();
 
                 Some(
                     Container::new(
@@ -2056,9 +2060,20 @@ impl BillingAndUsagePageView {
         });
 
         let auto_reload_amount = selected_option
-            .map(|option| option.credits.to_string())
+            .map(|option| PackAmount::of(option).label())
             .filter(|_| auto_reload_enabled)
-            .unwrap_or("your selected".to_string());
+            .unwrap_or_else(|| "your selected package".to_string());
+        let auto_reload_description = if packs_in_dollars {
+            format!(
+                "When enabled, auto reload will automatically purchase {auto_reload_amount} when \
+                your add-on balance runs low."
+            )
+        } else {
+            format!(
+                "When enabled, auto reload will automatically purchase {auto_reload_amount} when \
+                your add-on credit balance reaches 100 credits remaining."
+            )
+        };
         let auto_reload_switch = ui_builder
             .switch(self.auto_reload_switch.clone())
             .check(auto_reload_enabled);
@@ -2087,10 +2102,7 @@ impl BillingAndUsagePageView {
             Default::default(),
             appearance,
             auto_reload_switch,
-            Some(format!(
-                "When enabled, auto reload will automatically purchase {auto_reload_amount} \
-                credits when your add-on credit balance reaches 100 credits remaining."
-            )),
+            Some(auto_reload_description),
         ))
         .with_padding_right(-TOGGLE_BUTTON_RIGHT_PADDING)
         .finish();

@@ -30,6 +30,7 @@ use crate::ai::request_usage_model::{
 use crate::auth::AuthStateProvider;
 use crate::features::FeatureFlag;
 use crate::menu::MenuItemFields;
+use crate::pricing::addon_pack::{PackAmount, pack_menu_label};
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::send_telemetry_from_ctx;
 use crate::server::ids::ServerId;
@@ -327,17 +328,20 @@ impl BuyCreditsBanner {
             .with_color(sub_text_color.into())
             .finish();
 
-        // Get the selected amount for the tooltip
-        let selected_credits = self
+        let selected_amount = self
             .addon_credits_options
             .get(self.selected_denomination_index)
-            .map(|option| option.credits)
-            .unwrap_or(0);
-
-        let tooltip_text = format!(
-            "When enabled, auto reload will purchase {} credits when your credit balance gets low",
-            selected_credits
-        );
+            .map_or(PackAmount::Credits(0), PackAmount::of);
+        let tooltip_text = match selected_amount {
+            PackAmount::UsageCents(_) => format!(
+                "When enabled, auto reload will purchase {} when your balance gets low",
+                selected_amount.label()
+            ),
+            PackAmount::Credits(credits) => format!(
+                "When enabled, auto reload will purchase {credits} credits when your credit \
+                balance gets low"
+            ),
+        };
 
         // Create info icon with a custom sub_text_color & mouse cursor (i.e. as opposed to using IconWithTooltip)
         let ui_builder = appearance.ui_builder();
@@ -404,13 +408,7 @@ impl BuyCreditsBanner {
             .iter()
             .enumerate()
             .map(|(index, option)| {
-                let price_cents = option.price_usd_cents_with_premium(premium_bps);
-                let price_label = if price_cents % 100 == 0 {
-                    format!("${}", price_cents / 100)
-                } else {
-                    format!("${:.2}", price_cents as f64 / 100.)
-                };
-                let primary_text = format!("{price_label} / {} credits", option.credits);
+                let primary_text = pack_menu_label(option, premium_bps);
                 let discount_percent = if base_rate > 0.0 {
                     let actual_rate = option.rate();
                     ((base_rate - actual_rate) / base_rate * 100.0).round() as u32
