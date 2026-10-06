@@ -350,6 +350,8 @@ cfg_if::cfg_if! {
 /// NOTE: `planning_model` was removed after planning via subagent was deprecated; serialized legacy
 /// profiles may include a `planning_model` field and this field name should remain reserved
 /// indefinitely.
+// `remote = "Self"` turns the derived serde impls into inherent functions so the trait impls below
+// can wrap them with legacy-field handling.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(remote = "Self", default)]
 pub struct AIExecutionProfile {
