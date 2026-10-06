@@ -23,13 +23,13 @@ fn grant(scope: BonusGrantScope, usage_cents_granted: Option<f64>) -> BonusGrant
 }
 
 #[test]
-fn generic_grant_message_shows_dollars_when_the_grant_carries_a_dollar_value() {
+fn generic_grant_message_shows_dollars_on_a_dollar_billed_tier() {
     let team = WorkspaceUid::from(ServerId::from(1_i64));
     assert_eq!(
-        BonusGrantNotificationModel::format_generic_grant_message(&grant(
-            BonusGrantScope::Team(team),
-            Some(1800.0)
-        )),
+        BonusGrantNotificationModel::format_generic_grant_message(
+            &grant(BonusGrantScope::Team(team), Some(1800.0)),
+            true
+        ),
         "$18.00 has been added to your team."
     );
 }
@@ -37,10 +37,18 @@ fn generic_grant_message_shows_dollars_when_the_grant_carries_a_dollar_value() {
 #[test]
 fn generic_grant_message_falls_back_to_credits() {
     assert_eq!(
-        BonusGrantNotificationModel::format_generic_grant_message(&grant(
-            BonusGrantScope::User,
-            None
-        )),
+        BonusGrantNotificationModel::format_generic_grant_message(
+            &grant(BonusGrantScope::User, None),
+            true
+        ),
+        "1000 Reload Credits have been added to your account."
+    );
+    // Cents the server sends to a credits-billed tier are never shown.
+    assert_eq!(
+        BonusGrantNotificationModel::format_generic_grant_message(
+            &grant(BonusGrantScope::User, Some(1800.0)),
+            false
+        ),
         "1000 Reload Credits have been added to your account."
     );
 }

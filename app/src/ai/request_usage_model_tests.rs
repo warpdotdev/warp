@@ -225,7 +225,7 @@ fn test_request_limit_info_round_trips_usage_cents() {
 }
 
 #[test]
-fn test_dollar_accessors_for_subject_billed_in_dollars() {
+fn test_dollar_accessors_expose_the_server_supplied_cents() {
     App::test((), |mut app| async move {
         let request_usage_model = add_request_usage_model(&mut app);
         request_usage_model.update(&mut app, |model, _ctx| {
@@ -235,7 +235,6 @@ fn test_dollar_accessors_for_subject_billed_in_dollars() {
                 next_refresh_time: ServerTimestamp::new(Utc::now() + Duration::days(1)),
                 ..RequestLimitInfo::default()
             };
-            assert!(model.is_billed_in_dollars());
             assert_eq!(model.included_usage_cents(), Some(1800.0));
             assert_eq!(model.usage_cents_used(), Some(70.2));
         })
@@ -260,12 +259,11 @@ fn test_usage_cents_used_is_zero_past_refresh_time() {
 }
 
 #[test]
-fn test_dollar_accessors_for_subject_billed_in_credits() {
+fn test_dollar_accessors_are_none_without_server_supplied_cents() {
     App::test((), |mut app| async move {
         let request_usage_model = add_request_usage_model(&mut app);
         request_usage_model.update(&mut app, |model, _ctx| {
             model.request_limit_info = RequestLimitInfo::new_for_test(200, 39);
-            assert!(!model.is_billed_in_dollars());
             assert_eq!(model.included_usage_cents(), None);
             assert_eq!(model.usage_cents_used(), None);
         })
@@ -920,11 +918,9 @@ fn test_bonus_usage_cents_remaining_sums_grants_with_dollar_values() {
                 usage_cents_remaining,
                 scope,
             };
-            model.request_limit_info = RequestLimitInfo {
-                included_usage_cents: Some(1800.0),
-                usage_cents_used_since_last_refresh: Some(0.0),
-                ..RequestLimitInfo::default()
-            };
+            // The sums report the server-supplied cents regardless of the billing unit; the
+            // tier decides whether a surface shows them.
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 0);
             model.bonus_grants = vec![
                 make(BonusGrantScope::User, BonusGrantType::Any, 5, Some(9.0)),
                 make(
@@ -985,45 +981,17 @@ fn test_bonus_usage_cents_remaining_sums_grants_with_dollar_values() {
 }
 
 #[test]
-fn test_bonus_usage_cents_remaining_requires_subject_billed_in_dollars() {
+fn test_bonus_usage_cents_remaining_without_grants() {
     App::test((), |mut app| async move {
         let (uid, workspace) = create_test_workspace();
         add_user_workspaces_with_workspace(&mut app, workspace);
         let request_usage_model = add_request_usage_model(&mut app);
 
         request_usage_model.update(&mut app, |model, _ctx| {
-            model.request_limit_info = RequestLimitInfo::new_for_test(10, 0);
-            model.bonus_grants = vec![BonusGrant {
-                created_at: Utc::now(),
-                cost_cents: 0,
-                expiration: None,
-                grant_type: BonusGrantType::Any,
-                reason: "test".to_string(),
-                user_facing_message: None,
-                request_credits_granted: 7,
-                request_credits_remaining: 7,
-                usage_cents_granted: Some(12.6),
-                usage_cents_remaining: Some(12.6),
-                scope: BonusGrantScope::Team(uid),
-            }];
-
-            assert_eq!(
-                model.total_workspace_and_team_bonus_usage_cents_remaining(uid),
-                None
-            );
-            assert_eq!(
-                model.total_user_interactive_bonus_usage_cents_remaining(),
-                None
-            );
-            assert_eq!(model.ambient_only_usage_cents_remaining(), None);
-
-            // With no grants at all, a subject billed in dollars has a zero-dollar balance.
-            model.request_limit_info = RequestLimitInfo {
-                included_usage_cents: Some(1800.0),
-                usage_cents_used_since_last_refresh: Some(0.0),
-                ..RequestLimitInfo::default()
-            };
             model.bonus_grants.clear();
+
+            // An empty pool is a known zero-dollar balance, while "no ambient grants" stays
+            // unknown like its credit counterpart.
             assert_eq!(
                 model.total_workspace_and_team_bonus_usage_cents_remaining(uid),
                 Some(0.0)
@@ -1033,6 +1001,7 @@ fn test_bonus_usage_cents_remaining_requires_subject_billed_in_dollars() {
                 Some(0.0)
             );
             assert_eq!(model.ambient_only_usage_cents_remaining(), None);
+            assert_eq!(model.ambient_only_credits_remaining(), None);
         });
     });
 }

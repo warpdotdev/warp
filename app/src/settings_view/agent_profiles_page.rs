@@ -1902,23 +1902,28 @@ fn render_ai_list(
         .finish()
 }
 
-/// The dollar values of the allowance's credit figures, for a subject the server bills in
-/// dollars.
+/// The dollar values of the allowance's credit figures, for a plan billed in dollars.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct AllowanceCents {
     used: f64,
     limit: f64,
 }
 
-/// The current user's allowance in cents, for a subject the server bills in dollars. Unlimited
-/// subjects keep the credit display.
-fn allowance_cents(ai_request_usage_model: &AIRequestUsageModel) -> Option<AllowanceCents> {
-    if !ai_request_usage_model.is_billed_in_dollars() || ai_request_usage_model.is_unlimited() {
+/// The current user's allowance in cents. `None` unless the plan is billed in dollars
+/// (`billed_in_dollars`, from the tier) and the server supplied both figures; unlimited subjects
+/// keep the credit display.
+fn allowance_cents(
+    billed_in_dollars: bool,
+    is_unlimited: bool,
+    usage_cents_used: Option<f64>,
+    included_usage_cents: Option<f64>,
+) -> Option<AllowanceCents> {
+    if !billed_in_dollars || is_unlimited {
         return None;
     }
     Some(AllowanceCents {
-        used: ai_request_usage_model.usage_cents_used()?,
-        limit: ai_request_usage_model.included_usage_cents()?,
+        used: usage_cents_used?,
+        limit: included_usage_cents?,
     })
 }
 
@@ -2113,7 +2118,8 @@ impl SettingsWidget for UsageWidget {
         let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
         let next_refresh_time = ai_request_usage_model.next_refresh_time();
         let formatted_next_refresh_time = next_refresh_time.format("%b %d").to_string();
-        let workspace_is_delinquent_due_to_payment_issue = UserWorkspaces::as_ref(app)
+        let workspaces = UserWorkspaces::as_ref(app);
+        let workspace_is_delinquent_due_to_payment_issue = workspaces
             .team_for_view_handle(&self.view_handle, app)
             .map(|team| team.billing_metadata.is_delinquent_due_to_payment_issue())
             .unwrap_or_default();
@@ -2150,7 +2156,12 @@ impl SettingsWidget for UsageWidget {
         .with_padding_bottom(HEADER_PADDING)
         .finish();
 
-        let allowance_cents = allowance_cents(ai_request_usage_model);
+        let allowance_cents = allowance_cents(
+            workspaces.is_billed_in_dollars(),
+            ai_request_usage_model.is_unlimited(),
+            ai_request_usage_model.usage_cents_used(),
+            ai_request_usage_model.included_usage_cents(),
+        );
         let (header, unit) = if allowance_cents.is_some() {
             ("Usage", "usage")
         } else {
@@ -2174,7 +2185,7 @@ impl SettingsWidget for UsageWidget {
 
         let auth_state = AuthStateProvider::as_ref(app).get();
         let upgrade_cta_text_fragments = if let Some(team) =
-            UserWorkspaces::as_ref(app).team_for_view_handle(&self.view_handle, app)
+            workspaces.team_for_view_handle(&self.view_handle, app)
         {
             let current_user_email = auth_state.user_email().unwrap_or_default();
             let has_admin_permissions = team.has_admin_permissions(&current_user_email);
