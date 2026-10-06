@@ -42,7 +42,7 @@ use super::orchestration_event_streamer::{
 };
 use super::orchestration_events::{OrchestrationEventService, OrchestrationEventServiceEvent};
 use super::queued_query::{QueuedQueryEvent, QueuedQueryId, QueuedQueryModel};
-use super::{BlocklistAIInputModel, BlocklistAIPermissions, ResponseStreamId};
+use super::{BlocklistAIInputModel, ResponseStreamId};
 use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::api::{self, ServerConversationToken};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
@@ -300,15 +300,10 @@ impl RequestInput {
             .get_active_cli_agent_model(scope, app, Some(terminal_surface_id))
             .id
             .clone();
-        let computer_use_model_id = BlocklistAIPermissions::as_ref(app)
-            .execution_computer_use_model(terminal_surface_id)
-            .cloned()
-            .unwrap_or_else(|| {
-                llm_prefs
-                    .get_active_computer_use_model(scope, app, Some(terminal_surface_id))
-                    .id
-                    .clone()
-            });
+        let computer_use_model_id = llm_prefs
+            .get_active_computer_use_model(scope, app, Some(terminal_surface_id))
+            .id
+            .clone();
         let working_directory = active_session
             .as_ref(app)
             .current_working_directory()

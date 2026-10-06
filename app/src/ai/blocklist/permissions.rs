@@ -19,7 +19,6 @@ use crate::ai::execution_profiles::{
     AIExecutionProfile, ActionPermission, AskUserQuestionPermission, ComputerUsePermission,
     ExecutionProfileId, WriteToPtyPermission,
 };
-use crate::ai::llms::LLMId;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::ai::mcp::mcp_provider_from_file_path;
@@ -138,7 +137,6 @@ pub struct BlocklistAIPermissions {
     ///
     /// TODO: remove this once AM doesn't re-request access to the same file in a given convo.
     temporary_file_permissions: HashMap<AIConversationId, HashSet<PathBuf>>,
-    execution_computer_use: HashMap<EntityId, (bool, Option<LLMId>)>,
 }
 
 impl BlocklistAIPermissions {
@@ -171,7 +169,6 @@ impl BlocklistAIPermissions {
 
         Self {
             temporary_file_permissions: Default::default(),
-            execution_computer_use: Default::default(),
         }
     }
 
@@ -219,30 +216,6 @@ impl BlocklistAIPermissions {
         }
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    pub(crate) fn set_execution_computer_use(
-        &mut self,
-        terminal_view_id: EntityId,
-        enabled: bool,
-        model_id: Option<LLMId>,
-    ) {
-        self.execution_computer_use
-            .insert(terminal_view_id, (enabled, model_id));
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    pub(crate) fn clear_execution_computer_use(&mut self, terminal_view_id: EntityId) {
-        self.execution_computer_use.remove(&terminal_view_id);
-    }
-
-    pub(crate) fn execution_computer_use_model(
-        &self,
-        terminal_view_id: EntityId,
-    ) -> Option<&LLMId> {
-        self.execution_computer_use
-            .get(&terminal_view_id)
-            .and_then(|(_, model)| model.as_ref())
-    }
     pub fn active_permissions_profile(
         &self,
         terminal_view_id: Option<EntityId>,
@@ -252,15 +225,11 @@ impl BlocklistAIPermissions {
         let active_profile =
             AIExecutionProfilesModel::as_ref(ctx).active_profile(terminal_view_id, ctx);
         let mut profile = self.permissions_profile_for_id(active_profile.id(), scope, ctx);
-        if let Some(terminal_view_id) = terminal_view_id
-            && let Some((enabled, model_id)) = self.execution_computer_use.get(&terminal_view_id)
+        profile.computer_use = self.get_computer_use_setting(terminal_view_id, scope, ctx);
+        if let Some(selection) = terminal_view_id
+            .and_then(|id| AIExecutionProfilesModel::as_ref(ctx).session_computer_use(id))
         {
-            profile.computer_use = if *enabled {
-                ComputerUsePermission::AlwaysAllow
-            } else {
-                ComputerUsePermission::Never
-            };
-            profile.computer_use_model = model_id.clone();
+            profile.computer_use_model = selection.model_id.clone();
         }
         profile
     }
@@ -669,10 +638,13 @@ impl BlocklistAIPermissions {
         scope: &impl TeamScope,
         ctx: &AppContext,
     ) -> crate::ai::execution_profiles::ComputerUsePermission {
-        if let Some(terminal_view_id) = terminal_view_id
-            && let Some((enabled, _)) = self.execution_computer_use.get(&terminal_view_id)
+        if let Some(policy) = Self::team_autonomy_settings(scope, ctx).computer_use_setting {
+            return policy;
+        }
+        if let Some(selection) = terminal_view_id
+            .and_then(|id| AIExecutionProfilesModel::as_ref(ctx).session_computer_use(id))
         {
-            return if *enabled {
+            return if selection.enabled {
                 ComputerUsePermission::AlwaysAllow
             } else {
                 ComputerUsePermission::Never

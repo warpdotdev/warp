@@ -113,40 +113,106 @@ fn execution_computer_use_is_scoped_to_the_terminal() {
         let state = initialize_permissions_test(&mut app);
         let other_terminal = EntityId::new();
         let selected_model = LLMId::from("computer-use-model");
-        state.permissions.update(&mut app, |permissions, _| {
-            permissions.set_execution_computer_use(
+        let initial_profile = state.profile_model.read(&app, |profiles, ctx| {
+            profiles
+                .active_profile(Some(state.terminal_view_id), ctx)
+                .data()
+                .clone()
+        });
+        state.profile_model.update(&mut app, |profiles, ctx| {
+            profiles.set_session_computer_use(
                 state.terminal_view_id,
-                false,
+                true,
                 Some(selected_model.clone()),
+                ctx,
             );
         });
         state.permissions.read(&app, |permissions, ctx| {
-            assert!(matches!(
+            assert_eq!(
+                permissions.get_computer_use_setting(
+                    Some(state.terminal_view_id),
+                    &test_scope(),
+                    ctx
+                ),
+                ComputerUsePermission::AlwaysAllow
+            );
+            assert_eq!(
+                permissions
+                    .active_permissions_profile(Some(state.terminal_view_id), &test_scope(), ctx)
+                    .computer_use_model,
+                Some(selected_model.clone())
+            );
+            assert_ne!(
+                permissions.get_computer_use_setting(Some(other_terminal), &test_scope(), ctx),
+                ComputerUsePermission::AlwaysAllow
+            );
+        });
+        state.profile_model.read(&app, |profiles, ctx| {
+            assert_eq!(
+                profiles
+                    .active_profile(Some(state.terminal_view_id), ctx)
+                    .data()
+                    .computer_use_model,
+                initial_profile.computer_use_model
+            );
+            assert_eq!(
+                profiles
+                    .active_profile(Some(state.terminal_view_id), ctx)
+                    .data()
+                    .computer_use,
+                initial_profile.computer_use
+            );
+        });
+        state.profile_model.update(&mut app, |profiles, ctx| {
+            profiles.clear_session_computer_use(state.terminal_view_id, ctx);
+        });
+        state.permissions.read(&app, |permissions, ctx| {
+            assert_eq!(
+                permissions.get_computer_use_setting(
+                    Some(state.terminal_view_id),
+                    &test_scope(),
+                    ctx
+                ),
+                initial_profile.computer_use
+            );
+            assert_eq!(
+                permissions
+                    .active_permissions_profile(Some(state.terminal_view_id), &test_scope(), ctx)
+                    .computer_use_model,
+                initial_profile.computer_use_model
+            );
+        });
+    })
+}
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn workspace_computer_use_policy_overrides_session_selection() {
+    App::test((), |mut app| async move {
+        let state = initialize_permissions_test(&mut app);
+        state.profile_model.update(&mut app, |profiles, ctx| {
+            profiles.set_session_computer_use(state.terminal_view_id, true, None, ctx);
+        });
+        state.user_workspaces.update(&mut app, |workspaces, ctx| {
+            workspaces.setup_test_workspace(ctx);
+            workspaces.update_ai_autonomy_settings(
+                |settings| settings.computer_use_setting = Some(ComputerUsePermission::Never),
+                ctx,
+            );
+        });
+        state.permissions.read(&app, |permissions, ctx| {
+            assert_eq!(
                 permissions.get_computer_use_setting(
                     Some(state.terminal_view_id),
                     &test_scope(),
                     ctx
                 ),
                 ComputerUsePermission::Never
-            ));
+            );
             assert_eq!(
-                permissions.execution_computer_use_model(state.terminal_view_id),
-                Some(&selected_model)
-            );
-            assert!(
                 permissions
-                    .execution_computer_use_model(other_terminal)
-                    .is_none()
-            );
-        });
-        state.permissions.update(&mut app, |permissions, _| {
-            permissions.clear_execution_computer_use(state.terminal_view_id);
-        });
-        state.permissions.read(&app, |permissions, _| {
-            assert!(
-                permissions
-                    .execution_computer_use_model(state.terminal_view_id)
-                    .is_none()
+                    .active_permissions_profile(Some(state.terminal_view_id), &test_scope(), ctx)
+                    .computer_use,
+                ComputerUsePermission::Never
             );
         });
     })

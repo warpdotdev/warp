@@ -25,7 +25,7 @@ use repo_metadata::{RepoMetadataModel, RepositoryIdentifier};
 use session_sharing_protocol::sharer::SessionRetentionReason;
 use tracing::Instrument as _;
 use uuid::Uuid;
-use warp_cli::agent::{Harness, OutputFormat, RepositoryPreparationOverride};
+use warp_cli::agent::{Harness, OutputFormat};
 use warp_cli::mcp::MCPSpec;
 use warp_cli::share::ShareRequest;
 use warp_cli::skill::SkillSpec;
@@ -73,13 +73,10 @@ use crate::ai::blocklist::orchestration_event_streamer::{
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
 use crate::ai::blocklist::pending_cli_harness_prompt_queue::PendingCliHarnessPromptQueue;
 use crate::ai::blocklist::{
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIPermissions,
-    ConversationStatusUpdate, FinalizeReason, QueuedQueryEvent, QueuedQueryModel,
-    finalize_recording_for_conversation,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate, FinalizeReason,
+    QueuedQueryEvent, QueuedQueryModel, finalize_recording_for_conversation,
 };
-use crate::ai::cloud_environments::{
-    AmbientAgentEnvironment, CloudAmbientAgentEnvironment, GithubRepo, SourceRepo,
-};
+use crate::ai::cloud_environments::{CloudAmbientAgentEnvironment, GithubRepo, SourceRepo};
 use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentModelEvent};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
@@ -622,17 +619,7 @@ pub struct AgentDriverOptions {
     pub resume: Option<ResumeOptions>,
     /// Cloud providers to configure within the agent's session.
     pub cloud_providers: Vec<Box<dyn cloud_provider::CloudProvider>>,
-    /// Resolved environment configuration, if any.
-    pub environment: Option<AmbientAgentEnvironment>,
-    /// Additional per-task repositories supplied by the server, such as a webhook's
-    /// originating repository. Empty for local runs.
-    pub additional_source_repos: Vec<SourceRepo>,
-    /// Server-owned repository preparation overrides for the agent's session.
-    pub repository_preparation_overrides: Vec<RepositoryPreparationOverride>,
-    /// Whether origin remotes should be removed from environment repositories.
-    pub remove_repository_origins: bool,
-    pub resolved_repositories: Option<Vec<environment::ResolvedRepository>>,
-    pub resolved_setup_commands: Option<Vec<String>>,
+    pub workspace: environment::WorkspaceConfiguration,
     pub factory_skill_dirs: Option<Vec<PathBuf>>,
     pub computer_use_config: Option<(bool, Option<LLMId>)>,
     /// Selected execution harness for this run.
@@ -728,14 +715,7 @@ pub struct AgentDriver {
     /// Cloud providers set up within this driver session.
     cloud_providers: Vec<Box<dyn cloud_provider::CloudProvider>>,
 
-    /// Resolved environment configuration.
-    environment: Option<AmbientAgentEnvironment>,
-    /// Additional per-task repositories supplied by the server.
-    additional_source_repos: Vec<SourceRepo>,
-    repository_preparation_overrides: Vec<RepositoryPreparationOverride>,
-    remove_repository_origins: bool,
-    resolved_repositories: Option<Vec<environment::ResolvedRepository>>,
-    resolved_setup_commands: Option<Vec<String>>,
+    workspace: Option<environment::WorkspaceConfiguration>,
     factory_skill_dirs: Option<Vec<PathBuf>>,
     computer_use_configured: bool,
 
@@ -1102,12 +1082,7 @@ impl AgentDriver {
             secrets,
             resume,
             cloud_providers,
-            environment,
-            additional_source_repos,
-            repository_preparation_overrides,
-            remove_repository_origins,
-            resolved_repositories,
-            resolved_setup_commands,
+            workspace,
             factory_skill_dirs,
             computer_use_config,
             selected_harness,
@@ -1210,8 +1185,8 @@ impl AgentDriver {
         let computer_use_configured = computer_use_config.is_some();
         if let Some((enabled, model_id)) = computer_use_config {
             let terminal_view_id = terminal_driver.as_ref(ctx).terminal_view().id();
-            BlocklistAIPermissions::handle(ctx).update(ctx, |permissions, _| {
-                permissions.set_execution_computer_use(terminal_view_id, enabled, model_id);
+            AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
+                profiles.set_session_computer_use(terminal_view_id, enabled, model_id, ctx);
             });
         }
 
@@ -1308,12 +1283,7 @@ impl AgentDriver {
             restored_conversation_id,
             resume_payload,
             cloud_providers,
-            environment,
-            additional_source_repos,
-            repository_preparation_overrides,
-            remove_repository_origins,
-            resolved_repositories,
-            resolved_setup_commands,
+            workspace: Some(workspace),
             factory_skill_dirs,
             computer_use_configured,
             snapshot_disabled: snapshot_disabled_value,
@@ -1367,12 +1337,7 @@ impl AgentDriver {
             restored_conversation_id: None,
             resume_payload: None,
             cloud_providers: Vec::new(),
-            environment: None,
-            additional_source_repos: Vec::new(),
-            repository_preparation_overrides: Vec::new(),
-            remove_repository_origins: false,
-            resolved_repositories: None,
-            resolved_setup_commands: None,
+            workspace: Some(environment::WorkspaceConfiguration::default()),
             factory_skill_dirs: None,
             computer_use_configured: false,
             snapshot_disabled: false,
@@ -1394,8 +1359,8 @@ impl AgentDriver {
     fn unregister_streamer_consumer(&self, ctx: &mut ModelContext<Self>) {
         if self.computer_use_configured {
             let terminal_view_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
-            BlocklistAIPermissions::handle(ctx).update(ctx, |permissions, _| {
-                permissions.clear_execution_computer_use(terminal_view_id);
+            AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
+                profiles.clear_session_computer_use(terminal_view_id, ctx);
             });
         }
         let terminal = self.terminal_driver.as_ref(ctx).terminal_view().clone();
@@ -2269,59 +2234,29 @@ impl AgentDriver {
                     .await?;
                 let mut environment_skill_repos = Vec::new();
 
-                let (
-                    environment_opt,
-                    additional_source_repos,
-                    repository_preparation_overrides,
-                    remove_repository_origins,
-                    resolved_repositories,
-                    resolved_setup_commands,
-                    session_shell_type,
-                ) = foreground
+                let (workspace, session_shell_type) = foreground
                     .spawn(|me, ctx| {
                         (
-                            me.environment.clone(),
-                            me.additional_source_repos.clone(),
-                            me.repository_preparation_overrides.clone(),
-                            me.remove_repository_origins,
-                            me.resolved_repositories.clone(),
-                            me.resolved_setup_commands.clone(),
+                            me.workspace.take(),
                             me.terminal_driver
                                 .as_ref(ctx)
                                 .active_session_shell_type(ctx),
                         )
                     })
                     .await?;
-                let mut setup_commands = resolved_setup_commands.unwrap_or_else(|| {
-                    environment_opt
-                        .as_ref()
-                        .map(|environment| environment.setup_commands.clone())
-                        .unwrap_or_default()
-                });
+                let mut workspace = workspace.ok_or(AgentDriverError::InvalidRuntimeState)?;
+                let source_repos = workspace.source_repos.clone();
                 // The Factory definition checkout is run-scoped: the dispatch decides
                 // whether this run gets one by attaching the clone variables,
                 // independent of which environment the run executes in.
                 environment::prepend_factory_definition_clone(
-                    &mut setup_commands,
+                    &mut workspace.setup_commands,
                     session_shell_type,
                 );
-                let source_repos = match &resolved_repositories {
-                    Some(repositories) => repositories
-                        .iter()
-                        .map(|repo| repo.source.clone())
-                        .collect(),
-                    None => environment::merge_repos_deduped(
-                        environment_opt
-                            .as_ref()
-                            .map(AmbientAgentEnvironment::effective_repos)
-                            .unwrap_or_default(),
-                        additional_source_repos,
-                    )?,
-                };
 
-                if environment_opt.is_some()
+                if workspace.has_environment
                     || !source_repos.is_empty()
-                    || !setup_commands.is_empty()
+                    || !workspace.setup_commands.is_empty()
                 {
                     log::info!("Loading environment...");
                     environment_skill_repos = source_repos.clone();
@@ -2355,30 +2290,15 @@ impl AgentDriver {
 
                     let harness = task.harness.harness();
                     let setup_events_for_environment = setup_events.clone();
-                    let source_repos_for_prepare = source_repos;
                     let prepare_outcome = foreground
                         .spawn(move |me, ctx| {
                             let working_dir = me.working_dir.clone();
                             me.terminal_driver.update(ctx, |_, ctx| {
-                                let repository_options = match resolved_repositories {
-                                    Some(repositories) => {
-                                        environment::RepositoryPreparationOptions::from_resolved(
-                                            repositories,
-                                            setup_commands,
-                                        )
-                                    }
-                                    None => environment::RepositoryPreparationOptions::new(
-                                        source_repos_for_prepare,
-                                        setup_commands,
-                                        repository_preparation_overrides,
-                                        remove_repository_origins,
-                                    ),
-                                };
                                 environment::prepare_environment(
                                     working_dir,
                                     false, /* is_sandbox */
                                     harness,
-                                    repository_options,
+                                    workspace,
                                     setup_events_for_environment,
                                     environment_snapshot_reporter.clone(),
                                     ctx,

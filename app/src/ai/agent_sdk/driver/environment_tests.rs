@@ -17,13 +17,13 @@ use warp_core::command::ExitCode;
 use super::{
     CloneFailureCredentialIdentity, CloneFailureIdentityDiagnostics, PrepareEnvironmentError,
     RepositoryCloneRequest, ResolvedRepository, SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER,
-    SetupCommandPhase, await_setup_phase, build_git_credential_query_command,
-    build_parallel_clone_command, build_remove_repository_origins_command,
-    build_resolved_head_command, checkout_command_for, clone_failure_identity_diagnostics,
-    environment_snapshot, is_valid_git_object_id, merge_repos_deduped, parse_resolved_head_sha,
-    parse_resolved_head_shas, read_failed_repo_names, repository_clone_requests,
-    resolved_repository_clone_requests, setup_command_failure, single_repo_name,
-    unique_clone_hosts, validate_repository_preparation_overrides,
+    SetupCommandPhase, WorkspaceConfiguration, await_setup_phase,
+    build_git_credential_query_command, build_parallel_clone_command,
+    build_remove_repository_origins_command, build_resolved_head_command, checkout_command_for,
+    clone_failure_identity_diagnostics, environment_snapshot, is_valid_git_object_id,
+    merge_repos_deduped, parse_resolved_head_sha, parse_resolved_head_shas, read_failed_repo_names,
+    repository_clone_requests, setup_command_failure, single_repo_name, unique_clone_hosts,
+    validate_repository_preparation_overrides,
 };
 use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
@@ -33,25 +33,30 @@ use crate::terminal::shell::ShellType;
 fn resolved_repositories_apply_origin_policy_per_checkout() {
     let first = SourceRepo::new(CodeForge::GitHub, "owner".into(), "first".into());
     let second = SourceRepo::new(CodeForge::GitLab, "owner".into(), "second".into());
-    let requests = resolved_repository_clone_requests(&[
-        ResolvedRepository {
-            source: first,
-            checkout: None,
-            clone_from: None,
-            preserve_origin: true,
-        },
-        ResolvedRepository {
-            source: second,
-            checkout: Some(RepositoryHeadRef::Branch("feature".into())),
-            clone_from: Some(SourceRepo::new(
-                CodeForge::GitLab,
-                "source".into(),
-                "second".into(),
-            )),
-            preserve_origin: false,
-        },
-    ])
+    let workspace = WorkspaceConfiguration::from_resolved(
+        vec![
+            ResolvedRepository {
+                source: first,
+                checkout: None,
+                clone_from: None,
+                preserve_origin: true,
+            },
+            ResolvedRepository {
+                source: second,
+                checkout: Some(RepositoryHeadRef::Branch("feature".into())),
+                clone_from: Some(SourceRepo::new(
+                    CodeForge::GitLab,
+                    "source".into(),
+                    "second".into(),
+                )),
+                preserve_origin: false,
+            },
+        ],
+        vec!["make setup".into()],
+    )
     .unwrap();
+    assert_eq!(workspace.setup_commands, vec!["make setup"]);
+    let requests = workspace.clone_requests;
     assert!(!requests[0].remove_origin);
     assert!(requests[1].remove_origin);
     assert!(requests[1].fetch_branch_only);
@@ -68,7 +73,7 @@ fn duplicate_resolved_repositories_fail_before_clone() {
             preserve_origin: true,
         })
         .collect::<Vec<_>>();
-    assert!(resolved_repository_clone_requests(&repositories).is_err());
+    assert!(WorkspaceConfiguration::from_resolved(repositories, Vec::new()).is_err());
 }
 
 fn command_output(stdout: &str, stderr: &str, status: CommandExitStatus) -> CommandOutput {

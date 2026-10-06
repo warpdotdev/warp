@@ -137,24 +137,6 @@ fn maybe_warn_team_api_key(ctx: &AppContext) {
     );
 }
 
-fn validated_driver_repositories_for_preparation(
-    options: &AgentDriverOptions,
-) -> Result<Vec<SourceRepo>, driver::environment::PrepareEnvironmentError> {
-    let source_repos = driver::environment::merge_repos_deduped(
-        options
-            .environment
-            .as_ref()
-            .map(AmbientAgentEnvironment::effective_repos)
-            .unwrap_or_default(),
-        options.additional_source_repos.clone(),
-    )?;
-    driver::environment::validate_repository_preparation_overrides(
-        &source_repos,
-        &options.repository_preparation_overrides,
-    )?;
-    Ok(source_repos)
-}
-
 fn bedrock_oidc_credentials_config(
     options: &AgentDriverOptions,
     role_arn: String,
@@ -669,12 +651,10 @@ fn build_execution_task_and_options(
         secrets: Default::default(),
         resume: None,
         cloud_providers: Vec::new(),
-        environment: None,
-        additional_source_repos: Vec::new(),
-        repository_preparation_overrides: Vec::new(),
-        remove_repository_origins: false,
-        resolved_repositories: Some(repositories),
-        resolved_setup_commands: Some(config.setup_commands),
+        workspace: driver::environment::WorkspaceConfiguration::from_resolved(
+            repositories,
+            config.setup_commands,
+        )?,
         factory_skill_dirs: Some(factory_skill_dirs),
         computer_use_config: (selected_harness == Harness::Oz).then(|| {
             (
@@ -1458,7 +1438,14 @@ impl AgentDriverRunner {
 
         // Build the AgentConfigSnapshot, Task, and AgentDriverOptions
         let prompt_clone = prompt.clone();
-        let (merged_config, mut task, mut driver_options, agent_driver_team_scope) = foreground
+        let (
+            merged_config,
+            mut task,
+            mut driver_options,
+            agent_driver_team_scope,
+            repository_preparation_overrides,
+            remove_repository_origins,
+        ) = foreground
             .spawn(move |_, ctx| -> anyhow::Result<_> {
                 let (merged_config, task) = build_merged_config_and_task(
                     &args,
@@ -1487,12 +1474,7 @@ impl AgentDriverRunner {
                     secrets: Default::default(),
                     resume: None,
                     cloud_providers: Vec::new(),
-                    environment: None,
-                    additional_source_repos: Vec::new(),
-                    repository_preparation_overrides: args.repository_preparation_overrides.clone(),
-                    remove_repository_origins: args.remove_repository_origins,
-                    resolved_repositories: None,
-                    resolved_setup_commands: None,
+                    workspace: driver::environment::WorkspaceConfiguration::default(),
                     factory_skill_dirs: None,
                     computer_use_config: None,
                     selected_harness: args.harness,
@@ -1514,7 +1496,14 @@ impl AgentDriverRunner {
                     mcp_startup_timeout: args.mcp_startup_timeout.map(|duration| duration.into()),
                 };
 
-                Ok((merged_config, task, driver_options, agent_driver_team_scope))
+                Ok((
+                    merged_config,
+                    task,
+                    driver_options,
+                    agent_driver_team_scope,
+                    args.repository_preparation_overrides,
+                    args.remove_repository_origins,
+                ))
             })
             .await?
             .map_err(AgentDriverError::ConfigBuildFailed)?;
@@ -1524,7 +1513,8 @@ impl AgentDriverRunner {
         // Handle secrets/attachments fetch (existing task) or task creation (new run).
         // The existing-task branch also surfaces the task's `conversation_id` (if any) so
         // the caller can wire up resume without a separate `--conversation` arg.
-        let task_conversation_id = if let Some(task_id_str) = task_id_str {
+        let (task_conversation_id, additional_source_repos) = if let Some(task_id_str) = task_id_str
+        {
             driver_options.team_scope = agent_driver_team_scope;
             setup_events
                 .record_result(
@@ -1561,16 +1551,21 @@ impl AgentDriverRunner {
                 &mut driver_options,
             )
             .await?;
-            None
+            (None, Vec::new())
         };
         // Resolve environment and cloud providers.
-        setup_events
+        let environment = setup_events
             .record_result(
                 SetupStep::EnvironmentResolution,
                 Self::resolve_environment(foreground, environment_id, &mut driver_options),
             )
             .await?;
-        validated_driver_repositories_for_preparation(&driver_options)?;
+        driver_options.workspace = driver::environment::WorkspaceConfiguration::from_legacy(
+            environment.as_ref(),
+            additional_source_repos,
+            repository_preparation_overrides,
+            remove_repository_origins,
+        )?;
 
         Ok((driver_options, task, task_conversation_id))
     }
@@ -1634,7 +1629,7 @@ impl AgentDriverRunner {
         driver_options: &mut AgentDriverOptions,
         task: &mut Task,
         fetch_metadata: bool,
-    ) -> Result<Option<String>, AgentDriverError> {
+    ) -> Result<(Option<String>, Vec<SourceRepo>), AgentDriverError> {
         let (task_secrets, server_api) = foreground
             .spawn({
                 let task_id_str = task_id_str.clone();
@@ -1757,7 +1752,7 @@ impl AgentDriverRunner {
             {
                 *dir = attachments_dir;
             }
-            return Ok(None);
+            return Ok((None, Vec::new()));
         }
         let (
             parent_run_id,
@@ -1827,7 +1822,6 @@ impl AgentDriverRunner {
         driver_options.task_id = parsed_task_id;
         driver_options.parent_run_id = parent_run_id;
         driver_options.experimental = experimental;
-        driver_options.additional_source_repos = additional_source_repos;
         driver_options.secrets = secrets;
         // The server-reported task scope is authoritative for the headless window this run
         // creates; it supersedes whatever scope was resolved from CLI args before the task was
@@ -1849,7 +1843,7 @@ impl AgentDriverRunner {
             *dir = attachments_dir;
         }
 
-        Ok(task_conversation_id)
+        Ok((task_conversation_id, additional_source_repos))
     }
 
     /// If we are starting this agent run from an existing conversation, load the conversation
@@ -1930,9 +1924,9 @@ impl AgentDriverRunner {
         foreground: &ModelSpawner<Self>,
         environment_id: Option<String>,
         driver_options: &mut AgentDriverOptions,
-    ) -> Result<(), AgentDriverError> {
+    ) -> Result<Option<AmbientAgentEnvironment>, AgentDriverError> {
         let Some(environment_id) = environment_id else {
-            return Ok(());
+            return Ok(None);
         };
 
         let environment = foreground
@@ -1970,8 +1964,7 @@ impl AgentDriverRunner {
                     .map_err(AgentDriverError::CloudProviderSetupFailed)?;
         }
 
-        driver_options.environment = Some(environment);
-        Ok(())
+        Ok(Some(environment))
     }
 
     /// Create the AgentDriver and start running the task.

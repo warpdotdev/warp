@@ -40,16 +40,14 @@
 //! helper script the skill invokes) pointing at the real, versioned skill
 //! tree.
 
-use std::collections::{HashMap, HashSet};
-use std::ffi::{OsStr, OsString};
+use std::collections::HashSet;
+use std::ffi::OsString;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use ai::skills::{
-    WARP_SKILL_DIRS_ENV, parse_skills_dirs_env, parse_skills_dirs_value, resolve_skills_dirs,
-};
+use ai::skills::{parse_skills_dirs_env, parse_skills_dirs_value, resolve_skills_dirs};
 use anyhow::{Context, Result};
 use warp_core::features::FeatureFlag;
 use warp_core::safe_warn;
@@ -69,18 +67,24 @@ const NON_SANDBOX_ALTERNATE_NAME_PREFIX: &str = "warp-";
 pub(super) fn warp_skill_source_dirs(working_dir: &Path) -> Vec<PathBuf> {
     resolve_skills_dirs(working_dir, parse_skills_dirs_env())
 }
-
-pub(super) fn publish_skills_for_harness_with_env(
-    skill_root: &Path,
+pub(super) fn source_dirs_from_env(
     working_dir: &Path,
-    is_sandbox: bool,
-    resolved_env_vars: &HashMap<OsString, OsString>,
-) -> Vec<PathBuf> {
-    let source_dirs = resolved_env_vars
-        .get(OsStr::new(WARP_SKILL_DIRS_ENV))
+    value: Option<&OsString>,
+) -> Option<Vec<PathBuf>> {
+    value
         .and_then(|value| value.to_str())
         .map(parse_skills_dirs_value)
         .map(|dirs| resolve_skills_dirs(working_dir, dirs))
+}
+
+pub(super) fn publish_skills_for_harness(
+    skill_root: &Path,
+    working_dir: &Path,
+    is_sandbox: bool,
+    configured_source_dirs: Option<&[PathBuf]>,
+) -> Vec<PathBuf> {
+    let source_dirs = configured_source_dirs
+        .map(ToOwned::to_owned)
         .unwrap_or_else(|| warp_skill_source_dirs(working_dir));
     publish_skills_for_harness_from_source_dirs(skill_root, source_dirs, is_sandbox)
 }

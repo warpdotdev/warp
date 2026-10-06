@@ -23,8 +23,9 @@ use warpui::{App, SingletonEntity, WindowId};
 use super::{
     AgentDriverRunner, CommandAuthentication, command_authentication, command_requires_auth,
     command_to_telemetry_event, reconcile_task_harness, resolve_agent_driver_team_scope,
-    selected_execution_skills, validated_driver_repositories_for_preparation,
+    selected_execution_skills,
 };
+use crate::ai::agent_sdk::driver::environment::WorkspaceConfiguration;
 use crate::ai::agent_sdk::driver::harness::HarnessKind;
 use crate::ai::agent_sdk::driver::{AgentDriverError, AgentDriverOptions, AgentRunPrompt, Task};
 use crate::ai::ambient_agents::task::{AmbientAgentTask, AmbientAgentTaskState, TaskScope};
@@ -107,7 +108,6 @@ fn parse_run_agent_args(args: &[&str]) -> RunAgentArgs {
 
 #[test]
 fn driver_validation_uses_live_repository_membership() {
-    let mut options = agent_driver_options();
     let mut environment =
         AmbientAgentEnvironment::new(String::new(), None, vec![], String::new(), vec![]);
     environment.source_repos = Some(vec![SourceRepo::new(
@@ -115,13 +115,12 @@ fn driver_validation_uses_live_repository_membership() {
         "warpdotdev".to_string(),
         "warp".to_string(),
     )]);
-    options.additional_source_repos = vec![SourceRepo::new(
+    let additional_source_repos = vec![SourceRepo::new(
         CodeForge::GitHub,
         "warpdotdev".to_string(),
         "added-after-dispatch".to_string(),
     )];
-    options.environment = Some(environment);
-    options.repository_preparation_overrides = vec![RepositoryPreparationOverride {
+    let repository_preparation_overrides = vec![RepositoryPreparationOverride {
         code_forge: RepositoryForge::GitHub,
         repo_owner: "WarpDotDev".to_string(),
         repo_name: "Warp".to_string(),
@@ -134,10 +133,16 @@ fn driver_validation_uses_live_repository_membership() {
         preserve_origin: true,
     }];
 
-    let repositories = validated_driver_repositories_for_preparation(&options).unwrap();
+    let workspace = WorkspaceConfiguration::from_legacy(
+        Some(&environment),
+        additional_source_repos,
+        repository_preparation_overrides,
+        false,
+    )
+    .unwrap();
 
     assert_eq!(
-        repositories,
+        workspace.source_repos,
         vec![
             SourceRepo::new(
                 CodeForge::GitHub,
@@ -202,12 +207,7 @@ pub(crate) fn agent_driver_options() -> AgentDriverOptions {
         secrets: Default::default(),
         resume: None,
         cloud_providers: vec![],
-        environment: None,
-        additional_source_repos: vec![],
-        repository_preparation_overrides: vec![],
-        remove_repository_origins: false,
-        resolved_repositories: None,
-        resolved_setup_commands: None,
+        workspace: WorkspaceConfiguration::default(),
         factory_skill_dirs: None,
         computer_use_config: None,
         selected_harness: Harness::Oz,

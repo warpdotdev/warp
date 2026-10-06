@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -19,18 +20,38 @@ fn write_skill(dir: &Path, name: &str) -> PathBuf {
 }
 
 #[test]
+fn empty_configured_skill_dirs_suppress_ambient_sources() {
+    let workspace = TempDir::new().unwrap();
+    let source_dirs = source_dirs_from_env(workspace.path(), Some(&OsString::from("")));
+    assert_eq!(source_dirs, Some(Vec::new()));
+    assert_eq!(source_dirs_from_env(workspace.path(), None), None);
+
+    let published_root = workspace.path().join("harness/skills");
+    assert!(
+        publish_skills_for_harness(
+            &published_root,
+            workspace.path(),
+            false,
+            source_dirs.as_deref(),
+        )
+        .is_empty()
+    );
+    assert!(!published_root.exists());
+}
+
+#[test]
 fn resolved_skill_dirs_are_published_relative_to_workspace_root() {
     let workspace = TempDir::new().unwrap();
     let source_dir = workspace.path().join("repo/skills");
     let skill = write_skill(&source_dir, "factory-skill");
     let published_root = workspace.path().join("harness/skills");
-    let env = HashMap::from([(
-        OsString::from(WARP_SKILL_DIRS_ENV),
-        OsString::from("repo/skills"),
-    )]);
-
-    let published =
-        publish_skills_for_harness_with_env(&published_root, workspace.path(), false, &env);
+    let source_dirs = source_dirs_from_env(workspace.path(), Some(&OsString::from("repo/skills")));
+    let published = publish_skills_for_harness(
+        &published_root,
+        workspace.path(),
+        false,
+        source_dirs.as_deref(),
+    );
     let link = published_root.join("factory-skill");
     assert!(published.contains(&link));
     assert_eq!(fs::read_link(&link).unwrap(), skill);

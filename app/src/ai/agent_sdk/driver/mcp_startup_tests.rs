@@ -24,6 +24,7 @@ use warpui::r#async::{FutureExt as _, Timer};
 use warpui::{App, ModelContext, ModelHandle, SingletonEntity as _};
 
 use super::{AgentDriver, AgentDriverError, MANAGED_MCP_RESOLVE_MAX_ATTEMPTS};
+use crate::ai::agent_sdk::driver::environment::WorkspaceConfiguration;
 use crate::ai::agent_sdk::driver::harness::HarnessKind;
 use crate::ai::agent_sdk::driver::terminal::TerminalDriver;
 use crate::ai::agent_sdk::driver::{AgentRunPrompt, Task};
@@ -1034,13 +1035,21 @@ fn configured_and_profile_mcp_servers_wait_for_environment_setup() {
             let terminal_driver =
                 TerminalDriver::create_from_existing_view(driver_terminal_view, ctx);
             let mut driver = AgentDriver::new_for_test(std::env::temp_dir(), terminal_driver, ctx);
-            driver.environment = Some(AmbientAgentEnvironment::new(
-                "test".to_string(),
-                None,
-                vec![],
-                String::new(),
-                vec!["environment-setup-is-still-running".to_string()],
-            ));
+            driver.workspace = Some(
+                WorkspaceConfiguration::from_legacy(
+                    Some(&AmbientAgentEnvironment::new(
+                        "test".to_string(),
+                        None,
+                        vec![],
+                        String::new(),
+                        vec!["environment-setup-is-still-running".to_string()],
+                    )),
+                    Vec::new(),
+                    Vec::new(),
+                    false,
+                )
+                .unwrap(),
+            );
             driver.mcp_startup_timeout = Duration::from_secs(5);
             driver
         });
