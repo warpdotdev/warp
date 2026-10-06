@@ -1,7 +1,7 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::anyhow;
 use async_compat::Compat;
@@ -10,26 +10,33 @@ use build_cache::{RepoCacheKey, RepoIdentity};
 use cloud_object_models::{CodeForge, SourceRepo};
 use command::Stdio;
 use command::r#async::Command;
-use futures::{StreamExt as _, stream};
+use futures::{AsyncWriteExt as _, StreamExt as _, stream};
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncReadExt as _};
 use warp_cli::agent::{RepositoryForge, RepositoryHeadRef};
-use warp_cli::environment_checkout::{
-    CheckoutBatch, CheckoutFailure, CheckoutFailureKind, CheckoutFailureReport, CheckoutRequest,
-    EnvironmentCheckoutArgs,
-};
+use warp_cli::environment_checkout::EnvironmentCheckoutArgs;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::cache_setup;
+use super::environment_checkout_protocol::{
+    CheckoutBatch, CheckoutFailure, CheckoutFailureKind, CheckoutFailureReport, CheckoutRequest,
+    CloneFailureCredentialIdentity, CloneFailureIdentityDiagnostics, parse_resolved_head_sha,
+    sanitize_git_author_name, sanitize_git_credential_username,
+};
 use super::failure_output;
 
 const CHECKOUT_WORKERS: usize = 4;
 const CAPTURE_BYTES: usize = 64 * 1024;
 const OUTPUT_TRUNCATION_MARKER: &str = "\n… git output truncated …\n";
 const MIRRORS_DIRECTORY: &str = "git-mirrors";
+const IDENTITY_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
+const HEAD_CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(crate) fn run(args: &EnvironmentCheckoutArgs) -> anyhow::Result<()> {
-    futures::executor::block_on(Compat::new(run_async(args)))
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(run_async(args))
 }
 
 async fn remove_origin(target: &Path, git: &mut Git) -> Result<(), ()> {
@@ -61,7 +68,7 @@ async fn run_async(args: &EnvironmentCheckoutArgs) -> anyhow::Result<()> {
         &batch,
         mirror_root.as_deref(),
         args.remove_origins_only,
-        &mut io::stdout(),
+        log::logger(),
     )
     .await?;
     let failures = results
@@ -76,14 +83,131 @@ async fn run_async(args: &EnvironmentCheckoutArgs) -> anyhow::Result<()> {
         })
         .collect::<Vec<_>>();
     let failed = !failures.is_empty();
-    let bytes = serde_json::to_vec(&CheckoutFailureReport { failures })?;
+    let identity_diagnostics = if failed && !args.remove_origins_only {
+        Some(collect_failure_identity(&batch, &failures).await)
+    } else {
+        None
+    };
+    let bytes = serde_json::to_vec(&CheckoutFailureReport {
+        failures,
+        identity_diagnostics,
+    })?;
     fs::write(&args.failure_report, bytes)
         .await
         .map_err(|_| anyhow!("could not write environment checkout failure report"))?;
     if failed {
         Err(anyhow!("structured repository checkout failed"))
     } else {
+        if !args.remove_origins_only
+            && let Some(path) = &args.resolved_heads_report
+        {
+            let heads = capture_resolved_heads(&batch).await;
+            if fs::write(path, serde_json::to_vec(&heads)?).await.is_err() {
+                log::warn!("Could not write structured repository resolved HEAD report");
+            }
+        }
         Ok(())
+    }
+}
+async fn capture_resolved_heads(batch: &CheckoutBatch) -> Vec<Option<String>> {
+    let capture = async {
+        let mut heads = Vec::new();
+        for (index, request) in batch.repositories.iter().enumerate() {
+            let mut git = Git::default();
+            let head = git
+                .run(
+                    &batch.working_dir.join(&request.checkout_name),
+                    &["rev-parse", "--verify", "HEAD"],
+                )
+                .await
+                .ok()
+                .and_then(|head| parse_resolved_head_sha(&head));
+            if let Some(head) = &head {
+                log::info!("Repository {}: resolved HEAD {head}", index + 1);
+            }
+            heads.push(head);
+        }
+        heads
+    };
+    tokio::time::timeout(HEAD_CAPTURE_TIMEOUT, capture)
+        .await
+        .unwrap_or_else(|_| {
+            log::warn!("Timed out capturing structured repository resolved HEADs");
+            vec![None; batch.repositories.len()]
+        })
+}
+
+async fn identity_query(cwd: &Path, args: &[&str], input: Option<&str>) -> Option<String> {
+    tokio::time::timeout(IDENTITY_QUERY_TIMEOUT, async {
+        let mut child = Command::new("git")
+            .current_dir(cwd)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GCM_INTERACTIVE", "never")
+            .args(args)
+            .stdin(if input.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .ok()?;
+        if let Some(input) = input {
+            child.stdin.take()?.write_all(input.as_bytes()).await.ok()?;
+        }
+        let stdout = child.stdout.take()?;
+        let (output, status) = tokio::join!(capture(Compat::new(stdout)), child.status());
+        let (stdout, truncated) = output.ok()?;
+        (status.ok()?.success() && !truncated).then_some(stdout)
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+fn git_credential_username(stdout: &str) -> Option<String> {
+    let mut usernames = stdout
+        .lines()
+        .filter_map(|line| line.strip_prefix("username="));
+    let username = usernames.next()?;
+    if usernames.next().is_some() {
+        return None;
+    }
+    sanitize_git_credential_username(username)
+}
+
+async fn collect_failure_identity(
+    batch: &CheckoutBatch,
+    failures: &[CheckoutFailure],
+) -> CloneFailureIdentityDiagnostics {
+    let mut seen = HashSet::new();
+    let hosts = failures
+        .iter()
+        .map(|failure| {
+            source_repo(&batch.repositories[failure.request_index])
+                .code_forge
+                .unwrap_or_default()
+                .host()
+        })
+        .filter(|host| seen.insert(*host))
+        .collect::<Vec<_>>();
+    let credentials = futures::future::join_all(hosts.into_iter().map(|host| async move {
+        let input = format!("protocol=https\nhost={host}\n\n");
+        let username = identity_query(&batch.working_dir, &["credential", "fill"], Some(&input))
+            .await
+            .and_then(|stdout| git_credential_username(&stdout));
+        CloneFailureCredentialIdentity {
+            host: host.to_owned(),
+            username,
+        }
+    }));
+    let author = identity_query(&batch.working_dir, &["config", "--get", "user.name"], None);
+    let (author, credentials) = tokio::join!(author, credentials);
+    CloneFailureIdentityDiagnostics {
+        author: author.and_then(|value| sanitize_git_author_name(&value)),
+        credentials,
     }
 }
 
@@ -147,7 +271,7 @@ async fn checkout_batch(
     batch: &CheckoutBatch,
     mirror_root: Option<&Path>,
     remove_origins_only: bool,
-    output: &mut impl io::Write,
+    logger: &dyn log::Log,
 ) -> anyhow::Result<Vec<CheckoutResult>> {
     batch.validate().map_err(|error| anyhow!(error))?;
     let mut groups = HashMap::<_, Vec<_>>::new();
@@ -157,32 +281,26 @@ async fn checkout_batch(
             .or_default()
             .push((index, request));
     }
-    let progress = RefCell::new(output);
     let mut results = vec![None; batch.repositories.len()];
-    let mut completed = stream::iter(groups.into_values().map(|requests| {
-        let progress = &progress;
-        async move {
-            let mut results = Vec::new();
-            for (index, request) in requests {
-                let emit = |category: &str| {
-                    let mut output = progress.borrow_mut();
-                    let _ = writeln!(output, "Repository {}: {category}", index + 1);
-                    let _ = output.flush();
-                };
-                emit("started");
-                let mut git = Git::default();
-                let result = if remove_origins_only {
-                    remove_origin(&batch.working_dir.join(&request.checkout_name), &mut git)
-                        .await
-                        .map_err(|_| CheckoutFailureKind::RemoveOrigin)
-                } else {
-                    checkout(request, &batch.working_dir, mirror_root, &mut git, &emit).await
-                };
-                emit(if result.is_ok() { "finished" } else { "failed" });
-                results.push((index, result.map_err(|kind| (kind, git.diagnostics))));
-            }
-            results
+    let mut completed = stream::iter(groups.into_values().map(|requests| async move {
+        let mut results = Vec::new();
+        for (index, request) in requests {
+            let emit = |category: &str| {
+                log::info!(logger: logger, "Repository {}: {category}", index + 1);
+            };
+            emit("started");
+            let mut git = Git::default();
+            let result = if remove_origins_only {
+                remove_origin(&batch.working_dir.join(&request.checkout_name), &mut git)
+                    .await
+                    .map_err(|_| CheckoutFailureKind::RemoveOrigin)
+            } else {
+                checkout(request, &batch.working_dir, mirror_root, &mut git, &emit).await
+            };
+            emit(if result.is_ok() { "finished" } else { "failed" });
+            results.push((index, result.map_err(|kind| (kind, git.diagnostics))));
         }
+        results
     }))
     .buffer_unordered(CHECKOUT_WORKERS);
     while let Some(group) = completed.next().await {
@@ -196,12 +314,10 @@ async fn checkout_batch(
         .collect::<Vec<_>>();
     for (index, result) in results.iter().enumerate() {
         if let Err((_, diagnostics)) = result {
-            let mut output = progress.borrow_mut();
-            writeln!(
-                output,
+            log::error!(logger: logger,
                 "Repository {} diagnostics:\n{diagnostics}",
                 index + 1
-            )?;
+            );
         }
     }
     Ok(results)
@@ -222,6 +338,7 @@ impl Git {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .kill_on_drop(true)
             .spawn();
         let Ok(mut child) = child else {
             self.record("could not start Git");
@@ -234,11 +351,15 @@ impl Git {
             capture(Compat::new(stderr)),
             child.status(),
         );
-        let (Ok((stdout, truncated)), Ok((stderr, _)), Ok(status)) = (stdout, stderr, status)
+        let (Ok((stdout, truncated)), Ok((stderr, stderr_truncated)), Ok(status)) =
+            (stdout, stderr, status)
         else {
             self.record("could not read Git result");
             return Err(());
         };
+        if stderr_truncated {
+            self.record(OUTPUT_TRUNCATION_MARKER);
+        }
         self.record(&stderr);
         if status.success() && !truncated {
             Ok(stdout)
@@ -256,17 +377,36 @@ impl Git {
 }
 
 async fn capture(mut reader: impl AsyncRead + Unpin) -> io::Result<(String, bool)> {
-    let mut bytes = Vec::new();
-    (&mut reader)
-        .take(CAPTURE_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .await?;
-    let truncated = bytes.len() > CAPTURE_BYTES;
-    tokio::io::copy(&mut reader, &mut tokio::io::sink()).await?;
-    if truncated {
-        bytes.truncate(bytes.iter().rposition(|byte| *byte == b'\n').unwrap_or(0));
+    let mut bytes = VecDeque::new();
+    let mut buffer = [0; 8192];
+    let mut truncated = false;
+    let mut starts_on_line = true;
+    loop {
+        let count = reader.read(&mut buffer).await?;
+        if count == 0 {
+            break;
+        }
+        bytes.extend(&buffer[..count]);
+        if bytes.len() > CAPTURE_BYTES {
+            let excess = bytes.len() - CAPTURE_BYTES;
+            starts_on_line = bytes[excess - 1] == b'\n';
+            bytes.drain(..excess);
+            truncated = true;
+        }
     }
-    Ok((String::from_utf8_lossy(&bytes).into_owned(), truncated))
+    let bytes = bytes.make_contiguous();
+    let start = if truncated && !starts_on_line {
+        bytes
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(bytes.len(), |index| index + 1)
+    } else {
+        0
+    };
+    Ok((
+        String::from_utf8_lossy(&bytes[start..]).into_owned(),
+        truncated,
+    ))
 }
 
 async fn checkout(
@@ -291,7 +431,7 @@ async fn checkout(
     };
     let url = source_repo(request).https_clone_url();
     if existing {
-        return materialize(request, &url, &target, true, None, git).await;
+        return checkout_existing(request, &url, &target, git).await;
     }
     if let Some(root) = mirror_root {
         let mirror = root.join(mirror_key(request).as_str());
@@ -300,7 +440,7 @@ async fn checkout(
             refresh_mirror(&mirror, &url, git, emit).await?;
             fs::create_dir(&target).await.map_err(|_| ())?;
             created_target = true;
-            materialize(request, &url, &target, false, Some(&mirror), git)
+            checkout_cached(request, &url, &target, &mirror, git)
                 .await
                 .map_err(|_| ())
         }
@@ -320,7 +460,7 @@ async fn checkout(
         git.record("could not create checkout target");
         CheckoutFailureKind::Clone
     })?;
-    materialize(request, &url, &target, false, None, git).await
+    checkout_network(request, &url, &target, git).await
 }
 
 async fn refresh_mirror(
@@ -337,25 +477,7 @@ async fn refresh_mirror(
         "[core]\n\trepositoryformatversion = 0\n\tbare = true\n\
          [remote \"origin\"]\n\turl = {url}\n\tfetch = +refs/heads/*:refs/heads/*\n"
     );
-    let inspected = mirror.to_owned();
-    let full_tree = tokio::task::spawn_blocking(move || {
-        walkdir::WalkDir::new(inspected)
-            .follow_links(false)
-            .into_iter()
-            .all(|entry| {
-                entry.is_ok_and(|entry| {
-                    !entry.file_type().is_symlink()
-                        && entry
-                            .path()
-                            .extension()
-                            .is_none_or(|extension| extension != "promisor")
-                })
-            })
-    })
-    .await
-    .map_err(|_| ())?;
     let mut valid = existing.as_ref().is_ok_and(|metadata| metadata.is_dir())
-        && full_tree
         && git
             .run(
                 parent,
@@ -447,72 +569,132 @@ async fn remote_default_branch(target: &Path, git: &mut Git) -> Result<String, (
     Ok(branch.to_owned())
 }
 
-async fn materialize(
+async fn checkout_existing(
     request: &CheckoutRequest,
     url: &str,
     target: &Path,
-    existing: bool,
-    mirror: Option<&Path>,
     git: &mut Git,
 ) -> Result<(), CheckoutFailureKind> {
-    let clone_error = CheckoutFailureKind::Clone;
-    let checkout_error = CheckoutFailureKind::Checkout;
-    if !existing {
-        if mirror.is_none()
-            && (request.fetch_branch_only
-                || matches!(request.head, Some(RepositoryHeadRef::CommitSha(_))))
+    if request.fetch_branch_only {
+        let action = if git
+            .run(target, &["remote", "get-url", "origin"])
+            .await
+            .is_ok()
         {
-            git.run(target, &["init", "--quiet"])
-                .await
-                .map_err(|_| clone_error)?;
-            git.run(target, &["remote", "add", "origin", url])
-                .await
-                .map_err(|_| clone_error)?;
+            "set-url"
         } else {
-            let target_path = target.to_str().ok_or(clone_error)?;
-            let mut args = vec!["clone"];
-            if request.head.is_some() {
-                args.push("--no-checkout");
-            }
-            let reference;
-            if let Some(mirror) = mirror {
-                reference = mirror.to_str().ok_or(clone_error)?;
-                args.extend(["--reference", reference, "--dissociate"]);
-            } else {
-                args.push("--filter=blob:none");
-            }
-            if request.fetch_branch_only {
-                args.extend([
-                    "--no-tags",
-                    "--single-branch",
-                    "--branch",
-                    request.head.as_ref().ok_or(checkout_error)?.value(),
-                ]);
-            }
-            args.extend(["--", url, target_path]);
-            git.run(target.parent().ok_or(clone_error)?, &args)
-                .await
-                .map_err(|_| clone_error)?;
-        }
+            "add"
+        };
+        git.run(target, &["remote", action, "origin", url])
+            .await
+            .map_err(|_| CheckoutFailureKind::Checkout)?;
     }
+    checkout_requested_head(request, target, true, git)
+        .await
+        .map(|_| ())
+}
+
+async fn checkout_network(
+    request: &CheckoutRequest,
+    url: &str,
+    target: &Path,
+    git: &mut Git,
+) -> Result<(), CheckoutFailureKind> {
+    if request.fetch_branch_only || matches!(request.head, Some(RepositoryHeadRef::CommitSha(_))) {
+        git.run(target, &["init", "--quiet"])
+            .await
+            .map_err(|_| CheckoutFailureKind::Clone)?;
+        git.run(target, &["remote", "add", "origin", url])
+            .await
+            .map_err(|_| CheckoutFailureKind::Clone)?;
+    } else {
+        clone_repository(request, url, target, &["--filter=blob:none"], git).await?;
+    }
+    checkout_requested_head(request, target, true, git)
+        .await
+        .map(|_| ())
+}
+
+async fn checkout_cached(
+    request: &CheckoutRequest,
+    url: &str,
+    target: &Path,
+    mirror: &Path,
+    git: &mut Git,
+) -> Result<(), CheckoutFailureKind> {
+    let reference = mirror.to_str().ok_or(CheckoutFailureKind::Clone)?;
+    clone_repository(
+        request,
+        url,
+        target,
+        &["--reference", reference, "--dissociate"],
+        git,
+    )
+    .await?;
+    if let Some(default) = checkout_requested_head(request, target, false, git).await?
+        && let Some(head) = &request.head
+        && head.value() != default
+    {
+        git.run(
+            target,
+            &[
+                "update-ref",
+                "-d",
+                &format!("refs/remotes/origin/{}", head.value()),
+            ],
+        )
+        .await
+        .map_err(|_| CheckoutFailureKind::Checkout)?;
+    }
+    Ok(())
+}
+
+async fn clone_repository(
+    request: &CheckoutRequest,
+    url: &str,
+    target: &Path,
+    options: &[&str],
+    git: &mut Git,
+) -> Result<(), CheckoutFailureKind> {
+    let mut args = vec!["clone"];
+    if request.head.is_some() {
+        args.push("--no-checkout");
+    }
+    args.extend(options);
+    if request.fetch_branch_only {
+        args.extend([
+            "--no-tags",
+            "--single-branch",
+            "--branch",
+            request
+                .head
+                .as_ref()
+                .ok_or(CheckoutFailureKind::Checkout)?
+                .value(),
+        ]);
+    }
+    args.extend([
+        "--",
+        url,
+        target.to_str().ok_or(CheckoutFailureKind::Clone)?,
+    ]);
+    git.run(target.parent().ok_or(CheckoutFailureKind::Clone)?, &args)
+        .await
+        .map_err(|_| CheckoutFailureKind::Clone)?;
+    Ok(())
+}
+
+async fn checkout_requested_head(
+    request: &CheckoutRequest,
+    target: &Path,
+    blobless: bool,
+    git: &mut Git,
+) -> Result<Option<String>, CheckoutFailureKind> {
+    let checkout_error = CheckoutFailureKind::Checkout;
     let Some(head) = &request.head else {
-        return Ok(());
+        return Ok(None);
     };
     if request.fetch_branch_only {
-        if existing {
-            let action = if git
-                .run(target, &["remote", "get-url", "origin"])
-                .await
-                .is_ok()
-            {
-                "set-url"
-            } else {
-                "add"
-            };
-            git.run(target, &["remote", action, "origin", url])
-                .await
-                .map_err(|_| checkout_error)?;
-        }
         let default = remote_default_branch(target, git)
             .await
             .map_err(|_| checkout_error)?;
@@ -524,7 +706,7 @@ async fn materialize(
         .await
         .map_err(|_| checkout_error)?;
         let mut fetch = vec!["fetch", "--no-tags"];
-        if mirror.is_none() {
+        if blobless {
             fetch.push("--filter=blob:none");
         }
         fetch.push("origin");
@@ -542,21 +724,10 @@ async fn materialize(
         )
         .await
         .map_err(|_| checkout_error)?;
-        if !existing && mirror.is_some() && head.value() != default {
-            git.run(
-                target,
-                &[
-                    "update-ref",
-                    "-d",
-                    &format!("refs/remotes/origin/{}", head.value()),
-                ],
-            )
-            .await
-            .map_err(|_| checkout_error)?;
-        }
+        Ok(Some(default))
     } else {
         let mut fetch = vec!["fetch"];
-        if mirror.is_none() {
+        if blobless {
             fetch.push("--filter=blob:none");
         }
         fetch.extend(["origin", head.value()]);
@@ -564,8 +735,8 @@ async fn materialize(
         git.run(target, &["checkout", "--detach", "FETCH_HEAD"])
             .await
             .map_err(|_| checkout_error)?;
+        Ok(None)
     }
-    Ok(())
 }
 
 #[cfg(test)]

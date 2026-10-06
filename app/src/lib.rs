@@ -805,6 +805,11 @@ pub fn run() -> Result<()> {
             warp_cli::Command::CommandLine(cmd) => {
                 #[cfg(not(target_family = "wasm"))]
                 if let CliCommand::EnvironmentCheckout(args) = cmd.as_ref() {
+                    warp_logging::init(warp_logging::LogConfig {
+                        frontend: warp_logging::LogFrontend::Cli,
+                        log_destination: Some(warp_logging::LogDestination::Stderr),
+                        ..Default::default()
+                    })?;
                     return ai::agent_sdk::run_environment_checkout(args);
                 }
                 let (is_sandboxed, computer_use_override) = match cmd.as_ref() {

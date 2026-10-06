@@ -10,30 +10,20 @@ use futures::poll;
 use warp_cli::agent::{
     RepositoryForge, RepositoryHeadRef, RepositoryIdentity, RepositoryPreparationOverride,
 };
-use warp_completer::completer::{CommandExitStatus, CommandOutput};
 use warp_core::command::ExitCode;
 
+use super::super::environment_checkout_protocol::is_valid_git_object_id;
 use super::{
-    CloneFailureCredentialIdentity, CloneFailureIdentityDiagnostics, PrepareEnvironmentError,
-    RepositoryCloneRequest, SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER, SetupCommandPhase,
-    await_setup_phase, build_checkout_helper_command, build_git_credential_query_command,
-    build_resolved_head_command, clone_failure_identity_diagnostics, environment_snapshot,
-    is_valid_git_object_id, merge_repos_deduped, parse_resolved_head_sha, parse_resolved_head_shas,
-    read_checkout_failures, repository_clone_requests, setup_command_failure, single_repo_name,
-    unique_clone_hosts, validate_repository_preparation_overrides,
+    CloneFailureIdentityDiagnostics, PrepareEnvironmentError, RepositoryCloneRequest,
+    SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER, SetupCommandPhase, await_setup_phase,
+    build_checkout_helper_command, environment_snapshot, merge_repos_deduped,
+    parse_resolved_head_sha, read_checkout_failures, read_resolved_heads,
+    repository_clone_requests, setup_command_failure, single_repo_name,
+    validate_repository_preparation_overrides,
 };
 use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::terminal::shell::ShellType;
-
-fn command_output(stdout: &str, stderr: &str, status: CommandExitStatus) -> CommandOutput {
-    CommandOutput {
-        stdout: stdout.as_bytes().to_vec(),
-        stderr: stderr.as_bytes().to_vec(),
-        status,
-        exit_code: None,
-    }
-}
 
 #[test]
 fn setup_timeout_covers_command_start_and_exit_without_resetting_deadline() {
@@ -72,6 +62,23 @@ fn setup_timeout_covers_command_start_and_exit_without_resetting_deadline() {
             }
             assert!(exit_tx.is_canceled());
         });
+    }
+}
+#[test]
+fn resolved_head_reports_preserve_positions_and_are_removed_on_every_read() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("heads.json");
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+    std::fs::write(&path, format!(r#"["{sha}",null,"invalid"]"#)).unwrap();
+    assert_eq!(
+        read_resolved_heads(&path, 3),
+        vec![Some(sha.to_owned()), None, None]
+    );
+    assert!(!path.exists());
+    for bytes in ["{", "[]"] {
+        std::fs::write(&path, bytes).unwrap();
+        assert_eq!(read_resolved_heads(&path, 3), vec![None; 3]);
+        assert!(!path.exists());
     }
 }
 
@@ -306,23 +313,6 @@ fn parse_resolved_head_sha_accepts_trimmed_valid_object_ids() {
     );
     assert_eq!(parse_resolved_head_sha("not-a-sha"), None);
     assert_eq!(parse_resolved_head_sha(""), None);
-}
-
-#[test]
-fn parse_resolved_head_shas_keeps_one_line_per_repo_including_failures() {
-    let first = "0123456789abcdef0123456789abcdef01234567";
-    let second = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-    let stdout = format!("{first}\n\n{second}\n");
-
-    assert_eq!(
-        parse_resolved_head_shas(stdout.as_bytes(), 3),
-        vec![Some(first.to_string()), None, Some(second.to_string())]
-    );
-    assert_eq!(
-        parse_resolved_head_shas(first.as_bytes(), 2),
-        vec![Some(first.to_string()), None]
-    );
-    assert_eq!(parse_resolved_head_shas(b"\xff", 1), vec![None]);
 }
 
 #[test]
@@ -873,33 +863,6 @@ fn repository_head_override_validation_accepts_partial_multi_repo_sets() {
 }
 
 #[test]
-fn clone_failure_identity_hosts_are_deduplicated_in_request_order() {
-    let requests = [
-        clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp"), None),
-        clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp-server"), None),
-        clone_request(repo(CodeForge::GitLab, "platform", "api"), None),
-    ];
-
-    assert_eq!(
-        unique_clone_hosts(&requests),
-        vec!["github.com".to_string(), "gitlab.com".to_string()]
-    );
-}
-
-#[test]
-fn credential_query_is_noninteractive_and_contains_only_the_requested_host() {
-    let command = build_git_credential_query_command("github.com", ShellType::Bash);
-
-    assert!(command.contains("GIT_TERMINAL_PROMPT=0"));
-    assert!(command.contains("GCM_INTERACTIVE=never"));
-    assert!(command.contains("git credential fill"));
-    assert!(command.contains("protocol=https"));
-    assert!(command.contains("host=github.com"));
-    assert!(!command.contains("https://"));
-    assert!(!command.contains("password"));
-}
-
-#[test]
 fn checkout_helper_quotes_paths_without_embedding_repository_payloads() {
     for shell in [
         ShellType::Bash,
@@ -911,6 +874,7 @@ fn checkout_helper_quotes_paths_without_embedding_repository_payloads() {
             Path::new("/Applications/Warp's App/Contents/MacOS/warp"),
             Path::new("/private/a path/requests.json"),
             Path::new("/private/a path/failures.json"),
+            Some(Path::new("/private/a path/heads.json")),
             true,
             shell,
         );
@@ -932,8 +896,8 @@ fn failure_reports_are_validated_and_removed_on_every_read() {
     )
     .unwrap();
     let failures = read_checkout_failures(&path, 2).unwrap();
-    assert_eq!(failures.len(), 1);
-    assert_eq!(failures[0].request_index, 1);
+    assert_eq!(failures.failures.len(), 1);
+    assert_eq!(failures.failures[0].request_index, 1);
     assert!(!path.exists());
     for bytes in [
         "{",
@@ -943,211 +907,6 @@ fn failure_reports_are_validated_and_removed_on_every_read() {
         std::fs::write(&path, bytes).unwrap();
         assert!(read_checkout_failures(&path, 2).is_none());
         assert!(!path.exists());
-    }
-}
-
-#[test]
-fn powershell_post_checkout_commands_do_not_depend_on_posix_shells() {
-    let requests = repository_clone_requests(
-        &[
-            repo(CodeForge::GitHub, "fixtures", "one"),
-            repo(CodeForge::GitHub, "fixtures", "two"),
-        ],
-        &[],
-        true,
-    )
-    .unwrap();
-    let working_dir = Path::new("C:\\working directory");
-    for command in [
-        build_resolved_head_command(&requests, working_dir, ShellType::PowerShell),
-        build_git_credential_query_command("github.com", ShellType::PowerShell),
-    ] {
-        assert!(!command.contains("sh -c") && !command.contains("/dev/null"));
-        assert!(command.contains("git"));
-    }
-}
-
-#[cfg(feature = "local_tty")]
-#[test]
-fn snapshot_preserves_shell_output_and_missing_repository_status() {
-    use crate::terminal::model::session::command_executor::{
-        ExecuteCommandOptions, LocalCommandExecutor,
-    };
-
-    let directory = tempfile::tempdir().unwrap();
-    let working_dir = directory.path().join("quoted's working directory");
-    fs::create_dir(&working_dir).unwrap();
-    let requests = repository_clone_requests(
-        &[
-            repo(CodeForge::GitHub, "fixtures", "one"),
-            repo(CodeForge::GitHub, "fixtures", "two"),
-        ],
-        &[],
-        true,
-    )
-    .unwrap();
-    let target = working_dir.join("one");
-    fs::create_dir(&target).unwrap();
-    for args in [
-        vec!["init", "--quiet"],
-        vec![
-            "-c",
-            "user.name=Fixture",
-            "-c",
-            "user.email=fixture@example.com",
-            "commit",
-            "--allow-empty",
-            "-m",
-            "initial",
-        ],
-        vec![
-            "remote",
-            "add",
-            "origin",
-            "https://github.com/fixtures/one.git",
-        ],
-    ] {
-        assert!(
-            Command::new("git")
-                .current_dir(&target)
-                .args(args)
-                .output()
-                .unwrap()
-                .status
-                .success()
-        );
-    }
-    #[cfg(windows)]
-    let (shell, executable) = (ShellType::PowerShell, "powershell.exe");
-    #[cfg(not(windows))]
-    let (shell, executable) = (ShellType::Bash, "/bin/bash");
-    let executor = LocalCommandExecutor::new(Some(executable.into()), shell);
-    let execute = |command: String| {
-        block_on(executor.execute_local_command(
-            &command,
-            None,
-            None,
-            ExecuteCommandOptions::default(),
-        ))
-        .unwrap()
-    };
-    let output = execute(build_resolved_head_command(&requests, &working_dir, shell));
-    let heads = parse_resolved_head_shas(&output.stdout, 2);
-    assert!(heads[0].is_some());
-    assert!(heads[1].is_none());
-}
-#[test]
-fn clone_failure_identity_diagnostics_keep_only_sanitized_expected_fields() {
-    let author = command_output("Ada Lovelace\n", "", CommandExitStatus::Success);
-    let github = command_output(
-        "protocol=https\nhost=github.com\nusername=octocat\npassword=github-secret-token\n",
-        "",
-        CommandExitStatus::Success,
-    );
-    let gitlab = command_output(
-        "username=gitlab-user\npassword=gitlab-secret-token\n",
-        "",
-        CommandExitStatus::Success,
-    );
-
-    let diagnostics = clone_failure_identity_diagnostics(
-        Some(&author),
-        [("github.com", Some(&github)), ("gitlab.com", Some(&gitlab))],
-    );
-
-    assert_eq!(diagnostics.author.as_deref(), Some("Ada Lovelace"));
-    assert_eq!(
-        diagnostics.credentials,
-        vec![
-            CloneFailureCredentialIdentity {
-                host: "github.com".to_string(),
-                username: Some("octocat".to_string()),
-            },
-            CloneFailureCredentialIdentity {
-                host: "gitlab.com".to_string(),
-                username: Some("gitlab-user".to_string()),
-            },
-        ]
-    );
-    let rendered = diagnostics.to_string();
-    assert_eq!(
-        rendered,
-        "\nGit identity diagnostics:\n  Author: Ada Lovelace\n  Credential username for github.com: octocat\n  Credential username for gitlab.com: gitlab-user"
-    );
-    assert!(!rendered.contains("password"));
-    assert!(!rendered.contains("secret-token"));
-    assert!(!rendered.contains("protocol="));
-    assert!(!rendered.contains("host="));
-}
-
-#[test]
-fn clone_failure_identity_diagnostics_fall_back_on_timeout_malformed_or_failed_queries() {
-    let malformed_author = command_output(
-        "Ada\npassword=author-secret\n",
-        "",
-        CommandExitStatus::Success,
-    );
-    let malformed_username = command_output(
-        "username=https://token@github.com\npassword=credential-secret\n",
-        "",
-        CommandExitStatus::Success,
-    );
-    let helper_failure = command_output(
-        "username=ignored",
-        "helper failed with password=stderr-secret",
-        CommandExitStatus::Failure,
-    );
-    let duplicate_username = command_output(
-        "username=first\nusername=second\npassword=duplicate-secret\n",
-        "",
-        CommandExitStatus::Success,
-    );
-
-    let diagnostics = clone_failure_identity_diagnostics(
-        Some(&malformed_author),
-        [
-            ("github.com", Some(&malformed_username)),
-            ("gitlab.com", Some(&helper_failure)),
-            ("bitbucket.org", Some(&duplicate_username)),
-            ("dev.azure.com", None),
-        ],
-    );
-
-    assert_eq!(diagnostics.author, None);
-    assert_eq!(
-        diagnostics.credentials,
-        vec![
-            CloneFailureCredentialIdentity {
-                host: "github.com".to_string(),
-                username: None,
-            },
-            CloneFailureCredentialIdentity {
-                host: "gitlab.com".to_string(),
-                username: None,
-            },
-            CloneFailureCredentialIdentity {
-                host: "bitbucket.org".to_string(),
-                username: None,
-            },
-            CloneFailureCredentialIdentity {
-                host: "dev.azure.com".to_string(),
-                username: None,
-            },
-        ]
-    );
-    let rendered = diagnostics.to_string();
-    assert_eq!(
-        rendered,
-        "\nGit identity diagnostics:\n  Author: unset\n  Credential username for github.com: unavailable\n  Credential username for gitlab.com: unavailable\n  Credential username for bitbucket.org: unavailable\n  Credential username for dev.azure.com: unavailable"
-    );
-    for secret in [
-        "author-secret",
-        "credential-secret",
-        "stderr-secret",
-        "duplicate-secret",
-        "https://token@github.com",
-    ] {
-        assert!(!rendered.contains(secret));
     }
 }
 

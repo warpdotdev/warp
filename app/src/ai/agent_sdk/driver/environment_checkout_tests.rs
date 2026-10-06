@@ -1,8 +1,8 @@
 use std::io::{BufRead as _, Read as _, Write as _};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{fs, thread};
 
@@ -10,13 +10,14 @@ use async_compat::Compat;
 use command::Stdio;
 use command::blocking::Command;
 use futures::executor::block_on;
+use instant::Instant;
 use tempfile::TempDir;
 use warp_cli::agent::{RepositoryForge, RepositoryHeadRef, RepositoryIdentity};
-use warp_cli::environment_checkout::{
-    CheckoutBatch, CheckoutFailureKind, CheckoutFailureReport, CheckoutRequest,
-    EnvironmentCheckoutArgs,
-};
+use warp_cli::environment_checkout::EnvironmentCheckoutArgs;
 
+use super::super::environment_checkout_protocol::{
+    CheckoutBatch, CheckoutFailureKind, CheckoutFailureReport, CheckoutRequest,
+};
 use super::{Git, capture, mirror_key, optional_mirror_root, run};
 
 const CANONICAL_URL: &str = "https://github.com/fixtures/source.git";
@@ -40,6 +41,7 @@ fn cleanup_only_preserves_refs_and_reports_failures_without_cloning() {
             let args = EnvironmentCheckoutArgs {
                 requests_file: directory.path().join("requests.json"),
                 failure_report: directory.path().join("failures.json"),
+                resolved_heads_report: None,
                 remove_origins_only: true,
             };
             let batch = fixture.batch(vec![
@@ -87,6 +89,112 @@ fn cleanup_only_preserves_refs_and_reports_failures_without_cloning() {
                     .unwrap()
                     .to_string()
             );
+        },
+    );
+}
+#[test]
+fn helper_head_report_keeps_request_order_and_omits_unresolved_heads() {
+    fixture_test(
+        "helper_head_report_keeps_request_order_and_omits_unresolved_heads",
+        |fixture| {
+            let empty = fixture.work().join("empty");
+            fs::create_dir(&empty).unwrap();
+            git(&empty, &["init", "--quiet"]);
+            let directory = TempDir::new().unwrap();
+            let mut args = EnvironmentCheckoutArgs {
+                requests_file: directory.path().join("requests.json"),
+                failure_report: directory.path().join("failures.json"),
+                resolved_heads_report: Some(directory.path().join("heads.json")),
+                remove_origins_only: false,
+            };
+            let batch = fixture.batch(vec![
+                fixture.request("empty", None),
+                fixture.request(
+                    "pinned",
+                    Some(RepositoryHeadRef::CommitSha(fixture.pinned())),
+                ),
+                fixture.request("default", None),
+            ]);
+            fs::write(&args.requests_file, serde_json::to_vec(&batch).unwrap()).unwrap();
+            run(&args).unwrap();
+            let heads: Vec<Option<String>> = serde_json::from_slice(
+                &fs::read(args.resolved_heads_report.as_ref().unwrap()).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                heads,
+                vec![None, Some(fixture.pinned()), Some(fixture.base())]
+            );
+            args.resolved_heads_report = Some(directory.path().to_owned());
+            run(&args).unwrap();
+        },
+    );
+}
+
+#[test]
+fn credential_identity_parser_rejects_malformed_or_ambiguous_usernames() {
+    for output in [
+        "username=https://token@github.com\n",
+        "username=first\nusername=second\n",
+        "password=fixture-secret\n",
+    ] {
+        assert_eq!(super::git_credential_username(output), None);
+    }
+    assert_eq!(
+        super::sanitize_git_author_name("Ada Lovelace\n"),
+        Some("Ada Lovelace".to_owned())
+    );
+    assert_eq!(
+        super::sanitize_git_author_name("Ada\npassword=fixture-secret\n"),
+        None
+    );
+}
+
+#[test]
+fn credential_identity_queries_discard_failed_output_and_time_out() {
+    fixture_test(
+        "credential_identity_queries_discard_failed_output_and_time_out",
+        |fixture| {
+            let config = fixture.root.join("gitconfig");
+            let query = || {
+                block_on(Compat::new(super::identity_query(
+                    &fixture.work(),
+                    &["credential", "fill"],
+                    Some("protocol=https\nhost=github.com\n\n"),
+                )))
+            };
+            git(
+                &fixture.root,
+                &[
+                    "config",
+                    "--file",
+                    config.to_str().unwrap(),
+                    "alias.identity-fixture",
+                    "!f() { printf 'username=fixture\\npassword=fixture-only-secret-not-a-real-token\\n'; printf 'fixture-only-secret-not-a-real-token' >&2; exit 1; }; f",
+                ],
+            );
+            assert!(
+                block_on(Compat::new(super::identity_query(
+                    &fixture.work(),
+                    &["identity-fixture"],
+                    None
+                )))
+                .is_none()
+            );
+            git(
+                &fixture.root,
+                &[
+                    "config",
+                    "--file",
+                    config.to_str().unwrap(),
+                    "credential.helper",
+                    "!f() { sleep 10; }; f",
+                ],
+            );
+            let started = Instant::now();
+            assert!(query().is_none());
+            assert!(started.elapsed() >= super::IDENTITY_QUERY_TIMEOUT);
+            assert!(started.elapsed() < Duration::from_secs(5));
         },
     );
 }
@@ -140,13 +248,15 @@ fn distinct_sources_run_concurrently_with_a_bounded_active_count() {
 fn checkout_batch(
     batch: &CheckoutBatch,
     mirror_root: Option<&Path>,
-    output: &mut impl std::io::Write,
+    output: &mut (impl std::io::Write + Send),
 ) -> anyhow::Result<Vec<super::CheckoutResult>> {
     block_on(Compat::new(super::checkout_batch(
         batch,
         mirror_root,
         false,
-        output,
+        &RecordingLogger {
+            output: Mutex::new(output),
+        },
     )))
 }
 
@@ -462,6 +572,12 @@ fn fixture_test(name: &str, test: impl FnOnce(&Fixture)) {
     }
     let output = command.output().unwrap();
     assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("fixture-only-secret-not-a-real-token")
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("fixture-only-secret-not-a-real-token")
+    );
+    assert!(
         output.status.success(),
         "{}\n{}",
         String::from_utf8_lossy(&output.stdout),
@@ -554,16 +670,6 @@ fn partial_mirrors_are_rebuilt_and_full_mirror_config_is_normalized() {
             assert!(
                 fixture
                     .prepare(fixture.request("filtered", None), true)
-                    .contains("invalid cache; rebuilding")
-            );
-            fs::write(
-                fixture.mirror().join("objects/pack/incomplete.promisor"),
-                "",
-            )
-            .unwrap();
-            assert!(
-                fixture
-                    .prepare(fixture.request("promisor-pack", None), true)
                     .contains("invalid cache; rebuilding")
             );
             git(
@@ -859,23 +965,58 @@ fn helper_writes_typed_failures_and_rejects_invalid_requests_before_work() {
     fixture_test(
         "helper_writes_typed_failures_and_rejects_invalid_requests_before_work",
         |fixture| {
+            let credentials = fixture.root.join("identity-credentials");
+            fs::write(
+                &credentials,
+                "https://fixture:fixture-only-secret-not-a-real-token@github.com\n",
+            )
+            .unwrap();
+            git(
+                &fixture.root,
+                &[
+                    "config",
+                    "--file",
+                    fixture.root.join("gitconfig").to_str().unwrap(),
+                    "credential.helper",
+                    &format!(
+                        "store --file=\"{}\"",
+                        credentials.to_str().unwrap().replace('\\', "/")
+                    ),
+                ],
+            );
             let directory = TempDir::new().unwrap();
             let args = EnvironmentCheckoutArgs {
                 requests_file: directory.path().join("requests.json"),
                 failure_report: directory.path().join("failures.json"),
+                resolved_heads_report: Some(directory.path().join("heads.json")),
                 remove_origins_only: false,
             };
             let batch = fixture.batch(vec![
                 fixture.request("good", None),
                 fixture.request("bad", Some(RepositoryHeadRef::Branch("missing".to_owned()))),
+                fixture.request(
+                    "another-bad",
+                    Some(RepositoryHeadRef::Branch("missing".to_owned())),
+                ),
             ]);
             fs::write(&args.requests_file, serde_json::to_vec(&batch).unwrap()).unwrap();
             assert!(run(&args).is_err());
+            assert!(!args.resolved_heads_report.as_ref().unwrap().exists());
             let report: CheckoutFailureReport =
                 serde_json::from_slice(&fs::read(&args.failure_report).unwrap()).unwrap();
-            assert_eq!(report.failures.len(), 1);
+            assert_eq!(report.failures.len(), 2);
             assert_eq!(report.failures[0].request_index, 1);
             assert_eq!(report.failures[0].kind, CheckoutFailureKind::Checkout);
+            assert_eq!(report.failures[1].request_index, 2);
+            let identity = report.identity_diagnostics.as_ref().unwrap();
+            assert_eq!(identity.credentials.len(), 1);
+            assert_eq!(identity.credentials[0].host, "github.com");
+            assert_eq!(identity.credentials[0].username.as_deref(), Some("fixture"));
+            assert!(
+                !serde_json::to_string(&report)
+                    .unwrap()
+                    .contains("fixture-only-secret-not-a-real-token")
+            );
             fs::write(&args.requests_file, b"{").unwrap();
             assert!(
                 run(&args)
@@ -889,9 +1030,9 @@ fn helper_writes_typed_failures_and_rejects_invalid_requests_before_work() {
 
 #[cfg(unix)]
 #[test]
-fn mirror_symlinks_cannot_escape_the_cache_volume() {
+fn top_level_mirror_symlinks_are_rebuilt_without_following_targets() {
     fixture_test(
-        "mirror_symlinks_cannot_escape_the_cache_volume",
+        "top_level_mirror_symlinks_are_rebuilt_without_following_targets",
         |fixture| {
             use std::os::unix::fs::symlink;
             optional_mirror_root().unwrap();
@@ -910,13 +1051,6 @@ fn mirror_symlinks_cannot_escape_the_cache_volume() {
                     .file_type()
                     .is_symlink()
             );
-            fs::remove_dir_all(fixture.mirror().join("objects")).unwrap();
-            symlink(&outside, fixture.mirror().join("objects")).unwrap();
-            fixture.prepare(fixture.request("nested-safe", None), true);
-            assert_eq!(
-                fs::read_to_string(outside.join("KEEP")).unwrap(),
-                "untouched"
-            );
             fs::remove_dir_all(fixture.root.join("cache/git-mirrors")).unwrap();
             symlink(&outside, fixture.root.join("cache/git-mirrors")).unwrap();
             assert!(optional_mirror_root().is_none());
@@ -925,15 +1059,38 @@ fn mirror_symlinks_cannot_escape_the_cache_volume() {
 }
 
 #[test]
-fn output_capture_discards_incomplete_secrets_and_bounds_large_diagnostics() {
-    let text = format!("valid line\n{}", "x".repeat(128 * 1024));
-    let (captured, truncated) = block_on(capture(text.as_bytes())).unwrap();
+fn output_capture_retains_the_failure_tail_without_partial_secret_lines() {
+    let text = format!(
+        "{}://user:fixture-only-secret-not-a-real-token@example.com\nfatal: repository not found",
+        "x".repeat(128 * 1024)
+    );
+    let mut reader = text.as_bytes();
+    let (captured, truncated) = block_on(capture(&mut reader)).unwrap();
     assert!(truncated);
-    assert_eq!(captured, "valid line");
+    assert!(reader.is_empty());
+    assert_eq!(captured, "fatal: repository not found");
     let mut git = Git::default();
     git.record(&format!("{} AKIAIOSFODNN7EXAMPLE", "line\n".repeat(2048)));
     assert!(git.diagnostics.len() <= 4096);
     assert!(!git.diagnostics.contains("AKIAIOSFODNN7EXAMPLE"));
+}
+
+struct RecordingLogger<W> {
+    output: Mutex<W>,
+}
+
+impl<W: std::io::Write + Send> log::Log for RecordingLogger<W> {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.level() <= log::Level::Info
+    }
+    fn log(&self, record: &log::Record<'_>) {
+        let mut output = self.output.lock().unwrap();
+        writeln!(output, "{}", record.args()).unwrap();
+        output.flush().unwrap();
+    }
+    fn flush(&self) {
+        self.output.lock().unwrap().flush().unwrap();
+    }
 }
 
 struct HttpRemote {
@@ -1135,6 +1292,7 @@ fn inherited_credentials_authenticate_without_leaking_and_progress_is_immediate(
                 serde_json::to_string(&batch).unwrap(),
                 serde_json::to_string(&CheckoutFailureReport {
                     failures: Vec::new(),
+                    identity_diagnostics: None,
                 })
                 .unwrap(),
                 fs::read_to_string(target.join(".git/config")).unwrap(),

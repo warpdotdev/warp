@@ -17,10 +17,7 @@ use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use warp_cli::agent::{
     RepositoryForge, RepositoryHeadRef, RepositoryIdentity, RepositoryPreparationOverride,
 };
-use warp_cli::environment_checkout::{
-    CheckoutBatch, CheckoutFailure, CheckoutFailureKind, CheckoutFailureReport, CheckoutRequest,
-};
-use warp_completer::completer::{CommandExitStatus, CommandOutput};
+use warp_completer::completer::CommandExitStatus;
 use warp_core::command::ExitCode;
 use warp_core::{safe_info, safe_warn};
 use warpui::r#async::{FutureExt, Timer};
@@ -28,6 +25,11 @@ use warpui::{ModelContext, ModelSpawner, SingletonEntity};
 
 #[cfg(feature = "local_fs")]
 use super::cache_setup;
+use super::environment_checkout_protocol::{
+    CheckoutBatch, CheckoutFailureKind, CheckoutFailureReport, CheckoutRequest,
+    CloneFailureIdentityDiagnostics, parse_resolved_head_sha, sanitize_git_author_name,
+    sanitize_git_credential_username,
+};
 use super::terminal::TerminalDriver;
 use super::{AgentDriverError, Harness, failure_output, git_credentials};
 use crate::ai::agent_sdk::environment_snapshot::{
@@ -41,8 +43,6 @@ use crate::terminal::model::session::command_executor::shell_escape_single_quote
 use crate::terminal::shell::ShellType;
 
 const CODEBASE_INDEX_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
-const ENVIRONMENT_SNAPSHOT_CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
-const CLONE_FAILURE_IDENTITY_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 const CLONE_FAILURE_OUTPUT_TRUNCATION_MARKER: &str = "\n… clone output truncated …\n";
 const SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER: &str = "\n… setup command output truncated …\n";
 const SETUP_COMMAND_TIMEOUT: Duration = Duration::from_mins(30);
@@ -193,53 +193,6 @@ fn clone_failure_output_suffix(output: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
-fn parse_resolved_head_sha(line: &str) -> Option<String> {
-    let sha = line.trim();
-    is_valid_git_object_id(sha).then(|| sha.to_string())
-}
-
-fn parse_resolved_head_shas(stdout: &[u8], repo_count: usize) -> Vec<Option<String>> {
-    let Ok(stdout) = std::str::from_utf8(stdout) else {
-        return vec![None; repo_count];
-    };
-    let mut resolved_heads = stdout
-        .lines()
-        .take(repo_count)
-        .map(parse_resolved_head_sha)
-        .collect::<Vec<_>>();
-    resolved_heads.resize(repo_count, None);
-    resolved_heads
-}
-
-fn build_resolved_head_command(
-    repos: &[RepositoryCloneRequest],
-    working_dir: &Path,
-    shell_type: ShellType,
-) -> String {
-    repos
-        .iter()
-        .map(|request| {
-            let escaped = shell_escape_single_quotes(
-                &working_dir.join(&request.checkout_name).to_string_lossy(),
-                shell_type,
-            );
-            match shell_type {
-                ShellType::Bash | ShellType::Zsh => format!(
-                    "git -C '{escaped}' rev-parse --verify HEAD 2>/dev/null || printf '\\n'"
-                ),
-                ShellType::Fish => format!(
-                    "git -C '{escaped}' rev-parse --verify HEAD 2>/dev/null; or printf '\\n'"
-                ),
-                ShellType::PowerShell => format!(
-                    "$head = & git -C '{escaped}' rev-parse --verify HEAD 2>$null; \
-                 if ($LASTEXITCODE -eq 0) {{ Write-Output $head }} else {{ Write-Output '' }}"
-                ),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("; ")
-}
-
 fn checkout_path(working_dir: &Path, repo_name: &str) -> String {
     working_dir
         .join(repo_name)
@@ -283,13 +236,6 @@ fn environment_snapshot(
         captured_at: Utc::now(),
         repositories,
     }
-}
-
-fn is_valid_git_object_id(value: &str) -> bool {
-    matches!(value.len(), 40 | 64)
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 /// Server-owned repository settings for environment preparation.
@@ -871,150 +817,6 @@ pub(super) struct RepositoryCloneRequest {
     pub(super) fetch_branch_only: bool,
 }
 
-fn unique_clone_hosts<'a>(
-    requests: impl IntoIterator<Item = &'a RepositoryCloneRequest>,
-) -> Vec<String> {
-    let mut seen = HashSet::new();
-    requests
-        .into_iter()
-        .filter_map(|request| request.remote.code_forge.map(CodeForge::host))
-        .filter(|host| seen.insert(*host))
-        .map(str::to_string)
-        .collect()
-}
-
-fn sanitize_git_author_name(value: &str) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty()
-        && value.len() <= 128
-        && value.chars().all(|character| {
-            character.is_alphanumeric()
-                || matches!(character, ' ' | '.' | '_' | '@' | '+' | '-' | '\'')
-        }))
-    .then(|| value.to_string())
-}
-
-fn sanitize_git_credential_username(value: &str) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty()
-        && value.len() <= 128
-        && value.chars().all(|character| {
-            character.is_alphanumeric() || matches!(character, '.' | '_' | '@' | '+' | '-')
-        }))
-    .then(|| value.to_string())
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CloneFailureCredentialIdentity {
-    host: String,
-    username: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CloneFailureIdentityDiagnostics {
-    author: Option<String>,
-    credentials: Vec<CloneFailureCredentialIdentity>,
-}
-
-impl fmt::Display for CloneFailureIdentityDiagnostics {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let author = self.author.as_deref().unwrap_or("unset");
-        write!(formatter, "\nGit identity diagnostics:\n  Author: {author}")?;
-        for credential in &self.credentials {
-            let username = credential.username.as_deref().unwrap_or("unavailable");
-            write!(
-                formatter,
-                "\n  Credential username for {}: {username}",
-                credential.host
-            )?;
-        }
-        Ok(())
-    }
-}
-
-fn git_credential_username(output: &CommandOutput) -> Option<String> {
-    if !output.success() {
-        return None;
-    }
-    let stdout = std::str::from_utf8(&output.stdout).ok()?;
-    let mut usernames = stdout
-        .lines()
-        .filter_map(|line| line.strip_prefix("username="));
-    let username = usernames.next()?;
-    if usernames.next().is_some() {
-        return None;
-    }
-    sanitize_git_credential_username(username)
-}
-
-fn clone_failure_identity_diagnostics<'a>(
-    author_output: Option<&CommandOutput>,
-    credential_outputs: impl IntoIterator<Item = (&'a str, Option<&'a CommandOutput>)>,
-) -> CloneFailureIdentityDiagnostics {
-    let author = author_output
-        .filter(|output| output.success())
-        .and_then(|output| std::str::from_utf8(&output.stdout).ok())
-        .and_then(sanitize_git_author_name);
-    let credentials = credential_outputs
-        .into_iter()
-        .map(|(host, output)| CloneFailureCredentialIdentity {
-            host: host.to_string(),
-            username: output.and_then(git_credential_username),
-        })
-        .collect();
-    CloneFailureIdentityDiagnostics {
-        author,
-        credentials,
-    }
-}
-
-fn build_git_credential_query_command(host: &str, shell_type: ShellType) -> String {
-    let credential_input = format!("protocol=https\nhost={host}\n");
-    let escaped_input = shell_escape_single_quotes(&credential_input, shell_type);
-    match shell_type {
-        ShellType::Bash | ShellType::Zsh | ShellType::Fish => format!(
-            "printf '%s\\n' '{escaped_input}' | env GIT_TERMINAL_PROMPT=0 \
-             GCM_INTERACTIVE=never git credential fill"
-        ),
-        ShellType::PowerShell => format!(
-            "$env:GIT_TERMINAL_PROMPT='0'; $env:GCM_INTERACTIVE='never'; \
-             '{escaped_input}' | & git credential fill"
-        ),
-    }
-}
-
-async fn collect_clone_failure_identity_diagnostics(
-    hosts: Vec<String>,
-    spawner: &ModelSpawner<TerminalDriver>,
-) -> CloneFailureIdentityDiagnostics {
-    let shell_type = active_shell_type(spawner).await;
-    let author_query = execute_silent_command("git config --get user.name".to_string(), spawner)
-        .with_timeout(CLONE_FAILURE_IDENTITY_QUERY_TIMEOUT);
-    let credential_queries = hosts.into_iter().map(|host| async move {
-        let command = build_git_credential_query_command(&host, shell_type);
-        let output = execute_silent_command(command, spawner)
-            .with_timeout(CLONE_FAILURE_IDENTITY_QUERY_TIMEOUT)
-            .await;
-        let output = match output {
-            Ok(Ok(output)) if output.success() => Some(output),
-            Ok(Ok(_)) | Ok(Err(_)) | Err(_) => None,
-        };
-        (host, output)
-    });
-    let (author_output, credential_outputs) =
-        futures::join!(author_query, join_all(credential_queries));
-    let author_output = match author_output {
-        Ok(Ok(output)) if output.success() => Some(output),
-        Ok(Ok(_)) | Ok(Err(_)) | Err(_) => None,
-    };
-    clone_failure_identity_diagnostics(
-        author_output.as_ref(),
-        credential_outputs
-            .iter()
-            .map(|(host, output)| (host.as_str(), output.as_ref())),
-    )
-}
-
 fn repository_clone_requests(
     repos: &[SourceRepo],
     overrides: &[RepositoryPreparationOverride],
@@ -1082,10 +884,10 @@ async fn remove_repository_origins_from_repos(
         .cloned()
         .collect::<Vec<_>>();
     let batch = checkout_requests_batch(&selected, working_dir)?;
-    let (output, _) = execute_checkout_helper(&batch, true, spawner)
+    let result = execute_checkout_helper(&batch, true, spawner)
         .await
         .map_err(|_| PrepareEnvironmentError::RemoveRepositoryOrigins)?;
-    if output.exit_code == 0.into() {
+    if result.command_result.exit_code == 0.into() {
         Ok(())
     } else {
         Err(PrepareEnvironmentError::RemoveRepositoryOrigins)
@@ -1112,6 +914,7 @@ fn build_checkout_helper_command(
     executable: &Path,
     requests_file: &Path,
     failure_report: &Path,
+    resolved_heads_report: Option<&Path>,
     remove_origins_only: bool,
     shell_type: ShellType,
 ) -> String {
@@ -1126,29 +929,68 @@ fn build_checkout_helper_command(
     } else {
         ""
     };
+    let heads = resolved_heads_report
+        .map(|path| format!(" --resolved-heads-report {}", quote(path)))
+        .unwrap_or_default();
     let operation = if remove_origins_only {
         " --remove-origins-only"
     } else {
         ""
     };
     format!(
-        "{prefix}{} environment-checkout --requests-file {} --failure-report {}{operation}",
+        "{prefix}{} environment-checkout --requests-file {} --failure-report {}{heads}{operation}",
         quote(executable),
         quote(requests_file),
         quote(failure_report)
     )
 }
 
-fn read_checkout_failures(path: &Path, request_count: usize) -> Option<Vec<CheckoutFailure>> {
+fn read_checkout_failures(path: &Path, request_count: usize) -> Option<CheckoutFailureReport> {
     let bytes = std::fs::read(path);
     let _ = std::fs::remove_file(path);
-    let report: CheckoutFailureReport = serde_json::from_slice(&bytes.ok()?).ok()?;
+    let mut report: CheckoutFailureReport = serde_json::from_slice(&bytes.ok()?).ok()?;
     let mut indexes = HashSet::new();
-    (!report.failures.is_empty()
-        && report.failures.iter().all(|failure| {
+    if report.failures.is_empty()
+        || !report.failures.iter().all(|failure| {
             failure.request_index < request_count && indexes.insert(failure.request_index)
-        }))
-    .then_some(report.failures)
+        })
+    {
+        return None;
+    }
+    if let Some(identity) = &mut report.identity_diagnostics {
+        identity.author = identity
+            .author
+            .as_deref()
+            .and_then(sanitize_git_author_name);
+        identity.credentials.retain(|credential| {
+            matches!(
+                credential.host.as_str(),
+                "github.com" | "gitlab.com" | "dev.azure.com"
+            )
+        });
+        for credential in &mut identity.credentials {
+            credential.username = credential
+                .username
+                .as_deref()
+                .and_then(sanitize_git_credential_username);
+        }
+    }
+    Some(report)
+}
+
+fn read_resolved_heads(path: &Path, request_count: usize) -> Vec<Option<String>> {
+    let bytes = std::fs::read(path);
+    let _ = std::fs::remove_file(path);
+    let heads = bytes
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Vec<Option<String>>>(&bytes).ok());
+    match heads {
+        Some(heads) if heads.len() == request_count => heads
+            .into_iter()
+            .map(|head| head.as_deref().and_then(parse_resolved_head_sha))
+            .collect(),
+        _ => vec![None; request_count],
+    }
 }
 
 fn checkout_requests_batch(
@@ -1186,16 +1028,23 @@ fn checkout_requests_batch(
     Ok(batch)
 }
 
+struct CheckoutHelperResult {
+    command_result: ExecutedCommand,
+    failure_report: Option<CheckoutFailureReport>,
+    resolved_heads: Vec<Option<String>>,
+}
+
 async fn execute_checkout_helper(
     batch: &CheckoutBatch,
     remove_origins_only: bool,
     spawner: &ModelSpawner<TerminalDriver>,
-) -> Result<(ExecutedCommand, Option<Vec<CheckoutFailure>>), PrepareEnvironmentError> {
+) -> Result<CheckoutHelperResult, PrepareEnvironmentError> {
     let directory = tempfile::tempdir().map_err(|_| PrepareEnvironmentError::CheckoutHelper {
         reason: "could not create private checkout request directory",
     })?;
     let requests_file = directory.path().join("requests.json");
     let failure_report = directory.path().join("failures.json");
+    let resolved_heads_report = (!remove_origins_only).then(|| directory.path().join("heads.json"));
     let bytes = serde_json::to_vec(batch).map_err(|_| PrepareEnvironmentError::CheckoutHelper {
         reason: "could not serialize checkout requests",
     })?;
@@ -1210,6 +1059,7 @@ async fn execute_checkout_helper(
         &executable,
         &requests_file,
         &failure_report,
+        resolved_heads_report.as_deref(),
         remove_origins_only,
         active_shell_type(spawner).await,
     );
@@ -1217,7 +1067,15 @@ async fn execute_checkout_helper(
     let _ = std::fs::remove_file(&requests_file);
     let command_result = result?;
     let failures = read_checkout_failures(&failure_report, batch.repositories.len());
-    Ok((command_result, failures))
+    let resolved_heads = resolved_heads_report
+        .as_deref()
+        .map(|path| read_resolved_heads(path, batch.repositories.len()))
+        .unwrap_or_default();
+    Ok(CheckoutHelperResult {
+        command_result,
+        failure_report: failures,
+        resolved_heads,
+    })
 }
 
 async fn clone_checkout_requests(
@@ -1229,7 +1087,16 @@ async fn clone_checkout_requests(
         return Ok(EnvironmentSnapshot::empty());
     }
     let batch = checkout_requests_batch(repos, working_dir)?;
-    let (command_result, failures) = execute_checkout_helper(&batch, false, spawner).await?;
+    let CheckoutHelperResult {
+        command_result,
+        mut failure_report,
+        resolved_heads,
+    } = execute_checkout_helper(&batch, false, spawner).await?;
+    let identity_diagnostics = failure_report
+        .as_mut()
+        .and_then(|report| report.identity_diagnostics.take())
+        .unwrap_or_default();
+    let failures = failure_report.map(|report| report.failures);
     if command_result.exit_code != 0.into() {
         let failed_requests = match &failures {
             Some(failures) => failures
@@ -1243,11 +1110,6 @@ async fn clone_checkout_requests(
             .map(|request| request.remote.to_string())
             .collect::<Vec<_>>()
             .join(", ");
-        let identity_diagnostics = collect_clone_failure_identity_diagnostics(
-            unique_clone_hosts(failed_requests.iter().copied()),
-            spawner,
-        )
-        .await;
         if let Some(failures) = &failures
             && failures
                 .iter()
@@ -1281,36 +1143,7 @@ async fn clone_checkout_requests(
             identity_diagnostics,
         });
     }
-    Ok(capture_environment_snapshot(repos, working_dir, spawner).await)
-}
-
-async fn capture_environment_snapshot(
-    repos: &[RepositoryCloneRequest],
-    working_dir: &Path,
-    spawner: &ModelSpawner<TerminalDriver>,
-) -> EnvironmentSnapshot {
-    if repos.is_empty() {
-        return EnvironmentSnapshot::empty();
-    }
-    let command = build_resolved_head_command(repos, working_dir, active_shell_type(spawner).await);
-    let resolved_heads = match execute_silent_command(command, spawner)
-        .with_timeout(ENVIRONMENT_SNAPSHOT_CAPTURE_TIMEOUT)
-        .await
-    {
-        Ok(Ok(output)) => parse_resolved_head_shas(&output.stdout, repos.len()),
-        Ok(Err(error)) => {
-            log::warn!("Could not capture resolved HEADs for structured repositories: {error}");
-            vec![None; repos.len()]
-        }
-        Err(_) => {
-            log::warn!(
-                "Timed out capturing resolved HEADs for structured repositories after {:?}",
-                ENVIRONMENT_SNAPSHOT_CAPTURE_TIMEOUT
-            );
-            vec![None; repos.len()]
-        }
-    };
-    environment_snapshot(repos, working_dir, &resolved_heads)
+    Ok(environment_snapshot(repos, working_dir, &resolved_heads))
 }
 
 /// Register a cloned source repository with `DetectedRepositories` so that the
@@ -1527,21 +1360,6 @@ async fn fetch_block_output_plaintext(
         .await
         .ok()
         .flatten()
-}
-
-async fn execute_silent_command(
-    command: String,
-    spawner: &ModelSpawner<TerminalDriver>,
-) -> Result<CommandOutput, PrepareEnvironmentError> {
-    spawner
-        .spawn(move |driver, ctx| driver.execute_silent_command(command, ctx))
-        .await
-        .map_err(|_| PrepareEnvironmentError::InvalidRuntimeState)?
-        .await
-        .map_err(|error| match error {
-            AgentDriverError::InvalidRuntimeState => PrepareEnvironmentError::InvalidRuntimeState,
-            source => PrepareEnvironmentError::TerminalDriver { source },
-        })
 }
 
 /// Change the current directory in the context of a terminal session (using `cd {dir}`).

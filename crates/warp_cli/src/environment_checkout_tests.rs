@@ -1,20 +1,7 @@
 use clap::Parser as _;
-use serde_json::json;
 
 use super::*;
 use crate::{Args, CliCommand, Command};
-
-fn batch() -> serde_json::Value {
-    json!({
-        "working_dir": std::env::current_dir().unwrap(),
-        "repositories": [{
-            "source": {"code_forge": "GITHUB", "owner": "warpdotdev", "repo": "warp"},
-            "checkout_name": "warp",
-            "head": null,
-            "fetch_branch_only": false
-        }]
-    })
-}
 
 #[test]
 fn hidden_command_parses_paths_and_traces_without_payload() {
@@ -25,6 +12,8 @@ fn hidden_command_parses_paths_and_traces_without_payload() {
         "a path/request.json",
         "--failure-report",
         "a path/report.json",
+        "--resolved-heads-report",
+        "a path/heads.json",
         "--remove-origins-only",
     ])
     .unwrap();
@@ -37,6 +26,10 @@ fn hidden_command_parses_paths_and_traces_without_payload() {
     };
     assert_eq!(args.requests_file, PathBuf::from("a path/request.json"));
     assert_eq!(args.failure_report, PathBuf::from("a path/report.json"));
+    assert_eq!(
+        args.resolved_heads_report,
+        Some(PathBuf::from("a path/heads.json"))
+    );
     assert!(args.remove_origins_only);
     assert!(
         !Args::clap_command()
@@ -44,66 +37,4 @@ fn hidden_command_parses_paths_and_traces_without_payload() {
             .to_string()
             .contains("environment-checkout")
     );
-}
-
-#[test]
-fn batch_rejects_malformed_and_untrusted_payloads() {
-    assert!(CheckoutBatch::parse(b"{").is_err());
-    for (pointer, value) in [
-        ("/repositories/0/source/code_forge", json!("UNKNOWN")),
-        ("/repositories/0/source/owner", json!("../owner")),
-        ("/repositories/0/source/repo", json!("repo?token=secret")),
-        ("/repositories/0/checkout_name", json!("../outside")),
-        ("/repositories/0/checkout_name", json!("C:\\outside")),
-        ("/repositories/0/checkout_name", json!("CON.txt")),
-        (
-            "/repositories/0/head",
-            json!({"type": "BRANCH", "value": "--upload-pack=bad"}),
-        ),
-        (
-            "/repositories/0/head",
-            json!({"type": "COMMIT_SHA", "value": "not-a-sha"}),
-        ),
-        (
-            "/repositories/0/head",
-            json!({"type": "BRANCH", "value": "main", "url": "untrusted"}),
-        ),
-        ("/repositories/0/fetch_branch_only", json!(true)),
-    ] {
-        let mut batch = batch();
-        *batch.pointer_mut(pointer).unwrap() = value;
-        assert!(
-            CheckoutBatch::parse(&serde_json::to_vec(&batch).unwrap()).is_err(),
-            "{pointer}"
-        );
-    }
-    let mut batch = batch();
-    batch["repositories"][0]["url"] = json!("https://user:password@example.com/repo");
-    assert!(CheckoutBatch::parse(&serde_json::to_vec(&batch).unwrap()).is_err());
-}
-
-#[test]
-fn duplicate_targets_are_rejected_before_any_checkout() {
-    let mut batch = batch();
-    let mut second = batch["repositories"][0].clone();
-    second["checkout_name"] = json!("WARP");
-    batch["repositories"].as_array_mut().unwrap().push(second);
-    assert_eq!(
-        CheckoutBatch::parse(&serde_json::to_vec(&batch).unwrap()).unwrap_err(),
-        "duplicate checkout target"
-    );
-}
-
-#[test]
-fn nested_gitlab_and_azure_identities_and_tag_pins_are_accepted() {
-    for (forge, owner, repo) in [
-        ("GITLAB", "platform/backend", "api"),
-        ("AZURE_DEVOPS", "organization/My Project", "My Repo"),
-    ] {
-        let mut batch = batch();
-        batch["repositories"][0]["source"] =
-            json!({"code_forge": forge, "owner": owner, "repo": repo});
-        batch["repositories"][0]["head"] = json!({"type": "BRANCH", "value": "refs/tags/v1"});
-        CheckoutBatch::parse(&serde_json::to_vec(&batch).unwrap()).unwrap();
-    }
 }
