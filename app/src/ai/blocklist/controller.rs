@@ -91,7 +91,7 @@ use crate::workspaces::user_workspaces::{
     ResolvedTeamScope, TeamContext, TeamContextResolver, TeamScope, UserWorkspaces,
 };
 
-const AGENT_SHELL_INTERRUPT_GRACE_PERIOD: Duration = Duration::from_millis(250);
+const AGENT_SHELL_INTERRUPT_GRACE_PERIOD: Duration = Duration::from_millis(750);
 
 #[derive(Debug, Clone)]
 pub struct SessionContext {
