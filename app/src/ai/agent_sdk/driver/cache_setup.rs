@@ -6,7 +6,6 @@ use std::time::Duration;
 use build_cache::{CacheSetupError, CacheSetupReport, RepoIdentity, RepositoryCacheSource};
 use cloud_object_models::SourceRepo;
 use warp_completer::completer::CommandExitStatus;
-use warp_core::safe_warn;
 use warp_errors::report_error;
 use warp_isolation_platform::IsolationPlatformType;
 use warpui::ModelSpawner;
@@ -85,10 +84,7 @@ pub(super) async fn setup_caches(
         .cache_usage(&cache_root)
         .and_then(|usage| build_cache::metadata::write_cache_metadata(&cache_root, usage))
     {
-        safe_warn!(
-            safe: ("Namespace cache usage metadata was not updated"),
-            full: ("Namespace cache usage metadata was not updated: {error}")
-        );
+        log::warn!("Namespace cache usage metadata was not updated: {error}");
     }
     let mut degraded = report_degradations(&report);
 
@@ -154,25 +150,18 @@ fn report_cache_error(
     exit_code: Option<i32>,
     duration: Duration,
 ) {
-    if let CacheSetupError::NonzeroExit { exit_code, .. } = error {
-        safe_warn!(
-            safe: ("spacectl exited unsuccessfully: exit_code={exit_code:?}"),
-            full: ("{error}")
-        );
-    } else {
-        // If a fixed failure category becomes noisy, add ReportErrorLogMode::OncePerRun here.
-        report_error!(
-            error,
-            extra: {
-                "scope" => scope,
-                "repo_key" => repo_key,
-                "mode" => modes,
-                "error_kind" => error.kind(),
-                "exit_code" => ?exit_code,
-                "duration_ms" => %duration.as_millis()
-            }
-        );
-    }
+    // If a fixed failure category becomes noisy, add ReportErrorLogMode::OncePerRun here.
+    report_error!(
+        error,
+        extra: {
+            "scope" => scope,
+            "repo_key" => repo_key,
+            "mode" => modes,
+            "error_kind" => error.kind(),
+            "exit_code" => ?exit_code,
+            "duration_ms" => %duration.as_millis()
+        }
+    );
     log::warn!(
         "Build cache setup degraded: scope={scope} error_kind={}",
         error.kind()

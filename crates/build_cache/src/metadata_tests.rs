@@ -27,6 +27,7 @@ fn existing_document(root: &Path, contents: &[u8]) {
 fn read_document(root: &Path) -> Value {
     serde_json::from_slice(&fs::read(metadata_path(root)).unwrap()).unwrap()
 }
+
 fn assert_io_diagnostics(
     error: &CacheMetadataError,
     operation: &str,

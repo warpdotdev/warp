@@ -35,8 +35,6 @@ use is_executable::IsExecutable as _;
 use itertools::Itertools;
 use sha2::{Digest, Sha256};
 use warp_core::safe_info;
-#[cfg(unix)]
-use warp_core::safe_warn;
 use warp_errors::{ErrorExt, register_error};
 
 mod discovery;
@@ -473,9 +471,11 @@ where
         let mut mkdir = Command::new_with_process_group("sudo");
         mkdir.args(["-n", "mkdir", "-p"]).arg(path);
         if let Err(error) = run_command(mkdir).await {
-            safe_warn!(
-                safe: ("sudo cache directory creation failed"),
-                full: ("sudo cache directory creation failed: {error}")
+            tracing::warn!(
+                target: "build_cache",
+                operation = "sudo mkdir",
+                error = ?error,
+                "sudo cache directory creation failed"
             );
             return Err(CacheSetupError::RootCreationFailed);
         }
@@ -483,9 +483,11 @@ where
         let mut chown = Command::new_with_process_group("sudo");
         chown.args(["-n", "chown", &owner]).arg(path);
         if let Err(error) = run_command(chown).await {
-            safe_warn!(
-                safe: ("sudo cache directory ownership update failed"),
-                full: ("sudo cache directory ownership update failed: {error}")
+            tracing::warn!(
+                target: "build_cache",
+                operation = "sudo chown",
+                error = ?error,
+                "sudo cache directory ownership update failed"
             );
             return Err(CacheSetupError::RootCreationFailed);
         }
