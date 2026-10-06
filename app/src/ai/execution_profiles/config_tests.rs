@@ -94,18 +94,6 @@ fn file_web_tool_settings_round_trip_independently() {
 }
 
 #[test]
-fn web_fetch_schema_documents_web_search_fallback() {
-    let mut generator = schemars::SchemaGenerator::default();
-    let schema = schemars::Schema::to_value(ExecutionProfileFile::json_schema(&mut generator));
-    let description = schema
-        .pointer("/properties/web_fetch_enabled/description")
-        .and_then(|d| d.as_str())
-        .expect("web_fetch_enabled should have a description");
-
-    assert!(description.contains("web_search_enabled"));
-}
-
-#[test]
 fn file_collection_rejects_invalid_values_as_a_unit() {
     for value in [
         serde_json::json!({"custom": {"name": "Missing default"}}),

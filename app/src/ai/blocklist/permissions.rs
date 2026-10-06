@@ -609,8 +609,8 @@ impl BlocklistAIPermissions {
 
     pub fn get_web_fetch_enabled_for_profile(
         &self,
-        ctx: &AppContext,
         profile_id: &ExecutionProfileId,
+        ctx: &AppContext,
     ) -> bool {
         let profiles_model = AIExecutionProfilesModel::as_ref(ctx);
         profiles_model
@@ -622,12 +622,12 @@ impl BlocklistAIPermissions {
 
     pub fn get_web_fetch_enabled(
         &self,
-        ctx: &AppContext,
         terminal_view_id: Option<EntityId>,
+        ctx: &AppContext,
     ) -> bool {
         let active_profile =
             AIExecutionProfilesModel::as_ref(ctx).active_profile(terminal_view_id, ctx);
-        self.get_web_fetch_enabled_for_profile(ctx, active_profile.id())
+        self.get_web_fetch_enabled_for_profile(active_profile.id(), ctx)
     }
 
     pub fn get_computer_use_setting_for_profile(

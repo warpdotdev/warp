@@ -381,7 +381,7 @@ impl RequestParams {
         let web_search_enabled =
             BlocklistAIPermissions::as_ref(app).get_web_search_enabled(app, terminal_view_id);
         let web_fetch_enabled =
-            BlocklistAIPermissions::as_ref(app).get_web_fetch_enabled(app, terminal_view_id);
+            BlocklistAIPermissions::as_ref(app).get_web_fetch_enabled(terminal_view_id, app);
         let research_agent_enabled = app
             .private_user_preferences()
             .read_value("ResearchAgentEnabled")
