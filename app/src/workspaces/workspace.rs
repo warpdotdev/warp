@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::path::PathBuf;
 
 use chrono::Utc;
+use ordered_float::OrderedFloat;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use warp_graphql::billing::{AddonCreditAutoReloadStatus, ServiceAgreement, ServiceAgreementType};
@@ -235,6 +236,12 @@ pub struct WorkspaceMemberUsageInfo {
     pub is_unlimited: bool,
     pub request_limit: i32,
     pub requests_used_since_last_refresh: i32,
+    /// The dollar value of `request_limit`, in cents. `None` for a workspace billed in
+    /// credits rather than dollars, and when usage is unlimited.
+    pub included_usage_cents: Option<OrderedFloat<f64>>,
+    /// The dollar value of `requests_used_since_last_refresh`, in cents. `None` for a
+    /// workspace billed in credits rather than dollars, and when usage is unlimited.
+    pub usage_cents_used_since_last_refresh: Option<OrderedFloat<f64>>,
     pub is_request_limit_prorated: bool,
 }
 
@@ -1026,6 +1033,11 @@ pub struct AddonCreditsSettings {
     pub auto_reload_enabled: bool,
     pub max_monthly_spend_cents: Option<i32>,
     pub selected_auto_reload_credit_denomination: Option<i32>,
+    /// The list price of the selected auto-reload pack, which is the usage it buys for a
+    /// workspace billed in dollars. `None` when auto-reload is not configured or the
+    /// workspace is billed in credits.
+    #[serde(default)]
+    pub selected_auto_reload_usage_cents: Option<i32>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

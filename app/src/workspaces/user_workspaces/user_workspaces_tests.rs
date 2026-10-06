@@ -3860,6 +3860,8 @@ fn test_remove_user_from_workspace_refreshes_state_only_on_success() {
                 is_unlimited: true,
                 request_limit: 0,
                 requests_used_since_last_refresh: 0,
+                included_usage_cents: None,
+                usage_cents_used_since_last_refresh: None,
                 is_request_limit_prorated: false,
             },
         });
@@ -4227,6 +4229,7 @@ fn gql_workspace(
                 auto_reload_enabled: false,
                 max_monthly_spend_cents: None,
                 selected_auto_reload_credit_denomination: None,
+                selected_auto_reload_usage_cents: None,
             },
             codebase_context_settings: GqlCodebaseContextSettings {
                 enabled: true,
@@ -4340,6 +4343,7 @@ fn gql_team_settings() -> GqlTeamSettings {
             auto_reload_enabled: false,
             max_monthly_spend_cents: None,
             selected_auto_reload_credit_denomination: None,
+            selected_auto_reload_usage_cents: None,
         },
         ambient_agent_settings: None,
         team_byo: None,

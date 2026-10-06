@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow, bail};
+use ordered_float::OrderedFloat;
 use regex::Regex;
 use warp_errors::report_error;
 use warp_graphql::billing::{
@@ -256,6 +257,12 @@ impl From<GqlWorkspaceMemberUsageInfo> for WorkspaceMemberUsageInfo {
             request_limit: gql_workspace_member_usage_info.request_limit,
             requests_used_since_last_refresh: gql_workspace_member_usage_info
                 .requests_used_since_last_refresh,
+            included_usage_cents: gql_workspace_member_usage_info
+                .included_usage_cents
+                .map(OrderedFloat),
+            usage_cents_used_since_last_refresh: gql_workspace_member_usage_info
+                .usage_cents_used_since_last_refresh
+                .map(OrderedFloat),
             is_unlimited: gql_workspace_member_usage_info.is_unlimited,
             is_request_limit_prorated: gql_workspace_member_usage_info.is_request_limit_prorated,
         }
@@ -524,6 +531,7 @@ impl From<GqlAddonCreditsSettings> for AddonCreditsSettings {
             max_monthly_spend_cents: gql_settings.max_monthly_spend_cents,
             selected_auto_reload_credit_denomination: gql_settings
                 .selected_auto_reload_credit_denomination,
+            selected_auto_reload_usage_cents: gql_settings.selected_auto_reload_usage_cents,
         }
     }
 }
@@ -819,6 +827,8 @@ impl BonusGrant {
             user_facing_message: bonus_grant.user_facing_message,
             request_credits_granted: bonus_grant.request_credits_granted,
             request_credits_remaining: bonus_grant.request_credits_remaining,
+            usage_cents_granted: bonus_grant.usage_cents_granted,
+            usage_cents_remaining: bonus_grant.usage_cents_remaining,
             scope,
         }
     }

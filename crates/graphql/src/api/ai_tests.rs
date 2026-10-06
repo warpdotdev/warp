@@ -46,6 +46,8 @@ fn conversion_populates_token_usage_and_tool_usage_metadata() {
         credits_spent: 12.5,
         platform_credits_spent: 2.5,
         total_provider_cost_in_cents: Some(3.2),
+        total_billed_cost_in_cents: Some(6.0),
+        total_platform_cost_in_cents: Some(0.5),
         summarized: true,
         warp_token_usage: vec![TokenUsage {
             model_id: "claude-4-7-opus-high".to_string(),
@@ -79,6 +81,7 @@ fn conversion_populates_token_usage_and_tool_usage_metadata() {
     assert_eq!(converted.credits_spent, 12.5);
     assert_eq!(converted.platform_credits_spent, 2.5);
     assert_eq!(converted.total_provider_cost_in_cents, Some(3.2));
+    assert_eq!(converted.total_billed_cost_in_cents, Some(6.5));
     assert_eq!(converted.credits_spent_for_last_block, None);
 
     // Token usage is sorted by model id, with warp and byok rows kept in
@@ -129,6 +132,8 @@ fn conversion_merges_warp_and_byok_usage_for_same_model() {
         credits_spent: 0.0,
         platform_credits_spent: 0.0,
         total_provider_cost_in_cents: None,
+        total_billed_cost_in_cents: None,
+        total_platform_cost_in_cents: Some(0.5),
         summarized: false,
         warp_token_usage: vec![TokenUsage {
             model_id: "claude-4-7-opus-high".to_string(),
@@ -150,6 +155,8 @@ fn conversion_merges_warp_and_byok_usage_for_same_model() {
     assert_eq!(usage.model_id, "claude-4-7-opus-high");
     assert_eq!(usage.warp_tokens, 100);
     assert_eq!(usage.byok_tokens, 50);
+    // A platform-only figure must not masquerade as a known billed total.
+    assert_eq!(converted.total_billed_cost_in_cents, None);
 }
 
 /// The conversation restore query must actually select the token-usage and
@@ -184,6 +191,8 @@ fn list_ai_conversations_query_selects_token_usage_fields() {
         "byokTokenUsage",
         "toolUsageMetadata",
         "tokenUsageByCategory",
+        "totalBilledCostInCents",
+        "totalPlatformCostInCents",
     ] {
         assert!(
             operation.query.contains(field),

@@ -122,6 +122,7 @@ fn set_addon_credits_pricing_info(app: &mut App) {
                 addon_credits_options: vec![AddonCreditsOption {
                     credits: 1000,
                     price_usd_cents: 1000,
+                    usage_cents: None,
                 }],
                 promotion_message: None,
             },
@@ -175,6 +176,8 @@ fn test_request_limit_info() {
             request_usage_model.request_limit_info = RequestLimitInfo {
                 limit: 200,
                 num_requests_used_since_refresh: 39,
+                included_usage_cents: None,
+                usage_cents_used_since_last_refresh: None,
                 next_refresh_time: ServerTimestamp::new(Utc::now() + Duration::days(1)),
                 is_unlimited: false,
                 request_limit_refresh_duration: RequestLimitRefreshDuration::Monthly,
@@ -194,6 +197,34 @@ fn test_request_limit_info() {
 }
 
 #[test]
+fn test_cached_request_limit_info_without_usage_cents_deserializes() {
+    let mut cached = serde_json::to_value(RequestLimitInfo::default()).unwrap();
+    let cached_object = cached.as_object_mut().unwrap();
+    cached_object.remove("included_usage_cents");
+    cached_object.remove("usage_cents_used_since_last_refresh");
+
+    let request_limit_info: RequestLimitInfo = serde_json::from_value(cached).unwrap();
+
+    assert_eq!(request_limit_info.included_usage_cents, None);
+    assert_eq!(request_limit_info.usage_cents_used_since_last_refresh, None);
+}
+
+#[test]
+fn test_request_limit_info_round_trips_usage_cents() {
+    let request_limit_info = RequestLimitInfo {
+        included_usage_cents: Some(1800.0),
+        usage_cents_used_since_last_refresh: Some(70.2),
+        ..RequestLimitInfo::default()
+    };
+
+    let serialized = serde_json::to_string(&request_limit_info).unwrap();
+    let deserialized: RequestLimitInfo = serde_json::from_str(&serialized).unwrap();
+
+    assert_eq!(deserialized.included_usage_cents, Some(1800.0));
+    assert_eq!(deserialized.usage_cents_used_since_last_refresh, Some(70.2));
+}
+
+#[test]
 fn test_request_limit_info_with_limit() {
     App::test((), |mut app| async move {
         let request_usage_model = add_request_usage_model(&mut app);
@@ -201,6 +232,8 @@ fn test_request_limit_info_with_limit() {
             request_usage_model.request_limit_info = RequestLimitInfo {
                 limit: 999999999,
                 num_requests_used_since_refresh: 39,
+                included_usage_cents: None,
+                usage_cents_used_since_last_refresh: None,
                 next_refresh_time: ServerTimestamp::new(Utc::now() + Duration::minutes(1)),
                 is_unlimited: false,
                 request_limit_refresh_duration: RequestLimitRefreshDuration::Monthly,
@@ -227,6 +260,8 @@ fn test_request_limit_info_past_refresh_time() {
             request_usage_model.request_limit_info = RequestLimitInfo {
                 limit: 200,
                 num_requests_used_since_refresh: 39,
+                included_usage_cents: None,
+                usage_cents_used_since_last_refresh: None,
                 next_refresh_time: ServerTimestamp::new(Utc::now() - Duration::seconds(1)),
                 is_unlimited: false,
                 request_limit_refresh_duration: RequestLimitRefreshDuration::Monthly,
@@ -253,6 +288,8 @@ fn test_request_limit_info_is_unlimited_true() {
             request_usage_model.request_limit_info = RequestLimitInfo {
                 limit: 999999999,
                 num_requests_used_since_refresh: 39,
+                included_usage_cents: None,
+                usage_cents_used_since_last_refresh: None,
                 next_refresh_time: ServerTimestamp::new(Utc::now() + Duration::minutes(1)),
                 is_unlimited: true,
                 request_limit_refresh_duration: RequestLimitRefreshDuration::Monthly,
@@ -308,6 +345,8 @@ fn test_buy_credits_banner_shows_with_only_ambient_bonus_credits() {
                 user_facing_message: None,
                 request_credits_granted: 1000,
                 request_credits_remaining: 1000,
+                usage_cents_granted: None,
+                usage_cents_remaining: None,
                 scope: BonusGrantScope::User,
             }];
 
@@ -403,6 +442,8 @@ fn test_buy_credits_banner_hidden_with_non_ambient_bonus_credits() {
                 user_facing_message: None,
                 request_credits_granted: 100,
                 request_credits_remaining: 100,
+                usage_cents_granted: None,
+                usage_cents_remaining: None,
                 scope: BonusGrantScope::User,
             }];
 
@@ -437,6 +478,8 @@ fn test_buy_credits_banner_shows_when_non_ambient_bonus_credits_are_depleted() {
                 user_facing_message: None,
                 request_credits_granted: 100,
                 request_credits_remaining: 0,
+                usage_cents_granted: None,
+                usage_cents_remaining: None,
                 scope: BonusGrantScope::User,
             }];
 
@@ -691,6 +734,8 @@ fn test_has_any_ai_remaining_true_with_user_bonus_credits() {
                 user_facing_message: None,
                 request_credits_granted: 5,
                 request_credits_remaining: 5,
+                usage_cents_granted: None,
+                usage_cents_remaining: None,
                 scope: BonusGrantScope::User,
             }];
 
@@ -755,6 +800,8 @@ fn test_has_any_ai_remaining_true_with_workspace_bonus_credits() {
                 user_facing_message: None,
                 request_credits_granted: 5,
                 request_credits_remaining: 5,
+                usage_cents_granted: None,
+                usage_cents_remaining: None,
                 scope: BonusGrantScope::Workspace(uid),
             }];
 
@@ -784,6 +831,8 @@ fn test_total_workspace_and_team_bonus_credits_counts_both_scopes() {
                 user_facing_message: None,
                 request_credits_granted: remaining,
                 request_credits_remaining: remaining,
+                usage_cents_granted: None,
+                usage_cents_remaining: None,
                 scope,
             };
             model.bonus_grants = vec![
@@ -1276,6 +1325,8 @@ fn test_has_any_ai_remaining_false_with_only_ambient_bonus_credits() {
                 user_facing_message: None,
                 request_credits_granted: 1000,
                 request_credits_remaining: 1000,
+                usage_cents_granted: None,
+                usage_cents_remaining: None,
                 scope: BonusGrantScope::User,
             }];
 

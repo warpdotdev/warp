@@ -16,6 +16,8 @@ fn grant(scope: BonusGrantScope, grant_type: BonusGrantType, remaining: i32) -> 
         user_facing_message: None,
         request_credits_granted: remaining,
         request_credits_remaining: remaining,
+        usage_cents_granted: None,
+        usage_cents_remaining: None,
         scope,
     }
 }

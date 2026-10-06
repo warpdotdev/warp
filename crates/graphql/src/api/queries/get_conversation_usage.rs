@@ -27,6 +27,8 @@ query GetConversationUsage(
             creditsSpent
             platformCreditsSpent
             totalProviderCostInCents
+            totalBilledCostInCents
+            totalPlatformCostInCents
             summarized
             tokenUsage { modelId totalTokens }
             warpTokenUsage { modelId totalTokens tokenUsageByCategory { category tokens } }
@@ -119,6 +121,8 @@ pub struct ConversationUsageMetadata {
     pub credits_spent: f64,
     pub platform_credits_spent: f64,
     pub total_provider_cost_in_cents: Option<f64>,
+    pub total_billed_cost_in_cents: Option<f64>,
+    pub total_platform_cost_in_cents: Option<f64>,
     pub summarized: bool,
     pub token_usage: Vec<ModelTokenUsage>,
     pub warp_token_usage: Vec<TokenUsage>,
@@ -189,6 +193,17 @@ pub(crate) fn convert_token_usage(
     result
 }
 
+/// Combines the server's cumulative billed inference cents with its platform cents into the
+/// single total the client displays, matching what `ChargedUsageTotals::total_cost_in_cents`
+/// sums from the per-turn wire charges. `None` when the billed inference total is unknown,
+/// since a platform-only figure would understate the conversation's cost.
+pub(crate) fn total_billed_cost_in_cents(
+    billed_inference_cents: Option<f64>,
+    platform_cents: Option<f64>,
+) -> Option<f32> {
+    billed_inference_cents.map(|billed| (billed + platform_cents.unwrap_or_default()) as f32)
+}
+
 impl From<&ConversationUsageMetadata> for persistence::model::ConversationUsageMetadata {
     fn from(gql: &ConversationUsageMetadata) -> Self {
         Self {
@@ -197,6 +212,10 @@ impl From<&ConversationUsageMetadata> for persistence::model::ConversationUsageM
             credits_spent: gql.credits_spent as f32,
             platform_credits_spent: gql.platform_credits_spent as f32,
             total_provider_cost_in_cents: gql.total_provider_cost_in_cents.map(|cost| cost as f32),
+            total_billed_cost_in_cents: total_billed_cost_in_cents(
+                gql.total_billed_cost_in_cents,
+                gql.total_platform_cost_in_cents,
+            ),
             credits_spent_for_last_block: None,
             // Not yet fetched by this GraphQL query (persisted-history
             // vertical, milestone 3) -- left `None` rather than fabricated.

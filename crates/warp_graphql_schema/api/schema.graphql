@@ -239,18 +239,42 @@ enum AddonCreditAutoReloadStatus {
 type AddonCreditsOption {
   credits: Int!
   priceUsdCents: Int!
+
+  """
+  The usage, in cents, that the pack buys when add-on packs are sold in dollars.
+  Null while packs are sold in credits.
+  """
+  usageCents: Int
 }
 
 type AddonCreditsSettings {
   autoReloadEnabled: Boolean!
   maxMonthlySpendCents: Int
+
+  """
+  The credit count the selected auto-reload pack is listed under in the add-on options.
+  """
   selectedAutoReloadCreditDenomination: Int
+
+  """
+  The list price of the selected auto-reload pack, which is the usage it buys for a team
+  billed in dollars.
+  """
+  selectedAutoReloadUsageCents: Int
 }
 
 input AddonCreditsSettingsInput {
   autoReloadEnabled: Boolean
   maxMonthlySpendCents: Int
+
+  """Selects the auto-reload pack by the credit count it is listed under."""
   selectedAutoReloadCreditDenomination: Int
+
+  """
+  Selects the auto-reload pack by its list price. Takes precedence over the credit
+  denomination, which must name the same pack when both are given.
+  """
+  selectedAutoReloadUsageCents: Int
 }
 
 enum AdminEnablementSetting {
@@ -586,6 +610,8 @@ type BonusGrant {
   requestCreditsGranted: Int!
   requestCreditsRemaining: Int!
   scope: BonusGrantScope!
+  usageCentsGranted: Float
+  usageCentsRemaining: Float
   userFacingMessage: String
 }
 
@@ -906,6 +932,23 @@ type ConversationUsageMetadata {
   platformCreditsSpent: Float!
   """The cumulative provider cost in US cents, when available."""
   totalProviderCostInCents: Float
+
+  """
+  The cumulative inference cost billed to the customer so far in the
+  conversation, in US cents (fractional cents allowed), at the customer's own
+  price: usage drawn from a grant or metered at what was paid for it, and
+  included usage at the plan's allowance rate. Null when the server cannot
+  establish a complete historical baseline, or when pricing transparency is
+  disabled server-side.
+  """
+  totalBilledCostInCents: Float
+
+  """
+  Aggregate platform cost (in US cents) charged so far in the conversation,
+  summed across every usage category and model. Null when pricing
+  transparency is disabled server-side.
+  """
+  totalPlatformCostInCents: Float
   summarized: Boolean!
 
   """
@@ -2989,6 +3032,12 @@ type RequestLimitInfo {
   acceptedAutosuggestionsLimit: Int! @deprecated(reason: "No longer tracked. Always returns 0.")
   acceptedAutosuggestionsSinceLastRefresh: Int! @deprecated(reason: "No longer tracked. Always returns 0.")
   embeddingGenerationBatchSize: Int!
+
+  """
+  The dollar value of requestLimit, in cents. Null for a subject billed in credits
+  rather than dollars, and when usage is unlimited.
+  """
+  includedUsageCents: Float
   isUnlimited: Boolean!
   isUnlimitedAutosuggestions: Boolean!
   isUnlimitedCodebaseIndices: Boolean!
@@ -3003,6 +3052,12 @@ type RequestLimitInfo {
   requestsUsedSinceLastRefresh: Int!
   suggestedCodeDiffsLimit: Int!
   suggestedCodeDiffsSurfacedSinceLastRefresh: Int!
+
+  """
+  The dollar value of requestsUsedSinceLastRefresh, in cents. Null for a subject billed
+  in credits rather than dollars, and when usage is unlimited.
+  """
+  usageCentsUsedSinceLastRefresh: Float
   voiceRequestLimit: Int!
   voiceRequestsUsedSinceLastRefresh: Int!
   voiceTokenLimit: Int!
@@ -5033,10 +5088,21 @@ type WorkspaceMember {
 }
 
 type WorkspaceMemberUsageInfo {
+  """
+  The dollar value of requestLimit, in cents. Null for a workspace billed in credits
+  rather than dollars, and when usage is unlimited.
+  """
+  includedUsageCents: Float
   isRequestLimitProrated: Boolean!
   isUnlimited: Boolean!
   requestLimit: Int!
   requestsUsedSinceLastRefresh: Int!
+
+  """
+  The dollar value of requestsUsedSinceLastRefresh, in cents. Null for a workspace billed
+  in credits rather than dollars, and when usage is unlimited.
+  """
+  usageCentsUsedSinceLastRefresh: Float
 }
 
 type WorkspaceSettings {

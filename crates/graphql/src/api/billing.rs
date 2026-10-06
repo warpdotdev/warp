@@ -57,6 +57,8 @@ pub struct BonusGrant {
     pub user_facing_message: Option<String>,
     pub request_credits_granted: i32,
     pub request_credits_remaining: i32,
+    pub usage_cents_granted: Option<f64>,
+    pub usage_cents_remaining: Option<f64>,
 }
 
 #[derive(cynic::Enum, Clone, Copy, Debug)]
@@ -284,6 +286,7 @@ pub enum DelinquencyStatus {
 pub struct AddonCreditsOption {
     pub credits: i32,
     pub price_usd_cents: i32,
+    pub usage_cents: Option<i32>,
 }
 
 impl AddonCreditsOption {

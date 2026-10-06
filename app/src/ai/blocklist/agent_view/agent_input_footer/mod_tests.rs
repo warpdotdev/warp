@@ -126,6 +126,7 @@ fn claude_conversation_metadata(task_id: AmbientAgentTaskId) -> ServerAIConversa
             credits_spent: 0.0,
             platform_credits_spent: 0.0,
             total_provider_cost_in_cents: None,
+            total_billed_cost_in_cents: None,
             credits_spent_for_last_block: None,
             charged_usage_for_last_block: None,
             total_charged_usage: None,

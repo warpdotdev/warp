@@ -262,6 +262,7 @@ fn usage_metadata_indicates_usage(metadata: &ConversationUsageMetadata) -> bool 
     metadata.credits_spent != 0.0
         || metadata.platform_credits_spent != 0.0
         || metadata.total_provider_cost_in_cents.is_some()
+        || metadata.total_billed_cost_in_cents.is_some()
         || !metadata.token_usage.is_empty()
         || metadata.context_window_usage != 0.0
         || metadata.was_summarized
@@ -1259,6 +1260,15 @@ impl AIConversation {
             self.total_provider_cost_in_cents = Some(total_provider_cost_in_cents);
             self.conversation_usage_metadata
                 .total_provider_cost_in_cents = Some(total_provider_cost_in_cents);
+        }
+        if let Some(total_billed_cost_in_cents) = metadata.usage.total_billed_cost_in_cents
+            && self
+                .conversation_usage_metadata
+                .total_billed_cost_in_cents
+                .is_none_or(|current| total_billed_cost_in_cents >= current)
+        {
+            self.conversation_usage_metadata.total_billed_cost_in_cents =
+                Some(total_billed_cost_in_cents);
         }
         // Usage evidence is derived from the metadata's contents (not its
         // presence) so a zero-usage conversation keeps the footer entry

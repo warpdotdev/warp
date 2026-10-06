@@ -117,6 +117,8 @@ fn workspace_member_conversion_preserves_is_disabled() {
         is_unlimited: false,
         request_limit: 0,
         requests_used_since_last_refresh: 0,
+        included_usage_cents: None,
+        usage_cents_used_since_last_refresh: None,
         is_request_limit_prorated: false,
     };
     let enabled_member = GqlWorkspaceMember {
@@ -136,6 +138,79 @@ fn workspace_member_conversion_preserves_is_disabled() {
 
     assert!(!WorkspaceMember::from(enabled_member).is_disabled);
     assert!(WorkspaceMember::from(disabled_member).is_disabled);
+}
+
+#[test]
+fn workspace_member_usage_conversion_preserves_billed_cents() {
+    let dollars_first = WorkspaceMemberUsageInfo::from(GqlWorkspaceMemberUsageInfo {
+        is_unlimited: false,
+        request_limit: 1000,
+        requests_used_since_last_refresh: 250,
+        included_usage_cents: Some(1800.0),
+        usage_cents_used_since_last_refresh: Some(450.5),
+        is_request_limit_prorated: false,
+    });
+    assert_eq!(
+        dollars_first.included_usage_cents,
+        Some(OrderedFloat(1800.0))
+    );
+    assert_eq!(
+        dollars_first.usage_cents_used_since_last_refresh,
+        Some(OrderedFloat(450.5))
+    );
+
+    let credits_first = WorkspaceMemberUsageInfo::from(GqlWorkspaceMemberUsageInfo {
+        is_unlimited: false,
+        request_limit: 1000,
+        requests_used_since_last_refresh: 250,
+        included_usage_cents: None,
+        usage_cents_used_since_last_refresh: None,
+        is_request_limit_prorated: false,
+    });
+    assert_eq!(credits_first.included_usage_cents, None);
+    assert_eq!(credits_first.usage_cents_used_since_last_refresh, None);
+}
+
+#[test]
+fn addon_credits_settings_conversion_preserves_auto_reload_usage_cents() {
+    let settings = AddonCreditsSettings::from(GqlAddonCreditsSettings {
+        auto_reload_enabled: true,
+        max_monthly_spend_cents: Some(10_000),
+        selected_auto_reload_credit_denomination: Some(1000),
+        selected_auto_reload_usage_cents: Some(1000),
+    });
+
+    assert_eq!(
+        settings.selected_auto_reload_credit_denomination,
+        Some(1000)
+    );
+    assert_eq!(settings.selected_auto_reload_usage_cents, Some(1000));
+}
+
+#[test]
+fn bonus_grant_conversion_preserves_usage_cents() {
+    let gql_grant = |usage_cents: Option<(f64, f64)>| GqlBonusGrant {
+        created_at: chrono::Utc::now().into(),
+        cost_cents: 1000,
+        expiration: None,
+        grant_type: warp_graphql::billing::BonusGrantType::Any,
+        scope: GqlBonusGrantScope::User,
+        reason: "purchase".to_string(),
+        user_facing_message: None,
+        request_credits_granted: 1000,
+        request_credits_remaining: 400,
+        usage_cents_granted: usage_cents.map(|(granted, _)| granted),
+        usage_cents_remaining: usage_cents.map(|(_, remaining)| remaining),
+    };
+
+    let dollars_first = BonusGrant::from_gql_user_bonus_grant(gql_grant(Some((1800.0, 720.0))));
+    assert_eq!(dollars_first.usage_cents_granted, Some(1800.0));
+    assert_eq!(dollars_first.usage_cents_remaining, Some(720.0));
+    assert_eq!(dollars_first.request_credits_remaining, 400);
+
+    let credits_first = BonusGrant::from_gql_user_bonus_grant(gql_grant(None));
+    assert_eq!(credits_first.usage_cents_granted, None);
+    assert_eq!(credits_first.usage_cents_remaining, None);
 }
 
 mod pending_email_invites_conversion {
@@ -313,6 +388,7 @@ mod team_settings_conversion {
                 auto_reload_enabled: true,
                 max_monthly_spend_cents: Some(100),
                 selected_auto_reload_credit_denomination: Some(50),
+                selected_auto_reload_usage_cents: None,
             },
             ambient_agent_settings: Some(gqlws::AmbientAgentSettings {
                 enable_warp_attribution: gqlws::AdminEnablementSetting::Enable,
