@@ -894,6 +894,12 @@ fn run_worker_command(worker: &warp_cli::WorkerCommand) -> Result<()> {
             crate::remote_server::run_daemon(args.identity_key.clone())
         }
         #[cfg(not(target_family = "wasm"))]
+        warp_cli::WorkerCommand::AcpBridge { launch_file } => {
+            // Stdout belongs to the agent's protocol stream, so there is no logging and no
+            // initialize_app.
+            crate::ai::agent_sdk::driver::harness::acp::run_bridge(launch_file)
+        }
+        #[cfg(not(target_family = "wasm"))]
         warp_cli::WorkerCommand::RipgrepSearch {
             parent,
             ignore_case,

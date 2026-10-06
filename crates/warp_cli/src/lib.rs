@@ -520,6 +520,18 @@ pub enum WorkerCommand {
     #[clap(hide = true)]
     RemoteServerDaemon(RemoteServerIdentityArgs),
 
+    /// Connect an Agent Client Protocol agent's stdin/stdout to the loopback socket the agent
+    /// driver is listening on. Run from the driver's terminal session so the agent inherits the
+    /// shell state established by environment setup commands.
+    #[cfg(not(target_family = "wasm"))]
+    #[clap(hide = true)]
+    AcpBridge {
+        /// File the driver wrote with the address to connect to, the token to present, and the
+        /// agent command line.
+        #[clap(long = "launch-file")]
+        launch_file: std::path::PathBuf,
+    },
+
     /// Run a headless ripgrep search worker.
     #[cfg(not(target_family = "wasm"))]
     #[clap(hide = true)]

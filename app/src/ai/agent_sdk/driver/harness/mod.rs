@@ -182,6 +182,13 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
         false
     }
 
+    /// Whether the harness runs as an interactive CLI agent in the terminal whose progress is
+    /// observed through CLI agent session events and hook plugins. Harnesses that drive a native
+    /// conversation directly return `false`.
+    fn drives_cli_agent_session(&self) -> bool {
+        true
+    }
+
     /// Fetch the harness-specific resume payload for an existing conversation.
     ///
     /// The driver calls this when the user passes `--conversation <id>` and the harness

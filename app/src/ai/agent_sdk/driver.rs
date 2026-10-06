@@ -699,6 +699,10 @@ pub struct AgentDriver {
     /// In the future, we _may_ use the harness abstraction for the Oz agent as well.
     harness: Option<Arc<dyn HarnessRunner>>,
 
+    /// Exit signal for a third-party harness that has no CLI agent session to fire it. Held so
+    /// the receiver in `run_harness` stays pending until the harness command ends on its own.
+    detached_harness_exit: Option<IdleTimeoutSender<()>>,
+
     // Optional idle timeout after completion. If set, the process will stay alive for follow-ups
     // and exit after this period of inactivity.
     idle_on_complete: Option<Duration>,
@@ -1280,6 +1284,7 @@ impl AgentDriver {
             team_scope,
             bedrock_oidc_credentials,
             harness: None,
+            detached_harness_exit: None,
             idle_on_complete,
             idle_on_fail,
             debug_window_refresh_installed: false,
@@ -1335,6 +1340,7 @@ impl AgentDriver {
             team_scope: None,
             bedrock_oidc_credentials: None,
             harness: None,
+            detached_harness_exit: None,
             idle_on_complete: None,
             idle_on_fail: None,
             debug_window_refresh_installed: false,
@@ -2911,6 +2917,16 @@ impl AgentDriver {
     ) -> Result<oneshot::Receiver<()>, AgentDriverError> {
         let (exit_tx, exit_rx) = oneshot::channel();
         let harness_exit = IdleTimeoutSender::new(exit_tx);
+
+        // Harnesses that report progress through the native conversation instead of a CLI agent
+        // session have no hook plugin to install and no session status to subscribe to; their
+        // exit is driven by the harness command ending.
+        if !harness.drives_cli_agent_session() {
+            foreground
+                .spawn(move |me, _| me.detached_harness_exit = Some(harness_exit))
+                .await?;
+            return Ok(exit_rx);
+        }
 
         // Subscribe to CLI agent session events so we can update the task
         // state as the harness emits stop/blocked notifications.
