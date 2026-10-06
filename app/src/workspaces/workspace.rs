@@ -449,6 +449,15 @@ impl PurchaseAddOnCreditsPolicy {
     }
 }
 
+/// Plan terms carried by the user's own tier rather than a workspace's. A teamless user's only
+/// workspace is the server's placeholder, which the client drops, so this is the only place
+/// their plan terms survive.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UserTier {
+    pub purchase_policy: Option<PurchaseAddOnCreditsPolicy>,
+    pub billed_in_dollars: bool,
+}
+
 #[derive(Clone, Debug, Copy, Serialize, Deserialize)]
 pub struct EnterprisePayAsYouGoPolicy {
     pub enabled: bool,
