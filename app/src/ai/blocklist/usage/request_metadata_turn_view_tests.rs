@@ -1,8 +1,14 @@
+use warp_core::features::FeatureFlag;
+use warpui::App;
+
 use super::*;
 use crate::ai::agent::request_metadata::{
     InferenceUsageType, RequestLlmGenerationSpan, RequestModelCharge, RequestPlatformCharge,
 };
+use crate::server::server_api::ServerApiProvider;
 use crate::settings::UsageDisplayUnit;
+use crate::test_util::request_usage::{add_request_usage_model, set_billed_in_dollars};
+use crate::test_util::settings::initialize_settings_for_tests;
 
 fn record(inference_cents: f32, platform_cents: f32) -> RequestMetadataRecord {
     RequestMetadataRecord {
@@ -51,13 +57,6 @@ fn record(inference_cents: f32, platform_cents: f32) -> RequestMetadataRecord {
         lines_removed: None,
         context_window_usage: None,
     }
-}
-
-#[test]
-fn format_dollars_never_rounds_a_real_charge_to_zero() {
-    assert_eq!(format_dollars(0.0), "$0.00");
-    assert_eq!(format_dollars(0.3), "<$0.01");
-    assert_eq!(format_dollars(150.0), "$1.50");
 }
 
 /// Every panel amount follows the display-unit setting; there is no separate Credits row.
@@ -128,6 +127,37 @@ fn tooltip_never_rounds_a_real_charge_to_zero() {
         turn_panel_tooltip_text(&[tiny], UsageDisplayUnit::Credits),
         "Turn: <0.1 credits"
     );
+}
+
+/// A subject billed in dollars sees a turn's charge in dollars whenever its records carry
+/// cents, regardless of the dogfood flag; a turn without any cents figure stays in credits.
+#[test]
+fn turn_panel_unit_follows_the_server_billing_unit() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        add_request_usage_model(&mut app);
+        set_billed_in_dollars(&mut app, true);
+
+        let charged = TurnPanelData::from(vec![record(120.0, 30.0)]);
+        let credits_only = TurnPanelData::Legacy {
+            records: vec![record(0.0, 0.0)],
+            charges: LegacyCharges::CreditsOnly(2.5),
+        };
+        app.read(|ctx| {
+            let unit = turn_panel_usage_display_unit(&charged, ctx);
+            assert_eq!(unit, UsageDisplayUnit::Dollars);
+            assert_eq!(
+                turn_panel_tooltip_text_for_data(&charged, unit),
+                "Turn: $1.50"
+            );
+            assert_eq!(
+                turn_panel_usage_display_unit(&credits_only, ctx),
+                UsageDisplayUnit::Credits
+            );
+        });
+    });
 }
 
 #[test]

@@ -110,7 +110,10 @@ fn test_convert_conversation_data_to_ai_conversation_sets_restored_run_id() {
         conversation.run_id(),
         Some(ambient_agent_task_id.to_string())
     );
-    assert_eq!(conversation.usage_totals().cost_in_cents, Some(3.2));
+    assert_eq!(
+        conversation.usage_metadata().total_provider_cost_in_cents,
+        Some(3.2)
+    );
     assert!(conversation.usage_totals().has_usage);
 }
 
@@ -138,16 +141,21 @@ fn set_server_metadata_keeps_known_baseline_when_cost_field_is_absent() {
         RestorationMode::Continue,
     )
     .expect("conversation should restore");
-    assert_eq!(conversation.usage_totals().cost_in_cents, Some(3.2));
+    assert_eq!(
+        conversation.usage_metadata().total_provider_cost_in_cents,
+        Some(3.2)
+    );
 
     let mut legacy_snapshot = test_server_metadata("server-token", None);
     legacy_snapshot.usage.total_provider_cost_in_cents = None;
     legacy_snapshot.usage.credits_spent = 2.0;
     conversation.set_server_metadata(legacy_snapshot);
 
-    let totals = conversation.usage_totals();
-    assert_eq!(totals.cost_in_cents, Some(3.2));
-    assert!(totals.has_usage);
+    assert_eq!(
+        conversation.usage_metadata().total_provider_cost_in_cents,
+        Some(3.2)
+    );
+    assert!(conversation.usage_totals().has_usage);
 }
 
 /// Asynchronous GraphQL metadata snapshots can be stale relative to live
@@ -174,20 +182,26 @@ fn stale_server_metadata_snapshot_never_regresses_known_total() {
         RestorationMode::Continue,
     )
     .expect("conversation should restore");
-    assert_eq!(conversation.usage_totals().cost_in_cents, Some(3.2));
+    assert_eq!(
+        conversation.usage_metadata().total_provider_cost_in_cents,
+        Some(3.2)
+    );
 
     let mut newer_snapshot = test_server_metadata("server-token", None);
     newer_snapshot.usage.total_provider_cost_in_cents = Some(4.4);
     conversation.set_server_metadata(newer_snapshot);
-    assert_eq!(conversation.usage_totals().cost_in_cents, Some(4.4));
+    assert_eq!(
+        conversation.usage_metadata().total_provider_cost_in_cents,
+        Some(4.4)
+    );
 
     let mut stale_snapshot = test_server_metadata("server-token", None);
     stale_snapshot.usage.total_provider_cost_in_cents = Some(3.2);
     conversation.set_server_metadata(stale_snapshot);
     assert_eq!(
-        conversation.usage_totals().cost_in_cents,
+        conversation.usage_metadata().total_provider_cost_in_cents,
         Some(4.4),
-        "a stale snapshot must never regress the displayed total"
+        "a stale snapshot must never regress the known total"
     );
 }
 
@@ -272,7 +286,7 @@ fn set_server_metadata_with_zero_usage_keeps_footer_usage_hidden() {
 
     let totals = conversation.usage_totals();
     assert!(!totals.has_usage);
-    assert_eq!(totals.cost_in_cents, None);
+    assert_eq!(totals.total_cost_in_cents(), None);
 }
 
 #[test]

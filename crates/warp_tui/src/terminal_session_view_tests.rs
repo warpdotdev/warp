@@ -2520,7 +2520,7 @@ fn render_usage_footer_row(app: &mut App, totals: ConversationUsageTotals) -> Ve
     app.update(|ctx| {
         let builder = TuiUiBuilder::from_app(ctx);
         let mode = AISettings::as_ref(ctx).usage_display_mode;
-        let usage = UsageToggle::default().render_entry(mode, totals, ctx, |_, _| {});
+        let usage = UsageToggle::default().render_entry(mode, totals, false, ctx, |_, _| {});
         let row = render_status_footer_row(
             FooterSegments {
                 ordered: vec![
@@ -2549,7 +2549,7 @@ fn response_summary_visibility_is_independent_from_the_footer_usage_mode() {
 
         let totals = ConversationUsageTotals {
             credits_spent: 2.5,
-            cost_in_cents: Some(3.2),
+            billed_cost_in_cents: Some(3.2),
             has_usage: true,
             charged_usage: None,
         };
@@ -4917,10 +4917,11 @@ fn footer_renders_agent_sections_left_aligned() {
                 TuiUsageDisplayMode::default(),
                 ConversationUsageTotals {
                     credits_spent: 2.5,
-                    cost_in_cents: Some(0.0),
+                    billed_cost_in_cents: Some(0.0),
                     has_usage: true,
                     charged_usage: None,
                 },
+                false,
                 ctx,
                 |_, _| {},
             );
@@ -5011,10 +5012,11 @@ fn footer_usage_entry_shows_unknown_cost_even_with_zero_credits() {
                 TuiUsageDisplayMode::Cost,
                 ConversationUsageTotals {
                     credits_spent: 0.0,
-                    cost_in_cents: None,
+                    billed_cost_in_cents: None,
                     has_usage: true,
                     charged_usage: None,
                 },
+                false,
                 ctx,
                 |_, _| {},
             );

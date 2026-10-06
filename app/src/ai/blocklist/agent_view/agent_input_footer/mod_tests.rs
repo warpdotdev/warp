@@ -22,6 +22,7 @@ use crate::terminal::cli_agent_sessions::{
 };
 use crate::terminal::shared_session::{SharedSessionSource, SharedSessionStatus};
 use crate::test_util::add_window_with_terminal;
+use crate::test_util::request_usage::set_billed_in_dollars;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 
 const CONVERSATION_TOKEN: &str = "server-conversation-token";
@@ -330,6 +331,47 @@ fn agent_footer_usage_tooltip_updates_on_usage_events() {
             footer.usage_tooltip_for_test(ctx)
         });
         assert_eq!(tooltip.as_deref(), Some("Conversation usage: 4.5 credits"));
+    });
+}
+
+/// A subject the server bills in dollars sees the tooltip's figure in dollars once the
+/// conversation has charged usage, even with the dogfood flag off, and the tooltip follows a
+/// request-limit refresh that flips the billing unit.
+#[test]
+fn agent_footer_usage_tooltip_follows_the_server_billing_unit() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        app.update(|ctx| {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
+                let conversation_id =
+                    model.start_new_conversation(terminal.id(), false, false, false, ctx);
+                model.set_active_conversation_id(conversation_id, terminal.id(), ctx);
+                model.update_conversation_cost_and_usage_for_request(
+                    conversation_id,
+                    None,
+                    None,
+                    vec![],
+                    Some(charged_usage_metadata()),
+                    false,
+                    ctx,
+                );
+            });
+        });
+        let tooltip = terminal.update(&mut app, |view, ctx| {
+            let footer = view.input().as_ref(ctx).agent_input_footer().as_ref(ctx);
+            footer.usage_tooltip_for_test(ctx)
+        });
+        assert_eq!(tooltip.as_deref(), Some("Conversation usage: 4.5 credits"));
+
+        set_billed_in_dollars(&mut app, true);
+        let tooltip = terminal.update(&mut app, |view, ctx| {
+            let footer = view.input().as_ref(ctx).agent_input_footer().as_ref(ctx);
+            footer.usage_tooltip_for_test(ctx)
+        });
+        assert_eq!(tooltip.as_deref(), Some("Conversation usage: $0.45"));
     });
 }
 

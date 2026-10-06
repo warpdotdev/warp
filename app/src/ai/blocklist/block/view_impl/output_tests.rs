@@ -5,6 +5,7 @@ use ai::skills::{ParsedSkill, SkillProvider, SkillReference, SkillScope};
 use computer_use::{Action, ScreenshotParams, Target, TargetedAction};
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::{DirectoryWatcher, RepoMetadataModel};
+use warp_core::features::FeatureFlag;
 use warp_util::host_id::HostId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
@@ -15,7 +16,7 @@ use watcher::HomeDirectoryWatcher;
 use super::{
     RecordingCardText, format_upload_artifact_text, parsed_skill_for_common_locations,
     read_skill_display_text, should_decorate_recorded_use_computer, start_recording_card_text,
-    stop_recording_card_text,
+    stop_recording_card_text, usage_pill_text,
 };
 use crate::ai::agent::{
     RecordingStarted, RecordingStopped, StartRecordingResult, StopRecordingResult,
@@ -23,7 +24,36 @@ use crate::ai::agent::{
 };
 use crate::ai::skills::SkillManager;
 use crate::settings::AISettings;
+use crate::test_util::request_usage::set_billed_in_dollars;
+use crate::test_util::terminal::initialize_app_for_terminal_view;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
+
+/// The pill shows a dollars-billed subject's figure in dollars whenever a cents figure exists
+/// and falls back to credits otherwise, independent of the dogfood flag; a credits-billed
+/// subject keeps today's prod display.
+#[test]
+fn usage_pill_text_follows_the_server_billing_unit() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
+        initialize_app_for_terminal_view(&mut app);
+
+        app.read(|ctx| {
+            assert_eq!(
+                usage_pill_text(20.0, Some(12_345), Some(36.0), ctx),
+                "20 credits"
+            );
+        });
+
+        set_billed_in_dollars(&mut app, true);
+        app.read(|ctx| {
+            assert_eq!(
+                usage_pill_text(20.0, Some(12_345), Some(36.0), ctx),
+                "$0.36"
+            );
+            assert_eq!(usage_pill_text(20.0, Some(12_345), None, ctx), "20 credits");
+        });
+    });
+}
 
 #[test]
 fn format_upload_artifact_text_includes_request_details() {

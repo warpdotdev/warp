@@ -222,10 +222,10 @@ pub struct ConversationUsageTotals {
     /// shows as "Credits spent (total)" and the conversation details panel
     /// shows as "Credits used".
     pub credits_spent: f32,
-    /// Total provider cost across all models, in US cents. `None` means the
-    /// server did not provide a historical baseline; it must not be rendered
-    /// as `$0.00` or as an incremental-only total.
-    pub cost_in_cents: Option<f32>,
+    /// The server's cumulative snapshot of what the customer was billed, in US
+    /// cents. `None` means the server did not establish one; it must not be
+    /// rendered as `$0.00`.
+    pub billed_cost_in_cents: Option<f32>,
     /// Whether the conversation has reported any usage. Derived from the
     /// contents of the usage metadata (not its mere presence), so a restored
     /// conversation that never ran a request keeps the footer entry hidden,
@@ -241,12 +241,13 @@ pub struct ConversationUsageTotals {
 }
 
 impl ConversationUsageTotals {
-    /// Returns the summed total of the tracked usage
-    /// if not available, falls back to the legacy provider total
+    /// Cost billed to the customer so far, in US cents: the summed per-turn charges when the
+    /// server streamed them, otherwise the GraphQL billed total. `None` when neither is known;
+    /// the provider cost is never a substitute.
     pub fn total_cost_in_cents(&self) -> Option<f32> {
         self.charged_usage
             .map(|usage| usage.total_cost_in_cents())
-            .or(self.cost_in_cents)
+            .or(self.billed_cost_in_cents)
     }
 }
 
@@ -860,14 +861,12 @@ impl AIConversation {
         self.conversation_usage_metadata.platform_credits_spent = 0.0;
     }
 
-    /// Test-only helper that sets (or clears) the conversation's dollar-cost
+    /// Test-only helper that sets (or clears) the conversation's billed-cost
     /// baseline directly, mirroring what `set_server_metadata` would derive
     /// from a real snapshot, without wiring up a full snapshot.
     #[cfg(test)]
-    pub(crate) fn set_cost_in_cents_for_test(&mut self, cost_in_cents: Option<f32>) {
-        self.total_provider_cost_in_cents = cost_in_cents;
-        self.conversation_usage_metadata
-            .total_provider_cost_in_cents = cost_in_cents;
+    pub(crate) fn set_billed_cost_in_cents_for_test(&mut self, cost_in_cents: Option<f32>) {
+        self.conversation_usage_metadata.total_billed_cost_in_cents = cost_in_cents;
     }
 
     /// Test-only helper that sets (or clears) the conversation's cumulative
@@ -4154,12 +4153,12 @@ impl AIConversation {
     }
 
     /// Compact usage totals for lightweight displays (e.g. the TUI footer's
-    /// usage entry): the GUI-consistent credits total plus the server-seeded
-    /// provider cost and any permitted live per-request deltas.
+    /// usage entry): the GUI-consistent credits total plus the billed cost the
+    /// server streamed or snapshotted.
     pub fn usage_totals(&self) -> ConversationUsageTotals {
         ConversationUsageTotals {
             credits_spent: self.inference_credits_spent() + self.platform_credits_spent(),
-            cost_in_cents: self.total_provider_cost_in_cents,
+            billed_cost_in_cents: self.conversation_usage_metadata.total_billed_cost_in_cents,
             has_usage: self.has_usage_metadata,
             charged_usage: self.conversation_usage_metadata.total_charged_usage,
         }

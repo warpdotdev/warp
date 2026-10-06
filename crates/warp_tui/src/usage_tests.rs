@@ -1,6 +1,6 @@
 use warp::appearance::Appearance;
 use warp::settings::TuiUsageDisplayMode;
-use warp::tui_export::ConversationUsageTotals;
+use warp::tui_export::{ChargedUsageTotals, ConversationUsageTotals};
 use warp_core::features::FeatureFlag;
 use warpui_core::App;
 use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
@@ -11,10 +11,26 @@ use super::*;
 fn totals(credits_spent: f32, cost_in_cents: f32) -> ConversationUsageTotals {
     ConversationUsageTotals {
         credits_spent,
-        cost_in_cents: Some(cost_in_cents),
+        billed_cost_in_cents: Some(cost_in_cents),
         has_usage: true,
         charged_usage: None,
     }
+}
+
+/// Renders the entry for `totals` into a single line of text.
+fn render_entry_line(
+    mode: TuiUsageDisplayMode,
+    totals: ConversationUsageTotals,
+    billed_in_dollars: bool,
+    ctx: &AppContext,
+) -> String {
+    let entry =
+        UsageToggle::default().render_entry(mode, totals, billed_in_dollars, ctx, |_, _| {});
+    TuiPresenter::new()
+        .present_element(entry, TuiRect::new(0, 0, 20, 1), ctx)
+        .buffer
+        .to_lines()
+        .join("")
 }
 
 #[test]
@@ -55,12 +71,33 @@ fn cost_mode_explicitly_marks_unknown_historical_cost() {
             TuiUsageDisplayMode::Cost,
             ConversationUsageTotals {
                 credits_spent: 0.0,
-                cost_in_cents: None,
+                billed_cost_in_cents: None,
                 has_usage: true,
                 charged_usage: None,
             },
         ),
         "Cost unavailable"
+    );
+}
+
+/// Cost mode shows what the server streamed as charged before falling back to
+/// the billed snapshot, mirroring `ConversationUsageTotals::total_cost_in_cents`.
+#[test]
+fn cost_mode_prefers_charged_usage_over_the_billed_snapshot() {
+    assert_eq!(
+        entry_text(
+            TuiUsageDisplayMode::Cost,
+            ConversationUsageTotals {
+                credits_spent: 2.5,
+                billed_cost_in_cents: Some(500.0),
+                has_usage: true,
+                charged_usage: Some(ChargedUsageTotals {
+                    input_cost_in_cents: 4.0,
+                    ..Default::default()
+                }),
+            },
+        ),
+        "$0.04"
     );
 }
 
@@ -76,19 +113,13 @@ fn footer_usage_entry_gates_the_cost_toggle_behind_the_feature_flag() {
         app.update(|ctx| {
             ctx.add_singleton_model(|_| Appearance::mock());
         });
-        let toggle = UsageToggle::default();
         let usage = totals(2.5, 3.2);
 
         // Flag OFF: static credits; the persisted `Cost` mode is ignored so the
         // dollar cost is never surfaced.
         app.read(|ctx| {
             let _guard = FeatureFlag::PricingTransparency.override_enabled(false);
-            let entry = toggle.render_entry(TuiUsageDisplayMode::Cost, usage, ctx, |_, _| {});
-            let line = TuiPresenter::new()
-                .present_element(entry, TuiRect::new(0, 0, 20, 1), ctx)
-                .buffer
-                .to_lines()
-                .join("");
+            let line = render_entry_line(TuiUsageDisplayMode::Cost, usage, false, ctx);
             assert!(
                 line.contains("2.5 credits"),
                 "flag off must show static credits, got: {line:?}"
@@ -103,15 +134,51 @@ fn footer_usage_entry_gates_the_cost_toggle_behind_the_feature_flag() {
         // dollar cost the toggle switches to.
         app.read(|ctx| {
             let _guard = FeatureFlag::PricingTransparency.override_enabled(true);
-            let entry = toggle.render_entry(TuiUsageDisplayMode::Cost, usage, ctx, |_, _| {});
-            let line = TuiPresenter::new()
-                .present_element(entry, TuiRect::new(0, 0, 20, 1), ctx)
-                .buffer
-                .to_lines()
-                .join("");
+            let line = render_entry_line(TuiUsageDisplayMode::Cost, usage, false, ctx);
             assert!(
                 line.contains("$0.03"),
                 "flag on must follow the persisted cost mode, got: {line:?}"
+            );
+        });
+    });
+}
+
+/// A subject the server bills in dollars sees the billed total regardless of
+/// the flag or the persisted mode, and falls back to the usual credits entry
+/// when the conversation has no billed total yet.
+#[test]
+fn footer_usage_entry_shows_billed_dollars_for_dollar_billed_subjects() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+        });
+        let usage = totals(2.5, 3.2);
+
+        app.read(|ctx| {
+            let _guard = FeatureFlag::PricingTransparency.override_enabled(false);
+            let line = render_entry_line(TuiUsageDisplayMode::Credits, usage, true, ctx);
+            assert!(
+                line.contains("$0.03"),
+                "a dollars-billed subject must see the billed total, got: {line:?}"
+            );
+        });
+
+        app.read(|ctx| {
+            let _guard = FeatureFlag::PricingTransparency.override_enabled(false);
+            let line = render_entry_line(
+                TuiUsageDisplayMode::Cost,
+                ConversationUsageTotals {
+                    credits_spent: 2.5,
+                    billed_cost_in_cents: None,
+                    has_usage: true,
+                    charged_usage: None,
+                },
+                true,
+                ctx,
+            );
+            assert!(
+                line.contains("2.5 credits"),
+                "without a billed total the entry falls back to credits, got: {line:?}"
             );
         });
     });

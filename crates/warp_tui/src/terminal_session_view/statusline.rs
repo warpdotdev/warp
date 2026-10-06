@@ -6,8 +6,8 @@ use chrono::{Local, NaiveDateTime};
 use vim::vim::{MotionType, VimMode};
 use warp::settings::{AISettings, TuiStatuslineConfig, TuiStatuslineItem};
 use warp::tui_export::{
-    ConversationUsageTotals, GitRepoModels, GitStatusMetadata, LLMPreferences, ResolvedTeamScope,
-    UserWorkspaces,
+    AIRequestUsageModel, ConversationUsageTotals, GitRepoModels, GitStatusMetadata, LLMPreferences,
+    ResolvedTeamScope, UserWorkspaces,
 };
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
@@ -573,9 +573,12 @@ impl TuiTerminalSessionView {
                     .flatten()
                     .map(|totals| {
                         let mode = AISettings::as_ref(ctx).usage_display_mode;
+                        let billed_in_dollars =
+                            AIRequestUsageModel::as_ref(ctx).is_billed_in_dollars();
                         FooterSegment::CreditUsage(self.usage_toggle.render_entry(
                             mode,
                             totals,
+                            billed_in_dollars,
                             ctx,
                             |event_ctx, _| {
                                 event_ctx.dispatch_typed_action(

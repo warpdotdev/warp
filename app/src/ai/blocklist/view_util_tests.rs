@@ -1,9 +1,27 @@
+use settings::Setting as _;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_if_error;
 use warpui::App;
 
 use super::*;
 use crate::ai::agent::ChatGPTSubscriptionErrorActionKind;
+use crate::server::server_api::ServerApiProvider;
 use crate::settings::UsageDisplayUnit;
+use crate::test_util::request_usage::{add_request_usage_model, set_billed_in_dollars};
+use crate::test_util::settings::initialize_settings_for_tests;
+
+/// Registers the settings and request-usage model the unit resolver reads.
+fn initialize_usage_unit_test_app(app: &mut App) {
+    initialize_settings_for_tests(app);
+    app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+    add_request_usage_model(app);
+}
+
+fn set_usage_display_unit(app: &mut App, unit: UsageDisplayUnit) {
+    AISettings::handle(app).update(app, |settings, ctx| {
+        report_if_error!(settings.usage_display_unit.set_value(unit, ctx));
+    });
+}
 
 fn chatgpt_subscription_error(actions: Vec<ChatGPTSubscriptionErrorAction>) -> RenderableAIError {
     RenderableAIError::ChatGPTSubscriptionError {
@@ -138,12 +156,88 @@ fn format_usage_floors_positive_sub_cent_dollar_amounts() {
     );
 }
 
+/// The server's billing unit decides between dollars and credits, so a subject billed in
+/// dollars sees dollars whichever way the dogfood flag and preference point.
 #[test]
-fn format_usage_returns_credits_only_when_flag_disabled() {
+fn effective_usage_unit_prefers_the_server_billing_unit() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
+        initialize_usage_unit_test_app(&mut app);
+        set_billed_in_dollars(&mut app, true);
+        set_usage_display_unit(&mut app, UsageDisplayUnit::Credits);
+
+        app.read(|ctx| {
+            assert_eq!(
+                effective_usage_unit(Some(36.0), ctx),
+                UsageDisplayUnit::Dollars
+            );
+        });
+    });
+}
+
+/// Without a cents figure there is nothing to show in dollars, so a dollars-billed subject
+/// falls back to the credits string on a flag-off client.
+#[test]
+fn effective_usage_unit_falls_back_to_credits_without_a_cents_figure() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
+        initialize_usage_unit_test_app(&mut app);
+        set_billed_in_dollars(&mut app, true);
+        set_usage_display_unit(&mut app, UsageDisplayUnit::Dollars);
+
+        app.read(|ctx| {
+            assert_eq!(effective_usage_unit(None, ctx), UsageDisplayUnit::Credits);
+        });
+    });
+}
+
+/// A subject billed in credits keeps today's dogfood rule: the preference only applies while
+/// the client flag is on.
+#[test]
+fn effective_usage_unit_follows_the_flag_and_preference_for_credit_billed_subjects() {
+    App::test((), |mut app| async move {
+        initialize_usage_unit_test_app(&mut app);
+        set_billed_in_dollars(&mut app, false);
+        set_usage_display_unit(&mut app, UsageDisplayUnit::Dollars);
+
+        app.read(|ctx| {
+            let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
+            assert_eq!(
+                effective_usage_unit(Some(36.0), ctx),
+                UsageDisplayUnit::Credits
+            );
+        });
+        app.read(|ctx| {
+            let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
+            assert_eq!(
+                effective_usage_unit(Some(36.0), ctx),
+                UsageDisplayUnit::Dollars
+            );
+        });
+
+        set_usage_display_unit(&mut app, UsageDisplayUnit::Credits);
+        app.read(|ctx| {
+            let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
+            assert_eq!(
+                effective_usage_unit(Some(36.0), ctx),
+                UsageDisplayUnit::Credits
+            );
+        });
+    });
+}
+
+/// The formatters render whichever unit they are handed; only the token detail stays behind
+/// the dogfood flag.
+#[test]
+fn format_usage_renders_dollars_without_tokens_when_flag_disabled() {
     let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
 
     assert_eq!(
         format_usage(20.0, Some(12345), Some(36.0), UsageDisplayUnit::Dollars),
+        "$0.36"
+    );
+    assert_eq!(
+        format_usage(20.0, Some(12345), Some(36.0), UsageDisplayUnit::Credits),
         format_credits(20.0)
     );
 }
@@ -283,12 +377,12 @@ fn usage_label_uses_credits_wording_when_unit_is_credits() {
 }
 
 #[test]
-fn usage_label_uses_credits_wording_when_flag_disabled_even_if_unit_is_dollars() {
+fn usage_label_uses_dollars_wording_when_flag_disabled_and_unit_is_dollars() {
     let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
 
     assert_eq!(
         usage_label(UsageLabelKind::Plain, Some(36.0), UsageDisplayUnit::Dollars),
-        "Credits spent"
+        "Usage charged"
     );
 }
 

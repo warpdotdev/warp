@@ -49,7 +49,9 @@ use crate::ai::ambient_agents::task::TaskPrincipalInfo;
 use crate::ai::ambient_agents::{AmbientAgentTaskId, cancel_task_with_toast};
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
-use crate::ai::blocklist::view_util::{UsageLabelKind, format_usage, usage_label};
+use crate::ai::blocklist::view_util::{
+    UsageLabelKind, effective_usage_unit, format_usage, usage_label,
+};
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, CloudAmbientAgentEnvironment};
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
@@ -245,7 +247,7 @@ pub struct ConversationDetailsData {
     credits: Option<f32>,
     /// Total token count used, when the source provides it.
     total_tokens: Option<u32>,
-    /// Total server-reported cost in US cents.
+    /// Total cost billed to the customer in US cents, when the source provides it.
     cost_in_cents: Option<f32>,
     /// Total duration of the conversation.
     run_time: Option<Duration>,
@@ -353,7 +355,6 @@ impl ConversationDetailsData {
             .map(|m| Harness::from(m.harness))
             .or(Some(Harness::Oz));
 
-        let usage_totals = conversation.usage_totals();
         let total_tokens: u32 = conversation
             .token_usage()
             .iter()
@@ -375,9 +376,7 @@ impl ConversationDetailsData {
             created_at,
             credits: Some(conversation.credits_spent()),
             total_tokens: (total_tokens > 0).then_some(total_tokens),
-            cost_in_cents: usage_totals
-                .charged_usage
-                .map(|usage| usage.total_cost_in_cents()),
+            cost_in_cents: conversation.usage_totals().total_cost_in_cents(),
             run_time,
             artifacts: conversation.artifacts().to_vec(),
             open_action: None,
@@ -2306,7 +2305,7 @@ impl View for ConversationDetailsPanel {
 
         if let Some(credits) = self.data.credits {
             let cost_in_cents = self.data.cost_in_cents;
-            let usage_display_unit = AISettings::as_ref(app).usage_display_unit;
+            let usage_display_unit = effective_usage_unit(cost_in_cents, app);
             let formatted = format_usage(
                 credits,
                 self.data.total_tokens,

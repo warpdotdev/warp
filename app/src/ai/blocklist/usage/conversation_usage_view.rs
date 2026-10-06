@@ -25,7 +25,9 @@ use crate::ai::blocklist::usage::render_context_window_usage_icon;
 use crate::ai::blocklist::usage::rollup::{
     AgentAvatar, OrchestrationCreditRollup, PerAgentCreditEntry, compute_orchestration_rollup,
 };
-use crate::ai::blocklist::view_util::{UsageLabelKind, format_credits, format_usage, usage_label};
+use crate::ai::blocklist::view_util::{
+    UsageLabelKind, effective_usage_unit, format_credits, format_usage, usage_label,
+};
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::appearance::Appearance;
 use crate::persistence::model::{
@@ -57,21 +59,21 @@ pub struct ConversationUsageInfo {
     pub lines_added: i32,
     pub lines_removed: i32,
     pub commands_executed: i32,
-    /// Total token count across the whole conversation so far, gated by
-    /// `FeatureFlag::PricingTransparency` (checked inside
-    /// `format_credits_with_cost`). `None` when the source doesn't provide
-    /// it (flag off, or a source that doesn't carry it yet — e.g. the
-    /// settings usage-history surface; documented gap, see `gql_convert.rs`).
+    /// Total token count across the whole conversation so far, shown only
+    /// behind `FeatureFlag::PricingTransparency` (checked inside
+    /// `format_usage`). `None` when the source doesn't provide it (flag off,
+    /// or a source that doesn't carry it yet — e.g. the settings
+    /// usage-history surface; documented gap, see `gql_convert.rs`).
     pub total_tokens: Option<u32>,
-    /// Total real dollar cost across the whole conversation so far, in US
-    /// cents. `None` under the same conditions as `total_tokens`.
+    /// Total cost billed to the customer across the whole conversation so
+    /// far, in US cents. `None` when the server has not established one.
     pub total_cost_in_cents: Option<f32>,
     /// Total token count over the last block (see
     /// `credits_spent_for_last_block`). `None` under the same conditions as
     /// `total_tokens`.
     pub tokens_for_last_block: Option<u32>,
-    /// Total real dollar cost over the last block, in US cents. `None`
-    /// under the same conditions as `total_tokens`.
+    /// Total cost billed to the customer over the last block, in US cents.
+    /// `None` when the server streamed no charges for it.
     pub cost_in_cents_for_last_block: Option<f32>,
 }
 
@@ -326,7 +328,6 @@ impl ConversationUsageView {
         let theme = appearance.theme();
         let font_size = appearance.ui_font_size() + 2.;
         let text_color = blended_colors::text_main(theme, theme.surface_2());
-        let usage_display_unit = AISettings::as_ref(app).usage_display_unit;
         let context_window_breakdown_enabled = FeatureFlag::ContextWindowUsageBreakdown
             .is_enabled()
             && !context_window_segment_display_rows(
@@ -360,16 +361,19 @@ impl ConversationUsageView {
             .as_ref()
             .map(|r| r.total_cost_in_cents)
             .unwrap_or(self.usage_info.total_cost_in_cents);
+        let total_usage_display_unit = effective_usage_unit(total_cost_in_cents_value, app);
 
         if self.display_mode == DisplayMode::Footer
             && self.usage_info.credits_spent_for_last_block.is_some()
         {
             let last_block_credits = self.usage_info.credits_spent_for_last_block.unwrap();
+            let last_block_usage_display_unit =
+                effective_usage_unit(self.usage_info.cost_in_cents_for_last_block, app);
             labels.push(render_label_text(
                 &usage_label(
                     UsageLabelKind::LastResponse,
                     self.usage_info.cost_in_cents_for_last_block,
-                    usage_display_unit,
+                    last_block_usage_display_unit,
                 ),
                 appearance,
             ));
@@ -378,7 +382,7 @@ impl ConversationUsageView {
                     last_block_credits,
                     self.usage_info.tokens_for_last_block,
                     self.usage_info.cost_in_cents_for_last_block,
-                    usage_display_unit,
+                    last_block_usage_display_unit,
                 ),
                 appearance,
             ));
@@ -387,7 +391,7 @@ impl ConversationUsageView {
                 &usage_label(
                     UsageLabelKind::Total,
                     total_cost_in_cents_value,
-                    usage_display_unit,
+                    total_usage_display_unit,
                 ),
                 appearance,
             ));
@@ -395,7 +399,7 @@ impl ConversationUsageView {
                 total_credits_value,
                 total_tokens_value,
                 total_cost_in_cents_value,
-                usage_display_unit,
+                total_usage_display_unit,
                 rollup.as_ref(),
                 appearance,
             ));
@@ -404,7 +408,7 @@ impl ConversationUsageView {
                 &usage_label(
                     UsageLabelKind::Plain,
                     total_cost_in_cents_value,
-                    usage_display_unit,
+                    total_usage_display_unit,
                 ),
                 appearance,
             ));
@@ -412,7 +416,7 @@ impl ConversationUsageView {
                 total_credits_value,
                 total_tokens_value,
                 total_cost_in_cents_value,
-                usage_display_unit,
+                total_usage_display_unit,
                 rollup.as_ref(),
                 appearance,
             ));

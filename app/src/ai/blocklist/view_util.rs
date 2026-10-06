@@ -21,7 +21,7 @@ use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::{
     ChatGPTSubscriptionErrorAction, ChatGPTSubscriptionErrorActionKind, RenderableAIError,
 };
-use crate::settings::UsageDisplayUnit;
+use crate::settings::{AISettings, UsageDisplayUnit};
 use crate::themes::theme::{AnsiColorIdentifier, Fill, WarpTheme};
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -375,43 +375,37 @@ pub fn format_dollars(cost_in_cents: f32) -> String {
     }
 }
 
-fn effective_usage_unit(unit: UsageDisplayUnit, cost_in_cents: Option<f32>) -> UsageDisplayUnit {
+/// Resolves the unit a usage figure is displayed in. A subject the server bills in dollars sees
+/// dollars whenever a cents figure exists, regardless of the client flag or preference; everyone
+/// else follows the dogfood `PricingTransparency` flag and the `usage_display_unit` setting.
+pub fn effective_usage_unit(cost_in_cents: Option<f32>, app: &AppContext) -> UsageDisplayUnit {
+    if cost_in_cents.is_some() && AIRequestUsageModel::as_ref(app).is_billed_in_dollars() {
+        return UsageDisplayUnit::Dollars;
+    }
     if !FeatureFlag::PricingTransparency.is_enabled() {
         return UsageDisplayUnit::Credits;
     }
-    match unit {
-        UsageDisplayUnit::Credits => UsageDisplayUnit::Credits,
-        UsageDisplayUnit::Dollars if cost_in_cents.is_some() => UsageDisplayUnit::Dollars,
-        UsageDisplayUnit::Dollars => UsageDisplayUnit::Credits,
-    }
+    AISettings::as_ref(app).usage_display_unit
 }
 
-fn format_usage_unit_value(
-    credits: f32,
-    cost_in_cents: Option<f32>,
-    unit: UsageDisplayUnit,
-) -> String {
-    match unit {
-        UsageDisplayUnit::Credits => format_credits(credits),
-        UsageDisplayUnit::Dollars => cost_in_cents
-            .map(format_dollars)
-            .unwrap_or_else(|| format_credits(credits)),
-    }
-}
-
-/// Formats tokens with the selected unit, falling back to credits when dollars are unavailable.
+/// Formats a usage figure in `unit`, with the token count when it is known. Dollars fall back to
+/// the plain credits string when no cents figure exists.
 pub fn format_usage(
     credits: f32,
     tokens: Option<u32>,
     cost_in_cents: Option<f32>,
     unit: UsageDisplayUnit,
 ) -> String {
-    let resolved_unit = effective_usage_unit(unit, cost_in_cents);
-    if !FeatureFlag::PricingTransparency.is_enabled() || resolved_unit != unit {
-        return format_credits(credits);
-    }
-    let unit_text = format_usage_unit_value(credits, cost_in_cents, resolved_unit);
-    let Some(tokens) = tokens.filter(|&tokens| tokens > 0) else {
+    let unit_text = match (unit, cost_in_cents) {
+        (UsageDisplayUnit::Dollars, None) => return format_credits(credits),
+        (UsageDisplayUnit::Dollars, Some(cost_in_cents)) => format_dollars(cost_in_cents),
+        (UsageDisplayUnit::Credits, _) => format_credits(credits),
+    };
+    // Token counts remain a dogfood-only detail: the server's billing unit decides between
+    // dollars and credits, but not whether this extra breakdown is shown.
+    let Some(tokens) =
+        tokens.filter(|&tokens| tokens > 0 && FeatureFlag::PricingTransparency.is_enabled())
+    else {
         return unit_text;
     };
     format!("{} tokens / {unit_text}", tokens.separate_with_commas())
@@ -431,7 +425,12 @@ pub fn usage_label(
     cost_in_cents: Option<f32>,
     unit: UsageDisplayUnit,
 ) -> String {
-    let unit = effective_usage_unit(unit, cost_in_cents);
+    let unit = match (unit, cost_in_cents) {
+        (UsageDisplayUnit::Dollars, Some(_)) => UsageDisplayUnit::Dollars,
+        (UsageDisplayUnit::Dollars, None) | (UsageDisplayUnit::Credits, _) => {
+            UsageDisplayUnit::Credits
+        }
+    };
     let base = match (kind, unit) {
         (UsageLabelKind::DetailsPanel, UsageDisplayUnit::Credits) => "Credits used",
         (UsageLabelKind::DetailsPanel, UsageDisplayUnit::Dollars) => "Usage",
