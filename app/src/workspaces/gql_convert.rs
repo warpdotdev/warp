@@ -89,7 +89,7 @@ use crate::workspaces::workspace::{
     AiOverages, BonusGrantsPurchased, ByoApiKeyPolicy, ByoEndpointPolicy, CodebaseContextPolicy,
     EnterpriseCreditsAutoReloadPolicy, EnterprisePayAsYouGoPolicy, ManagedByokByoePolicy,
     MultiAdminPolicy, NativeWorkspacesPolicy, PurchaseAddOnCreditsPolicy,
-    UsageBasedPricingSettings, WorkspaceUid,
+    UsageBasedPricingSettings, UserTier, WorkspaceUid,
 };
 
 pub const PLACEHOLDER_WORKSPACE_UID: &str = "NOT_A_REAL_WORKSPACE_UID";
@@ -716,6 +716,7 @@ impl From<GqlTier> for Tier {
         Self {
             name: gql_tier.name,
             description: gql_tier.description,
+            billed_in_dollars: gql_tier.billed_in_dollars,
             warp_ai_policy: gql_tier.warp_ai_policy.map(From::from),
             workspace_size_policy: gql_tier.team_size_policy.map(From::from),
             shared_notebooks_policy: gql_tier.shared_notebooks_policy.map(From::from),
@@ -1535,15 +1536,16 @@ pub fn workspaces_metadata_response_from_gql(
         .experiments
         .and_then(|experiments| convert_to_server_experiment!(experiments));
 
-    // A teamless user's only workspace is the placeholder filtered out
-    // above, so the user-level policy is the only place their add-on
-    // credits purchase policy — gating and premium pricing alike —
-    // survives (see
-    // [`crate::workspaces::user_workspaces::UserWorkspaces::purchase_policy`]).
-    let user_purchase_policy = gql_user
+    let user_tier = gql_user
         .billing_metadata
-        .and_then(|billing_metadata| billing_metadata.tier.purchase_add_on_credits_policy)
-        .map(Into::into);
+        .map(|billing_metadata| UserTier {
+            purchase_policy: billing_metadata
+                .tier
+                .purchase_add_on_credits_policy
+                .map(Into::into),
+            billed_in_dollars: billing_metadata.tier.billed_in_dollars,
+        })
+        .unwrap_or_default();
 
     // TODO(skambashi) refactor to return back workspaces, and not teams
     WorkspacesMetadataResponse {
@@ -1551,7 +1553,7 @@ pub fn workspaces_metadata_response_from_gql(
         joinable_teams,
         experiments,
         ai_credit_availability: Some(gql_user.ai_credit_availability.into()),
-        user_purchase_policy,
+        user_tier,
     }
 }
 

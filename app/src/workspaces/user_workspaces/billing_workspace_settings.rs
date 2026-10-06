@@ -50,7 +50,18 @@ impl UserWorkspaces {
     pub fn purchase_policy(&self) -> Option<PurchaseAddOnCreditsPolicy> {
         self.current_workspace_billing_metadata()
             .and_then(|billing| billing.tier.purchase_add_on_credits_policy)
-            .or(self.user_purchase_policy)
+            .or(self.user_tier.purchase_policy)
+    }
+
+    /// Whether the viewer's plan bills AI usage in dollars rather than credits: the current
+    /// workspace's tier when one exists, else the user-level tier (the teamless fallback, as for
+    /// [`Self::purchase_policy`]). This is the rollout signal for every dollars-first display; a
+    /// surface still falls back to credits for any figure whose cents the response leaves out.
+    pub fn is_billed_in_dollars(&self) -> bool {
+        self.current_workspace_billing_metadata()
+            .map_or(self.user_tier.billed_in_dollars, |billing| {
+                billing.tier.billed_in_dollars
+            })
     }
 
     /// Returns `true` if active AI is allowed for the current workspace, based on billing config.

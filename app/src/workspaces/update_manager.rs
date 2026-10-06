@@ -125,7 +125,7 @@ impl TeamUpdateManager {
                     joinable_teams: vec![],
                     experiments: None,
                     ai_credit_availability: None,
-                    user_purchase_policy: None,
+                    user_tier: Default::default(),
                 },
                 pricing_info: None,
             })
@@ -360,10 +360,10 @@ impl TeamUpdateManager {
 
                 let workspaces = response.metadata.workspaces;
                 let joinable_teams = response.metadata.joinable_teams;
-                let user_purchase_policy = response.metadata.user_purchase_policy;
+                let user_tier = response.metadata.user_tier;
 
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
-                    user_workspaces.set_user_purchase_policy(user_purchase_policy);
+                    user_workspaces.set_user_tier(user_tier);
                     user_workspaces.update_workspaces(workspaces.clone(), ctx);
                     user_workspaces.update_joinable_teams(joinable_teams, ctx);
                 });
@@ -484,7 +484,7 @@ impl TeamUpdateManager {
                 let workspaces = user_workspaces_access.workspaces;
                 let joinable_teams = user_workspaces_access.joinable_teams;
                 let experiments = user_workspaces_access.experiments;
-                let user_purchase_policy = user_workspaces_access.user_purchase_policy;
+                let user_tier = user_workspaces_access.user_tier;
 
                 if let Some(availability) = user_workspaces_access.ai_credit_availability {
                     AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
@@ -493,7 +493,7 @@ impl TeamUpdateManager {
                 }
 
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
-                    user_workspaces.set_user_purchase_policy(user_purchase_policy);
+                    user_workspaces.set_user_tier(user_tier);
                     user_workspaces.update_workspaces(workspaces.clone(), ctx);
                     user_workspaces.update_joinable_teams(joinable_teams.clone(), ctx);
                 });
