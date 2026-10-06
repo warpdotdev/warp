@@ -42,9 +42,7 @@ use crate::workspaces::workspace::{
     AIAutonomyPolicy, AiAutonomySettings, BillingMetadata, CustomerType, SplitListSetting,
     WorkspaceMember, WorkspaceSettings,
 };
-use crate::workspaces::workspace::{
-    AiOverages, PurchaseAddOnCreditsPolicy, UsageBasedPricingSettings,
-};
+use crate::workspaces::workspace::{AiOverages, UsageBasedPricingSettings, UserTier};
 pub(crate) mod billing_workspace_settings;
 pub(crate) mod team_workspace_settings;
 pub(crate) use team_workspace_settings::TeamContextForOperationResolver;
@@ -131,12 +129,9 @@ pub struct UserWorkspaces {
     workspaces: Tracked<Vec<Workspace>>,
     window_team_uids: HashMap<WindowId, Option<ServerId>>,
     joinable_teams: Vec<DiscoverableTeam>,
-    /// The user-level add-on credits purchase policy from the latest
-    /// workspaces-metadata response. Teamless (fresh free) users have no
-    /// team and their only workspace is the server's placeholder, which is
-    /// filtered out of `workspaces` — this is the only place their purchase
-    /// policy survives.
-    user_purchase_policy: Option<PurchaseAddOnCreditsPolicy>,
+    /// The user-level plan terms from the latest workspaces-metadata response; the fallback for
+    /// users whose only workspace is the server's placeholder filtered out of `workspaces`.
+    user_tier: UserTier,
     /// The model catalog to fall back to when no current workspace exists: before login, or
     /// for a logged-in user whose only workspace is the server's placeholder, which is
     /// filtered out of `workspaces`.
@@ -157,9 +152,9 @@ pub struct WorkspacesMetadataResponse {
     /// The server-authoritative AI credit availability decision, piggybacked
     /// on the metadata query so every refresh keeps the shared state fresh.
     pub ai_credit_availability: Option<AICreditAvailability>,
-    /// The user-level add-on credits purchase policy; the teamless-purchase
-    /// fallback (see [`UserWorkspaces::purchase_policy`]).
-    pub user_purchase_policy: Option<PurchaseAddOnCreditsPolicy>,
+    /// The user-level plan terms; the teamless fallback (see
+    /// [`UserWorkspaces::purchase_policy`] and [`UserWorkspaces::is_billed_in_dollars`]).
+    pub user_tier: UserTier,
 }
 
 // A representation of all data we fetch at a single time via our 10 minute poll.
@@ -199,7 +194,7 @@ impl UserWorkspaces {
             workspaces: cached_workspaces.into(),
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
-            user_purchase_policy: None,
+            user_tier: Default::default(),
             workspaceless_models_by_feature: None,
             team_client,
             workspace_client,
@@ -250,7 +245,7 @@ impl UserWorkspaces {
             workspaces: cached_workspaces.into(),
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
-            user_purchase_policy: None,
+            user_tier: Default::default(),
             workspaceless_models_by_feature: None,
             team_client,
             workspace_client,
@@ -637,11 +632,11 @@ impl UserWorkspaces {
             .and_then(|workspace_uid| self.workspace_from_uid(workspace_uid))
     }
 
-    /// Updates the user-level add-on credits purchase policy captured from a
-    /// workspaces-metadata response. Must be called on every path that
-    /// applies such a response so the teamless fallback can't go stale.
-    pub fn set_user_purchase_policy(&mut self, policy: Option<PurchaseAddOnCreditsPolicy>) {
-        self.user_purchase_policy = policy;
+    /// Updates the user-level plan terms captured from a workspaces-metadata response. Must be
+    /// called on every path that applies such a response so the teamless fallback can't go
+    /// stale.
+    pub fn set_user_tier(&mut self, user_tier: UserTier) {
+        self.user_tier = user_tier;
     }
 
     pub fn current_workspace_mut(&mut self) -> Option<&mut Workspace> {
@@ -892,7 +887,7 @@ impl UserWorkspaces {
                 let workspaces = response.metadata.workspaces;
                 let joinable_teams = response.metadata.joinable_teams;
 
-                self.set_user_purchase_policy(response.metadata.user_purchase_policy);
+                self.set_user_tier(response.metadata.user_tier);
                 self.update_workspaces(workspaces.clone(), ctx);
                 self.update_joinable_teams(joinable_teams, ctx);
 
