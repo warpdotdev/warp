@@ -220,64 +220,56 @@ impl AuthSession {
             let url = token.access_token_url(&firebase_api_key);
             let request_body = token.access_token_request_body();
             let proxy_url = token.proxy_url(&ChannelState::server_root_url(), &firebase_api_key);
-            let response = match client
-                .post(&url)
-                .form(&request_body)
-                .timeout(FETCH_ACCESS_TOKEN_TIMEOUT)
-                .send()
-                .await
-            {
-                Ok(response) => match response.error_for_status_ref() {
-                    Ok(_) => Ok(response),
-                    Err(error) => {
-                        log::warn!(
-                            "Request to firebase to fetch access token completed, but was unsuccessful: {error:?}"
-                        );
-
-                        Self::fetch_access_token_via_proxy(client, &request_body, proxy_url).await
-                    }
-                },
-                Err(error) => {
+            let direct_result = Self::fetch_access_token(
+                client
+                    .post(&url)
+                    .form(&request_body)
+                    .timeout(FETCH_ACCESS_TOKEN_TIMEOUT),
+            )
+            .await;
+            match direct_result {
+                Ok(tokens) => return Ok(tokens),
+                Err(
+                    error @ (UserAuthenticationError::DeniedAccessToken(_)
+                    | UserAuthenticationError::UserAccountDisabled(_)),
+                ) => return Err(error),
+                Err(
+                    error @ (UserAuthenticationError::Unexpected(_)
+                    | UserAuthenticationError::InvalidStateParameter
+                    | UserAuthenticationError::MissingStateParameter
+                    | UserAuthenticationError::DeviceCodeRequestTimedOut { .. }),
+                ) => {
                     log::warn!(
-                        "Failed to make response to firebase to fetch access token: {error:?}"
+                        "Failed to fetch access token from Firebase; falling back to proxy: {error:?}"
                     );
-
-                    Self::fetch_access_token_via_proxy(client, &request_body, proxy_url).await
                 }
-            }?;
-
-            let response = response
-                .json::<FetchAccessTokenResponse>()
-                .await
-                .map_err(anyhow::Error::from)?;
-            match response {
-                FetchAccessTokenResponse::Success {
-                    id_token,
-                    expires_in,
-                    refresh_token,
-                } => Ok(FirebaseAuthTokens::from_response(
-                    id_token,
-                    refresh_token,
-                    expires_in,
-                )?),
-                FetchAccessTokenResponse::Error { error } => Err(error.into()),
             }
+
+            Self::fetch_access_token(client.post(&proxy_url).form(&request_body)).await
         })
     }
-
-    fn fetch_access_token_via_proxy<'a>(
-        client: Arc<http_client::Client>,
-        request_body: &'a [(&'a str, &'a str)],
-        proxy_url: String,
-    ) -> BoxFuture<'a, Result<http_client::Response>> {
-        Box::pin(async move {
-            client
-                .post(&proxy_url)
-                .form(request_body)
-                .send()
-                .await
-                .map_err(anyhow::Error::from)
-        })
+    async fn fetch_access_token(
+        request: http_client::RequestBuilder<'_>,
+    ) -> StdResult<FirebaseAuthTokens, UserAuthenticationError> {
+        let response = request.send().await.map_err(anyhow::Error::from)?;
+        // Firebase carries credential verdicts in error bodies, but transient failures use the same
+        // envelope, so the payload's classification must take precedence over the HTTP status.
+        let response = response
+            .json::<FetchAccessTokenResponse>()
+            .await
+            .map_err(anyhow::Error::from)?;
+        match response {
+            FetchAccessTokenResponse::Success {
+                id_token,
+                expires_in,
+                refresh_token,
+            } => Ok(FirebaseAuthTokens::from_response(
+                id_token,
+                refresh_token,
+                expires_in,
+            )?),
+            FetchAccessTokenResponse::Error { error } => Err(error.into()),
+        }
     }
 }
 

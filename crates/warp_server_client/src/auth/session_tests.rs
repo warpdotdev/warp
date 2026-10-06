@@ -6,7 +6,7 @@ use warp_server_auth::auth_state::AuthState;
 use warp_server_auth::credentials::{AuthToken, Credentials, LoginToken};
 use warp_server_auth::user::FirebaseAuthTokens;
 
-use super::AuthSession;
+use super::{AuthSession, UserAuthenticationError};
 
 fn session_with_state(
     auth_state: Arc<AuthState>,
@@ -71,4 +71,96 @@ fn api_key_exchange_defers_owner_type_until_user_properties_are_fetched() {
             owner_type: None
         } if key == "api-key"
     ));
+}
+
+fn fetch_access_token_response(
+    status: usize,
+    body: &str,
+) -> Result<FirebaseAuthTokens, UserAuthenticationError> {
+    let mut server = mockito::Server::new();
+    let response = server
+        .mock("POST", "/token")
+        .with_status(status)
+        .with_body(body)
+        .create();
+    let client = http_client::Client::new();
+
+    let result = block_on(AuthSession::fetch_access_token(
+        client.post(format!("{}/token", server.url())),
+    ));
+
+    response.assert();
+    result
+}
+
+#[test]
+fn rejected_refresh_token_is_classified_from_error_body() {
+    let result = fetch_access_token_response(
+        400,
+        r#"{"error":{"code":400,"message":"INVALID_REFRESH_TOKEN"}}"#,
+    );
+
+    assert!(matches!(
+        result,
+        Err(UserAuthenticationError::DeniedAccessToken(error))
+            if error.message == "INVALID_REFRESH_TOKEN"
+    ));
+}
+
+#[test]
+fn disabled_account_is_classified_from_error_body() {
+    let result =
+        fetch_access_token_response(400, r#"{"error":{"code":400,"message":"USER_DISABLED"}}"#);
+
+    assert!(matches!(
+        result,
+        Err(UserAuthenticationError::UserAccountDisabled(error))
+            if error.message == "USER_DISABLED"
+    ));
+}
+
+#[test]
+fn unavailable_firebase_response_is_not_a_terminal_verdict() {
+    let result =
+        fetch_access_token_response(503, r#"{"error":{"code":503,"message":"UNAVAILABLE"}}"#);
+
+    assert!(matches!(
+        result,
+        Err(UserAuthenticationError::Unexpected(_))
+    ));
+}
+
+#[test]
+fn firebase_quota_response_is_not_a_terminal_verdict() {
+    let result = fetch_access_token_response(
+        429,
+        r#"{"error":{"code":429,"message":"TOO_MANY_ATTEMPTS_TRY_LATER"}}"#,
+    );
+
+    assert!(matches!(
+        result,
+        Err(UserAuthenticationError::Unexpected(_))
+    ));
+}
+
+#[test]
+fn non_firebase_response_is_not_a_terminal_verdict() {
+    let result = fetch_access_token_response(429, "<html>Too many requests</html>");
+
+    assert!(matches!(
+        result,
+        Err(UserAuthenticationError::Unexpected(_))
+    ));
+}
+
+#[test]
+fn successful_firebase_response_returns_tokens() {
+    let tokens = fetch_access_token_response(
+        200,
+        r#"{"id_token":"new-id-token","refresh_token":"new-refresh-token","expires_in":"3600"}"#,
+    )
+    .unwrap();
+
+    assert_eq!(tokens.id_token, "new-id-token");
+    assert_eq!(tokens.refresh_token, "new-refresh-token");
 }
