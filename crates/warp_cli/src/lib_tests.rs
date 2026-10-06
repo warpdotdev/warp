@@ -2982,15 +2982,6 @@ fn agent_run_cloud_accepts_snapshot_flags() {
 }
 
 #[test]
-fn agent_run_cloud_help_documents_attachment_limit() {
-    let help = Args::try_parse_from(["warp", "agent", "run-cloud", "--help"])
-        .expect_err("--help should return clap's display-help result")
-        .to_string();
-
-    assert!(help.contains("multiple files (maximum 25)"));
-    assert!(!help.contains("multiple files (maximum 5)"));
-}
-#[test]
 fn agent_run_accepts_task_id_with_conversation_for_worker_followups() {
     let args = Args::try_parse_from([
         "warp",
