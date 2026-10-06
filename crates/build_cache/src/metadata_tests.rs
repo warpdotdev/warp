@@ -16,7 +16,7 @@ fn usage(path: &str, mode: &str, targets: &[&str]) -> CacheUsage {
 }
 
 fn metadata_path(root: &Path) -> PathBuf {
-    root.join(".ns/cache-metadata.json")
+    root.join(".ns").join("cache-metadata.json")
 }
 
 fn existing_document(root: &Path, contents: &[u8]) {
@@ -217,14 +217,23 @@ fn blocked_metadata_directory_returns_an_error() {
 }
 
 #[test]
-fn blocked_cache_root_reports_directory_inspection_failure() {
+fn blocked_cache_root_reports_failed_operation() {
     let root = tempfile::NamedTempFile::new().unwrap();
     let directory = root.path().join(".ns");
-    let expected_source = fs::symlink_metadata(&directory).unwrap_err();
+    #[cfg(not(windows))]
+    let (operation, expected_source) = (
+        "inspect directory",
+        fs::symlink_metadata(&directory).unwrap_err(),
+    );
+    #[cfg(windows)]
+    let (operation, expected_source) = (
+        "create directory",
+        fs::create_dir_all(&directory).unwrap_err(),
+    );
 
     let error = write_cache_metadata(root.path(), []).unwrap_err();
 
-    assert_io_diagnostics(&error, "inspect directory", &directory, &expected_source);
+    assert_io_diagnostics(&error, operation, &directory, &expected_source);
 }
 
 #[test]

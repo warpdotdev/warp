@@ -34,7 +34,9 @@ use futures_lite::future;
 use is_executable::IsExecutable as _;
 use itertools::Itertools;
 use sha2::{Digest, Sha256};
-use warp_core::{safe_info, safe_warn};
+use warp_core::safe_info;
+#[cfg(unix)]
+use warp_core::safe_warn;
 use warp_errors::{ErrorExt, register_error};
 
 mod discovery;
