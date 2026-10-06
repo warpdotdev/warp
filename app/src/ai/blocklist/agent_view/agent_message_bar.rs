@@ -426,6 +426,7 @@ impl View for AgentMessageBar {
                 .map(|credits| {
                     render_ambient_credits_banner(
                         credits,
+                        request_usage_model.ambient_only_usage_cents_remaining(),
                         self.mouse_states.ambient_credits_banner_close.clone(),
                         AgentMessageBarAction::DismissAmbientCreditsBanner,
                         app,

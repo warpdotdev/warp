@@ -35,6 +35,7 @@ use crate::ai::blocklist::agent_view::{
     ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
 };
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::ai::blocklist::view_util::format_dollars;
 use crate::ai::conversation_navigation::ConversationNavigationData;
 use crate::appearance::Appearance;
 use crate::changelog_model::{self, ChangelogModel};
@@ -1224,9 +1225,11 @@ fn render_oz_updates(props: OzUpdatesProps<'_>, app: &AppContext) -> Option<Box<
     )
 }
 
-/// Renders the ambient credits banner showing free cloud credits.
+/// Renders the ambient credits banner showing free cloud credits, as dollars when the grants
+/// carry a dollar value (`usage_cents`).
 pub fn render_ambient_credits_banner<A>(
     credits: i32,
+    usage_cents: Option<f64>,
     close_button_mouse_state: MouseStateHandle,
     dismiss_action: A,
     app: &AppContext,
@@ -1236,7 +1239,7 @@ where
 {
     let appearance = Appearance::as_ref(app);
     render_dismissible_promo_pill(
-        format!("{credits} free cloud agent credits"),
+        ambient_credits_banner_label(credits, usage_cents),
         appearance.theme().terminal_colors().normal.blue.into(),
         None,
         None,
@@ -1244,6 +1247,13 @@ where
         dismiss_action,
         app,
     )
+}
+
+fn ambient_credits_banner_label(credits: i32, usage_cents: Option<f64>) -> String {
+    match usage_cents {
+        Some(cents) => format!("{} free cloud agent usage", format_dollars(cents as f32)),
+        None => format!("{credits} free cloud agent credits"),
+    }
 }
 
 pub fn render_dismissible_promo_pill<A>(

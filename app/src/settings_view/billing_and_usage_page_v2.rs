@@ -43,6 +43,7 @@ use super::billing_and_usage_page::{
 use super::settings_page::{AdditionalInfo, render_customer_type_badge, render_info_icon};
 use super::{SettingsSection, plan_header_presentation};
 use crate::ai::AIRequestUsageModel;
+use crate::ai::blocklist::view_util::format_dollars;
 use crate::ai::request_usage_model::{
     AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD, BonusGrant, BonusGrantScope, BonusGrantType,
 };
@@ -191,6 +192,31 @@ struct UsageHistoryState {
     load_more_button: ViewHandle<ActionButton>,
 }
 
+/// A balance in the unit the server bills the subject in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum BalanceAmount {
+    Credits(i64),
+    /// US cents, shown as dollars.
+    Cents(f64),
+}
+
+impl BalanceAmount {
+    fn format(self) -> String {
+        match self {
+            BalanceAmount::Credits(credits) => credits.separate_with_commas(),
+            BalanceAmount::Cents(cents) => format_dollars(cents as f32),
+        }
+    }
+
+    /// Names the pool a balance card shows, e.g. `Team credits` or `Team usage`.
+    fn pool_label(self, pool: &str) -> String {
+        match self {
+            BalanceAmount::Credits(_) => format!("{pool} credits"),
+            BalanceAmount::Cents(_) => format!("{pool} usage"),
+        }
+    }
+}
+
 struct GrantBucket {
     grants: Vec<BonusGrant>,
 }
@@ -205,6 +231,20 @@ impl GrantBucket {
             .iter()
             .map(|g| g.request_credits_remaining as i64)
             .sum()
+    }
+
+    /// The dollar value of [`Self::total_balance`], in cents. `None` unless every grant in the
+    /// bucket carries a dollar value.
+    fn total_usage_cents_balance(&self) -> Option<f64> {
+        self.grants.iter().map(|g| g.usage_cents_remaining).sum()
+    }
+
+    /// The balance to display: dollars when every grant carries a dollar value, else credits.
+    fn balance(&self) -> BalanceAmount {
+        match self.total_usage_cents_balance() {
+            Some(cents) => BalanceAmount::Cents(cents),
+            None => BalanceAmount::Credits(self.total_balance()),
+        }
     }
 
     fn expiry_label(&self) -> String {
@@ -850,17 +890,20 @@ impl BillingAndUsagePageV2View {
                 .next_refresh_time_local()
                 .format("Resets %b %d at %-I:%M %p")
                 .to_string();
-            let base_remaining = ai_model
-                .request_limit()
-                .saturating_sub(ai_model.requests_used()) as i64;
-            let base_limit = (!ai_model.is_unlimited()).then(|| ai_model.request_limit() as i64);
+            let (base_remaining, base_limit) = base_allowance_balance(
+                ai_model.request_limit(),
+                ai_model.requests_used(),
+                ai_model.is_unlimited(),
+                ai_model.included_usage_cents(),
+                ai_model.usage_cents_used(),
+            );
             cards_row.add_child(
                 Expanded::new(
                     1.,
                     render_balance_card(
                         appearance,
                         BASE_CREDITS_DOT_COLOR,
-                        "Base credits",
+                        &base_remaining.pool_label("Base"),
                         &reset_str,
                         base_remaining,
                         base_limit,
@@ -871,52 +914,24 @@ impl BillingAndUsagePageV2View {
             );
         }
 
-        if !classified.personal.is_empty() {
+        for (pool, bucket) in [
+            ("Personal", &classified.personal),
+            ("Team", &classified.team),
+            ("Workspace", &classified.workspace),
+        ] {
+            if bucket.is_empty() {
+                continue;
+            }
+            let balance = bucket.balance();
             cards_row.add_child(
                 Expanded::new(
                     1.,
                     render_balance_card(
                         appearance,
                         BONUS_CREDITS_DOT_COLOR,
-                        "Personal credits",
-                        &classified.personal.expiry_label(),
-                        classified.personal.total_balance(),
-                        None,
-                        outline_color,
-                    ),
-                )
-                .finish(),
-            );
-        }
-
-        if !classified.team.is_empty() {
-            cards_row.add_child(
-                Expanded::new(
-                    1.,
-                    render_balance_card(
-                        appearance,
-                        BONUS_CREDITS_DOT_COLOR,
-                        "Team credits",
-                        &classified.team.expiry_label(),
-                        classified.team.total_balance(),
-                        None,
-                        outline_color,
-                    ),
-                )
-                .finish(),
-            );
-        }
-
-        if !classified.workspace.is_empty() {
-            cards_row.add_child(
-                Expanded::new(
-                    1.,
-                    render_balance_card(
-                        appearance,
-                        BONUS_CREDITS_DOT_COLOR,
-                        "Workspace credits",
-                        &classified.workspace.expiry_label(),
-                        classified.workspace.total_balance(),
+                        &balance.pool_label(pool),
+                        &bucket.expiry_label(),
+                        balance,
                         None,
                         outline_color,
                     ),
@@ -972,13 +987,13 @@ impl BillingAndUsagePageV2View {
             .with_style(Properties::default().weight(Weight::Semibold))
             .finish();
 
-        let credits_text = if credits_remaining == 1 {
-            "1 credit remaining".to_string()
-        } else {
-            format!(
+        let credits_text = match ai_model.ambient_only_usage_cents_remaining() {
+            Some(cents) => format!("{} remaining", format_dollars(cents as f32)),
+            None if credits_remaining == 1 => "1 credit remaining".to_string(),
+            None => format!(
                 "{} credits remaining",
                 credits_remaining.separate_with_commas()
-            )
+            ),
         };
         let credits_label = Text::new_inline(credits_text, appearance.ui_font_family(), 12.)
             .with_color(blended_colors::text_sub(theme, theme.surface_1()))
@@ -2296,13 +2311,39 @@ fn should_show_open_admin_panel_link(
     (is_team_admin || is_workspace_admin) && is_enterprise_plan
 }
 
+/// The remaining included allowance and its limit: dollars when the server supplies both dollar
+/// figures (a subject billed in dollars) and otherwise credits. Unlimited subjects keep the
+/// credit display, with no limit.
+fn base_allowance_balance(
+    request_limit: usize,
+    requests_used: usize,
+    is_unlimited: bool,
+    included_usage_cents: Option<f64>,
+    usage_cents_used: Option<f64>,
+) -> (BalanceAmount, Option<BalanceAmount>) {
+    if let (false, Some(included), Some(used)) =
+        (is_unlimited, included_usage_cents, usage_cents_used)
+    {
+        return (
+            BalanceAmount::Cents((included - used).max(0.)),
+            Some(BalanceAmount::Cents(included)),
+        );
+    }
+    let remaining = request_limit.saturating_sub(requests_used) as i64;
+    let limit = (!is_unlimited).then_some(request_limit as i64);
+    (
+        BalanceAmount::Credits(remaining),
+        limit.map(BalanceAmount::Credits),
+    )
+}
+
 fn render_balance_card(
     appearance: &Appearance,
     dot_color: ColorU,
     label: &str,
     date: &str,
-    remaining: i64,
-    total: Option<i64>,
+    remaining: BalanceAmount,
+    total: Option<BalanceAmount>,
     border_color: ColorU,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -2343,17 +2384,13 @@ fn render_balance_card(
         .with_main_axis_size(MainAxisSize::Max)
         .finish();
 
-    let credit_count = Text::new_inline(
-        remaining.separate_with_commas(),
-        appearance.ui_font_family(),
-        24.,
-    )
-    .with_color(theme.active_ui_text_color().into())
-    .with_style(Properties::default().weight(Weight::Semibold))
-    .finish();
+    let credit_count = Text::new_inline(remaining.format(), appearance.ui_font_family(), 24.)
+        .with_color(theme.active_ui_text_color().into())
+        .with_style(Properties::default().weight(Weight::Semibold))
+        .finish();
 
     let remaining_label_text = match total {
-        Some(limit) => format!("/ {} remaining", limit.separate_with_commas()),
+        Some(limit) => format!("/ {} remaining", limit.format()),
         None => "remaining".to_string(),
     };
     let remaining_label = Text::new_inline(remaining_label_text, appearance.ui_font_family(), 14.)

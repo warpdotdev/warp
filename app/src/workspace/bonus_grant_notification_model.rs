@@ -4,6 +4,7 @@ use chrono::{Duration, Utc};
 use warp_core::settings::Setting;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
+use crate::ai::blocklist::view_util::format_dollars;
 use crate::ai::request_usage_model::{
     AIRequestUsageModel, AIRequestUsageModelEvent, BonusGrant, BonusGrantScope,
 };
@@ -110,10 +111,16 @@ impl BonusGrantNotificationModel {
             BonusGrantScope::Team(_) => "team",
             BonusGrantScope::Workspace(_) => "workspace",
         };
-        format!(
-            "{} Reload Credits have been added to your {}.",
-            grant.request_credits_granted, scope_text
-        )
+        match grant.usage_cents_granted {
+            Some(cents) => format!(
+                "{} has been added to your {scope_text}.",
+                format_dollars(cents as f32)
+            ),
+            None => format!(
+                "{} Reload Credits have been added to your {scope_text}.",
+                grant.request_credits_granted
+            ),
+        }
     }
 
     fn create_grant_key(grant: &BonusGrant) -> String {
@@ -131,3 +138,7 @@ impl BonusGrantNotificationModel {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "bonus_grant_notification_model_tests.rs"]
+mod tests;

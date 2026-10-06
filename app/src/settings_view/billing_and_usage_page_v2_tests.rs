@@ -22,6 +22,18 @@ fn grant(scope: BonusGrantScope, grant_type: BonusGrantType, remaining: i32) -> 
     }
 }
 
+fn grant_in_dollars(
+    scope: BonusGrantScope,
+    remaining: i32,
+    usage_cents_remaining: f64,
+) -> BonusGrant {
+    BonusGrant {
+        usage_cents_granted: Some(usage_cents_remaining),
+        usage_cents_remaining: Some(usage_cents_remaining),
+        ..grant(scope, BonusGrantType::Any, remaining)
+    }
+}
+
 #[test]
 fn classifies_grants_into_personal_team_and_workspace_buckets() {
     let current = workspace_uid(1);
@@ -65,6 +77,92 @@ fn hides_buckets_with_no_grants() {
     assert!(!classified.personal.is_empty());
     assert!(classified.team.is_empty());
     assert!(classified.workspace.is_empty());
+}
+
+#[test]
+fn bucket_balance_is_dollars_only_when_every_grant_has_a_dollar_value() {
+    let current = workspace_uid(1);
+    let dollars = ClassifiedGrants::new(
+        &[
+            grant_in_dollars(BonusGrantScope::Team(current), 10, 18.0),
+            grant_in_dollars(BonusGrantScope::Team(current), 20, 36.0),
+        ],
+        Some(current),
+    );
+    assert_eq!(dollars.team.total_usage_cents_balance(), Some(54.0));
+    assert_eq!(dollars.team.balance(), BalanceAmount::Cents(54.0));
+    assert_eq!(dollars.team.total_balance(), 30);
+
+    let mixed = ClassifiedGrants::new(
+        &[
+            grant_in_dollars(BonusGrantScope::Team(current), 10, 18.0),
+            grant(BonusGrantScope::Team(current), BonusGrantType::Any, 20),
+        ],
+        Some(current),
+    );
+    assert_eq!(mixed.team.total_usage_cents_balance(), None);
+    assert_eq!(mixed.team.balance(), BalanceAmount::Credits(30));
+}
+
+#[test]
+fn balance_amount_formats_in_its_unit() {
+    assert_eq!(BalanceAmount::Credits(1_500).format(), "1,500");
+    assert_eq!(
+        BalanceAmount::Credits(1_500).pool_label("Team"),
+        "Team credits"
+    );
+    assert_eq!(BalanceAmount::Cents(1729.8).format(), "$17.30");
+    assert_eq!(
+        BalanceAmount::Cents(1729.8).pool_label("Team"),
+        "Team usage"
+    );
+}
+
+#[test]
+fn base_allowance_balance_uses_dollars_when_billed_in_dollars() {
+    assert_eq!(
+        base_allowance_balance(1_000, 39, false, Some(1800.0), Some(75.0)),
+        (
+            BalanceAmount::Cents(1725.0),
+            Some(BalanceAmount::Cents(1800.0))
+        )
+    );
+    // Overspend never shows a negative balance.
+    assert_eq!(
+        base_allowance_balance(1_000, 1_000, false, Some(1800.0), Some(1850.0)),
+        (
+            BalanceAmount::Cents(0.0),
+            Some(BalanceAmount::Cents(1800.0))
+        )
+    );
+}
+
+#[test]
+fn base_allowance_balance_falls_back_to_credits() {
+    assert_eq!(
+        base_allowance_balance(1_000, 39, false, None, None),
+        (
+            BalanceAmount::Credits(961),
+            Some(BalanceAmount::Credits(1_000))
+        )
+    );
+    // A missing used figure means the dollar balance is unknown.
+    assert_eq!(
+        base_allowance_balance(1_000, 39, false, Some(1800.0), None),
+        (
+            BalanceAmount::Credits(961),
+            Some(BalanceAmount::Credits(1_000))
+        )
+    );
+    // Unlimited subjects keep today's display.
+    assert_eq!(
+        base_allowance_balance(999_999, 39, true, None, None),
+        (BalanceAmount::Credits(999_960), None)
+    );
+    assert_eq!(
+        base_allowance_balance(999_999, 39, true, Some(1800.0), Some(70.2)),
+        (BalanceAmount::Credits(999_960), None)
+    );
 }
 
 #[test]
