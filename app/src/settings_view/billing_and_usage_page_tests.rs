@@ -67,29 +67,43 @@ fn usage_count_without_a_limit_shows_the_used_figure_in_either_unit() {
 }
 
 #[test]
-fn member_usage_cents_requires_the_used_figure() {
+fn member_usage_cents_requires_a_dollar_billed_tier_and_the_used_figure() {
     assert_eq!(
-        member_usage_cents(&member_usage_info(false, Some(1800.0), Some(450.5))),
+        member_usage_cents(true, &member_usage_info(false, Some(1800.0), Some(450.5))),
         Some(UsageCents {
             used: 450.5,
             limit: Some(1800.0),
         })
     );
+    // A missing limit still renders the used figure's dollars for rows without a limit; the
+    // row formatter falls back to credits when it has one.
     assert_eq!(
-        member_usage_cents(&member_usage_info(false, Some(1800.0), None)),
+        member_usage_cents(true, &member_usage_info(false, None, Some(450.5))),
+        Some(UsageCents {
+            used: 450.5,
+            limit: None,
+        })
+    );
+    assert_eq!(
+        member_usage_cents(true, &member_usage_info(false, Some(1800.0), None)),
         None
     );
     assert_eq!(
-        member_usage_cents(&member_usage_info(false, None, None)),
+        member_usage_cents(true, &member_usage_info(false, None, None)),
+        None
+    );
+    // Cents the server sends to a credits-billed tier are never shown.
+    assert_eq!(
+        member_usage_cents(false, &member_usage_info(false, Some(1800.0), Some(450.5))),
         None
     );
     // Unlimited members keep the credit display even if dollar figures were supplied.
     assert_eq!(
-        member_usage_cents(&member_usage_info(true, None, None)),
+        member_usage_cents(true, &member_usage_info(true, None, None)),
         None
     );
     assert_eq!(
-        member_usage_cents(&member_usage_info(true, Some(1800.0), Some(450.5))),
+        member_usage_cents(true, &member_usage_info(true, Some(1800.0), Some(450.5))),
         None
     );
 }

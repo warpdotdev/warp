@@ -207,7 +207,7 @@ struct UsageHistoryState {
     load_more_button: ViewHandle<ActionButton>,
 }
 
-/// A balance in the unit the server bills the subject in.
+/// A balance in the unit the plan is billed in.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum BalanceAmount {
     Credits(i64),
@@ -254,9 +254,13 @@ impl GrantBucket {
         self.grants.iter().map(|g| g.usage_cents_remaining).sum()
     }
 
-    /// The balance to display: dollars when every grant carries a dollar value, else credits.
-    fn balance(&self) -> BalanceAmount {
-        match self.total_usage_cents_balance() {
+    /// The balance to display: dollars when the plan is billed in dollars (`billed_in_dollars`,
+    /// from the tier) and every grant carries a dollar value, else credits.
+    fn balance(&self, billed_in_dollars: bool) -> BalanceAmount {
+        match self
+            .total_usage_cents_balance()
+            .filter(|_| billed_in_dollars)
+        {
             Some(cents) => BalanceAmount::Cents(cents),
             None => BalanceAmount::Credits(self.total_balance()),
         }
@@ -901,9 +905,9 @@ impl BillingAndUsagePageV2View {
         let has_base_credits = ai_model.request_limit() > 0;
 
         let grants = ai_model.bonus_grants();
-        let workspace_uid = UserWorkspaces::as_ref(app)
-            .current_workspace()
-            .map(|ws| ws.uid);
+        let workspaces = UserWorkspaces::as_ref(app);
+        let workspace_uid = workspaces.current_workspace().map(|ws| ws.uid);
+        let billed_in_dollars = workspaces.is_billed_in_dollars();
         let classified = ClassifiedGrants::new(grants, workspace_uid);
 
         if !has_base_credits && !classified.has_any() {
@@ -922,6 +926,7 @@ impl BillingAndUsagePageV2View {
                 .format("Resets %b %d at %-I:%M %p")
                 .to_string();
             let (base_remaining, base_limit) = base_allowance_balance(
+                billed_in_dollars,
                 ai_model.request_limit(),
                 ai_model.requests_used(),
                 ai_model.is_unlimited(),
@@ -953,7 +958,7 @@ impl BillingAndUsagePageV2View {
             if bucket.is_empty() {
                 continue;
             }
-            let balance = bucket.balance();
+            let balance = bucket.balance(billed_in_dollars);
             cards_row.add_child(
                 Expanded::new(
                     1.,
@@ -1018,7 +1023,11 @@ impl BillingAndUsagePageV2View {
             .with_style(Properties::default().weight(Weight::Semibold))
             .finish();
 
-        let credits_text = match ai_model.ambient_only_usage_cents_remaining() {
+        let workspaces = UserWorkspaces::as_ref(app);
+        let usage_cents_remaining = ai_model
+            .ambient_only_usage_cents_remaining()
+            .filter(|_| workspaces.is_billed_in_dollars());
+        let credits_text = match usage_cents_remaining {
             Some(cents) => format!("{} remaining", format_dollars(cents as f32)),
             None if credits_remaining == 1 => "1 credit remaining".to_string(),
             None => format!(
@@ -1070,7 +1079,7 @@ impl BillingAndUsagePageV2View {
             );
         }
 
-        let is_on_paid_plan = UserWorkspaces::as_ref(app)
+        let is_on_paid_plan = workspaces
             .current_workspace()
             .is_some_and(|workspace| workspace.billing_metadata.is_user_on_paid_plan());
         if !is_on_paid_plan {
@@ -2404,19 +2413,23 @@ fn should_show_open_admin_panel_link(
     (is_team_admin || is_workspace_admin) && is_enterprise_plan
 }
 
-/// The remaining included allowance and its limit: dollars when the server supplies both dollar
-/// figures (a subject billed in dollars) and otherwise credits. Unlimited subjects keep the
-/// credit display, with no limit.
+/// The remaining included allowance and its limit: dollars when the plan is billed in dollars
+/// (`billed_in_dollars`, from the tier) and the server supplied both dollar figures, otherwise
+/// credits. Unlimited subjects keep the credit display, with no limit.
 fn base_allowance_balance(
+    billed_in_dollars: bool,
     request_limit: usize,
     requests_used: usize,
     is_unlimited: bool,
     included_usage_cents: Option<f64>,
     usage_cents_used: Option<f64>,
 ) -> (BalanceAmount, Option<BalanceAmount>) {
-    if let (false, Some(included), Some(used)) =
-        (is_unlimited, included_usage_cents, usage_cents_used)
-    {
+    if let (true, false, Some(included), Some(used)) = (
+        billed_in_dollars,
+        is_unlimited,
+        included_usage_cents,
+        usage_cents_used,
+    ) {
         return (
             BalanceAmount::Cents((included - used).max(0.)),
             Some(BalanceAmount::Cents(included)),

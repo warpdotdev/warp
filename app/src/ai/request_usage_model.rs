@@ -60,11 +60,9 @@ pub struct BonusGrant {
     pub user_facing_message: Option<String>,
     pub request_credits_granted: i32,
     pub request_credits_remaining: i32,
-    /// The dollar value of `request_credits_granted`, in cents. `None` for grants to a
-    /// subject billed in credits rather than dollars.
+    /// The dollar value of `request_credits_granted`, in cents, when the server supplied one.
     pub usage_cents_granted: Option<f64>,
-    /// The dollar value of `request_credits_remaining`, in cents. `None` for grants to a
-    /// subject billed in credits rather than dollars.
+    /// The dollar value of `request_credits_remaining`, in cents, when the server supplied one.
     pub usage_cents_remaining: Option<f64>,
     pub scope: BonusGrantScope,
 }
@@ -85,12 +83,13 @@ pub enum RequestLimitRefreshDuration {
 pub struct RequestLimitInfo {
     pub limit: usize,
     pub num_requests_used_since_refresh: usize,
-    /// The dollar value of `limit`, in cents. `Some` only for a subject the server bills in
-    /// dollars rather than credits, which is also the signal to display usage as dollars.
+    /// The dollar value of `limit`, in cents, when the server supplied one. Whether to display
+    /// usage in dollars is decided by the plan's `Tier::billed_in_dollars`, not by this being
+    /// `Some`.
     #[serde(default)]
     pub included_usage_cents: Option<f64>,
-    /// The dollar value of `num_requests_used_since_refresh`, in cents. `Some` only for a
-    /// subject billed in dollars.
+    /// The dollar value of `num_requests_used_since_refresh`, in cents, when the server
+    /// supplied one.
     #[serde(default)]
     pub usage_cents_used_since_last_refresh: Option<f64>,
     pub next_refresh_time: ServerTimestamp,
@@ -647,12 +646,6 @@ impl AIRequestUsageModel {
         self.request_limit_info.limit
     }
 
-    /// Whether the server bills this subject's included usage in dollars rather than credits,
-    /// which is also the signal to display usage as dollars.
-    pub fn is_billed_in_dollars(&self) -> bool {
-        self.request_limit_info.included_usage_cents.is_some()
-    }
-
     /// Returns the number of indices the user's tier allows them to create and the number of files
     /// the user's tier allows them to index. If the user is allowed unlimited indices, then the
     /// max_indices_allowed is None.
@@ -682,15 +675,14 @@ impl AIRequestUsageModel {
         self.request_limit_info.is_unlimited
     }
 
-    /// The dollar value of the included allowance, in cents. `None` for a subject billed in
-    /// credits.
+    /// The dollar value of the included allowance, in cents, when the server supplied one.
     pub fn included_usage_cents(&self) -> Option<f64> {
         self.request_limit_info.included_usage_cents
     }
 
-    /// The dollar value of the included allowance used since the last refresh, in cents.
-    /// `None` for a subject billed in credits. Reads as zero once the refresh time has passed,
-    /// mirroring [`Self::requests_used`].
+    /// The dollar value of the included allowance used since the last refresh, in cents, when
+    /// the server supplied one. Reads as zero once the refresh time has passed, mirroring
+    /// [`Self::requests_used`].
     pub fn usage_cents_used(&self) -> Option<f64> {
         let used = self
             .request_limit_info
@@ -766,15 +758,11 @@ impl AIRequestUsageModel {
     }
 
     /// The dollar value of [`Self::total_workspace_and_team_bonus_credits_remaining`], in cents.
-    /// `None` unless the subject is billed in dollars and every counted grant carries a dollar
-    /// value.
+    /// `None` unless every counted grant carries a dollar value.
     pub fn total_workspace_and_team_bonus_usage_cents_remaining(
         &self,
         uid: WorkspaceUid,
     ) -> Option<f64> {
-        if !self.is_billed_in_dollars() {
-            return None;
-        }
         self.workspace_and_team_bonus_grants(uid)
             .map(|grant| grant.usage_cents_remaining)
             .sum()
@@ -806,12 +794,8 @@ impl AIRequestUsageModel {
     }
 
     /// The dollar value of [`Self::total_user_interactive_bonus_credits_remaining`], in cents.
-    /// `None` unless the subject is billed in dollars and every counted grant carries a dollar
-    /// value.
+    /// `None` unless every counted grant carries a dollar value.
     pub fn total_user_interactive_bonus_usage_cents_remaining(&self) -> Option<f64> {
-        if !self.is_billed_in_dollars() {
-            return None;
-        }
         self.user_interactive_bonus_grants()
             .map(|grant| grant.usage_cents_remaining)
             .sum()

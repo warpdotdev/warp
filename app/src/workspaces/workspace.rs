@@ -233,11 +233,11 @@ pub struct WorkspaceMemberUsageInfo {
     pub is_unlimited: bool,
     pub request_limit: i32,
     pub requests_used_since_last_refresh: i32,
-    /// The dollar value of `request_limit`, in cents. `None` for a workspace billed in
-    /// credits rather than dollars, and when usage is unlimited.
+    /// The dollar value of `request_limit`, in cents, when the server supplied one; never
+    /// supplied when usage is unlimited.
     pub included_usage_cents: Option<OrderedFloat<f64>>,
-    /// The dollar value of `requests_used_since_last_refresh`, in cents. `None` for a
-    /// workspace billed in credits rather than dollars, and when usage is unlimited.
+    /// The dollar value of `requests_used_since_last_refresh`, in cents, when the server
+    /// supplied one; never supplied when usage is unlimited.
     pub usage_cents_used_since_last_refresh: Option<OrderedFloat<f64>>,
     pub is_request_limit_prorated: bool,
 }

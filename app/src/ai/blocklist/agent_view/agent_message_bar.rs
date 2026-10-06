@@ -63,6 +63,7 @@ use crate::util::bindings::keybinding_name_to_keystroke;
 #[cfg(not(target_family = "wasm"))]
 use crate::workspace::WorkspaceAction;
 use crate::workspace::tab_settings::{TabSettings, TabSettingsChangedEvent};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const FIGMA_ICON_SIZE: f32 = 14.;
 
@@ -426,7 +427,9 @@ impl View for AgentMessageBar {
                 .map(|credits| {
                     render_ambient_credits_banner(
                         credits,
-                        request_usage_model.ambient_only_usage_cents_remaining(),
+                        request_usage_model
+                            .ambient_only_usage_cents_remaining()
+                            .filter(|_| UserWorkspaces::as_ref(app).is_billed_in_dollars()),
                         self.mouse_states.ambient_credits_banner_close.clone(),
                         AgentMessageBarAction::DismissAmbientCreditsBanner,
                         app,

@@ -1225,8 +1225,8 @@ fn render_oz_updates(props: OzUpdatesProps<'_>, app: &AppContext) -> Option<Box<
     )
 }
 
-/// Renders the ambient credits banner showing free cloud credits, as dollars when the grants
-/// carry a dollar value (`usage_cents`).
+/// Renders the ambient credits banner showing free cloud credits, as dollars when `usage_cents`
+/// is given (a plan billed in dollars whose grants carry a dollar value).
 pub fn render_ambient_credits_banner<A>(
     credits: i32,
     usage_cents: Option<f64>,
