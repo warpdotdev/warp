@@ -9,6 +9,7 @@ use warpui::elements::{
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{AppContext, Element, SingletonEntity, ViewHandle};
 
 use super::{ExecutionProfileEditorView, ExecutionProfileEditorViewAction};
@@ -616,6 +617,11 @@ pub fn render_permissions_section(
                 .with_margin_top(16.)
                 .finish(),
         );
+        column.add_child(
+            Container::new(render_web_fetch_toggle(appearance, view, profile_data))
+                .with_margin_top(16.)
+                .finish(),
+        );
     }
 
     column.add_child(
@@ -965,11 +971,48 @@ pub fn render_web_search_toggle(
     view: &ExecutionProfileEditorView,
     profile_data: &AIExecutionProfile,
 ) -> Box<dyn Element> {
+    let enabled = profile_data.web_search_enabled;
+    render_web_tool_toggle(
+        appearance,
+        Icon::Globe,
+        "Web search",
+        "The agent may search the web when helpful.",
+        view.web_search_switch.clone(),
+        enabled,
+        ExecutionProfileEditorViewAction::SetWebSearchEnabled { enabled: !enabled },
+    )
+}
+
+pub fn render_web_fetch_toggle(
+    appearance: &Appearance,
+    view: &ExecutionProfileEditorView,
+    profile_data: &AIExecutionProfile,
+) -> Box<dyn Element> {
+    let enabled = profile_data.web_fetch_enabled;
+    render_web_tool_toggle(
+        appearance,
+        Icon::Link,
+        "Web fetch",
+        "The agent may fetch the contents of specific web pages by URL.",
+        view.web_fetch_switch.clone(),
+        enabled,
+        ExecutionProfileEditorViewAction::SetWebFetchEnabled { enabled: !enabled },
+    )
+}
+
+fn render_web_tool_toggle(
+    appearance: &Appearance,
+    icon: Icon,
+    label: &str,
+    description: &str,
+    switch_state: SwitchStateHandle,
+    enabled: bool,
+    toggle_action: ExecutionProfileEditorViewAction,
+) -> Box<dyn Element> {
     let icon_size = 16.0;
     let icon_elem = Container::new(
         ConstrainedBox::new(
-            Icon::Globe
-                .to_warpui_icon(appearance.theme().active_ui_text_color())
+            icon.to_warpui_icon(appearance.theme().active_ui_text_color())
                 .finish(),
         )
         .with_width(icon_size)
@@ -979,37 +1022,26 @@ pub fn render_web_search_toggle(
     .with_margin_right(8.)
     .finish();
 
-    let label_elem = Text::new(
-        "Call web tools".to_string(),
-        appearance.ui_font_family(),
-        13.,
-    )
-    .with_color(appearance.theme().active_ui_text_color().into())
-    .finish();
+    let label_elem = Text::new(label.to_string(), appearance.ui_font_family(), 13.)
+        .with_color(appearance.theme().active_ui_text_color().into())
+        .finish();
 
-    let desc_elem = Text::new(
-        "The agent may use web search when helpful for completing tasks.".to_string(),
-        appearance.ui_font_family(),
-        11.,
-    )
-    .with_color(
-        appearance
-            .theme()
-            .sub_text_color(appearance.theme().surface_1())
-            .into(),
-    )
-    .finish();
+    let desc_elem = Text::new(description.to_string(), appearance.ui_font_family(), 11.)
+        .with_color(
+            appearance
+                .theme()
+                .sub_text_color(appearance.theme().surface_1())
+                .into(),
+        )
+        .finish();
 
-    let current_value = profile_data.web_search_enabled;
     let switch = appearance
         .ui_builder()
-        .switch(view.web_search_switch.clone())
-        .check(current_value)
+        .switch(switch_state)
+        .check(enabled)
         .build()
         .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(ExecutionProfileEditorViewAction::SetWebSearchEnabled {
-                enabled: !current_value,
-            });
+            ctx.dispatch_typed_action(toggle_action.clone());
         })
         .finish();
 

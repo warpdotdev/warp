@@ -1644,6 +1644,33 @@ impl AIExecutionProfilesModel {
         );
     }
 
+    pub fn set_web_fetch_enabled(
+        &mut self,
+        profile_id: &ExecutionProfileId,
+        enabled: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.edit_profile_internal(
+            profile_id,
+            |profile| {
+                if profile.web_fetch_enabled != enabled {
+                    profile.web_fetch_enabled = enabled;
+                    return true;
+                }
+                false
+            },
+            ctx,
+        );
+
+        send_telemetry_from_ctx!(
+            TelemetryEvent::AIExecutionProfileSettingUpdated {
+                setting_type: "web_fetch_enabled".to_string(),
+                setting_value: format!("{enabled}"),
+            },
+            ctx
+        );
+    }
+
     pub fn set_autosync_plans_to_warp_drive(
         &mut self,
         profile_id: &ExecutionProfileId,

@@ -482,6 +482,11 @@ struct ExecutionProfileFile {
     autosync_plans_to_warp_drive: bool,
     #[schemars(description = "Whether the web-search tool is available.")]
     web_search_enabled: bool,
+    #[serde(default)]
+    #[schemars(
+        description = "Whether the web-fetch tool is available. When omitted, follows `web_search_enabled`."
+    )]
+    web_fetch_enabled: Option<bool>,
 }
 
 impl Default for ExecutionProfileFile {
@@ -530,6 +535,7 @@ impl From<&AIExecutionProfile> for ExecutionProfileFile {
             context_window_limit: profile.context_window_limit,
             autosync_plans_to_warp_drive: profile.autosync_plans_to_warp_drive,
             web_search_enabled: profile.web_search_enabled,
+            web_fetch_enabled: Some(profile.web_fetch_enabled),
         }
     }
 }
@@ -581,6 +587,7 @@ impl TryFrom<ExecutionProfileFile> for AIExecutionProfile {
             context_window_limit: file.context_window_limit,
             autosync_plans_to_warp_drive: file.autosync_plans_to_warp_drive,
             web_search_enabled: file.web_search_enabled,
+            web_fetch_enabled: file.web_fetch_enabled.unwrap_or(file.web_search_enabled),
         })
     }
 }

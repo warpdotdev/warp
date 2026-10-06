@@ -56,6 +56,44 @@ fn file_collection_round_trips_multiple_profiles() {
 }
 
 #[test]
+fn file_profile_without_web_fetch_inherits_web_search() {
+    for web_search_enabled in [false, true] {
+        let value = serde_json::json!({
+            "default": {"web_search_enabled": web_search_enabled},
+        });
+
+        let decoded = ExecutionProfilesConfig::from_file_value(&value).unwrap();
+        let profile = decoded
+            .profile(&ExecutionProfileId::default_profile())
+            .unwrap();
+
+        assert_eq!(profile.web_search_enabled, web_search_enabled);
+        assert_eq!(profile.web_fetch_enabled, web_search_enabled);
+    }
+}
+
+#[test]
+fn file_web_tool_settings_round_trip_independently() {
+    for (web_search_enabled, web_fetch_enabled) in [(true, false), (false, true)] {
+        let mut config = ExecutionProfilesConfig::default();
+        let profile = config
+            .profile_mut(&ExecutionProfileId::default_profile())
+            .unwrap();
+        profile.web_search_enabled = web_search_enabled;
+        profile.web_fetch_enabled = web_fetch_enabled;
+
+        let file_value = config.to_file_value();
+        assert_eq!(
+            file_value["default"]["web_fetch_enabled"],
+            web_fetch_enabled
+        );
+
+        let decoded = ExecutionProfilesConfig::from_file_value(&file_value).unwrap();
+        assert_eq!(decoded, config);
+    }
+}
+
+#[test]
 fn file_collection_rejects_invalid_values_as_a_unit() {
     for value in [
         serde_json::json!({"custom": {"name": "Missing default"}}),

@@ -237,6 +237,9 @@ pub enum ExecutionProfileEditorViewAction {
     SetWebSearchEnabled {
         enabled: bool,
     },
+    SetWebFetchEnabled {
+        enabled: bool,
+    },
 }
 
 pub struct ExecutionProfileEditorView {
@@ -278,6 +281,7 @@ pub struct ExecutionProfileEditorView {
     tooltip_mouse_state_handles: TooltipMouseStateHandles,
     plan_auto_sync_switch: SwitchStateHandle,
     web_search_switch: SwitchStateHandle,
+    web_fetch_switch: SwitchStateHandle,
     upgrade_footer_mouse_state: MouseStateHandle,
 }
 
@@ -691,6 +695,7 @@ impl ExecutionProfileEditorView {
             tooltip_mouse_state_handles: Default::default(),
             plan_auto_sync_switch: Default::default(),
             web_search_switch: Default::default(),
+            web_fetch_switch: Default::default(),
             upgrade_footer_mouse_state: Default::default(),
         };
 
@@ -1811,6 +1816,12 @@ impl TypedActionView for ExecutionProfileEditorView {
             ExecutionProfileEditorViewAction::SetWebSearchEnabled { enabled } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
                     profiles_model.set_web_search_enabled(&self.profile_id, *enabled, ctx);
+                });
+                ctx.notify();
+            }
+            ExecutionProfileEditorViewAction::SetWebFetchEnabled { enabled } => {
+                AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
+                    profiles_model.set_web_fetch_enabled(&self.profile_id, *enabled, ctx);
                 });
                 ctx.notify();
             }

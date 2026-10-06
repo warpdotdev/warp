@@ -7,7 +7,8 @@ use cloud_objects::cloud_object::{
 use cloud_objects::ids::GenericStringObjectId;
 use lazy_static::lazy_static;
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 
@@ -349,8 +350,10 @@ cfg_if::cfg_if! {
 /// NOTE: `planning_model` was removed after planning via subagent was deprecated; serialized legacy
 /// profiles may include a `planning_model` field and this field name should remain reserved
 /// indefinitely.
+// `remote = "Self"` turns the derived serde impls into inherent functions so the trait impls below
+// can wrap them with legacy-field handling.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(remote = "Self", default)]
 pub struct AIExecutionProfile {
     pub name: String,
     pub is_default_profile: bool,
@@ -389,6 +392,35 @@ pub struct AIExecutionProfile {
 
     /// Whether the agent may use web search when helpful for completing tasks
     pub web_search_enabled: bool,
+
+    /// Whether the agent may fetch the contents of specific web pages by URL
+    pub web_fetch_enabled: bool,
+}
+
+impl Serialize for AIExecutionProfile {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        AIExecutionProfile::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for AIExecutionProfile {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let has_web_fetch_setting = value.get("web_fetch_enabled").is_some();
+        let mut profile = AIExecutionProfile::deserialize(value).map_err(D::Error::custom)?;
+        // Profiles saved before web fetch had its own setting used `web_search_enabled` to gate
+        // both web tools, so they keep that choice for fetch.
+        if !has_web_fetch_setting {
+            profile.web_fetch_enabled = profile.web_search_enabled;
+        }
+        Ok(profile)
+    }
 }
 
 impl Default for AIExecutionProfile {
@@ -416,6 +448,7 @@ impl Default for AIExecutionProfile {
             context_window_limit: None,
             autosync_plans_to_warp_drive: true,
             web_search_enabled: true,
+            web_fetch_enabled: true,
         }
     }
 }
@@ -455,6 +488,7 @@ impl AIExecutionProfile {
             context_window_limit: None,
             autosync_plans_to_warp_drive: false,
             web_search_enabled: true,
+            web_fetch_enabled: true,
         }
     }
 
@@ -511,6 +545,7 @@ impl AIExecutionProfile {
             context_window_limit: None,
             autosync_plans_to_warp_drive: FeatureFlag::SyncAmbientPlans.is_enabled(),
             web_search_enabled: true,
+            web_fetch_enabled: true,
         }
     }
 }
@@ -526,3 +561,7 @@ pub type CloudAIExecutionProfile =
 pub type CloudAIExecutionProfileModel = GenericStringModel<AIExecutionProfile, JsonSerializer>;
 pub type ServerAIExecutionProfile =
     GenericServerObject<GenericStringObjectId, CloudAIExecutionProfileModel>;
+
+#[cfg(test)]
+#[path = "ai_execution_profile_tests.rs"]
+mod tests;
