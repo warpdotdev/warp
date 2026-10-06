@@ -3,6 +3,11 @@
 //!
 //! The `BlocklistAIController` orchestrates state updates and service calls to power the
 //! Agent Mode UI.
+#[allow(
+    dead_code,
+    reason = "the ACP harness runner that drives these turns lands in a follow-up"
+)]
+pub(crate) mod external_harness;
 pub mod input_context;
 mod pending_response_streams;
 pub mod response_stream;
@@ -49,12 +54,12 @@ use crate::ai::agent::conversation::{AIConversation, AIConversationId, Conversat
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment, AIAgentContext,
-    AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, AIIdentifiers, BaseUserQuery,
-    CancellationOutcome, CancellationReason, DocumentContentAttachmentSource, EntrypointType,
-    FileContext, FinishedAIAgentOutput, PassiveSuggestionResultType, PassiveSuggestionTrigger,
-    PassiveSuggestionTriggerType, RenderableAIError, RequestCommandOutputResult, RequestCost,
-    RequestMetadata, RunningCommand, StaticQueryType, TransientNetworkErrorKind, UserQueryMode,
-    extract_user_query_mode,
+    AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, AIIdentifiers,
+    BaseUserQuery, CancellationOutcome, CancellationReason, DocumentContentAttachmentSource,
+    EntrypointType, FileContext, FinishedAIAgentOutput, PassiveSuggestionResultType,
+    PassiveSuggestionTrigger, PassiveSuggestionTriggerType, RenderableAIError,
+    RequestCommandOutputResult, RequestCost, RequestMetadata, RunningCommand, StaticQueryType,
+    TransientNetworkErrorKind, UserQueryMode, extract_user_query_mode,
 };
 use crate::ai::agent_events::AgentMessageEventMetadata;
 #[cfg(not(target_family = "wasm"))]
@@ -344,6 +349,9 @@ pub struct BlocklistAIController {
 
     shared_session_state: shared_session::SharedSessionState,
     native_prompt_conversation_id: Option<AIConversationId>,
+    /// When set, prompts injected into the bound native conversation are handed to an external
+    /// harness driving it instead of being sent to Warp's agent.
+    external_harness_prompt_sink: Option<async_channel::Sender<String>>,
 
     /// Ambient agent task ID attached to this controller. This is a property of the controller, and not an individual
     /// conversation, because the ambient agent task driver owns the entire Warp window working on a task, and any
@@ -490,12 +498,12 @@ impl BlocklistAIController {
             }
 
             let history_model = BlocklistAIHistoryModel::handle(ctx);
-            let Some((is_viewing_shared_session, is_entirely_passive_code_diff)) = history_model
+            let Some((driver, is_entirely_passive_code_diff)) = history_model
                 .as_ref(ctx)
                 .conversation(conversation_id)
                 .map(|conversation| {
                     (
-                        conversation.is_viewing_shared_session(),
+                        conversation.driver(),
                         conversation.is_entirely_passive_code_diff(),
                     )
                 })
@@ -503,9 +511,7 @@ impl BlocklistAIController {
                 return;
             };
 
-            // Viewer sessions should not send follow-ups.
-            // They only act as passive viewers of the action stream.
-            if is_viewing_shared_session {
+            if !driver.owns_turn_lifecycle() {
                 return;
             }
 
@@ -715,6 +721,7 @@ impl BlocklistAIController {
             should_refresh_available_llms_on_stream_finish: false,
             shared_session_state: shared_session::SharedSessionState::default(),
             native_prompt_conversation_id: None,
+            external_harness_prompt_sink: None,
             ambient_agent_task_id: None,
             attachments_download_dir: None,
             pending_auto_resume_handles: HashMap::new(),
@@ -3460,6 +3467,163 @@ impl BlocklistAIController {
             .try_cancel_stream(response_stream_id, reason, ctx)
     }
 
+    /// Forwards a response event to shared-session viewers when this controller is the sharer.
+    fn tee_response_event_to_viewers(
+        &self,
+        event: &warp_multi_agent_api::ResponseEvent,
+        conversation_id: AIConversationId,
+        ctx: &AppContext,
+    ) {
+        if !FeatureFlag::AgentSharedSessions.is_enabled() {
+            return;
+        }
+        let mut model = self.terminal_model.lock();
+        if !model.shared_session_status().is_sharer() {
+            return;
+        }
+        // Get the participant who initiated this response, falling back to the sharer if needed.
+        let participant_id = self
+            .get_current_response_initiator()
+            .or_else(|| self.get_sharer_participant_id());
+
+        // For forked conversations (e.g. when loading from cloud), include the original
+        // conversation token so viewers can link the new server-assigned token to their existing
+        // conversation. The token is cleared after the first Init event, so it's only sent once
+        // per forked conversation.
+        let forked_from_token = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .and_then(|conv| {
+                conv.forked_from_server_conversation_token()
+                    .map(|t| t.as_str().to_string())
+            });
+
+        model.send_agent_response_for_shared_session(event, participant_id, forked_from_token);
+    }
+
+    /// Applies one MAA response event to `conversation_id`: forwards it to shared-session
+    /// viewers, then dispatches on its type. `did_input_contain_user_query` is what the sender
+    /// knew when the request went out; `None` derives it from the exchanges this stream added,
+    /// for drivers whose inputs only exist once their messages have streamed in.
+    pub(super) fn apply_response_event(
+        &mut self,
+        stream_id: &ResponseStreamId,
+        conversation_id: AIConversationId,
+        event: warp_multi_agent_api::ResponseEvent,
+        did_input_contain_user_query: Option<bool>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.tee_response_event_to_viewers(&event, conversation_id, ctx);
+        let Some(event) = event.r#type else {
+            return;
+        };
+        let history_model = BlocklistAIHistoryModel::handle(ctx);
+        match event {
+            warp_multi_agent_api::response_event::Type::Init(init_event) => {
+                history_model.update(ctx, |history_model, ctx| {
+                    history_model.initialize_output_for_response_stream(
+                        stream_id,
+                        conversation_id,
+                        self.terminal_surface_id,
+                        init_event,
+                        ctx,
+                    );
+
+                    // Clear the forked_from token after the first Init event.
+                    // For forked conversations, we only need to send this once so
+                    // viewers can update their conversation's server token. After
+                    // that, the viewer's conversation uses the new token directly.
+                    if let Some(conversation) = history_model.conversation_mut(&conversation_id) {
+                        conversation.clear_forked_from_server_conversation_token();
+                    }
+                });
+            }
+            warp_multi_agent_api::response_event::Type::Finished(finished_event) => {
+                let did_input_contain_user_query =
+                    did_input_contain_user_query.unwrap_or_else(|| {
+                        history_model
+                            .as_ref(ctx)
+                            .conversation(&conversation_id)
+                            .is_some_and(|conversation| {
+                                conversation
+                                    .new_exchange_ids_for_response(stream_id)
+                                    .filter_map(|id| conversation.exchange_with_id(id))
+                                    .any(AIAgentExchange::has_user_query)
+                            })
+                    });
+                self.handle_response_stream_finished(
+                    stream_id,
+                    finished_event,
+                    conversation_id,
+                    did_input_contain_user_query,
+                    ctx,
+                );
+            }
+            warp_multi_agent_api::response_event::Type::ClientActions(actions) => {
+                let client_actions = actions.actions;
+                let skill_path_origin =
+                    SessionContext::from_session(self.active_session.as_ref(ctx), ctx)
+                        .skill_path_origin();
+                let apply_result = history_model.update(ctx, |history_model, ctx| {
+                    history_model.apply_client_actions(
+                        stream_id,
+                        client_actions,
+                        conversation_id,
+                        self.terminal_surface_id,
+                        &skill_path_origin,
+                        ctx,
+                    )
+                });
+                if let Err(e) = apply_result {
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Failed to apply client actions to conversation")
+                    );
+                }
+                self.record_streamed_tool_call_results_as_finished(stream_id, conversation_id, ctx);
+            }
+        }
+    }
+
+    /// For drivers that run their own tools, tool call results arrive as streamed messages
+    /// rather than from the action model, which would otherwise still treat the matching tool
+    /// calls as pending and try to execute them locally.
+    fn record_streamed_tool_call_results_as_finished(
+        &mut self,
+        stream_id: &ResponseStreamId,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let history_model = BlocklistAIHistoryModel::as_ref(ctx);
+        let Some(conversation) = history_model.conversation(&conversation_id) else {
+            return;
+        };
+        if conversation.driver().executes_tool_calls_locally() {
+            return;
+        }
+        let streamed_results = conversation
+            .new_exchange_ids_for_response(stream_id)
+            .filter_map(|exchange_id| conversation.exchange_with_id(exchange_id))
+            .flat_map(|exchange| {
+                exchange
+                    .input
+                    .iter()
+                    .filter_map(|input| input.action_result().cloned())
+            })
+            .collect_vec();
+        for result in streamed_results {
+            if self
+                .action_model
+                .as_ref(ctx)
+                .get_action_result(&result.id)
+                .is_none()
+            {
+                self.action_model.update(ctx, |action_model, ctx| {
+                    action_model.apply_finished_action_result(conversation_id, result, ctx);
+                });
+            }
+        }
+    }
+
     fn handle_response_stream_event(
         &mut self,
         did_input_contain_user_query: bool,
@@ -3488,99 +3652,13 @@ impl BlocklistAIController {
                 let history_model = BlocklistAIHistoryModel::handle(ctx);
                 match event {
                     Ok(event) => {
-                        // If this controller is part of a shared session, forward the entire response event to viewers first.
-                        if FeatureFlag::AgentSharedSessions.is_enabled() {
-                            let mut model = self.terminal_model.lock();
-                            if model.shared_session_status().is_sharer() {
-                                // Get the participant who initiated this response, falling back to the sharer if needed.
-                                let participant_id = self
-                                    .get_current_response_initiator()
-                                    .or_else(|| self.get_sharer_participant_id());
-
-                                // For forked conversations (e.g. when loading from cloud), include
-                                // the original conversation token so viewers can link the new
-                                // server-assigned token to their existing conversation.
-                                //
-                                // This token is cleared after the first Init event (see below),
-                                // so it's only sent once per forked conversation.
-                                let forked_from_token = history_model
-                                    .as_ref(ctx)
-                                    .conversation(&conversation_id)
-                                    .and_then(|conv| {
-                                        conv.forked_from_server_conversation_token()
-                                            .map(|t| t.as_str().to_string())
-                                    });
-
-                                model.send_agent_response_for_shared_session(
-                                    &event,
-                                    participant_id,
-                                    forked_from_token,
-                                );
-                            }
-                        }
-                        let Some(event) = event.r#type else {
-                            return;
-                        };
-                        match event {
-                            warp_multi_agent_api::response_event::Type::Init(init_event) => {
-                                history_model.update(ctx, |history_model, ctx| {
-                                    history_model.initialize_output_for_response_stream(
-                                        &stream_id,
-                                        conversation_id,
-                                        self.terminal_surface_id,
-                                        init_event,
-                                        ctx,
-                                    );
-
-                                    // Clear the forked_from token after the first Init event.
-                                    // For forked conversations, we only need to send this once so
-                                    // viewers can update their conversation's server token. After
-                                    // that, the viewer's conversation uses the new token directly.
-                                    if let Some(conversation) =
-                                        history_model.conversation_mut(&conversation_id)
-                                    {
-                                        conversation.clear_forked_from_server_conversation_token();
-                                    }
-                                });
-                            }
-                            warp_multi_agent_api::response_event::Type::Finished(
-                                finished_event,
-                            ) => {
-                                self.handle_response_stream_finished(
-                                    &stream_id,
-                                    finished_event,
-                                    conversation_id,
-                                    did_input_contain_user_query,
-                                    ctx,
-                                );
-                            }
-                            warp_multi_agent_api::response_event::Type::ClientActions(actions) => {
-                                let client_actions = actions.actions;
-                                let skill_path_origin = SessionContext::from_session(
-                                    self.active_session.as_ref(ctx),
-                                    ctx,
-                                )
-                                .skill_path_origin();
-                                let apply_result =
-                                    history_model.update(ctx, |history_model, ctx| {
-                                        history_model.apply_client_actions(
-                                            &stream_id,
-                                            client_actions,
-                                            conversation_id,
-                                            self.terminal_surface_id,
-                                            &skill_path_origin,
-                                            ctx,
-                                        )
-                                    });
-                                if let Err(e) = apply_result {
-                                    report_error!(
-                                        anyhow::Error::new(e).context(
-                                            "Failed to apply client actions to conversation"
-                                        )
-                                    );
-                                }
-                            }
-                        }
+                        self.apply_response_event(
+                            &stream_id,
+                            conversation_id,
+                            event,
+                            Some(did_input_contain_user_query),
+                            ctx,
+                        );
                     }
                     Err(e) => {
                         if matches!(e.as_ref(), AIApiError::QuotaLimit { .. }) {
