@@ -155,7 +155,10 @@ async fn identity_query(cwd: &Path, args: &[&str], input: Option<&str>) -> Optio
             .spawn()
             .ok()?;
         if let Some(input) = input {
-            child.stdin.take()?.write_all(input.as_bytes()).await.ok()?;
+            let mut stdin = child.stdin.take()?;
+            stdin.write_all(input.as_bytes()).await.ok()?;
+            // Dropping Windows subprocess stdin without flushing can discard the buffered query.
+            stdin.flush().await.ok()?;
         }
         let stdout = child.stdout.take()?;
         let (output, status) = tokio::join!(capture(Compat::new(stdout)), child.status());
