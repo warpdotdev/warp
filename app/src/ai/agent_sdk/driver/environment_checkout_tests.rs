@@ -93,6 +93,69 @@ fn cleanup_only_preserves_refs_and_reports_failures_without_cloning() {
     );
 }
 #[test]
+fn checkout_io_failures_include_operation_and_underlying_error() {
+    let directory = TempDir::new().unwrap();
+    let fixture = Fixture {
+        root: directory.path().to_owned(),
+    };
+    let batch = fixture.batch(vec![fixture.request("missing-parent", None)]);
+    let target = batch.working_dir.join("missing-parent");
+    for remove_origins_only in [false, true] {
+        let (expected_kind, context, error) = if remove_origins_only {
+            (
+                CheckoutFailureKind::RemoveOrigin,
+                "could not inspect origin cleanup target",
+                fs::symlink_metadata(&target).unwrap_err(),
+            )
+        } else {
+            (
+                CheckoutFailureKind::Clone,
+                "could not create checkout target",
+                fs::create_dir(&target).unwrap_err(),
+            )
+        };
+        let mut output = Vec::new();
+        let results = block_on(Compat::new(super::checkout_batch(
+            &batch,
+            None,
+            remove_origins_only,
+            &RecordingLogger {
+                output: Mutex::new(&mut output),
+            },
+        )))
+        .unwrap();
+        let (kind, diagnostic) = results[0].as_ref().unwrap_err();
+        assert_eq!(*kind, expected_kind);
+        assert!(diagnostic.contains(context));
+        assert!(diagnostic.contains(&error.to_string()));
+        assert!(String::from_utf8(output).unwrap().contains(diagnostic));
+    }
+}
+
+#[test]
+fn git_failures_include_operation_and_status_without_output() {
+    fixture_test(
+        "git_failures_include_operation_and_status_without_output",
+        |fixture| {
+            git(
+                &fixture.root,
+                &[
+                    "config",
+                    "--file",
+                    fixture.root.join("gitconfig").to_str().unwrap(),
+                    "alias.quiet-failure",
+                    "!exit 23",
+                ],
+            );
+            let mut git = Git::default();
+            assert!(block_on(Compat::new(git.run(&fixture.work(), &["quiet-failure"]))).is_err());
+            assert!(git.diagnostics.contains("Git quiet-failure failed"));
+            assert!(git.diagnostics.contains("23"));
+        },
+    );
+}
+
+#[test]
 fn helper_head_report_keeps_request_order_and_omits_unresolved_heads() {
     fixture_test(
         "helper_head_report_keeps_request_order_and_omits_unresolved_heads",
@@ -369,7 +432,7 @@ fn direct_clone_failure_is_fatal_and_attributed_to_its_request() {
             assert!(
                 String::from_utf8(output)
                     .unwrap()
-                    .contains("Repository 2: failed")
+                    .contains("github.com/fixtures/missing (checkout bad-clone): failed")
             );
         },
     );
@@ -738,6 +801,8 @@ fn failed_refresh_falls_back_instead_of_serving_stale_history() {
             fs::create_dir(fixture.mirror().join("FETCH_HEAD")).unwrap();
             let progress = fixture.prepare(fixture.request("fallback", None), true);
             assert!(progress.contains("cache failure; using network fallback"));
+            assert!(progress.contains("cache failure diagnostics:"));
+            assert!(progress.contains("FETCH_HEAD"));
             let target = fixture.work().join("fallback");
             assert_eq!(git(&target, &["rev-parse", "HEAD"]), pinned);
             assert_eq!(git(&target, &["config", "remote.origin.promisor"]), "true");
@@ -866,9 +931,21 @@ fn parallel_substituted_branches_preserve_alias_and_attribute_failure() {
                 request.fetch_branch_only = true;
                 let mut second = request.clone();
                 second.checkout_name.push_str("-second");
+                let first_label = format!(
+                    "github.com/fixtures/source (checkout {})",
+                    request.checkout_name
+                );
+                let second_label = format!(
+                    "github.com/fixtures/source (checkout {})",
+                    second.checkout_name
+                );
                 let bad = fixture.request(
                     if cached { "cached-bad" } else { "direct-bad" },
                     Some(RepositoryHeadRef::Branch("missing".to_owned())),
+                );
+                let bad_label = format!(
+                    "github.com/fixtures/source (checkout {})",
+                    bad.checkout_name
                 );
                 let root = cached.then(optional_mirror_root).flatten();
                 let mut output = Vec::new();
@@ -902,16 +979,16 @@ fn parallel_substituted_branches_preserve_alias_and_attribute_failure() {
                 );
                 let output = String::from_utf8(output).unwrap();
                 assert!(
-                    output.find("Repository 1: finished").unwrap()
-                        < output.find("Repository 2: started").unwrap()
+                    output.find(&format!("{first_label}: finished")).unwrap()
+                        < output.find(&format!("{second_label}: started")).unwrap()
                 );
                 assert!(
-                    output.contains("Repository 1: started")
-                        && output.contains("Repository 2: finished")
+                    output.contains(&format!("{first_label}: started"))
+                        && output.contains(&format!("{second_label}: finished"))
                 );
                 assert!(
-                    output.contains("Repository 3: failed")
-                        && output.contains("Repository 3 diagnostics:")
+                    output.contains(&format!("{bad_label}: failed"))
+                        && output.contains(&format!("{bad_label} diagnostics:"))
                 );
                 if cached {
                     fixture.full_objects(&target);
@@ -1018,12 +1095,24 @@ fn helper_writes_typed_failures_and_rejects_invalid_requests_before_work() {
                     .contains("fixture-only-secret-not-a-real-token")
             );
             fs::write(&args.requests_file, b"{").unwrap();
-            assert!(
-                run(&args)
-                    .unwrap_err()
-                    .to_string()
-                    .contains("invalid checkout JSON")
-            );
+            let error = run(&args).unwrap_err().to_string();
+            assert!(error.contains("invalid checkout JSON"));
+            assert!(error.contains("EOF while parsing an object at line 1 column 1"));
+            let mut invalid = serde_json::to_value(&batch).unwrap();
+            let sentinel = "fixture-only-secret-not-a-real-token";
+            invalid["repositories"][0]["source"]["code_forge"] = serde_json::json!(format!(
+                "https://fixture:{sentinel}@example.com/{}?token=AKIAIOSFODNN7EXAMPLE",
+                "x".repeat(8192)
+            ));
+            fs::write(&args.requests_file, serde_json::to_vec(&invalid).unwrap()).unwrap();
+            let error = run(&args).unwrap_err();
+            let message = error.to_string();
+            assert!(message.contains("unknown variant"));
+            assert!(message.contains("line 1 column"));
+            assert!(message.len() <= 4096);
+            let diagnostic = format!("{error:?}");
+            assert!(!diagnostic.contains(sentinel));
+            assert!(!diagnostic.contains("AKIAIOSFODNN7EXAMPLE"));
         },
     );
 }
@@ -1209,7 +1298,8 @@ struct ProgressObserver {
 impl std::io::Write for ProgressObserver {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.bytes.extend(bytes);
-        if String::from_utf8_lossy(&self.bytes).contains("Repository 1: started")
+        if String::from_utf8_lossy(&self.bytes)
+            .contains("github.com/fixtures/source (checkout authenticated): started")
             && !self.remote_received.load(Ordering::SeqCst)
         {
             self.started_before_remote = true;

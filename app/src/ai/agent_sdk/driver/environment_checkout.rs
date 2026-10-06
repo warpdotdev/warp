@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use std::{fmt, io};
 
 use anyhow::anyhow;
 use async_compat::Compat;
@@ -35,15 +35,35 @@ const HEAD_CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
 pub(crate) fn run(args: &EnvironmentCheckoutArgs) -> anyhow::Result<()> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .build()?
+        .build()
+        .map_err(|error| sanitized_error("could not start checkout runtime", error))?
         .block_on(run_async(args))
 }
 
+fn repository_label(request: &CheckoutRequest) -> String {
+    let repo = source_repo(request);
+    failure_output::prepare_failure_output(
+        &format!(
+            "{}/{}/{} (checkout {})",
+            repo.code_forge.unwrap_or_default().host(),
+            repo.owner,
+            repo.repo,
+            request.checkout_name
+        ),
+        OUTPUT_TRUNCATION_MARKER,
+    )
+}
+
 async fn remove_origin(target: &Path, git: &mut Git) -> Result<(), ()> {
-    if !fs::symlink_metadata(target).await.map_err(|_| ())?.is_dir() {
+    if !fs::symlink_metadata(target)
+        .await
+        .map_err(|error| git.record_error("could not inspect origin cleanup target", error))?
+        .is_dir()
+    {
         git.record("origin cleanup target is not a repository directory");
         return Err(());
     }
+
     let remotes = git.run(target, &["remote"]).await?;
     if remotes.lines().any(|remote| remote == "origin") {
         // Removing the remote itself can collide on case-insensitive tracking-ref lock paths.
@@ -59,8 +79,9 @@ async fn remove_origin(target: &Path, git: &mut Git) -> Result<(), ()> {
 async fn run_async(args: &EnvironmentCheckoutArgs) -> anyhow::Result<()> {
     let bytes = fs::read(&args.requests_file)
         .await
-        .map_err(|_| anyhow!("could not read environment checkout requests"))?;
-    let batch = CheckoutBatch::parse(&bytes).map_err(|error| anyhow!(error))?;
+        .map_err(|error| sanitized_error("could not read environment checkout requests", error))?;
+    let batch = CheckoutBatch::parse(&bytes)
+        .map_err(|error| sanitized_error("could not parse environment checkout requests", error))?;
     let mirror_root = (!args.remove_origins_only)
         .then(optional_mirror_root)
         .flatten();
@@ -94,7 +115,9 @@ async fn run_async(args: &EnvironmentCheckoutArgs) -> anyhow::Result<()> {
     })?;
     fs::write(&args.failure_report, bytes)
         .await
-        .map_err(|_| anyhow!("could not write environment checkout failure report"))?;
+        .map_err(|error| {
+            sanitized_error("could not write environment checkout failure report", error)
+        })?;
     if failed {
         Err(anyhow!("structured repository checkout failed"))
     } else {
@@ -102,17 +125,35 @@ async fn run_async(args: &EnvironmentCheckoutArgs) -> anyhow::Result<()> {
             && let Some(path) = &args.resolved_heads_report
         {
             let heads = capture_resolved_heads(&batch).await;
-            if fs::write(path, serde_json::to_vec(&heads)?).await.is_err() {
-                log::warn!("Could not write structured repository resolved HEAD report");
+            if let Err(error) = fs::write(path, serde_json::to_vec(&heads)?).await {
+                log::warn!(
+                    "{}",
+                    sanitized_error(
+                        "could not write structured repository resolved HEAD report",
+                        error
+                    )
+                );
             }
         }
         Ok(())
     }
 }
+
+fn sanitized_error(context: &str, error: impl fmt::Display) -> anyhow::Error {
+    // JSON errors can echo untrusted values, so do not retain an unredacted error source.
+    anyhow!(
+        "{}",
+        failure_output::prepare_failure_output(
+            &format!("{context}: {error:#}"),
+            OUTPUT_TRUNCATION_MARKER
+        )
+    )
+}
+
 async fn capture_resolved_heads(batch: &CheckoutBatch) -> Vec<Option<String>> {
     let capture = async {
         let mut heads = Vec::new();
-        for (index, request) in batch.repositories.iter().enumerate() {
+        for request in &batch.repositories {
             let mut git = Git::default();
             let head = git
                 .run(
@@ -123,7 +164,16 @@ async fn capture_resolved_heads(batch: &CheckoutBatch) -> Vec<Option<String>> {
                 .ok()
                 .and_then(|head| parse_resolved_head_sha(&head));
             if let Some(head) = &head {
-                log::info!("Repository {}: resolved HEAD {head}", index + 1);
+                log::info!(
+                    "Repository {}: resolved HEAD {head}",
+                    repository_label(request)
+                );
+            } else {
+                log::warn!(
+                    "Repository {}: could not resolve HEAD\n{}",
+                    repository_label(request),
+                    git.diagnostics
+                );
             }
             heads.push(head);
         }
@@ -234,11 +284,21 @@ fn optional_mirror_root() -> Option<PathBuf> {
         let cache_root = cache_setup::enabled_cache_root()?;
         let root = cache_root.join(MIRRORS_DIRECTORY);
         if std::fs::symlink_metadata(&root).is_ok_and(|metadata| !metadata.is_dir()) {
+            log::warn!("Git mirror cache unavailable: mirror root is not a directory");
             return None;
         }
-        std::fs::create_dir_all(&root).ok()?;
-        let _writability_probe = tempfile::NamedTempFile::new_in(&root).ok()?;
-        std::fs::canonicalize(root).ok()
+        let prepare = || -> io::Result<PathBuf> {
+            std::fs::create_dir_all(&root)?;
+            let _writability_probe = tempfile::NamedTempFile::new_in(&root)?;
+            std::fs::canonicalize(&root)
+        };
+        match prepare() {
+            Ok(root) => Some(root),
+            Err(error) => {
+                log::warn!("{}", sanitized_error("Git mirror cache unavailable", error));
+                None
+            }
+        }
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -288,8 +348,9 @@ async fn checkout_batch(
     let mut completed = stream::iter(groups.into_values().map(|requests| async move {
         let mut results = Vec::new();
         for (index, request) in requests {
+            let label = repository_label(request);
             let emit = |category: &str| {
-                log::info!(logger: logger, "Repository {}: {category}", index + 1);
+                log::info!(logger: logger, "Repository {label}: {category}");
             };
             emit("started");
             let mut git = Git::default();
@@ -319,7 +380,7 @@ async fn checkout_batch(
         if let Err((_, diagnostics)) = result {
             log::error!(logger: logger,
                 "Repository {} diagnostics:\n{diagnostics}",
-                index + 1
+                repository_label(&batch.repositories[index])
             );
         }
     }
@@ -333,6 +394,7 @@ struct Git {
 
 impl Git {
     async fn run(&mut self, cwd: &Path, args: &[&str]) -> Result<String, ()> {
+        let operation = args.first().copied().unwrap_or("command");
         let child = Command::new("git")
             .current_dir(cwd)
             .env("GIT_TERMINAL_PROMPT", "0")
@@ -343,10 +405,9 @@ impl Git {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn();
-        let Ok(mut child) = child else {
-            self.record("could not start Git");
-            return Err(());
-        };
+        let mut child = child.map_err(|error| {
+            self.record_error(&format!("could not start Git {operation}"), error)
+        })?;
         let stdout = child.stdout.take().expect("Git stdout pipe");
         let stderr = child.stderr.take().expect("Git stderr pipe");
         let (stdout, stderr, status) = tokio::join!(
@@ -354,20 +415,36 @@ impl Git {
             capture(Compat::new(stderr)),
             child.status(),
         );
-        let (Ok((stdout, truncated)), Ok((stderr, stderr_truncated)), Ok(status)) =
-            (stdout, stderr, status)
-        else {
-            self.record("could not read Git result");
+        let stdout = stdout.map_err(|error| {
+            self.record_error(&format!("could not read Git {operation} stdout"), error)
+        });
+        let stderr = stderr.map_err(|error| {
+            self.record_error(&format!("could not read Git {operation} stderr"), error)
+        });
+        let status = status.map_err(|error| {
+            self.record_error(&format!("could not wait for Git {operation}"), error)
+        });
+        if let Ok((stderr, stderr_truncated)) = &stderr {
+            if *stderr_truncated {
+                self.record(OUTPUT_TRUNCATION_MARKER);
+            }
+            self.record(stderr);
+        }
+        let (Ok((stdout, truncated)), Ok(_), Ok(status)) = (stdout, stderr, status) else {
             return Err(());
         };
-        if stderr_truncated {
-            self.record(OUTPUT_TRUNCATION_MARKER);
-        }
-        self.record(&stderr);
         if status.success() && !truncated {
             Ok(stdout)
         } else {
             self.record(&stdout);
+            if !status.success() {
+                self.record_error(&format!("Git {operation} failed"), status);
+            }
+            if truncated {
+                self.record(&format!(
+                    "Git {operation} stdout exceeded the capture limit"
+                ));
+            }
             Err(())
         }
     }
@@ -376,6 +453,10 @@ impl Git {
         let combined = format!("{}\n{output}", self.diagnostics);
         self.diagnostics =
             failure_output::prepare_failure_output(&combined, OUTPUT_TRUNCATION_MARKER);
+    }
+
+    fn record_error(&mut self, context: &str, error: impl fmt::Display) {
+        self.record(&format!("{context}: {error:#}"));
     }
 }
 
@@ -427,8 +508,8 @@ async fn checkout(
             return Err(CheckoutFailureKind::Clone);
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-        Err(_) => {
-            git.record("could not inspect checkout target");
+        Err(error) => {
+            git.record_error("could not inspect checkout target", error);
             return Err(CheckoutFailureKind::Clone);
         }
     };
@@ -441,7 +522,9 @@ async fn checkout(
         let mut created_target = false;
         let cached = async {
             refresh_mirror(&mirror, &url, git, emit).await?;
-            fs::create_dir(&target).await.map_err(|_| ())?;
+            fs::create_dir(&target).await.map_err(|error| {
+                git.record_error("could not create cached checkout target", error)
+            })?;
             created_target = true;
             checkout_cached(request, &url, &target, &mirror, git)
                 .await
@@ -452,15 +535,19 @@ async fn checkout(
             return Ok(());
         }
         emit("cache failure; using network fallback");
+        if !git.diagnostics.is_empty() {
+            emit(&format!("cache failure diagnostics:\n{}", git.diagnostics));
+        }
         if created_target {
-            fs::remove_dir_all(&target)
-                .await
-                .map_err(|_| CheckoutFailureKind::Clone)?;
+            fs::remove_dir_all(&target).await.map_err(|error| {
+                git.record_error("could not remove failed cached checkout target", error);
+                CheckoutFailureKind::Clone
+            })?;
         }
         git.diagnostics.clear();
     }
-    fs::create_dir(&target).await.map_err(|_| {
-        git.record("could not create checkout target");
+    fs::create_dir(&target).await.map_err(|error| {
+        git.record_error("could not create checkout target", error);
         CheckoutFailureKind::Clone
     })?;
     checkout_network(request, &url, &target, git).await
@@ -472,10 +559,17 @@ async fn refresh_mirror(
     git: &mut Git,
     emit: &impl Fn(&str),
 ) -> Result<(), ()> {
-    let parent = mirror.parent().ok_or(())?;
+    let parent = mirror
+        .parent()
+        .ok_or_else(|| git.record("cache mirror has no parent directory"))?;
     let existing = fs::symlink_metadata(mirror).await;
-    let path = mirror.to_str().ok_or(())?;
+    let path = mirror
+        .to_str()
+        .ok_or_else(|| git.record("cache mirror path is not valid UTF-8"))?;
     let config_path = mirror.join("config");
+    let config_path_str = config_path
+        .to_str()
+        .ok_or_else(|| git.record("cache mirror config path is not valid UTF-8"))?;
     let canonical_config = format!(
         "[core]\n\trepositoryformatversion = 0\n\tbare = true\n\
          [remote \"origin\"]\n\turl = {url}\n\tfetch = +refs/heads/*:refs/heads/*\n"
@@ -487,7 +581,7 @@ async fn refresh_mirror(
                 &[
                     "config",
                     "--file",
-                    config_path.to_str().ok_or(())?,
+                    config_path_str,
                     "--no-includes",
                     "--list",
                 ],
@@ -508,7 +602,7 @@ async fn refresh_mirror(
     if valid {
         fs::write(&config_path, &canonical_config)
             .await
-            .map_err(|_| ())?;
+            .map_err(|error| git.record_error("could not write cache mirror config", error))?;
         valid = git
             .run(mirror, &["rev-parse", "--is-bare-repository"])
             .await
@@ -521,19 +615,26 @@ async fn refresh_mirror(
             Ok(metadata) => {
                 emit("invalid cache; rebuilding");
                 if !metadata.is_dir() {
-                    fs::remove_file(mirror).await.map_err(|_| ())?;
+                    fs::remove_file(mirror).await.map_err(|error| {
+                        git.record_error("could not remove invalid cache mirror file", error)
+                    })?;
                 } else {
-                    fs::remove_dir_all(mirror).await.map_err(|_| ())?;
+                    fs::remove_dir_all(mirror).await.map_err(|error| {
+                        git.record_error("could not remove invalid cache mirror directory", error)
+                    })?;
                 }
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => emit("cold cache population"),
-            Err(_) => return Err(()),
+            Err(error) => {
+                git.record_error("could not inspect cache mirror", error);
+                return Err(());
+            }
         }
         git.run(parent, &["init", "--bare", "--quiet", path])
             .await?;
         fs::write(&config_path, &canonical_config)
             .await
-            .map_err(|_| ())?;
+            .map_err(|error| git.record_error("could not write new cache mirror config", error))?;
     }
     git.run(
         mirror,
@@ -566,7 +667,7 @@ async fn remote_default_branch(target: &Path, git: &mut Git) -> Result<String, (
             line.strip_prefix("ref: refs/heads/")
                 .and_then(|value| value.strip_suffix("\tHEAD"))
         })
-        .ok_or(())?;
+        .ok_or_else(|| git.record("Git ls-remote did not report a symbolic default branch"))?;
     git.run(target, &["check-ref-format", "--branch", branch])
         .await?;
     Ok(branch.to_owned())
@@ -625,7 +726,10 @@ async fn checkout_cached(
     mirror: &Path,
     git: &mut Git,
 ) -> Result<(), CheckoutFailureKind> {
-    let reference = mirror.to_str().ok_or(CheckoutFailureKind::Clone)?;
+    let reference = mirror.to_str().ok_or_else(|| {
+        git.record("cache mirror reference path is not valid UTF-8");
+        CheckoutFailureKind::Clone
+    })?;
     clone_repository(
         request,
         url,
@@ -672,16 +776,26 @@ async fn clone_repository(
             request
                 .head
                 .as_ref()
-                .ok_or(CheckoutFailureKind::Checkout)?
+                .ok_or_else(|| {
+                    git.record("branch-only checkout requires a branch");
+                    CheckoutFailureKind::Checkout
+                })?
                 .value(),
         ]);
     }
     args.extend([
         "--",
         url,
-        target.to_str().ok_or(CheckoutFailureKind::Clone)?,
+        target.to_str().ok_or_else(|| {
+            git.record("checkout target path is not valid UTF-8");
+            CheckoutFailureKind::Clone
+        })?,
     ]);
-    git.run(target.parent().ok_or(CheckoutFailureKind::Clone)?, &args)
+    let parent = target.parent().ok_or_else(|| {
+        git.record("checkout target has no parent directory");
+        CheckoutFailureKind::Clone
+    })?;
+    git.run(parent, &args)
         .await
         .map_err(|_| CheckoutFailureKind::Clone)?;
     Ok(())

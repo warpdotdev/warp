@@ -57,7 +57,9 @@ fn duplicate_targets_are_rejected_before_any_checkout() {
     second["checkout_name"] = json!("WARP");
     batch["repositories"].as_array_mut().unwrap().push(second);
     assert_eq!(
-        CheckoutBatch::parse(&serde_json::to_vec(&batch).unwrap()).unwrap_err(),
+        CheckoutBatch::parse(&serde_json::to_vec(&batch).unwrap())
+            .unwrap_err()
+            .to_string(),
         "duplicate checkout target"
     );
 }

@@ -2,6 +2,8 @@ use std::collections::HashSet;
 use std::fmt;
 use std::path::PathBuf;
 
+#[cfg(any(test, feature = "local_fs"))]
+use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 use warp_cli::agent::{RepositoryForge, RepositoryHeadRef, RepositoryIdentity};
 
@@ -132,9 +134,9 @@ where
 
 impl CheckoutBatch {
     #[cfg(any(test, feature = "local_fs"))]
-    pub fn parse(bytes: &[u8]) -> Result<Self, &'static str> {
-        let batch: Self = serde_json::from_slice(bytes).map_err(|_| "invalid checkout JSON")?;
-        batch.validate()?;
+    pub fn parse(bytes: &[u8]) -> anyhow::Result<Self> {
+        let batch: Self = serde_json::from_slice(bytes).context("invalid checkout JSON")?;
+        batch.validate().map_err(anyhow::Error::msg)?;
         Ok(batch)
     }
 
