@@ -660,9 +660,6 @@ pub enum FeatureFlag {
     /// Enables Oz identity federation commands.
     OzIdentityFederation,
 
-    /// Gates populating/reading oz updates from channel versions in the changelog model.
-    OzChangelogUpdates,
-
     /// Enables image upload for ambient agents.
     AmbientAgentsImageUpload,
 
