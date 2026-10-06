@@ -4130,6 +4130,7 @@ fn gql_tier(purchase_policy: Option<GqlPurchaseAddOnCreditsPolicy>) -> GqlTier {
     GqlTier {
         name: "Free".to_string(),
         description: "Free tier".to_string(),
+        billed_in_dollars: false,
         warp_ai_policy: None,
         team_size_policy: None,
         shared_notebooks_policy: None,
@@ -4554,6 +4555,7 @@ fn gql_user(
         },
         billing_metadata: user_purchase_policy.map(|policy| UserPurchasePolicyBillingMetadata {
             tier: UserPurchasePolicyTier {
+                billed_in_dollars: false,
                 purchase_add_on_credits_policy: Some(policy),
             },
         }),

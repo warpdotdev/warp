@@ -4194,6 +4194,11 @@ type Tier {
   aiPermissionsPolicy: AiPermissionsPolicy
   ambientAgentsPolicy: AmbientAgentsPolicy
   anyoneWithLinkSharingPolicy: AnyoneWithLinkSharingPolicy
+
+  """
+  Whether AI usage on this tier is billed in dollars rather than credits.
+  """
+  billedInDollars: Boolean!
   byoApiKeyPolicy: ByoApiKeyPolicy
   byoEndpointPolicy: ByoEndpointPolicy
   cloudConversationStoragePolicy: CloudConversationStoragePolicy

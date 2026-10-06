@@ -172,6 +172,38 @@ fn workspace_member_usage_conversion_preserves_billed_cents() {
 }
 
 #[test]
+fn tier_conversion_preserves_billed_in_dollars() {
+    let gql_tier = |billed_in_dollars: bool| GqlTier {
+        name: "Build".to_string(),
+        description: "Build tier".to_string(),
+        billed_in_dollars,
+        warp_ai_policy: None,
+        team_size_policy: None,
+        shared_notebooks_policy: None,
+        shared_workflows_policy: None,
+        session_sharing_policy: None,
+        ai_autonomy_policy: None,
+        telemetry_data_collection_policy: None,
+        ugc_data_collection_policy: None,
+        usage_based_pricing_policy: None,
+        codebase_context_policy: None,
+        byo_api_key_policy: None,
+        byo_endpoint_policy: None,
+        managed_byok_byoe_policy: None,
+        purchase_add_on_credits_policy: None,
+        enterprise_pay_as_you_go_policy: None,
+        enterprise_credits_auto_reload_policy: None,
+        multi_admin_policy: None,
+        native_workspaces_policy: None,
+        ambient_agents_policy: None,
+        usage_visibility_policy: None,
+    };
+
+    assert!(Tier::from(gql_tier(true)).billed_in_dollars);
+    assert!(!Tier::from(gql_tier(false)).billed_in_dollars);
+}
+
+#[test]
 fn addon_credits_settings_conversion_preserves_auto_reload_usage_cents() {
     let settings = AddonCreditsSettings::from(GqlAddonCreditsSettings {
         auto_reload_enabled: true,

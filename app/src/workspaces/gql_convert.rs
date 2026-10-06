@@ -713,6 +713,7 @@ impl From<GqlTier> for Tier {
         Self {
             name: gql_tier.name,
             description: gql_tier.description,
+            billed_in_dollars: gql_tier.billed_in_dollars,
             warp_ai_policy: gql_tier.warp_ai_policy.map(From::from),
             workspace_size_policy: gql_tier.team_size_policy.map(From::from),
             shared_notebooks_policy: gql_tier.shared_notebooks_policy.map(From::from),
