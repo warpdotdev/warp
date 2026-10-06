@@ -283,7 +283,7 @@ pub enum DelinquencyStatus {
     Other(String),
 }
 
-#[derive(cynic::QueryFragment, Debug, Clone)]
+#[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
 pub struct AddonCreditsOption {
     pub credits: i32,
     pub price_usd_cents: i32,

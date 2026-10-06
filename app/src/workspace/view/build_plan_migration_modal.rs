@@ -21,7 +21,7 @@ use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use crate::pricing::addon_pack::pack_menu_label;
+use crate::pricing::addon_pack::{PackUnit, pack_menu_label};
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::terminal::general_settings::GeneralSettings;
 use crate::ui_components::blended_colors;
@@ -205,6 +205,7 @@ impl BuildPlanMigrationModal {
         let premium_bps = UserWorkspaces::as_ref(ctx)
             .purchase_policy()
             .map_or(0, |policy| policy.effective_premium_bps());
+        let unit = PackUnit::for_viewer(ctx);
         self.reload_denominations_dropdown
             .update(ctx, |dropdown, ctx| {
                 dropdown.set_items(
@@ -213,7 +214,7 @@ impl BuildPlanMigrationModal {
                         .enumerate()
                         .map(|(i, option)| {
                             DropdownItem::new(
-                                pack_menu_label(option, premium_bps),
+                                pack_menu_label(option, premium_bps, unit),
                                 BuildPlanMigrationModalViewAction::SelectReloadDenomination(i),
                             )
                         })
