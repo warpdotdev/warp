@@ -85,11 +85,16 @@ fn export_commands_use_active_shell_syntax_and_escaping() {
 }
 
 #[test]
-fn final_snapshot_includes_existing_git_usage_with_or_without_build_mounts() {
+fn final_snapshot_includes_caller_usage_with_or_without_build_mounts() {
     let root = tempfile::tempdir().unwrap();
-    let mirrors = root.path().join("git-mirrors");
-    std::fs::create_dir(&mirrors).unwrap();
-    record_cache_usage(root.path(), Vec::new()).unwrap();
+    let usage = || {
+        vec![build_cache::metadata::CacheUsage {
+            path: "git-mirrors".into(),
+            cache_framework: Some("git".to_owned()),
+            mount_target: Vec::new(),
+        }]
+    };
+    record_cache_usage(root.path(), Vec::new(), usage()).unwrap();
     let path = root.path().join(".ns/cache-metadata.json");
     let document: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -108,6 +113,7 @@ fn final_snapshot_includes_existing_git_usage_with_or_without_build_mounts() {
             cache_framework: Some("rust".to_owned()),
             mount_target: vec!["/work/target".to_owned()],
         }],
+        usage(),
     )
     .unwrap();
     let document: serde_json::Value =
@@ -117,8 +123,7 @@ fn final_snapshot_includes_existing_git_usage_with_or_without_build_mounts() {
         document["userRequest"]["repos/key/target"]["mountTarget"],
         serde_json::json!(["/work/target"])
     );
-    std::fs::remove_dir(mirrors).unwrap();
-    record_cache_usage(root.path(), Vec::new()).unwrap();
+    record_cache_usage(root.path(), Vec::new(), Vec::new()).unwrap();
     let document: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(document["userRequest"], serde_json::json!({}));

@@ -64,6 +64,7 @@ pub(crate) fn repository_cache_source(
 pub(super) async fn setup_caches(
     cache_root: PathBuf,
     source_repos: &[RepositoryCloneRequest],
+    additional_usage: Vec<CacheUsage>,
     working_dir: &Path,
     spawner: &ModelSpawner<TerminalDriver>,
 ) -> Result<(), CacheSetupDegraded> {
@@ -83,7 +84,7 @@ pub(super) async fn setup_caches(
 
     if let Err(error) = report
         .cache_usage(&cache_root)
-        .and_then(|usage| record_cache_usage(&cache_root, usage))
+        .and_then(|usage| record_cache_usage(&cache_root, usage, additional_usage))
     {
         log::warn!("Namespace cache usage metadata was not updated: {error}");
     }
@@ -121,16 +122,9 @@ pub(super) async fn setup_caches(
 fn record_cache_usage(
     cache_root: &Path,
     mut usage: Vec<CacheUsage>,
+    additional_usage: Vec<CacheUsage>,
 ) -> Result<(), CacheMetadataError> {
-    if std::fs::symlink_metadata(cache_root.join("git-mirrors"))
-        .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
-    {
-        usage.push(CacheUsage {
-            path: "git-mirrors".into(),
-            cache_framework: Some("git".to_owned()),
-            mount_target: Vec::new(),
-        });
-    }
+    usage.extend(additional_usage);
     build_cache::metadata::write_cache_metadata(cache_root, usage)
 }
 /// Report any cache setup failures to Sentry.

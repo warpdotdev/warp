@@ -52,6 +52,7 @@ fn environment_checkout_requires_no_auth_and_has_no_telemetry_payload() {
         CliCommand::EnvironmentCheckout(warp_cli::environment_checkout::EnvironmentCheckoutArgs {
             requests_file: "private/requests.json".into(),
             failure_report: "private/failures.json".into(),
+            remove_origins_only: false,
         });
     assert!(!command_requires_auth(&command));
     let event = command_to_telemetry_event(&command);

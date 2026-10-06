@@ -623,8 +623,9 @@ async fn prepare_environment_impl(
             .record_result(
                 SetupStep::CacheSetup,
                 cache_setup::setup_caches(
-                    cache_root,
+                    cache_root.clone(),
                     &repository_clone_requests,
+                    super::environment_checkout::mirror_cache_usage(&cache_root),
                     working_dir,
                     spawner,
                 ),
@@ -1067,60 +1068,6 @@ async fn active_shell_type(spawner: &ModelSpawner<TerminalDriver>) -> ShellType 
         .unwrap_or(ShellType::Bash)
 }
 
-fn build_remove_repository_origins_command(
-    repos: &[RepositoryCloneRequest],
-    working_dir: &Path,
-    shell_type: ShellType,
-) -> String {
-    if shell_type == ShellType::PowerShell {
-        let commands = repos
-            .iter()
-            .filter(|request| request.remove_origin)
-            .map(|request| {
-                let path = shell_escape_single_quotes(
-                    &working_dir.join(&request.checkout_name).to_string_lossy(),
-                    shell_type,
-                );
-                format!(
-                    "& git -C '{path}' remote get-url origin >$null 2>&1; \
-                 if ($LASTEXITCODE -eq 0) {{ \
-                   & git -C '{path}' config --remove-section remote.origin; \
-                   if ($LASTEXITCODE -ne 0) {{ $failed = $true }} \
-                 }}"
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("; ");
-        return format!(
-            "$failed = $false; {commands}; \
-             if ($failed) {{ $global:LASTEXITCODE = 1; Write-Error 'could not remove repository origins' }} \
-             else {{ $global:LASTEXITCODE = 0 }}"
-        );
-    }
-    let mut script = String::new();
-    for request in repos.iter().filter(|request| request.remove_origin) {
-        let repo_path = working_dir.join(&request.checkout_name);
-        let escaped_path =
-            shell_escape_single_quotes(&repo_path.to_string_lossy(), ShellType::Bash);
-        // `git remote remove` deletes every remote-tracking ref as one atomic
-        // transaction, which locks all of them up front. A repository whose
-        // real branch history includes two ref names differing only by case
-        // (e.g. from a case-sensitive host, cloned onto a case-insensitive
-        // filesystem) then fails outright, since both lock paths collide.
-        // Clearing only the remote's config section severs fetch/push access
-        // just as effectively without ever touching a per-ref path, so it
-        // can't hit that collision; the now-unreachable tracking refs are
-        // harmless leftovers.
-        script.push_str(&format!(
-            "if git -C '{escaped_path}' remote get-url origin >/dev/null 2>&1; then\n\
-             \tgit -C '{escaped_path}' config --remove-section remote.origin || exit 1\n\
-             fi\n"
-        ));
-    }
-    let escaped_script = shell_escape_single_quotes(&script, shell_type);
-    format!("sh -c '{escaped_script}'")
-}
-
 async fn remove_repository_origins_from_repos(
     repos: &[RepositoryCloneRequest],
     working_dir: &Path,
@@ -1129,10 +1076,16 @@ async fn remove_repository_origins_from_repos(
     if !repos.iter().any(|request| request.remove_origin) {
         return Ok(());
     }
-    let shell_type = active_shell_type(spawner).await;
-    let command = build_remove_repository_origins_command(repos, working_dir, shell_type);
-    let output = execute_silent_command(command, spawner).await?;
-    if output.success() {
+    let selected = repos
+        .iter()
+        .filter(|request| request.remove_origin)
+        .cloned()
+        .collect::<Vec<_>>();
+    let batch = checkout_requests_batch(&selected, working_dir)?;
+    let (output, _) = execute_checkout_helper(&batch, true, spawner)
+        .await
+        .map_err(|_| PrepareEnvironmentError::RemoveRepositoryOrigins)?;
+    if output.exit_code == 0.into() {
         Ok(())
     } else {
         Err(PrepareEnvironmentError::RemoveRepositoryOrigins)
@@ -1159,6 +1112,7 @@ fn build_checkout_helper_command(
     executable: &Path,
     requests_file: &Path,
     failure_report: &Path,
+    remove_origins_only: bool,
     shell_type: ShellType,
 ) -> String {
     let quote = |path: &Path| {
@@ -1172,8 +1126,13 @@ fn build_checkout_helper_command(
     } else {
         ""
     };
+    let operation = if remove_origins_only {
+        " --remove-origins-only"
+    } else {
+        ""
+    };
     format!(
-        "{prefix}{} environment-checkout --requests-file {} --failure-report {}",
+        "{prefix}{} environment-checkout --requests-file {} --failure-report {}{operation}",
         quote(executable),
         quote(requests_file),
         quote(failure_report)
@@ -1192,14 +1151,10 @@ fn read_checkout_failures(path: &Path, request_count: usize) -> Option<Vec<Check
     .then_some(report.failures)
 }
 
-async fn clone_checkout_requests(
+fn checkout_requests_batch(
     repos: &[RepositoryCloneRequest],
     working_dir: &Path,
-    spawner: &ModelSpawner<TerminalDriver>,
-) -> Result<EnvironmentSnapshot, PrepareEnvironmentError> {
-    if repos.is_empty() {
-        return Ok(EnvironmentSnapshot::empty());
-    }
+) -> Result<CheckoutBatch, PrepareEnvironmentError> {
     let batch = CheckoutBatch {
         working_dir: working_dir.to_owned(),
         repositories: repos
@@ -1228,15 +1183,22 @@ async fn clone_checkout_requests(
             reason: reason.to_owned(),
         }
     })?;
+    Ok(batch)
+}
+
+async fn execute_checkout_helper(
+    batch: &CheckoutBatch,
+    remove_origins_only: bool,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Result<(ExecutedCommand, Option<Vec<CheckoutFailure>>), PrepareEnvironmentError> {
     let directory = tempfile::tempdir().map_err(|_| PrepareEnvironmentError::CheckoutHelper {
         reason: "could not create private checkout request directory",
     })?;
     let requests_file = directory.path().join("requests.json");
     let failure_report = directory.path().join("failures.json");
-    let bytes =
-        serde_json::to_vec(&batch).map_err(|_| PrepareEnvironmentError::CheckoutHelper {
-            reason: "could not serialize checkout requests",
-        })?;
+    let bytes = serde_json::to_vec(batch).map_err(|_| PrepareEnvironmentError::CheckoutHelper {
+        reason: "could not serialize checkout requests",
+    })?;
     std::fs::write(&requests_file, bytes).map_err(|_| PrepareEnvironmentError::CheckoutHelper {
         reason: "could not write checkout requests",
     })?;
@@ -1248,13 +1210,27 @@ async fn clone_checkout_requests(
         &executable,
         &requests_file,
         &failure_report,
+        remove_origins_only,
         active_shell_type(spawner).await,
     );
     let result = execute_command(command, spawner).await;
     let _ = std::fs::remove_file(&requests_file);
     let command_result = result?;
+    let failures = read_checkout_failures(&failure_report, batch.repositories.len());
+    Ok((command_result, failures))
+}
+
+async fn clone_checkout_requests(
+    repos: &[RepositoryCloneRequest],
+    working_dir: &Path,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Result<EnvironmentSnapshot, PrepareEnvironmentError> {
+    if repos.is_empty() {
+        return Ok(EnvironmentSnapshot::empty());
+    }
+    let batch = checkout_requests_batch(repos, working_dir)?;
+    let (command_result, failures) = execute_checkout_helper(&batch, false, spawner).await?;
     if command_result.exit_code != 0.into() {
-        let failures = read_checkout_failures(&failure_report, repos.len());
         let failed_requests = match &failures {
             Some(failures) => failures
                 .iter()
@@ -1305,7 +1281,6 @@ async fn clone_checkout_requests(
             identity_diagnostics,
         });
     }
-    let _ = std::fs::remove_file(&failure_report);
     Ok(capture_environment_snapshot(repos, working_dir, spawner).await)
 }
 

@@ -17,11 +17,10 @@ use super::{
     CloneFailureCredentialIdentity, CloneFailureIdentityDiagnostics, PrepareEnvironmentError,
     RepositoryCloneRequest, SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER, SetupCommandPhase,
     await_setup_phase, build_checkout_helper_command, build_git_credential_query_command,
-    build_remove_repository_origins_command, build_resolved_head_command,
-    clone_failure_identity_diagnostics, environment_snapshot, is_valid_git_object_id,
-    merge_repos_deduped, parse_resolved_head_sha, parse_resolved_head_shas, read_checkout_failures,
-    repository_clone_requests, setup_command_failure, single_repo_name, unique_clone_hosts,
-    validate_repository_preparation_overrides,
+    build_resolved_head_command, clone_failure_identity_diagnostics, environment_snapshot,
+    is_valid_git_object_id, merge_repos_deduped, parse_resolved_head_sha, parse_resolved_head_shas,
+    read_checkout_failures, repository_clone_requests, setup_command_failure, single_repo_name,
+    unique_clone_hosts, validate_repository_preparation_overrides,
 };
 use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
@@ -577,31 +576,6 @@ fn substituted_request_uses_target_identity_and_source_checkout_path() {
 }
 
 #[test]
-fn sparse_substitution_origin_removal_excludes_preserved_target() {
-    let repos = vec![
-        repo(CodeForge::GitHub, "warpdotdev", "warp"),
-        repo(CodeForge::GitHub, "warpdotdev", "common-skills"),
-    ];
-    let overrides = vec![substitution_override(
-        "warpdotdev",
-        "warp",
-        "0123456789abcdef0123456789abcdef01234567",
-        "warpdotdev",
-        "warp-for-benchmarks",
-    )];
-    let requests = repository_clone_requests(&repos, &overrides, true).unwrap();
-    let workspace = Path::new("/workspace");
-    let command = build_remove_repository_origins_command(&requests, workspace, ShellType::Bash);
-    let preserved_target = workspace.join("warp").to_string_lossy().into_owned();
-    let removed_source = workspace
-        .join("common-skills")
-        .to_string_lossy()
-        .into_owned();
-    assert!(!command.contains(&preserved_target));
-    assert!(command.contains(&removed_source));
-}
-
-#[test]
 fn preparation_overrides_replace_checkout_ref_only_for_matching_repos() {
     let repos = vec![
         SourceRepo::new(
@@ -899,33 +873,6 @@ fn repository_head_override_validation_accepts_partial_multi_repo_sets() {
 }
 
 #[test]
-fn repository_origin_removal_targets_all_environment_repositories() {
-    let repos = vec![
-        SourceRepo::new(
-            CodeForge::GitHub,
-            "warpdotdev".to_string(),
-            "warp".to_string(),
-        ),
-        SourceRepo::new(
-            CodeForge::GitHub,
-            "warpdotdev".to_string(),
-            "warp-server".to_string(),
-        ),
-    ];
-
-    let workspace = Path::new("/workspace");
-    let requests = repository_clone_requests(&repos, &[], true).unwrap();
-    let command = build_remove_repository_origins_command(&requests, workspace, ShellType::Bash);
-
-    let warp_dir = workspace.join("warp").to_string_lossy().into_owned();
-    let warp_server_dir = workspace.join("warp-server").to_string_lossy().into_owned();
-    assert!(command.contains(&warp_dir));
-    assert!(command.contains(&warp_server_dir));
-    assert!(command.contains("remote get-url origin"));
-    assert!(command.contains("config --remove-section remote.origin"));
-}
-
-#[test]
 fn clone_failure_identity_hosts_are_deduplicated_in_request_order() {
     let requests = [
         clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp"), None),
@@ -964,12 +911,14 @@ fn checkout_helper_quotes_paths_without_embedding_repository_payloads() {
             Path::new("/Applications/Warp's App/Contents/MacOS/warp"),
             Path::new("/private/a path/requests.json"),
             Path::new("/private/a path/failures.json"),
+            true,
             shell,
         );
         assert!(command.contains("environment-checkout --requests-file"));
         assert!(command.contains("' --failure-report '"));
         assert!(!command.contains("github.com") && !command.contains("sh -c"));
         assert_eq!(command.starts_with("& "), shell == ShellType::PowerShell);
+        assert!(command.ends_with(" --remove-origins-only"));
     }
 }
 
@@ -1012,7 +961,6 @@ fn powershell_post_checkout_commands_do_not_depend_on_posix_shells() {
     for command in [
         build_resolved_head_command(&requests, working_dir, ShellType::PowerShell),
         build_git_credential_query_command("github.com", ShellType::PowerShell),
-        build_remove_repository_origins_command(&requests, working_dir, ShellType::PowerShell),
     ] {
         assert!(!command.contains("sh -c") && !command.contains("/dev/null"));
         assert!(command.contains("git"));
@@ -1021,7 +969,7 @@ fn powershell_post_checkout_commands_do_not_depend_on_posix_shells() {
 
 #[cfg(feature = "local_tty")]
 #[test]
-fn snapshot_and_origin_removal_preserve_shell_output_and_failure_status() {
+fn snapshot_preserves_shell_output_and_missing_repository_status() {
     use crate::terminal::model::session::command_executor::{
         ExecuteCommandOptions, LocalCommandExecutor,
     };
@@ -1087,34 +1035,6 @@ fn snapshot_and_origin_removal_preserve_shell_output_and_failure_status() {
     let heads = parse_resolved_head_shas(&output.stdout, 2);
     assert!(heads[0].is_some());
     assert!(heads[1].is_none());
-
-    fs::write(target.join(".git/config.lock"), "").unwrap();
-    assert!(
-        !execute(build_remove_repository_origins_command(
-            &requests,
-            &working_dir,
-            shell
-        ))
-        .success()
-    );
-    fs::remove_file(target.join(".git/config.lock")).unwrap();
-    assert!(
-        execute(build_remove_repository_origins_command(
-            &requests,
-            &working_dir,
-            shell
-        ))
-        .success()
-    );
-    assert!(
-        !Command::new("git")
-            .current_dir(&target)
-            .args(["remote", "get-url", "origin"])
-            .output()
-            .unwrap()
-            .status
-            .success()
-    );
 }
 #[test]
 fn clone_failure_identity_diagnostics_keep_only_sanitized_expected_fields() {

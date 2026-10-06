@@ -11,6 +11,8 @@ pub struct EnvironmentCheckoutArgs {
     pub requests_file: PathBuf,
     #[arg(long)]
     pub failure_report: PathBuf,
+    #[arg(long)]
+    pub remove_origins_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,6 +36,7 @@ pub struct CheckoutRequest {
 pub enum CheckoutFailureKind {
     Clone,
     Checkout,
+    RemoveOrigin,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
