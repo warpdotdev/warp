@@ -38,7 +38,7 @@ use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::editor::{
     EditorOptions, EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, TextOptions,
 };
-use crate::server::ids::{ClientId, HashableId, ServerId, SyncId};
+use crate::server::ids::SyncId;
 use crate::ui_components::icons::Icon;
 use crate::view_components::copyable_text_field::{
     COPY_FEEDBACK_DURATION, CopyButtonPlacement, CopyableTextFieldConfig,
@@ -58,6 +58,10 @@ pub trait GenericMenuItem: Debug + 'static {
 
     /// Data associated with this menu item action
     fn action_data(&self) -> String;
+    /// Environment ID to show in the sidecar, if this item represents an environment.
+    fn environment_sidecar_id(&self) -> Option<SyncId> {
+        None
+    }
 
     /// Optional element to render on the right side of the menu item
     fn right_side_element(&self, _app: &AppContext) -> Option<Box<dyn Element>> {
@@ -629,21 +633,16 @@ impl DisplayChipMenu {
             && self.selected_index < self.filtered_items.len()
     }
 
-    fn parse_sync_id_lossy(s: &str) -> SyncId {
-        if let Some(hashed) = ClientId::from_hash(s) {
-            SyncId::ClientId(hashed)
-        } else {
-            SyncId::ServerId(ServerId::from_string_lossy(s))
-        }
-    }
-
     fn environment_sidecar_data(&self, app: &AppContext) -> Option<EnvironmentSidecarData> {
         if !self.should_show_environment_sidecar() {
             return None;
         }
 
-        let item = self.filtered_items.get(self.selected_index)?.item.clone();
-        let sync_id = Self::parse_sync_id_lossy(&item.action_data());
+        let sync_id = self
+            .filtered_items
+            .get(self.selected_index)?
+            .item
+            .environment_sidecar_id()?;
         let env = CloudAmbientAgentEnvironment::get_by_id(&sync_id, app)?;
 
         let repo_names = env

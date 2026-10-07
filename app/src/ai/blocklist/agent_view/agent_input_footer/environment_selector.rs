@@ -230,6 +230,12 @@ impl GenericMenuItem for EnvironmentMenuItem {
             CloudSelectorChoice::Factory { uid, .. } => format!("factory:{uid}"),
         }
     }
+    fn environment_sidecar_id(&self) -> Option<SyncId> {
+        match &self.choice {
+            CloudSelectorChoice::Environment(id) => Some(*id),
+            CloudSelectorChoice::Factory { .. } => None,
+        }
+    }
 
     fn right_side_element(&self, app: &AppContext) -> Option<Box<dyn Element>> {
         if !self.is_selected {
@@ -843,3 +849,7 @@ impl ActionButtonTheme for DisabledTheme {
         AgentInputButtonTheme.should_opt_out_of_contrast_adjustment()
     }
 }
+
+#[cfg(test)]
+#[path = "environment_selector_tests.rs"]
+mod tests;
