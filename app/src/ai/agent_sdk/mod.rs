@@ -1,6 +1,7 @@
 //! Agent SDK entry points for invoking Agent-related functionality from the app.
 //! For now this provides a simple runner that echoes the received command.
 
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -42,6 +43,7 @@ use warp_graphql::queries::execution_config::ExecutionConfiguration;
 use warp_isolation_platform::IsolationPlatformError;
 #[cfg(not(target_family = "wasm"))]
 use warp_logging::log_file_path;
+use warp_managed_secrets::{ManagedSecretValue, convert_task_secrets};
 use warp_server_client::iap::{IapManager, IapManagerEvent};
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelSpawner, SingletonEntity};
@@ -58,7 +60,7 @@ use crate::ai::agent_sdk::setup_observability::{
     OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::ambient_agents::task::HarnessConfig;
+use crate::ai::ambient_agents::task::{HarnessConfig, TaskAttachment};
 use crate::ai::attachment_utils::attachments_download_dir;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::aws_credentials::{BedrockOidcCredentialsConfig, refresh_aws_credentials_oidc};
@@ -787,6 +789,11 @@ fn run_task(
 /// when starting the agent driver. This is needed because conversation fetching
 /// requires spawning an async task, which requires a ModelContext.
 struct AgentDriverRunner;
+struct ExecutionTaskData {
+    config: ExecutionConfiguration,
+    secrets: HashMap<String, ManagedSecretValue>,
+    attachments: anyhow::Result<Vec<TaskAttachment>>,
+}
 
 impl warpui::Entity for AgentDriverRunner {
     type Event = ();
@@ -836,13 +843,14 @@ impl AgentDriverRunner {
             setup_events
                 .post_timeline_event(OzRunTimelineEvent::WorkerContainerReady)
                 .await;
-            let execution_config = if let Some(execution_id) = args.execution_id.as_deref() {
+            let execution_data = if let Some(execution_id) = args.execution_id.as_deref() {
                 let task_id = args.task_id.as_deref().ok_or(AgentDriverError::InvalidRuntimeState)?;
-                Some(Self::fetch_execution_config(&foreground, task_id, execution_id).await?)
+                Some(Self::fetch_execution_task_data(&foreground, task_id, execution_id).await?)
             } else {
                 None
             };
-            if let Some(config) = execution_config.as_ref()
+            let execution_config = execution_data.as_ref().map(|data| &data.config);
+            if let Some(config) = execution_config
                 && let Some(conversation_id) = config.conversation_id.as_ref()
             {
                 let selected_harness = execution_config::harness(&config.harness)
@@ -906,18 +914,18 @@ impl AgentDriverRunner {
                 .await?;
 
             // Pull relevant variables out of args before moving it into the closure.
-            let share_requests = match execution_config.as_ref() {
+            let share_requests = match execution_config {
                 Some(config) => Some(execution_config::sharing_acls(config.session_sharing_acls.clone())
                     .map_err(AgentDriverError::ConfigBuildFailed)?),
                 None => args.share.share.clone(),
             };
-            let bedrock_inference_role = match execution_config.as_ref() {
+            let bedrock_inference_role = match execution_config {
                 Some(config) => config.inference_providers.as_ref()
                     .and_then(|providers| providers.aws_bedrock.as_ref())
                     .map(|bedrock| bedrock.role_arn.clone()),
                 None => args.bedrock_inference_role.clone(),
             };
-            let bedrock_role_region = match execution_config.as_ref() {
+            let bedrock_role_region = match execution_config {
                 Some(config) => config.inference_providers.as_ref()
                     .and_then(|providers| providers.aws_bedrock.as_ref())
                     .and_then(|bedrock| bedrock.region.clone()),
@@ -953,7 +961,7 @@ impl AgentDriverRunner {
                     agent_driver_team_scope,
                     &server_api,
                     &setup_events,
-                    execution_config,
+                    execution_data,
                 )
                 .await?;
 
@@ -1100,17 +1108,24 @@ impl AgentDriverRunner {
         Ok(())
     }
 
-    async fn fetch_execution_config(
+    async fn fetch_execution_task_data(
         foreground: &ModelSpawner<Self>,
         task_id: &str,
         execution_id: &str,
-    ) -> Result<ExecutionConfiguration, AgentDriverError> {
+    ) -> Result<ExecutionTaskData, AgentDriverError> {
+        let (workload_token, no_isolation) =
+            match warp_isolation_platform::issue_workload_token(Some(Duration::from_mins(5))).await
+            {
+                Ok(token) => (token.token, false),
+                Err(IsolationPlatformError::NoIsolationPlatformDetected) => (String::new(), true),
+                Err(error) => return Err(AgentDriverError::SecretsFetchFailed(error.into())),
+            };
         let api = foreground
             .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get())
             .await?;
-        let config = with_retry(
-            "Execution configuration",
-            || api.get_execution_config(task_id, execution_id),
+        let data = with_retry(
+            "Execution bootstrap",
+            || api.get_execution_bootstrap(task_id, execution_id, workload_token.clone()),
             retry::is_transient_graphql_or_http_error,
             |delay| async move {
                 warpui::r#async::Timer::after(delay).await;
@@ -1123,9 +1138,19 @@ impl AgentDriverRunner {
         )
         .await
         .map_err(AgentDriverError::ConfigBuildFailed)?;
-        execution_config::validate_identity(&config, task_id, execution_id)
+        execution_config::validate_identity(&data.config, task_id, execution_id)
             .map_err(AgentDriverError::ConfigBuildFailed)?;
-        Ok(config)
+        let secrets = if no_isolation {
+            HashMap::new()
+        } else {
+            convert_task_secrets(data.secrets.map_err(AgentDriverError::SecretsFetchFailed)?)
+                .map_err(AgentDriverError::SecretsFetchFailed)?
+        };
+        Ok(ExecutionTaskData {
+            config: data.config,
+            secrets,
+            attachments: data.attachments,
+        })
     }
 
     async fn fetch_task_git_credentials(
@@ -1362,7 +1387,7 @@ impl AgentDriverRunner {
         agent_driver_team_scope: Option<HeadlessTeamScope>,
         server_api: &Arc<dyn AIClient>,
         setup_events: &SetupClientEventReporter,
-        execution_config: Option<ExecutionConfiguration>,
+        execution_data: Option<ExecutionTaskData>,
     ) -> Result<(AgentDriverOptions, Task, Option<String>), AgentDriverError> {
         // Get the working directory
         let working_dir = match args.cwd.as_ref() {
@@ -1375,11 +1400,12 @@ impl AgentDriverRunner {
         if let Some(task_id_str) = args.task_id.as_ref() {
             Self::bootstrap_git_credentials_for_task(foreground, task_id_str, &args).await?;
         }
-        if let Some(config) = execution_config {
-            let task_id_str = args
-                .task_id
-                .clone()
-                .ok_or(AgentDriverError::InvalidRuntimeState)?;
+        if let Some(ExecutionTaskData {
+            config,
+            secrets,
+            attachments,
+        }) = execution_data
+        {
             let (first_skill, skill_discovery_dirs) = Self::resolve_execution_skills(
                 foreground,
                 &args,
@@ -1402,16 +1428,20 @@ impl AgentDriverRunner {
                 .await?
                 .map_err(AgentDriverError::ConfigBuildFailed)?;
             options.team_scope = agent_driver_team_scope;
+            let task_id = options
+                .task_id
+                .ok_or(AgentDriverError::InvalidRuntimeState)?;
             setup_events
                 .record_result(
                     SetupStep::TaskDataFetch,
-                    Self::fetch_secrets_and_attachments(
+                    Self::prepare_execution_task_data(
                         foreground,
                         server_api,
-                        task_id_str,
+                        task_id,
+                        secrets,
+                        attachments,
                         &mut options,
                         &mut task,
-                        false,
                     ),
                 )
                 .await?;
@@ -1525,7 +1555,6 @@ impl AgentDriverRunner {
                         task_id_str,
                         &mut driver_options,
                         &mut task,
-                        true,
                     ),
                 )
                 .await?
@@ -1616,8 +1645,72 @@ impl AgentDriverRunner {
         Ok(())
     }
 
-    /// When starting an agent run from an existing task_id, fetch secrets, task metadata,
-    /// and task attachments (images and files) from the server and update the driver options.
+    async fn prepare_execution_task_data(
+        foreground: &ModelSpawner<Self>,
+        ai_client: &Arc<dyn AIClient>,
+        task_id: AmbientAgentTaskId,
+        secrets: HashMap<String, ManagedSecretValue>,
+        attachments: anyhow::Result<Vec<TaskAttachment>>,
+        driver_options: &mut AgentDriverOptions,
+        task: &mut Task,
+    ) -> Result<(), AgentDriverError> {
+        let server_api = foreground
+            .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get())
+            .await?;
+        let attachments_dir = attachments_download_dir(&driver_options.working_dir);
+        let regular = async {
+            match attachments {
+                Ok(attachments) => {
+                    driver::attachments::download_attachments(
+                        attachments,
+                        server_api.clone(),
+                        attachments_dir.clone(),
+                    )
+                    .await
+                }
+                Err(error) => Err(error),
+            }
+        };
+        let handoff = async {
+            if !FeatureFlag::OzHandoff.is_enabled() {
+                return Ok(None);
+            }
+            driver::attachments::fetch_and_download_handoff_snapshot_attachments(
+                ai_client.clone(),
+                server_api.http_client(),
+                task_id,
+                attachments_dir.clone(),
+            )
+            .await
+        };
+        let (regular_result, handoff_result) = futures::join!(regular, handoff);
+        let mut attachments_dir = match regular_result {
+            Ok(dir) => dir,
+            Err(error) => {
+                log::warn!("Failed to fetch and download attachments: {error:#}");
+                None
+            }
+        };
+        match handoff_result {
+            Ok(Some(dir)) => {
+                attachments_dir.get_or_insert(dir);
+            }
+            Ok(None) => {}
+            Err(error) => log::warn!("Failed to fetch handoff snapshot attachments: {error:#}"),
+        }
+        driver_options.secrets = secrets;
+        if let AgentRunPrompt::ServerSide {
+            attachments_dir: ref mut dir,
+            ..
+        } = task.prompt
+        {
+            *dir = attachments_dir;
+        }
+        Ok(())
+    }
+
+    /// For task-only launches, fetch secrets, task metadata, and task attachments (images and
+    /// files) from the server and update the driver options.
     ///
     /// Returns the task's `conversation_id` when the server has linked the task to an existing
     /// AI conversation (e.g. a `run-cloud --conversation` spawn). The caller uses this to drive
@@ -1628,7 +1721,6 @@ impl AgentDriverRunner {
         task_id_str: String,
         driver_options: &mut AgentDriverOptions,
         task: &mut Task,
-        fetch_metadata: bool,
     ) -> Result<(Option<String>, Vec<SourceRepo>), AgentDriverError> {
         let (task_secrets, server_api) = foreground
             .spawn({
@@ -1660,13 +1752,12 @@ impl AgentDriverRunner {
         let attachments_download_dir = attachments_download_dir(&driver_options.working_dir);
         let task_ai_client = ai_client.clone();
         let task_metadata = async {
-            match (fetch_metadata, parsed_task_id) {
-                (false, _) => Ok(None),
-                (true, Some(task_id)) => task_ai_client
+            match parsed_task_id {
+                Some(task_id) => task_ai_client
                     .get_ambient_agent_task(&task_id)
                     .await
                     .map(Some),
-                (true, None) => Ok(None),
+                None => Ok(None),
             }
         };
 
@@ -1743,17 +1834,6 @@ impl AgentDriverRunner {
                 }
             }
         };
-        if !fetch_metadata {
-            driver_options.secrets = secrets;
-            if let AgentRunPrompt::ServerSide {
-                attachments_dir: ref mut dir,
-                ..
-            } = task.prompt
-            {
-                *dir = attachments_dir;
-            }
-            return Ok((None, Vec::new()));
-        }
         let (
             parent_run_id,
             task_conversation_id,

@@ -1,7 +1,32 @@
+use super::task_attachments::{TaskInput, TaskResult};
+use super::task_secrets::{TaskSecretsInput, TaskSecretsResult};
 use crate::ai::AgentHarness;
 use crate::error::UserFacingError;
 use crate::request_context::RequestContext;
 use crate::schema;
+
+#[derive(cynic::QueryVariables, Debug)]
+pub struct ExecutionBootstrapVariables {
+    pub config_input: ExecutionConfigInput,
+    pub secrets_input: TaskSecretsInput,
+    pub task_input: TaskInput,
+    pub request_context: RequestContext,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "RootQuery", variables = "ExecutionBootstrapVariables")]
+pub struct ExecutionBootstrap {
+    #[arguments(input: $config_input, requestContext: $request_context)]
+    pub execution_config: ExecutionConfigResult,
+    #[arguments(input: $secrets_input, requestContext: $request_context)]
+    pub task_secrets: TaskSecretsResult,
+    #[arguments(input: $task_input, requestContext: $request_context)]
+    pub task: TaskResult,
+}
+
+crate::client::define_operation! {
+    execution_bootstrap(ExecutionBootstrapVariables) -> ExecutionBootstrap;
+}
 
 #[derive(cynic::QueryVariables, Debug)]
 pub struct ExecutionConfigVariables {

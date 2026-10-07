@@ -5,6 +5,7 @@ use chrono::Utc;
 use clap::Parser;
 use cloud_object_models::CodeForge;
 use command::blocking::Command as ProcessCommand;
+use mockito::Server;
 use serde_json::json;
 use warp_cli::agent::{
     AgentCommand, Harness, OutputFormat, RepositoryForge, RepositoryHeadRef,
@@ -28,7 +29,9 @@ use super::{
 use crate::ai::agent_sdk::driver::environment::WorkspaceConfiguration;
 use crate::ai::agent_sdk::driver::harness::HarnessKind;
 use crate::ai::agent_sdk::driver::{AgentDriverError, AgentDriverOptions, AgentRunPrompt, Task};
-use crate::ai::ambient_agents::task::{AmbientAgentTask, AmbientAgentTaskState, TaskScope};
+use crate::ai::ambient_agents::task::{
+    AmbientAgentTask, AmbientAgentTaskState, TaskAttachment, TaskScope,
+};
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::ai::skills::ResolvedSkill;
 use crate::auth::AuthStateProvider;
@@ -48,6 +51,78 @@ use crate::workspaces::user_workspaces::{HeadlessTeamScope, TeamScope, UserWorks
 use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
+
+#[test]
+fn paired_task_data_downloads_listed_attachment_without_refetching_it() {
+    let _images = FeatureFlag::AmbientAgentsImageUpload.override_enabled(true);
+    let _handoff = FeatureFlag::OzHandoff.override_enabled(false);
+    let working_dir = tempfile::TempDir::new().unwrap();
+    let mut server = Server::new();
+    let download = server
+        .mock("GET", "/attachment")
+        .with_status(200)
+        .with_body("attachment body")
+        .expect(1)
+        .create();
+    let attachment = TaskAttachment {
+        file_id: "file-id".to_owned(),
+        filename: "file-id_report.txt".to_owned(),
+        download_url: format!("{}/attachment", server.url()),
+        mime_type: "text/plain".to_owned(),
+    };
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        let runner = app.add_singleton_model(|_| AgentDriverRunner);
+        let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _enter = runtime.enter();
+        let mut ai_client = MockAIClient::new();
+        ai_client.expect_get_task_attachments().times(0);
+        let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
+        let mut options = agent_driver_options();
+        options.working_dir = working_dir.path().to_path_buf();
+        let mut task = Task {
+            prompt: AgentRunPrompt::ServerSide {
+                skill: None,
+                attachments_dir: None,
+            },
+            model: None,
+            profile: None,
+            mcp_specs: vec![],
+            harness: HarnessKind::Oz,
+        };
+        AgentDriverRunner::prepare_execution_task_data(
+            &foreground,
+            &ai_client,
+            TASK_ID.parse().unwrap(),
+            std::collections::HashMap::from([(
+                "API_KEY".to_owned(),
+                warp_managed_secrets::ManagedSecretValue::raw_value("secret"),
+            )]),
+            Ok(vec![attachment]),
+            &mut options,
+            &mut task,
+        )
+        .await
+        .unwrap();
+        assert!(options.secrets.contains_key("API_KEY"));
+        let AgentRunPrompt::ServerSide {
+            attachments_dir: Some(dir),
+            ..
+        } = task.prompt
+        else {
+            panic!("expected downloaded attachments directory");
+        };
+        assert_eq!(
+            fs::read(std::path::Path::new(&dir).join("file-id_report.txt")).unwrap(),
+            b"attachment body"
+        );
+    });
+    download.assert();
+}
 
 #[test]
 fn ordered_execution_skills_attach_only_first_and_expose_all_for_discovery() {
@@ -383,7 +458,6 @@ fn factory_experiment_bootstrap_subprocess() {
             TASK_ID.to_string(),
             &mut options,
             &mut task,
-            true,
         )
         .await
         .unwrap();

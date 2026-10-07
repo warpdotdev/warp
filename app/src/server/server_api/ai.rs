@@ -85,7 +85,7 @@ use warp_graphql::queries::codebase_context_config::{
 };
 #[cfg(not(target_family = "wasm"))]
 use warp_graphql::queries::execution_config::{
-    ExecutionConfig, ExecutionConfigInput, ExecutionConfigResult, ExecutionConfigVariables,
+    ExecutionBootstrap, ExecutionBootstrapVariables, ExecutionConfigInput, ExecutionConfigResult,
     ExecutionConfiguration,
 };
 use warp_graphql::queries::free_available_models::{
@@ -137,6 +137,8 @@ use warp_graphql::queries::task_git_credentials::{
     TaskGitCredentialsLegacyInput, TaskGitCredentialsLegacyResult,
     TaskGitCredentialsLegacyVariables, TaskGitCredentialsResult, TaskGitCredentialsVariables,
 };
+#[cfg(not(target_family = "wasm"))]
+use warp_graphql::queries::task_secrets::{ManagedSecretValue, TaskSecretsInput};
 use warp_multi_agent_api::ConversationData;
 
 use super::ServerApi;
@@ -186,6 +188,13 @@ use crate::{
 };
 
 const AI_ASSISTANT_REQUEST_TIMEOUT_SECONDS: u64 = 30;
+
+#[cfg(not(target_family = "wasm"))]
+pub(crate) struct ExecutionBootstrapData {
+    pub config: ExecutionConfiguration,
+    pub secrets: anyhow::Result<HashMap<String, ManagedSecretValue>>,
+    pub attachments: anyhow::Result<Vec<TaskAttachment>>,
+}
 
 /// A status update for a task, optionally including a platform error code.
 pub struct TaskStatusUpdate {
@@ -1721,28 +1730,61 @@ fn into_file_artifact_record(
     }
 }
 
+fn task_attachments_from_result(result: TaskResult) -> anyhow::Result<Vec<TaskAttachment>> {
+    match result {
+        TaskResult::TaskOutput(output) => Ok(output
+            .task
+            .attachments
+            .into_iter()
+            .map(|att| TaskAttachment {
+                file_id: att.file_id.into_inner(),
+                filename: att.filename,
+                download_url: att.download_url,
+                mime_type: att.mime_type,
+            })
+            .collect()),
+        TaskResult::UserFacingError(error) => Err(anyhow!(get_user_facing_error_message(error))),
+        TaskResult::Unknown => Err(anyhow!("Failed to fetch task attachments")),
+    }
+}
+
 impl ServerApi {
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) async fn get_execution_config(
+    pub(crate) async fn get_execution_bootstrap(
         &self,
         task_id: &str,
         execution_id: &str,
-    ) -> anyhow::Result<ExecutionConfiguration> {
-        let operation = ExecutionConfig::build(ExecutionConfigVariables {
-            input: ExecutionConfigInput {
+        workload_token: String,
+    ) -> anyhow::Result<ExecutionBootstrapData> {
+        let operation = ExecutionBootstrap::build(ExecutionBootstrapVariables {
+            config_input: ExecutionConfigInput {
                 task_id: task_id.to_string().into(),
                 execution_id: execution_id.to_string().into(),
+            },
+            secrets_input: TaskSecretsInput {
+                task_id: task_id.to_string().into(),
+                workload_token,
+            },
+            task_input: TaskInput {
+                task_id: task_id.to_string().into(),
             },
             request_context: get_request_context(),
         });
         let response = self.send_graphql_request(operation, None).await?;
-        match response.execution_config {
-            ExecutionConfigResult::ExecutionConfigOutput(output) => Ok(output.config),
+        let config = match response.execution_config {
+            ExecutionConfigResult::ExecutionConfigOutput(output) => output.config,
             ExecutionConfigResult::UserFacingError(error) => {
-                Err(anyhow!(get_user_facing_error_message(error)))
+                return Err(anyhow!(get_user_facing_error_message(error)));
             }
-            ExecutionConfigResult::Unknown => Err(anyhow!("Unknown execution config response")),
-        }
+            ExecutionConfigResult::Unknown => {
+                return Err(anyhow!("Unknown execution config response"));
+            }
+        };
+        Ok(ExecutionBootstrapData {
+            config,
+            secrets: super::managed_secrets::task_secrets_from_result(response.task_secrets),
+            attachments: task_attachments_from_result(response.task),
+        })
     }
     async fn get_public_api_with_team_scope<R>(
         &self,
@@ -3120,26 +3162,7 @@ impl AIClient for ServerApi {
         let operation = TaskAttachmentsQuery::build(variables);
         let response = self.send_graphql_request(operation, None).await?;
 
-        match response.task {
-            TaskResult::TaskOutput(output) => {
-                let attachments = output
-                    .task
-                    .attachments
-                    .into_iter()
-                    .map(|att| TaskAttachment {
-                        file_id: att.file_id.into_inner(),
-                        filename: att.filename,
-                        download_url: att.download_url,
-                        mime_type: att.mime_type,
-                    })
-                    .collect();
-                Ok(attachments)
-            }
-            TaskResult::UserFacingError(error) => {
-                Err(anyhow!(get_user_facing_error_message(error)))
-            }
-            TaskResult::Unknown => Err(anyhow!("Failed to fetch task attachments")),
-        }
+        task_attachments_from_result(response.task)
     }
 
     async fn create_file_artifact_upload_target(
