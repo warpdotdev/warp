@@ -64,6 +64,7 @@ use crate::util::bindings::keybinding_name_to_keystroke;
 use crate::workspace::WorkspaceAction;
 use crate::workspace::tab_settings::{TabSettings, TabSettingsChangedEvent};
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::ChargeUnit;
 
 const FIGMA_ICON_SIZE: f32 = 14.;
 
@@ -425,11 +426,15 @@ impl View for AgentMessageBar {
                         && !request_usage_model.is_ambient_credits_banner_dismissed()
                 })
                 .map(|credits| {
+                    let usage_cents = match UserWorkspaces::as_ref(app).charge_unit() {
+                        ChargeUnit::Cents => {
+                            request_usage_model.ambient_only_usage_cents_remaining()
+                        }
+                        ChargeUnit::Credits => None,
+                    };
                     render_ambient_credits_banner(
                         credits,
-                        request_usage_model
-                            .ambient_only_usage_cents_remaining()
-                            .filter(|_| UserWorkspaces::as_ref(app).is_billed_in_dollars()),
+                        usage_cents,
                         self.mouse_states.ambient_credits_banner_close.clone(),
                         AgentMessageBarAction::DismissAmbientCreditsBanner,
                         app,

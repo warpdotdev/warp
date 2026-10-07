@@ -85,6 +85,7 @@ use crate::view_components::{
     WarningBoxConfig, render_warning_box,
 };
 use crate::workspaces::user_workspaces::{ResolvedTeamScope, TeamContext, UserWorkspacesEvent};
+use crate::workspaces::workspace::ChargeUnit;
 use crate::{TelemetryEvent, UserWorkspaces, send_telemetry_from_ctx};
 
 const AI_SETTINGS_DROPDOWN_WIDTH: f32 = 250.;
@@ -1902,29 +1903,29 @@ fn render_ai_list(
         .finish()
 }
 
-/// The dollar values of the allowance's credit figures, for a plan billed in dollars.
+/// The dollar values of the allowance's credit figures, for a plan charged in cents.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct AllowanceCents {
     used: f64,
     limit: f64,
 }
 
-/// The current user's allowance in cents. `None` unless the plan is billed in dollars
-/// (`billed_in_dollars`, from the tier) and the server supplied both figures; unlimited subjects
-/// keep the credit display.
+/// The current user's allowance in cents: for a plan charged in cents, when the server supplied
+/// both figures. Unlimited subjects keep the credit display.
 fn allowance_cents(
-    billed_in_dollars: bool,
+    charge_unit: ChargeUnit,
     is_unlimited: bool,
     usage_cents_used: Option<f64>,
     included_usage_cents: Option<f64>,
 ) -> Option<AllowanceCents> {
-    if !billed_in_dollars || is_unlimited {
-        return None;
+    match charge_unit {
+        ChargeUnit::Credits => None,
+        ChargeUnit::Cents if is_unlimited => None,
+        ChargeUnit::Cents => Some(AllowanceCents {
+            used: usage_cents_used?,
+            limit: included_usage_cents?,
+        }),
     }
-    Some(AllowanceCents {
-        used: usage_cents_used?,
-        limit: included_usage_cents?,
-    })
 }
 
 /// Formats the allowance's `used/limit` figure, in dollars when available and otherwise in
@@ -2157,7 +2158,7 @@ impl SettingsWidget for UsageWidget {
         .finish();
 
         let allowance_cents = allowance_cents(
-            workspaces.is_billed_in_dollars(),
+            workspaces.charge_unit(),
             ai_request_usage_model.is_unlimited(),
             ai_request_usage_model.usage_cents_used(),
             ai_request_usage_model.included_usage_cents(),

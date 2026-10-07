@@ -27,6 +27,7 @@ use crate::settings_view::update_environment_form::{
 };
 use crate::ui_components::blended_colors;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::ChargeUnit;
 
 /// Max width for the content area (matches Figma: 592px)
 const CONTENT_MAX_WIDTH: f32 = 592.;
@@ -38,7 +39,7 @@ const HEADER_SPACING: f32 = 4.;
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct TrialCredits {
     credits: i32,
-    /// The dollar value of `credits`, in cents, for a plan billed in dollars whose trial grants
+    /// The dollar value of `credits`, in cents, for a plan charged in cents whose trial grants
     /// all carry one.
     usage_cents: Option<f64>,
 }
@@ -349,9 +350,10 @@ impl View for FirstTimeCloudAgentSetupView {
             .filter(|&credits| credits >= AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD)
             .map(|credits| TrialCredits {
                 credits,
-                usage_cents: request_usage_model
-                    .ambient_only_usage_cents_remaining()
-                    .filter(|_| UserWorkspaces::as_ref(app).is_billed_in_dollars()),
+                usage_cents: match UserWorkspaces::as_ref(app).charge_unit() {
+                    ChargeUnit::Cents => request_usage_model.ambient_only_usage_cents_remaining(),
+                    ChargeUnit::Credits => None,
+                },
             });
 
         // Build main content column:

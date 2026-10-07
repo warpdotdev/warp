@@ -63,7 +63,7 @@ use crate::view_components::ToastFlavor;
 use crate::view_components::action_button::{ActionButton, PrimaryTheme, SecondaryTheme};
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
-use crate::workspaces::workspace::{CustomerType, Workspace, WorkspaceUid};
+use crate::workspaces::workspace::{ChargeUnit, CustomerType, Workspace, WorkspaceUid};
 use crate::{WorkspaceAction, send_telemetry_from_ctx};
 
 const ADDON_CREDITS_DESCRIPTION: &str = "Add-on credits are purchased in prepaid packages that roll over each billing cycle and expire after one year. The more you purchase, the better the per-credit rate. Once your base plan credits are used, add-on credits will be consumed.";
@@ -192,7 +192,7 @@ struct UsageHistoryState {
     load_more_button: ViewHandle<ActionButton>,
 }
 
-/// A balance in the unit the plan is billed in.
+/// A balance in the unit the plan charges in.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum BalanceAmount {
     Credits(i64),
@@ -239,13 +239,14 @@ impl GrantBucket {
         self.grants.iter().map(|g| g.usage_cents_remaining).sum()
     }
 
-    /// The balance to display: dollars when the plan is billed in dollars (`billed_in_dollars`,
-    /// from the tier) and every grant carries a dollar value, else credits.
-    fn balance(&self, billed_in_dollars: bool) -> BalanceAmount {
-        match self
-            .total_usage_cents_balance()
-            .filter(|_| billed_in_dollars)
-        {
+    /// The balance to display: dollars for a plan charged in cents whose grants all carry a
+    /// dollar value, else credits.
+    fn balance(&self, charge_unit: ChargeUnit) -> BalanceAmount {
+        let usage_cents = match charge_unit {
+            ChargeUnit::Cents => self.total_usage_cents_balance(),
+            ChargeUnit::Credits => None,
+        };
+        match usage_cents {
             Some(cents) => BalanceAmount::Cents(cents),
             None => BalanceAmount::Credits(self.total_balance()),
         }
@@ -876,7 +877,7 @@ impl BillingAndUsagePageV2View {
         let grants = ai_model.bonus_grants();
         let workspaces = UserWorkspaces::as_ref(app);
         let workspace_uid = workspaces.current_workspace().map(|ws| ws.uid);
-        let billed_in_dollars = workspaces.is_billed_in_dollars();
+        let charge_unit = workspaces.charge_unit();
         let classified = ClassifiedGrants::new(grants, workspace_uid);
 
         if !has_base_credits && !classified.has_any() {
@@ -895,7 +896,7 @@ impl BillingAndUsagePageV2View {
                 .format("Resets %b %d at %-I:%M %p")
                 .to_string();
             let (base_remaining, base_limit) = base_allowance_balance(
-                billed_in_dollars,
+                charge_unit,
                 ai_model.request_limit(),
                 ai_model.requests_used(),
                 ai_model.is_unlimited(),
@@ -927,7 +928,7 @@ impl BillingAndUsagePageV2View {
             if bucket.is_empty() {
                 continue;
             }
-            let balance = bucket.balance(billed_in_dollars);
+            let balance = bucket.balance(charge_unit);
             cards_row.add_child(
                 Expanded::new(
                     1.,
@@ -993,9 +994,10 @@ impl BillingAndUsagePageV2View {
             .finish();
 
         let workspaces = UserWorkspaces::as_ref(app);
-        let usage_cents_remaining = ai_model
-            .ambient_only_usage_cents_remaining()
-            .filter(|_| workspaces.is_billed_in_dollars());
+        let usage_cents_remaining = match workspaces.charge_unit() {
+            ChargeUnit::Cents => ai_model.ambient_only_usage_cents_remaining(),
+            ChargeUnit::Credits => None,
+        };
         let credits_text = match usage_cents_remaining {
             Some(cents) => format!("{} remaining", format_dollars(cents as f32)),
             None if credits_remaining == 1 => "1 credit remaining".to_string(),
@@ -2320,34 +2322,40 @@ fn should_show_open_admin_panel_link(
     (is_team_admin || is_workspace_admin) && is_enterprise_plan
 }
 
-/// The remaining included allowance and its limit: dollars when the plan is billed in dollars
-/// (`billed_in_dollars`, from the tier) and the server supplied both dollar figures, otherwise
-/// credits. Unlimited subjects keep the credit display, with no limit.
+/// The remaining included allowance and its limit: dollars for a plan charged in cents when the
+/// server supplied both dollar figures, otherwise credits. Unlimited subjects keep the credit
+/// display, with no limit.
 fn base_allowance_balance(
-    billed_in_dollars: bool,
+    charge_unit: ChargeUnit,
     request_limit: usize,
     requests_used: usize,
     is_unlimited: bool,
     included_usage_cents: Option<f64>,
     usage_cents_used: Option<f64>,
 ) -> (BalanceAmount, Option<BalanceAmount>) {
-    if let (true, false, Some(included), Some(used)) = (
-        billed_in_dollars,
-        is_unlimited,
-        included_usage_cents,
-        usage_cents_used,
-    ) {
-        return (
-            BalanceAmount::Cents((included - used).max(0.)),
-            Some(BalanceAmount::Cents(included)),
-        );
+    let credit_balance = || {
+        let remaining = request_limit.saturating_sub(requests_used) as i64;
+        let limit = (!is_unlimited).then_some(request_limit as i64);
+        (
+            BalanceAmount::Credits(remaining),
+            limit.map(BalanceAmount::Credits),
+        )
+    };
+    match charge_unit {
+        ChargeUnit::Credits => credit_balance(),
+        ChargeUnit::Cents => {
+            if let (false, Some(included), Some(used)) =
+                (is_unlimited, included_usage_cents, usage_cents_used)
+            {
+                (
+                    BalanceAmount::Cents((included - used).max(0.)),
+                    Some(BalanceAmount::Cents(included)),
+                )
+            } else {
+                credit_balance()
+            }
+        }
     }
-    let remaining = request_limit.saturating_sub(requests_used) as i64;
-    let limit = (!is_unlimited).then_some(request_limit as i64);
-    (
-        BalanceAmount::Credits(remaining),
-        limit.map(BalanceAmount::Credits),
-    )
 }
 
 fn render_balance_card(

@@ -80,7 +80,7 @@ fn hides_buckets_with_no_grants() {
 }
 
 #[test]
-fn bucket_balance_is_dollars_only_on_a_dollar_billed_tier_with_every_grant_priced() {
+fn bucket_balance_is_dollars_only_on_a_tier_charged_in_cents_with_every_grant_priced() {
     let current = workspace_uid(1);
     let dollars = ClassifiedGrants::new(
         &[
@@ -90,10 +90,16 @@ fn bucket_balance_is_dollars_only_on_a_dollar_billed_tier_with_every_grant_price
         Some(current),
     );
     assert_eq!(dollars.team.total_usage_cents_balance(), Some(54.0));
-    assert_eq!(dollars.team.balance(true), BalanceAmount::Cents(54.0));
+    assert_eq!(
+        dollars.team.balance(ChargeUnit::Cents),
+        BalanceAmount::Cents(54.0)
+    );
     assert_eq!(dollars.team.total_balance(), 30);
-    // Cents the server sends to a credits-billed tier are never shown.
-    assert_eq!(dollars.team.balance(false), BalanceAmount::Credits(30));
+    // Cents the server sends to a tier charged in credits are never shown.
+    assert_eq!(
+        dollars.team.balance(ChargeUnit::Credits),
+        BalanceAmount::Credits(30)
+    );
 
     let mixed = ClassifiedGrants::new(
         &[
@@ -103,7 +109,10 @@ fn bucket_balance_is_dollars_only_on_a_dollar_billed_tier_with_every_grant_price
         Some(current),
     );
     assert_eq!(mixed.team.total_usage_cents_balance(), None);
-    assert_eq!(mixed.team.balance(true), BalanceAmount::Credits(30));
+    assert_eq!(
+        mixed.team.balance(ChargeUnit::Cents),
+        BalanceAmount::Credits(30)
+    );
 }
 
 #[test]
@@ -121,9 +130,16 @@ fn balance_amount_formats_in_its_unit() {
 }
 
 #[test]
-fn base_allowance_balance_uses_dollars_when_billed_in_dollars() {
+fn base_allowance_balance_uses_dollars_when_charged_in_cents() {
     assert_eq!(
-        base_allowance_balance(true, 1_000, 39, false, Some(1800.0), Some(75.0)),
+        base_allowance_balance(
+            ChargeUnit::Cents,
+            1_000,
+            39,
+            false,
+            Some(1800.0),
+            Some(75.0)
+        ),
         (
             BalanceAmount::Cents(1725.0),
             Some(BalanceAmount::Cents(1800.0))
@@ -131,7 +147,14 @@ fn base_allowance_balance_uses_dollars_when_billed_in_dollars() {
     );
     // Overspend never shows a negative balance.
     assert_eq!(
-        base_allowance_balance(true, 1_000, 1_000, false, Some(1800.0), Some(1850.0)),
+        base_allowance_balance(
+            ChargeUnit::Cents,
+            1_000,
+            1_000,
+            false,
+            Some(1800.0),
+            Some(1850.0)
+        ),
         (
             BalanceAmount::Cents(0.0),
             Some(BalanceAmount::Cents(1800.0))
@@ -142,7 +165,7 @@ fn base_allowance_balance_uses_dollars_when_billed_in_dollars() {
 #[test]
 fn base_allowance_balance_falls_back_to_credits() {
     assert_eq!(
-        base_allowance_balance(true, 1_000, 39, false, None, None),
+        base_allowance_balance(ChargeUnit::Cents, 1_000, 39, false, None, None),
         (
             BalanceAmount::Credits(961),
             Some(BalanceAmount::Credits(1_000))
@@ -150,15 +173,22 @@ fn base_allowance_balance_falls_back_to_credits() {
     );
     // A missing used figure means the dollar balance is unknown.
     assert_eq!(
-        base_allowance_balance(true, 1_000, 39, false, Some(1800.0), None),
+        base_allowance_balance(ChargeUnit::Cents, 1_000, 39, false, Some(1800.0), None),
         (
             BalanceAmount::Credits(961),
             Some(BalanceAmount::Credits(1_000))
         )
     );
-    // Cents the server sends to a credits-billed tier are never shown.
+    // Cents the server sends to a tier charged in credits are never shown.
     assert_eq!(
-        base_allowance_balance(false, 1_000, 39, false, Some(1800.0), Some(75.0)),
+        base_allowance_balance(
+            ChargeUnit::Credits,
+            1_000,
+            39,
+            false,
+            Some(1800.0),
+            Some(75.0)
+        ),
         (
             BalanceAmount::Credits(961),
             Some(BalanceAmount::Credits(1_000))
@@ -166,11 +196,18 @@ fn base_allowance_balance_falls_back_to_credits() {
     );
     // Unlimited subjects keep today's display.
     assert_eq!(
-        base_allowance_balance(true, 999_999, 39, true, None, None),
+        base_allowance_balance(ChargeUnit::Cents, 999_999, 39, true, None, None),
         (BalanceAmount::Credits(999_960), None)
     );
     assert_eq!(
-        base_allowance_balance(true, 999_999, 39, true, Some(1800.0), Some(70.2)),
+        base_allowance_balance(
+            ChargeUnit::Cents,
+            999_999,
+            39,
+            true,
+            Some(1800.0),
+            Some(70.2)
+        ),
         (BalanceAmount::Credits(999_960), None)
     );
 }
