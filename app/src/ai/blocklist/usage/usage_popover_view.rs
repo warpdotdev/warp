@@ -445,20 +445,18 @@ impl UsagePopoverView {
     /// model. Omitted when the conversation incurred no platform fee.
     fn render_platform_usage_section(
         &self,
-        charged_usage: Option<&ChargedUsageTotals>,
+        platform_cost: Option<CostValue>,
         usage_display_unit: UsageDisplayUnit,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
-        let charged_usage = charged_usage?;
-        if charged_usage.platform_cost_in_credits == 0.0
-            && charged_usage.platform_cost_in_cents == 0.0
-        {
+        let platform_cost = platform_cost?;
+        if platform_cost.credits == 0.0 && platform_cost.cost_in_cents == 0.0 {
             return None;
         }
 
         let value = match usage_display_unit {
-            UsageDisplayUnit::Credits => format_credits(charged_usage.platform_cost_in_credits),
-            UsageDisplayUnit::Dollars => format_dollars(charged_usage.platform_cost_in_cents),
+            UsageDisplayUnit::Credits => format_credits(platform_cost.credits),
+            UsageDisplayUnit::Dollars => format_dollars(platform_cost.cost_in_cents),
         };
         Some(self.render_static_section_header_with_value("PLATFORM USAGE", value, appearance))
     }
@@ -941,7 +939,7 @@ impl View for UsagePopoverView {
             |config_key: &str| llm_preferences.custom_endpoint_usage_display_label(config_key);
         let charged_usage_by_key =
             sum_charged_usage_by_key(conversation.all_tasks().flat_map(|task| task.messages()));
-        let charged_totals = conversation_charged_totals(conversation);
+        let platform_cost = conversation_charges(conversation).platform_cost();
         self.registered_tooltips.borrow_mut().clear();
 
         // Absent sections are skipped rather than rendered empty, so they don't
@@ -955,11 +953,7 @@ impl View for UsagePopoverView {
                 usage_display_unit,
                 appearance,
             ),
-            self.render_platform_usage_section(
-                charged_totals.as_ref(),
-                usage_display_unit,
-                appearance,
-            ),
+            self.render_platform_usage_section(platform_cost, usage_display_unit, appearance),
             self.render_tool_call_summary_section(conversation, appearance),
         ];
         let mut column = Flex::column().with_spacing(12.);
@@ -1585,12 +1579,22 @@ fn render_tooltip_box(text: String, appearance: &Appearance) -> Box<dyn Element>
     .finish()
 }
 
-/// The conversation's cumulative charged usage, summed from the persisted
-/// per-request `RequestMetadata` charges -- the same source the per-model
-/// rows itemize, so the headline total always equals what the rows add up
-/// to. Falls back to the server's cumulative `total_charges` when no request
-/// has persisted charges (e.g. a legacy conversation).
-fn conversation_charged_totals(conversation: &AIConversation) -> Option<ChargedUsageTotals> {
+/// Where a conversation's cumulative charges come from.
+enum ConversationCharges {
+    /// Summed from the persisted per-request `RequestMetadata` charges -- the same source the
+    /// per-model rows itemize, so the headline total always equals what the rows add up to.
+    PerRequest(ChargedUsageTotals),
+    /// No request has persisted charges (e.g. a legacy conversation): dollar totals come from
+    /// the server's cumulative `total_charges`, and credits from its cumulative credit totals,
+    /// because `total_charges` carries dollar costs only.
+    Legacy {
+        totals: Option<ChargedUsageTotals>,
+        inference_credits: f32,
+        platform_credits: f32,
+    },
+}
+
+fn conversation_charges(conversation: &AIConversation) -> ConversationCharges {
     let mut per_request_charges = conversation
         .all_tasks()
         .flat_map(|task| task.messages())
@@ -1601,40 +1605,71 @@ fn conversation_charged_totals(conversation: &AIConversation) -> Option<ChargedU
         .map(ChargedUsageTotals::from)
         .peekable();
     if per_request_charges.peek().is_none() {
-        return conversation.usage_totals().charged_usage;
+        return ConversationCharges::Legacy {
+            totals: conversation.usage_totals().charged_usage,
+            inference_credits: conversation.inference_credits_spent(),
+            platform_credits: conversation.platform_credits_spent(),
+        };
     }
-    Some(
-        per_request_charges.fold(ChargedUsageTotals::default(), |mut acc, totals| {
+    ConversationCharges::PerRequest(per_request_charges.fold(
+        ChargedUsageTotals::default(),
+        |mut acc, totals| {
             acc += totals;
             acc
-        }),
-    )
+        },
+    ))
 }
 
-/// The conversation-level total: [`conversation_charged_totals`] when known,
-/// falling back to the server-seeded provider cost for dollars and to the
-/// metadata's cumulative `credits_spent` for credits. A conversation with
-/// neither renders an em dash rather than a fake zero.
+impl ConversationCharges {
+    fn platform_cost(&self) -> Option<CostValue> {
+        match self {
+            Self::PerRequest(totals) => Some(CostValue::new(
+                totals.platform_cost_in_credits,
+                totals.platform_cost_in_cents,
+            )),
+            Self::Legacy {
+                totals,
+                platform_credits,
+                ..
+            } => totals
+                .map(|totals| CostValue::new(*platform_credits, totals.platform_cost_in_cents)),
+        }
+    }
+}
+
+/// The conversation-level total. A conversation with no known figure in the display unit
+/// renders an em dash rather than a fake zero.
 pub(crate) fn conversation_total_text(
     conversation: &AIConversation,
     usage_display_unit: UsageDisplayUnit,
 ) -> String {
-    let charged_totals = conversation_charged_totals(conversation);
-    let usage_totals = conversation.usage_totals();
-    match usage_display_unit {
-        UsageDisplayUnit::Dollars => charged_totals
-            .map(|totals| totals.total_cost_in_cents())
-            .or(usage_totals.total_cost_in_cents())
-            .map(format_dollars)
-            .unwrap_or_else(|| EM_DASH.to_string()),
-        UsageDisplayUnit::Credits => charged_totals
-            .map(|totals| totals.total_cost_in_credits())
-            // `credits_spent` is a plain float, so zero is indistinguishable from
-            // "never reported"; only a positive figure counts as known.
-            .or_else(|| (usage_totals.credits_spent > 0.0).then_some(usage_totals.credits_spent))
-            .map(format_credits)
-            .unwrap_or_else(|| EM_DASH.to_string()),
+    match (conversation_charges(conversation), usage_display_unit) {
+        (ConversationCharges::PerRequest(totals), UsageDisplayUnit::Dollars) => {
+            Some(format_dollars(totals.total_cost_in_cents()))
+        }
+        (ConversationCharges::PerRequest(totals), UsageDisplayUnit::Credits) => {
+            Some(format_credits(totals.total_cost_in_credits()))
+        }
+        // Falls back to the server-seeded provider cost when no cumulative charges exist.
+        (ConversationCharges::Legacy { .. }, UsageDisplayUnit::Dollars) => conversation
+            .usage_totals()
+            .total_cost_in_cents()
+            .map(format_dollars),
+        (
+            ConversationCharges::Legacy {
+                inference_credits,
+                platform_credits,
+                ..
+            },
+            UsageDisplayUnit::Credits,
+        ) => {
+            // Credits are plain floats, so zero is indistinguishable from "never reported";
+            // only a positive figure counts as known.
+            let credits = inference_credits + platform_credits;
+            (credits > 0.0).then(|| format_credits(credits))
+        }
     }
+    .unwrap_or_else(|| EM_DASH.to_string())
 }
 
 /// Formats a US-cent amount as dollars. A non-zero amount that would round to

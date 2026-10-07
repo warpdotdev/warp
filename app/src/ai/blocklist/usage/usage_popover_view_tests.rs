@@ -778,21 +778,22 @@ fn conversation_total_text_falls_back_to_credits_spent() {
     );
 }
 
+/// Without per-request records the cumulative charged usage supplies the dollar total, while
+/// credits come from the server's credit totals: the wire's `total_charges` carries no credit
+/// fields, so summing them would read as free.
 #[test]
 fn conversation_total_text_uses_the_charged_usage_totals() {
     let mut conversation = AIConversation::new(false, false);
     conversation.set_credits_spent_for_test(12.5);
     conversation.set_charged_usage_for_test(Some(ChargedUsageTotals {
         input_cost_in_cents: 21.0,
-        input_cost_in_credits: 2.1,
         platform_cost_in_cents: 79.0,
-        platform_cost_in_credits: 7.9,
         ..Default::default()
     }));
 
     assert_eq!(
         conversation_total_text(&conversation, UsageDisplayUnit::Credits),
-        "10 credits"
+        "12.5 credits"
     );
     assert_eq!(
         conversation_total_text(&conversation, UsageDisplayUnit::Dollars),
@@ -870,11 +871,11 @@ fn platform_usage_section_is_omitted_when_the_platform_fee_is_zero() {
         let (_, popover) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
             UsagePopoverView::new(None, ctx)
         });
-        let render_platform_section = |app: &mut App, charged_usage: ChargedUsageTotals| {
+        let render_platform_section = |app: &mut App, platform_cost: CostValue| {
             popover.read(app, |popover, ctx| {
                 popover
                     .render_platform_usage_section(
-                        Some(&charged_usage),
+                        Some(platform_cost),
                         UsageDisplayUnit::Credits,
                         Appearance::as_ref(ctx),
                     )
@@ -883,16 +884,10 @@ fn platform_usage_section_is_omitted_when_the_platform_fee_is_zero() {
         };
 
         assert_eq!(
-            render_platform_section(&mut app, ChargedUsageTotals::default()),
+            render_platform_section(&mut app, CostValue::new(0.0, 0.0)),
             None
         );
-        let with_fee = render_platform_section(
-            &mut app,
-            ChargedUsageTotals {
-                platform_cost_in_credits: 0.5,
-                ..Default::default()
-            },
-        );
+        let with_fee = render_platform_section(&mut app, CostValue::new(0.5, 0.0));
         assert!(
             with_fee
                 .as_deref()
