@@ -41,7 +41,7 @@ use warpui::elements::{
     ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     DispatchEventResult, Element, Empty, EventHandler, Flex, MainAxisAlignment, MainAxisSize,
     OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
-    Shrinkable, Stack, Wrap, WrapFill, WrapFillEntireRun,
+    Shrinkable, Stack, Text, Wrap, WrapFill, WrapFillEntireRun,
 };
 use warpui::{
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
@@ -1095,7 +1095,15 @@ impl AgentInputFooter {
 
         right = right.with_child(ChildView::new(&self.file_button).finish());
 
-        if let Some(model_selector) = self.v2_model_selector.as_ref() {
+        let factory_selected = self
+            .ambient_agent_view_model
+            .as_ref()
+            .is_some_and(|model| model.as_ref(app).is_factory_selected());
+        if let Some(model_selector) = self
+            .v2_model_selector
+            .as_ref()
+            .filter(|_| !factory_selected)
+        {
             // Only show the model selector when the active harness has available models.
             // Some harnesses (e.g. Gemini) may not have any server-provided model options.
             let show_selector = self
@@ -2279,6 +2287,17 @@ impl AgentInputFooter {
         self.prompt_cache_expiry_timer_handle = Some(handle);
     }
 
+    fn is_factory_composing(&self, app: &AppContext) -> bool {
+        self.ambient_agent_view_model.as_ref().is_some_and(|model| {
+            let model = model.as_ref(app);
+            model.is_configuring_ambient_agent() && model.is_factory_selected()
+        }) || (self.handoff_compose_state.as_ref(app).is_active()
+            && matches!(
+                self.handoff_compose_state.as_ref(app).selected_choice(),
+                Some(crate::ai::cloud_environments::CloudSelectorChoice::Factory { .. })
+            ))
+    }
+
     fn render_toolbar_item(
         &self,
         item: &AgentToolbarItemKind,
@@ -2323,6 +2342,9 @@ impl AgentInputFooter {
                     .map(|chip| ChildView::new(chip).finish())
             }
             AgentToolbarItemKind::ModelSelector => {
+                if self.is_factory_composing(app) {
+                    return None;
+                }
                 let show = FeatureFlag::ProfilesDesignRevamp.is_enabled()
                     || *SessionSettings::as_ref(app).show_model_selectors_in_prompt;
                 show.then(|| ChildView::new(&self.model_selector).finish())
@@ -2552,6 +2574,18 @@ impl View for AgentInputFooter {
         } else if self.handoff_compose_state.as_ref(app).is_active() {
             left_buttons = left_buttons
                 .with_child(ChildView::new(&self.handoff_environment_selector).finish());
+        }
+        if self.is_factory_composing(app) {
+            let appearance = Appearance::as_ref(app);
+            left_buttons.add_child(
+                Text::new(
+                    "Factory defaults",
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(appearance.theme().foreground().into())
+                .finish(),
+            );
         }
 
         // The lock is released before rendering toolbar items: the usage popover's menu

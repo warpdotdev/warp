@@ -69,13 +69,18 @@ pub enum HandoffInjectionPath {
 #[strum_discriminants(derive(EnumIter))]
 pub enum CloudAgentTelemetryEvent {
     /// User entered Cloud Mode.
-    EnteredCloudMode { entry_point: CloudModeEntryPoint },
+    EnteredCloudMode {
+        entry_point: CloudModeEntryPoint,
+    },
     /// User opened the environment selector menu.
     EnvironmentSelectorOpened,
     /// User selected an environment from the environment selector.
     EnvironmentSelected {
         /// The ID of the selected environment, if available.
         environment_id: Option<ServerId>,
+    },
+    FactorySelected {
+        factory_uid: String,
     },
     /// User opened the environment management pane from the environment selector.
     OpenedEnvironmentManagementPane,
@@ -167,6 +172,9 @@ impl TelemetryEvent for CloudAgentTelemetryEvent {
             CloudAgentTelemetryEvent::EnvironmentSelected { environment_id } => Some(json!({
                 "environment_id": environment_id.map(|id| id.to_string()),
             })),
+            CloudAgentTelemetryEvent::FactorySelected { factory_uid } => Some(json!({
+                "factory_uid": factory_uid,
+            })),
             CloudAgentTelemetryEvent::OpenedEnvironmentManagementPane => None,
             CloudAgentTelemetryEvent::EnvironmentCreated => None,
             CloudAgentTelemetryEvent::EnvironmentUpdated { environment_id } => Some(json!({
@@ -237,6 +245,7 @@ impl TelemetryEventDesc for CloudAgentTelemetryEventDiscriminants {
             Self::EnteredCloudMode => "AmbientAgent.CloudMode.Entered",
             Self::EnvironmentSelectorOpened => "AmbientAgent.CloudMode.EnvironmentSelector.Opened",
             Self::EnvironmentSelected => "AmbientAgent.CloudMode.EnvironmentSelector.Selected",
+            Self::FactorySelected => "AmbientAgent.CloudMode.FactorySelector.Selected",
             Self::OpenedEnvironmentManagementPane => "AmbientAgent.EnvironmentSettings.Opened",
             Self::EnvironmentCreated => "AmbientAgent.EnvironmentSettings.CreatedEnvironment",
             Self::EnvironmentUpdated => "AmbientAgent.EnvironmentSettings.UpdatedEnvironment",
@@ -265,6 +274,7 @@ impl TelemetryEventDesc for CloudAgentTelemetryEventDiscriminants {
             Self::EnteredCloudMode => "User entered cloud agent view",
             Self::EnvironmentSelectorOpened => "User opened the environment selector menu",
             Self::EnvironmentSelected => "User selected an environment from the selector",
+            Self::FactorySelected => "User selected a Factory from the selector",
             Self::OpenedEnvironmentManagementPane => "User opened the environment management pane",
             Self::EnvironmentCreated => "User created a new environment",
             Self::EnvironmentUpdated => "User updated an existing environment",

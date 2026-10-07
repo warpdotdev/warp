@@ -83,10 +83,48 @@ pub struct ScopedAuthSecretPreference {
     preference: AuthSecretPreference,
 }
 
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+pub enum CloudSelectorPreference {
+    Environment(SyncId),
+    Factory(String),
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+pub struct ScopedCloudSelectorPreference {
+    team_uid: Option<String>,
+    choice: CloudSelectorPreference,
+}
+
 define_settings_group!(CloudAgentSettings, settings: [
     last_selected_environment_id: LastSelectedEnvironmentId {
         type: Option<SyncId>,
         default: None,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
+        private: true,
+    },
+    scoped_cloud_selector_preferences: ScopedCloudSelectorPreferences {
+        type: Vec<ScopedCloudSelectorPreference>,
+        default: Vec::new(),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
         surface: settings::SettingSurfaces::GUI,
@@ -155,6 +193,33 @@ define_settings_group!(CloudAgentSettings, settings: [
 ]);
 
 impl CloudAgentSettings {
+    pub fn cloud_selector_preference(
+        &self,
+        scope: &(impl TeamScope + ?Sized),
+    ) -> Option<CloudSelectorPreference> {
+        let team_uid = scope.team_uid().map(|id| id.uid());
+        self.scoped_cloud_selector_preferences
+            .value()
+            .iter()
+            .find(|entry| entry.team_uid == team_uid)
+            .map(|entry| entry.choice.clone())
+    }
+
+    pub fn persist_cloud_selector_preference(
+        &mut self,
+        scope: &(impl TeamScope + ?Sized),
+        choice: CloudSelectorPreference,
+        ctx: &mut warpui::ModelContext<Self>,
+    ) {
+        let team_uid = scope.team_uid().map(|id| id.uid());
+        let mut entries = self.scoped_cloud_selector_preferences.value().clone();
+        entries.retain(|entry| entry.team_uid != team_uid);
+        entries.push(ScopedCloudSelectorPreference { team_uid, choice });
+        report_if_error!(
+            self.scoped_cloud_selector_preferences
+                .set_value(entries, ctx)
+        );
+    }
     pub fn auth_secret_preference<S: TeamScope + ?Sized>(
         &self,
         team_scope: &S,

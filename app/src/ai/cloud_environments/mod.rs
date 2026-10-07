@@ -1,4 +1,5 @@
 mod catalog;
+mod factory_selector;
 pub use catalog::CloudEnvironmentCatalog;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 pub(crate) use catalog::sort_environments_by_recency;
@@ -10,6 +11,11 @@ pub use cloud_object_models::{
     CloudAmbientAgentEnvironmentModel, GcpProviderConfig, GithubRepo, ProvidersConfig, SourceRepo,
 };
 use cloud_objects::cloud_object::Owner;
+#[cfg(feature = "local_fs")]
+pub(crate) use factory_selector::revalidate_factory_choice;
+pub(crate) use factory_selector::{
+    CloudSelectorChoice, FactorySelectorCatalog, FactorySelectorRow, FactorySelectorState,
+};
 use warpui::{AppContext, Entity, SingletonEntity as _, ViewContext};
 
 use crate::auth::AuthStateProvider;

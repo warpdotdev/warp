@@ -2199,6 +2199,7 @@ pub(crate) fn initialize_app(
         )
     });
     ctx.add_singleton_model(ai::cloud_environments::CloudEnvironmentCatalog::new);
+    ctx.add_singleton_model(ai::cloud_environments::FactorySelectorCatalog::new);
 
     let unsynced_actions: Vec<(CloudObjectTypeAndId, ObjectAction)> = object_actions
         .iter()

@@ -880,6 +880,34 @@ impl TerminalView {
         Some((terminal_view, ambient_agent_view_model))
     }
 
+    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+    pub(crate) fn abort_provisional_handoff_target(
+        &self,
+        target_model: &ModelHandle<AmbientAgentViewModel>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(stack) = self
+            .pane_stack
+            .as_ref()
+            .and_then(|stack| stack.upgrade(ctx))
+        else {
+            return;
+        };
+        if stack.as_ref(ctx).depth() <= 1
+            || stack
+                .as_ref(ctx)
+                .active_view()
+                .as_ref(ctx)
+                .ambient_agent_view_model()
+                .is_none_or(|model| model.id() != target_model.id())
+        {
+            return;
+        }
+        stack.update(ctx, |stack, ctx| {
+            stack.pop(ctx);
+        });
+    }
+
     /// Renders the ambient agent progress view based on agent progress.
     pub(in crate::terminal::view) fn render_ambient_agent_progress(
         &self,

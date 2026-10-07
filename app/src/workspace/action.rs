@@ -631,6 +631,7 @@ pub enum WorkspaceAction {
         #[cfg(not(all(feature = "local_fs", not(target_family = "wasm"))))]
         launch: Option<()>,
         environment_id: Option<crate::server::ids::SyncId>,
+        selected_choice: Option<crate::ai::cloud_environments::CloudSelectorChoice>,
         entry_point: crate::ai::ambient_agents::telemetry::HandoffEntryPoint,
     },
     /// Automatically hand off the active running local agent conversation in the
