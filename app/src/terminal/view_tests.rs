@@ -4918,6 +4918,83 @@ fn test_alt_screen_copy_on_select() {
     })
 }
 
+/// Draws `rows` into the alt screen the way a full-screen program does and copies the whole
+/// screen with the mouse. With `pad_to_edge`, every row is also filled with spaces up to the
+/// right edge, which is what a program that redraws full-width rows leaves in the grid.
+fn copy_alt_screen_rows(rows: &[&str], pad_to_edge: bool) -> String {
+    let rows: Vec<String> = rows.iter().map(|row| row.to_string()).collect();
+    let copied = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let copied_out = copied.clone();
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            {
+                let mut model = view.model.lock();
+                model.set_mode(ansi::Mode::SwapScreen {
+                    save_cursor_and_clear_screen: true,
+                });
+                assert!(model.is_alt_screen_active());
+
+                let columns = view.size_info.columns;
+                for row in &rows {
+                    let padding = if pad_to_edge {
+                        columns - row.chars().count() - 1
+                    } else {
+                        0
+                    };
+                    for c in row.chars().chain(std::iter::repeat_n(' ', padding)) {
+                        model.alt_screen_mut().input(c);
+                    }
+                    model.alt_screen_mut().carriage_return();
+                    model.alt_screen_mut().linefeed();
+                }
+            }
+
+            let selection_settings = SelectionSettings::as_ref(ctx);
+            assert!(selection_settings.copy_on_select_enabled());
+
+            view.begin_alt_selection(Point::new(0, 0), Side::Left, SelectionType::Simple, ctx);
+            view.update_alt_selection(
+                Point::new(rows.len() - 1, view.size_info.columns),
+                Side::Right,
+                &Lines::zero(),
+                ctx,
+            );
+            view.end_alt_selection(ctx);
+            *copied_out.lock().unwrap() = read_from_clipboard(ctx);
+        });
+    });
+    copied.lock().unwrap().clone()
+}
+
+/// Regression test for #10450: rows padded with spaces up to the window width must not carry
+/// that padding into the clipboard.
+#[test]
+fn test_alt_screen_copy_drops_row_padding() {
+    let copied = copy_alt_screen_rows(&["ab", "", "cd"], true);
+    assert!(
+        copied.starts_with("ab\n\ncd"),
+        "unexpected clipboard text: {copied:?}"
+    );
+    for line in copied.lines() {
+        assert_eq!(line, line.trim_end(), "padding copied on line {line:?}");
+    }
+}
+
+/// Control for the test above: Warp adds no padding of its own to rows the program left short.
+#[test]
+fn test_alt_screen_copy_adds_no_padding_to_short_rows() {
+    let copied = copy_alt_screen_rows(&["ab", "", "cd"], false);
+    assert!(
+        copied.starts_with("ab\n\ncd"),
+        "unexpected clipboard text: {copied:?}"
+    );
+    for line in copied.lines() {
+        assert_eq!(line, line.trim_end(), "padding copied on line {line:?}");
+    }
+}
+
 #[test]
 fn test_alt_screen_select_with_sgr_mouse() {
     App::test((), |mut app| async move {

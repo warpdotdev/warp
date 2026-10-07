@@ -436,6 +436,75 @@ fn test_basic_input_and_newline() {
     );
 }
 
+fn grid_with_input(rows: &[&str]) -> GridHandler {
+    let size = SizeInfo::new_without_font_metrics(5, 5);
+    let mut grid = GridHandler::new(
+        size,
+        MAX_SCROLL_LIMIT,
+        ChannelEventListener::new_for_test(),
+        false,
+        ObfuscateSecrets::No,
+        PerformResetGridChecks::default(),
+    );
+    for (i, row) in rows.iter().enumerate() {
+        if i > 0 {
+            grid.linefeed();
+            grid.carriage_return();
+        }
+        for c in row.chars() {
+            grid.input(c);
+        }
+    }
+    grid
+}
+
+fn copied_text(grid: &GridHandler, start: Point, end: Point) -> String {
+    grid.bounds_to_string(
+        start,
+        end,
+        false,
+        RespectObfuscatedSecrets::No,
+        false,
+        RespectDisplayedOutput::No,
+    )
+}
+
+/// Regression test for #10450: spaces a program writes to fill a row out to the window width
+/// must not be copied when the row ends in a real line break.
+#[test]
+fn test_copy_drops_padding_before_a_line_break() {
+    // "ab" and "cd" are followed by explicit spaces up to the right edge, with a row made of
+    // spaces only in between.
+    let grid = grid_with_input(&["ab   ", "     ", "cd   "]);
+
+    assert_eq!(
+        copied_text(&grid, Point::new(0, 0), Point::new(2, 4)),
+        "ab\n\ncd"
+    );
+}
+
+#[test]
+fn test_copy_keeps_spaces_between_soft_wrapped_rows() {
+    // "ab c d" wraps after "ab c " because the row is 5 columns wide.
+    let grid = grid_with_input(&["ab c d"]);
+
+    assert_eq!(
+        copied_text(&grid, Point::new(0, 0), Point::new(1, 0)),
+        "ab c d"
+    );
+}
+
+#[test]
+fn test_copy_keeps_spaces_the_selection_ends_on() {
+    // The selection stops before the right edge, so the spaces in it were selected on purpose.
+    let grid = grid_with_input(&["ab   "]);
+
+    assert_eq!(
+        copied_text(&grid, Point::new(0, 0), Point::new(0, 3)),
+        "ab  "
+    );
+}
+
 #[test]
 fn test_empty_grid_bounds_to_string() {
     let size = SizeInfo::new_without_font_metrics(0, 0);
