@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_channel::unbounded;
 use futures::channel::oneshot;
@@ -12,16 +13,159 @@ use super::{BlockSelector, ShellCommandExecutor, ShellCommandExecutorEvent};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentAction, AIAgentActionResultType, AIAgentActionType, RequestCommandOutputResult,
+    AIAgentAction, AIAgentActionResultType, AIAgentActionType, ReadShellCommandOutputResult,
+    RequestCommandOutputResult, ShellCommandDelay, TransferShellCommandControlToUserResult,
 };
 use crate::ai::blocklist::action_model::recording_controller::RecordingController;
 use crate::terminal::event::{BlockMetadataReceivedEvent, BlockWorkingDirectoryUpdatedEvent};
-use crate::terminal::model::block::{BlockId, BlockMetadata};
+use crate::terminal::model::block::{BlockId, BlockMetadata, BlockState, CURSOR_MARKER};
 use crate::terminal::model::session::Sessions;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::terminal_model::{BlockIndex, TerminalModel};
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::test_util::terminal::initialize_app_for_terminal_view;
+
+#[test]
+fn polling_snapshot_exposes_continuation_prompt_and_cursor() {
+    App::test((), |mut app| async move {
+        let sessions = app.add_model(|_| Sessions::new_for_test());
+        let (_tx, rx) = unbounded();
+        let dispatcher = app.add_model(|ctx| ModelEventDispatcher::new(rx, sessions.clone(), ctx));
+        let active_session =
+            app.add_model(|ctx| ActiveSession::new(sessions, dispatcher.clone(), ctx));
+        let model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+        let block_id = {
+            let mut model = model.lock();
+            model.block_list_mut().active_block_mut().start();
+            model.process_bytes("echo \"unterminated\r\ndquote> ");
+            assert_eq!(
+                model.block_list().active_block().state(),
+                BlockState::BeforeExecution
+            );
+            model.active_block_id().clone()
+        };
+        let executor = app.add_model(|ctx| {
+            ShellCommandExecutor::new(active_session, model, &dispatcher, EntityId::new(), ctx)
+        });
+
+        let action = AIAgentAction {
+            id: "read-output".to_owned().into(),
+            task_id: TaskId::new("root".into()),
+            requires_result: true,
+            action: AIAgentActionType::ReadShellCommandOutput {
+                block_id,
+                delay: Some(ShellCommandDelay::Duration(Duration::ZERO)),
+            },
+        };
+
+        let execution: AnyActionExecution = executor.update(&mut app, |executor, ctx| {
+            executor
+                .execute(
+                    ExecuteActionInput {
+                        action: &action,
+                        conversation_id: AIConversationId::new(),
+                    },
+                    ctx,
+                )
+                .into()
+        });
+        let AnyActionExecution::Async {
+            execute_future,
+            on_complete,
+        } = execution
+        else {
+            panic!("polling an incomplete quote must wait for a snapshot");
+        };
+        let snapshot = execute_future.await;
+        let result = app.update(|ctx| on_complete(snapshot, ctx));
+
+        let AIAgentActionResultType::ReadShellCommandOutput(
+            ReadShellCommandOutputResult::LongRunningCommandSnapshot {
+                grid_contents,
+                cursor,
+                ..
+            },
+        ) = result
+        else {
+            panic!("an incomplete quote must produce a long-running snapshot");
+        };
+        assert_eq!(grid_contents, "echo \"unterminated\ndquote> <|cursor|>");
+        assert_eq!(cursor, CURSOR_MARKER);
+    });
+}
+
+#[test]
+fn control_handback_snapshot_exposes_continuation_prompt_and_cursor() {
+    App::test((), |mut app| async move {
+        let sessions = app.add_model(|_| Sessions::new_for_test());
+        let (_tx, rx) = unbounded();
+        let dispatcher = app.add_model(|ctx| ModelEventDispatcher::new(rx, sessions.clone(), ctx));
+        let active_session =
+            app.add_model(|ctx| ActiveSession::new(sessions, dispatcher.clone(), ctx));
+        let model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+        {
+            let mut model = model.lock();
+            model.block_list_mut().active_block_mut().start();
+            model.process_bytes("echo \"unterminated\r\ndquote> ");
+            model
+                .block_list_mut()
+                .active_block_mut()
+                .set_was_long_running(true.into());
+            assert_eq!(
+                model.block_list().active_block().state(),
+                BlockState::BeforeExecution
+            );
+        }
+        let executor = app.add_model(|ctx| {
+            ShellCommandExecutor::new(active_session, model, &dispatcher, EntityId::new(), ctx)
+        });
+        let action = AIAgentAction {
+            id: "transfer-control".to_owned().into(),
+            task_id: TaskId::new("root".into()),
+            requires_result: true,
+            action: AIAgentActionType::TransferShellCommandControlToUser {
+                reason: "Complete the unterminated quote".to_owned(),
+            },
+        };
+        let execution: AnyActionExecution = executor.update(&mut app, |executor, ctx| {
+            executor
+                .execute(
+                    ExecuteActionInput {
+                        action: &action,
+                        conversation_id: AIConversationId::new(),
+                    },
+                    ctx,
+                )
+                .into()
+        });
+        let AnyActionExecution::Async {
+            execute_future,
+            on_complete,
+        } = execution
+        else {
+            panic!("control transfer must wait for handback");
+        };
+
+        executor.update(&mut app, |executor, _| {
+            executor.notify_control_handed_back()
+        });
+        let snapshot = execute_future.await;
+        let result = app.update(|ctx| on_complete(snapshot, ctx));
+
+        let AIAgentActionResultType::TransferShellCommandControlToUser(
+            TransferShellCommandControlToUserResult::Snapshot {
+                grid_contents,
+                cursor,
+                ..
+            },
+        ) = result
+        else {
+            panic!("handing back an incomplete quote must produce a snapshot");
+        };
+        assert_eq!(grid_contents, "echo \"unterminated\ndquote> <|cursor|>");
+        assert_eq!(cursor, CURSOR_MARKER);
+    });
+}
 
 #[test]
 fn terminal_busy_does_not_write_or_cancel_the_running_command() {
