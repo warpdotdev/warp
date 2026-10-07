@@ -242,8 +242,7 @@ pub struct ConversationUsageTotals {
 
 impl ConversationUsageTotals {
     /// Cost billed to the customer so far, in US cents: the summed per-turn charges when the
-    /// server streamed them, otherwise the GraphQL billed total. `None` when neither is known;
-    /// the provider cost is never a substitute.
+    /// server streamed them, otherwise the GraphQL billed total. `None` when neither is known.
     pub fn total_cost_in_cents(&self) -> Option<f32> {
         self.charged_usage
             .map(|usage| usage.total_cost_in_cents())
