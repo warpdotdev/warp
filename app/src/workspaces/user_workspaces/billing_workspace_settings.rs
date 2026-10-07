@@ -11,7 +11,7 @@ use crate::auth::AuthStateProvider;
 use crate::channel::ChannelState;
 use crate::workspaces::team::Team;
 use crate::workspaces::workspace::{
-    BillingMetadata, CustomerType, PurchaseAddOnCreditsPolicy, Workspace,
+    BillingMetadata, ChargeUnit, CustomerType, PurchaseAddOnCreditsPolicy, Workspace,
 };
 
 impl UserWorkspaces {
@@ -53,14 +53,14 @@ impl UserWorkspaces {
             .or(self.user_tier.purchase_policy)
     }
 
-    /// Whether the viewer's plan bills AI usage in dollars rather than credits: the current
-    /// workspace's tier when one exists, else the user-level tier (the teamless fallback, as for
-    /// [`Self::purchase_policy`]). This is the rollout signal for every dollars-first display; a
-    /// surface still falls back to credits for any figure whose cents the response leaves out.
-    pub fn is_billed_in_dollars(&self) -> bool {
+    /// The unit the viewer's plan charges AI usage in: the current workspace's tier when one
+    /// exists, else the user-level tier (the teamless fallback, as for [`Self::purchase_policy`]).
+    /// A surface showing dollars still falls back to credits for any figure whose cents the
+    /// response leaves out.
+    pub fn charge_unit(&self) -> ChargeUnit {
         self.current_workspace_billing_metadata()
-            .map_or(self.user_tier.billed_in_dollars, |billing| {
-                billing.tier.billed_in_dollars
+            .map_or(self.user_tier.charge_unit, |billing| {
+                billing.tier.charge_unit
             })
     }
 
