@@ -300,7 +300,7 @@ fn historical_turn_panel_data_is_timing_only() {
     }
 }
 
-/// The latest turn's panel shows the last-block breakdown as one aggregated "Models" row.
+/// The latest turn's panel carries the last-block breakdown alongside the block's credits.
 #[test]
 fn latest_turn_panel_data_uses_the_breakdown_snapshot() {
     let mut messages = legacy_turn_messages("req-1", 1_000);
@@ -325,6 +325,7 @@ fn latest_turn_panel_data_uses_the_breakdown_snapshot() {
         web_search_cost_in_credits: 1.0,
         ..Default::default()
     }));
+    conversation.set_credits_spent_for_last_block_for_test(3.02);
 
     let last_exchange_id = conversation
         .root_task_exchanges()
@@ -334,19 +335,18 @@ fn latest_turn_panel_data_uses_the_breakdown_snapshot() {
     match conversation.turn_panel_data(last_exchange_id) {
         Some(TurnPanelData::Legacy { records, charges }) => {
             match charges {
-                LegacyCharges::Breakdown(_) => (),
+                LegacyCharges::Breakdown { totals, credits } => {
+                    assert_eq!(totals.total_tokens(), 150);
+                    assert_eq!(totals.web_search_count, 2);
+                    assert_eq!(credits, Some(3.02));
+                }
                 other => panic!("expected the breakdown snapshot, got {other:?}"),
             }
             let [record] = records.as_slice() else {
                 panic!("expected one record for a single-exchange turn");
             };
-            let [charge] = record.model_charges.as_slice() else {
-                panic!("expected exactly one aggregated model row");
-            };
-            assert_eq!(charge.model_id, "Models");
-            assert_eq!(charge.tokens(), 150);
-            // Web-search charges ride along like the records path renders them.
-            assert_eq!(charge.web_search_count, 2);
+            // No model attribution exists, so no model charge is fabricated.
+            assert!(record.model_charges.is_empty());
             // The platform split rides along as its own charge.
             assert_eq!(record.platform_charges.len(), 1);
             assert_eq!(record.platform_charges[0].cost_in_cents, 2.0);
