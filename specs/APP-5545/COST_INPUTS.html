@@ -1,0 +1,1157 @@
+<!DOCTYPE html>
+<!--
+  Canonical readout template (bundled asset from the readout skill).
+
+  Start every readout from this file and fill the slots (marked with comments).
+  The style[data-readout] and script[data-readout] blocks are the shared chrome —
+  copy them VERBATIM and never edit them; every readout must look like every other.
+  Document-specific CSS (diagram sizing, one-off content elements) goes ONLY in the
+  style[data-doc] block and must not override the chrome's tokens or selectors.
+  (Tag names are written selector-style in this comment on purpose: scripts that
+  extract the chrome by searching for the literal opening tags must never match
+  inside this comment.)
+
+  Header anatomy (fixed): .kicker (REPO · CONTEXT · READOUT TYPE, mono uppercase),
+  h1 title, .subtitle (one-line framing), .meta (date · audience · org/repo@commit pin).
+  Sections: <section id="..."> with <h2>, one TOC <li> per section (class="sub" for nested).
+  When the document contains GitHub blob links, inline assets/code-pane.html verbatim
+  where indicated before </body>.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Harness cost inputs: complete or omitted</title>
+<meta name="description" content="Draft wire and parsing specification: complete per-response pricing inputs, independent output and tool aggregates, and all-or-nothing server cost estimates.">
+<style data-readout>
+  :root {
+    --bg: #faf8f4; --fg: #262220; --muted: #857c6e;
+    --accent: #31567d; --warn: #7d6a2e;
+    --hairline: #e3ddd1; --code-bg: #f0ece3;
+    --tint: #f3efe7; --warn-tint: #f2eedd;
+    --good: #3d6247; --bad: #8e3b3b;
+    --sidebar-w: 15rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1e1c19; --fg: #e8e4dc; --muted: #948b7c;
+      --accent: #8caec9; --warn: #c2ae76;
+      --hairline: #383530; --code-bg: #2a2723;
+      --tint: #262320; --warn-tint: #2c2a20;
+      --good: #9ab894; --bad: #c98f8f;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font-family: Charter, 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+    font-size: 17px; line-height: 1.65;
+  }
+  code, pre {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.82em;
+  }
+  code { background: var(--code-bg); border-radius: 4px; padding: 0.1em 0.35em; }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--hairline); border-radius: 8px;
+    padding: 0.8rem 1rem; overflow-x: auto; line-height: 1.5;
+  }
+  pre code { background: none; border: none; padding: 0; font-size: 1em; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .layout {
+    display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+    max-width: 68rem; margin: 0 auto; gap: 2.5rem; padding: 0 1.5rem;
+  }
+  nav.toc {
+    position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto;
+    padding: 2.75rem 0 2rem; font-size: 0.85rem;
+  }
+  nav.toc .toc-title {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
+    font-size: 0.68rem; color: var(--muted); margin-bottom: 0.7rem;
+  }
+  nav.toc ol { list-style: none; margin: 0; padding: 0; }
+  nav.toc li { margin: 0; }
+  nav.toc a {
+    display: block; color: var(--muted);
+    padding: 0.28rem 0.75rem; border-left: 2px solid var(--hairline);
+  }
+  nav.toc a.sub { padding-left: 1.6rem; font-size: 0.8rem; }
+  nav.toc a:hover { color: var(--fg); text-decoration: none; }
+  nav.toc a.active { color: var(--accent); border-left-color: var(--accent); font-weight: 600; }
+  main { padding: 2.75rem 0 4rem; max-width: 72ch; }
+
+  header.doc-header { margin-bottom: 2.2rem; }
+  .kicker {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    font-size: 0.7rem; color: var(--accent); margin: 0 0 0.7rem;
+  }
+  h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 0.5rem; font-weight: 700; }
+  .subtitle { color: var(--muted); font-size: 1rem; margin: 0 0 0.5rem; }
+  .meta {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.72rem; color: var(--muted); margin: 0;
+  }
+
+  h2 { font-size: 1.3rem; margin: 2.6rem 0 0.9rem; padding-top: 0.8rem; border-top: 1px solid var(--hairline); }
+  h3 { font-size: 1.05rem; margin: 1.6rem 0 0.5rem; }
+  p { margin: 0.8rem 0; }
+  ul, ol { padding-left: 1.4rem; }
+  li { margin: 0.35rem 0; }
+
+  .badge {
+    display: inline-block;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.66rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+    padding: 0.12rem 0.5rem; border-radius: 999px; border: 1px solid;
+    vertical-align: middle; white-space: nowrap;
+  }
+  .badge.good { color: var(--good); border-color: var(--good); }
+  .badge.bad { color: var(--bad); border-color: var(--bad); }
+  .badge.neutral { color: var(--muted); border-color: var(--hairline); }
+
+  .callout {
+    background: var(--tint); border: 1px solid var(--hairline); border-radius: 8px;
+    padding: 0.85rem 1.1rem; margin: 1.3rem 0;
+  }
+  .callout p { margin: 0.3rem 0; }
+  .callout .callout-label {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-weight: 700; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--muted); display: block; margin-bottom: 0.3rem;
+  }
+  .callout.warn { background: var(--warn-tint); }
+  .callout.warn .callout-label { color: var(--warn); }
+
+  details { margin: 1.2rem 0; }
+  details summary { cursor: pointer; color: var(--muted); }
+  details[open] summary { margin-bottom: 0.6rem; }
+
+  .table-wrap { overflow-x: auto; margin: 1.2rem 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+  th, td { border: 1px solid var(--hairline); padding: 0.5rem 0.75rem; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); font-weight: 600; }
+  td .delta { font-weight: 600; color: var(--good); white-space: nowrap; }
+
+  figure { margin: 1.6rem 0; }
+  figure svg { width: 100%; height: auto; display: block; color: var(--fg); }
+  figcaption { font-size: 0.8rem; color: var(--muted); text-align: center; margin-top: 0.5rem; }
+
+  footer.provenance {
+    margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--hairline);
+    font-size: 0.8rem; color: var(--muted);
+  }
+  footer.provenance p { margin: 0.3rem 0; }
+
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; gap: 0; }
+    nav.toc {
+      position: static; height: auto;
+      padding: 1.5rem 0 0; border-bottom: 1px solid var(--hairline);
+    }
+    nav.toc a { border-left: none; padding-left: 0; }
+    main { padding-top: 1.5rem; }
+  }
+</style>
+<style data-doc>
+  .spec-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.7rem; font-size: 0.86rem; }
+  .spec-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .spec-diagram { min-width: 560px; }
+  figure:has(.spec-diagram) { overflow-x: auto; }
+  @media (max-width: 540px) {
+    .spec-grid, .spec-grid.two { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc" aria-label="Table of contents">
+  <div class="toc-title">Contents</div>
+  <ol><li><a href="#summary">The contract</a></li>
+<li><a href="#flow">Parsing → pricing</a></li>
+<li><a href="#wire">Full wire object</a></li>
+<li><a href="#failure">Independent failures</a></li>
+<li><a href="#pricing">Server resolution</a></li>
+<li><a href="#changes">PR changes & validation</a></li></ol>
+</nav>
+<main>
+<header class="doc-header">
+  <p class="kicker">THIRD-PARTY HARNESSES · CLIENT + SERVER · CONTRACT SPEC</p>
+  <h1>Harness cost inputs: complete or omitted</h1>
+  <p class="subtitle">The proposed wire object and native transcript → server estimate flow.</p>
+  <p class="meta">2026-10-07 · engineering review · warp@0ae320fa1e · warp-server@5a40cefedb</p>
+</header>
+
+
+<section id="summary">
+<h2>The contract in one glance</h2>
+<p><strong>Complete cost inputs, or no cost estimate. Reporting survives independently.</strong>
+Native Codex records remove checkpoint-boundary inference for fully covered response histories.
+This revises <a href="https://github.com/warpdotdev/warp/pull/16240">warp#16240</a> and
+<a href="https://github.com/warpdotdev/warp-server/pull/18837">warp-server#18837</a>; it does not implement them.</p>
+<div class="spec-grid">
+<div class="callout"><span class="callout-label">01 · Price inputs</span><p><code>cost_estimation?</code><br/>All per-response usage + classifications. No remainder.</p></div>
+<div class="callout"><span class="callout-label">02 · Output</span><p><code>output_tokens?</code><br/>One independent aggregate. Never counted twice.</p></div>
+<div class="callout"><span class="callout-label">03 · Tools</span><p><code>toolCalls?</code><br/>One count + name map. No request-level tool metrics.</p></div>
+</div>
+<p><span class="badge neutral">Draft for approval</span>
+<span class="badge neutral">Public list-price estimate</span>
+<span class="badge good">No Codex upgrade needed</span></p>
+</section>
+
+<section id="flow">
+<h2>What is parsed → what is priced</h2>
+
+<figure>
+<svg viewBox="0 0 720 656" role="img" aria-labelledby="flow-title flow-desc" class="spec-diagram">
+<title id="flow-title">Native transcripts to independent wire metrics and server pricing</title>
+<desc id="flow-desc">Codex native response usage or reconciled Claude assistant usage feeds complete request cost inputs. Output tokens and tool calls are aggregated independently. One cumulative snapshot is published and stored. Server model and per-request threshold resolution yields a cost only if all requests price successfully.</desc>
+<defs><marker id="flow-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="currentColor"/></marker></defs>
+<g fill="none" stroke="currentColor" stroke-width="1.3">
+<rect x="12" y="16" width="338" height="102" rx="8"/>
+<rect x="370" y="16" width="338" height="102" rx="8"/>
+<rect x="12" y="165" width="338" height="104" rx="8"/>
+<rect x="370" y="165" width="338" height="104" rx="8"/>
+<rect x="12" y="318" width="696" height="90" rx="8"/>
+<rect x="12" y="456" width="338" height="83" rx="8"/>
+<rect x="370" y="456" width="338" height="83" rx="8"/>
+<rect x="12" y="578" width="338" height="64" rx="8"/>
+<rect x="370" y="578" width="338" height="64" rx="8"/>
+<g marker-end="url(#flow-arrow)">
+<path d="M181 118V165"/><path d="M539 118V143H181V165"/>
+<path d="M539 118V165"/><path d="M181 118V143H539V165"/>
+<path d="M181 269V318"/><path d="M539 269V318"/>
+<path d="M360 408V432H181V456"/><path d="M181 539V578"/>
+<path d="M350 497H370"/><path d="M539 539V578"/>
+</g>
+</g>
+<g fill="currentColor" text-anchor="middle" font-family="ui-monospace,monospace" font-size="13">
+<text x="181" y="43" font-weight="bold">CODEX JSONL</text>
+<text x="181" y="67">token_usage_record.usage</text>
+<text x="181" y="91">+ turn model / thread tier</text>
+<text x="539" y="43" font-weight="bold">CLAUDE JSONL</text>
+<text x="539" y="67">assistant.message.usage</text>
+<text x="539" y="91">+ message model / price modifiers</text>
+<text x="181" y="193" font-weight="bold">COST INPUTS · PER RESPONSE</text>
+<text x="181" y="218">deduplicate → join attribution</text>
+<text x="181" y="244">complete rows OR omit the object</text>
+<text x="539" y="193" font-weight="bold">REPORTING · AGGREGATES</text>
+<text x="539" y="218">output_tokens: checked total</text>
+<text x="539" y="244">toolCalls: deduplicated counts</text>
+<text x="360" y="343" font-weight="bold">ONE CUMULATIVE WIRE SNAPSHOT</text>
+<text x="360" y="369">cost_estimation?   │   output_tokens?   │   toolCalls?</text>
+<text x="360" y="391">POST /api/v1/harness-support/usage</text>
+<text x="181" y="482" font-weight="bold">SERVER · VALIDATE &amp; REPLACE</text>
+<text x="181" y="505">one JSONB value, same capture identity</text>
+<text x="181" y="524">newer snapshot clears stale cost</text>
+<text x="539" y="482" font-weight="bold">SERVER · PRICE EVERY ROW</text>
+<text x="539" y="505">model → request threshold → rates</text>
+<text x="539" y="524">apply supported modifiers → sum</text>
+<text x="181" y="604" font-weight="bold">READ AGGREGATES DIRECTLY</text>
+<text x="181" y="627">do not re-sum cost rows</text>
+<text x="539" y="604" font-weight="bold">ALL PRICE? USD ESTIMATE</text>
+<text x="539" y="627">one fails? no estimate, not $0</text>
+</g>
+</svg>
+<figcaption>Left and right lanes fail independently. No dollars are sent by the client.</figcaption>
+</figure>
+
+<details><summary>Exact native-record rules and scope</summary>
+<ul>
+<li><strong>Codex:</strong> take <code>usage</code> once per compatible response identity.
+Join its matching turn model; configured tier comes from
+<code>event_msg / thread_settings_applied / thread_settings.service_tier</code>, not <code>turn_context</code>.
+Use native turn/thread totals only to detect uncovered history or conflicts, within matching ownership/lineage.</li>
+<li><strong>Compaction:</strong> deduplicate <code>compacted.latest_token_usage_record</code> copies.
+The marker and synthetic context-size updates are not charges. A real completed summarization response is.
+Never reset billable totals at a compaction boundary.</li>
+<li><strong>No cost fallback:</strong> legacy or mixed history lacking complete native records gets no cost inputs.
+Reporting output may use an unambiguous additive legacy checkpoint instead of overlapping native totals;
+otherwise retain only a safe partial response sum. Never sum checkpoint and native copies.</li>
+<li><strong>Claude:</strong> reconcile streaming copies by session/message ID, independently deduplicate tool-use IDs,
+and ignore synthetic/error messages. Preserve root plus captured subagent processing.</li>
+<li><strong>Scope:</strong> retain the existing Codex root-only and Claude root/captured-subagent scope.
+“Complete” means within that capture contract, not all provider activity. A known capture hole invalidates cost.
+Child discovery and invoice/rerouting precision are not added here; Codex model/tier context can be configured intent.</li>
+</ul>
+<p>Previously verified Codex v0.159.3 source:
+<a href="https://github.com/openai/codex/blob/01fc69f4026735edfdf6789820549727a4867b11/codex-rs/protocol/src/protocol.rs#L2264-L2275"><code>TokenUsageRecord</code></a>,
+<a href="https://github.com/openai/codex/blob/01fc69f4026735edfdf6789820549727a4867b11/codex-rs/core/src/session/mod.rs#L4764-L4799"><code>response writer</code></a>.
+Current client: <a href="https://github.com/warpdotdev/warp/blob/0ae320fa1ea690f7daa73411941c784e860f4aa0/crates/warp_harness_usage/src/codex.rs#L196-L208"><code>crates/warp_harness_usage/src/codex.rs:196–208</code></a>; <a href="https://github.com/warpdotdev/warp/blob/0ae320fa1ea690f7daa73411941c784e860f4aa0/crates/warp_harness_usage/src/claude.rs#L86-L95"><code>crates/warp_harness_usage/src/claude.rs:86–95</code></a>.</p>
+</details>
+</section>
+
+<section id="wire">
+<h2>The wire object, in full</h2>
+<p><code>cost_estimation</code> is <strong>pricing input, not a dollar result</strong>.
+Its entire request array is optional; individual price-essential fields are not.
+The following JSON shows every permitted Codex row field.</p>
+<pre data-example="codex-complete"><code>{
+  &quot;execution_id&quot;: 42,
+  &quot;capture_sequence&quot;: 7,
+  &quot;captured_at&quot;: &quot;2026-10-07T15:00:00Z&quot;,
+  &quot;harness&quot;: &quot;CODEX&quot;,
+  &quot;snapshot&quot;: {
+    &quot;coverage&quot;: {
+      &quot;cost_status&quot;: &quot;known&quot;,
+      &quot;output_token_status&quot;: &quot;known&quot;,
+      &quot;tool_status&quot;: &quot;known&quot;
+    },
+    &quot;payload&quot;: {
+      &quot;format&quot;: &quot;cost_inputs_v3&quot;,
+      &quot;cost_estimation&quot;: {
+        &quot;requests&quot;: [
+          {
+            &quot;model&quot;: &quot;gpt-5.4&quot;,
+            &quot;service_tier&quot;: &quot;default&quot;,
+            &quot;inference_geo&quot;: &quot;global&quot;,
+            &quot;speed&quot;: &quot;standard&quot;,
+            &quot;usage&quot;: {
+              &quot;input_tokens&quot;: 300000,
+              &quot;cached_input_tokens&quot;: 200000,
+              &quot;cache_write_input_tokens&quot;: 0,
+              &quot;output_tokens&quot;: 1000,
+              &quot;reasoning_output_tokens&quot;: 400,
+              &quot;total_tokens&quot;: 301000
+            }
+          }
+        ]
+      },
+      &quot;output_tokens&quot;: 1000,
+      &quot;toolCalls&quot;: {
+        &quot;total&quot;: 3,
+        &quot;byName&quot;: {
+          &quot;exec_command&quot;: 2,
+          &quot;apply_patch&quot;: 1
+        }
+      }
+    }
+  }
+}</code></pre>
+<details><summary>Complete Claude wire object · all provider fields</summary>
+<pre data-example="claude-complete"><code>{
+  &quot;execution_id&quot;: 42,
+  &quot;capture_sequence&quot;: 7,
+  &quot;captured_at&quot;: &quot;2026-10-07T15:00:00Z&quot;,
+  &quot;harness&quot;: &quot;CLAUDE_CODE&quot;,
+  &quot;snapshot&quot;: {
+    &quot;coverage&quot;: {
+      &quot;cost_status&quot;: &quot;known&quot;,
+      &quot;output_token_status&quot;: &quot;known&quot;,
+      &quot;tool_status&quot;: &quot;known&quot;
+    },
+    &quot;payload&quot;: {
+      &quot;format&quot;: &quot;cost_inputs_v3&quot;,
+      &quot;cost_estimation&quot;: {
+        &quot;requests&quot;: [
+          {
+            &quot;model&quot;: &quot;claude-sonnet-4-6&quot;,
+            &quot;service_tier&quot;: &quot;standard&quot;,
+            &quot;inference_geo&quot;: &quot;global&quot;,
+            &quot;speed&quot;: &quot;standard&quot;,
+            &quot;usage&quot;: {
+              &quot;input_tokens&quot;: 10000,
+              &quot;output_tokens&quot;: 1000,
+              &quot;cache_read_input_tokens&quot;: 180000,
+              &quot;cache_creation_input_tokens&quot;: 20000,
+              &quot;cache_creation&quot;: {
+                &quot;ephemeral_5m_input_tokens&quot;: 15000,
+                &quot;ephemeral_1h_input_tokens&quot;: 5000
+              }
+            }
+          }
+        ]
+      },
+      &quot;output_tokens&quot;: 1000,
+      &quot;toolCalls&quot;: {
+        &quot;total&quot;: 2,
+        &quot;byName&quot;: {
+          &quot;Bash&quot;: 1,
+          &quot;Read&quot;: 1
+        }
+      }
+    }
+  }
+}</code></pre>
+</details>
+<div class="table-wrap"><table>
+<thead><tr><th>Field / category</th><th>Normative rule</th></tr></thead><tbody>
+<tr><td><code>format</code></td><td>Required literal <code>cost_inputs_v3</code>, even when cost is absent. It selects the contract, not a parser release.</td></tr>
+<tr><td><code>cost_status</code></td><td><code>known</code> iff complete cost inputs are present; otherwise <code>unavailable</code>. Never partial cost. Server price lookup can still fail.</td></tr>
+<tr><td><code>output_token_status</code><br/><code>tool_status</code></td><td>Each is <code>known</code>, <code>partial</code>, or <code>unavailable</code>. Known/partial requires its aggregate; unavailable forbids it.</td></tr>
+<tr><td>Envelope + counts</td><td>Keep positive int64 execution/sequence and RFC3339 capture time. Counts are nonnegative int64 with checked sums, including &gt;2<sup>53</sup>. Zero is measured; omitted is unknown. Reject nulls and unknown fields.</td></tr>
+<tr><td>Request row</td><td>Required concrete <code>model</code> and native <code>usage</code>; optional <code>service_tier</code>, <code>inference_geo</code>, <code>speed</code>. Absent modifiers keep existing standard/global/nonfast defaults. Carry known nondefaults; unknown values fail pricing.</td></tr>
+<tr><td>Codex usage</td><td>Required input, cached input, cache-write input, output. Optional reasoning and total. Cache reads + writes ≤ input; reasoning ≤ output; input + output = total when present.</td></tr>
+<tr><td>Claude usage</td><td>Required input, output, cache-read and aggregate cache-creation. For nonzero writes, require both TTL partitions and their exact sum. No assumed 5-minute remainder.</td></tr>
+<tr><td>Cost rows + tools</td><td>0–4,096 complete request rows. Empty means established empty history, not extraction failure. <code>toolCalls.total</code> equals the checked sum of <code>byName</code>. IDs remain client-local.</td></tr>
+</tbody></table></div>
+<p>These three metrics are <strong>top-level siblings within the existing payload</strong>.
+Output repeated inside a cost row is needed for pricing, but only the sibling aggregate is used for output reporting.</p>
+</section>
+
+<section id="failure">
+<h2>One failure must not erase the other metrics</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Situation</th><th>Cost inputs / result</th><th>Output &amp; tools</th></tr></thead><tbody>
+<tr><td>Complete native history; every price resolves</td><td><span class="badge good">Send / estimate</span></td><td>Independent aggregates</td></tr>
+<tr><td>Missing usage/model, conflicted identity, capture hole</td><td><span class="badge bad">Omit / unavailable</span></td><td>Keep trustworthy values; mark partial when needed</td></tr>
+<tr><td>4,097 rows or &gt;1 MiB with cost detail</td><td><span class="badge bad">Drop entire cost object</span></td><td>Continue aggregation; reserialize smaller report</td></tr>
+<tr><td>One model, modifier, or nonzero category has no rate</td><td>Inputs may exist; <span class="badge bad">no USD result</span></td><td>Unaffected</td></tr>
+<tr><td>Established complete empty history</td><td><span class="badge good">True $0</span></td><td>Measured zero, not missing</td></tr>
+</tbody></table></div>
+<p>The extractor returns a <strong>structured cost error alongside reporting results</strong>
+(<code>IncompleteInput</code>, <code>InvalidData</code>, <code>AmbiguousAccounting</code>, or <code>ResourceLimit</code>).
+Bounded diagnostics stay local; they are not a whole-report HTTP failure. Wire coverage communicates availability.</p>
+<details open><summary>Aggregate-only publication after a cost-detail limit</summary>
+<pre data-example="cost-unavailable"><code>{
+  &quot;execution_id&quot;: 42,
+  &quot;capture_sequence&quot;: 8,
+  &quot;captured_at&quot;: &quot;2026-10-07T15:00:00Z&quot;,
+  &quot;harness&quot;: &quot;CODEX&quot;,
+  &quot;snapshot&quot;: {
+    &quot;coverage&quot;: {
+      &quot;cost_status&quot;: &quot;unavailable&quot;,
+      &quot;output_token_status&quot;: &quot;known&quot;,
+      &quot;tool_status&quot;: &quot;known&quot;
+    },
+    &quot;payload&quot;: {
+      &quot;format&quot;: &quot;cost_inputs_v3&quot;,
+      &quot;output_tokens&quot;: 1000,
+      &quot;toolCalls&quot;: {
+        &quot;total&quot;: 3,
+        &quot;byName&quot;: {
+          &quot;exec_command&quot;: 2,
+          &quot;apply_patch&quot;: 1
+        }
+      }
+    }
+  }
+}</code></pre>
+</details>
+<p><strong>Delete</strong> <code>unattributed_usage</code> and prefix-pricing fallback.
+At a row limit, release cost detail without stopping independent counting. If aggregate-only JSON still exceeds 1 MiB,
+diagnose nonpublication rather than silently truncate. Raw transcript saving/cleanup remains unchanged.</p>
+<details><summary>When no category is trustworthy · clear stale cost</summary>
+<pre data-example="all-unavailable"><code>{
+  &quot;execution_id&quot;: 42,
+  &quot;capture_sequence&quot;: 9,
+  &quot;captured_at&quot;: &quot;2026-10-07T15:00:00Z&quot;,
+  &quot;harness&quot;: &quot;CODEX&quot;,
+  &quot;snapshot&quot;: {
+    &quot;coverage&quot;: {
+      &quot;cost_status&quot;: &quot;unavailable&quot;,
+      &quot;output_token_status&quot;: &quot;unavailable&quot;,
+      &quot;tool_status&quot;: &quot;unavailable&quot;
+    },
+    &quot;payload&quot;: {
+      &quot;format&quot;: &quot;cost_inputs_v3&quot;
+    }
+  }
+}</code></pre>
+<p>Permit this unavailable snapshot under the same capture ordering. A newer incomplete snapshot replaces the old whole
+snapshot; never reuse a prior complete estimate for newer output. This intentionally replaces the previous
+“only successful snapshots” requirement when current availability must be represented.</p>
+</details>
+</section>
+
+<section id="pricing">
+<h2>Server resolution: all rows, or no estimate</h2>
+
+<figure>
+<svg viewBox="0 0 720 164" role="img" aria-labelledby="threshold-title" class="spec-diagram">
+<title id="threshold-title">Threshold sizes preserve provider semantics at request granularity</title>
+<g fill="none" stroke="currentColor" stroke-width="1.2">
+<rect x="12" y="8" width="338" height="146" rx="8"/><rect x="370" y="8" width="338" height="146" rx="8"/>
+</g>
+<g fill="currentColor" text-anchor="middle" font-family="ui-monospace,monospace" font-size="13">
+<text x="181" y="36" font-weight="bold">CODEX REQUEST SIZE</text>
+<text x="181" y="64">input_tokens</text>
+<text x="181" y="89">already includes cache reads/writes</text>
+<text x="181" y="119">example: 300K input → over 272K</text>
+<text x="181" y="141">reasoning is inside output, not extra</text>
+<text x="539" y="36" font-weight="bold">CLAUDE REQUEST SIZE</text>
+<text x="539" y="64">input + cache_read + cache_creation</text>
+<text x="539" y="89">TTL partitions split writes, not add-ons</text>
+<text x="539" y="119">example: 10K + 180K + 20K = 210K</text>
+<text x="539" y="141">use this model’s threshold, if any</text>
+</g>
+</svg>
+<figcaption>Choose the model’s request-local rate tier before summing cost; never threshold the run-wide total.</figcaption>
+</figure>
+
+<p>Resolve the concrete model through the existing explicit map and public list-price table.
+For every row, select request-local rates and supported tier/geo/speed modifiers.
+Only after <strong>every row</strong> prices successfully, return the decimal sum.
+Missing inputs or one unknown price returns unavailable—not a zero contribution.</p>
+<div class="callout warn"><span class="callout-label">Carry “unknown” through every consumer</span>
+<p>Provider/inference and total estimated-dollar values become optional through run metrics,
+benchmark attempts/configurations/run rollups, and judge facts. If a contributing cost is unavailable,
+the total/average is unavailable; never sum only known attempts or show Warp-only dollars as a complete total.
+Compute/platform dollars and credits remain known. Oz is unchanged.</p></div>
+<p>Read output and tools from their payload siblings, even when no estimate exists.
+The cost result is a typed optional decimal plus a bounded error; absent optional dollar fields are omitted in responses.</p>
+<details><summary>Category formula and supported classifications</summary>
+<ul>
+<li><strong>Codex:</strong> subtract cache reads from base input; subtract cache writes only when a separate write rate applies.
+Price the remaining input, cached reads, separately priced writes, and output once. Otherwise writes stay at the base input rate.
+Reasoning and total tokens do not add charges.</li>
+<li><strong>Claude:</strong> price uncached input, cache reads, 5-minute writes, 1-hour writes, and output once.
+The TTL partitions replace aggregate writes; never add both.</li>
+<li>Preserve the existing supported modifiers: Codex <code>flex</code> ×0.5,
+<code>priority</code>/<code>fast</code> tier ×2; Claude <code>batch</code> ×0.5,
+<code>fast</code> speed ×2; <code>us</code> geo uses the model’s surcharge where defined.
+Absent/default/standard tiers, global geo, and standard speed are neutral.
+Other nonempty classifications are unsupported and suppress the estimate.</li>
+<li>Update dollar serializers, mirrored consumer types, and formatters for omission.
+An unavailable estimate uses the existing unavailable-value presentation, not zero; exclude unavailable values from plotted cost
+points without silently recomputing a rollup or average over a smaller subset.</li>
+</ul>
+</details>
+<details><summary>Existing implementation being revised</summary>
+<p>Current prefix estimator: <a href="https://github.com/warpdotdev/warp-server/blob/5a40cefedbba844ad788011b3c43d475560448b5/logic/harness_cost/harness_cost.go#L23-L39"><code>logic/harness_cost/harness_cost.go:23–39</code></a>. Threshold-aware list rates: <a href="https://github.com/warpdotdev/warp-server/blob/5a40cefedbba844ad788011b3c43d475560448b5/logic/ai/llm/llm.go#L1816-L1850"><code>logic/ai/llm/llm.go:1816–1850</code></a>.
+Claude request size: <a href="https://github.com/warpdotdev/warp-server/blob/5a40cefedbba844ad788011b3c43d475560448b5/logic/harness_cost/harness_cost.go#L69-L84"><code>logic/harness_cost/harness_cost.go:69–84</code></a>. Output reconstruction: <a href="https://github.com/warpdotdev/warp-server/blob/5a40cefedbba844ad788011b3c43d475560448b5/logic/run_scoring/metrics.go#L191-L202"><code>logic/run_scoring/metrics.go:191–202</code></a>.
+Scalar consumer that must not coerce unavailable to zero: <a href="https://github.com/warpdotdev/warp-server/blob/5a40cefedbba844ad788011b3c43d475560448b5/model/types/run_metrics.go#L31-L32"><code>model/types/run_metrics.go:31–32</code></a>.</p>
+</details>
+</section>
+
+<section id="changes">
+<h2>Changes to the two PRs</h2>
+<div class="spec-grid two">
+<div class="callout"><span class="callout-label">Client · warp#16240</span>
+<p>Native Codex rows + context/tier joins.<br/>Independent output/tool aggregation.<br/>
+Whole-object cost omission and per-category errors.<br/>No remainder or cost-prefix compaction.</p></div>
+<div class="callout"><span class="callout-label">Server · warp-server#18837</span>
+<p>OpenAPI/DTOs + v3 validation/read/storage.<br/>Strict optional estimator.<br/>
+Aggregate reporting adapters.<br/>Unavailable dollars through consumers/rollups.</p></div>
+</div>
+<p><strong>Keep:</strong> authorization, sequence/time/idempotence, exact retry bytes,
+one cumulative JSONB replacement. No per-request database ledger.</p>
+<details><summary>Compatibility and release order</summary>
+<ul>
+<li>Ship server v3 decoding, storage, validation, read conversion and consumers first, then the client.
+Unknown-field validation makes a client-first rollout unsafe. Stop v3 producers before a server rollback.</li>
+<li>Retain v1 grouped and v2 request formats for old producers/storage.
+Their provider estimate is unavailable because they do not establish v3 completeness.
+Keep existing legacy output/tool adapters; never reconstruct guessed request rows.</li>
+<li>Stored/read v3 envelopes use <code>metricsVersion: 3</code> and existing camelCase identity names.
+Coverage becomes <code>costStatus</code>, <code>outputTokenStatus</code>, <code>toolStatus</code>.
+Payload and native usage names are exactly those shown above. The POST has no server-owned <code>metricsVersion</code>.</li>
+<li>The required <code>format</code> marker prevents a cost-absent v3 payload being mistaken for legacy tool-only data.
+Reject mixed shapes and version/payload mismatch.</li>
+<li>No Docker bump, billing change, historical backfill, child-rollout discovery, or UI redesign.
+Existing price/default assumptions remain list-price estimates, not invoice guarantees.</li>
+</ul>
+<p>Current version dispatch: <a href="https://github.com/warpdotdev/warp-server/blob/5a40cefedbba844ad788011b3c43d475560448b5/model/types/harness_usage.go#L61-L84"><code>model/types/harness_usage.go:61–84</code></a>; category validation: <a href="https://github.com/warpdotdev/warp-server/blob/5a40cefedbba844ad788011b3c43d475560448b5/model/harness_usage_validation.go#L109-L120"><code>model/harness_usage_validation.go:109–120</code></a>;
+replacement/identity: <a href="https://github.com/warpdotdev/warp-server/blob/5a40cefedbba844ad788011b3c43d475560448b5/model/harness_usage.go#L117-L128"><code>model/harness_usage.go:117–128</code></a>. Client wire payload: <a href="https://github.com/warpdotdev/warp/blob/0ae320fa1ea690f7daa73411941c784e860f4aa0/crates/warp_harness_usage/src/api.rs#L162-L174"><code>crates/warp_harness_usage/src/api.rs:162–174</code></a>;
+row/body remainder behavior being removed: <a href="https://github.com/warpdotdev/warp/blob/0ae320fa1ea690f7daa73411941c784e860f4aa0/crates/warp_harness_usage/src/counters.rs#L183-L198"><code>crates/warp_harness_usage/src/counters.rs:183–198</code></a>; <a href="https://github.com/warpdotdev/warp/blob/0ae320fa1ea690f7daa73411941c784e860f4aa0/crates/warp_harness_usage/src/api.rs#L23-L37"><code>crates/warp_harness_usage/src/api.rs:23–37</code></a>.</p>
+</details>
+<details><summary>Acceptance checks · required, not yet run</summary>
+<ol>
+<li><strong>Wire fixtures:</strong> complete Codex/Claude, aggregate-only, all-unavailable, true-empty,
+zero vs missing, &gt;2<sup>53</sup>, null/unknown/mixed-shape rejection; Rust and Go agree.</li>
+<li><strong>Identity/history:</strong> equal-size distinct native responses, native + checkpoint overlap,
+compatible copies and compacted latest-record copies, conflicts, model/tier switches, missing response usage,
+uncovered cumulative baseline, legacy-only and partial capture.</li>
+<li><strong>Claude/compaction:</strong> streaming revisions, subagents, missing TTL split,
+synthetic markers vs actual summarization usage; no billing reset or double count.</li>
+<li><strong>Bounds:</strong> 4,096/4,097 rows and 1 MiB; no priced prefix, aggregates survive.
+Own identity/input/overflow limits degrade affected categories, not fabricated values. Raw saving remains independent.</li>
+<li><strong>Pricing:</strong> each model threshold −1 / exact / +1; same aggregate but different request distributions;
+unknown model/classification or missing nonzero-category rate suppresses the whole sum; true-empty differs from unavailable.</li>
+<li><strong>Storage/consumers:</strong> newer incomplete snapshot clears older cost, stale/retry rules hold,
+output/tool reporting survives; unknown total propagates across attempts/rollups/judges; legacy and Oz regression cases.</li>
+</ol>
+<p>Client: <code>cargo nextest run -p warp_harness_usage</code>, focused publication tests, targeted Clippy.
+Server: focused <code>go test</code> for <code>logic/harness_cost</code>, <code>logic/run_scoring</code>,
+<code>model</code>, <code>router/handlers/public_api</code>, <code>logic/ai/ambient_agents</code>;
+targeted vet/lint and generated-DTO consistency checks.</p>
+</details>
+</section>
+<footer class="provenance">
+  <p><strong>Provenance.</strong> October 7, 2026. Draft based on the requester’s strict-cost/independent-reporting decisions in <a href="https://warpdev.slack.com/archives/C0BDQDW8V5E/p1791387884684899">the originating thread</a>. Current client/server PR heads inspected; Codex v0.159.3 facts carried from the pinned upstream investigation. Static document checks only; no implementation or browser/runtime verification. Embedded private source is for repository-authorized teammates only.</p>
+</footer>
+</main>
+</div>
+<script data-readout>
+(function () {
+  var links = Array.prototype.slice.call(document.querySelectorAll("nav.toc a"));
+  if (!links.length || !("IntersectionObserver" in window)) return;
+  var map = {};
+  links.forEach(function (a) {
+    var href = a.getAttribute("href") || "";
+    if (href.charAt(0) === "#") map[href.slice(1)] = a;
+  });
+  var current = null;
+  var observer = new IntersectionObserver(function (entries) {
+    entries.forEach(function (entry) {
+      if (entry.isIntersecting) {
+        if (current) current.classList.remove("active");
+        current = map[entry.target.id];
+        if (current) current.classList.add("active");
+      }
+    });
+  }, { rootMargin: "0px 0px -70% 0px" });
+  Object.keys(map).forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) observer.observe(el);
+  });
+})();
+</script>
+<!--
+  readout code pane (bundled asset from the readout skill).
+  Inline this ENTIRE block verbatim immediately before </body>.
+
+  It enhances every GitHub blob link (https://github.com/<org>/<repo>/blob/<commit>/<path>#L10-L20)
+  with an in-document source viewer: click opens the code in a split pane on the right (the
+  document content is pushed aside, not overlaid), clicking another reference reuses the pane,
+  and a close button (or Escape) dismisses it. The pane is resizable by dragging its left edge
+  (min width, persisted; double-click the edge to reset). Code is syntax-highlighted via
+  highlight.js, lazily loaded from a CDN only when the pane opens; offline it degrades to plain text.
+  Progressive enhancement: with JS disabled, or on modified clicks, links open GitHub normally.
+
+  Source resolution order:
+    1. snippets embedded at generation time in a script[type="application/json"][data-code-snippets]
+       block, keyed "org/repo@commit:path" -> {"start": first line number, "text": "lines", "full": bool}
+       or, for whole files compressed at generation time, {"gz": "base64 gzip", "full": true}
+       (inflated in the browser via DecompressionStream). Use scripts/embed_snippets.py to generate.
+    2. runtime fetch of raw.githubusercontent.com (user-initiated; works for public repos)
+    3. reader-supplied GitHub token: on an HTTP error the pane offers a paste-a-token form and
+       retries via api.github.com (fine-grained PAT, read-only Contents). The token lives in
+       sessionStorage for this tab only and is never written into the document.
+    4. fallback message with an "open on GitHub" link
+-->
+<style data-code-pane>
+  :root { --crp-w: min(44rem, 46vw); }
+  body { transition: margin-right 0.18s ease; }
+  html.crp-open body { margin-right: var(--crp-w); }
+  @media (max-width: 900px) {
+    :root { --crp-w: 100vw; }
+    html.crp-open body { margin-right: 0; }
+  }
+  .crp-pane {
+    position: fixed; top: 0; right: 0; bottom: 0;
+    width: var(--crp-w);
+    display: flex; flex-direction: column;
+    background: #f5f2eb; color: #2a2622;
+    border-left: 1px solid #d8d2c6;
+    z-index: 1000;
+    font-size: 0.8rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    .crp-pane { background: #211f1c; color: #e8e4dc; border-left-color: #3a3733; }
+  }
+  .crp-head {
+    display: flex; align-items: center; gap: 0.7rem;
+    padding: 0.6rem 1rem;
+    border-bottom: 1px solid rgba(128, 118, 100, 0.3);
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.76rem;
+  }
+  .crp-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+  .crp-lines { flex: none; opacity: 0.6; }
+  .crp-gh { flex: none; color: inherit; opacity: 0.75; text-decoration: underline; white-space: nowrap; }
+  .crp-close {
+    flex: none; width: 1.7rem; height: 1.7rem;
+    border: 1px solid rgba(128, 118, 100, 0.4); border-radius: 6px;
+    background: transparent; color: inherit;
+    font-size: 1rem; line-height: 1; cursor: pointer;
+  }
+  .crp-close:hover { background: rgba(128, 118, 100, 0.15); }
+  .crp-resize {
+    position: absolute; left: -3px; top: 0; bottom: 0; width: 7px;
+    cursor: col-resize; z-index: 1001;
+  }
+  .crp-resize:hover, html.crp-resizing .crp-resize { background: rgba(128, 118, 100, 0.3); }
+  html.crp-resizing body { transition: none; }
+  html.crp-resizing, html.crp-resizing * { user-select: none; cursor: col-resize !important; }
+  .crp-body {
+    flex: 1 1 auto; overflow: auto;
+    padding: 0.5rem 0 2rem;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    line-height: 1.5; tab-size: 4;
+  }
+  .crp-line { display: flex; }
+  .crp-ln { flex: none; width: 3.4rem; padding-right: 0.9rem; text-align: right; opacity: 0.45; user-select: none; }
+  .crp-code { flex: 1 1 auto; white-space: pre; padding-right: 1rem; }
+  .crp-line.crp-hit { background: rgba(163, 148, 84, 0.22); }
+  .crp-msg { padding: 1.1rem 1.2rem; font-family: inherit; }
+  .crp-msg a { color: inherit; }
+  .crp-note { padding: 0.5rem 1.2rem 0.7rem; opacity: 0.65; font-size: 0.72rem; font-family: inherit; }
+  .crp-token { display: flex; gap: 0.5rem; margin: 0.8rem 0 0.4rem; }
+  .crp-token input {
+    flex: 1 1 auto; min-width: 0;
+    font: inherit; color: inherit;
+    background: rgba(128, 118, 100, 0.08);
+    border: 1px solid rgba(128, 118, 100, 0.4); border-radius: 6px;
+    padding: 0.35rem 0.6rem;
+  }
+  .crp-token button {
+    flex: none;
+    font: inherit; color: inherit; cursor: pointer;
+    background: rgba(128, 118, 100, 0.15);
+    border: 1px solid rgba(128, 118, 100, 0.4); border-radius: 6px;
+    padding: 0.35rem 0.8rem;
+  }
+  .crp-token button:hover { background: rgba(128, 118, 100, 0.25); }
+  .crp-token-note { opacity: 0.65; font-size: 0.72rem; margin: 0.4rem 0 0.8rem; }
+  /* muted-primaries highlight.js theme on warm paper, scoped to the pane (light + dark) */
+  .crp-pane .hljs-comment, .crp-pane .hljs-doctag, .crp-pane .hljs-quote { color: #91887a; font-style: italic; }
+  .crp-pane .hljs-string, .crp-pane .hljs-regexp, .crp-pane .hljs-addition { color: #3d6247; }
+  .crp-pane .hljs-keyword, .crp-pane .hljs-literal, .crp-pane .hljs-selector-tag, .crp-pane .hljs-section { color: #31567d; }
+  .crp-pane .hljs-number, .crp-pane .hljs-symbol, .crp-pane .hljs-bullet { color: #7d6a2e; }
+  .crp-pane .hljs-title, .crp-pane .hljs-name { color: #794046; }
+  .crp-pane .hljs-type, .crp-pane .hljs-built_in, .crp-pane .hljs-selector-class, .crp-pane .hljs-selector-id { color: #6e5540; }
+  .crp-pane .hljs-attr, .crp-pane .hljs-property, .crp-pane .hljs-variable, .crp-pane .hljs-template-variable, .crp-pane .hljs-attribute { color: #5a6b3f; }
+  .crp-pane .hljs-meta, .crp-pane .hljs-params, .crp-pane .hljs-operator, .crp-pane .hljs-punctuation { color: #6d675c; }
+  .crp-pane .hljs-deletion { color: #8e3b3b; }
+  .crp-pane .hljs-emphasis { font-style: italic; }
+  .crp-pane .hljs-strong { font-weight: 600; }
+  @media (prefers-color-scheme: dark) {
+    .crp-pane .hljs-comment, .crp-pane .hljs-doctag, .crp-pane .hljs-quote { color: #837a6b; }
+    .crp-pane .hljs-string, .crp-pane .hljs-regexp, .crp-pane .hljs-addition { color: #9ab894; }
+    .crp-pane .hljs-keyword, .crp-pane .hljs-literal, .crp-pane .hljs-selector-tag, .crp-pane .hljs-section { color: #8caec9; }
+    .crp-pane .hljs-number, .crp-pane .hljs-symbol, .crp-pane .hljs-bullet { color: #c2ae76; }
+    .crp-pane .hljs-title, .crp-pane .hljs-name { color: #c99a94; }
+    .crp-pane .hljs-type, .crp-pane .hljs-built_in, .crp-pane .hljs-selector-class, .crp-pane .hljs-selector-id { color: #b39a7e; }
+    .crp-pane .hljs-attr, .crp-pane .hljs-property, .crp-pane .hljs-variable, .crp-pane .hljs-template-variable, .crp-pane .hljs-attribute { color: #a9b98a; }
+    .crp-pane .hljs-meta, .crp-pane .hljs-params, .crp-pane .hljs-operator, .crp-pane .hljs-punctuation { color: #9a9284; }
+    .crp-pane .hljs-deletion { color: #c98f8f; }
+  }
+</style>
+<script data-code-pane>
+(function () {
+  "use strict";
+  var BLOB = /^https:\/\/github\.com\/([^\/]+)\/([^\/]+)\/blob\/([^\/]+)\/([^#?]+)(?:#L(\d+)(?:-L(\d+))?)?$/;
+  var TOKEN_KEY = "crp-gh-token";
+  var WIDTH_KEY = "crp-w-px";
+  var MIN_W = 320; // px — minimum pane width when dragging
+  var HLJS_CDN = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js";
+  var EXT_LANG = {
+    go: "go", rs: "rust", py: "python", rb: "ruby", sql: "sql", lua: "lua", pl: "perl",
+    js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "javascript",
+    ts: "typescript", tsx: "typescript",
+    sh: "bash", bash: "bash", zsh: "bash",
+    c: "c", h: "c", cpp: "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp", hh: "cpp",
+    java: "java", kt: "kotlin", kts: "kotlin", swift: "swift", cs: "csharp",
+    m: "objectivec", mm: "objectivec", php: "php", r: "r",
+    yaml: "yaml", yml: "yaml", toml: "ini", ini: "ini", conf: "ini",
+    json: "json", jsonc: "json", xml: "xml", html: "xml", htm: "xml", svg: "xml",
+    css: "css", scss: "scss", less: "less", md: "markdown", markdown: "markdown",
+    makefile: "makefile", diff: "diff", patch: "diff"
+  };
+
+  var snippets = {};
+  var snipEl = document.querySelector('script[type="application/json"][data-code-snippets]');
+  if (snipEl) { try { snippets = JSON.parse(snipEl.textContent) || {}; } catch (e) { snippets = {}; } }
+
+  var cache = Object.create(null); // rawUrl -> file text
+  var reqId = 0;
+  var memToken = "";
+  var hljsPromise = null;
+  var pane = null, titleEl, linesEl, ghEl, bodyEl;
+
+  function getToken() {
+    if (memToken) return memToken;
+    try { return window.sessionStorage.getItem(TOKEN_KEY) || ""; } catch (e) { return ""; }
+  }
+  function setToken(t) {
+    memToken = t;
+    try { window.sessionStorage.setItem(TOKEN_KEY, t); } catch (e) {}
+  }
+
+  function storedWidth() {
+    try { return parseInt(window.localStorage.getItem(WIDTH_KEY), 10) || 0; } catch (e) { return 0; }
+  }
+  function storeWidth(px) {
+    try { window.localStorage.setItem(WIDTH_KEY, String(px)); } catch (e) {}
+  }
+  function clampWidth(px) {
+    var max = Math.max(MIN_W, window.innerWidth - 280); // keep some document visible
+    return Math.min(Math.max(px, MIN_W), max);
+  }
+  function applyWidth(px) {
+    document.documentElement.style.setProperty("--crp-w", px + "px");
+  }
+  function resetWidth() {
+    try { window.localStorage.removeItem(WIDTH_KEY); } catch (e) {}
+    document.documentElement.style.removeProperty("--crp-w");
+  }
+  // Applies the remembered width, and defers to the stylesheet (full-width pane) on
+  // narrow screens — an inline --crp-w would otherwise override the media query.
+  function syncWidth() {
+    if (window.innerWidth <= 900) { document.documentElement.style.removeProperty("--crp-w"); return; }
+    var w = storedWidth();
+    if (w) applyWidth(clampWidth(w));
+  }
+
+  function langFor(path) {
+    var base = (path || "").split("/").pop().toLowerCase();
+    if (base === "makefile") return "makefile";
+    if (base === "dockerfile") return "dockerfile";
+    var m = /\.([a-z0-9_]+)$/.exec(base);
+    return m ? EXT_LANG[m[1]] || null : null;
+  }
+
+  function loadHljs() {
+    if (window.hljs) return Promise.resolve(window.hljs);
+    if (hljsPromise) return hljsPromise;
+    hljsPromise = new Promise(function (resolve) {
+      var s = document.createElement("script");
+      s.src = HLJS_CDN;
+      s.onload = function () { resolve(window.hljs || null); };
+      s.onerror = function () { resolve(null); };
+      document.head.appendChild(s);
+    });
+    return hljsPromise;
+  }
+
+  // Split highlight.js output HTML into per-line HTML, re-opening spans that cross newlines.
+  function splitHighlighted(html) {
+    var lines = html.split("\n");
+    var open = [];
+    var out = [];
+    var tagRe = /<span[^>]*>|<\/span>/g;
+    for (var i = 0; i < lines.length; i++) {
+      var prefix = open.join("");
+      var line = lines[i];
+      var m;
+      tagRe.lastIndex = 0;
+      while ((m = tagRe.exec(line))) {
+        if (m[0] === "</span>") open.pop(); else open.push(m[0]);
+      }
+      var suffix = "";
+      for (var k = 0; k < open.length; k++) suffix += "</span>";
+      out.push(prefix + line + suffix);
+    }
+    return out;
+  }
+
+  function inflate(b64) {
+    return new Promise(function (resolve, reject) {
+      if (typeof DecompressionStream === "undefined") { reject(new Error("DecompressionStream unavailable")); return; }
+      var bin = atob(b64);
+      var bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      var stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+      new Response(stream).text().then(resolve, reject);
+    });
+  }
+
+  // Resolves an embedded snippet entry to {text, start, full} (inflating "gz" once), or null.
+  function resolveSnippet(key) {
+    var snip = snippets[key];
+    if (!snip) return Promise.resolve(null);
+    if (typeof snip.text === "string") {
+      return Promise.resolve({ text: snip.text, start: snip.start || 1, full: !!snip.full });
+    }
+    if (typeof snip.gz === "string") {
+      return inflate(snip.gz).then(function (text) {
+        snippets[key] = { text: text, start: snip.start || 1, full: !!snip.full };
+        return snippets[key];
+      }, function () { return null; });
+    }
+    return Promise.resolve(null);
+  }
+
+  function ensurePane() {
+    if (pane) return;
+    pane = document.createElement("aside");
+    pane.className = "crp-pane";
+    pane.setAttribute("role", "complementary");
+    pane.setAttribute("aria-label", "Source viewer");
+    pane.tabIndex = -1;
+
+    var head = document.createElement("div");
+    head.className = "crp-head";
+    titleEl = document.createElement("span"); titleEl.className = "crp-title";
+    linesEl = document.createElement("span"); linesEl.className = "crp-lines";
+    ghEl = document.createElement("a"); ghEl.className = "crp-gh"; ghEl.textContent = "open on GitHub";
+    ghEl.target = "_blank"; ghEl.rel = "noopener";
+    var close = document.createElement("button");
+    close.className = "crp-close"; close.type = "button";
+    close.setAttribute("aria-label", "Close source viewer");
+    close.textContent = "\u00d7";
+    close.addEventListener("click", closePane);
+    head.appendChild(titleEl); head.appendChild(linesEl); head.appendChild(ghEl); head.appendChild(close);
+
+    bodyEl = document.createElement("div");
+    bodyEl.className = "crp-body";
+
+    var grip = document.createElement("div");
+    grip.className = "crp-resize";
+    grip.setAttribute("aria-hidden", "true");
+    grip.title = "Drag to resize · double-click to reset";
+    grip.addEventListener("pointerdown", function (ev) {
+      if (ev.button !== 0) return;
+      ev.preventDefault();
+      grip.setPointerCapture(ev.pointerId);
+      document.documentElement.classList.add("crp-resizing");
+      function move(e) {
+        applyWidth(clampWidth(Math.round(window.innerWidth - e.clientX)));
+      }
+      function up(e) {
+        document.documentElement.classList.remove("crp-resizing");
+        storeWidth(clampWidth(Math.round(window.innerWidth - e.clientX)));
+        grip.removeEventListener("pointermove", move);
+        grip.removeEventListener("pointerup", up);
+        grip.removeEventListener("pointercancel", up);
+      }
+      grip.addEventListener("pointermove", move);
+      grip.addEventListener("pointerup", up);
+      grip.addEventListener("pointercancel", up);
+    });
+    grip.addEventListener("dblclick", resetWidth);
+
+    pane.appendChild(grip);
+    pane.appendChild(head);
+    pane.appendChild(bodyEl);
+    document.body.appendChild(pane);
+    document.documentElement.classList.add("crp-open");
+    syncWidth();
+  }
+
+  function closePane() {
+    if (pane && pane.parentNode) pane.parentNode.removeChild(pane);
+    pane = null;
+    document.documentElement.classList.remove("crp-open");
+  }
+
+  function showMessage(text, href) {
+    bodyEl.textContent = "";
+    var div = document.createElement("div");
+    div.className = "crp-msg";
+    var p = document.createElement("p");
+    p.textContent = text;
+    div.appendChild(p);
+    if (href) {
+      var a = document.createElement("a");
+      a.href = href; a.target = "_blank"; a.rel = "noopener";
+      a.textContent = "Open on GitHub instead";
+      div.appendChild(a);
+    }
+    bodyEl.appendChild(div);
+  }
+
+  function showTokenForm(ref, notice) {
+    bodyEl.textContent = "";
+    var div = document.createElement("div");
+    div.className = "crp-msg";
+    var p = document.createElement("p");
+    p.textContent = notice;
+    div.appendChild(p);
+
+    var form = document.createElement("form");
+    form.className = "crp-token";
+    var input = document.createElement("input");
+    input.type = "password";
+    input.placeholder = "github_pat_\u2026";
+    input.setAttribute("aria-label", "GitHub token");
+    input.autocomplete = "off";
+    var btn = document.createElement("button");
+    btn.type = "submit";
+    btn.textContent = "View with token";
+    form.appendChild(input); form.appendChild(btn);
+    form.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var t = input.value.trim();
+      if (!t) return;
+      setToken(t);
+      show(ref);
+    });
+    div.appendChild(form);
+
+    var note = document.createElement("p");
+    note.className = "crp-token-note";
+    note.textContent = "Use a fine-grained personal access token with read-only Contents permission, scoped to this repo. It is kept in sessionStorage for this tab only and never written into the document.";
+    div.appendChild(note);
+
+    var a = document.createElement("a");
+    a.href = ref.href; a.target = "_blank"; a.rel = "noopener";
+    a.textContent = "Open on GitHub instead";
+    div.appendChild(a);
+
+    bodyEl.appendChild(div);
+    input.focus();
+  }
+
+  function renderLines(text, startNum, hitFrom, hitTo, note, path, live) {
+    bodyEl.textContent = "";
+    if (note) {
+      var n = document.createElement("div");
+      n.className = "crp-note";
+      n.textContent = note;
+      bodyEl.appendChild(n);
+    }
+    var lines = text.split("\n");
+    if (lines.length && lines[lines.length - 1] === "") lines.pop();
+    var frag = document.createDocumentFragment();
+    var target = null;
+    var codeEls = [];
+    for (var i = 0; i < lines.length; i++) {
+      var num = startNum + i;
+      var row = document.createElement("div");
+      row.className = "crp-line" + (hitFrom && num >= hitFrom && num <= hitTo ? " crp-hit" : "");
+      if (!target && hitFrom && num >= hitFrom) target = row;
+      var ln = document.createElement("span"); ln.className = "crp-ln"; ln.textContent = String(num);
+      var code = document.createElement("span"); code.className = "crp-code"; code.textContent = lines[i];
+      codeEls.push(code);
+      row.appendChild(ln); row.appendChild(code);
+      frag.appendChild(row);
+    }
+    bodyEl.appendChild(frag);
+    if (target) {
+      var y = target.offsetTop - bodyEl.clientHeight * 0.33;
+      bodyEl.scrollTop = y > 0 ? y : 0;
+    } else {
+      bodyEl.scrollTop = 0;
+    }
+
+    // Upgrade to syntax-highlighted lines in place once highlight.js is available.
+    var lang = langFor(path);
+    if (!lang) return;
+    loadHljs().then(function (hljs) {
+      if (!hljs || !live()) return;
+      if (!hljs.getLanguage(lang)) return;
+      var highlighted;
+      try { highlighted = hljs.highlight(text, { language: lang, ignoreIllegals: true }).value; }
+      catch (e) { return; }
+      var htmlLines = splitHighlighted(highlighted);
+      for (var i = 0; i < codeEls.length && i < htmlLines.length; i++) {
+        codeEls[i].innerHTML = htmlLines[i];
+      }
+    });
+  }
+
+  function apiFetch(ref, token) {
+    var url = "https://api.github.com/repos/" + ref.org + "/" + ref.repo + "/contents/" +
+      encodeURIComponent(ref.path).replace(/%2F/gi, "/") + "?ref=" + encodeURIComponent(ref.commit);
+    return fetch(url, {
+      headers: { "Accept": "application/vnd.github.raw+json", "Authorization": "Bearer " + token }
+    }).then(function (res) {
+      if (!res.ok) { var e = new Error("HTTP " + res.status); e.httpStatus = res.status; throw e; }
+      return res.text();
+    });
+  }
+
+  function show(ref) {
+    ensurePane();
+    var my = ++reqId;
+    titleEl.textContent = "\u200e" + ref.path;
+    titleEl.title = ref.org + "/" + ref.repo + "@" + ref.commit + ":" + ref.path;
+    linesEl.textContent = ref.from ? (ref.to && ref.to !== ref.from ? "L" + ref.from + "\u2013L" + ref.to : "L" + ref.from) : "";
+    ghEl.href = ref.href;
+    var hitFrom = ref.from || 0;
+    var hitTo = ref.to || ref.from || 0;
+    var key = ref.org + "/" + ref.repo + "@" + ref.commit + ":" + ref.path;
+    var rawUrl = "https://raw.githubusercontent.com/" + ref.org + "/" + ref.repo + "/" + ref.commit + "/" + ref.path;
+    var live = function () { return my === reqId && !!pane; };
+    var resolvedSnip = null;
+
+    function done(text, startNum, note) {
+      if (!live()) return;
+      renderLines(text, startNum, hitFrom, hitTo, note, ref.path, live);
+    }
+    function snippetCovers(s) {
+      if (!s) return false;
+      if (!ref.from || s.full) return true;
+      var end = s.start + s.text.split("\n").length - 1;
+      return ref.from >= s.start && hitTo <= end;
+    }
+    function fallbackAfterHttp(status) {
+      if (!live()) return;
+      if (resolvedSnip) {
+        done(resolvedSnip.text, resolvedSnip.start, "Excerpt embedded at generation time \u2014 couldn't fetch the full file (HTTP " + status + ").");
+      } else {
+        showTokenForm(ref, "GitHub returned HTTP " + status + " for this file \u2014 it may be private (paste a token to view it here), or the file/commit may not exist.");
+      }
+    }
+    function fallbackOffline() {
+      if (!live()) return;
+      if (resolvedSnip) {
+        done(resolvedSnip.text, resolvedSnip.start, "Excerpt embedded at generation time \u2014 couldn't reach GitHub.");
+      } else {
+        showMessage("Couldn't reach GitHub \u2014 you may be offline.", ref.href);
+      }
+    }
+    function fetchChain() {
+      if (typeof cache[rawUrl] === "string") { done(cache[rawUrl], 1, null); return; }
+      showMessage("Loading " + ref.path + " @ " + ref.commit.slice(0, 10) + "\u2026", null);
+      fetch(rawUrl).then(function (res) {
+        if (!res.ok) { var e = new Error("HTTP " + res.status); e.httpStatus = res.status; throw e; }
+        return res.text();
+      }).then(function (text) {
+        cache[rawUrl] = text;
+        done(text, 1, null);
+      }).catch(function (err) {
+        if (!live()) return;
+        if (!(err && err.httpStatus)) { fallbackOffline(); return; }
+        var token = getToken();
+        if (!token) { fallbackAfterHttp(err.httpStatus); return; }
+        apiFetch(ref, token).then(function (text) {
+          cache[rawUrl] = text;
+          done(text, 1, null);
+        }).catch(function (err2) {
+          if (!live()) return;
+          if (err2 && (err2.httpStatus === 401 || err2.httpStatus === 403)) {
+            showTokenForm(ref, "GitHub rejected the saved token (HTTP " + err2.httpStatus + "). Paste a token with read access to " + ref.org + "/" + ref.repo + ":");
+          } else if (err2 && err2.httpStatus) {
+            fallbackAfterHttp(err2.httpStatus);
+          } else {
+            fallbackOffline();
+          }
+        });
+      });
+    }
+
+    resolveSnippet(key).then(function (s) {
+      if (!live()) return;
+      resolvedSnip = s;
+      if (snippetCovers(s)) {
+        done(s.text, s.start, s.full ? null : "Excerpt embedded at generation time \u2014 full file on GitHub.");
+        return;
+      }
+      fetchChain();
+    });
+    pane.focus();
+  }
+
+  document.addEventListener("click", function (ev) {
+    if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+    var el = ev.target && ev.target.closest ? ev.target.closest("a[href]") : null;
+    if (!el) return;
+    if (pane && pane.contains(el)) return; // pane-internal links always go to GitHub
+    var m = BLOB.exec(el.href);
+    if (!m) return;
+    ev.preventDefault();
+    show({
+      org: m[1], repo: m[2], commit: m[3], path: m[4],
+      from: m[5] ? parseInt(m[5], 10) : null,
+      to: m[6] ? parseInt(m[6], 10) : null,
+      href: el.href
+    });
+  });
+
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape" && pane) {
+      var inForm = document.activeElement && pane.contains(document.activeElement) && document.activeElement.tagName === "INPUT";
+      if (!inForm) closePane();
+    }
+  });
+
+  window.addEventListener("resize", function () {
+    if (pane) syncWidth();
+  });
+
+  if (typeof window !== "undefined" && window.__crpTest) {
+    window.__crpTest({ splitHighlighted: splitHighlighted, langFor: langFor, clampWidth: clampWidth });
+  }
+})();
+</script>
+
+</body>
+</html>
