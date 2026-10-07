@@ -96,8 +96,9 @@ use crate::server::server_api::harness_support::{
     HarnessSupportClient, ResolvePromptAttachedSkill, ResolvePromptRequest,
 };
 use crate::server::team_scope::RequestTeamScope;
+use crate::terminal::ShellLaunchData;
 use crate::terminal::cli_agent_sessions::plugin_manager::{
-    CliAgentPluginManager, plugin_manager_for,
+    CliAgentPluginManager, PluginInstallError, plugin_manager_for_with_shell,
 };
 use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
@@ -2913,18 +2914,39 @@ impl AgentDriver {
             .await?;
 
         // Install plugins before running the harness command.
-        Self::setup_harness_plugins(harness, events).await?;
+        Self::setup_harness_plugins(harness, foreground, events).await?;
 
         Ok(exit_rx)
     }
 
     async fn setup_harness_plugins(
         harness: &dyn ThirdPartyHarness,
+        foreground: &ModelSpawner<Self>,
         events: &SetupClientEventReporter,
     ) -> Result<(), AgentDriverError> {
         let harness_name = harness.cli_agent().command_prefix();
         let requires_platform_plugin = harness.requires_verified_platform_plugin();
-        let Some(manager) = plugin_manager_for(harness.cli_agent()) else {
+        let shell_launch_data = foreground
+            .spawn(|me, ctx| me.terminal_driver.as_ref(ctx).active_shell_launch_data(ctx))
+            .await?;
+        // Without an explicit shell the plugin manager falls back to a bare `bash`, which on
+        // Windows resolves to the WSL launcher in System32 rather than a usable shell.
+        let (shell_path, shell_type) = match shell_launch_data {
+            Some(ShellLaunchData::Executable {
+                executable_path,
+                shell_type,
+            })
+            | Some(ShellLaunchData::MSYS2 {
+                executable_path,
+                shell_type,
+            }) => (Some(executable_path), Some(shell_type)),
+            Some(ShellLaunchData::WSL { .. })
+            | Some(ShellLaunchData::DockerSandbox { .. })
+            | None => (None, None),
+        };
+        let Some(manager) =
+            plugin_manager_for_with_shell(harness.cli_agent(), shell_path, shell_type, None)
+        else {
             if requires_platform_plugin {
                 return Err(Self::required_platform_plugin_error(
                     harness_name,
@@ -2990,7 +3012,7 @@ impl AgentDriver {
                 if required {
                     return Err(Self::required_platform_plugin_error(
                         harness_name,
-                        format!("Required platform plugin update failed: {e}"),
+                        Self::plugin_failure_reason("Required platform plugin update failed", &e),
                     ));
                 }
                 log::warn!("Platform plugin update failed (continuing): {e}");
@@ -3006,7 +3028,7 @@ impl AgentDriver {
             if required {
                 return Err(Self::required_platform_plugin_error(
                     harness_name,
-                    format!("Required platform plugin installation failed: {e}"),
+                    Self::plugin_failure_reason("Required platform plugin installation failed", &e),
                 ));
             }
             log::warn!("Platform plugin installation failed (continuing): {e}");
@@ -3035,6 +3057,15 @@ impl AgentDriver {
             ));
         }
         Ok(())
+    }
+
+    fn plugin_failure_reason(summary: &str, error: &PluginInstallError) -> String {
+        let log = error.log.trim();
+        if log.is_empty() {
+            format!("{summary}: {error}")
+        } else {
+            format!("{summary}: {error}\n{log}")
+        }
     }
 
     fn required_platform_plugin_error(
