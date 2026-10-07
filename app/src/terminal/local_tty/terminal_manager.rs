@@ -219,7 +219,8 @@ struct PendingShellRecovery {
     replacement_session_id: SessionId,
 }
 
-const REPLACEMENT_SHELL_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(15);
+/// Matches the deadline the cloud agent driver gives the initial shell to bootstrap.
+const REPLACEMENT_SHELL_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Handles created for a local terminal manager and its surface.
 pub struct TerminalManagerInit<S> {

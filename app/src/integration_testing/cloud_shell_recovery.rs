@@ -18,6 +18,7 @@ use crate::ai::agent::{
 use crate::ai::blocklist::{BlocklistAIHistoryModel, ResponseStreamId};
 use crate::ai::llms::LLMId;
 use crate::integration_testing::step::new_step_with_default_assertions;
+use crate::integration_testing::terminal::assert_active_block_received_precmd;
 use crate::integration_testing::view_getters::{single_terminal_view_for_tab, workspace_view};
 use crate::terminal::TerminalView;
 
@@ -197,6 +198,10 @@ pub fn wait_for_agent_command_result(
                     )
                 })
             },
+        )
+        .add_named_assertion(
+            "Agent command returns to the prompt",
+            assert_active_block_received_precmd(tab_index, 0),
         )
 }
 
