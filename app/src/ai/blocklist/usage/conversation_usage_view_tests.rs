@@ -30,9 +30,10 @@ use warpui::platform::WindowStyle;
 
 use super::*;
 use crate::persistence::model::{ModelTokenUsage, PRIMARY_AGENT_CATEGORY};
-use crate::test_util::billing_unit::set_billed_in_dollars;
+use crate::test_util::billing_unit::set_charge_unit;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::ChargeUnit;
 
 fn placeholder_usage_info() -> ConversationUsageInfo {
     ConversationUsageInfo {
@@ -61,6 +62,7 @@ fn placeholder_usage_info() -> ConversationUsageInfo {
 fn initialize_test_app(app: &mut App) {
     initialize_settings_for_tests(app);
     app.add_singleton_model(|_| Appearance::mock());
+    app.add_singleton_model(UserWorkspaces::default_mock);
 }
 
 fn build_view(_ctx: &mut warpui::ViewContext<ConversationUsageView>) -> ConversationUsageView {
@@ -161,15 +163,14 @@ fn custom_endpoint_models_use_the_external_key_icon_bucket() {
     );
 }
 
-/// A viewer whose tier bills in dollars sees each usage figure in dollars where a cents figure
+/// A viewer whose tier charges in cents sees each usage figure in dollars where a cents figure
 /// exists and in credits where none does, independent of the dogfood flag.
 #[test]
-fn usage_summary_follows_the_tier_billing_unit_per_figure() {
+fn usage_summary_follows_the_tier_charge_unit_per_figure() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
         initialize_test_app(&mut app);
-        app.add_singleton_model(UserWorkspaces::default_mock);
-        set_billed_in_dollars(&mut app, true);
+        set_charge_unit(&mut app, ChargeUnit::Cents);
 
         let view = ConversationUsageView::new(
             ConversationUsageInfo {

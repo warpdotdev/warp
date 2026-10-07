@@ -17,8 +17,9 @@ use crate::persistence::model::{
 use crate::server::ids::ServerId;
 use crate::settings::UsageDisplayUnit;
 use crate::test_util::add_window_with_terminal;
-use crate::test_util::billing_unit::set_billed_in_dollars;
+use crate::test_util::billing_unit::set_charge_unit;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
+use crate::workspaces::workspace::ChargeUnit;
 
 fn identity_labels(config_key: &str) -> String {
     config_key.to_string()
@@ -741,15 +742,15 @@ fn conversation_total_text_falls_back_to_the_billed_snapshot() {
     );
 }
 
-/// A viewer whose tier bills in dollars sees the popover's figures in dollars whenever the
+/// A viewer whose tier charges in cents sees the popover's figures in dollars whenever the
 /// conversation has a billed total, even on a client with the dogfood flag off; without one it
 /// falls back to credits.
 #[test]
-fn popover_unit_follows_the_tier_billing_unit() {
+fn popover_unit_follows_the_tier_charge_unit() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
         initialize_app_for_terminal_view(&mut app);
-        set_billed_in_dollars(&mut app, true);
+        set_charge_unit(&mut app, ChargeUnit::Cents);
 
         let mut conversation = AIConversation::new(false, false);
         conversation.set_credits_spent_for_test(2.5);
@@ -772,14 +773,14 @@ fn popover_unit_follows_the_tier_billing_unit() {
     });
 }
 
-/// A viewer whose tier bills in credits keeps today's prod display: credits, even when the
+/// A viewer whose tier charges in credits keeps today's prod display: credits, even when the
 /// server streamed cents for the conversation.
 #[test]
-fn popover_unit_stays_credits_for_credit_billed_viewers_when_flag_is_off() {
+fn popover_unit_stays_credits_for_credit_charged_viewers_when_flag_is_off() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
         initialize_app_for_terminal_view(&mut app);
-        set_billed_in_dollars(&mut app, false);
+        set_charge_unit(&mut app, ChargeUnit::Credits);
 
         let mut conversation = AIConversation::new(false, false);
         conversation.set_charged_usage_for_test(Some(ChargedUsageTotals {

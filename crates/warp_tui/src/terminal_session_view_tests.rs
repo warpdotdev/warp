@@ -26,8 +26,8 @@ use warp::tui_export::{
     AIBlockModel, AIBlockOutputStatus, AIConversationAutoexecuteMode, AIConversationId,
     AIRequestType, AgentViewEntryOrigin, AskUserQuestionItem, AskUserQuestionOption,
     AskUserQuestionType, BlockPadding, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-    ConversationStatus, ConversationUsageTotals, Harness, InputTypeAutoDetectionSource, LLMId,
-    LLMPreferences, LinkedWorkflowData, LongRunningCommandControlState, MessageId,
+    ChargeUnit, ConversationStatus, ConversationUsageTotals, Harness, InputTypeAutoDetectionSource,
+    LLMId, LLMPreferences, LinkedWorkflowData, LongRunningCommandControlState, MessageId,
     OutputStatusUpdateCallback, ParsedSlashCommandInput, PtyIntent, PtyIntentEvent,
     ResolvedTeamScope, ServerOutputId, Session, Shared, SizeInfo, SizeUpdate,
     SlashCommandDataSource as _, SlashCommandKind, TaskId, TranscriptScope, TuiMcpAction,
@@ -2520,7 +2520,8 @@ fn render_usage_footer_row(app: &mut App, totals: ConversationUsageTotals) -> Ve
     app.update(|ctx| {
         let builder = TuiUiBuilder::from_app(ctx);
         let mode = AISettings::as_ref(ctx).usage_display_mode;
-        let usage = UsageToggle::default().render_entry(mode, totals, false, ctx, |_, _| {});
+        let usage =
+            UsageToggle::default().render_entry(mode, totals, ChargeUnit::Credits, ctx, |_, _| {});
         let row = render_status_footer_row(
             FooterSegments {
                 ordered: vec![
@@ -4921,7 +4922,7 @@ fn footer_renders_agent_sections_left_aligned() {
                     has_usage: true,
                     charged_usage: None,
                 },
-                false,
+                ChargeUnit::Credits,
                 ctx,
                 |_, _| {},
             );
@@ -5016,7 +5017,7 @@ fn footer_usage_entry_shows_unknown_cost_even_with_zero_credits() {
                     has_usage: true,
                     charged_usage: None,
                 },
-                false,
+                ChargeUnit::Credits,
                 ctx,
                 |_, _| {},
             );

@@ -25,6 +25,7 @@ use crate::settings::{AISettings, UsageDisplayUnit};
 use crate::themes::theme::{AnsiColorIdentifier, Fill, WarpTheme};
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::ChargeUnit;
 
 const PROVIDER_BUTTON_ICON_SIZE: f32 = 14.;
 const PROVIDER_BUTTON_ICON_TEXT_GAP: f32 = 8.;
@@ -375,19 +376,22 @@ pub fn format_dollars(cost_in_cents: f32) -> String {
     }
 }
 
-/// Resolves the unit a usage figure is displayed in. A viewer whose tier bills usage in dollars
-/// (`Tier.billedInDollars`, via [`UserWorkspaces::is_billed_in_dollars`]) sees dollars whenever
-/// the figure has a cents value, regardless of the client flag or preference; everyone else
-/// follows the dogfood `PricingTransparency` flag and the `usage_display_unit` setting. A cents
-/// value on its own never selects dollars.
+/// Resolves the unit a usage figure is displayed in. A viewer whose tier charges usage in cents
+/// (`Tier.chargeUnit`, via [`UserWorkspaces::charge_unit`]) sees dollars whenever the figure has
+/// a cents value, regardless of the client flag or preference; a tier charging in credits follows
+/// the dogfood `PricingTransparency` flag and the `usage_display_unit` setting. A cents value on
+/// its own never selects dollars.
 pub fn effective_usage_unit(cost_in_cents: Option<f32>, app: &AppContext) -> UsageDisplayUnit {
-    if cost_in_cents.is_some() && UserWorkspaces::as_ref(app).is_billed_in_dollars() {
-        return UsageDisplayUnit::Dollars;
+    match (UserWorkspaces::as_ref(app).charge_unit(), cost_in_cents) {
+        (ChargeUnit::Cents, Some(_)) => UsageDisplayUnit::Dollars,
+        (ChargeUnit::Cents, None) | (ChargeUnit::Credits, Some(_) | None) => {
+            if FeatureFlag::PricingTransparency.is_enabled() {
+                AISettings::as_ref(app).usage_display_unit
+            } else {
+                UsageDisplayUnit::Credits
+            }
+        }
     }
-    if !FeatureFlag::PricingTransparency.is_enabled() {
-        return UsageDisplayUnit::Credits;
-    }
-    AISettings::as_ref(app).usage_display_unit
 }
 
 /// Formats a usage figure in `unit`, with the token count when it is known. Dollars fall back to
