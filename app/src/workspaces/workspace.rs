@@ -236,11 +236,11 @@ pub struct WorkspaceMemberUsageInfo {
     pub is_unlimited: bool,
     pub request_limit: i32,
     pub requests_used_since_last_refresh: i32,
-    /// The dollar value of `request_limit`, in cents, when the server supplied one; never
-    /// supplied when usage is unlimited.
+    /// The member's `includedUsageCents`: their included monthly allowance in US cents, when
+    /// the server sends one; never sent when usage is unlimited.
     pub included_usage_cents: Option<OrderedFloat<f64>>,
-    /// The dollar value of `requests_used_since_last_refresh`, in cents, when the server
-    /// supplied one; never supplied when usage is unlimited.
+    /// The member's `usageCentsUsedSinceLastRefresh`: how much of that allowance they have
+    /// used, in US cents, when the server sends one; never sent when usage is unlimited.
     pub usage_cents_used_since_last_refresh: Option<OrderedFloat<f64>>,
     pub is_request_limit_prorated: bool,
 }
