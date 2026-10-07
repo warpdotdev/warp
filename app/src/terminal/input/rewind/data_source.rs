@@ -10,9 +10,9 @@ use warpui::{AppContext, Entity, SingletonEntity};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentActionResultType, AIAgentExchangeId, AIAgentInput};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::search::SyncDataSource;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
-use crate::search::SyncDataSource;
 use crate::terminal::input::rewind::search_item::RewindSearchItem;
 
 /// Action emitted when a rewind point is selected.
@@ -52,8 +52,8 @@ impl RewindDataSource {
 
         for exchange in exchanges {
             for input in &exchange.input {
-                if let Some(action_result) = input.action_result() {
-                    if let AIAgentActionResultType::RequestFileEdits(
+                if let Some(action_result) = input.action_result()
+                    && let AIAgentActionResultType::RequestFileEdits(
                         RequestFileEditsResult::Success {
                             updated_files,
                             lines_added,
@@ -61,13 +61,12 @@ impl RewindDataSource {
                             ..
                         },
                     ) = &action_result.result
-                    {
-                        total_lines_added += lines_added;
-                        total_lines_removed += lines_removed;
+                {
+                    total_lines_added += lines_added;
+                    total_lines_removed += lines_removed;
 
-                        for updated_file in updated_files {
-                            file_paths.insert(updated_file.file_context.file_name.clone());
-                        }
+                    for updated_file in updated_files {
+                        file_paths.insert(updated_file.file_context.file_name.clone());
                     }
                 }
             }

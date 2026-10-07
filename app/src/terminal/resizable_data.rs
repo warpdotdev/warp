@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use warpui::elements::{resizable_state_handle, ResizableStateHandle};
+use warpui::elements::{ResizableStateHandle, resizable_state_handle};
 use warpui::{Entity, SingletonEntity, WindowId};
 
 use crate::app_state::WindowSnapshot;

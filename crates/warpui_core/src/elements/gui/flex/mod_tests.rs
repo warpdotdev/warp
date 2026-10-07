@@ -1,10 +1,8 @@
-use std::collections::HashSet;
-
 use super::*;
 use crate::elements::{Align, ConstrainedBox, ParentElement, Rect, SavePosition, Stack};
 use crate::geometry::rect::RectF;
 use crate::platform::WindowStyle;
-use crate::{App, Entity, Presenter, TypedActionView, WindowId, WindowInvalidation};
+use crate::{App, Entity, EntityIdSet, Presenter, TypedActionView, WindowId, WindowInvalidation};
 
 type RenderFn = dyn Fn(&AppContext) -> Box<dyn Element> + 'static;
 
@@ -155,7 +153,7 @@ fn test_flex_main_axis_alignment() {
 
         let mut presenter = Presenter::new(window_id);
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).expect("root view should exist"));
         let invalidation = WindowInvalidation {
             updated,
@@ -524,7 +522,7 @@ fn test_flex_cross_axis_alignment() {
 
         let mut presenter = Presenter::new(window_id);
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).expect("root view should exist"));
         let invalidation = WindowInvalidation {
             updated,

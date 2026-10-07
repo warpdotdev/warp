@@ -156,6 +156,17 @@ impl ViewportState {
         self.scroll_left
     }
 
+    /// The current vertical scroll position as a fraction of the scrollable range, in `0..=1`.
+    /// Returns 0 when the content fits within the viewport (no scrollable range).
+    pub fn scroll_fraction(&self, content_height: Pixels) -> f32 {
+        let max_scroll = (content_height - self.height).max(Pixels::zero()).as_f32();
+        if max_scroll <= 0.0 {
+            0.0
+        } else {
+            (self.scroll_top.as_f32() / max_scroll).clamp(0.0, 1.0)
+        }
+    }
+
     /// Vertically scroll by `delta` pixels. Scrolling is capped at `content_height`,
     /// which should be the height of the buffer content.
     ///
@@ -178,6 +189,15 @@ impl ViewportState {
             self.scroll_top = scroll_top;
         }
         changed
+    }
+
+    /// Scroll to the given `fraction` (clamped to `0..=1`) of the scrollable range.
+    ///
+    /// Returns whether or not the view needs to be re-rendered.
+    pub(super) fn scroll_to_fraction(&mut self, fraction: f32, content_height: Pixels) -> bool {
+        let max_scroll = (content_height - self.height).max(Pixels::zero()).as_f32();
+        let scroll_top = (max_scroll * fraction.clamp(0.0, 1.0)).into_pixels();
+        self.scroll_to(scroll_top, content_height)
     }
 
     pub(super) fn scroll_horizontally_to(

@@ -15,7 +15,7 @@ use crate::completer::SessionAgnosticContext;
 use crate::debounce;
 use crate::editor::{EditorView, TextStyleOperation};
 use crate::terminal::input::decorations::{
-    parse_current_commands_and_tokens, ParsedTokenData, ParsedTokensSnapshot,
+    ParsedTokenData, ParsedTokensSnapshot, parse_current_commands_and_tokens,
 };
 
 /// Debounce for syntax highlighting workflow

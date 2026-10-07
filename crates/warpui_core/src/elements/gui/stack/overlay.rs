@@ -55,4 +55,9 @@ impl Element for Overlay {
     fn origin(&self) -> Option<Point> {
         self.child.origin()
     }
+
+    #[cfg(any(test, feature = "test-util"))]
+    fn debug_child_view_ids(&self) -> Vec<crate::EntityId> {
+        self.child.debug_child_view_ids()
+    }
 }

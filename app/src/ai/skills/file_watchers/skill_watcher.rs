@@ -3,14 +3,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ai::skills::{
-    get_provider_for_path, home_skills_path, parse_skill, parse_skill_content_at_location,
-    ParsedSkill, SkillProvider, SkillScope, SKILL_PROVIDER_DEFINITIONS,
+    ParsedSkill, SKILL_PROVIDER_DEFINITIONS, SkillProvider, SkillScope, get_provider_for_path,
+    home_skills_path, parse_skill, parse_skill_content_at_location,
 };
 use async_channel::Sender;
 use futures::future::BoxFuture;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::repository::{Repository, SubscriberId};
-use repo_metadata::{DirectoryWatcher, RepoMetadataModel, RepositoryIdentifier, RepositoryUpdate};
+use repo_metadata::{
+    DirectoryWatcher, RepoMetadataModel, RepositoryIdentifier, RepositoryUpdate,
+    RepositoryWatchMode,
+};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 use watcher::{BulkFilesystemWatcherEvent, HomeDirectoryWatcher, HomeDirectoryWatcherEvent};
@@ -24,11 +27,11 @@ use super::utils::{
     read_skills_from_files,
 };
 use crate::ai::remote_context_files::{
-    read_remote_text_file_contents, REMOTE_CONTEXT_MAX_BATCH_BYTES, REMOTE_CONTEXT_MAX_FILE_BYTES,
+    REMOTE_CONTEXT_MAX_BATCH_BYTES, REMOTE_CONTEXT_MAX_FILE_BYTES, read_remote_text_file_contents,
 };
 use crate::warp_managed_paths_watcher::{
-    filter_repository_update_by_prefix, warp_managed_skill_dirs, WarpManagedPathsWatcher,
-    WarpManagedPathsWatcherEvent,
+    WarpManagedPathsWatcher, WarpManagedPathsWatcherEvent, filter_repository_update_by_prefix,
+    warp_managed_skill_dirs,
 };
 
 #[derive(Debug, PartialEq)]
@@ -314,7 +317,9 @@ impl SkillWatcher {
         let subscriber = Box::new(ProjectSkillSubscriber {
             message_tx: self.repository_message_tx.clone(),
         });
-        let start = repo_handle.update(ctx, |repo, ctx| repo.start_watching(subscriber, ctx));
+        let start = repo_handle.update(ctx, |repo, ctx| {
+            repo.start_watching(RepositoryWatchMode::FilesystemOnly, subscriber, ctx)
+        });
         let subscriber_id = start.subscriber_id;
         self.failed_local_project_watchers
             .insert(repo_path.clone(), (repo_handle.clone(), subscriber_id));
@@ -772,7 +777,9 @@ impl SkillWatcher {
             let subscriber = Box::new(SymlinkSkillSubscriber {
                 message_tx: self.repository_message_tx.clone(),
             });
-            let start = repo_handle.update(ctx, |repo, ctx| repo.start_watching(subscriber, ctx));
+            let start = repo_handle.update(ctx, |repo, ctx| {
+                repo.start_watching(RepositoryWatchMode::FilesystemOnly, subscriber, ctx)
+            });
             let subscriber_id = start.subscriber_id;
             self.symlink_target_watchers
                 .insert(canonical_dir.clone(), (repo_handle.clone(), subscriber_id));
@@ -1018,7 +1025,9 @@ impl SkillWatcher {
             }
         };
 
-        let start = repo_handle.update(ctx, |repo, ctx| repo.start_watching(subscriber, ctx));
+        let start = repo_handle.update(ctx, |repo, ctx| {
+            repo.start_watching(RepositoryWatchMode::FilesystemOnly, subscriber, ctx)
+        });
         let subscriber_id = start.subscriber_id;
 
         // Store the watcher so it can be cleaned up if the directory is deleted.

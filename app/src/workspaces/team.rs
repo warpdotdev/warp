@@ -3,9 +3,9 @@ use std::cmp::Ordering;
 use serde::{Deserialize, Serialize};
 
 use super::workspace::{
-    BillingMetadata, EmailInvite, InviteLinkDomainRestriction, WorkspaceInviteCode,
-    WorkspaceSettings,
+    BillingMetadata, EmailInvite, InviteLinkDomainRestriction, TeamSettings, WorkspaceUid,
 };
+use crate::ai::llms::ModelsByFeature;
 use crate::auth::UserUid;
 use crate::server::ids::ServerId;
 
@@ -14,6 +14,23 @@ pub enum MembershipRole {
     Owner,
     Admin,
     User,
+}
+
+/// Governs which workspace members can discover and join a team. Orthogonal to
+/// workspace-level discoverability. Only `Open` teams support an invite link;
+/// `Private` and `Hidden` teams rely on admin-sent email invites instead.
+#[derive(Clone, Copy, Eq, PartialEq, Debug, Default)]
+pub enum TeamVisibility {
+    #[default]
+    Open,
+    Private,
+    Hidden,
+}
+
+impl TeamVisibility {
+    pub fn supports_invite_link(&self) -> bool {
+        matches!(self, TeamVisibility::Open)
+    }
 }
 
 impl MembershipRole {
@@ -31,6 +48,7 @@ pub struct TeamMember {
     pub uid: UserUid,
     pub email: String,
     pub role: MembershipRole,
+    pub is_disabled: bool,
 }
 
 impl PartialOrd for TeamMember {
@@ -51,6 +69,20 @@ pub struct DiscoverableTeam {
     pub num_members: i64,
     pub name: String,
     pub team_accepting_invites: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct DiscoverableWorkspace {
+    pub workspace_uid: WorkspaceUid,
+    pub name: String,
+    pub open_teams: Vec<DiscoverableTeam>,
+    pub member_count: i64,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct DiscoveryOptions {
+    pub workspaces: Vec<DiscoverableWorkspace>,
+    pub legacy_teams: Vec<DiscoverableTeam>,
 }
 
 #[derive(PartialEq, Eq, Clone)]
@@ -80,38 +112,47 @@ impl TeamDeleteDisabledReason {
 pub struct Team {
     pub uid: ServerId,
     pub name: String,
-    pub invite_code: Option<WorkspaceInviteCode>,
+    /// The team's brand color as a hex string (e.g. "#7c3aed"), if set by the team admin.
+    pub color: Option<String>,
+    pub invite_link: Option<String>,
     pub members: Vec<TeamMember>,
     pub pending_email_invites: Vec<EmailInvite>,
     pub invite_link_domain_restrictions: Vec<InviteLinkDomainRestriction>,
     pub billing_metadata: BillingMetadata,
     pub stripe_customer_id: Option<String>,
-    pub organization_settings: WorkspaceSettings,
+    /// The team's effective settings, sourced from the server's `Team.settings`.
+    pub settings: TeamSettings,
+    pub feature_model_choice: ModelsByFeature,
     /// If the team is eligible for discovery, then show toggle for setting discoverability to the team's admin
     pub is_eligible_for_discovery: bool,
     pub has_billing_history: bool,
+    pub visibility: TeamVisibility,
 }
 
 impl Team {
     pub fn from_local_cache(
         uid: ServerId,
         name: String,
-        workspace_settings: Option<WorkspaceSettings>,
+        settings: Option<TeamSettings>,
         billing_metadata: Option<BillingMetadata>,
         members: Option<Vec<TeamMember>>,
+        feature_model_choice: Option<ModelsByFeature>,
     ) -> Self {
         Self {
             uid,
             name,
-            invite_code: Default::default(),
+            color: None,
+            invite_link: Default::default(),
             members: members.unwrap_or_default(),
             pending_email_invites: Default::default(),
             invite_link_domain_restrictions: Default::default(),
             billing_metadata: billing_metadata.unwrap_or_default(),
             stripe_customer_id: Default::default(),
-            organization_settings: workspace_settings.unwrap_or_default(),
+            settings: settings.unwrap_or_default(),
+            feature_model_choice: feature_model_choice.unwrap_or_default(),
             is_eligible_for_discovery: false,
             has_billing_history: false,
+            visibility: TeamVisibility::default(),
         }
     }
 
@@ -141,7 +182,7 @@ impl Team {
     pub fn get_delete_disabled_reason(
         &self,
         current_user_email: &str,
-        remaining_workspace_credits: i32,
+        remaining_workspace_and_team_credits: i32,
     ) -> Option<TeamDeleteDisabledReason> {
         if self.members.len() > 1
             || self
@@ -154,13 +195,13 @@ impl Team {
         if self.billing_metadata.is_user_on_paid_plan() {
             return Some(TeamDeleteDisabledReason::ActivePaidSubscription);
         }
-        if remaining_workspace_credits > 0 {
+        if remaining_workspace_and_team_credits > 0 {
             return Some(TeamDeleteDisabledReason::RemainingBonusCredits);
         }
         None // No reason found, team can be deleted
     }
 
     pub fn is_custom_llm_enabled(&self) -> bool {
-        self.organization_settings.llm_settings.enabled
+        self.settings.llm_settings.enabled
     }
 }

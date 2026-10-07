@@ -74,6 +74,11 @@ impl Element for Positioned {
     fn as_selectable_element(&self) -> Option<&dyn SelectableElement> {
         Some(self as &dyn SelectableElement)
     }
+
+    #[cfg(any(test, feature = "test-util"))]
+    fn debug_child_view_ids(&self) -> Vec<crate::EntityId> {
+        self.child.debug_child_view_ids()
+    }
 }
 
 impl SelectableElement for Positioned {

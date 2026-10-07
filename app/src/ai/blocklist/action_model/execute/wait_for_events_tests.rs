@@ -1,11 +1,22 @@
-//! Unit tests for the pure helpers in `wait_for_events`.
+//! Unit tests for the pure helpers in `wait_for_events`, plus an App-based
+//! test of the executor's parent-registration wiring.
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use warpui::{App, EntityId};
+
 use super::{
-    watchdog_timeout_for_stamped_seconds, CLIENT_WATCHDOG_SAFETY_MARGIN,
-    DEFAULT_ORCHESTRATED_IDLE_TIMEOUT_SECONDS, HARD_FLOOR,
+    AnyActionExecution, CLIENT_WATCHDOG_SAFETY_MARGIN, DEFAULT_ORCHESTRATED_IDLE_TIMEOUT_SECONDS,
+    ExecuteActionInput, HARD_FLOOR, WaitForEventsExecutor, watchdog_timeout_for_stamped_seconds,
 };
+use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{AIAgentAction, AIAgentActionId, AIAgentActionType};
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
+use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::{AIClient, MockAIClient};
 
 #[test]
 fn watchdog_timeout_constants_match_documented_values() {
@@ -66,4 +77,93 @@ fn watchdog_timeout_preserves_large_stamped_value() {
         watchdog_timeout_for_stamped_seconds(900),
         Duration::from_secs(900) - CLIENT_WATCHDOG_SAFETY_MARGIN
     );
+}
+
+#[test]
+fn execute_invokes_parent_registration_for_child_conversations() {
+    // `execute()` must route into the orchestration streamer.
+    // A child conversation is eligible for wait-time parent registration —
+    // with multi-level orchestration a mid-tree node may have children of
+    // its own — so the streamer issues a `get_ambient_agent_task` fetch,
+    // and the wait still flips the conversation into WaitingForEvents.
+    App::test((), |mut app| async move {
+        let terminal_view_id = EntityId::new();
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+
+        // The registration fetch must be issued for the child (the old code
+        // short-circuited children entirely, i.e. zero fetches). At least
+        // once, not exactly once: the Err return below can also be refetched
+        // by the streamer's restore-retry loop, and whether a retry lands
+        // before test teardown is a platform timing race.
+        let mut mock = MockAIClient::new();
+        mock.expect_get_ambient_agent_task()
+            .times(1..)
+            .returning(|_| Err(anyhow::anyhow!("fetch observed")));
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+        // Held for the lifetime of the test so the mock's times(1..)
+        // expectation is verified on drop; resolved internally by `execute()`
+        // via `OrchestrationEventStreamer::handle`.
+        let _streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let executor = app.add_model(|ctx| WaitForEventsExecutor::new(terminal_view_id, ctx));
+
+        // Child conversation: own run_id plus a parent_agent_id.
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id("550e8400-e29b-41d4-a716-446655440530".to_string());
+        conversation.set_parent_agent_id("550e8400-e29b-41d4-a716-4466554405fc".to_string());
+        let conversation_id = conversation.id();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        let action = AIAgentAction {
+            id: AIAgentActionId::from("wait-action".to_string()),
+            action: AIAgentActionType::WaitForEvents {
+                tool_call_id: "tool-call-1".to_string(),
+                idle_timeout_seconds: 600,
+            },
+            task_id: TaskId::new("wait-task".to_string()),
+            requires_result: false,
+        };
+
+        let execution = executor.update(&mut app, |executor, ctx| {
+            let input = ExecuteActionInput {
+                action: &action,
+                conversation_id,
+            };
+            let result: AnyActionExecution = executor.execute(input, ctx).into();
+            result
+        });
+        assert!(
+            matches!(execution, AnyActionExecution::Async { .. }),
+            "WaitForEvents should yield an async execution"
+        );
+
+        // Drive the spawned registration fetch so the mock observes it; the
+        // times(1..) expectation is verified when `_streamer` drops at test
+        // teardown.
+        for _ in 0..3 {
+            futures_lite::future::yield_now().await;
+        }
+
+        history_model.read(&app, |model, _| {
+            assert!(
+                matches!(
+                    model.conversation(&conversation_id).map(|c| c.status()),
+                    Some(ConversationStatus::WaitingForEvents)
+                ),
+                "execute() must flip the conversation into WaitingForEvents"
+            );
+        });
+    });
 }

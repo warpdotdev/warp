@@ -15,7 +15,6 @@ fn key_with_uid(uid: &str, name: &str, scope: &str, created_at: DateTime<Utc>) -
         expires_at: None,
     }
 }
-
 #[test]
 fn sort_api_keys_sorts_by_name_ascending() {
     let created_at = Utc::now();
@@ -62,7 +61,7 @@ fn resolve_api_key_identifier_prefers_uid_match() {
         resolve_api_key_identifier(&keys, "target")
             .unwrap()
             .unwrap(),
-        keys[0].clone()
+        keys[0]
     );
 }
 
@@ -75,7 +74,7 @@ fn resolve_api_key_identifier_falls_back_to_name_match() {
         resolve_api_key_identifier(&keys, "deploy-key")
             .unwrap()
             .unwrap(),
-        keys[0].clone()
+        keys[0]
     );
 }
 

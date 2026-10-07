@@ -9,7 +9,7 @@ use languages::Language;
 use parking_lot::Mutex;
 use queries::highlight_query::HighlightQuery;
 pub use queries::highlight_query::{ColorMap, TextSlice};
-use queries::indent_query::{indentation_delta, IndentDelta};
+use queries::indent_query::{IndentDelta, indentation_delta};
 use rangemap::{RangeMap, RangeSet};
 use string_offset::{ByteOffset, CharOffset};
 use warp_editor::content::buffer::{Buffer, BufferSnapshot};
@@ -151,11 +151,11 @@ impl SyntaxTreeState {
             .map(|q| q.language.grammar.clone());
 
         // Check cache first
-        if let Ok(cache) = Ref::filter_map(self.highlight_cache.borrow(), |c| c.as_ref()) {
-            if cache.key.matches(buffer_version, &ranges, &language_id) {
-                // Return a borrowed reference to the cached highlights
-                return Some(Ref::map(cache, |c| &c.highlights));
-            }
+        if let Ok(cache) = Ref::filter_map(self.highlight_cache.borrow(), |c| c.as_ref())
+            && cache.key.matches(buffer_version, &ranges, &language_id)
+        {
+            // Return a borrowed reference to the cached highlights
+            return Some(Ref::map(cache, |c| &c.highlights));
         }
 
         // Cache miss - compute highlights
@@ -269,10 +269,10 @@ impl SyntaxTreeState {
     pub fn invalidate_highlight_cache_for_version(&self, version: BufferVersion) {
         // Check if the cache exists and if it matches the version being invalidated
         let mut cache = self.highlight_cache.borrow_mut();
-        if let Some(ref cached) = *cache {
-            if cached.key.version == version {
-                *cache = None;
-            }
+        if let Some(ref cached) = *cache
+            && cached.key.version == version
+        {
+            *cache = None;
         }
     }
 

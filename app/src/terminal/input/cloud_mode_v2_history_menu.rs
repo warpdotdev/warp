@@ -14,6 +14,7 @@ use warpui::{
 use crate::ai::blocklist::agent_view::AgentViewController;
 use crate::search::data_source::{Query, QueryFilter};
 use crate::search::mixer::SearchMixer;
+use crate::terminal::input::InputSuggestionsMode;
 use crate::terminal::input::buffer_model::{InputBufferModel, InputBufferUpdateEvent};
 use crate::terminal::input::inline_history::{
     AcceptHistoryItem, InlineHistoryMenuDataSource, InlineHistoryMenuEvent,
@@ -22,7 +23,6 @@ use crate::terminal::input::inline_menu::{InlineMenuEvent, InlineMenuPositioner,
 use crate::terminal::input::suggestions_mode_model::{
     InputSuggestionsModeEvent, InputSuggestionsModeModel,
 };
-use crate::terminal::input::InputSuggestionsMode;
 use crate::terminal::model::session::active_session::ActiveSession;
 
 const MENU_MAX_HEIGHT: f32 = 168.;

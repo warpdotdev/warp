@@ -16,7 +16,8 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
+use warp_errors::report_error;
 use wgpu::rwh::HasDisplayHandle;
 use wgpu::{AdapterInfo, CompositeAlphaMode};
 #[cfg(windows)]
@@ -32,20 +33,20 @@ use winit::window::{CursorIcon, Fullscreen, ResizeDirection, UserAttentionType, 
 
 use super::app::CustomEvent;
 #[cfg(windows)]
-use super::windows::{get_system_caption_button_bounds, set_window_attribute, WindowAttributeErr};
+use super::windows::{WindowAttributeErr, get_system_caption_button_bounds, set_window_attribute};
 #[cfg(not(target_family = "wasm"))]
 use crate::platform::WindowBounds;
 use crate::platform::{
-    self, Cursor, FullscreenState, GraphicsBackend, TerminationMode, WindowFocusBehavior,
-    WindowOptions, WindowStyle,
+    self, Cursor, FullscreenState, GraphicsBackend, TerminationMode, WindowBackdrop,
+    WindowFocusBehavior, WindowOptions, WindowStyle,
 };
 use crate::rendering::wgpu::{
-    adapter_has_rendering_offset_bug, from_wgpu_backend, renderer, to_wgpu_backend, Renderer,
-    Resources,
+    Renderer, Resources, adapter_has_rendering_offset_bug, from_wgpu_backend, renderer,
+    to_wgpu_backend,
 };
 use crate::rendering::{GPUPowerPreference, GlyphConfig, OnGPUDeviceSelected};
 use crate::windowing::WindowCallbacks;
-use crate::{fonts, geometry, DisplayId, DisplayIdx, OptionalPlatformWindow, Scene, WindowId};
+use crate::{DisplayId, DisplayIdx, OptionalPlatformWindow, Scene, WindowId, fonts, geometry};
 
 /// The inner margin from the edges of the window within which the mouse can drag to resize the
 /// window. Note that this value is a logical size, not a physical size. It can be converted to a
@@ -64,6 +65,16 @@ pub(in crate::windowing::winit) const MIN_WINDOW_SIZE: LogicalSize<f64> = Logica
 
 lazy_static! {
     static ref DEFAULT_WINDOW_SIZE: Vector2F = Vector2F::new(1280., 800.);
+}
+
+#[cfg(windows)]
+fn winit_backdrop(backdrop: WindowBackdrop) -> BackdropType {
+    match backdrop {
+        WindowBackdrop::None => BackdropType::None,
+        WindowBackdrop::Mica => BackdropType::MainWindow,
+        WindowBackdrop::Acrylic => BackdropType::TransientWindow,
+        WindowBackdrop::MicaAlt => BackdropType::TabbedWindow,
+    }
 }
 
 pub(crate) struct WindowManager {
@@ -130,7 +141,7 @@ impl WindowManager {
             x11_manager: match x11::X11Manager::new() {
                 Ok(x11_manager) => Some(x11_manager),
                 Err(err) => {
-                    log::error!("error creating connection to Xorg server: {err:?}");
+                    report_error!(err.context("error creating connection to Xorg server"));
                     None
                 }
             },
@@ -234,11 +245,11 @@ impl platform::WindowManager for WindowManager {
 
         // Finally, go back and focus the last active window to make sure it ends up having the
         // focus.
-        if let Some(window_id) = last_active_window {
-            if let Some(window) = self.windows.get(&window_id) {
-                window.focus();
-                next_active_window = Some(window_id);
-            }
+        if let Some(window_id) = last_active_window
+            && let Some(window) = self.windows.get(&window_id)
+        {
+            window.focus();
+            next_active_window = Some(window_id);
         }
 
         if let Some(window_id) = next_active_window {
@@ -284,23 +295,6 @@ impl platform::WindowManager for WindowManager {
     fn set_all_windows_background_blur_radius(&self, _blur_radius_pixels: u8) {
         // unsupported on Linux and Windows
         // https://docs.rs/winit/latest/winit/window/struct.Window.html#method.set_blur
-    }
-
-    #[cfg_attr(not(windows), allow(unused_variables))]
-    fn set_all_windows_background_blur_texture(&self, use_blur_texture: bool) {
-        #[cfg(windows)]
-        {
-            let new_backdrop_texture = if use_blur_texture {
-                BackdropType::TransientWindow
-            } else {
-                BackdropType::None
-            };
-            for window in self.windows.values() {
-                if let Some(inner) = window.inner.borrow().as_ref() {
-                    inner.window.set_system_backdrop(new_backdrop_texture);
-                }
-            }
-        }
     }
 
     fn set_window_title(&self, window_id: WindowId, title: &str) {
@@ -440,10 +434,10 @@ impl platform::WindowManager for WindowManager {
         // Skip when a PositionedNoFocus (drag preview) window is present: it
         // was moved to the front on creation and must stay there so that
         // `cross_window_attach_target` can find it at index 0.
-        if !window_ordering.has_positioned_no_focus_window() {
-            if let Some(active_window_id) = self.active_window_id() {
-                window_ordering.move_to_front(active_window_id);
-            }
+        if !window_ordering.has_positioned_no_focus_window()
+            && let Some(active_window_id) = self.active_window_id()
+        {
+            window_ordering.move_to_front(active_window_id);
         }
         window_ordering.front_to_back_window_ids.clone()
     }
@@ -595,11 +589,6 @@ impl platform::WindowManager for IntegrationTestWindowManager {
     fn set_all_windows_background_blur_radius(&self, blur_radius_pixels: u8) {
         self.window_manager
             .set_all_windows_background_blur_radius(blur_radius_pixels)
-    }
-
-    fn set_all_windows_background_blur_texture(&self, use_blur_texture: bool) {
-        self.window_manager
-            .set_all_windows_background_blur_texture(use_blur_texture)
     }
 
     fn set_window_title(&self, window_id: WindowId, title: &str) {
@@ -843,7 +832,7 @@ impl Window {
         }
 
         let Some(scene) = scene.clone() else {
-            log::error!(
+            report_error!(
                 "A redraw of the window was requested but no scene was available to render"
             );
             return Ok(());
@@ -946,7 +935,7 @@ impl Window {
         {
             Ok(resources) => resources,
             Err(err) => {
-                log::error!("{err:#}");
+                report_error!(err.context("Failed to create window resources"));
                 return;
             }
         };
@@ -1352,12 +1341,8 @@ fn create_window(
 
         use winit::platform::windows::{IconExtWindows, WindowAttributesExtWindows};
 
-        let background_texture = if window_options.background_blur_texture {
-            BackdropType::TransientWindow
-        } else {
-            BackdropType::None
-        };
-        window_attributes = window_attributes.with_system_backdrop(background_texture);
+        window_attributes = window_attributes
+            .with_system_backdrop(winit_backdrop(window_options.background_backdrop));
 
         // On Windows, don't set the window to be visible until after it has been marked as
         // "cloaked". Winit doesn't support initializing a window as cloaked--so we temporarily set
@@ -1453,14 +1438,8 @@ fn create_window(
 
     #[cfg(target_os = "linux")]
     if let Ok(window) = created_window.as_ref() {
-        use wgpu::rwh::RawDisplayHandle;
-        let is_x11 = matches!(
-            window_target.display_handle().map(|dh| dh.as_raw()),
-            Ok(RawDisplayHandle::Xlib(_)) | Ok(RawDisplayHandle::Xcb(_))
-        );
-        if is_x11 {
-            window.set_ime_allowed(true);
-        }
+        window.set_ime_allowed(true);
+        log::debug!("IME allowed on newly created Linux window");
     }
 
     #[cfg(windows)]
@@ -1473,7 +1452,7 @@ fn create_window(
             // This differs from `visible` which is not composited.
             // The window is uncloaked after the drawing the first frame.
             if let Err(e) = window.set_cloaked(true) {
-                log::error!("Failed to mark window as cloaked: {e:#?}");
+                report_error!(anyhow::Error::new(e).context("Failed to mark window as cloaked"));
             };
 
             if let Some(adjustment) = maybe_adjust_window_vertically(window) {
@@ -1511,7 +1490,9 @@ fn create_window(
                         log::info!("Rounded window corners not supported on Windows 10");
                     }
                     _ => {
-                        log::error!("Error setting rounded window corners: {err:#}");
+                        report_error!(
+                            anyhow::Error::new(err).context("Error setting rounded window corners")
+                        );
                     }
                 }
             }
@@ -1605,6 +1586,16 @@ impl crate::platform::Window for Window {
                     .or(window.is_maximized().then_some(FullscreenState::Maximized))
             })
             .unwrap_or_default()
+    }
+
+    #[cfg_attr(not(windows), allow(unused_variables))]
+    fn set_background_backdrop(&self, backdrop: WindowBackdrop) {
+        #[cfg(windows)]
+        {
+            if let Some(inner) = self.inner.borrow().as_ref() {
+                inner.window.set_system_backdrop(winit_backdrop(backdrop));
+            }
+        }
     }
 
     fn supports_transparency(&self) -> bool {

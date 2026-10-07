@@ -58,12 +58,12 @@ Scripting has a single setting:
 - **Enabled** (default on internal dogfood channels): same-user processes may request exact-action credentials and send control requests.
 - **Disabled** (default on Stable, Preview, OSS, and Integration channels): no credentials are issued, no control requests are accepted, discovery records contain no actionable endpoint.
 The authoritative value is stored in the most secure local storage available:
-- **macOS:** Keychain, constrained to Warp-signed code where the platform supports it.
+- **macOS:** Keychain via the platform Security framework generic-password API. This is same-user secret storage that keeps the value out of `settings.toml` and cloud sync; it is **not** currently constrained to Warp-signed code through a Keychain access-control list.
 - **Linux:** Platform secret service where available; owner-only file fallback with the weaker same-user protection explicitly documented.
 The setting is:
 - Local-only: never synced through Settings Sync, Warp Drive, or server-backed preferences.
 - Private: never appears in `settings.toml`, generated schemas, or any user-editable settings surface.
-- App-controlled: only the running Warp app through Settings > Scripting can change it. `warpctrl`, shell scripts, config files, registry edits, `defaults write`, and direct protocol requests cannot enable or change it.
+- App-mediated: the supported way to change it is Settings > Scripting in the running Warp app. `warpctrl`, config files, registry edits, `defaults write`, and direct protocol requests cannot enable or change it. Same-user software that can already use the user's Keychain or secret-service session may still be able to read or write the underlying item; that is residual same-user risk, not a hard signed-code boundary.
 - Channel-default: when no valid protected value is available, the mode defaults to enabled on internal dogfood channels (Dev, Local) and disabled on all other channels.
 Disabling Scripting immediately prevents new credential issuance and invalidates outstanding credentials. The control listener rejects all requests with `local_control_disabled`.
 ## Discovery registry
@@ -118,7 +118,8 @@ The broker authenticates the OS user, not the calling application. Any same-user
 - Short expiry limits the window for credential reuse.
 - Normal Warp close behavior preserves existing warnings for close actions.
 - No `input.run` action exists, so `warpctrl` cannot be used to execute terminal commands.
-- Protected enablement prevents silent activation of the control surface.
+- `tab.create` / `window.create` do not accept a `shell` parameter. New terminals use the app's default shell selection; local control cannot choose or spawn an arbitrary shell binary.
+- Protected enablement prevents silent activation of the control surface through ordinary config surfaces; it is not a signed-code isolation boundary against same-user Keychain or secret-service access.
 - App-side bridge enforcement re-checks every credential on every request.
 These mitigations route operations through intentional flows. They do not guarantee that arbitrary same-user software cannot cause Warp-visible actions.
 ## Transport authentication
@@ -159,6 +160,7 @@ The catalog contains exactly 84 actions. The following families and actions are 
 - The entire Drive family (all `drive.*` actions).
 - The entire History family (`history.list`).
 - `input.get`, `input.clear`, `input.mode.set`, `input.run`, and any form of terminal command execution.
+- `shell` selection on `tab.create` / `window.create`, and any local-control path that spawns a caller-chosen shell binary.
 - `file.list` and any local file content operations beyond the `file.open` app-state intent.
 - Accepted-command submission and agent-prompt submission.
 - Debug, crash, heap-dump, token-copying, and developer-only helpers.
@@ -188,7 +190,7 @@ The app never downgrades these failures into broader default actions.
 ## Platform requirements
 ### macOS
 - Discovery directory and records: owner-only permissions.
-- Authoritative Scripting value: Keychain, constrained to Warp-signed code.
+- Authoritative Scripting value: Keychain generic-password item (same-user secret storage; not currently ACL-constrained to Warp-signed code).
 - Broker: Unix-domain socket with peer credential checks.
 ### Linux
 - Discovery directory and records: owner-only permissions (`0700`/`0600`).

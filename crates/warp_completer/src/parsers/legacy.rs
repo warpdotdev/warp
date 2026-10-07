@@ -4,13 +4,13 @@ use itertools::Itertools;
 use warp_command_signatures::{DynamicCompletionData, IsArgumentOptional, Opt, Signature};
 
 use super::hir::{Command, Expression, ShellCommand};
-use super::{parse_unclassified_command, LiteCommand, ParseError};
+use super::{LiteCommand, ParseError, parse_unclassified_command};
 use crate::completer::TopLevelCommandCaseSensitivity;
 use crate::meta::{HasSpan, Span, Spanned, SpannedItem};
 use crate::parsers::hir::Flags;
 use crate::parsers::{
-    parse_arg, parse_dollar_expr, ArgumentError, FlagArgumentsCardinality, FlagSignature,
-    ParsedExpression, ParsedToken,
+    ArgumentError, FlagArgumentsCardinality, FlagSignature, ParsedExpression, ParsedToken,
+    parse_arg, parse_dollar_expr,
 };
 use crate::signatures::CommandRegistry;
 
@@ -98,10 +98,25 @@ fn parse_internal_command(
     let mut named = Flags::new();
     let mut positional = vec![];
     let mut error = None;
+    let mut options_terminated = false;
     idx += 1; // Start where the arguments begin
 
     while idx < lite_cmd.parts.len() {
-        if lite_cmd.parts[idx].item.starts_with('-') && lite_cmd.parts[idx].item.len() > 1 {
+        let token = &lite_cmd.parts[idx];
+        let is_completed_options_terminator = !options_terminated
+            && !signature.parser_directives.flags_are_posix_noncompliant
+            && token.item == "--"
+            && (idx + 1 < lite_cmd.parts.len() || lite_cmd.post_whitespace.is_some());
+        if is_completed_options_terminator {
+            options_terminated = true;
+            idx += 1;
+            continue;
+        }
+
+        if !options_terminated
+            && lite_cmd.parts[idx].item.starts_with('-')
+            && lite_cmd.parts[idx].item.len() > 1
+        {
             let (named_types, err) =
                 get_flag_signature_spec(signature, &internal_command, &lite_cmd.parts[idx]);
 
@@ -248,6 +263,12 @@ fn parse_internal_command(
         } else {
             let expression = if lite_cmd.parts[idx].item.starts_with('$') {
                 parse_dollar_expr(&lite_cmd.parts[idx])
+            } else if options_terminated {
+                ParsedExpression::new(
+                    Expression::Literal,
+                    ParsedToken(lite_cmd.parts[idx].item.clone()),
+                )
+                .spanned(lite_cmd.parts[idx].span)
             } else {
                 ParsedExpression::new(
                     Expression::Unknown,
@@ -299,6 +320,7 @@ fn parse_internal_command(
     if !positional.is_empty() {
         internal_command.args.positionals = Some(positional);
     }
+    internal_command.args.options_terminated = options_terminated;
 
     (internal_command, error)
 }

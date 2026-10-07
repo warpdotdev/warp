@@ -2,14 +2,14 @@
 name: test-warp-ui
 description: >
   Guides testing Warp UI features and changes using the computer use tool.
-  Use this skill only when the computer_use tool is available to the agent.
+  Use this skill only when computer-use testing was requested (explicit request or accepted offer) and the computer_use tool is available to the agent.
   Covers launching Warp and verifying UI behavior.
 user-invocable: false
 ---
 
 # Computer Use for Warp UI Testing
 
-Use the `computer_use` tool to visually test that Warp looks and behaves as intended after UI changes.
+Use the `computer_use` tool to visually test that Warp looks and behaves as intended after UI changes, when computer-use testing was requested.
 
 ## Running Warp
 
@@ -32,6 +32,15 @@ Always pass `--bin warp` explicitly. That target builds the internal (dogfood) c
 Authenticating this way starts the app directly without interactive login prompts.
 
 Initial builds may take several minutes; subsequent incremental builds are faster.
+
+### Verify the launch is authenticated
+
+After launching, confirm both of the following before testing:
+
+- Warp is **authenticated** — it opens straight to the terminal, NOT the logged-out onboarding/sign-in screen.
+- The `cargo run` stderr/terminal output does **not** contain the substring `provided but IGNORED`.
+
+If that warning appears (or the app is logged out), the wrong binary/channel was launched — stop and relaunch with `cargo run --bin warp`.
 
 ## Testing Workflow
 

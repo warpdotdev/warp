@@ -1,7 +1,7 @@
 use settings::Setting as _;
 use warpui::integration::{AssertionCallback, AssertionOutcome};
 use warpui::units::{IntoPixels, Lines};
-use warpui::{async_assert, async_assert_eq, AppContext, SingletonEntity, WindowId};
+use warpui::{AppContext, SingletonEntity, WindowId, async_assert, async_assert_eq};
 
 use crate::integration_testing::terminal::util::ExpectedOutput;
 use crate::integration_testing::view_getters::{
@@ -11,7 +11,7 @@ use crate::settings::InputModeSettings;
 use crate::terminal::block_list_viewport::ViewportState;
 use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::view::BlockVisibilityMode;
-use crate::terminal::{heights_approx_eq, TerminalModel, TerminalView};
+use crate::terminal::{TerminalModel, TerminalView, heights_approx_eq};
 
 /// Specifies a block position either directly by index, or by whether it's first or
 /// last

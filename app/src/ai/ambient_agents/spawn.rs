@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
-use futures::{select, FutureExt, Stream, StreamExt};
+use futures::{FutureExt, Stream, StreamExt, select};
 use session_sharing_protocol::common::SessionId;
 
 use super::{AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState};
@@ -14,6 +14,7 @@ use crate::server::retry_strategies::with_bounded_retry;
 use crate::server::server_api::ai::{
     AIClient, RunFollowupRequest, SpawnAgentRequest, TaskStatusMessage,
 };
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::shared_session;
 
 /// How long to poll for the agent to be ready.
@@ -101,6 +102,7 @@ enum RunPollMode {
 /// If `timeout` is `None`, there is no timeout.
 pub fn spawn_task(
     request: SpawnAgentRequest,
+    team_scope: RequestTeamScope,
     ai_client: Arc<dyn AIClient>,
     timeout: Option<Duration>,
 ) -> impl Stream<Item = Result<AmbientAgentEvent, anyhow::Error>> {
@@ -108,7 +110,7 @@ pub fn spawn_task(
     // See https://github.com/tokio-rs/async-stream/issues/63.
     async_stream::stream! {
         // First, spawn the ambient agent task.
-        let (task_id, run_id, at_capacity) = match ai_client.spawn_agent(request).await {
+        let (task_id, run_id, at_capacity) = match ai_client.spawn_agent(request, team_scope).await {
             Ok(response) => (response.task_id, response.run_id, response.at_capacity),
             Err(err) => {
                 yield Err(err);
@@ -116,6 +118,31 @@ pub fn spawn_task(
             },
         };
 
+        let mut stream = Box::pin(monitor_spawned_task(
+            task_id,
+            run_id,
+            at_capacity,
+            ai_client,
+            timeout,
+        ));
+        while let Some(event) = stream.next().await {
+            yield event;
+        }
+    }
+}
+
+/// Monitors an ambient task that has already been created.
+///
+/// This preserves the event contract of [`spawn_task`] while allowing callers
+/// that own task creation to avoid issuing a second spawn request.
+pub fn monitor_spawned_task(
+    task_id: AmbientAgentTaskId,
+    run_id: String,
+    at_capacity: bool,
+    ai_client: Arc<dyn AIClient>,
+    timeout: Option<Duration>,
+) -> impl Stream<Item = Result<AmbientAgentEvent, anyhow::Error>> {
+    async_stream::stream! {
         yield Ok(AmbientAgentEvent::TaskSpawned { task_id, run_id });
 
         // Emit AtCapacity event if the server indicates capacity limit reached.
@@ -275,8 +302,8 @@ fn poll_run_until_joinable_session(
                                 return;
                             }
 
-                            if task.state == AmbientAgentTaskState::InProgress {
-                                if let Some(session_join_info) = SessionJoinInfo::from_task(&task) {
+                            if task.state == AmbientAgentTaskState::InProgress
+                                && let Some(session_join_info) = SessionJoinInfo::from_task(&task) {
                                     let has_new_session = match &mode {
                                         RunPollMode::InitialRun
                                         | RunPollMode::Followup {
@@ -296,7 +323,6 @@ fn poll_run_until_joinable_session(
                                         return;
                                     }
                                 }
-                            }
                         }
                         Err(err) => {
                             yield Err(err);

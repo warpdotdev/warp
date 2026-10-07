@@ -3,6 +3,7 @@ pub(super) mod aws_bedrock_credentials_error;
 pub(crate) mod code_diff_view;
 pub(crate) mod create_environment_modal;
 pub(crate) mod create_or_edit_document;
+pub(super) mod gemini_enterprise_credentials_error;
 pub(crate) mod host_picker;
 pub(crate) mod inline_action_header;
 pub(crate) mod inline_action_icons;

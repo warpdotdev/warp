@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 
+use async_tungstenite::WebSocketStream;
 use async_tungstenite::tokio::{
-    client_async_tls_with_connector_and_config, connect_async_with_tls_connector, ClientStream,
+    ClientStream, client_async_tls_with_connector_and_config, connect_async_with_tls_connector,
 };
 use async_tungstenite::tungstenite::client::IntoClientRequest;
-use async_tungstenite::WebSocketStream;
 use futures::{Sink, Stream};
 use futures_util::StreamExt as _;
 use rustls_platform_verifier::ConfigVerifierExt;

@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use onboarding::components::onboarding_callout::{
     Button as CalloutButton, OnboardingCallout, Options as CalloutOptions, Params as CalloutParams,
     StepStatus,
@@ -13,7 +13,7 @@ use warpui_core::color::ColorU;
 use warpui_core::elements::{Rect, Stack};
 use warpui_core::fonts::{Cache, FamilyId, Weight};
 use warpui_core::prelude::*;
-use warpui_core::{platform, AddWindowOptions, AssetProvider, ModelContext};
+use warpui_core::{AddWindowOptions, AssetProvider, ModelContext, platform};
 
 #[derive(Clone, Copy, RustEmbed)]
 #[folder = "../../app/assets"]

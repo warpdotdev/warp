@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use super::*;
 use crate::core::View;
 use crate::elements::{ConstrainedBox, Rect, Scrollable, ScrollbarWidth};
@@ -7,7 +5,8 @@ use crate::platform::WindowStyle;
 use crate::prelude::Fill;
 use crate::units::{IntoPixels, Pixels};
 use crate::{
-    App, AppContext, Entity, Event, Presenter, TypedActionView, ViewContext, WindowInvalidation,
+    App, AppContext, Entity, EntityIdSet, Event, Presenter, TypedActionView, ViewContext,
+    WindowInvalidation,
 };
 
 /// Test context that captures scroll position information.
@@ -98,7 +97,7 @@ fn test_scroll_preservation_adjusts_position_when_item_above_grows() {
             let mut presenter = Presenter::new(window_id);
 
             // First layout pass to measure all items
-            let mut updated = HashSet::new();
+            let mut updated = EntityIdSet::default();
             updated.insert(root_view_id);
             let invalidation = WindowInvalidation {
                 updated: updated.clone(),
@@ -118,7 +117,7 @@ fn test_scroll_preservation_adjusts_position_when_item_above_grows() {
         let root_view_id = app.root_view_id(window_id).unwrap();
         app.update(move |ctx| {
             let mut presenter = Presenter::new(window_id);
-            let mut updated = HashSet::new();
+            let mut updated = EntityIdSet::default();
             updated.insert(root_view_id);
             let invalidation = WindowInvalidation {
                 updated,
@@ -148,7 +147,7 @@ fn test_scroll_preservation_adjusts_position_when_item_above_grows() {
         let root_view_id = app.root_view_id(window_id).unwrap();
         app.update(move |ctx| {
             let mut presenter = Presenter::new(window_id);
-            let mut updated = HashSet::new();
+            let mut updated = EntityIdSet::default();
             updated.insert(root_view_id);
             let invalidation = WindowInvalidation {
                 updated,
@@ -186,7 +185,7 @@ fn test_scroll_preservation_no_adjustment_when_item_below_changes() {
         // First layout pass
         app.update(move |ctx| {
             let mut presenter = Presenter::new(window_id);
-            let mut updated = HashSet::new();
+            let mut updated = EntityIdSet::default();
             updated.insert(root_view_id);
             let invalidation = WindowInvalidation {
                 updated,
@@ -206,7 +205,7 @@ fn test_scroll_preservation_no_adjustment_when_item_below_changes() {
         let root_view_id = app.root_view_id(window_id).unwrap();
         app.update(move |ctx| {
             let mut presenter = Presenter::new(window_id);
-            let mut updated = HashSet::new();
+            let mut updated = EntityIdSet::default();
             updated.insert(root_view_id);
             let invalidation = WindowInvalidation {
                 updated,
@@ -231,7 +230,7 @@ fn test_scroll_preservation_no_adjustment_when_item_below_changes() {
         let root_view_id = app.root_view_id(window_id).unwrap();
         app.update(move |ctx| {
             let mut presenter = Presenter::new(window_id);
-            let mut updated = HashSet::new();
+            let mut updated = EntityIdSet::default();
             updated.insert(root_view_id);
             let invalidation = WindowInvalidation {
                 updated,
@@ -307,7 +306,7 @@ fn test_list_state_without_scroll_preservation_backward_compatible() {
         // Layout should work without scroll preservation
         app.update(move |ctx| {
             let mut presenter = Presenter::new(window_id);
-            let mut updated = HashSet::new();
+            let mut updated = EntityIdSet::default();
             updated.insert(root_view_id);
             let invalidation = WindowInvalidation {
                 updated,
@@ -333,7 +332,7 @@ fn test_list_state_without_scroll_preservation_backward_compatible() {
         let root_view_id = app.root_view_id(window_id).unwrap();
         app.update(move |ctx| {
             let mut presenter = Presenter::new(window_id);
-            let mut updated = HashSet::new();
+            let mut updated = EntityIdSet::default();
             updated.insert(root_view_id);
             let invalidation = WindowInvalidation {
                 updated,
@@ -420,7 +419,7 @@ fn test_scroll_sender_receives_events_on_scroll() {
             let presenter = presenter.clone();
             move |ctx| {
                 // Layout the list so the element has a size and can handle events.
-                let mut updated = HashSet::new();
+                let mut updated = EntityIdSet::default();
                 updated.insert(root_view_id);
                 let invalidation = WindowInvalidation {
                     updated,

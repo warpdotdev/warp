@@ -1,4 +1,4 @@
-use super::{Priority, MAX_PRIORITY, MIN_PRIORITY};
+use super::{MAX_PRIORITY, MIN_PRIORITY, Priority};
 
 #[test]
 fn test_priority_normalization() {

@@ -7,11 +7,11 @@ use futures::io::BufReader;
 use futures::{AsyncRead, AsyncWrite};
 use warpui_core::r#async::executor::Background;
 
+use super::Service;
 use super::protocol::{
-    receive_message, send_message, ConnectionAddress, ProtocolError, RequestId, Response,
+    ConnectionAddress, ProtocolError, RequestId, Response, receive_message, send_message,
 };
 use super::service::service_id;
-use super::Service;
 use crate::platform::client::connect_client;
 use crate::protocol::Request;
 

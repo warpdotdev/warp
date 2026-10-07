@@ -15,9 +15,9 @@ use gemini::GeminiPluginManager;
 use opencode::OpenCodePluginManager;
 
 use crate::features::FeatureFlag;
+use crate::terminal::CLIAgent;
 use crate::terminal::model::session::LocalCommandExecutor;
 use crate::terminal::shell::ShellType;
-use crate::terminal::CLIAgent;
 
 /// Distinguishes whether the plugin instructions modal should show install or update steps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +51,7 @@ pub(crate) struct PluginInstructions {
 /// Error returned when plugin installation fails.
 /// Carries both a short user-facing message (for the toast) and a detailed
 /// command log (for the log file the user can inspect).
+#[derive(Debug)]
 pub(crate) struct PluginInstallError {
     /// Short description shown in the toast notification.
     pub message: String,
@@ -63,6 +64,8 @@ impl fmt::Display for PluginInstallError {
         f.write_str(&self.message)
     }
 }
+
+impl std::error::Error for PluginInstallError {}
 
 impl From<io::Error> for PluginInstallError {
     fn from(err: io::Error) -> Self {
@@ -285,15 +288,20 @@ pub(crate) fn plugin_manager_for_with_shell(
         CLIAgent::OpenCode
         | CLIAgent::Codex
         | CLIAgent::Gemini
+        | CLIAgent::Grok
         | CLIAgent::Amp
         | CLIAgent::Droid
         | CLIAgent::Copilot
         | CLIAgent::Pi
+        | CLIAgent::OhMyPi
         | CLIAgent::Auggie
         | CLIAgent::CursorCli
         | CLIAgent::Hermes
+        | CLIAgent::Kiro
         | CLIAgent::Goose
         | CLIAgent::Vibe
+        | CLIAgent::Antigravity
+        | CLIAgent::WarpTui
         | CLIAgent::Unknown => None,
     }
 }

@@ -2,37 +2,16 @@ use std::future::Future;
 #[cfg(feature = "local_fs")]
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 #[cfg(not(target_family = "wasm"))]
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 #[cfg(not(target_family = "wasm"))]
-use crc::{Crc, CRC_32_ISCSI};
-use thiserror::Error;
-use warp_core::errors::{register_error, ErrorExt};
+use crc::{CRC_32_ISCSI, Crc};
+pub use warp_server_client::HttpStatusError;
 
 #[cfg(feature = "local_fs")]
 use super::ai::FileArtifactUploadTargetInfo;
 use super::harness_support::{UploadFieldValue, UploadTarget};
-
-/// Typed error for HTTP-backed operations so downstream classifiers (e.g. the agent-SDK
-/// retry helper) can decide transient vs permanent failures without string-parsing the
-/// anyhow Display.
-///
-/// Emitted as the source cause of an upload failure; callers typically also attach a
-/// human-facing context message via `.context(...)` so `err.to_string()` remains useful.
-#[derive(Debug, Error)]
-#[error("HTTP request failed with status {status}: {body}")]
-pub struct HttpStatusError {
-    pub status: u16,
-    pub body: String,
-}
-
-impl ErrorExt for HttpStatusError {
-    fn is_actionable(&self) -> bool {
-        !matches!(self.status, 408 | 429)
-    }
-}
-register_error!(HttpStatusError);
 
 #[cfg(not(target_family = "wasm"))]
 pub(crate) static CRC32C: Crc<u32> = Crc::<u32>::new(&CRC_32_ISCSI);
@@ -266,10 +245,7 @@ async fn ensure_upload_succeeded(
 
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
-    let status_err = HttpStatusError {
-        status: status.as_u16(),
-        body: body.clone(),
-    };
+    let status_err = HttpStatusError::new(status.as_u16(), body.clone());
     Err(anyhow::Error::new(status_err).context(format!(
         "{} failed with status {status}: {body}",
         error_context.failure

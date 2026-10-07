@@ -166,10 +166,12 @@ fn create_finished_event_from_conversation(conversation: &AIConversation) -> Res
     let usage_metadata = Some(
         api_response_event::stream_finished::ConversationUsageMetadata {
             context_window_usage: conversation.context_window_usage(),
+            total_input_tokens: 0,
             credits_spent: conversation.inference_credits_spent(),
+            #[allow(deprecated)]
             platform_credits_spent: conversation.platform_credits_spent(),
             summarized: conversation.was_summarized(),
-            total_input_tokens: 0,
+            total_charges: None,
             #[allow(deprecated)]
             token_usage: conversation
                 .token_usage()
@@ -209,7 +211,9 @@ fn create_finished_event_from_conversation(conversation: &AIConversation) -> Res
                 conversation_usage_metadata: usage_metadata,
                 token_usage: vec![],
                 should_refresh_model_config: false,
+                #[allow(deprecated)]
                 request_cost: None,
+                request_charges: None,
             },
         )),
     }

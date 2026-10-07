@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use async_channel::Sender;
 use repo_metadata::repository::{RepositorySubscriber, SubscriberId};
-use repo_metadata::{DirectoryWatcher, Repository, RepositoryUpdate};
+use repo_metadata::{DirectoryWatcher, Repository, RepositoryUpdate, RepositoryWatchMode};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use warp_core::safe_warn;
@@ -236,7 +236,9 @@ impl GlobalRules {
 
         let subscriber = Box::new(GlobalRulesRepositorySubscriber { source, update_tx });
 
-        let start = repo_handle.update(ctx, |repo, ctx| repo.start_watching(subscriber, ctx));
+        let start = repo_handle.update(ctx, |repo, ctx| {
+            repo.start_watching(RepositoryWatchMode::FilesystemOnly, subscriber, ctx)
+        });
         let subscriber_id = start.subscriber_id;
         let subdir_path_owned = subdir_path.to_path_buf();
 

@@ -18,11 +18,11 @@ use super::cloud_conversation_continuation::TombstoneCta;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_management::telemetry::{AgentManagementTelemetryEvent, ArtifactType};
 use crate::ai::ambient_agents::{
-    conversation_output_status_from_conversation, AmbientAgentTask, AmbientAgentTaskId,
-    AmbientConversationStatus,
+    AmbientAgentTask, AmbientAgentTaskId, AmbientConversationStatus,
+    conversation_output_status_from_conversation,
 };
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
-use crate::ai::blocklist::{format_credits, BlocklistAIHistoryModel};
+use crate::ai::blocklist::{BlocklistAIHistoryModel, format_credits};
 use crate::appearance::Appearance;
 use crate::server::ids::SyncId;
 use crate::server::server_api::ServerApiProvider;
@@ -69,10 +69,10 @@ impl TombstoneDisplayData {
         let conversation_is_transcript = !has_task_id
             && history_model
                 .as_ref(ctx)
-                .is_terminal_view_conversation_transcript_viewer(terminal_view_id);
+                .is_terminal_surface_conversation_transcript_viewer(terminal_view_id);
         let conversation = history_model
             .as_ref(ctx)
-            .all_live_conversations_for_terminal_view(terminal_view_id)
+            .all_live_conversations_for_terminal_surface(terminal_view_id)
             .find(|c| c.id() == conversation_id);
 
         let Some(conversation) = conversation else {
@@ -175,7 +175,7 @@ impl ConversationEndedTombstoneView {
     ) -> Self {
         let conversation_id = BlocklistAIHistoryModel::handle(ctx)
             .as_ref(ctx)
-            .all_live_conversations_for_terminal_view(terminal_view_id)
+            .all_live_conversations_for_terminal_surface(terminal_view_id)
             .next()
             .map(|c| c.id());
 
@@ -490,28 +490,27 @@ impl ConversationEndedTombstoneView {
         let mut has_button = false;
 
         let is_any_ai_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
-        if is_any_ai_enabled {
-            if let Some(continue_in_cloud_button) = &self.continue_in_cloud_button {
-                row.add_child(ChildView::new(continue_in_cloud_button).finish());
+        if is_any_ai_enabled && let Some(continue_in_cloud_button) = &self.continue_in_cloud_button
+        {
+            row.add_child(ChildView::new(continue_in_cloud_button).finish());
+            has_button = true;
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            if let Some(continue_locally_button) = &self.continue_locally_button {
+                row.add_child(ChildView::new(continue_locally_button).finish());
                 has_button = true;
-            }
-            #[cfg(not(target_family = "wasm"))]
-            {
-                if let Some(continue_locally_button) = &self.continue_locally_button {
-                    row.add_child(ChildView::new(continue_locally_button).finish());
-                    has_button = true;
-                }
             }
         }
 
         #[cfg(target_family = "wasm")]
         {
             // Don't show on mobile devices - they can't use the desktop app
-            if !warpui::platform::wasm::is_mobile_device() {
-                if let Some(ref open_in_warp_button) = self.open_in_warp_button {
-                    row.add_child(ChildView::new(open_in_warp_button).finish());
-                    has_button = true;
-                }
+            if !warpui::platform::wasm::is_mobile_device()
+                && let Some(ref open_in_warp_button) = self.open_in_warp_button
+            {
+                row.add_child(ChildView::new(open_in_warp_button).finish());
+                has_button = true;
             }
         }
 
@@ -665,13 +664,16 @@ impl TypedActionView for ConversationEndedTombstoneView {
                         if let Ok(url) = url::Url::parse(&url_string) {
                             ctx.dispatch_typed_action(&WorkspaceAction::OpenLinkOnDesktop(url));
                         } else {
-                            log::error!("Failed to parse conversation URL: {}", url_string);
+                            warp_errors::report_error!(
+                                "Failed to parse conversation URL",
+                                extra: { "url" => %url_string }
+                            );
                         }
                     } else {
                         log::warn!("No server conversation token available for conversation");
                     }
                 } else {
-                    log::error!("Conversation not found in history model");
+                    warp_errors::report_error!("Conversation not found in history model");
                 }
             }
         }

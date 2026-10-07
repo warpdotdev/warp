@@ -1,26 +1,40 @@
 //! Renders the user query portion of the AI block, if there is one.
 //!
 //! Queries are not rendered in blocks corresponding to requested command or requested action responses.
-
+use chrono::{DateTime, Local};
 use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
+use warp_core::ui::color::Opacity;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    Container, CornerRadius, DispatchEventResult, EventHandler, Flex, MainAxisAlignment,
-    MainAxisSize, ParentElement, Radius, Shrinkable, Wrap,
+    Border, ChildAnchor, Container, CornerRadius, DispatchEventResult, DropShadow, EventHandler,
+    Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentAnchor, ParentElement, Radius,
+    Shrinkable, Wrap,
 };
 use warpui::fonts::{Properties, Style, Weight};
 use warpui::ui_components::chip::Chip;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, SingletonEntity};
 
-use super::common::{render_query_text, render_user_avatar, FindContext};
+use super::common::{FindContext, render_query_text, render_user_avatar};
+use crate::ai::blocklist::AttachmentType;
 use crate::ai::blocklist::block::view_impl::common::UserQueryProps;
 use crate::ai::blocklist::block::{AIBlockAction, DetectedLinksState, SecretRedactionState};
-use crate::ai::blocklist::AttachmentType;
 use crate::appearance::Appearance;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
+use crate::util::time_format::format_message_timestamp;
+
+/// Width of the accent ring drawn around the user avatar while agent-view transcript
+/// navigation targets this query.
+const NAVIGATION_RING_BORDER_WIDTH: f32 = 2.;
+/// Blur radius of the accent halo behind the navigation ring.
+const NAVIGATION_HALO_BLUR_RADIUS: f32 = 6.;
+/// How far the accent halo extends beyond the avatar.
+const NAVIGATION_HALO_SPREAD_RADIUS: f32 = 1.5;
+/// Opacity (in percent) of the accent halo.
+const NAVIGATION_HALO_OPACITY: Opacity = 60;
 
 /// Data required to render the AI block query component.
 #[derive(Copy, Clone, Debug)]
@@ -28,6 +42,8 @@ pub(super) struct Props<'a> {
     pub(super) user_display_name: &'a String,
     pub(super) profile_image_path: Option<&'a String>,
     pub(super) avatar_color: Option<ColorU>,
+    pub(super) query_sent_at: Option<DateTime<Local>>,
+    pub(super) query_timestamp_tooltip_handle: &'a MouseStateHandle,
     pub(super) query_and_index: Option<(&'a str, usize)>,
     pub(super) query_prefix_highlight_len: Option<usize>,
     pub(super) detected_links_state: &'a DetectedLinksState,
@@ -36,6 +52,7 @@ pub(super) struct Props<'a> {
     pub(super) is_ai_input_enabled: bool,
     pub(super) attachments: &'a [(AttachmentType, String)],
     pub(super) find_context: Option<FindContext<'a>>,
+    pub(super) is_agent_transcript_navigation_target: bool,
 }
 
 pub(super) fn maybe_render(props: Props, app: &AppContext) -> Option<Box<dyn Element>> {
@@ -45,6 +62,8 @@ pub(super) fn maybe_render(props: Props, app: &AppContext) -> Option<Box<dyn Ele
             props.user_display_name,
             props.profile_image_path,
             props.avatar_color,
+            props.query_sent_at,
+            props.query_timestamp_tooltip_handle.clone(),
             props.detected_links_state,
             props.secret_redaction_state,
             input_index,
@@ -53,6 +72,7 @@ pub(super) fn maybe_render(props: Props, app: &AppContext) -> Option<Box<dyn Ele
             props.is_ai_input_enabled,
             props.attachments,
             props.find_context,
+            props.is_agent_transcript_navigation_target,
             app,
         )
     })
@@ -64,6 +84,8 @@ pub(crate) fn render_query(
     user_display_name: &str,
     profile_image_path: Option<&String>,
     avatar_color: Option<ColorU>,
+    query_sent_at: Option<DateTime<Local>>,
+    query_timestamp_tooltip_handle: MouseStateHandle,
     detected_links_state: &DetectedLinksState,
     secret_redaction_state: &SecretRedactionState,
     input_index: usize,
@@ -72,16 +94,49 @@ pub(crate) fn render_query(
     is_ai_input_enabled: bool,
     attachments: &[(AttachmentType, String)],
     find_context: Option<FindContext>,
+    is_agent_transcript_navigation_target: bool,
     app: &AppContext,
 ) -> Box<dyn Element> {
-    let avatar = Container::new(render_user_avatar(
+    let appearance = Appearance::as_ref(app);
+    let mut avatar_container = Container::new(render_user_avatar(
         user_display_name,
         profile_image_path,
         avatar_color,
         app,
-    ))
-    .with_margin_right(16.)
-    .finish();
+    ));
+    if is_agent_transcript_navigation_target {
+        // Cmd-Up/Cmd-Down transcript navigation is stopped on this query: ring the avatar
+        // with the theme accent plus a soft accent halo so the stop is unmistakable even
+        // when the viewport doesn't move. The foreground border and the drop-shadow halo
+        // match the avatar's circular radius, reserve no layout space, and leave the query
+        // text and response untouched.
+        let accent = Appearance::as_ref(app).theme().accent();
+        avatar_container = avatar_container
+            .with_foreground_border(
+                Border::all(NAVIGATION_RING_BORDER_WIDTH).with_border_fill(accent),
+            )
+            .with_drop_shadow(DropShadow {
+                color: accent.with_opacity(NAVIGATION_HALO_OPACITY).into_solid(),
+                offset: vec2f(0., 0.),
+                blur_radius: NAVIGATION_HALO_BLUR_RADIUS,
+                spread_radius: NAVIGATION_HALO_SPREAD_RADIUS,
+            })
+            .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)));
+    }
+    let avatar = avatar_container.finish();
+    let avatar = if let Some(timestamp) = query_sent_at {
+        appearance.ui_builder().overlay_tool_tip_on_element(
+            format!("Message sent {}", format_message_timestamp(&timestamp)),
+            query_timestamp_tooltip_handle,
+            avatar,
+            ParentAnchor::TopLeft,
+            ChildAnchor::BottomLeft,
+            vec2f(0., -8.),
+        )
+    } else {
+        avatar
+    };
+    let avatar = Container::new(avatar).with_margin_right(16.).finish();
 
     let properties = Properties {
         style: Style::Normal,
@@ -103,7 +158,6 @@ pub(crate) fn render_query(
         app,
     );
 
-    let appearance = Appearance::as_ref(app);
     let mut query = Flex::column().with_child(text_element.finish());
 
     if FeatureFlag::ImageAsContext.is_enabled() {

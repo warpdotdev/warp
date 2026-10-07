@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "source-placeholder": {
+      "command": "placeholder-command",
+      "env": {
+        "SAFE_TOKEN": "${SAFE_TOKEN}"
+      },
+      "headers": {
+        "Authorization": "Bearer ${SAFE_TOKEN}"
+      }
+    },
+    "destination-conflict": {
+      "url": "https://source.invalid/mcp"
+    },
+    "literal-sensitive": {
+      "command": "sensitive-command",
+      "env": {
+        "API_KEY": "LITERAL_SECRET_SENTINEL"
+      }
+    },
+    "managed-installation": {
+      "warp_id": "MANAGED_INSTALLATION_SENTINEL"
+    }
+  }
+}

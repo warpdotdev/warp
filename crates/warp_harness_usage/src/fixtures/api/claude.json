@@ -1,0 +1,42 @@
+{
+  "harness": "CLAUDE_CODE",
+  "execution_id": 7,
+  "capture_sequence": 3,
+  "captured_at": "2026-01-01T12:00:00Z",
+  "snapshot": {
+    "coverage": {
+      "token_status": "known",
+      "tool_status": "known"
+    },
+    "payload": {
+      "usage": {
+        "input_tokens": 9007199254740993,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 2,
+        "cache_creation_input_tokens": 3,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 3
+        }
+      },
+      "attribution": [
+        {
+          "model": "claude-test",
+          "service_tier": "standard",
+          "inference_geo": "us",
+          "speed": "fast",
+          "usage": {
+            "input_tokens": 9007199254740993,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "toolCalls": {
+        "total": 2,
+        "byName": {
+          "Read": 1,
+          "mcp__test__lookup": 1
+        }
+      }
+    }
+  }
+}

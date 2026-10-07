@@ -8,11 +8,19 @@ use async_trait::async_trait;
 #[cfg(test)]
 use mockall::automock;
 
+#[path = "harness_usage/publication.rs"]
+mod publication;
+pub use publication::HarnessUsageCapability;
+#[cfg(test)]
+use publication::parse_harness_usage_retry_after;
+#[cfg(not(target_family = "wasm"))]
+pub use publication::{HarnessUsageError, HarnessUsageErrorKind, HarnessUsagePublicationStatus};
+
+use super::ServerApi;
 #[cfg(feature = "local_fs")]
 pub use super::presigned_upload::FileUploadBody;
 pub use super::presigned_upload::UploadBody;
-use super::ServerApi;
-use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::api::ServerConversationToken;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::retry::with_bounded_retry;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -24,6 +32,8 @@ use crate::ai::artifacts::Artifact;
 pub struct UploadTarget {
     pub url: String,
     pub method: String,
+    #[serde(default)]
+    #[serde_as(deserialize_as = "serde_with::DefaultOnNull")]
     pub headers: HashMap<String, String>,
     /// Ordered multipart form fields for POST uploads.
     #[serde(default)]
@@ -48,15 +58,133 @@ pub enum UploadFieldValue {
     Static { value: String },
     /// Client should compute CRC32C of the upload, base64-encode the 4-byte
     /// big-endian result, and send it as this field's value.
+    // `snake_case` would derive `content_crc32_c`, which does not match the
+    // `ContentCRC32CFieldValue` discriminator in warp-server's OpenAPI schema.
+    #[serde(rename = "content_crc32c")]
     ContentCrc32C,
     /// Client should use the raw upload bytes as this field's value.
     ContentData,
 }
 
+/// Selects how the server names and accounts for a [`SnapshotUploadRequest`]'s uploads.
+///
+/// `Legacy` uses unprefixed names and charges the execution's cumulative attachment quota.
+/// `Checkpoint` signs generation-prefixed names and is charged per attempt at commit time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapshotUploadMode {
+    #[default]
+    Legacy,
+    Checkpoint,
+}
+
 /// Request body for upload-snapshot upload targets.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SnapshotUploadRequest {
+    /// Omitted when legacy, which the server treats as the default.
+    #[serde(skip_serializing_if = "is_default_mode")]
+    pub mode: SnapshotUploadMode,
+    /// Required in checkpoint mode; the server uploads each file as
+    /// `checkpoint_<generation>__<filename>`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generation: Option<String>,
     pub files: Vec<SnapshotFileInfo>,
+}
+
+fn is_default_mode(mode: &SnapshotUploadMode) -> bool {
+    *mode == SnapshotUploadMode::default()
+}
+
+impl SnapshotUploadRequest {
+    pub fn legacy(files: Vec<SnapshotFileInfo>) -> Self {
+        Self {
+            mode: SnapshotUploadMode::Legacy,
+            generation: None,
+            files,
+        }
+    }
+
+    pub fn checkpoint(generation: CheckpointGeneration, files: Vec<SnapshotFileInfo>) -> Self {
+        Self {
+            mode: SnapshotUploadMode::Checkpoint,
+            generation: Some(generation.into_inner()),
+            files,
+        }
+    }
+}
+
+/// Client-minted identifier for one checkpoint attempt, used to key that attempt's storage
+/// objects as `checkpoint_<generation>__<logical_name>`.
+///
+/// A generation is a storage-keying detail and must never leak into agent-visible paths or
+/// restore commands.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(transparent)]
+pub struct CheckpointGeneration(String);
+
+impl CheckpointGeneration {
+    /// Test-only escape hatch; production code mints generations via
+    /// `snapshot::mint_generation`. Gated to match `driver::snapshot`'s test module, which
+    /// does not build on Windows.
+    #[cfg(all(test, not(windows)))]
+    pub(crate) fn new_for_test(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Mirrors the server's `[A-Za-z0-9._-]{1,128}` format check, including the reserved `__`
+    /// separator that would make `checkpoint_<generation>__<logical_name>` ambiguous.
+    fn is_valid(value: &str) -> bool {
+        !value.is_empty()
+            && value.len() <= 128
+            && !value.contains("__")
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+    }
+
+    /// Construct from a string the caller has already shaped to [`Self::is_valid`].
+    /// `snapshot::mint_generation` is the only production caller and satisfies it by
+    /// construction, so the invariant is a debug assertion rather than a fallible return.
+    pub(crate) fn from_validated(value: String) -> Self {
+        debug_assert!(
+            Self::is_valid(&value),
+            "checkpoint generation must match [A-Za-z0-9._-]{{1,128}} and exclude `__`: {value}"
+        );
+        Self(value)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl std::fmt::Display for CheckpointGeneration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Request body for committing a fully uploaded checkpoint generation.
+///
+/// `files` are logical names, exactly as sent to `upload-snapshot`. The server derives each
+/// object's storage name from the generation, so how a checkpoint is laid out in storage stays
+/// entirely server-side.
+///
+/// Exact-set: the server commits only the objects these names resolve to, and selection later
+/// returns exactly that set rather than everything sharing the generation.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CommitSnapshotRequest {
+    pub generation: String,
+    pub files: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct CommitSnapshotResponse {
+    pub generation: String,
 }
 
 /// Describes a single file in a snapshot upload request.
@@ -128,6 +256,11 @@ pub struct ResolvedHarnessPrompt {
     /// after any resumption preamble.
     #[serde(default)]
     pub context: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "publication::deserialize_harness_usage_capability"
+    )]
+    pub harness_usage: Option<HarnessUsageCapability>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -150,6 +283,8 @@ struct FinishTaskRequest {
 struct ShutdownError {
     category: String,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exit_code: Option<u8>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -165,9 +300,13 @@ impl ReportShutdownRequest {
     }
 
     /// An abnormal shutdown carrying an error category and message.
-    pub fn abnormal(category: String, message: String) -> Self {
+    pub fn abnormal(category: String, message: String, exit_code: Option<u8>) -> Self {
         Self {
-            error: Some(ShutdownError { category, message }),
+            error: Some(ShutdownError {
+                category,
+                message,
+                exit_code,
+            }),
         }
     }
 }
@@ -177,19 +316,21 @@ impl ReportShutdownRequest {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait HarnessSupportClient: 'static + Send + Sync {
-    /// Create a new external conversation for a third-party harness.
-    async fn create_external_conversation(&self, format: &str) -> Result<AIConversationId>;
+    /// Create a new external conversation for a third-party harness. Returns a
+    /// server-issued [`ServerConversationToken`], not a client-local `AIConversationId`:
+    /// a 3rd-party-harness conversation is never represented in `BlocklistAIHistoryModel`.
+    async fn create_external_conversation(&self, format: &str) -> Result<ServerConversationToken>;
 
     /// Get a presigned upload target for the conversation's raw transcript.
     async fn get_transcript_upload_target(
         &self,
-        conversation_id: &AIConversationId,
+        conversation_id: &ServerConversationToken,
     ) -> Result<UploadTarget>;
 
     /// Get a presigned upload target for the conversation's block snapshot.
     async fn get_block_snapshot_upload_target(
         &self,
-        conversation_id: &AIConversationId,
+        conversation_id: &ServerConversationToken,
     ) -> Result<UploadTarget>;
 
     /// Resolve the prompt for a third-party harness run for a task stored on the server.
@@ -213,6 +354,7 @@ pub trait HarnessSupportClient: 'static + Send + Sync {
         &self,
         error_category: String,
         error_message: String,
+        exit_code: Option<u8>,
     ) -> Result<()>;
 
     /// Get presigned upload targets for a workspace state snapshot.
@@ -223,6 +365,16 @@ pub trait HarnessSupportClient: 'static + Send + Sync {
         &self,
         request: &SnapshotUploadRequest,
     ) -> Result<Vec<UploadTarget>>;
+
+    /// Make a fully uploaded checkpoint generation the selected checkpoint.
+    ///
+    /// Only call this once every file in `request.files` (including the manifest) has
+    /// uploaded successfully; the server resolves each name to its object, verifies existence
+    /// and per-attempt size limits, and rejects the whole commit otherwise.
+    async fn commit_snapshot(
+        &self,
+        request: &CommitSnapshotRequest,
+    ) -> Result<CommitSnapshotResponse>;
 
     /// Download the raw third-party harness transcript bytes for the current task's
     /// conversation.
@@ -253,7 +405,7 @@ impl ServerApi {
 
         let url = format!("{}/api/v1/{}", crate::ChannelState::server_root_url(), path);
 
-        let mut request = self.client.get(&url);
+        let mut request = self.base_client.http_client().get(&url);
         if let Some(token) = auth_token.as_bearer_token() {
             request = request.bearer_auth(token);
         }
@@ -290,7 +442,7 @@ impl ServerApi {
 
         let url = format!("{}/api/v1/{}", crate::ChannelState::server_root_url(), path);
 
-        let mut request = self.client.post(&url).json(body);
+        let mut request = self.base_client.http_client().post(&url).json(body);
         if let Some(token) = auth_token.as_bearer_token() {
             request = request.bearer_auth(token);
         }
@@ -356,7 +508,7 @@ impl ServerApi {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl HarnessSupportClient for ServerApi {
-    async fn create_external_conversation(&self, format: &str) -> Result<AIConversationId> {
+    async fn create_external_conversation(&self, format: &str) -> Result<ServerConversationToken> {
         let response: CreateExternalConversationResponse = self
             .post_public_api(
                 "harness-support/external-conversation",
@@ -366,13 +518,12 @@ impl HarnessSupportClient for ServerApi {
             )
             .await?;
 
-        AIConversationId::try_from(response.conversation_id)
-            .context("Server returned an invalid conversation ID")
+        Ok(ServerConversationToken::new(response.conversation_id))
     }
 
     async fn get_transcript_upload_target(
         &self,
-        conversation_id: &AIConversationId,
+        conversation_id: &ServerConversationToken,
     ) -> Result<UploadTarget> {
         self.post_public_api(
             "harness-support/transcript",
@@ -385,7 +536,7 @@ impl HarnessSupportClient for ServerApi {
 
     async fn get_block_snapshot_upload_target(
         &self,
-        conversation_id: &AIConversationId,
+        conversation_id: &ServerConversationToken,
     ) -> Result<UploadTarget> {
         self.post_public_api(
             "harness-support/block-snapshot",
@@ -439,10 +590,11 @@ impl HarnessSupportClient for ServerApi {
         &self,
         error_category: String,
         error_message: String,
+        exit_code: Option<u8>,
     ) -> Result<()> {
         self.post_public_api_unit(
             "harness-support/report-shutdown",
-            &ReportShutdownRequest::abnormal(error_category, error_message),
+            &ReportShutdownRequest::abnormal(error_category, error_message, exit_code),
         )
         .await
     }
@@ -455,6 +607,14 @@ impl HarnessSupportClient for ServerApi {
             .post_public_api("harness-support/upload-snapshot", request)
             .await?;
         Ok(response.uploads)
+    }
+
+    async fn commit_snapshot(
+        &self,
+        request: &CommitSnapshotRequest,
+    ) -> Result<CommitSnapshotResponse> {
+        self.post_public_api("harness-support/commit-snapshot", request)
+            .await
     }
 
     async fn fetch_transcript(&self) -> Result<bytes::Bytes> {
@@ -480,7 +640,7 @@ impl HarnessSupportClient for ServerApi {
     }
 
     fn http_client(&self) -> &http_client::Client {
-        &self.client
+        self.base_client.http_client()
     }
 }
 
@@ -496,3 +656,7 @@ pub async fn upload_to_target(
 #[cfg(test)]
 #[path = "harness_support_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "harness_usage_tests.rs"]
+mod harness_usage_tests;

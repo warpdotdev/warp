@@ -2,6 +2,8 @@ pub mod active_session;
 pub mod command_executor;
 
 use std::collections::{HashMap, HashSet};
+#[cfg(windows)]
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
@@ -13,8 +15,8 @@ use async_channel::Sender;
 #[cfg(feature = "local_tty")]
 use command_executor::remote_server_executor::RemoteServerCommandExecutor;
 pub use command_executor::*;
-use futures::future::{BoxFuture, Shared};
 use futures::FutureExt;
+use futures::future::{BoxFuture, Shared};
 use instant::Instant;
 use once_cell::sync::OnceCell;
 use parking_lot::{Mutex, RwLock};
@@ -24,9 +26,10 @@ use version_compare::Version;
 use warp_completer::completer::{
     CommandExitStatus, CommandOutput, PathSeparators, TopLevelCommandCaseSensitivity,
 };
+use warp_errors::{ErrorExt, register_error};
 use warp_util::path::{
-    convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
-    ShellFamily,
+    ShellFamily, convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path,
+    msys2_exe_to_root,
 };
 use warpui::platform::OperatingSystem;
 use warpui::{Entity, ModelContext, SingletonEntity};
@@ -44,28 +47,62 @@ use crate::terminal::warpify::SubshellSource;
 use crate::terminal::{History, ShellHost, ShellLaunchData};
 
 #[derive(thiserror::Error, Debug)]
-pub enum ReadHistoryContentsError {
+#[allow(
+    clippy::enum_variant_names,
+    reason = "Each variant names a distinct read failure, so the shared `Error` suffix is intentional."
+)]
+enum ReadHistoryContentsError {
+    /// Intentionally omit this source anyhow error as it may contain stderr contents which can be
+    /// lengthy.
     #[cfg(windows)]
-    #[error("Couldn't get path to history file")]
-    HistoryFilePathError,
-
-    #[cfg(windows)]
-    #[error("Error running PowerShell commands to read history file: {0}")]
+    #[error("Error running PowerShell commands to read history file")]
     PowerShellError(anyhow::Error),
 
+    #[error("Error reading history file from filesystem")]
+    AsyncFsError(#[source] std::io::Error),
+
     #[cfg(windows)]
-    #[error("Error running PowerShell commands and reading from filesystem to read history file. PowerShell error: {powershell_error}, filesystem error: {async_fs_error}")]
+    #[error("Error running PowerShell commands and reading from filesystem to read history file.")]
     PowerShellAndAsyncFsError {
         powershell_error: anyhow::Error,
         async_fs_error: std::io::Error,
     },
+}
 
-    #[error("Error reading history file from filesystem: {0}")]
-    AsyncFsError(std::io::Error),
+impl ErrorExt for ReadHistoryContentsError {
+    fn is_actionable(&self) -> bool {
+        true
+    }
+}
+register_error!(ReadHistoryContentsError);
+
+#[cfg(windows)]
+fn powershell_read_all_text_command(path: &OsStr) -> OsString {
+    let mut command = OsString::from("[System.IO.File]::ReadAllText('");
+    command.push(escape_powershell_single_quotes(path));
+    command.push("')");
+    command
+}
+
+/// Doubles every single quote in `path` so it is safe to embed inside a
+/// PowerShell single-quoted string literal.
+#[cfg(windows)]
+fn escape_powershell_single_quotes(path: &OsStr) -> OsString {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    const SINGLE_QUOTE: u16 = b'\'' as u16;
+    let mut escaped = Vec::new();
+    for unit in path.encode_wide() {
+        escaped.push(unit);
+        if unit == SINGLE_QUOTE {
+            escaped.push(SINGLE_QUOTE);
+        }
+    }
+    OsString::from_wide(&escaped)
 }
 
 // SessionId is defined in warp_core and re-exported here for backward compatibility.
-pub use warp_core::SessionId;
+use warp_errors::report_error;
+pub use warp_terminal::model::session::{SessionId, get_local_hostname};
 
 /// Information about the sessions within a given terminal pane/top-level
 /// shell.
@@ -232,7 +269,7 @@ impl Sessions {
             .unwrap_or(false)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn new_for_test() -> Self {
         let (executor_command_tx, _executor_command_rx) = async_channel::unbounded();
         Self {
@@ -372,11 +409,9 @@ impl Sessions {
                 session_info.session_type,
                 BootstrapSessionType::WarpifiedRemote
             )
+            && let Some(host_id) = RemoteServerManager::as_ref(ctx).host_id_for_session(session_id)
         {
-            if let Some(host_id) = RemoteServerManager::as_ref(ctx).host_id_for_session(session_id)
-            {
-                session.set_remote_host_id(Some(host_id.clone()));
-            }
+            session.set_remote_host_id(Some(host_id.clone()));
         }
 
         let bootstrap_duration_seconds =
@@ -489,12 +524,11 @@ impl Sessions {
         event: ExecutedExecutorCommandEvent,
     ) {
         if let Some(in_band_command_output_tx) = self.in_band_command_output_tx_map.get(&session_id)
+            && let Err(e) = in_band_command_output_tx.try_send(event)
         {
-            if let Err(e) = in_band_command_output_tx.try_send(event) {
-                log::error!(
-                    "Failed to send ExecutedExecutorCommandEvent to InBandCommandExecutor: {e:?}"
-                );
-            }
+            log::warn!(
+                "Failed to send ExecutedExecutorCommandEvent to InBandCommandExecutor: {e:#}"
+            );
         }
     }
 
@@ -703,7 +737,7 @@ impl SessionInfo {
                 }
             }
             Err(e) => {
-                crate::report_error!(e);
+                log::warn!("Failed to get local hostname when determining session type: {e:#}");
                 BootstrapSessionType::Local
             }
         }
@@ -730,7 +764,10 @@ impl SessionInfo {
         let shell_type = match ShellType::from_name(bootstrapped_value.shell.as_str()) {
             Some(value) => {
                 if value != self.shell.shell_type() {
-                    log::error!("Received ShellType {:?} in BootstrappedValue that conflicts with pending ShellType {:?}", value, self.shell.shell_type());
+                    report_error!(
+                        "Received ShellType in BootstrappedValue that conflicts with pending ShellType",
+                        extra: { "value" => ?value, "pending" => ?self.shell.shell_type() }
+                    );
                 }
                 value
             }
@@ -900,14 +937,17 @@ impl From<BootstrapSessionType> for SessionType {
 #[derive(Debug)]
 pub struct Session {
     info: SessionInfo,
-    external_commands: Arc<OnceCell<HashSet<SmolStr>>>,
+    external_commands: OnceCell<HashSet<SmolStr>>,
     /// Function names collected asynchronously after bootstrap via an in-band command.
-    additional_function_names: Arc<OnceCell<HashSet<SmolStr>>>,
+    additional_function_names: OnceCell<HashSet<SmolStr>>,
+    /// builtin/cmdlet names collected asynchronously after bootstrap via an in-band command.
+    additional_builtin_names: OnceCell<HashSet<SmolStr>>,
     /// The command executor for this session. Behind a `RwLock` so it can be
     /// swapped after a remote server reconnect (via `set_command_executor`).
     command_executor: RwLock<Arc<dyn CommandExecutor>>,
     load_external_commands_future: OnceCell<Shared<BoxFuture<'static, ()>>>,
     load_all_function_names_future: OnceCell<Shared<BoxFuture<'static, ()>>>,
+    load_all_builtins_future: OnceCell<Shared<BoxFuture<'static, ()>>>,
     command_case_sensitivity: TopLevelCommandCaseSensitivity,
     /// The authoritative session type, initially derived from the
     /// [`BootstrapSessionType`] in `SessionInfo` and updated by [`Sessions`]
@@ -931,11 +971,13 @@ impl Session {
         let session_type = SessionType::from(session_info.session_type.clone());
         Self {
             info: session_info,
-            external_commands: Arc::new(OnceCell::new()),
-            additional_function_names: Arc::new(OnceCell::new()),
+            external_commands: OnceCell::new(),
+            additional_function_names: OnceCell::new(),
+            additional_builtin_names: OnceCell::new(),
             command_executor: RwLock::new(command_executor),
             load_external_commands_future: Default::default(),
             load_all_function_names_future: Default::default(),
+            load_all_builtins_future: Default::default(),
             command_case_sensitivity,
             session_type: Mutex::new(session_type),
         }
@@ -987,7 +1029,11 @@ impl Session {
 
     pub fn home_dir(&self) -> Option<&str> {
         if cfg!(test) {
-            return warp_util::path::TEST_SESSION_HOME_DIR.as_deref();
+            return self
+                .info
+                .home_dir
+                .as_deref()
+                .or(warp_util::path::TEST_SESSION_HOME_DIR.as_deref());
         }
 
         self.info.home_dir.as_deref()
@@ -1050,7 +1096,11 @@ impl Session {
     }
 
     pub fn builtin_names(&self) -> impl Iterator<Item = &str> {
-        self.info.builtins.iter().map(Deref::deref)
+        self.info
+            .builtins
+            .iter()
+            .chain(self.additional_builtin_names.get().into_iter().flatten())
+            .map(Deref::deref)
     }
 
     pub fn function_names(&self) -> impl Iterator<Item = &str> {
@@ -1134,11 +1184,46 @@ impl Session {
         else {
             return;
         };
+        self.load_deferred_name_set(
+            command,
+            &self.info.function_names,
+            &self.additional_function_names,
+            &self.load_all_function_names_future,
+            "function",
+        )
+        .await;
+    }
 
+    /// Asynchronously collects all builtin (cmdlet) names via an in-band shell command.
+    pub async fn load_all_builtins(&self) {
+        let Some(command) = self
+            .info
+            .shell
+            .shell_type()
+            .shell_command_to_get_all_builtins()
+        else {
+            return;
+        };
+        self.load_deferred_name_set(
+            command,
+            &self.info.builtins,
+            &self.additional_builtin_names,
+            &self.load_all_builtins_future,
+            "builtin",
+        )
+        .await;
+    }
+
+    /// Shared helper for [`Self::load_all_function_names`] and [`Self::load_all_builtins`].
+    async fn load_deferred_name_set(
+        &self,
+        command: &'static str,
+        existing: &HashSet<SmolStr>,
+        storage: &OnceCell<HashSet<SmolStr>>,
+        future_cell: &OnceCell<Shared<BoxFuture<'static, ()>>>,
+        label: &'static str,
+    ) {
         let (load_future, receiver) = (async {
-            let additional_function_names = self.additional_function_names.clone();
-            let existing = &self.info.function_names;
-
             let result = self
                 .execute_command(command, None, None, ExecuteCommandOptions::default())
                 .await;
@@ -1152,33 +1237,28 @@ impl Session {
                             .map(Into::into)
                             .collect(),
                         Err(e) => {
-                            log::warn!("Failed to decode all function names output: {e:#}");
+                            log::warn!("Failed to decode {label} names output: {e:#}");
                             HashSet::new()
                         }
                     }
                 }
                 Ok(_) => {
-                    log::warn!(
-                        "In-band command for all function names returned non-success status"
-                    );
+                    log::warn!("In-band command for {label} names returned non-success status");
                     HashSet::new()
                 }
                 Err(e) => {
-                    log::warn!("Failed to load all function names: {e:#}");
+                    log::warn!("Failed to load {label} names: {e:#}");
                     HashSet::new()
                 }
             };
 
-            if additional_function_names.set(new_names).is_err() {
-                log::warn!("Additional function names were already set for this session.");
+            if storage.set(new_names).is_err() {
+                log::warn!("Additional {label} names were already set for this session.");
             }
         })
         .remote_handle();
 
-        match self
-            .load_all_function_names_future
-            .try_insert(receiver.boxed().shared())
-        {
+        match future_cell.try_insert(receiver.boxed().shared()) {
             Ok(_) => load_future.await,
             Err((existing_receiver, _)) => existing_receiver.clone().await,
         };
@@ -1198,7 +1278,6 @@ impl Session {
     pub async fn load_external_commands(&self) {
         let (load_future, receiver) = (async {
             let shell = self.info.shell.clone();
-            let external_commands = self.external_commands.clone();
             let shell_command_to_get_executables =
                 shell.shell_type().shell_command_to_get_executables();
             let env_vars = self
@@ -1256,7 +1335,7 @@ impl Session {
                     .executables_from_shell_command_output(result, is_msys2)
                     .into_iter(),
             );
-            if external_commands.set(new_commands).is_err() {
+            if self.external_commands.set(new_commands).is_err() {
                 log::warn!("External commands should only be loaded once per session.");
             }
         })
@@ -1283,6 +1362,7 @@ impl Session {
             .chain(self.info.aliases.keys())
             .chain(self.info.abbreviations.keys())
             .chain(&self.info.builtins)
+            .chain(self.additional_builtin_names.get().into_iter().flatten())
             .chain(&self.info.keywords)
             .map(Deref::deref)
     }
@@ -1332,7 +1412,7 @@ impl Session {
                 {
                     Ok(contents) => contents,
                     Err(e) => {
-                        log::error!("Failed to read history contents for file: {e:?}");
+                        report_error!(e);
                         continue;
                     }
                 };
@@ -1374,15 +1454,16 @@ impl Session {
         history_file: &Path,
         is_kaspersky_running: bool,
     ) -> Result<Vec<u8>, ReadHistoryContentsError> {
-        let Some(history_file_path) = history_file.as_os_str().to_str() else {
-            return Err(ReadHistoryContentsError::HistoryFilePathError);
-        };
-
         // Try reading the history file using PowerShell commands first.
-        let powershell_error = match Self::read_history_via_powershell(history_file_path).await {
-            Ok(result) => return Ok(result),
-            Err(e) => e,
-        };
+        let powershell_error =
+            match Self::read_history_via_powershell(history_file.as_os_str()).await {
+                Ok(result) => return Ok(result),
+                Err(e) => e,
+            };
+        // Log the detailed error locally as a breadcrumb only; the failure is reported once at the
+        // sink via the registered `ReadHistoryContentsError`, whose static message keeps Sentry
+        // grouping stable and omits the (potentially sensitive/lengthy) PowerShell stderr.
+        log::error!("{powershell_error:?}");
 
         // If Kaspersky is running, early return since we can't use [`async_fs`] to read the history
         // file.
@@ -1391,46 +1472,17 @@ impl Session {
         }
 
         // Otherwise, fall back to using [`async_fs`] to read the history file.
-        match async_fs::read(history_file).await {
-            Ok(contents) => {
-                // Report this error so we have some data on whether this method of running
-                // PowerShell commands is reliable. If this turns out to be noisy, we can remove
-                // this log line.
-                log::warn!(
-                    "Failed to read history using PowerShell commands: {powershell_error:?}"
-                );
-                #[cfg(feature = "crash_reporting")]
-                sentry::with_scope(
-                    |scope| {
-                        let mut context = std::collections::BTreeMap::new();
-                        context.insert(
-                            "powershell_error".to_string(),
-                            format!("{powershell_error:?}").into(),
-                        );
-                        scope.set_context(
-                            "powershell_history",
-                            sentry::protocol::Context::Other(context),
-                        );
-                    },
-                    || {
-                        sentry::capture_message(
-                            "Failed to read history using PowerShell commands",
-                            sentry::Level::Error,
-                        )
-                    },
-                );
-                Ok(contents)
-            }
-            Err(e) => Err(ReadHistoryContentsError::PowerShellAndAsyncFsError {
+        async_fs::read(history_file).await.map_err(|e| {
+            ReadHistoryContentsError::PowerShellAndAsyncFsError {
                 powershell_error,
                 async_fs_error: e,
-            }),
-        }
+            }
+        })
     }
 
     #[cfg(windows)]
-    async fn read_history_via_powershell(history_file_path: &str) -> Result<Vec<u8>> {
-        let Some(powershell_command) = crate::util::windows::any_powershell_path() else {
+    async fn read_history_via_powershell(history_file_path: &OsStr) -> Result<Vec<u8>> {
+        let Some(powershell_command) = warp_util::path::windows::any_powershell_path() else {
             return Err(anyhow::anyhow!(
                 "Failed to find powershell executable to read history"
             ));
@@ -1440,9 +1492,7 @@ impl Session {
             .arg("-NoProfile")
             .arg("-NoLogo")
             .arg("-Command")
-            .arg(format!(
-                "[System.IO.File]::ReadAllText('{history_file_path}')"
-            ))
+            .arg(powershell_read_all_text_command(history_file_path))
             .output()
             .await;
         match read_result {
@@ -1511,7 +1561,7 @@ impl Session {
                 )
             }
             CommandExitStatus::Failure => {
-                log::error!("Failed to parse history file from file");
+                log::warn!("Failed to read history file from remote session");
                 None
             }
         }
@@ -1532,8 +1582,8 @@ impl Session {
     }
 
     #[cfg(feature = "integration_tests")]
-    pub fn external_commands(&self) -> Arc<OnceCell<HashSet<SmolStr>>> {
-        self.external_commands.clone()
+    pub fn external_commands(&self) -> &OnceCell<HashSet<SmolStr>> {
+        &self.external_commands
     }
 
     /// Returns a reference to the session's command executor for integration
@@ -1599,11 +1649,11 @@ impl Session {
                     );
                     return vec![];
                 };
-                let res = output_string
+
+                output_string
                     .lines()
                     .map(|s| s.trim().to_string())
-                    .collect();
-                res
+                    .collect()
             }
             _ => {
                 log::warn!("failed to get git_branches_for_command_corrections");
@@ -1640,6 +1690,14 @@ impl Session {
             ShellFamily::PowerShell => TypedPathBuf::from_windows(pwd),
         }
     }
+
+    /// Returns whether `cwd` (a working directory reported for this session)
+    /// can be resolved to a usable native path.
+    pub fn can_resolve_cwd_to_native_path(&self, cwd: &str) -> bool {
+        let typed_path = self.convert_directory_to_typed_path_buf(cwd.to_string());
+        self.maybe_convert_to_native_path(&typed_path.to_path())
+            .is_ok()
+    }
 }
 
 impl Display for Session {
@@ -1655,24 +1713,7 @@ impl Display for Session {
     }
 }
 
-/// Returns the hostname for the local machine where Warp is running.
-pub fn get_local_hostname() -> Result<String> {
-    cfg_if::cfg_if! {
-        if #[cfg(not(target_family = "wasm"))] {
-            use gethostname::gethostname;
-
-            gethostname()
-                .into_string()
-                .map_err(|os_string| {
-                    anyhow::anyhow!("Failed to convert local hostname OsString {os_string:?} into String.")
-                })
-        } else {
-            anyhow::bail!("Cannot get machine hostname from wasm")
-        }
-    }
-}
-
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 pub mod testing {
     use super::command_executor::testing::TestCommandExecutor;
     use super::*;
@@ -1818,6 +1859,17 @@ pub mod testing {
             );
             self
         }
+
+        pub fn with_shell_plugins(mut self, shell_plugins: HashSet<String>) -> Self {
+            self.shell = Shell::new(
+                self.shell.shell_type(),
+                self.shell.version().clone(),
+                self.shell.options().clone(),
+                shell_plugins,
+                self.shell.shell_path().clone(),
+            );
+            self
+        }
     }
 
     impl Session {
@@ -1833,6 +1885,8 @@ pub mod testing {
                 session_type: Mutex::new(session_type),
                 additional_function_names: Default::default(),
                 load_all_function_names_future: Default::default(),
+                additional_builtin_names: Default::default(),
+                load_all_builtins_future: Default::default(),
             }
         }
 
@@ -1850,6 +1904,8 @@ pub mod testing {
                 session_type: Mutex::new(session_type),
                 additional_function_names: Default::default(),
                 load_all_function_names_future: Default::default(),
+                additional_builtin_names: Default::default(),
+                load_all_builtins_future: Default::default(),
             }
         }
 
@@ -1869,7 +1925,9 @@ pub mod testing {
                 .set(external_commands_with_values(commands))
                 .is_err()
             {
-                log::warn!("Ignored call to set_external_commands, as external commands had already been set!");
+                log::warn!(
+                    "Ignored call to set_external_commands, as external commands had already been set!"
+                );
             };
         }
 

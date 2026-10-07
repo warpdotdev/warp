@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
-use windows::core::BSTR;
-use windows::Win32::Foundation::{LocalFree, HLOCAL};
+use windows::Win32::Foundation::{HLOCAL, LocalFree};
 use windows::Win32::Security::Cryptography::{
-    CryptProtectData, CryptUnprotectData, CRYPT_INTEGER_BLOB,
+    CRYPT_INTEGER_BLOB, CryptProtectData, CryptUnprotectData,
 };
+use windows::core::BSTR;
 
 use super::Error;
 
@@ -25,6 +25,20 @@ impl SecureStorage {
     fn storage_file(&self, key: &str) -> PathBuf {
         let filename = format!("{}-{key}", self.service_name);
         self.storage_dir.join(filename)
+    }
+
+    /// Maps a filesystem error into an [`Error`], translating a missing
+    /// backing file into [`Error::NotFound`] so an unset key is reported as
+    /// "not found" (matching the macOS and Linux implementations) rather than a
+    /// generic I/O error. This keeps callers that special-case
+    /// [`Error::NotFound`] (e.g. to fall back to a default without logging an
+    /// error) working on Windows.
+    fn map_io_error(err: std::io::Error) -> Error {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            Error::NotFound
+        } else {
+            Error::IOError(err)
+        }
     }
 
     fn byte_vec_to_blob(byte_vec: &mut Vec<u8>) -> CRYPT_INTEGER_BLOB {
@@ -93,13 +107,13 @@ impl super::SecureStorage for SecureStorage {
 
     fn read_value(&self, key: &str) -> Result<String, Error> {
         let storage_file = self.storage_file(key);
-        let file_bytes = std::fs::read(storage_file)?;
+        let file_bytes = std::fs::read(storage_file).map_err(Self::map_io_error)?;
         Self::decrypt(file_bytes)
     }
 
     fn remove_value(&self, key: &str) -> Result<(), Error> {
         let storage_file = self.storage_file(key);
-        std::fs::remove_file(storage_file).map_err(Error::from)
+        std::fs::remove_file(storage_file).map_err(Self::map_io_error)
     }
 }
 

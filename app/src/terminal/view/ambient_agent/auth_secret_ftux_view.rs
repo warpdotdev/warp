@@ -1,7 +1,7 @@
 use warp_cli::agent::Harness;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warp_editor::editor::NavigationKey;
 use warp_managed_secrets::client::SecretOwner;
 use warpui::elements::{
@@ -14,11 +14,12 @@ use warpui::fonts::{Properties, Weight};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+    WeakViewHandle,
 };
 
 use crate::ai::auth_secret_types::{
-    auth_secret_types_for_harness, build_managed_secret_value, learn_more_url_for_harness,
-    AuthSecretTypeInfo,
+    AuthSecretTypeInfo, auth_secret_types_for_harness, build_managed_secret_value,
+    learn_more_url_for_harness,
 };
 use crate::ai::harness_availability::{HarnessAvailabilityEvent, HarnessAvailabilityModel};
 use crate::ai::harness_display;
@@ -33,7 +34,7 @@ use crate::terminal::view::ambient_agent::auth_secret_ftux_dropdown::{
 use crate::ui_components::icons::Icon as UiIcon;
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 const DESCRIPTION_FONT_SIZE: f32 = 14.;
 
@@ -118,6 +119,7 @@ struct ValidatedForm {
 }
 
 pub struct AuthSecretFtuxView {
+    view_handle: WeakViewHandle<Self>,
     harness: Harness,
     ftux_dropdown: ViewHandle<AuthSecretFtuxDropdown>,
     name_editor: ViewHandle<EditorView>,
@@ -155,8 +157,9 @@ impl AuthSecretFtuxView {
         ctx.subscribe_to_view(&ftux_dropdown, |me, _, event, ctx| {
             if matches!(event, FtuxDropdownEvent::Opened) {
                 let harness = me.harness;
+                let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.ensure_auth_secrets_fetched(harness, ctx);
+                    model.ensure_auth_secrets_fetched(&team_scope, harness, ctx);
                 });
             }
         });
@@ -233,14 +236,26 @@ impl AuthSecretFtuxView {
                     }
                 }
                 HarnessAvailabilityEvent::Changed
-                | HarnessAvailabilityEvent::AuthSecretsLoaded
-                | HarnessAvailabilityEvent::AuthSecretsFetchFailed
+                | HarnessAvailabilityEvent::AuthSecretsChanged
                 | HarnessAvailabilityEvent::AuthSecretDeleted { .. }
                 | HarnessAvailabilityEvent::AuthSecretDeletionFailed { .. } => {}
             },
         );
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            let affects_window = matches!(event, UserWorkspacesEvent::TeamsChanged)
+                || matches!(
+                    event,
+                    UserWorkspacesEvent::WindowTeamChanged { window_id }
+                        if *window_id == ctx.window_id()
+                );
+            if affects_window {
+                me.clear_creation_state(ctx);
+                ctx.notify();
+            }
+        });
 
         Self {
+            view_handle: ctx.handle(),
             harness,
             ftux_dropdown,
             name_editor,
@@ -456,18 +471,18 @@ impl AuthSecretFtuxView {
 
         let mut stack = Stack::new();
         stack.add_child(trigger);
-        if self.is_harness_menu_open {
-            if let Some(menu) = &self.harness_menu {
-                stack.add_positioned_overlay_child(
-                    ChildView::new(menu).finish(),
-                    OffsetPositioning::offset_from_parent(
-                        warpui::geometry::vector::vec2f(0., 4.),
-                        ParentOffsetBounds::WindowByPosition,
-                        ParentAnchor::BottomLeft,
-                        ChildAnchor::TopLeft,
-                    ),
-                );
-            }
+        if self.is_harness_menu_open
+            && let Some(menu) = &self.harness_menu
+        {
+            stack.add_positioned_overlay_child(
+                ChildView::new(menu).finish(),
+                OffsetPositioning::offset_from_parent(
+                    warpui::geometry::vector::vec2f(0., 4.),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::BottomLeft,
+                    ChildAnchor::TopLeft,
+                ),
+            );
         }
         stack.finish()
     }
@@ -676,19 +691,19 @@ impl AuthSecretFtuxView {
         }
         ctx.notify();
 
+        let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
         let owner = self.resolve_secret_owner(ctx);
         HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
-            model.create_auth_secret(harness, name, value, owner, ctx);
+            model.create_auth_secret(&team_scope, harness, name, value, owner, ctx);
         });
     }
-
     fn resolve_secret_owner(&self, ctx: &ViewContext<Self>) -> SecretOwner {
-        if self.share_with_team {
-            if let Some(team) = UserWorkspaces::as_ref(ctx).current_team() {
-                return SecretOwner::Team {
-                    team_uid: team.uid.uid(),
-                };
-            }
+        if self.share_with_team
+            && let Some(team) = UserWorkspaces::as_ref(ctx).team_for_view(ctx)
+        {
+            return SecretOwner::Team {
+                team_uid: team.uid.uid(),
+            };
         }
         SecretOwner::CurrentUser
     }
@@ -849,7 +864,9 @@ impl AuthSecretFtuxView {
     }
 
     fn render_scope_checkbox(&self, app: &AppContext) -> Box<dyn Element> {
-        let has_team = UserWorkspaces::as_ref(app).current_team().is_some();
+        let has_team = UserWorkspaces::as_ref(app)
+            .team_for_view_handle(&self.view_handle, app)
+            .is_some();
         if !has_team {
             return Empty::new().finish();
         }

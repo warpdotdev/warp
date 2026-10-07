@@ -13,6 +13,7 @@ This document provides classification rules for PRs that lack explicit `CHANGELO
 - **IMPROVEMENT** — Enhances an existing feature in a way users would notice (performance, UX, new options).
 - **BUG-FIX** — Fixes a user-visible bug or regression.
 - **OZ** — Changes to Oz / AI agent capabilities. At most 4 per release in the stable changelog.
+- **TUI** — User-visible changes that impact the Warp Agent CLI/headless TUI, including shared Agent capabilities.
 - **NONE** — Explicitly opt out of changelog inclusion. Handled upstream by `fetch_prs.py` marker extraction.
 
 ## Decision rules
@@ -28,6 +29,14 @@ This document provides classification rules for PRs that lack explicit `CHANGELO
 ### Always include
 - PRs with explicit `CHANGELOG-*` markers (handled before this guidance applies)
 - PRs that fix a crash, data loss, or security issue — even without a marker
+
+### TUI surface classification
+- Treat explicit `CHANGELOG-TUI` and `CHANGELOG-OZ` markers as authoritative entries. They are independent and may coexist with each other or with regular changelog categories.
+- Determine TUI impact independently from the regular New Feature, Improvement, or Bug Fix category. A shared Agent capability may belong in both its regular category and `TUI`.
+- Classify a user-visible entry as impacting `TUI` when `commit_subject` contains `TUI` as a standalone token.
+- For stable releases, also use the PR title/body and TUI-owned paths such as `crates/warp_tui` or `crates/warpui_core/src/elements/tui`. Shared capabilities such as Agent tool-call or edit-file behavior also impact TUI when Warp Agent CLI users observe the change. If metadata is ambiguous, inspect the commit diff.
+- Do not infer TUI impact from file paths alone; confirm that Warp Agent CLI users observe the changed behavior.
+- A TUI-only entry belongs only in the TUI category. An entry that impacts both TUI and another surface should appear in both `TUI` and its regular category.
 
 ### Conditional on channel
 - **Stable channel:** Only include changes that are live for all users. Exclude PRs gated behind `DOGFOOD_FLAGS` or `PREVIEW_FLAGS`.

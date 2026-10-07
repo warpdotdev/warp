@@ -11,7 +11,7 @@ type OSStatus = i32;
 // https://github.com/kornelski/core-services/blob/5572befea9fae3c31310d875240342229afa14ca/src/launch_services.rs#L33
 const K_LS_ROLES_SHELL: LSRolesMask = 0x00000008;
 
-extern "C" {
+unsafe extern "C" {
     // Launch Services bindings
     fn LSCopyDefaultRoleHandlerForContentType(
         in_content_type: &CFString,

@@ -2,7 +2,7 @@ mod hoa_onboarding_flow;
 mod tab_config_step;
 mod welcome_banner;
 
-pub use hoa_onboarding_flow::{init, HoaOnboardingFlow, HoaOnboardingFlowEvent, HoaOnboardingStep};
+pub use hoa_onboarding_flow::{HoaOnboardingFlow, HoaOnboardingFlowEvent, HoaOnboardingStep, init};
 use warp_core::user_preferences::GetUserPreferences;
 use warpui::AppContext;
 

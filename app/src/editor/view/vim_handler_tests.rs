@@ -1,9 +1,7 @@
-use std::collections::HashSet;
-
 use itertools::Itertools;
 use unindent::Unindent;
 use warpui::platform::WindowStyle;
-use warpui::{App, ViewHandle};
+use warpui::{App, EntityIdSet, ViewHandle};
 
 use super::*;
 use crate::editor::EditorView;
@@ -298,7 +296,7 @@ fn test_vim_number_repeat_line_motion() {
         let window_id = app.read(|ctx| editor.window_id(ctx));
         let mut presenter = warpui::presenter::Presenter::new(window_id);
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = warpui::WindowInvalidation {
             updated,
@@ -378,7 +376,7 @@ fn test_vim_number_repeat_character_motion() {
         let window_id = app.read(|ctx| editor.window_id(ctx));
         let mut presenter = warpui::presenter::Presenter::new(window_id);
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = warpui::WindowInvalidation {
             updated,
@@ -2397,7 +2395,7 @@ fn test_vim_begin_line_above() {
         let window_id = app.read(|ctx| editor.window_id(ctx));
         let mut presenter = warpui::presenter::Presenter::new(window_id);
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = warpui::WindowInvalidation {
             updated,
@@ -4700,6 +4698,99 @@ fn test_vim_operators_on_word_text_objects() {
 
         editor.read(&app, |view, ctx| {
             assert_eq!(view.buffer_text(ctx), " baz");
+        });
+    });
+}
+
+#[test]
+fn test_vim_line_text_objects() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let editor = add_editor_vim_normal_mode("one\n two words \nthree", &mut app);
+
+        editor.update(&mut app, |view, ctx| {
+            view.select_ranges(vec![DisplayPoint::new(1, 4)..DisplayPoint::new(1, 4)], ctx)
+                .unwrap();
+            view.vim_user_insert("yil", ctx);
+        });
+        VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
+            let register = registers.read_from_register('"', ctx).unwrap();
+            assert_eq!(register.text, "two words");
+            assert_eq!(register.motion_type, MotionType::Charwise);
+        });
+
+        editor.update(&mut app, |view, ctx| {
+            view.select_ranges(vec![DisplayPoint::new(1, 4)..DisplayPoint::new(1, 4)], ctx)
+                .unwrap();
+            view.vim_user_insert("dil", ctx);
+        });
+        editor.read(&app, |view, ctx| {
+            assert_eq!(view.buffer_text(ctx), "one\n  \nthree");
+        });
+
+        editor.update(&mut app, |view, ctx| {
+            view.set_buffer_text("one\n \t \nthree", ctx);
+            view.select_ranges(vec![DisplayPoint::new(1, 1)..DisplayPoint::new(1, 1)], ctx)
+                .unwrap();
+            view.vim_user_insert("dil", ctx);
+        });
+        editor.read(&app, |view, ctx| {
+            assert_eq!(view.buffer_text(ctx), "one\n \t \nthree");
+        });
+        editor.update(&mut app, |view, ctx| {
+            view.set_buffer_text("one\n two words \nthree", ctx);
+            view.select_ranges(vec![DisplayPoint::new(1, 4)..DisplayPoint::new(1, 4)], ctx)
+                .unwrap();
+            view.vim_user_insert("cil", ctx);
+        });
+        editor.read(&app, |view, ctx| {
+            assert_eq!(view.buffer_text(ctx), "one\n  \nthree");
+            assert_eq!(view.vim_mode(ctx), Some(VimMode::Insert));
+        });
+
+        editor.update(&mut app, |view, ctx| {
+            view.vim_keystroke(&Keystroke::parse("escape").unwrap(), ctx);
+            view.set_buffer_text(" αβ \n \nlast", ctx);
+            view.select_ranges(vec![DisplayPoint::new(2, 0)..DisplayPoint::new(2, 0)], ctx)
+                .unwrap();
+            view.vim_user_insert("yal", ctx);
+        });
+        editor.read(&app, |view, ctx| {
+            assert_eq!(
+                view.selected_ranges(ctx),
+                vec![DisplayPoint::new(2, 0)..DisplayPoint::new(2, 0)]
+            );
+        });
+        VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
+            let register = registers.read_from_register('"', ctx).unwrap();
+            assert_eq!(register.text, " αβ \n \nlast\n");
+            assert_eq!(register.motion_type, MotionType::Linewise);
+        });
+
+        editor.update(&mut app, |view, ctx| {
+            view.vim_user_insert("Vily", ctx);
+        });
+        VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
+            let register = registers.read_from_register('"', ctx).unwrap();
+            assert_eq!(register.text, "last");
+            assert_eq!(register.motion_type, MotionType::Charwise);
+        });
+
+        editor.update(&mut app, |view, ctx| {
+            view.vim_user_insert("valy", ctx);
+        });
+        VimRegisters::handle(&app).update(&mut app, |registers, ctx| {
+            let register = registers.read_from_register('"', ctx).unwrap();
+            assert_eq!(register.text, " αβ \n \nlast\n");
+            assert_eq!(register.motion_type, MotionType::Linewise);
+        });
+
+        editor.update(&mut app, |view, ctx| {
+            view.vim_user_insert("cal", ctx);
+        });
+        editor.read(&app, |view, ctx| {
+            assert_eq!(view.buffer_text(ctx), "");
+            assert_eq!(view.vim_mode(ctx), Some(VimMode::Insert));
         });
     });
 }
@@ -7130,6 +7221,39 @@ fn test_vim_visual_mode_paste() {
 }
 
 #[test]
+fn test_vim_visual_mode_paste_after_history_recall() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let editor = add_editor_vim_normal_mode("echo foo bar", &mut app);
+
+        // Yank "foo" into the unnamed register.
+        editor.update(&mut app, |view, ctx| {
+            view.vim_user_insert("wve", ctx);
+            view.vim_user_insert("y", ctx);
+        });
+
+        // Simulate scrolling up the command history (e.g. pressing "k" in normal mode), which
+        // replaces the editor buffer with a previously run command via an ephemeral edit.
+        editor.update(&mut app, |view, ctx| {
+            view.set_buffer_text_ignoring_undo("echo xxx bar", ctx);
+        });
+
+        // Select "xxx" in the recalled command and paste "foo" over it. The selected range should
+        // be replaced, not appended to.
+        editor.update(&mut app, |view, ctx| {
+            view.vim_user_insert("0wve", ctx);
+            view.vim_user_insert("p", ctx);
+        });
+
+        editor.read(&app, |view, ctx| {
+            assert_eq!(view.buffer_text(ctx), "echo foo bar");
+            assert_eq!(view.vim_mode(ctx), Some(VimMode::Normal));
+        });
+    });
+}
+
+#[test]
 fn test_vim_unnamed_system_clipboard() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -7627,7 +7751,7 @@ fn test_vim_visual_selection_with_newlines() {
         // Ensure layout so vertical motions (j/k) use real geometry for goal columns.
         let window_id = app.read(|ctx| editor.window_id(ctx));
         let mut presenter = warpui::presenter::Presenter::new(window_id);
-        let mut updated = std::collections::HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = warpui::WindowInvalidation {
             updated,
@@ -7675,7 +7799,7 @@ fn test_vim_visual_selection_with_newlines() {
         // Re-layout for new content
         let window_id = app.read(|ctx| editor.window_id(ctx));
         let mut presenter = warpui::presenter::Presenter::new(window_id);
-        let mut updated = std::collections::HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = warpui::WindowInvalidation {
             updated,

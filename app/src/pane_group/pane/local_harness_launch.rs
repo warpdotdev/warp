@@ -7,21 +7,22 @@ use shell_words::quote as shell_quote;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 
+use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::agent_sdk::driver::harness::claude_code::prepare_claude_environment_config;
 use crate::ai::agent_sdk::driver::harness::{
-    harness_kind, harness_model_env_vars, remove_claude_externally_managed_listener_env_vars,
-    HarnessKind,
+    HarnessKind, harness_kind, harness_model_env_vars,
+    remove_claude_externally_managed_listener_env_vars,
 };
-use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::agent_sdk::{task_env_vars, validate_cli_installed};
 use crate::ai::ambient_agents::task::{
-    normalize_orchestrator_agent_name, HarnessConfig, HarnessModelConfig,
+    HarnessConfig, HarnessModelConfig, normalize_orchestrator_agent_name,
 };
 use crate::ai::ambient_agents::{AgentConfigSnapshot, AmbientAgentTaskId};
 use crate::ai::local_harness_setup::local_harness_product_disabled_message;
 use crate::server::server_api::ai::AIClient;
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::cli_agent_sessions::plugin_manager::{
-    plugin_manager_for, CliAgentPluginManager,
+    CliAgentPluginManager, plugin_manager_for,
 };
 use crate::terminal::shell::ShellType;
 
@@ -164,6 +165,7 @@ pub(super) async fn prepare_local_harness_child_launch(
     shell_type: Option<ShellType>,
     startup_directory: Option<PathBuf>,
     ai_client: Arc<dyn AIClient>,
+    team_scope: RequestTeamScope,
 ) -> Result<PreparedLocalHarnessLaunch, String> {
     let harness_model_config =
         model_id
@@ -208,7 +210,7 @@ pub(super) async fn prepare_local_harness_child_launch(
             // auth/session state. We still prepare harness config files here,
             // but there are no Warp-managed secrets to materialize into the
             // hidden child pane.
-            prepare_claude_environment_config(&working_dir, &HashMap::new())
+            prepare_claude_environment_config(&working_dir, &working_dir, &HashMap::new())
                 .map_err(|error| error.to_string())?;
             if let Some(manager) = plugin_manager_for(third_party_harness.cli_agent()) {
                 ensure_local_claude_child_plugins(manager.as_ref()).await;
@@ -246,6 +248,7 @@ pub(super) async fn prepare_local_harness_child_launch(
             None,
             parent_run_id.clone(),
             local_child_task_config(harness, agent_name),
+            team_scope,
         )
         .await
         .map_err(|error| {

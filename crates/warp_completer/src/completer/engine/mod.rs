@@ -10,15 +10,8 @@ pub use flag::complete as flag_suggestions;
 pub use path::{EngineDirEntry, EngineFileType};
 pub use variable::suggestions as variable_suggestions;
 
-cfg_if::cfg_if! {
-    if #[cfg(feature = "v2")] {
-        mod v2;
-        use v2::argument_name_at_index_for_command;
-    } else {
-        mod legacy;
-        use legacy::argument_name_at_index_for_command;
-    }
-}
+mod legacy;
+use legacy::argument_name_at_index_for_command;
 
 use crate::completer::{CompletionContext, TopLevelCommandCaseSensitivity};
 use crate::meta::{HasSpan, Span, Spanned, SpannedItem};
@@ -76,33 +69,41 @@ impl<'s> Flatten<'s> {
     fn expression(&self, e: &Spanned<ParsedExpression>) -> Vec<CompletionLocation> {
         match e.item.expression() {
             Expression::Command => {
-                vec![LocationType::Command {
-                    is_recognized: true,
-                    parsed_token: e.item.value().to_owned(),
-                }
-                .spanned(e.span)]
+                vec![
+                    LocationType::Command {
+                        is_recognized: true,
+                        parsed_token: e.item.value().to_owned(),
+                    }
+                    .spanned(e.span),
+                ]
             }
             Expression::Literal => {
-                vec![LocationType::Argument {
-                    command_name: self.command.clone(),
-                    argument_name: self.flag.clone(),
-                    parsed_token: e.item.value().clone(),
-                }
-                .spanned(e.span)]
+                vec![
+                    LocationType::Argument {
+                        command_name: self.command.clone(),
+                        argument_name: self.flag.clone(),
+                        parsed_token: e.item.value().clone(),
+                    }
+                    .spanned(e.span),
+                ]
             }
             Expression::ValidatableArgument(_) => {
-                vec![LocationType::Argument {
-                    command_name: self.command.clone(),
-                    argument_name: self.flag.clone(),
-                    parsed_token: e.item.value().to_owned(),
-                }
-                .spanned(e.span)]
+                vec![
+                    LocationType::Argument {
+                        command_name: self.command.clone(),
+                        argument_name: self.flag.clone(),
+                        parsed_token: e.item.value().to_owned(),
+                    }
+                    .spanned(e.span),
+                ]
             }
             Expression::Unknown => Vec::new(),
-            Expression::Variable => vec![LocationType::Variable {
-                parsed_token: e.item.value().to_owned(),
-            }
-            .spanned(e.span)],
+            Expression::Variable => vec![
+                LocationType::Variable {
+                    parsed_token: e.item.value().to_owned(),
+                }
+                .spanned(e.span),
+            ],
         }
     }
 
@@ -261,23 +262,24 @@ impl<'s> Flatten<'s> {
                 match positional.item.expression() {
                     Expression::Unknown => {
                         let unknown = positional.span.slice(self.line);
-                        let location = if unknown.starts_with('-') {
-                            LocationType::Flag {
-                                command_name: command.name.clone().spanned(command.name_span),
-                                flag_name: Some(unknown.to_string().spanned(positional.span)),
-                            }
-                        } else {
-                            LocationType::Argument {
-                                command_name: command.name.clone().spanned(command.name_span),
-                                argument_name: argument_name_at_index_for_command(
-                                    command.name_span.slice(self.line),
-                                    idx,
-                                    self.context,
-                                    command_case_sensitivity,
-                                ),
-                                parsed_token: positional.item.value().clone(),
-                            }
-                        };
+                        let location =
+                            if unknown.starts_with('-') && !command.args.options_terminated {
+                                LocationType::Flag {
+                                    command_name: command.name.clone().spanned(command.name_span),
+                                    flag_name: Some(unknown.to_string().spanned(positional.span)),
+                                }
+                            } else {
+                                LocationType::Argument {
+                                    command_name: command.name.clone().spanned(command.name_span),
+                                    argument_name: argument_name_at_index_for_command(
+                                        command.name_span.slice(self.line),
+                                        idx,
+                                        self.context,
+                                        command_case_sensitivity,
+                                    ),
+                                    parsed_token: positional.item.value().clone(),
+                                }
+                            };
 
                         vec![location.spanned(positional.span)]
                     }
@@ -384,12 +386,18 @@ pub fn completion_location(
         // If there's no command--treat the completion location as a single foreign command to
         // surface top level commands.
         None => {
-            return vec![LocationType::Command {
-                is_recognized: false,
-                parsed_token: ParsedToken::empty(),
-            }
-            .spanned(Span::default())]
+            return vec![
+                LocationType::Command {
+                    is_recognized: false,
+                    parsed_token: ParsedToken::empty(),
+                }
+                .spanned(Span::default()),
+            ];
         }
+    };
+    let options_terminated = match command {
+        Command::Classified(command) => command.args.options_terminated,
+        Command::Unclassified(_) => false,
     };
 
     let completion_engine = Flatten::new(
@@ -401,11 +409,13 @@ pub fn completion_location(
     let locations = completion_engine.completion_locations(command, ctx.command_case_sensitivity());
 
     if locations.is_empty() {
-        vec![LocationType::Command {
-            is_recognized: false,
-            parsed_token: ParsedToken::empty(),
-        }
-        .spanned(Span::default())]
+        vec![
+            LocationType::Command {
+                is_recognized: false,
+                parsed_token: ParsedToken::empty(),
+            }
+            .spanned(Span::default()),
+        ]
     } else {
         let mut command = None;
         let mut prev = None;
@@ -421,7 +431,7 @@ pub fn completion_location(
                         ..
                     } => {
                         let cmd = cmd.clone();
-                        if loc.span.slice(line) == "-" {
+                        if !options_terminated && loc.span.slice(line) == "-" {
                             let span = loc.span;
                             return vec![
                                 loc,
@@ -454,11 +464,13 @@ pub fn completion_location(
             // is after some character that would imply we're in the command position.
             let start = prev.span.end();
             if line[start..].contains(BEFORE_COMMAND_CHARS) {
-                vec![LocationType::Command {
-                    is_recognized: true,
-                    parsed_token: ParsedToken::empty(),
-                }
-                .spanned(Span::new(line.len(), line.len()))]
+                vec![
+                    LocationType::Command {
+                        is_recognized: true,
+                        parsed_token: ParsedToken::empty(),
+                    }
+                    .spanned(Span::new(line.len(), line.len())),
+                ]
             } else if let Some(command) = command {
                 let arg_location = LocationType::Argument {
                     command_name: command.clone(),
@@ -473,22 +485,27 @@ pub fn completion_location(
                 }
                 .spanned(Span::new(line.len(), line.len()));
 
-                vec![arg_location, flag_location]
+                if options_terminated {
+                    vec![arg_location]
+                } else {
+                    vec![arg_location, flag_location]
+                }
             } else {
                 vec![]
             }
         } else {
             // Cursor is before any possible completion location, so must be a command
-            vec![LocationType::Command {
-                is_recognized: true,
-                parsed_token: ParsedToken::empty(),
-            }
-            .spanned(Span::new(line.len(), line.len()))]
+            vec![
+                LocationType::Command {
+                    is_recognized: true,
+                    parsed_token: ParsedToken::empty(),
+                }
+                .spanned(Span::new(line.len(), line.len())),
+            ]
         }
     }
 }
 
-#[cfg(not(feature = "v2"))]
 #[cfg(test)]
 #[path = "test.rs"]
 mod tests;

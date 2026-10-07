@@ -6,9 +6,9 @@ use crate::cloud_object::model::json_model::JsonModel;
 use crate::cloud_object::{
     GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType, Revision,
 };
-use crate::drive::items::ai_fact::WarpDriveAIFact;
-use crate::drive::items::WarpDriveItem;
 use crate::drive::CloudObjectTypeAndId;
+use crate::drive::items::WarpDriveItem;
+use crate::drive::items::ai_fact::WarpDriveAIFact;
 use crate::server::ids::SyncId;
 use crate::server::sync_queue::QueueItem;
 
@@ -54,7 +54,7 @@ impl StringModel for AIFact {
         QueueItem::UpdateAIFact {
             model: object.model().clone().into(),
             id: object.id,
-            revision: revision_ts.or_else(|| object.metadata.revision.clone()),
+            revision: revision_ts.or(object.metadata.revision),
         }
     }
 

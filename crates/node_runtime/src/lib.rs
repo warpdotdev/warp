@@ -4,7 +4,7 @@
 //! supporting multiple platforms (macOS, Linux, Windows) and architectures
 //! (x64, arm64).
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 cfg_if::cfg_if! {
@@ -341,10 +341,10 @@ where
             let mut file = archive.by_index(i).context("Failed to read zip entry")?;
             let file_name = file.name().to_string();
 
-            if let Some(ref filter) = file_filter {
-                if !filter(&file_name) {
-                    continue;
-                }
+            if let Some(ref filter) = file_filter
+                && !filter(&file_name)
+            {
+                continue;
             }
 
             let outpath = match file.enclosed_name() {
@@ -405,30 +405,30 @@ where
 #[cfg(feature = "local_fs")]
 pub async fn find_working_node_binary(path_env_var: Option<&str>) -> Option<PathBuf> {
     // First, try our custom node installation
-    if let Ok(custom_node) = node_binary_path() {
-        if custom_node.is_file() {
-            let mut cmd = Command::new(&custom_node);
-            cmd.arg("--version");
-            if let Ok(output) = cmd.output().await {
-                if output.status.success() {
-                    log::info!(
-                        "Using custom node installation at {}",
-                        custom_node.display()
-                    );
-                    return Some(custom_node);
-                }
-            }
+    if let Ok(custom_node) = node_binary_path()
+        && custom_node.is_file()
+    {
+        let mut cmd = Command::new(&custom_node);
+        cmd.arg("--version");
+        if let Ok(output) = cmd.output().await
+            && output.status.success()
+        {
+            log::info!(
+                "Using custom node installation at {}",
+                custom_node.display()
+            );
+            return Some(custom_node);
         }
     }
 
     // Fall back to system node if available
-    if let Some(path_env_var) = path_env_var {
-        if detect_system_node(path_env_var).await.is_ok() {
-            // System node is available and meets version requirements.
-            // Use "node" and let the PATH resolve it.
-            log::info!("Using system node");
-            return Some(PathBuf::from("node"));
-        }
+    if let Some(path_env_var) = path_env_var
+        && detect_system_node(path_env_var).await.is_ok()
+    {
+        // System node is available and meets version requirements.
+        // Use "node" and let the PATH resolve it.
+        log::info!("Using system node");
+        return Some(PathBuf::from("node"));
     }
 
     log::info!("No working node binary found");

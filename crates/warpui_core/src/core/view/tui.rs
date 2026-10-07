@@ -10,7 +10,7 @@ use std::any::Any;
 
 use super::{BlurContext, FocusContext, ViewContext};
 use crate::elements::tui::TuiElement;
-use crate::{keymap, AppContext, Entity, EntityId, WindowId};
+use crate::{AppContext, Entity, EntityId, WindowId, keymap};
 
 /// An interactive, renderable TUI component. The TUI counterpart of
 /// [`View`](crate::View); registered with
@@ -21,6 +21,16 @@ pub trait TuiView: Entity {
     fn ui_name() -> &'static str;
 
     /// Produces the [`TuiElement`] representation of this view.
+    ///
+    /// Terminal resizes flow through the layout pass: the presenter lays out
+    /// against the current terminal size every frame, and each
+    /// [`TuiElement::layout`] receives the [`AppContext`], so width-dependent
+    /// read-only state (e.g. a char-cell editor's terminal width) is refreshed
+    /// there. A size-driven *side effect* that must run once with the settled
+    /// geometry — e.g. committing a PTY resize — belongs in
+    /// [`TuiElement::after_layout`], the post-layout pass the presenter runs
+    /// after arranging the tree and before paint (mirroring the GUI's
+    /// `Element::after_layout`).
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement>;
 
     /// Handles the view or its descendent receiving focus.

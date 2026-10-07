@@ -69,6 +69,29 @@ fn test_split_path() {
     );
 }
 
+#[test]
+fn split_path_keeps_escaped_leading_tilde_relative_to_pwd() {
+    let pwd = TypedPathBuf::from_unix("/work");
+    let split = SplitPath::new(pwd.to_path(), r"\~/file", Some("/home/me"), &['/']);
+
+    assert_eq!(
+        split.directory_absolute_path,
+        TypedPathBuf::from_unix("/work/~/")
+    );
+    assert_eq!(split.directory_relative_path_name, r"\~/");
+}
+
+#[test]
+fn cdpath_expands_session_home_with_unix_separators_on_any_host() {
+    let ctx = MockPathCompletionContext::new(TypedPathBuf::from_unix("/work"))
+        .with_home_directory("/home/me".to_owned());
+
+    assert_eq!(
+        resolve_cdpath_entry("~/src", &ctx),
+        TypedPathBuf::from_unix("/home/me/src")
+    );
+}
+
 fn file_entry(file_name: &str) -> EngineDirEntry {
     EngineDirEntry {
         file_name: file_name.to_owned(),
@@ -142,14 +165,16 @@ pub fn test_sorted_paths_relative_to() {
         .into_iter()
         .map(|matched_suggestion| matched_suggestion.suggestion)
         .collect_vec(),
-        vec![Suggestion::with_same_display_and_replacement(
-            "src/",
-            Some("Directory".into()),
-            SuggestionType::Argument,
-            Priority::default(),
-        )
-        .with_icon_override(IconType::Folder)
-        .with_file_type(EngineFileType::Directory)]
+        vec![
+            Suggestion::with_same_display_and_replacement(
+                "src/",
+                Some("Directory".into()),
+                SuggestionType::Argument,
+                Priority::default(),
+            )
+            .with_icon_override(IconType::Folder)
+            .with_file_type(EngineFileType::Directory)
+        ]
     );
 
     assert_eq!(
@@ -237,14 +262,16 @@ pub fn test_sorted_directories_relative_to() {
         .into_iter()
         .map(|matched_suggestion| matched_suggestion.suggestion)
         .collect_vec(),
-        vec![Suggestion::with_same_display_and_replacement(
-            "src/",
-            Some("Directory".into()),
-            SuggestionType::Argument,
-            Priority::default(),
-        )
-        .with_icon_override(IconType::Folder)
-        .with_file_type(EngineFileType::Directory)]
+        vec![
+            Suggestion::with_same_display_and_replacement(
+                "src/",
+                Some("Directory".into()),
+                SuggestionType::Argument,
+                Priority::default(),
+            )
+            .with_icon_override(IconType::Folder)
+            .with_file_type(EngineFileType::Directory)
+        ]
     );
 }
 
@@ -383,15 +410,6 @@ pub fn test_path_completions_with_special_characters_fuzzy() {
         .collect_vec(),
         vec![
             Suggestion::new(
-                "!nice ~/",
-                r"\!nice\ \~/",
-                Some("Directory".into()),
-                SuggestionType::Argument,
-                Priority::default(),
-            )
-            .with_icon_override(IconType::Folder)
-            .with_file_type(EngineFileType::Directory),
-            Suggestion::new(
                 "~/",
                 r"\~/",
                 Some("Directory".into()),
@@ -434,15 +452,17 @@ pub fn test_path_completions_tilde_expansion() {
         .into_iter()
         .map(|matched_suggestion| matched_suggestion.suggestion)
         .collect_vec(),
-        vec![Suggestion::new(
-            "~ testdir/",
-            r"~/\~\ testdir/",
-            Some("Directory".into()),
-            SuggestionType::Argument,
-            Priority::default(),
-        )
-        .with_icon_override(IconType::Folder)
-        .with_file_type(EngineFileType::Directory),]
+        vec![
+            Suggestion::new(
+                "~ testdir/",
+                r"~/\~\ testdir/",
+                Some("Directory".into()),
+                SuggestionType::Argument,
+                Priority::default(),
+            )
+            .with_icon_override(IconType::Folder)
+            .with_file_type(EngineFileType::Directory),
+        ]
     );
 }
 
@@ -460,15 +480,17 @@ pub fn test_path_completions_home_env_var_special_characters() {
         .into_iter()
         .map(|matched_suggestion| matched_suggestion.suggestion)
         .collect_vec(),
-        vec![Suggestion::new(
-            "~ testdir/",
-            r"$HOME/\~\ testdir/",
-            Some("Directory".into()),
-            SuggestionType::Argument,
-            Priority::default(),
-        )
-        .with_icon_override(IconType::Folder)
-        .with_file_type(EngineFileType::Directory),]
+        vec![
+            Suggestion::new(
+                "~ testdir/",
+                r"$HOME/\~\ testdir/",
+                Some("Directory".into()),
+                SuggestionType::Argument,
+                Priority::default(),
+            )
+            .with_icon_override(IconType::Folder)
+            .with_file_type(EngineFileType::Directory),
+        ]
     );
 }
 

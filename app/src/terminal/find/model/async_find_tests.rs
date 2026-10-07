@@ -7,18 +7,19 @@ use parking_lot::FairMutex;
 use warpui::{App, EntityId};
 
 use super::{
-    is_query_refinement, AbsoluteMatch, AsyncFindConfig, AsyncFindController, AsyncFindStatus,
-    BlockFindResults, FindTaskMessage,
+    AbsoluteMatch, AsyncFindConfig, AsyncFindController, AsyncFindStatus, BlockFindResults,
+    FindTaskMessage, is_query_refinement,
 };
 use crate::terminal::block_list_element::GridType;
 use crate::terminal::find::model::block_list::run_find_on_block_list;
 use crate::terminal::find::model::{FindOptions, TerminalFindModel};
 use crate::terminal::find::{BlockListMatch, RichContentMatchId};
+use crate::terminal::model::TerminalModel;
 use crate::terminal::model::blocks::TotalIndex;
 use crate::terminal::model::grid::grid_handler::AbsolutePoint;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::terminal_model::{BlockIndex, BlockSortDirection};
-use crate::terminal::model::TerminalModel;
+use crate::test_util::assert_eventually;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::view_components::find::FindDirection;
 
@@ -27,6 +28,7 @@ fn make_match(row: u64) -> AbsoluteMatch {
     AbsoluteMatch {
         start: AbsolutePoint { row, col: 0 },
         end: AbsolutePoint { row, col: 5 },
+        is_filtered: false,
     }
 }
 
@@ -38,6 +40,7 @@ fn make_match_at(row: u64, start_col: usize, end_col: usize) -> AbsoluteMatch {
             col: start_col,
         },
         end: AbsolutePoint { row, col: end_col },
+        is_filtered: false,
     }
 }
 
@@ -93,20 +96,16 @@ fn test_async_find_produces_same_results_as_sync_find() {
 
         // Wait for async find to complete. The stream-based delivery processes
         // results automatically; we just need to yield to the executor.
-        for _ in 0..100 {
-            let is_complete = test_model.update(&mut app, |model, _ctx| {
+        assert_eventually!(
+            200 => test_model.update(&mut app, |model, _ctx| {
                 model
                     .async_find_controller
                     .as_ref()
                     .map(|c| matches!(c.status(), AsyncFindStatus::Complete))
                     .unwrap_or(false)
-            });
-            if is_complete {
-                break;
-            }
-            // Small delay to let background task and stream delivery run.
-            warpui::r#async::Timer::after(std::time::Duration::from_millis(10)).await;
-        }
+            }),
+            "Async find should complete"
+        );
 
         let (status, async_count) = test_model.update(&mut app, |model, _ctx| {
             let c = model.async_find_controller.as_ref().unwrap();
@@ -507,9 +506,11 @@ fn test_block_find_results_remove_block() {
     assert_eq!(results.total_match_count(), 1);
 
     // Block 1 should still have its matches.
-    assert!(results
-        .terminal_matches
-        .contains_key(&(BlockIndex(1), GridType::Output)));
+    assert!(
+        results
+            .terminal_matches
+            .contains_key(&(BlockIndex(1), GridType::Output))
+    );
 }
 
 #[test]
@@ -716,19 +717,16 @@ fn assert_async_focused_order_matches_sync(block_sort_direction: BlockSortDirect
                 .start_find(&find_options, block_sort_direction, ctx);
         });
 
-        for _ in 0..100 {
-            let is_complete = test_model.update(&mut app, |model, _ctx| {
+        assert_eventually!(
+            200 => test_model.update(&mut app, |model, _ctx| {
                 model
                     .async_find_controller
                     .as_ref()
                     .map(|c| matches!(c.status(), AsyncFindStatus::Complete))
                     .unwrap_or(false)
-            });
-            if is_complete {
-                break;
-            }
-            warpui::r#async::Timer::after(std::time::Duration::from_millis(10)).await;
-        }
+            }),
+            "Async find should complete."
+        );
 
         let (status, async_match_count) = test_model.update(&mut app, |model, _ctx| {
             let controller = model

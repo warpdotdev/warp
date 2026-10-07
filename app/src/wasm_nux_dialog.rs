@@ -1,4 +1,5 @@
 use settings::Setting as _;
+use warp_errors::{report_error, report_if_error};
 use warpui::elements::{
     Align, CrossAxisAlignment, Flex, MainAxisSize, MouseStateHandle, ParentElement as _,
 };
@@ -9,12 +10,11 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use crate::appearance::Appearance;
-use crate::report_if_error;
 use crate::settings::app_installation_detection::{
     UserAppInstallDetectionSettings, UserAppInstallStatus,
 };
 use crate::settings::{NativePreferenceSettings, UserNativePreference};
-use crate::ui_components::dialog::{dialog_styles, Dialog};
+use crate::ui_components::dialog::{Dialog, dialog_styles};
 use crate::uri::web_intent_parser::{self, WebIntent};
 
 const CLOSE_BUTTON_DIAMETER: f32 = 20.;
@@ -71,6 +71,7 @@ impl WasmNUXDialog {
     ///
     /// It's shown if all of the following are true:
     /// * Not on a mobile device (mobile users can't use the desktop app)
+    /// * The current URL is not a shared-session or conversation-transcript view
     /// * The user does not have an explicit native/web preference
     /// * The user hasn't dismissed the dialog
     ///
@@ -79,6 +80,17 @@ impl WasmNUXDialog {
     pub fn should_display(app: &AppContext) -> bool {
         // Don't show on mobile devices - they can't use the desktop app
         if warpui::platform::wasm::is_mobile_device() {
+            return false;
+        }
+
+        // Someone just viewing a shared session or a conversation transcript (e.g. a
+        // factory-onboarding link) isn't a prospective new user composing in their own
+        // workspace, so the desktop-download prompt isn't relevant to them. The "Open in
+        // Warp" header button remains available as the unobtrusive path to the app.
+        if matches!(
+            web_intent_parser::current_web_intent(),
+            Some(WebIntent::SessionView(_)) | Some(WebIntent::ConversationView(_))
+        ) {
             return false;
         }
 
@@ -255,7 +267,7 @@ impl TypedActionView for WasmNUXDialog {
                         .user_native_redirect_preference
                         .set_value(UserNativePreference::Web, ctx)
                 }) {
-                    log::error!("Failed to set the open preference to web. {e}");
+                    report_error!(e.context("Failed to set the open preference to web"));
                 };
                 ctx.emit(WasmNUXDialogEvent::Close);
             }
@@ -272,7 +284,7 @@ impl TypedActionView for WasmNUXDialog {
                         },
                     );
                 } else {
-                    log::error!("Failed to open in app. Could not determine current url");
+                    report_error!("Failed to open in app. Could not determine current url");
                 }
             }
             WasmNUXDialogAction::OpenDownloadDesktopAppLink => {

@@ -38,4 +38,6 @@ pub enum ToolToAIAgentActionError {
     MissingSkillReference,
     #[error("Missing required file reference for upload artifact tool call")]
     MissingUploadArtifactFileReference,
+    #[error("Invalid recording window id: {0:?}")]
+    InvalidRecordingWindowId(String),
 }

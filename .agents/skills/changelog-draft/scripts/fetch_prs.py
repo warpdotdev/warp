@@ -17,7 +17,7 @@ import sys
 
 # Matches lines like: CHANGELOG-NEW-FEATURE: Added dark mode
 MARKER_RE = re.compile(
-    r"^CHANGELOG-(NEW-FEATURE|IMPROVEMENT|BUG-FIX|IMAGE|OZ|NONE)\s*:?\s*(.*)$",
+    r"^CHANGELOG-(NEW-FEATURE|IMPROVEMENT|BUG-FIX|IMAGE|OZ|TUI|NONE)\s*:?\s*(.*)$",
     re.MULTILINE,
 )
 
@@ -57,6 +57,10 @@ def get_commits(base_ref: str, head_ref: str) -> list[str]:
     if not log:
         return []
     return log.splitlines()
+
+def get_commit_subject(sha: str) -> str:
+    """Return the first line of a commit message."""
+    return run(["git", "log", "-1", "--format=%s", sha])
 
 
 def extract_pr_number(sha: str) -> int | None:
@@ -285,26 +289,20 @@ def extract_markers(body: str) -> list[dict]:
     return entries
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Fetch PRs in a release range")
-    parser.add_argument("--repo", required=True, help="GitHub repo (owner/name)")
-    parser.add_argument("--base-ref", required=True, help="Previous release tag")
-    parser.add_argument("--head-ref", required=True, help="Current release tag")
-    args = parser.parse_args()
-
-    commit_shas = get_commits(args.base_ref, args.head_ref)
-
+def collect_prs(repo: str, base_ref: str, head_ref: str) -> dict:
+    """Collect normalized PR metadata for a release range."""
+    commit_shas = get_commits(base_ref, head_ref)
     seen_prs: set[int] = set()
     prs: list[dict] = []
 
-    def process_pr(pr_num: int) -> None:
+    def process_pr(pr_num: int, commit_sha: str) -> None:
         """Fetch and record a single PR by number."""
-        data = fetch_pr_data(args.repo, pr_num)
+        data = fetch_pr_data(repo, pr_num)
         if data is None:
             return
-        if not should_include_pr(args.repo, data):
+        if not should_include_pr(repo, data):
             return
-        source_repo, data, internal_pr = normalize_pr_data(args.repo, pr_num, data)
+        source_repo, data, internal_pr = normalize_pr_data(repo, pr_num, data)
         author_login = get_author_login(data)
         label_names = get_label_names(data)
 
@@ -317,6 +315,7 @@ def main() -> None:
             "number": data.get("number", pr_num),
             "url": data.get("url", "") if source_repo == PUBLIC_REPO else "",
             "title": data.get("title", ""),
+            "commit_subject": get_commit_subject(commit_sha),
             "author": author_login,
             "body": body,
             "labels": label_names,
@@ -335,7 +334,7 @@ def main() -> None:
         if pr_num is not None and pr_num not in seen_prs:
             # Normal squash-merge commit
             seen_prs.add(pr_num)
-            process_pr(pr_num)
+            process_pr(pr_num, sha)
         else:
             # Merge commit fallback: walk the merged-in commits for PR numbers.
             # This handles branches merged via merge commit (e.g. security-patches)
@@ -344,12 +343,22 @@ def main() -> None:
                 inner_pr = extract_pr_number(merged_sha)
                 if inner_pr is not None and inner_pr not in seen_prs:
                     seen_prs.add(inner_pr)
-                    process_pr(inner_pr)
+                    process_pr(inner_pr, merged_sha)
 
-    output = {
-        "range": {"base": args.base_ref, "head": args.head_ref},
+    return {
+        "range": {"base": base_ref, "head": head_ref},
         "prs": prs,
     }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Fetch PRs in a release range")
+    parser.add_argument("--repo", required=True, help="GitHub repo (owner/name)")
+    parser.add_argument("--base-ref", required=True, help="Previous release tag")
+    parser.add_argument("--head-ref", required=True, help="Current release tag")
+    args = parser.parse_args()
+
+    output = collect_prs(args.repo, args.base_ref, args.head_ref)
     json.dump(output, sys.stdout, indent=2)
     print()  # trailing newline
 

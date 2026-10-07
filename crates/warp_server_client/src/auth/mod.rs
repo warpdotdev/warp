@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result, anyhow};
 use async_trait::async_trait;
+use cloud_objects::ids::ServerId;
 use cynic::{MutationBuilder, QueryBuilder};
 use firebase::FirebaseError;
 use instant::Duration;
@@ -13,7 +14,7 @@ use mockall::automock;
 pub use session::*;
 use thiserror::Error;
 pub use user_uid::{TEST_USER_EMAIL, TEST_USER_UID, UserUid};
-use warp_core::errors::{AnyhowErrorExt, ErrorExt, register_error};
+use warp_errors::{AnyhowErrorExt, ErrorExt, register_error};
 use warp_graphql::client::Operation;
 use warp_graphql::mutations::create_anonymous_user::{
     AnonymousUserType, CreateAnonymousUser, CreateAnonymousUserResult, CreateAnonymousUserVariables,
@@ -40,8 +41,8 @@ use warp_graphql::queries::get_user_settings::{GetUserSettings, GetUserSettingsV
 use warp_server_auth::credentials::{AuthToken, Credentials, FirebaseToken, LoginToken};
 pub use warp_server_auth::user_uid;
 
-use crate::base_client::BaseClient;
-use crate::graphql_helpers::send_graphql_request;
+use crate::base_client::{BaseClient, TEAM_UID_HEADER};
+use crate::graphql_helpers::{send_graphql_request, send_graphql_request_with_options};
 use crate::ids::ApiKeyUid;
 
 /// Header key used to associate unauthenticated requests with an experiment identity.
@@ -53,6 +54,12 @@ pub struct AgentIdentity {
     pub uid: String,
     pub name: String,
     pub available: bool,
+}
+
+/// Wrapper for the `GET /api/v1/agent/identities` response.
+#[derive(serde::Deserialize)]
+struct AgentIdentitiesResponse {
+    agents: Vec<AgentIdentity>,
 }
 
 /// User settings that are stored server-side on a per-user basis.
@@ -145,7 +152,7 @@ pub trait AuthClient: Send + Sync {
         timeout: Duration,
     ) -> StdResult<FirebaseToken, UserAuthenticationError>;
 
-    async fn list_api_keys(&self) -> Result<Vec<ApiKeyProperties>>;
+    async fn list_api_keys(&self, team_uid: Option<ServerId>) -> Result<Vec<ApiKeyProperties>>;
 
     async fn create_api_key(
         &self,
@@ -158,17 +165,19 @@ pub trait AuthClient: Send + Sync {
     async fn expire_api_key(&self, key_uid: &ApiKeyUid) -> Result<ExpireApiKeyResult>;
 
     /// Fetches the list of named agent identities for the user's team.
-    async fn list_agent_identities(&self) -> Result<Vec<AgentIdentity>>;
+    async fn list_agent_identities(&self, team_uid: Option<ServerId>)
+    -> Result<Vec<AgentIdentity>>;
 }
 
 /// Implements the [`AuthClient`] trait on top of a base client and auth session.
 pub struct AuthClientImpl {
-    base_client: Arc<dyn BaseClient>,
+    base_client: Arc<BaseClient>,
     auth_session: Arc<AuthSession>,
 }
 
 impl AuthClientImpl {
-    pub fn new(base_client: Arc<dyn BaseClient>, auth_session: Arc<AuthSession>) -> Self {
+    pub fn new(base_client: Arc<BaseClient>) -> Self {
+        let auth_session = base_client.auth_session();
         Self {
             base_client,
             auth_session,
@@ -184,7 +193,7 @@ impl AuthClientImpl {
             input,
             request_context: warp_graphql::client::get_request_context(),
         });
-        let result = send_graphql_request(self.base_client.as_ref(), operation, None)
+        let result = send_graphql_request(&self.base_client, operation, None)
             .await?
             .update_user_settings;
         Self::on_settings_updated(result, unknown_error_message)
@@ -222,8 +231,8 @@ impl AuthClient for AuthClientImpl {
         });
         let response = operation
             .send_request(
-                self.base_client.http_client(),
-                self.base_client.unauthenticated_graphql_request_options(),
+                self.base_client.owned_http_client(),
+                self.base_client.graphql_request_options_with_token(None),
             )
             .await?;
         Ok(response
@@ -269,7 +278,7 @@ impl AuthClient for AuthClientImpl {
                 request_context: warp_graphql::client::get_request_context(),
             },
         );
-        let response = send_graphql_request(self.base_client.as_ref(), operation, None).await?;
+        let response = send_graphql_request(&self.base_client, operation, None).await?;
         Ok(response.mint_custom_token)
     }
 
@@ -295,14 +304,15 @@ impl AuthClient for AuthClientImpl {
         let operation = GetUser::build(GetUserVariables {
             request_context: warp_graphql::client::get_request_context(),
         });
-        let mut options = self.base_client.unauthenticated_graphql_request_options();
-        options.auth_token = auth_token.map(ToOwned::to_owned);
+        let mut options = self
+            .base_client
+            .graphql_request_options_with_token(auth_token.map(ToOwned::to_owned));
         options.headers.insert(
             EXPERIMENT_ID_HEADER.to_string(),
             self.base_client.anonymous_id(),
         );
         let response = operation
-            .send_request(self.base_client.http_client(), options)
+            .send_request(self.base_client.owned_http_client(), options)
             .await?
             .data
             .ok_or_else(|| anyhow!("Expected valid response.data"))?;
@@ -407,11 +417,19 @@ impl AuthClient for AuthClientImpl {
             .await
     }
 
-    async fn list_api_keys(&self) -> Result<Vec<ApiKeyProperties>> {
+    async fn list_api_keys(&self, team_uid: Option<ServerId>) -> Result<Vec<ApiKeyProperties>> {
         let operation = ApiKeys::build(ApiKeysVariables {
             request_context: warp_graphql::client::get_request_context(),
         });
-        let response = send_graphql_request(self.base_client.as_ref(), operation, None).await?;
+        let mut options = self.base_client.graphql_request_options(None).await?;
+        if let Some(team_uid) = team_uid {
+            options
+                .headers
+                .insert(TEAM_UID_HEADER.to_string(), team_uid.uid());
+        }
+        let response =
+            send_graphql_request_with_options(self.base_client.as_ref(), operation, options)
+                .await?;
         match response.api_keys {
             ApiKeyPropertiesResult::ApiKeyPropertiesOutput(output) => Ok(output.api_keys),
             ApiKeyPropertiesResult::UserFacingError(error) => Err(anyhow!(
@@ -450,8 +468,15 @@ impl AuthClient for AuthClientImpl {
         Ok(response.expire_api_key)
     }
 
-    async fn list_agent_identities(&self) -> Result<Vec<AgentIdentity>> {
-        self.base_client.list_agent_identities().await
+    async fn list_agent_identities(
+        &self,
+        team_uid: Option<ServerId>,
+    ) -> Result<Vec<AgentIdentity>> {
+        let response: AgentIdentitiesResponse = self
+            .base_client
+            .get_public_api_for_team("agent/identities", team_uid)
+            .await?;
+        Ok(response.agents)
     }
 }
 
@@ -470,6 +495,8 @@ pub enum UserAuthenticationError {
     InvalidStateParameter,
     #[error("Missing state parameter in auth redirect")]
     MissingStateParameter,
+    #[error("Timed out requesting a sign-in link after {attempts} attempts")]
+    DeviceCodeRequestTimedOut { attempts: usize },
     #[error("unexpected error occurred when fetching an ID token: {0:#}")]
     Unexpected(#[from] anyhow::Error),
 }
@@ -489,6 +516,7 @@ impl ErrorExt for UserAuthenticationError {
                 log::info!("ignoring user account disabled error: {error:#}");
                 false
             }
+            UserAuthenticationError::DeviceCodeRequestTimedOut { .. } => false,
             UserAuthenticationError::Unexpected(error) => error.is_actionable(),
             UserAuthenticationError::InvalidStateParameter
             | UserAuthenticationError::MissingStateParameter => {

@@ -421,6 +421,15 @@ impl Default for AIExecutionProfile {
 }
 
 impl AIExecutionProfile {
+    /// Creates the TUI default while retaining every shared profile default
+    /// except command execution approval.
+    pub fn default_profile_for_tui() -> Self {
+        Self {
+            execute_commands: ActionPermission::AgentDecides,
+            ..Default::default()
+        }
+    }
+
     #[cfg(feature = "agent_mode_evals")]
     pub fn create_agent_mode_eval_profile() -> Self {
         Self {

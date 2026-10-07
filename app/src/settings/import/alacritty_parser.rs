@@ -11,8 +11,8 @@ use warp_core::ui::theme::{AnsiColor, AnsiColors, TerminalColors, WarpTheme};
 use warpui::fonts::FontInfo;
 
 use super::config::{
-    calculate_accent_color, Config, ConfigError, ImportableSetting, ParseableConfig, SettingType,
-    ThemeType,
+    Config, ConfigError, ImportableSetting, ParseableConfig, SettingType, ThemeType,
+    calculate_accent_color,
 };
 use crate::settings::import::config::ThemeError;
 

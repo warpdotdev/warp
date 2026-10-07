@@ -3,8 +3,8 @@ use string_offset::ByteOffset;
 use warpui_core::platform::OperatingSystem;
 
 use super::context::CompletionContext;
-use super::suggest::{suggestions, CompleterOptions, CompletionsFallbackStrategy, SuggestionType};
-use super::{get_path_separators, Match, MatchStrategy};
+use super::suggest::{CompleterOptions, CompletionsFallbackStrategy, SuggestionType, suggestions};
+use super::{Match, MatchStrategy, get_path_separators};
 use crate::completer::suggest::MatchRequirement;
 use crate::meta::{HasSpan, Span, Spanned, SpannedItem};
 use crate::parsers::simple::command_at_cursor_position;
@@ -254,6 +254,6 @@ fn floor_char_boundary(original_string: &str, idx: usize) -> usize {
     }
 }
 
-#[cfg(all(test, not(feature = "v2")))]
+#[cfg(test)]
 #[path = "describe_tests.rs"]
 mod tests;

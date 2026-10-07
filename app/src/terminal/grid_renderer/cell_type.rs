@@ -6,9 +6,9 @@ use pathfinder_color::ColorU;
 
 use super::{BLOCK_FILTER_MATCH_COLOR, FOCUSED_MATCH_COLOR, MATCH_COLOR, URL_COLOR};
 use crate::terminal::color;
-use crate::terminal::model::ansi::{color_index, Color, NamedColor};
-use crate::terminal::model::cell::{Cell, Flags};
 use crate::terminal::model::ObfuscateSecrets;
+use crate::terminal::model::ansi::{Color, NamedColor, color_index};
+use crate::terminal::model::cell::{Cell, Flags};
 use crate::util::color::OPAQUE;
 
 #[derive(PartialEq)]

@@ -9,6 +9,9 @@ use itertools::Itertools;
 use serde::de::DeserializeOwned;
 use walkdir::{DirEntry, WalkDir};
 
+use crate::ai::custom_model_routers::{
+    CustomModelRouter, ModelConfigError, parse_model_config_yaml,
+};
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::tab_configs::{TabConfig, TabConfigError};
 use crate::themes::theme::{ThemeKind, WarpTheme, WarpThemeConfig};
@@ -54,14 +57,14 @@ where
     F: Fn(String, T) -> G,
     T: DeserializeOwned,
 {
-    if let Some(file_name) = get_file_name(item) {
-        if is_config_file(&file_name) {
-            let parsed = from_yaml::<T>(item.path().into());
-            match parsed {
-                Ok(parsed) => return Some(post_deserialize_fn(file_name, parsed)),
-                Err(e) => {
-                    log::warn!("Failed to parse config file at {file_name:?} with error: {e:?}")
-                }
+    if let Some(file_name) = get_file_name(item)
+        && is_config_file(&file_name)
+    {
+        let parsed = from_yaml::<T>(item.path().into());
+        match parsed {
+            Ok(parsed) => return Some(post_deserialize_fn(file_name, parsed)),
+            Err(e) => {
+                log::warn!("Failed to parse config file at {file_name:?} with error: {e:?}")
             }
         }
     }
@@ -87,21 +90,21 @@ where
     F: Fn(String, T) -> G,
     T: DeserializeOwned,
 {
-    if let Some(file_name) = get_file_name(item) {
-        if is_config_file(&file_name) {
-            let parsed = from_multi_doc_yaml::<T>(item.path().into());
-            match parsed {
-                Ok(parsed) => {
-                    return Some(
-                        parsed
-                            .into_iter()
-                            .map(|val| post_deserialize_fn(file_name.clone(), val))
-                            .collect_vec(),
-                    );
-                }
-                Err(e) => {
-                    log::warn!("Failed to parse config file at {file_name:?} with error: {e:?}")
-                }
+    if let Some(file_name) = get_file_name(item)
+        && is_config_file(&file_name)
+    {
+        let parsed = from_multi_doc_yaml::<T>(item.path().into());
+        match parsed {
+            Ok(parsed) => {
+                return Some(
+                    parsed
+                        .into_iter()
+                        .map(|val| post_deserialize_fn(file_name.clone(), val))
+                        .collect_vec(),
+                );
+            }
+            Err(e) => {
+                log::warn!("Failed to parse config file at {file_name:?} with error: {e:?}")
             }
         }
     }
@@ -184,6 +187,28 @@ pub(super) fn parse_tab_config_dir_entry(
                 error_message: e.to_string(),
             }),
     )
+}
+
+/// Parses a `DirEntry` as a single custom model router (one router per YAML file).
+/// Returns `None` for non-config files, otherwise the parsed router or a
+/// [`ModelConfigError`] describing the read/parse/validation failure.
+pub(super) fn parse_model_config_dir_entry(
+    item: &DirEntry,
+) -> Option<Result<CustomModelRouter, ModelConfigError>> {
+    let file_name = get_file_name(item)?;
+    if !is_config_file(&file_name) {
+        return None;
+    }
+    let make_error = |message: String| ModelConfigError {
+        file_name: file_name.clone(),
+        file_path: item.path().into(),
+        error_message: message,
+    };
+    let contents = match fs::read_to_string(item.path()) {
+        Ok(contents) => contents,
+        Err(e) => return Some(Err(make_error(e.to_string()))),
+    };
+    Some(parse_model_config_yaml(&contents, Some(item.path())).map_err(make_error))
 }
 
 /// Runs the given function on each `DirEntry` within the `Path`. If the path is not a directory,

@@ -1,6 +1,7 @@
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::Fill;
+use warp_errors::report_error;
 use warpui::elements::{
     Align, ChildAnchor, ConstrainedBox, Container, CrossAxisAlignment, Flex, Hoverable,
     MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Stack,
@@ -15,10 +16,10 @@ use warpui::{
     AppContext, Element, Entity, EntityId, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
-use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentExchangeId;
+use crate::ai::agent::conversation::AIConversationId;
 use crate::appearance::Appearance;
-use crate::ui_components::dialog::{dialog_styles, Dialog};
+use crate::ui_components::dialog::{Dialog, dialog_styles};
 use crate::ui_components::icons::Icon;
 
 pub fn init(app: &mut AppContext) {
@@ -255,7 +256,7 @@ impl TypedActionView for RewindConfirmationDialog {
         match action {
             RewindConfirmationAction::Confirm => {
                 let Some(rewind_source) = self.rewind_source.clone() else {
-                    log::error!("Rewind confirm button pressed with no rewind source");
+                    report_error!("Rewind confirm button pressed with no rewind source");
                     return;
                 };
                 ctx.emit(RewindConfirmationEvent::Confirm { rewind_source });

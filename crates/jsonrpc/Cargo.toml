@@ -1,11 +1,12 @@
 [package]
 name = "jsonrpc"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 publish.workspace = true
 license.workspace = true
 
 [dependencies]
+warp_errors.workspace = true
 anyhow.workspace = true
 async-channel.workspace = true
 async-trait.workspace = true

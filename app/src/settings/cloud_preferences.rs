@@ -14,6 +14,7 @@ define_settings_group!(CloudPreferencesSettings, settings: [
        default: false,
        supported_platforms: SupportedPlatforms::ALL,
        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+       surface: settings::SettingSurfaces::GUI,
        private: false,
        toml_path: "account.is_settings_sync_enabled",
        description: "Whether settings are synced across devices via the cloud.",
@@ -59,7 +60,7 @@ impl StringModel for Preference {
         QueueItem::UpdateCloudPreferences {
             model: object.model().clone().into(),
             id: object.id,
-            revision: revision_ts.or_else(|| object.metadata.revision.clone()),
+            revision: revision_ts.or(object.metadata.revision),
         }
     }
 

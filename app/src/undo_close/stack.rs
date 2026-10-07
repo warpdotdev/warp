@@ -1,18 +1,20 @@
 use uuid::Uuid;
+use warp_errors::report_error;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{
     AppContext, ClosedWindowData, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity,
     ViewHandle, WeakViewHandle, WindowId,
 };
 
-use super::settings::UndoCloseSettingsChangedEvent;
 use super::UndoCloseSettings;
+use super::settings::UndoCloseSettingsChangedEvent;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::pane_group::{PaneGroup, PaneId};
 use crate::send_telemetry_from_app_ctx;
 use crate::server::telemetry::{TelemetryEvent, UndoCloseItemType};
 use crate::tab::TabData;
+use crate::window_settings::WindowSettings;
 use crate::workspace::Workspace;
 
 /// A unique identifier for an item in the undo close stack.
@@ -129,7 +131,8 @@ impl ClosedItem {
 
             for terminal_view_id in terminal_view_ids {
                 history_model.update(ctx, |history_model, _| {
-                    history_model.mark_conversations_historical_for_terminal_view(terminal_view_id);
+                    history_model
+                        .mark_conversations_historical_for_terminal_surface(terminal_view_id);
                 });
             }
         }
@@ -138,7 +141,10 @@ impl ClosedItem {
     fn clean_up_pane_group(pane_group: &ViewHandle<PaneGroup>, ctx: &mut AppContext) {
         let window_id = pane_group.window_id(ctx);
 
-        if !ctx.is_window_open(window_id) {
+        if ctx
+            .view_with_id::<PaneGroup>(window_id, pane_group.id())
+            .is_none()
+        {
             return;
         }
 
@@ -259,7 +265,14 @@ impl UndoCloseStack {
                 );
 
                 let window_id = data.window_id;
-                ctx.reopen_closed_window(*data);
+                let (background_blur_radius_pixels, background_backdrop) = {
+                    let window_settings = WindowSettings::as_ref(ctx);
+                    (
+                        Some(*window_settings.background_blur_radius),
+                        *window_settings.background_backdrop,
+                    )
+                };
+                ctx.reopen_closed_window(*data, background_blur_radius_pixels, background_backdrop);
 
                 if let Some(workspace) = window_workspace(window_id, ctx) {
                     workspace.update(ctx, |workspace, ctx| {
@@ -370,9 +383,9 @@ impl UndoCloseStack {
                 }
                 // Log errors if the expired item was not found or multiple items were found
                 if me.stack.len() == initial_len {
-                    log::error!("Undo close expiry task did not find item in stack!");
+                    report_error!("Undo close expiry task did not find item in stack!");
                 } else if me.stack.len() < initial_len - 1 {
-                    log::error!("Undo close expiry task found multiple matching items in stack!");
+                    report_error!("Undo close expiry task found multiple matching items in stack!");
                 } else {
                     log::debug!("Removed expired item from undo stack");
                 }

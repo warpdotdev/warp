@@ -44,4 +44,4 @@ if [[ "$ARTIFACT" == "app" ]]; then
 fi
 
 # Prepare the bundled resources directory.
-"$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "${TARGET_DIR}/${OPT_DIR}/resources" "$RELEASE_CHANNEL" "$CARGO_PROFILE"
+"$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "${TARGET_DIR}/${OPT_DIR}/resources" "$RELEASE_CHANNEL"

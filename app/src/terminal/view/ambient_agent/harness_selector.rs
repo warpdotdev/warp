@@ -8,8 +8,9 @@ use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
 use warp_cli::agent::Harness;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
+use warp_errors::report_if_error;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, OffsetPositioning, ParentAnchor, ParentElement as _,
     ParentOffsetBounds, Stack,
@@ -24,7 +25,6 @@ use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display::{brand_color, icon_for};
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
-use crate::report_if_error;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
 use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 use crate::view_components::action_button::{ActionButton, ActionButtonTheme, ButtonSize};
@@ -144,14 +144,12 @@ impl HarnessSelector {
             .last_selected_harness
             .value()
             .as_deref()
+            && let Some(harness) = Harness::from_config_name(saved)
+            && HarnessAvailabilityModel::as_ref(ctx).is_harness_enabled(harness)
         {
-            if let Some(harness) = Harness::from_config_name(saved) {
-                if HarnessAvailabilityModel::as_ref(ctx).is_harness_enabled(harness) {
-                    me.ambient_agent_model.update(ctx, |model, ctx| {
-                        model.set_harness(harness, ctx);
-                    });
-                }
-            }
+            me.ambient_agent_model.update(ctx, |model, ctx| {
+                model.set_harness(harness, ctx);
+            });
         }
         me.refresh_button(ctx);
         me.refresh_menu(ctx);
@@ -348,9 +346,11 @@ impl TypedActionView for HarnessSelector {
                 });
                 // Persist the selection to settings for next time.
                 CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .last_selected_harness
-                        .set_value(Some(harness.config_name().to_string()), ctx));
+                    report_if_error!(
+                        settings
+                            .last_selected_harness
+                            .set_value(Some(harness.config_name().to_string()), ctx)
+                    );
                 });
                 self.set_menu_visibility(false, ctx);
             }

@@ -11,6 +11,32 @@ cat > "$temp_dir/bin/cargo" <<'EOF'
 printf '%s\n' "$@" > "$CARGO_ARGS_FILE"
 EOF
 chmod +x "$temp_dir/bin/cargo"
+cat > "$temp_dir/bin/rustup" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$temp_dir/bin/rustup"
+
+case "$(uname -m)" in
+  arm64|aarch64)
+    arch="aarch64"
+    ;;
+  x86_64|amd64)
+    arch="x86_64"
+    ;;
+  *)
+    echo "Unsupported architecture: $(uname -m)" >&2
+    exit 1
+    ;;
+esac
+target="$arch-unknown-linux-musl"
+for compiler in "$target-gcc" "$target-g++" "$target-strip"; do
+  cat > "$temp_dir/bin/$compiler" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$temp_dir/bin/$compiler"
+done
 
 PATH="$temp_dir/bin:$PATH" \
   CARGO_ARGS_FILE="$temp_dir/cargo-args" \
@@ -18,12 +44,13 @@ PATH="$temp_dir/bin:$PATH" \
   "$workspace_root/script/linux/bundle" \
   --check-only \
   --artifact warpctrl \
+  --arch "$arch" \
   --features smoke_feature
 
 grep -qx -- '--features' "$temp_dir/cargo-args"
-grep -qx -- 'release_bundle,crash_reporting,agent_mode_debug,jemalloc_pprof,standalone,warp_control_cli,smoke_feature' "$temp_dir/cargo-args"
+grep -qx -- 'release_bundle,crash_reporting,agent_mode_debug,jemalloc_pprof,heap_usage_tracking,standalone,warp_control_cli,smoke_feature' "$temp_dir/cargo-args"
 
-profile_dir="$temp_dir/target/release-cli-debug_assertions"
+profile_dir="$temp_dir/target/$target/release-cli-debug_assertions"
 mkdir -p "$profile_dir"
 cat > "$profile_dir/dev" <<'EOF'
 #!/usr/bin/env bash
@@ -31,12 +58,14 @@ printf '%s\n' "$@" > "$FORWARDED_ARGS_FILE"
 EOF
 chmod +x "$profile_dir/dev"
 
-CARGO_TARGET_DIR="$temp_dir/target" \
+PATH="$temp_dir/bin:$PATH" \
+  CARGO_TARGET_DIR="$temp_dir/target" \
   NO_LICENSES=1 \
   SKIP_SETTINGS_SCHEMA=1 \
   "$workspace_root/script/linux/bundle" \
   --skip-build \
-  --artifact warpctrl
+  --artifact warpctrl \
+  --arch "$arch"
 
 FORWARDED_ARGS_FILE="$temp_dir/forwarded-args" \
   "$profile_dir/bundle/linux/warpctrl" tab create --instance "inst 123"

@@ -6,6 +6,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 axum.workspace = true
 log.workspace = true
 tokio.workspace = true
@@ -13,3 +14,4 @@ tower.workspace = true
 tower-http = { workspace = true, features = ["trace", "cors"] } 
 warpui_core.workspace = true
 warp_core.workspace = true
+warp_errors.workspace = true

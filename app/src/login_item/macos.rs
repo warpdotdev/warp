@@ -5,9 +5,9 @@
 //! updates, but we don't try to register against a class that isn't there.
 
 use ::settings::Setting;
+use warp_errors::report_if_error;
 use warpui::{AppContext, SingletonEntity};
 
-use crate::report_if_error;
 use crate::terminal::general_settings::GeneralSettings;
 
 pub(super) fn maybe_register_app_as_login_item(ctx: &mut AppContext) {
@@ -61,9 +61,11 @@ pub(super) fn maybe_register_app_as_login_item(ctx: &mut AppContext) {
                 false
             },
             |settings, app_added_as_login_item, ctx| {
-                report_if_error!(settings
-                    .app_added_as_login_item
-                    .set_value(app_added_as_login_item, ctx));
+                report_if_error!(
+                    settings
+                        .app_added_as_login_item
+                        .set_value(app_added_as_login_item, ctx)
+                );
             },
         );
     });

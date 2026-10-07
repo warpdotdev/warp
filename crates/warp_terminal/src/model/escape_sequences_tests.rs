@@ -2,9 +2,9 @@ use warpui_core::keymap::Keystroke;
 use warpui_core::platform::OperatingSystem;
 
 use super::*;
+use crate::model::TermMode;
 use crate::model::indexing::Point;
 use crate::model::mouse::{MouseAction, MouseButton, MouseState};
-use crate::model::TermMode;
 
 fn validate_keystroke_test_cases<T: ModeProvider>(
     test_cases: &[(Keystroke, Vec<u8>)],
@@ -51,10 +51,43 @@ fn test_keystroke_to_c0_control_code() {
         (Keystroke::parse("ctrl-6").unwrap(), vec![C0::RS]),
         (Keystroke::parse("ctrl-7").unwrap(), vec![C0::US]),
         (Keystroke::parse("ctrl-8").unwrap(), vec![C0::DEL]),
+        // `ctrl-/` is an xterm-era addition to the VT220 table. GH#4620.
+        (Keystroke::parse("ctrl-/").unwrap(), vec![C0::US]),
     ];
 
     let terminal_model_mock = TerminalModelMock::new();
     validate_keystroke_test_cases(test_cases, &terminal_model_mock);
+}
+
+#[test]
+fn test_ctrl_slash_emits_us_control_code() {
+    // Regression test for GH#4620: `ctrl-/` must reach the pty as US (0x1f), which is what
+    // Vim/Neovim's `<C-/>` mappings listen for. No platform keyboard layer folds `ctrl-/` into a
+    // control byte, so without an explicit mapping a bare `/` was sent instead.
+    let terminal_model_mock = TerminalModelMock::new();
+    let ctrl_slash = Keystroke::parse("ctrl-/").unwrap();
+
+    assert_eq!(
+        Some(vec![0x1f]),
+        KeystrokeWithDetails {
+            keystroke: &ctrl_slash,
+            key_without_modifiers: Some("/"),
+            chars: Some("/"),
+        }
+        .to_escape_sequence(&terminal_model_mock)
+    );
+
+    // An unmodified `/` is still ordinary text.
+    let slash = Keystroke::parse("/").unwrap();
+    assert_eq!(
+        None,
+        KeystrokeWithDetails {
+            keystroke: &slash,
+            key_without_modifiers: Some("/"),
+            chars: Some("/"),
+        }
+        .to_escape_sequence(&terminal_model_mock)
+    );
 }
 
 #[test]
@@ -68,6 +101,14 @@ fn test_shift_backspace_emits_del_sequence() {
 
     let terminal_model_mock = TerminalModelMock::new();
     validate_keystroke_test_cases(test_cases, &terminal_model_mock);
+}
+
+#[test]
+fn tmux_passthrough_wraps_and_doubles_escapes() {
+    assert_eq!(
+        tmux_passthrough("\x1b]52;c;abc\x07"),
+        "\x1bPtmux;\x1b\x1b]52;c;abc\x07\x1b\\"
+    );
 }
 
 #[test]
@@ -172,6 +213,29 @@ fn test_mouse_actions_to_escape_sequence() {
 
     let terminal_model_mock = TerminalModelMock::new();
     validate_mouse_test_cases(test_cases, &terminal_model_mock);
+}
+
+#[test]
+fn test_alt_screen_scroll_to_pty_bytes() {
+    let terminal_model = TerminalModelMock::new();
+    let point = Point::new(3, 2);
+
+    assert_eq!(
+        alt_screen_scroll_to_pty_bytes(2, point, false, &terminal_model),
+        Some(b"\x1bOA\x1bOA".to_vec())
+    );
+    assert_eq!(
+        alt_screen_scroll_to_pty_bytes(-2, point, false, &terminal_model),
+        Some(b"\x1bOB\x1bOB".to_vec())
+    );
+    assert_eq!(
+        alt_screen_scroll_to_pty_bytes(1, point, true, &terminal_model),
+        Some(b"\x1b[<64;3;4M".to_vec())
+    );
+    assert_eq!(
+        alt_screen_scroll_to_pty_bytes(0, point, true, &terminal_model),
+        None
+    );
 }
 
 #[test]
@@ -497,6 +561,71 @@ fn test_unmatched_keystroke_does_not_yield_escape_sequence() {
         .to_escape_sequence(&terminal_model_mock);
         assert_eq!(result, None);
     }
+}
+
+#[test]
+fn test_to_pty_bytes_layers_fallbacks_over_the_encoder() {
+    let mock = TerminalModelMock::new();
+    let pty_bytes = |keystroke: &Keystroke, chars: Option<&str>| {
+        KeystrokeWithDetails {
+            keystroke,
+            key_without_modifiers: None,
+            chars,
+        }
+        .to_pty_bytes(&mock)
+    };
+    // A key with no `chars` and no encoder mapping, built the way the
+    // crossterm→key-event conversion supplies named keys.
+    let named = |key: &str| Keystroke {
+        ctrl: false,
+        alt: false,
+        shift: false,
+        cmd: false,
+        meta: false,
+        key: key.to_owned(),
+    };
+
+    // 1. The shared encoder still wins for special keys.
+    assert_eq!(
+        pty_bytes(&Keystroke::parse("up").unwrap(), None),
+        Some(vec![C0::ESC, b'[', b'A'])
+    );
+    assert_eq!(
+        pty_bytes(&Keystroke::parse("backspace").unwrap(), None),
+        Some(vec![C0::DEL])
+    );
+
+    // 2. Ctrl+letter -> C0 (0x01..0x1A); the encoder leaves these alone here.
+    assert_eq!(
+        pty_bytes(&Keystroke::parse("ctrl-a").unwrap(), Some("a")),
+        Some(vec![0x01])
+    );
+    assert_eq!(
+        pty_bytes(&Keystroke::parse("ctrl-c").unwrap(), Some("c")),
+        Some(vec![0x03])
+    );
+    assert_eq!(
+        pty_bytes(&Keystroke::parse("ctrl-d").unwrap(), Some("d")),
+        Some(vec![0x04])
+    );
+
+    // 3. Printable text -> its UTF-8 bytes.
+    assert_eq!(
+        pty_bytes(&Keystroke::parse("a").unwrap(), Some("a")),
+        Some(b"a".to_vec())
+    );
+    assert_eq!(
+        pty_bytes(&Keystroke::parse("1").unwrap(), Some("1")),
+        Some(b"1".to_vec())
+    );
+
+    // 4. Named control keys with no `chars` -> their C0 bytes.
+    assert_eq!(pty_bytes(&named("enter"), None), Some(vec![C0::CR]));
+    assert_eq!(pty_bytes(&named("escape"), None), Some(vec![C0::ESC]));
+    assert_eq!(pty_bytes(&named("tab"), None), Some(vec![C0::HT]));
+
+    // Nothing to send.
+    assert_eq!(pty_bytes(&named("insert"), None), None);
 }
 
 struct TerminalModelMock {
@@ -1030,4 +1159,135 @@ fn test_keyboard_enhancement_event_types() {
         .to_escape_sequence(&mock),
         Some(b"\x1b[13;2u".to_vec())
     );
+}
+
+/// Regression test for macOS editing keys under the Kitty keyboard protocol (GH#9159).
+///
+/// Each case asserts the exact bytes Kitty/Ghostty emit under `DISAMBIGUATE_ESCAPE`:
+/// - Backspace (codepoint 127, no legacy code) → CSI u.
+/// - Arrows, Home/End & Delete (own legacy codes) → the legacy `CSI 1;<mods><letter>` /
+///   `CSI 3;<mods>~` forms.
+#[test]
+fn test_kitty_protocol_cmd_and_option_editing_keys() {
+    // `Keystroke::parse` has no portable `cmd-` token in these tests, so build Cmd combos
+    // as literals.
+    let cmd = |key: &str| Keystroke {
+        ctrl: false,
+        alt: false,
+        shift: false,
+        cmd: true,
+        meta: false,
+        key: key.to_owned(),
+    };
+
+    let mock = mock_with_disambiguate_only();
+
+    // OS-independent: Cmd is unrepresentable in legacy encoding on every platform, and raw
+    // Option on a non-printable functional key never composes via the IME, so both are
+    // always ambiguous → CSI u / modified legacy form.
+    let os_independent: &[(Keystroke, Vec<u8>)] = &[
+        // Backspace → CSI u (key code 127).
+        (cmd("backspace"), b"\x1b[127;9u".to_vec()),
+        (
+            Keystroke::parse("alt-backspace").unwrap(),
+            b"\x1b[127;3u".to_vec(),
+        ),
+        // Arrows and Home/End → legacy `CSI 1;<mods> <letter>` (Kitty keeps the legacy
+        // code for these).
+        (cmd("left"), b"\x1b[1;9D".to_vec()),
+        (cmd("right"), b"\x1b[1;9C".to_vec()),
+        (cmd("home"), b"\x1b[1;9H".to_vec()),
+        (cmd("end"), b"\x1b[1;9F".to_vec()),
+        (Keystroke::parse("alt-left").unwrap(), b"\x1b[1;3D".to_vec()),
+        (
+            Keystroke::parse("alt-right").unwrap(),
+            b"\x1b[1;3C".to_vec(),
+        ),
+        (Keystroke::parse("alt-home").unwrap(), b"\x1b[1;3H".to_vec()),
+        (Keystroke::parse("alt-end").unwrap(), b"\x1b[1;3F".to_vec()),
+        // Delete → legacy `CSI 3;<mods> ~`.
+        (cmd("delete"), b"\x1b[3;9~".to_vec()),
+        (
+            Keystroke::parse("alt-delete").unwrap(),
+            b"\x1b[3;3~".to_vec(),
+        ),
+    ];
+    validate_keystroke_test_cases(os_independent, &mock);
+}
+
+/// On macOS, Option+Space composes a non-breaking space via the IME. Composition is detected
+/// from the OS-provided `chars`.
+#[test]
+fn test_kitty_protocol_mac_option_space_composition_is_not_disambiguated() {
+    if !warpui_core::platform::OperatingSystem::get().is_mac() {
+        return;
+    }
+
+    let mock = mock_with_disambiguate_only();
+    let option_space = Keystroke {
+        ctrl: false,
+        alt: true,
+        shift: false,
+        cmd: false,
+        meta: false,
+        key: "space".to_owned(),
+    };
+
+    // Composed text present → Option is part of the character, not a modifier → not
+    // disambiguated (None, so the composed nbsp flows through the caller's text fallback).
+    assert_eq!(
+        KeystrokeWithDetails {
+            keystroke: &option_space,
+            key_without_modifiers: None,
+            chars: Some("\u{a0}"),
+        }
+        .to_escape_sequence(&mock),
+        None
+    );
+
+    // No composed text → nothing to pass through, so the key stays ambiguous and is
+    // disambiguated as CSI u (base key 'space' = 32, Alt modifier = 3).
+    assert_eq!(
+        KeystrokeWithDetails {
+            keystroke: &option_space,
+            key_without_modifiers: None,
+            chars: None,
+        }
+        .to_escape_sequence(&mock),
+        Some(b"\x1b[32;3u".to_vec())
+    );
+}
+
+/// Function keys use `modifier_param`, which encodes Super and multi-digit values
+/// (Cmd = 9, Cmd+Shift = 10).
+#[test]
+fn test_fn_keystroke_with_cmd_modifier() {
+    let cmd = |key: &str| Keystroke {
+        ctrl: false,
+        alt: false,
+        shift: false,
+        cmd: true,
+        meta: false,
+        key: key.to_owned(),
+    };
+    let cmd_shift = |key: &str| Keystroke {
+        ctrl: false,
+        alt: false,
+        shift: true,
+        cmd: true,
+        meta: false,
+        key: key.to_owned(),
+    };
+
+    let mock = TerminalModelMock::new();
+    let cases: &[(Keystroke, Vec<u8>)] = &[
+        // F1-F4 use the SS3-derived `CSI 1;<mods> P/Q/R/S` form.
+        (cmd("f1"), b"\x1b[1;9P".to_vec()),
+        // F5+ use the `CSI <n>;<mods> ~` form.
+        (cmd("f5"), b"\x1b[15;9~".to_vec()),
+        (cmd("f12"), b"\x1b[24;9~".to_vec()),
+        // Cmd+Shift = 1 + 1 + 8 = 10.
+        (cmd_shift("f5"), b"\x1b[15;10~".to_vec()),
+    ];
+    validate_keystroke_test_cases(cases, &mock);
 }

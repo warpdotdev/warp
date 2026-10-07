@@ -5,6 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use warp_errors::report_error;
 use warp_multi_agent_api as api;
 
 use crate::ai::agent::task::helper::TaskExt as _;
@@ -29,7 +30,10 @@ pub fn compute_active_task_ids<'a>(
     while let Some(task_id) = queue.pop() {
         // Cycle protection: skip tasks we've already processed.
         if !visited.insert(task_id) {
-            log::error!("Cycle detected in active task computation at task {task_id}");
+            report_error!(
+                "Cycle detected in active task computation",
+                extra: { "task_id" => %task_id }
+            );
             continue;
         }
 
@@ -46,14 +50,13 @@ pub fn compute_active_task_ids<'a>(
                 Some(api::message::Message::ToolCall(tool_call)) => {
                     // Check if this is a subagent call.
                     if let Some(api::message::tool_call::Tool::Subagent(subagent)) = &tool_call.tool
+                        && !subagent.task_id.is_empty()
                     {
-                        if !subagent.task_id.is_empty() {
-                            // Add subtask to the queue.
-                            queue.push(subagent.task_id.as_str());
-                            // Track this subagent call so we can remove it when we see the result.
-                            pending_subagents
-                                .insert(tool_call.tool_call_id.as_str(), subagent.task_id.as_str());
-                        }
+                        // Add subtask to the queue.
+                        queue.push(subagent.task_id.as_str());
+                        // Track this subagent call so we can remove it when we see the result.
+                        pending_subagents
+                            .insert(tool_call.tool_call_id.as_str(), subagent.task_id.as_str());
                     }
                 }
                 Some(api::message::Message::ToolCallResult(result)) => {
@@ -87,7 +90,10 @@ pub fn compute_task_depths(tasks: &HashMap<String, api::Task>) -> HashMap<&str, 
         while let Some(task) = tasks.get(current_id) {
             if !visited.insert(current_id) {
                 // Cycle detected; treat as depth 0.
-                log::error!("Cycle detected in task parent chain starting from task {task_id}");
+                report_error!(
+                    "Cycle detected in task parent chain",
+                    extra: { "task_id" => %task_id }
+                );
                 depth = 0;
                 break;
             }

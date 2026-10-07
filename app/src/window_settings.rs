@@ -1,6 +1,8 @@
 use settings::macros::define_settings_group;
-use settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
-use warpui::{AppContext, WindowId};
+use settings::{RespectUserSyncSetting, Setting as _, SupportedPlatforms, SyncToCloud};
+use warp_errors::report_if_error;
+use warpui::platform::WindowBackdrop;
+use warpui::{AppContext, SingletonEntity, WindowId};
 
 define_settings_group!(WindowSettings, settings: [
     background_blur_radius: BackgroundBlurRadius {
@@ -8,26 +10,39 @@ define_settings_group!(WindowSettings, settings: [
         default: 1,
         supported_platforms: SupportedPlatforms::MAC,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         storage_key: "OverrideBlur",
         toml_path: "appearance.window.override_blur",
         description: "The blur radius applied to the window background.",
     },
-    background_blur_texture: BackgroundBlurTexture {
+    background_backdrop: BackgroundBackdrop {
+        type: WindowBackdrop,
+        default: WindowBackdrop::None,
+        supported_platforms: SupportedPlatforms::WINDOWS,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "appearance.window.backdrop",
+        description: "The system backdrop material applied to the window background.",
+    },
+    legacy_override_blur_texture: LegacyOverrideBlurTexture {
         type: bool,
         default: false,
         supported_platforms: SupportedPlatforms::WINDOWS,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         storage_key: "OverrideBlurTexture",
         toml_path: "appearance.window.override_blur_texture",
-        description: "Whether to apply a blur texture to the window background.",
-    }
+        description: "Deprecated legacy setting for the Acrylic window backdrop.",
+    },
     background_opacity: BackgroundOpacity {
         type: u8,
         default: 100,
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         storage_key: "OverrideOpacity",
         toml_path: "appearance.window.override_opacity",
@@ -38,6 +53,7 @@ define_settings_group!(WindowSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "appearance.window.open_windows_at_custom_size",
         description: "Whether to open new windows at a custom size instead of the default.",
@@ -47,6 +63,7 @@ define_settings_group!(WindowSettings, settings: [
         default: 80,
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "appearance.window.new_windows_num_columns",
         description: "The number of columns for new windows when using a custom size.",
@@ -56,6 +73,7 @@ define_settings_group!(WindowSettings, settings: [
         default: 40,
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "appearance.window.new_windows_num_rows",
         description: "The number of rows for new windows when using a custom size.",
@@ -65,6 +83,7 @@ define_settings_group!(WindowSettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "appearance.window.left_panel_visibility_across_tabs",
         description: "Whether the left panel visibility is shared across all tabs.",
@@ -74,11 +93,48 @@ define_settings_group!(WindowSettings, settings: [
         default: 100,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "appearance.window.zoom_level",
         description: "The zoom level for the window, as a percentage.",
     },
 ]);
+
+pub(crate) fn stage_legacy_background_backdrop(ctx: &mut AppContext) {
+    WindowSettings::handle(ctx).update(ctx, |settings, ctx| {
+        if settings.background_backdrop.is_value_explicitly_set()
+            || !*settings.legacy_override_blur_texture
+        {
+            return;
+        }
+        report_if_error!(settings.background_backdrop.load_value(
+            WindowBackdrop::Acrylic,
+            false,
+            ctx
+        ));
+    });
+}
+
+pub(crate) fn migrate_legacy_background_backdrop(ctx: &mut AppContext) {
+    WindowSettings::handle(ctx).update(ctx, |settings, ctx| {
+        if settings.background_backdrop.is_value_explicitly_set() {
+            return;
+        }
+        if *settings.legacy_override_blur_texture {
+            report_if_error!(
+                settings
+                    .background_backdrop
+                    .set_value(WindowBackdrop::Acrylic, ctx)
+            );
+        } else {
+            report_if_error!(settings.background_backdrop.load_value(
+                WindowBackdrop::None,
+                false,
+                ctx
+            ));
+        }
+    });
+}
 
 impl ZoomLevel {
     /// Available zoom values (percent): 50, 60, 70, 80, 90, 100, 110, 125, 150, 175, 200, 225, 250, 300, 350.

@@ -12,3 +12,14 @@ crate-type = ["cdylib"]
 [dependencies]
 warp_managed_secrets.workspace = true
 wasm-bindgen.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# `warp_managed_secrets` pulls in `warpui_core`, whose wasm platform code calls
+# `web_sys::Window::navigator()`. web-sys is feature-gated and `warpui_core` only
+# depends on it transitively (via `gloo`), so the `Navigator`/`Window` features
+# are not enabled unless the top-level wasm crate requests them. Depend on the
+# workspace `web-sys` (which enables those features) so this crate's standalone
+# `wasm-pack build` unifies them in and the transitive deps compile.
+[target.'cfg(target_family = "wasm")'.dependencies]
+web-sys.workspace = true

@@ -1,12 +1,12 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use url::Url;
 use uuid::Uuid;
 #[cfg(target_family = "wasm")]
 use warp_core::context_flag::ContextFlag;
 
+use crate::ChannelState;
 #[cfg(target_family = "wasm")]
 use crate::uri::browser_url_handler::parse_current_url;
-use crate::ChannelState;
 
 #[derive(Debug)]
 /// Represents an intent parsed from a web url
@@ -158,6 +158,16 @@ impl WebIntent {
             WebIntent::CloudAgentHome(url) => url,
             WebIntent::Action(url) => url,
         }
+    }
+
+    /// True when `url` resolves to a `ConversationView` or `SessionView` —
+    /// the two routes that anchor the web session viewer.
+    #[cfg(any(target_family = "wasm", test))]
+    pub fn is_conversation_or_session_view(url: &Url) -> bool {
+        matches!(
+            Self::try_from_url(url),
+            Ok(WebIntent::ConversationView(_) | WebIntent::SessionView(_))
+        )
     }
 }
 

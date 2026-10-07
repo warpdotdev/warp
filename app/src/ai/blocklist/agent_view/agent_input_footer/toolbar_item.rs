@@ -2,9 +2,9 @@ use serde::{Deserialize, Serialize};
 use warpui::SingletonEntity;
 
 use super::editor::AgentToolbarEditorMode;
-use crate::context_chips::{agent_footer_available_chips, available_chips, ContextChipKind};
+use crate::context_chips::{ContextChipKind, agent_footer_available_chips, available_chips};
 use crate::features::FeatureFlag;
-use crate::settings::AISettings;
+use crate::settings::{AISettings, CodeSettings};
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::ui_components::icons::Icon;
 
@@ -52,12 +52,16 @@ pub enum AgentToolbarItemKind {
     ModelSelector,
     NLDToggle,
     ContextWindowUsage,
+    /// Trigger for the "Conversation" usage popover. Gated on
+    /// [`FeatureFlag::PricingTransparency`], since the popover's content is
+    /// entirely usage figures.
+    UsageSummary,
 
     // CLI agent only
-    FileExplorer,
     RichInput,
 
     // Both
+    FileExplorer,
     VoiceInput,
     // Renamed from ImageAttach; alias preserves existing user toolbar configs.
     #[serde(alias = "ImageAttach")]
@@ -77,17 +81,18 @@ pub enum AgentToolbarItemKind {
 impl AgentToolbarItemKind {
     pub fn available_in(&self) -> ToolbarAvailability {
         match self {
-            Self::ContextChip(_) | Self::VoiceInput | Self::FileAttach | Self::ShareSession => {
-                ToolbarAvailability::Both
-            }
+            Self::ContextChip(_)
+            | Self::VoiceInput
+            | Self::FileAttach
+            | Self::ShareSession
+            | Self::FileExplorer => ToolbarAvailability::Both,
             Self::ModelSelector
             | Self::NLDToggle
             | Self::ContextWindowUsage
+            | Self::UsageSummary
             | Self::FastForwardToggle
             | Self::HandoffToCloud => ToolbarAvailability::AgentViewOnly,
-            Self::FileExplorer | Self::RichInput | Self::Settings => {
-                ToolbarAvailability::CLIAgentOnly
-            }
+            Self::RichInput | Self::Settings => ToolbarAvailability::CLIAgentOnly,
         }
     }
 
@@ -109,6 +114,7 @@ impl AgentToolbarItemKind {
             | Self::ModelSelector
             | Self::NLDToggle
             | Self::ContextWindowUsage
+            | Self::UsageSummary
             | Self::RichInput
             | Self::VoiceInput => true,
         }
@@ -122,6 +128,7 @@ impl AgentToolbarItemKind {
             Self::VoiceInput => "Voice Input",
             Self::FileAttach => "Attach File",
             Self::ContextWindowUsage => "Context Usage",
+            Self::UsageSummary => "Conversation Usage",
             Self::FileExplorer => "File Explorer",
             Self::RichInput => "Rich Input",
             Self::ShareSession => "/remote-control",
@@ -134,11 +141,12 @@ impl AgentToolbarItemKind {
     pub fn icon(&self) -> Option<Icon> {
         match self {
             Self::ContextChip(kind) => kind.udi_icon(),
-            Self::ModelSelector => Some(Icon::Oz),
+            Self::ModelSelector => Some(Icon::Agent),
             Self::NLDToggle => Some(Icon::NLD),
             Self::VoiceInput => Some(Icon::Microphone),
             Self::FileAttach => Some(Icon::Plus),
-            Self::ContextWindowUsage => Some(Icon::ConversationContext0),
+            Self::ContextWindowUsage => Some(Icon::ContextRemaining100),
+            Self::UsageSummary => Some(Icon::PieChart),
             Self::FileExplorer => Some(Icon::FileCopy),
             Self::RichInput => Some(Icon::TextInput),
             Self::ShareSession => Some(Icon::Phone01),
@@ -161,6 +169,7 @@ impl AgentToolbarItemKind {
             Self::ContextChip(_)
             | Self::NLDToggle
             | Self::ContextWindowUsage
+            | Self::UsageSummary
             | Self::FastForwardToggle
             | Self::HandoffToCloud
             | Self::ShareSession
@@ -176,6 +185,16 @@ impl AgentToolbarItemKind {
     pub fn is_available(&self, app: &warpui::AppContext) -> bool {
         match self {
             Self::HandoffToCloud => AISettings::as_ref(app).is_cloud_handoff_enabled(app),
+            // Drops the item from the toolbar editor once the flag goes off. The render
+            // path does not consult this method, so it repeats the check itself.
+            Self::UsageSummary => FeatureFlag::PricingTransparency.is_enabled(),
+            // Matches the gating on every other project explorer entry point, so the chip
+            // cannot open a tool view the rest of the app hides. See
+            // `Workspace::compute_left_panel_views` and the `SHOW_PROJECT_EXPLORER`
+            // keybinding predicate.
+            Self::FileExplorer => {
+                cfg!(feature = "local_fs") && *CodeSettings::as_ref(app).show_project_explorer
+            }
             _ => true,
         }
     }
@@ -211,8 +230,11 @@ impl AgentToolbarItemKind {
         let mut items = vec![
             Self::ContextChip(ContextChipKind::AgentPlanAndTodoList),
             Self::ContextWindowUsage,
-            Self::ModelSelector,
         ];
+        if FeatureFlag::PricingTransparency.is_enabled() {
+            items.push(Self::UsageSummary);
+        }
+        items.push(Self::ModelSelector);
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && FeatureFlag::HOARemoteControl.is_enabled()
         {
@@ -241,7 +263,12 @@ impl AgentToolbarItemKind {
             Self::VoiceInput,
             Self::FileAttach,
             Self::ContextWindowUsage,
+            // Opt-in only: deliberately absent from `default_left`/`default_right`.
+            Self::FileExplorer,
         ]);
+        if FeatureFlag::PricingTransparency.is_enabled() {
+            items.push(Self::UsageSummary);
+        }
         if FeatureFlag::FastForwardAutoexecuteButton.is_enabled() {
             items.push(Self::FastForwardToggle);
         }
@@ -330,3 +357,7 @@ impl From<ContextChipKind> for AgentToolbarItemKind {
         Self::ContextChip(kind)
     }
 }
+
+#[cfg(test)]
+#[path = "toolbar_item_tests.rs"]
+mod tests;

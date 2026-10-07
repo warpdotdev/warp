@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use cynic::{MutationBuilder, QueryBuilder};
 #[cfg(test)]
@@ -17,9 +17,17 @@ use warp_graphql::mutations::delete_invite_link_domain_restriction::{
 use warp_graphql::mutations::delete_team_invite::{
     DeleteTeamInvite, DeleteTeamInviteInput, DeleteTeamInviteResult, DeleteTeamInviteVariables,
 };
+use warp_graphql::mutations::join_team_in_workspace::{
+    JoinTeamInWorkspace, JoinTeamInWorkspaceInput, JoinTeamInWorkspaceResult,
+    JoinTeamInWorkspaceVariables,
+};
 use warp_graphql::mutations::join_team_with_team_discovery::{
     JoinTeamWithTeamDiscovery, JoinTeamWithTeamDiscoveryInput, JoinTeamWithTeamDiscoveryResult,
     JoinTeamWithTeamDiscoveryVariables, TeamDiscoveryEntrypoint,
+};
+use warp_graphql::mutations::join_workspace_from_discovery::{
+    JoinWorkspaceFromDiscovery, JoinWorkspaceFromDiscoveryInput, JoinWorkspaceFromDiscoveryResult,
+    JoinWorkspaceFromDiscoveryVariables,
 };
 use warp_graphql::mutations::remove_user_from_team::{
     RemoveUserFromTeam, RemoveUserFromTeamInput, RemoveUserFromTeamResult,
@@ -62,9 +70,10 @@ use crate::auth::UserUid;
 use crate::cloud_object::CloudObjectEventEntrypoint;
 use crate::server::graphql::{get_request_context, get_user_facing_error_message};
 use crate::server::ids::ServerId;
-use crate::workspaces::team::{DiscoverableTeam, MembershipRole};
+use crate::workspaces::gql_convert::workspaces_metadata_response_from_gql;
+use crate::workspaces::team::{DiscoveryOptions, MembershipRole};
 use crate::workspaces::user_workspaces::{CreateTeamResponse, WorkspacesMetadataWithPricing};
-use crate::workspaces::workspace::Workspace;
+use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 
 #[cfg_attr(test, automock)]
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
@@ -114,6 +123,15 @@ pub trait TeamClient: 'static + Send + Sync {
         &self,
         team_uid: ServerId,
     ) -> Result<WorkspacesMetadataWithPricing>;
+    async fn join_team_in_workspace(
+        &self,
+        team_uid: ServerId,
+    ) -> Result<WorkspacesMetadataWithPricing>;
+    async fn join_workspace_from_discovery(
+        &self,
+        workspace_uid: WorkspaceUid,
+        team_uid: Option<ServerId>,
+    ) -> Result<WorkspacesMetadataWithPricing>;
 
     async fn send_team_invite_email(
         &self,
@@ -127,7 +145,7 @@ pub trait TeamClient: 'static + Send + Sync {
         email: String,
     ) -> Result<WorkspacesMetadataWithPricing>;
 
-    async fn get_discoverable_teams(&self) -> Result<Vec<DiscoverableTeam>>;
+    async fn get_discovery_options(&self) -> Result<DiscoveryOptions>;
 
     async fn rename_team(
         &self,
@@ -136,7 +154,7 @@ pub trait TeamClient: 'static + Send + Sync {
     ) -> Result<WorkspacesMetadataWithPricing>;
 
     async fn reset_invite_links(&self, team_uid: ServerId)
-        -> Result<WorkspacesMetadataWithPricing>;
+    -> Result<WorkspacesMetadataWithPricing>;
 
     async fn set_is_invite_link_enabled(
         &self,
@@ -177,7 +195,7 @@ impl TeamClient for ServerApi {
         let metadata = match response.user {
             warp_graphql::queries::get_workspaces_metadata_for_user::UserResult::UserOutput(
                 user_output,
-            ) => user_output.user.into(),
+            ) => workspaces_metadata_response_from_gql(user_output.user, self.is_service_account()),
             warp_graphql::queries::get_workspaces_metadata_for_user::UserResult::Unknown => {
                 return Err(anyhow!("Unable to fetch workspaces metadata"));
             }
@@ -222,12 +240,12 @@ impl TeamClient for ServerApi {
                 }
             }
             AddInviteLinkDomainRestrictionResult::UserFacingError(user_facing_error) => {
-                return Err(anyhow!(get_user_facing_error_message(user_facing_error)))
+                return Err(anyhow!(get_user_facing_error_message(user_facing_error)));
             }
             AddInviteLinkDomainRestrictionResult::Unknown => {
                 return Err(anyhow!(
                     "unknown error while adding invite link domain restriction"
-                ))
+                ));
             }
         }
 
@@ -261,12 +279,12 @@ impl TeamClient for ServerApi {
                 }
             }
             DeleteInviteLinkDomainRestrictionResult::UserFacingError(user_facing_error) => {
-                return Err(anyhow!(get_user_facing_error_message(user_facing_error)))
+                return Err(anyhow!(get_user_facing_error_message(user_facing_error)));
             }
             DeleteInviteLinkDomainRestrictionResult::Unknown => {
                 return Err(anyhow!(
                     "unknown error while deleting invite link domain restriction"
-                ))
+                ));
             }
         }
 
@@ -422,6 +440,72 @@ impl TeamClient for ServerApi {
         }
     }
 
+    async fn join_team_in_workspace(
+        &self,
+        team_uid: ServerId,
+    ) -> Result<WorkspacesMetadataWithPricing> {
+        let variables = JoinTeamInWorkspaceVariables {
+            input: JoinTeamInWorkspaceInput {
+                team_uid: team_uid.into(),
+            },
+            request_context: get_request_context(),
+        };
+
+        let operation = JoinTeamInWorkspace::build(variables);
+        let result = self
+            .send_graphql_request(operation, None)
+            .await?
+            .join_team_in_workspace;
+
+        match result {
+            JoinTeamInWorkspaceResult::JoinTeamInWorkspaceOutput(output) => {
+                if !output.success {
+                    return Err(anyhow!("failed to join team"));
+                }
+                self.workspaces_metadata().await
+            }
+            JoinTeamInWorkspaceResult::UserFacingError(user_facing_error) => {
+                Err(anyhow!(get_user_facing_error_message(user_facing_error)))
+            }
+            JoinTeamInWorkspaceResult::Unknown => Err(anyhow!("unknown error while joining team")),
+        }
+    }
+
+    async fn join_workspace_from_discovery(
+        &self,
+        workspace_uid: WorkspaceUid,
+        team_uid: Option<ServerId>,
+    ) -> Result<WorkspacesMetadataWithPricing> {
+        let variables = JoinWorkspaceFromDiscoveryVariables {
+            input: JoinWorkspaceFromDiscoveryInput {
+                workspace_uid: String::from(workspace_uid).into(),
+                team_uid: team_uid.map(Into::into),
+            },
+            request_context: get_request_context(),
+        };
+
+        let operation = JoinWorkspaceFromDiscovery::build(variables);
+        let result = self
+            .send_graphql_request(operation, None)
+            .await?
+            .join_workspace_from_discovery;
+
+        match result {
+            JoinWorkspaceFromDiscoveryResult::JoinWorkspaceFromDiscoveryOutput(output) => {
+                if !output.success {
+                    return Err(anyhow!("failed to join workspace"));
+                }
+                self.workspaces_metadata().await
+            }
+            JoinWorkspaceFromDiscoveryResult::UserFacingError(user_facing_error) => {
+                Err(anyhow!(get_user_facing_error_message(user_facing_error)))
+            }
+            JoinWorkspaceFromDiscoveryResult::Unknown => {
+                Err(anyhow!("unknown error while joining workspace"))
+            }
+        }
+    }
+
     async fn send_team_invite_email(
         &self,
         team_uid: ServerId,
@@ -494,7 +578,7 @@ impl TeamClient for ServerApi {
         }
     }
 
-    async fn get_discoverable_teams(&self) -> Result<Vec<DiscoverableTeam>, anyhow::Error> {
+    async fn get_discovery_options(&self) -> Result<DiscoveryOptions, anyhow::Error> {
         let variables = GetDiscoverableTeamsVariables {
             request_context: get_request_context(),
         };
@@ -503,12 +587,20 @@ impl TeamClient for ServerApi {
 
         match result.user {
             warp_graphql::queries::get_discoverable_teams::UserResult::UserOutput(user_output) => {
-                Ok(user_output
-                    .user
-                    .discoverable_teams
-                    .into_iter()
-                    .map(|gql_team_data| Ok(gql_team_data.into()))
-                    .collect::<Result<Vec<DiscoverableTeam>>>()?)
+                Ok(DiscoveryOptions {
+                    workspaces: user_output
+                        .user
+                        .discoverable_workspaces
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
+                    legacy_teams: user_output
+                        .user
+                        .discoverable_teams
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
+                })
             }
             warp_graphql::queries::get_discoverable_teams::UserResult::UserFacingError(
                 user_facing_error,

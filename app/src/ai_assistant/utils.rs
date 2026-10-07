@@ -1,5 +1,5 @@
 /// Common functionality used across different AI Assistant components.
-use markdown_parser::{parse_markdown, CodeBlockText, FormattedText, FormattedTextLine};
+use markdown_parser::{CodeBlockText, FormattedText, FormattedTextLine, parse_markdown};
 use pathfinder_color::ColorU;
 use warpui::elements::{
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, HighlightedHyperlink, Icon,

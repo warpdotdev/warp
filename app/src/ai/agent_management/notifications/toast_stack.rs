@@ -3,6 +3,7 @@ use std::time::Duration;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::color::internal_colors;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::elements::{
     Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     DispatchEventResult, Element, EventHandler, Flex, Hoverable, MouseStateHandle,
@@ -11,14 +12,13 @@ use warpui::elements::{
 };
 use warpui::keymap::Keystroke;
 use warpui::platform::Cursor;
-use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::keyboard_shortcut::KeyboardShortcut;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use crate::ai::agent_management::notifications::item_rendering::{
-    create_notification_artifact_buttons_view, handle_notification_artifact_buttons_event,
-    render_notification_item_content, NotificationRenderContext, OnExpandClick,
+    NotificationRenderContext, OnExpandClick, create_notification_artifact_buttons_view,
+    handle_notification_artifact_buttons_event, render_notification_item_content,
 };
 use crate::ai::agent_management::notifications::{NotificationId, NotificationItem};
 use crate::ai::agent_management::{AgentManagementEvent, AgentNotificationsModel};
@@ -26,8 +26,8 @@ use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent
 use crate::appearance::Appearance;
 use crate::terminal::session_settings::SessionSettings;
 use crate::util::bindings::keybinding_name_to_keystroke;
-use crate::workspace::view::JUMP_TO_LATEST_TOAST_BINDING_NAME;
 use crate::workspace::WorkspaceAction;
+use crate::workspace::view::JUMP_TO_LATEST_TOAST_BINDING_NAME;
 
 const CLOSE_BUTTON_SIZE: f32 = 20.;
 
@@ -191,10 +191,10 @@ impl AgentNotificationToastStack {
 
     /// Pauses the auto-dismiss timer for a toast (e.g. while the user is hovering over it).
     fn cancel_dismissal_timeout(&mut self, id: &NotificationId) {
-        if let Some(entry) = self.toasts.iter_mut().find(|e| e.notification_id == *id) {
-            if let Some(handle) = entry.abort_handle.take() {
-                handle.abort();
-            }
+        if let Some(entry) = self.toasts.iter_mut().find(|e| e.notification_id == *id)
+            && let Some(handle) = entry.abort_handle.take()
+        {
+            handle.abort();
         }
     }
 

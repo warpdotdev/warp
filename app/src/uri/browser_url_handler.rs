@@ -1,15 +1,16 @@
 use url::Url;
+use warp_errors::report_error;
 
-use super::web_intent_parser::WebIntent;
+use super::browser_url_resolution::resolve_browser_url;
 
 const DEFAULT_TITLE: &str = "Warp";
-const BASE_APP_PATH: &str = "/app";
 
 pub fn update_browser_url(url: Option<Url>, force_redirect: bool) {
-    let mut new_url = url;
-    if new_url.is_none() {
-        new_url = get_base_app_url()
+    let current_url = parse_current_url();
+    if url.is_none() && current_url.is_none() {
+        report_error!("Failed to get the base url");
     }
+    let new_url = resolve_browser_url(current_url, url, force_redirect);
 
     if let Some(unwrapped_url) = new_url.and_then(safe_browser_navigation_url) {
         let window = gloo::utils::window();
@@ -23,7 +24,7 @@ pub fn update_browser_url(url: Option<Url>, force_redirect: bool) {
                     Some(unwrapped_url.as_str()),
                 )
                 .unwrap_or_else(|_| {
-                    log::error!("Failed to replace browser state");
+                    report_error!("Failed to replace browser state");
                     crate::platform::wasm::emit_event(
                         crate::platform::wasm::WarpEvent::ErrorLogged {
                             error: String::from("Failed to replace browser state"),
@@ -31,10 +32,10 @@ pub fn update_browser_url(url: Option<Url>, force_redirect: bool) {
                     );
                 });
         } else {
-            log::error!("Failed to get gloo history while trying to update browser url");
+            report_error!("Failed to get gloo history while trying to update browser url");
         }
     } else {
-        log::error!("Failed to get new url to update browser with");
+        report_error!("Failed to get new url to update browser with");
     }
 }
 
@@ -62,25 +63,4 @@ pub fn parse_current_url() -> Option<Url> {
     }
 
     None
-}
-
-fn get_base_app_url() -> Option<Url> {
-    if let Some(current_url) = parse_current_url() {
-        if should_preserve_current_url_on_base_fallback(&current_url) {
-            return Some(current_url);
-        }
-        let mut new_url = current_url.clone();
-        new_url.set_path(BASE_APP_PATH);
-        new_url.set_query(None);
-        return Some(new_url);
-    }
-    log::error!("Failed to get the base url");
-    None
-}
-
-fn should_preserve_current_url_on_base_fallback(url: &Url) -> bool {
-    matches!(
-        WebIntent::try_from_url(url),
-        Ok(WebIntent::ConversationView(_) | WebIntent::SessionView(_))
-    )
 }

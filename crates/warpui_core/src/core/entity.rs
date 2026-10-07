@@ -1,6 +1,7 @@
 use core::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::ModelHandle;
@@ -11,6 +12,12 @@ use crate::ModelHandle;
 /// use them interchangeably in several places, e.g. in observations.
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct EntityId(usize);
+
+/// A hash map keyed by [`EntityId`].
+pub type EntityIdMap<V> = FxHashMap<EntityId, V>;
+
+/// A hash set of [`EntityId`]s.
+pub type EntityIdSet = FxHashSet<EntityId>;
 
 impl EntityId {
     /// Constructs a new globally-unique entity ID.

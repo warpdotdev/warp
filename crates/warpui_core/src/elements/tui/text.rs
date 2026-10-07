@@ -1,45 +1,89 @@
-//! [`TuiText`]: a styled run of text that wraps (or truncates) to the width it
-//! is laid out at.
+//! [`TuiText`]: styled text that wraps (or truncates) to the width it is laid
+//! out at, built on ratatui's `Paragraph`.
 //!
 //! # Construction
-//! Build with [`TuiText::new`] and chain builders:
-//! - [`with_style`](TuiText::with_style) sets the [`TuiStyle`] applied to every
-//!   glyph.
+//! Build with [`TuiText::new`] (one uniformly-styled run) or
+//! [`TuiText::from_spans`] (multiple styled runs flowing as one paragraph)
+//! and chain builders:
+//! - [`with_style`](TuiText::with_style) sets the base [`TuiStyle`] beneath
+//!   every glyph; span styles patch over it.
 //! - [`truncate`](TuiText::truncate) switches from the default word-wrapping
-//!   policy to single-row-per-line truncation.
+//!   policy to single-row-per-hard-line truncation.
+//! - [`truncate_with_ellipsis`](TuiText::truncate_with_ellipsis) also replaces
+//!   clipped trailing content with as much of `...` as fits.
 //!
 //! # Layout policy
-//! The text is first split into *hard lines* on `'\n'`. Each hard line is then
-//! laid out against the available width in one of two modes:
+//! Wrapping and measurement defer to `Paragraph`, so layout, render, and
+//! `desired_height` always agree:
+//! - **Wrap** (default): word-wrapped with whitespace preserved
+//!   (`Wrap { trim: false }`); a word wider than the row is broken at grapheme
+//!   boundaries.
+//! - **Truncate**: each hard line becomes one row, clipped to the width.
+//! - **Ellipsis**: each hard line remains one row and is truncated at grapheme
+//!   boundaries with `...` inside the assigned width.
 //!
-//! - **Wrap** (default): tokens (space-separated words) are packed greedily,
-//!   separated by a single space, starting a new row whenever the next token
-//!   would overflow. A token wider than the whole width is hard-broken at
-//!   grapheme boundaries. Runs of spaces collapse to a single separator.
-//! - **Truncate**: each hard line becomes exactly one row; glyphs past the
-//!   width are dropped by the buffer when painted.
-//!
-//! Column widths are measured with `unicode-width`, so a wide (CJK) glyph
-//! occupies two columns and is never split across rows.
+//! Height is `Paragraph::line_count` and the natural width is
+//! `Paragraph::line_width`; both are column-accurate for wide (CJK) glyphs, so a
+//! wide glyph occupies two columns and is never split across rows. An empty
+//! string occupies no rows.
 
+use std::mem;
+
+use ratatui::buffer::{Buffer, Cell};
+use ratatui::layout::Rect;
+use ratatui::text::{Line, Span, Text};
+use ratatui::widgets::{Paragraph, Widget, Wrap};
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
-use super::{TuiBuffer, TuiConstraint, TuiElement, TuiRect, TuiSize, TuiStyle};
+use super::{
+    TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiScreenPoint,
+    TuiScreenPosition, TuiSize, TuiStyle, text_width,
+};
+use crate::AppContext;
+
+#[derive(Clone, Copy, Default)]
+enum TuiTextOverflow {
+    #[default]
+    Clip,
+    Ellipsis,
+}
+#[derive(Clone, Copy)]
+struct TuiTextMeasurement {
+    available_width: u16,
+    natural_size: TuiSize,
+}
 
 pub struct TuiText {
-    text: String,
+    /// Styled runs that concatenate into the full text. Runs may contain hard
+    /// newlines, which split rows exactly as they would in a single run.
+    spans: Vec<(String, TuiStyle)>,
+    /// Base style beneath every span; span styles patch over it.
     style: TuiStyle,
     wrap: bool,
+    overflow: TuiTextOverflow,
+    cached_measurement: Option<TuiTextMeasurement>,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
 }
 
 impl TuiText {
     /// A wrapping text element holding `text` with default styling.
     pub fn new(text: impl Into<String>) -> Self {
+        Self::from_spans([(text.into(), TuiStyle::default())])
+    }
+
+    /// A wrapping text element composed of styled runs that flow as one
+    /// paragraph (a run is never a wrap boundary by itself). Each run's style
+    /// patches over the base style set by [`with_style`](Self::with_style).
+    pub fn from_spans(spans: impl IntoIterator<Item = (String, TuiStyle)>) -> Self {
         Self {
-            text: text.into(),
+            spans: spans.into_iter().collect(),
             style: TuiStyle::default(),
             wrap: true,
+            overflow: TuiTextOverflow::default(),
+            cached_measurement: None,
+            size: None,
+            origin: None,
         }
     }
 
@@ -51,146 +95,233 @@ impl TuiText {
     /// Lays each hard line out as a single (clipped) row instead of wrapping.
     pub fn truncate(mut self) -> Self {
         self.wrap = false;
+        self.cached_measurement = None;
+        self
+    }
+    /// Truncates each hard line at grapheme boundaries and appends `...`
+    /// inside the width supplied during layout.
+    pub fn truncate_with_ellipsis(mut self) -> Self {
+        self.wrap = false;
+        self.overflow = TuiTextOverflow::Ellipsis;
+        self.cached_measurement = None;
         self
     }
 
-    /// The rows this text occupies when laid out at `width` columns, under the
-    /// active wrap/truncate policy. This is the single source of truth shared by
-    /// [`layout`](TuiElement::layout), [`render`](TuiElement::render), and
-    /// [`desired_height`](TuiElement::desired_height).
-    fn rows(&self, width: u16) -> Vec<String> {
-        if self.text.is_empty() {
-            return Vec::new();
+    /// The number of terminal rows this text occupies when laid out at `width`
+    /// columns. Matches what `layout` would return as the height component.
+    pub fn desired_height(&self, width: u16) -> u16 {
+        if self.is_empty() {
+            return 0;
         }
+        u16::try_from(self.paragraph(width).line_count(width)).unwrap_or(u16::MAX)
+    }
+    /// The cell width occupied by the first rendered row at `width`, including
+    /// trailing whitespace that belongs to the row.
+    pub(super) fn first_rendered_line_width(&self, width: u16) -> u16 {
+        if width == 0 || self.is_empty() {
+            return 0;
+        }
+
+        let area = Rect::new(0, 0, width, 1);
+        // An explicitly empty symbol distinguishes untouched cells from
+        // rendered spaces, whose symbols are `" "`. This lets callers retain
+        // intentional trailing whitespace without duplicating the wrapping
+        // algorithm used by `Paragraph`.
+        let mut buffer = Buffer::filled(area, Cell::new(""));
+        self.paragraph(width).render(area, &mut buffer);
+        let mut occupied_width = 0;
+        let mut column = 0;
+        while column < width {
+            let symbol = buffer[(column, 0)].symbol();
+            if symbol.is_empty() {
+                break;
+            }
+            let symbol_width = text_width(symbol).max(1);
+            occupied_width = column.saturating_add(symbol_width).min(width);
+            column = column.saturating_add(symbol_width);
+        }
+        occupied_width
+    }
+
+    /// Whether this element holds no text at all (and so occupies no rows).
+    fn is_empty(&self) -> bool {
+        self.spans.iter().all(|(text, _)| text.is_empty())
+    }
+
+    /// The spans re-grouped into ratatui `Line`s: hard newlines inside any
+    /// span split lines; between newlines, consecutive (sub)spans share a line.
+    fn text(&self) -> Text<'_> {
+        let mut lines = Vec::new();
+        let mut current_line = Vec::new();
+        for (content, style) in &self.spans {
+            let mut parts = content.split('\n');
+            // `split` always yields at least one part; parts after the first
+            // are each preceded by a newline, i.e. a completed line.
+            if let Some(first) = parts.next()
+                && !first.is_empty()
+            {
+                current_line.push(Span::styled(first, *style));
+            }
+            for part in parts {
+                lines.push(Line::from(mem::take(&mut current_line)));
+                if !part.is_empty() {
+                    current_line.push(Span::styled(part, *style));
+                }
+            }
+        }
+        lines.push(Line::from(current_line));
+        Text::from(lines)
+    }
+
+    /// Rebuilds hard lines with trailing content replaced by a styled
+    /// ellipsis. Allocating here keeps the normal wrapping/clipping path
+    /// borrowing its original spans.
+    fn ellipsized_text(&self, maximum_columns: u16) -> Text<'static> {
+        let mut source_lines = Vec::<Vec<(String, TuiStyle)>>::new();
+        let mut current_line = Vec::new();
+        for (content, style) in &self.spans {
+            let mut parts = content.split('\n');
+            if let Some(first) = parts.next()
+                && !first.is_empty()
+            {
+                current_line.push((first.to_owned(), *style));
+            }
+            for part in parts {
+                source_lines.push(mem::take(&mut current_line));
+                if !part.is_empty() {
+                    current_line.push((part.to_owned(), *style));
+                }
+            }
+        }
+        source_lines.push(current_line);
+
+        let maximum_columns = usize::from(maximum_columns);
+        let ellipsis_columns = usize::from(text_width("...")).min(maximum_columns);
+        let prefix_columns = maximum_columns.saturating_sub(ellipsis_columns);
+        let lines = source_lines
+            .into_iter()
+            .map(|runs| {
+                let line_columns = runs
+                    .iter()
+                    .map(|(text, _)| usize::from(text_width(text)))
+                    .sum::<usize>();
+                if line_columns <= maximum_columns {
+                    return Line::from(
+                        runs.into_iter()
+                            .map(|(text, style)| Span::styled(text, style))
+                            .collect::<Vec<_>>(),
+                    );
+                }
+
+                let mut spans = Vec::new();
+                let mut used_columns = 0usize;
+                let mut ellipsis_style = runs.first().map(|(_, style)| *style).unwrap_or_default();
+                'runs: for (text, style) in runs {
+                    let mut prefix = String::new();
+                    for grapheme in UnicodeSegmentation::graphemes(text.as_str(), true) {
+                        let grapheme_columns = usize::from(text_width(grapheme));
+                        if used_columns.saturating_add(grapheme_columns) > prefix_columns {
+                            ellipsis_style = style;
+                            if !prefix.is_empty() {
+                                spans.push(Span::styled(prefix, style));
+                            }
+                            break 'runs;
+                        }
+                        prefix.push_str(grapheme);
+                        used_columns = used_columns.saturating_add(grapheme_columns);
+                    }
+                    if !prefix.is_empty() {
+                        spans.push(Span::styled(prefix, style));
+                    }
+                    ellipsis_style = style;
+                }
+                if ellipsis_columns > 0 {
+                    spans.push(Span::styled(".".repeat(ellipsis_columns), ellipsis_style));
+                }
+                Line::from(spans)
+            })
+            .collect::<Vec<_>>();
+        Text::from(lines)
+    }
+
+    fn text_for_width(&self, width: u16) -> Text<'_> {
+        match (self.wrap, self.overflow) {
+            (false, TuiTextOverflow::Ellipsis) => self.ellipsized_text(width),
+            (true | false, TuiTextOverflow::Clip) | (true, TuiTextOverflow::Ellipsis) => {
+                self.text()
+            }
+        }
+    }
+
+    /// The ratatui `Paragraph` backing this element's measure and paint.
+    fn paragraph(&self, width: u16) -> Paragraph<'_> {
+        let paragraph = Paragraph::new(self.text_for_width(width)).style(self.style);
         if self.wrap {
-            self.text
-                .split('\n')
-                .flat_map(|line| wrap_hard_line(line, width))
-                .collect()
+            paragraph.wrap(Wrap { trim: false })
         } else {
-            self.text.split('\n').map(str::to_owned).collect()
+            paragraph
         }
     }
 }
 
 impl TuiElement for TuiText {
-    fn layout(&mut self, constraint: TuiConstraint) -> TuiSize {
-        let rows = self.rows(constraint.max.width);
-        let content_width = rows.iter().map(|row| text_width(row)).max().unwrap_or(0);
-        let height = u16::try_from(rows.len()).unwrap_or(u16::MAX);
-        TuiSize::new(
-            constraint.constrain_width(content_width),
-            constraint.constrain_height(height),
-        )
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiSize {
+        let width = constraint.max.width;
+        let natural_size = if self.is_empty() {
+            TuiSize::ZERO
+        } else if let Some(measurement) = self
+            .cached_measurement
+            .filter(|measurement| measurement.available_width == width)
+        {
+            measurement.natural_size
+        } else {
+            let paragraph = self.paragraph(constraint.max.width);
+            let height =
+                u16::try_from(paragraph.line_count(constraint.max.width)).unwrap_or(u16::MAX);
+            let content_width = u16::try_from(paragraph.line_width()).unwrap_or(u16::MAX);
+            let size = TuiSize::new(content_width, height);
+            self.cached_measurement = Some(TuiTextMeasurement {
+                available_width: width,
+                natural_size: size,
+            });
+            size
+        };
+        let size = TuiSize::new(
+            constraint.constrain_width(natural_size.width),
+            constraint.constrain_height(natural_size.height),
+        );
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer) {
-        if area.is_empty() {
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.scene_point(origin));
+        let Some(size) = self.size else {
+            return;
+        };
+        if size.width == 0 || size.height == 0 {
             return;
         }
-        for (offset, row) in self.rows(area.width).iter().enumerate() {
-            let Ok(offset) = u16::try_from(offset) else {
-                break;
-            };
-            if offset >= area.height {
-                break;
-            }
-            buffer.set_str(area.x, area.y + offset, area.width, row, self.style);
-        }
+        surface.render_widget(origin, size, self.paragraph(size.width));
     }
 
-    fn desired_height(&self, width: u16) -> u16 {
-        u16::try_from(self.rows(width).len()).unwrap_or(u16::MAX)
-    }
-}
-
-/// Greedily wraps a single newline-free line to `width` columns. Returns one
-/// `String` per visual row (empty when `width` is zero).
-fn wrap_hard_line(line: &str, width: u16) -> Vec<String> {
-    if width == 0 {
-        return Vec::new();
+    fn size(&self) -> Option<TuiSize> {
+        self.size
     }
 
-    let mut rows = Vec::new();
-    let mut current = String::new();
-    let mut current_width = 0;
-
-    for token in line.split(' ').filter(|token| !token.is_empty()) {
-        let token_width = text_width(token);
-
-        if !current.is_empty() && current_width + 1 + token_width <= width {
-            current.push(' ');
-            current.push_str(token);
-            current_width += 1 + token_width;
-            continue;
-        }
-
-        if !current.is_empty() {
-            rows.push(std::mem::take(&mut current));
-            current_width = 0;
-        }
-
-        if token_width <= width {
-            current = token.to_owned();
-            current_width = token_width;
-            continue;
-        }
-
-        // The token is wider than a full row: hard-break it at grapheme
-        // boundaries, carrying the final fragment into `current`.
-        let chunks = hard_break(token, width);
-        let last = chunks.len().saturating_sub(1);
-        for (index, chunk) in chunks.into_iter().enumerate() {
-            if index == last {
-                current_width = text_width(&chunk);
-                current = chunk;
-            } else {
-                rows.push(chunk);
-            }
-        }
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
     }
-
-    if !current.is_empty() {
-        rows.push(current);
-    }
-    if rows.is_empty() {
-        rows.push(String::new());
-    }
-    rows
-}
-
-/// Splits `token` into fragments each at most `width` columns wide, breaking
-/// only on grapheme boundaries (a single glyph wider than `width` is kept whole
-/// and clipped later by the buffer).
-fn hard_break(token: &str, width: u16) -> Vec<String> {
-    let mut chunks = Vec::new();
-    let mut current = String::new();
-    let mut current_width = 0;
-
-    for grapheme in token.graphemes(true) {
-        let glyph_width = grapheme_width(grapheme);
-        if !current.is_empty() && current_width + glyph_width > width {
-            chunks.push(std::mem::take(&mut current));
-            current_width = 0;
-        }
-        current.push_str(grapheme);
-        current_width += glyph_width;
-    }
-
-    if !current.is_empty() {
-        chunks.push(current);
-    }
-    chunks
-}
-
-fn text_width(text: &str) -> u16 {
-    u16::try_from(UnicodeWidthStr::width(text)).unwrap_or(u16::MAX)
-}
-
-/// The column width of a single grapheme, floored at 1 to mirror the buffer's
-/// own measurement of zero-width clusters.
-fn grapheme_width(grapheme: &str) -> u16 {
-    u16::try_from(UnicodeWidthStr::width(grapheme).max(1)).unwrap_or(u16::MAX)
 }
 
 #[cfg(test)]

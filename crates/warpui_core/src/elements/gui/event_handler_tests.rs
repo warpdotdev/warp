@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use pathfinder_geometry::vector::vec2f;
@@ -10,7 +10,8 @@ use crate::elements::{
 };
 use crate::platform::WindowStyle;
 use crate::{
-    App, AppContext, Entity, EntityId, Presenter, TypedActionView, ViewContext, WindowInvalidation,
+    App, AppContext, Entity, EntityId, EntityIdSet, Presenter, TypedActionView, ViewContext,
+    WindowInvalidation,
 };
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug)]
@@ -20,17 +21,61 @@ enum ElementIdentifier {
     Overlay,
 }
 
+#[test]
+fn test_right_mouse_down_with_shift_reports_modifier() {
+    App::test((), |mut app| async move {
+        app.update(init);
+        let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |_| View::default());
+
+        let mut presenter = Presenter::new(window_id);
+        let mut updated = EntityIdSet::default();
+        updated.insert(app.root_view_id(window_id).unwrap());
+        let invalidation = WindowInvalidation {
+            updated,
+            ..Default::default()
+        };
+
+        app.update(move |ctx| {
+            presenter.invalidate(invalidation, ctx);
+            presenter.build_scene(vec2f(100., 100.), 1., None, ctx);
+            let presenter = Rc::new(RefCell::new(presenter));
+
+            for shift in [false, true] {
+                ctx.simulate_window_event(
+                    Event::RightMouseDown {
+                        position: vec2f(10., 10.),
+                        cmd: false,
+                        shift,
+                        click_count: 1,
+                    },
+                    window_id,
+                    presenter.clone(),
+                );
+            }
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.right_click_shifts, vec![false, true]);
+        });
+    });
+}
+
 #[derive(Default)]
 struct View {
     // Maps identifier to number of mouse down events
     mouse_downs: HashMap<ElementIdentifier, usize>,
     mouse_ins: HashMap<ElementIdentifier, usize>,
+    right_click_shifts: Vec<bool>,
     mouse_in_behavior: MouseInBehavior,
 }
 
 pub fn init(app: &mut AppContext) {
     app.add_action("event_handler_test:mouse_down", View::mouse_down);
     app.add_action("event_handler_test:mouse_in", View::mouse_in);
+    app.add_action(
+        "event_handler_test:right_click_shift",
+        View::record_right_click_shift,
+    );
 }
 
 impl View {
@@ -43,6 +88,11 @@ impl View {
     fn mouse_in(&mut self, identifier: &ElementIdentifier, _: &mut ViewContext<Self>) -> bool {
         let entry = self.mouse_ins.entry(*identifier).or_insert(0);
         *entry += 1;
+        true
+    }
+
+    fn record_right_click_shift(&mut self, shift: &bool, _: &mut ViewContext<Self>) -> bool {
+        self.right_click_shifts.push(*shift);
         true
     }
 }
@@ -107,6 +157,10 @@ impl crate::core::View for View {
                     evt.dispatch_action("event_handler_test:mouse_down", ElementIdentifier::Base);
                     DispatchEventResult::StopPropagation
                 })
+                .on_right_mouse_down(|evt, _, _, modifiers| {
+                    evt.dispatch_action("event_handler_test:right_click_shift", modifiers.shift);
+                    DispatchEventResult::StopPropagation
+                })
                 .on_mouse_in(
                     |evt, _, _| {
                         evt.dispatch_action("event_handler_test:mouse_in", ElementIdentifier::Base);
@@ -160,7 +214,7 @@ fn test_layered_click_handling() {
 
         let mut presenter = Presenter::new(window_id);
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = WindowInvalidation {
             updated,
@@ -243,7 +297,7 @@ fn test_default_mouse_in_behavior() {
 
         let mut presenter = Presenter::new(window_id);
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = WindowInvalidation {
             updated,
@@ -331,7 +385,7 @@ fn test_mouse_in_behavior_dont_fire_on_synthetic_events() {
 
         let mut presenter = Presenter::new(window_id);
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = WindowInvalidation {
             updated,
@@ -392,7 +446,7 @@ fn test_mouse_in_behavior_dont_fire_when_covered() {
 
         let mut presenter = Presenter::new(window_id);
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = WindowInvalidation {
             updated,
@@ -545,7 +599,7 @@ fn invalidate_and_rebuild_scene(
     root_view_id: EntityId,
     ctx: &mut AppContext,
 ) {
-    let mut updated = HashSet::new();
+    let mut updated = EntityIdSet::default();
     updated.insert(root_view_id);
     let invalidation = WindowInvalidation {
         updated,

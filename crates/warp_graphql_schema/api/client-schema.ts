@@ -35,6 +35,7 @@ const clientMutations = [
   'grabNotebookEditAccess',
   'issueTaskIdentityToken',
   'joinTeamWithTeamDiscovery',
+  'joinWorkspaceFromDiscovery',
   'leaveObject',
   'markAcceptedIntelligentAutosuggestion',
   'mintCustomToken',
@@ -102,6 +103,7 @@ const clientQueries = [
   'task',
   'taskGitCredentials',
   'taskSecrets',
+  'tuiOnboardingMarkers',
   'listAIConversations',
   'suggestCloudEnvironmentImage'
 ];

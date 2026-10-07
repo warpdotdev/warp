@@ -1,5 +1,6 @@
 use session_sharing_protocol::common::SessionId;
 use uuid::Uuid;
+use warp_errors::report_error;
 use warpui::{SingletonEntity, ViewContext, ViewHandle};
 
 use crate::ai::agent::api::ServerConversationToken;
@@ -104,7 +105,7 @@ impl PaneGroup {
                         resources.clone(),
                         view_size,
                         true, // enable_orchestration_polling
-                        true, // is_cloud_mode
+                        true, // is_ambient_agent
                         ctx,
                     );
                     let new_pane = TerminalPane::new(
@@ -120,16 +121,49 @@ impl PaneGroup {
                     conversation_id,
                     ambient_agent_task_id,
                 }) => {
-                    if let Some(target_view) = self.terminal_view_from_pane_id(pane_id, ctx) {
-                        Self::fetch_and_load_transcript(
-                            target_view,
-                            conversation_id,
-                            ambient_agent_task_id,
-                            ctx,
-                        );
-                    } else {
+                    if !self.restore_pane_with_transcript(
+                        pane_id,
+                        conversation_id,
+                        ambient_agent_task_id,
+                        ctx,
+                    ) {
                         self.pending_ambient_agent_conversation_restorations
                             .insert(task_id, pane_id);
+                    }
+                }
+                // An owned cloud agent conversation that is now locally
+                // persisted resolves to a local-conversation navigation action,
+                // which cannot be applied to an ambient loading pane. If the
+                // conversation is already associated with a terminal surface
+                // skip loading it again to avoid opening the same conversation
+                // on two surfaces; otherwise load the transcript from the server
+                // token stored on the task.
+                Some(WorkspaceAction::RestoreOrNavigateToConversation {
+                    conversation_id, ..
+                }) => {
+                    let already_open = BlocklistAIHistoryModel::as_ref(ctx)
+                        .terminal_surface_id_for_conversation(&conversation_id)
+                        .is_some();
+                    if already_open {
+                        self.replace_pane_with_new_cloud_conversation(pane_id, ctx);
+                    } else {
+                        match task
+                            .conversation_id()
+                            .map(|id| ServerConversationToken::new(id.to_string()))
+                        {
+                            Some(server_token) => {
+                                if !self.restore_pane_with_transcript(
+                                    pane_id,
+                                    server_token,
+                                    Some(task_id),
+                                    ctx,
+                                ) {
+                                    self.pending_ambient_agent_conversation_restorations
+                                        .insert(task_id, pane_id);
+                                }
+                            }
+                            None => self.replace_pane_with_new_cloud_conversation(pane_id, ctx),
+                        }
                     }
                 }
                 _ => {
@@ -137,6 +171,28 @@ impl PaneGroup {
                 }
             }
         }
+    }
+
+    /// Loads a cloud conversation transcript into the loading pane.
+    /// Returns `false` when the pane's terminal view is not yet available,
+    /// so the caller can requeue the restoration entry.
+    fn restore_pane_with_transcript(
+        &mut self,
+        pane_id: PaneId,
+        server_conversation_token: ServerConversationToken,
+        ambient_agent_task_id: Option<AmbientAgentTaskId>,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let Some(target_view) = self.terminal_view_from_pane_id(pane_id, ctx) else {
+            return false;
+        };
+        Self::fetch_and_load_transcript(
+            target_view,
+            server_conversation_token,
+            ambient_agent_task_id,
+            ctx,
+        );
+        true
     }
 
     /// Replaces a pane with a new cloud conversation.
@@ -186,7 +242,7 @@ impl PaneGroup {
             } else if let Some(pane_id) =
                 group.find_pane_id_for_terminal_view(target_view.id(), ctx)
             {
-                log::error!(
+                report_error!(
                     "Failed to restore ambient agent pane, replacing with new cloud conversation"
                 );
                 group.replace_pane_with_new_cloud_conversation(pane_id, ctx);

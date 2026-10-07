@@ -2,12 +2,13 @@ use std::path::PathBuf;
 
 use ::settings::ToggleableSetting;
 use warp_core::execution_mode::AppExecutionMode;
+use warp_errors::report_error;
 use warp_graphql::mutations::create_anonymous_user::AnonymousUserType;
 use warpui::windowing::WindowManager;
 use warpui::{AppContext, SingletonEntity, TypedActionView};
 
-use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentExchangeId;
+use crate::ai::agent::conversation::AIConversationId;
 use crate::app_state::get_app_state;
 use crate::network::NetworkStatus;
 use crate::persistence::ModelEvent;
@@ -18,7 +19,7 @@ use crate::terminal::general_settings::GeneralSettings;
 use crate::undo_close::UndoCloseStack;
 use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
 use crate::workspace::{Workspace, WorkspaceAction};
-use crate::{auth, GlobalResourceHandlesProvider};
+use crate::{GlobalResourceHandlesProvider, auth};
 
 /// Specifies where a forked conversation should be opened.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -33,6 +34,16 @@ pub enum ForkedConversationDestination {
 }
 
 impl ForkedConversationDestination {
+    /// Fork destination from an Enter (`false`) / Cmd-or-Ctrl+Enter (`true`) trigger: Enter
+    /// opens a new split pane, Cmd/Ctrl+Enter opens a new tab. Shared by all fork-style commands.
+    pub fn for_fork_trigger(cmd_or_ctrl_enter: bool) -> Self {
+        if cmd_or_ctrl_enter {
+            Self::NewTab
+        } else {
+            Self::SplitPane
+        }
+    }
+
     pub fn is_new_tab(&self) -> bool {
         matches!(self, Self::NewTab)
     }
@@ -153,7 +164,7 @@ fn save_app(_: &(), ctx: &mut AppContext) {
     let event = ModelEvent::Snapshot(app_state);
 
     if let Err(err) = model_event_sender.send(event) {
-        log::error!("Error trying to send model event {err:?}");
+        report_error!(anyhow::Error::new(err).context("Error trying to send model event"));
     }
 }
 
@@ -179,7 +190,7 @@ fn create_anonymous_user(_: &(), ctx: &mut AppContext) {
         warpui::r#async::block_on(auth_client.create_anonymous_user(None, anonymous_user_type));
     match result {
         Ok(user) => log::info!("Successfully created anonymous user {user:?}"),
-        Err(err) => log::error!("Failed to create anonymous user: {err:?}"),
+        Err(err) => report_error!(err.context("Failed to create anonymous user")),
     }
 }
 
@@ -196,14 +207,13 @@ fn trigger_maybe_log_out(_: &(), ctx: &mut AppContext) {
 
 /// Dispatches an action to the active workspace, if one exists.
 fn dispatch_to_active_workspace(ctx: &mut AppContext, action: WorkspaceAction) {
-    if let Some(window_id) = WindowManager::as_ref(ctx).active_window() {
-        if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) {
-            if let Some(workspace) = workspaces.into_iter().next() {
-                workspace.update(ctx, |workspace, ctx| {
-                    workspace.handle_action(&action, ctx);
-                });
-            }
-        }
+    if let Some(window_id) = WindowManager::as_ref(ctx).active_window()
+        && let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
+        && let Some(workspace) = workspaces.into_iter().next()
+    {
+        workspace.update(ctx, |workspace, ctx| {
+            workspace.handle_action(&action, ctx);
+        });
     }
 }
 

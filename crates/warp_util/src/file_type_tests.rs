@@ -104,6 +104,18 @@ fn test_development_extensions() {
 }
 
 #[test]
+fn test_is_jupyter_notebook_file() {
+    assert!(is_jupyter_notebook_file("analysis.ipynb"));
+    assert!(is_jupyter_notebook_file("Analysis.IPYNB"));
+    assert!(is_jupyter_notebook_file("/path/to/notebook.ipynb"));
+
+    assert!(!is_jupyter_notebook_file("notebook.json"));
+    assert!(!is_jupyter_notebook_file("README.md"));
+    assert!(!is_jupyter_notebook_file("ipynb"));
+    assert!(!is_jupyter_notebook_file("notebook"));
+}
+
+#[test]
 fn test_extensionless_files() {
     assert!(is_extensionless_text_file("README"));
     assert!(is_extensionless_text_file("LICENSE"));

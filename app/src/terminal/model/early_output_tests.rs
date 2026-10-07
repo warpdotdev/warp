@@ -1,5 +1,4 @@
 use super::TypeaheadMode;
-use crate::ai::blocklist::agent_view::AgentViewState;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi::{self, Handler};
 use crate::terminal::model::blocks::BlockList;
@@ -42,7 +41,7 @@ fn new_block_list(event_proxy: ChannelEventListener, mode: TypeaheadMode) -> Blo
     assert_eq!(block_list.early_output_mut().mode, mode);
 
     block_list.command_finished(Default::default());
-    block_list.precmd(Default::default());
+    block_list.prompt_only_precmd(Default::default());
     assert!(block_list.is_bootstrapping_precmd_done());
     block_list
 }
@@ -80,7 +79,7 @@ fn test_lazy_background_insertion() {
 fn test_background_triggers_wakeup() {
     let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
     let mut block_list = new_block_list(
-        ChannelEventListener::builder_for_test()
+        ChannelEventListener::builder_for_test::<crate::terminal::event::Event>()
             .with_wakeups_tx(wakeups_tx)
             .build(),
         TypeaheadMode::ShellReported,
@@ -128,7 +127,7 @@ fn test_queued_typeahead_input_matching() {
     });
     assert_eq!(block_list.active_block().command_to_string(), "first");
     block_list.command_finished(Default::default());
-    block_list.precmd(Default::default());
+    block_list.prompt_only_precmd(Default::default());
 
     // Once the second line of typeahead is echoed, it should be recognized as typeahead.
     block_list.input('s');
@@ -174,7 +173,7 @@ fn test_queued_typeahead_shell_reported() {
     assert!(block_list.background_block_mut().is_none());
 
     block_list.command_finished(Default::default());
-    block_list.precmd(Default::default());
+    block_list.prompt_only_precmd(Default::default());
 
     // Now, when the second line is echoed, it should be recognized as typeahead.
     block_list.input('s');
@@ -198,8 +197,10 @@ fn test_queued_typeahead_shell_reported() {
     assert_eq!(block_list.early_output().typeahead(), "second");
     // Unlike regular blocks, if the output grid of a background block is cleared
     // then it becomes hidden.
-    assert!(block_list
-        .background_block_mut()
-        .expect("Block should exist")
-        .is_empty(&AgentViewState::Inactive));
+    assert!(
+        block_list
+            .background_block_mut()
+            .expect("Block should exist")
+            .is_empty(&crate::terminal::model::block::TranscriptScope::Terminal)
+    );
 }

@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use ::ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 use chrono::Local;
 use itertools::Itertools;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
@@ -27,43 +28,49 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView, View,
-    ViewContext, ViewHandle,
+    ViewContext, ViewHandle, WeakViewHandle,
 };
 
+use super::SettingsSection;
 use super::admin_actions::AdminActions;
+use super::billing_and_usage::chatgpt_usage_card::{
+    chatgpt_manage_usage_button, render_chatgpt_usage_card,
+};
 use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
 use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
 use super::billing_and_usage::usage_history_model::UsageHistoryModel;
 use super::settings_page::{
-    build_sub_header, render_body_item, render_customer_type_badge, render_info_icon,
-    AdditionalInfo, HEADER_PADDING,
+    AdditionalInfo, HEADER_PADDING, build_sub_header, render_body_item, render_customer_type_badge,
+    render_info_icon,
 };
-use super::SettingsSection;
 use crate::ai::AIRequestUsageModel;
+use crate::ai::blocklist::view_util::format_dollars;
 use crate::auth::auth_manager::LoginGatedFeature;
 use crate::auth::auth_state::AuthState;
 use crate::auth::auth_view_modal::AuthViewVariant;
 use crate::auth::{AuthManager, AuthStateProvider, UserUid};
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::modal::{Modal, ModalEvent, ModalViewState};
+use crate::pricing::addon_pack::PackAmount;
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::server::ids::ServerId;
 use crate::server::telemetry::TelemetryEvent;
-use crate::settings::ai::AISettings;
+use crate::settings::ai::{AISettings, AISettingsChangedEvent};
 use crate::settings_view::settings_page::TOGGLE_BUTTON_RIGHT_PADDING;
 use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
-use crate::ui_components::menu_button::{icon_button_with_context_menu, MenuDirection};
+use crate::ui_components::menu_button::{MenuDirection, icon_button_with_context_menu};
 use crate::ui_components::tab_selector::{self, SettingsTab};
-use crate::view_components::action_button::{ActionButton, PrimaryTheme, SecondaryTheme};
 use crate::view_components::ToastFlavor;
-use crate::workspaces::team::Team;
+use crate::view_components::action_button::{ActionButton, PrimaryTheme, SecondaryTheme};
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
-use crate::workspaces::workspace::{CustomerType, Workspace};
-use crate::{send_telemetry_from_ctx, WorkspaceAction};
+use crate::workspaces::workspace::{
+    BillingMetadata, ChargeUnit, CustomerType, Workspace, WorkspaceMemberUsageInfo,
+};
+use crate::{WorkspaceAction, send_telemetry_from_ctx};
 
 const HEADER_FONT_SIZE: f32 = 16.;
 const OVERAGE_USAGE_LINK_TEXT: &str = "View details on overage usage";
@@ -79,27 +86,28 @@ const SORT_MENU_ITEM_DISPLAY_NAME_Z_A_LABEL: &str = "Z to A";
 const SORT_MENU_ITEM_REQUEST_USAGE_ASCENDING_LABEL: &str = "Usage ascending";
 const SORT_MENU_ITEM_REQUEST_USAGE_DESCENDING_LABEL: &str = "Usage descending";
 
-const AUTO_RELOAD_EXCEED_LIMIT_WARNING_STRING: &str =
-    "Auto reload is disabled, as the next reload would exceed your monthly spend limit. Increase your limit to use auto reload.";
+const AUTO_RELOAD_EXCEED_LIMIT_WARNING_STRING: &str = "Auto reload is disabled, as the next reload would exceed your monthly spend limit. Increase your limit to use auto reload.";
 const AUTO_RELOAD_DELINQUENT_WARNING_STRING: &str =
     "Restricted due to billing issue. Update your payment method to purchase add-on credits.";
-const RESTRICTED_BILLING_USAGE_WARNING_STRING: &str =
-    "Auto reload is disabled due to recent failed reload. Please update your payment method and try again.";
+const AUTO_RELOAD_USAGE_DELINQUENT_WARNING_STRING: &str =
+    "Restricted due to billing issue. Update your payment method to purchase usage.";
+const RESTRICTED_BILLING_USAGE_WARNING_STRING: &str = "Auto reload is disabled due to recent failed reload. Please update your payment method and try again.";
 
 const OVERVIEW_TAB_TEXT: &str = "Overview";
 const USAGE_HISTORY_TAB_TEXT: &str = "Usage History";
 
 const ENTERPRISE_USAGE_CALLOUT_HEADER: &str = "Usage reporting is currently limited";
-const ENTERPRISE_USAGE_CALLOUT_BODY_ADMIN_PREFIX: &str =
-    "Enterprise credit usage isn't fully available in this view yet. For the most accurate spend tracking, ";
+const ENTERPRISE_USAGE_CALLOUT_BODY_ADMIN_PREFIX: &str = "Enterprise credit usage isn't fully available in this view yet. For the most accurate spend tracking, ";
 const ENTERPRISE_USAGE_CALLOUT_BODY_ADMIN_LINK: &str = "visit the admin panel";
 const ENTERPRISE_USAGE_CALLOUT_BODY_ADMIN_SUFFIX: &str = ".";
-const ENTERPRISE_USAGE_CALLOUT_BODY_NON_ADMIN: &str =
-    "Enterprise credit usage isn't fully available in this view yet. Contact a team admin for detailed usage reporting.";
+const ENTERPRISE_USAGE_CALLOUT_BODY_NON_ADMIN: &str = "Enterprise credit usage isn't fully available in this view yet. Contact a team admin for detailed usage reporting.";
 
 const ADDON_CREDITS_DESCRIPTION: &str = "Add-on credits are purchased in prepaid packages that roll over each billing cycle and expire after one year. The more you purchase, the better the per-credit rate. Once your base plan credits are used, add-on credits will be consumed.";
 const ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM: &str =
     "Purchased add-on credits are shared across your team.";
+const ADDON_USAGE_DESCRIPTION: &str = "Usage rolls over each billing cycle and expires after one year. Once your base plan usage is depleted, any additional purchased usage will be consumed.";
+const ADDITIONAL_ADDON_USAGE_DESCRIPTION_FOR_TEAM: &str =
+    "Purchased usage is shared across your team.";
 
 // Cloud agent trial widget constants.
 const AMBIENT_AGENT_TRIAL_TITLE: &str = "Cloud agent trial";
@@ -122,6 +130,56 @@ pub fn create_discount_badge(discount: u32, appearance: &Appearance) -> Box<dyn 
     .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
     .with_background(bg_color)
     .with_uniform_padding(4.)
+    .finish()
+}
+
+/// Formats an add-on credits price premium, expressed in basis points, as a
+/// human-readable percentage (e.g. 1000 -> "10%").
+fn format_addon_premium_percent(premium_bps: i32) -> String {
+    if premium_bps % 100 == 0 {
+        format!("{}%", premium_bps / 100)
+    } else {
+        format!("{:.2}%", premium_bps as f64 / 100.0)
+    }
+}
+
+pub(crate) const CHECKOUT_PENDING_MESSAGE: &str = "Opening your browser to complete your purchase";
+
+/// Renders the savings-framed upsell shown in the add-on credits panel for
+/// plans that purchase at a premium over list price, linking to the upgrade
+/// page.
+pub(crate) fn render_premium_upgrade_savings_note(
+    upgrade_url: String,
+    premium_bps: i32,
+    charge_unit: ChargeUnit,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let percent = format_addon_premium_percent(premium_bps);
+    let purchasable = match charge_unit {
+        ChargeUnit::Credits => "add-on credits",
+        ChargeUnit::Cents => "usage",
+    };
+    let fragments = vec![
+        FormattedTextFragment::plain_text(format!("Save {percent} on {purchasable} by ")),
+        FormattedTextFragment::hyperlink("upgrading to a Build plan", upgrade_url),
+        FormattedTextFragment::plain_text("."),
+    ];
+
+    FormattedTextElement::new(
+        FormattedText::new([FormattedTextLine::Line(fragments)]),
+        appearance.ui_font_size(),
+        appearance.ui_font_family(),
+        appearance.ui_font_family(),
+        theme.sub_text_color(theme.background()).into(),
+        HighlightedHyperlink::default(),
+    )
+    .with_hyperlink_font_color(theme.accent().into_solid())
+    .register_default_click_handlers_with_action_support(|hyperlink_lens, _, ctx| {
+        if let warpui::elements::HyperlinkLens::Url(url) = hyperlink_lens {
+            ctx.open_url(url);
+        }
+    })
     .finish()
 }
 
@@ -184,6 +242,7 @@ pub(crate) struct ProratedRequestLimitsInfo {
 }
 
 pub struct BillingAndUsagePageView {
+    self_handle: WeakViewHandle<Self>,
     auth_state: Arc<AuthState>,
     overage_limit_modal_state: ModalViewState<Modal<SpendingLimitModal>>,
     addon_credit_modal_state: ModalViewState<Modal<SpendingLimitModal>>,
@@ -211,6 +270,8 @@ pub struct BillingAndUsagePageView {
     load_more_button: ViewHandle<ActionButton>,
     selected_addon_denomination: usize,
     addon_credits_options: Vec<AddonCreditsOption>,
+    /// The charge unit the denomination buttons were last built for.
+    addon_charge_unit: ChargeUnit,
     addon_credit_denomination_buttons: Vec<ViewHandle<ActionButton>>,
     purchase_addon_credits_loading: bool,
     prorated_request_limits_info_mouse_states: Vec<MouseStateHandle>,
@@ -240,6 +301,7 @@ pub struct BillingAndUsagePageView {
     ambient_trial_new_agent_button: MouseStateHandle,
     ambient_trial_buy_more_button: MouseStateHandle,
     ambient_trial_dismiss_button: MouseStateHandle,
+    chatgpt_manage_usage_button: ViewHandle<ActionButton>,
 }
 
 impl BillingAndUsagePageView {
@@ -278,6 +340,20 @@ impl BillingAndUsagePageView {
         });
         // On page init, fetch the usage history for the current user.
         usage_history_model.update(ctx, |m, ctx| m.refresh_usage_history_async(ctx));
+
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
+            if matches!(event, AISettingsChangedEvent::UsageDisplayUnit { .. }) {
+                ctx.notify();
+            }
+        });
+
+        if FeatureFlag::ChatGPTSubscription.is_enabled() {
+            ctx.subscribe_to_model(&ApiKeyManager::handle(ctx), |_, _, event, ctx| {
+                if matches!(event, ApiKeyManagerEvent::ChatGPTConnectionUpdated) {
+                    ctx.notify();
+                }
+            });
+        }
 
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
 
@@ -344,8 +420,11 @@ impl BillingAndUsagePageView {
                 ctx.dispatch_typed_action(BillingAndUsagePageAction::RenderMoreUsageEntries);
             })
         });
+        let chatgpt_manage_usage_button =
+            ctx.add_typed_action_view(|_| chatgpt_manage_usage_button());
 
         let mut me = Self {
+            self_handle: ctx.handle(),
             auth_state,
             overage_limit_modal_state: ModalViewState::new(overage_limit_modal_view),
             addon_credit_modal_state: ModalViewState::new(addon_credit_modal_view),
@@ -363,6 +442,7 @@ impl BillingAndUsagePageView {
             load_more_button,
             selected_addon_denomination: 0,
             addon_credits_options: Default::default(),
+            addon_charge_unit: ChargeUnit::Credits,
             addon_credit_denomination_buttons: Default::default(),
             purchase_addon_credits_loading: false,
             prorated_request_limits_info_mouse_states: Default::default(),
@@ -388,6 +468,7 @@ impl BillingAndUsagePageView {
             ambient_trial_new_agent_button: MouseStateHandle::default(),
             ambient_trial_buy_more_button: MouseStateHandle::default(),
             ambient_trial_dismiss_button: MouseStateHandle::default(),
+            chatgpt_manage_usage_button,
         };
         me.update_addon_credits_options(ctx);
         me.refresh_addon_credits_settings(ctx);
@@ -396,19 +477,13 @@ impl BillingAndUsagePageView {
     }
 
     fn refresh_addon_credits_settings(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some(workspace) = UserWorkspaces::as_ref(ctx).current_workspace() else {
-            return;
-        };
-        let addon_credits_settings = &workspace.settings.addon_credits_settings;
-        if addon_credits_settings.auto_reload_enabled {
-            self.selected_addon_denomination = addon_credits_settings
-                .selected_auto_reload_credit_denomination
-                .and_then(|amount| {
-                    self.addon_credits_options
-                        .iter()
-                        .find_position(|option| option.credits == amount)
-                })
-                .map_or(0, |pair| pair.0);
+        if let Some(workspace) = UserWorkspaces::as_ref(ctx).current_workspace() {
+            let addon_credits_settings = &workspace.settings.addon_credits_settings;
+            if addon_credits_settings.auto_reload_enabled {
+                self.selected_addon_denomination = addon_credits_settings
+                    .selected_auto_reload_option_index(&self.addon_credits_options)
+                    .unwrap_or(0);
+            }
         }
         self.update_denomination_buttons_focus(ctx);
     }
@@ -434,6 +509,7 @@ impl BillingAndUsagePageView {
             UserWorkspacesEvent::TeamsChanged => {
                 self.update_spending_limit_modals(ctx);
                 self.update_prorated_mouse_states(ctx);
+                self.update_addon_credits_options(ctx);
             }
             UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess => {
                 self.update_spending_limit_modals(ctx);
@@ -457,14 +533,24 @@ impl BillingAndUsagePageView {
             }
             UserWorkspacesEvent::PurchaseAddonCreditsSuccess => {
                 self.purchase_addon_credits_loading = false;
-                self.show_toast(
-                    "Successfully purchased add-on credits",
-                    ToastFlavor::Success,
-                    ctx,
-                );
+                let message = match UserWorkspaces::as_ref(ctx).charge_unit() {
+                    ChargeUnit::Credits => "Successfully purchased add-on credits",
+                    ChargeUnit::Cents => "Successfully purchased usage",
+                };
+                self.show_toast(message, ToastFlavor::Success, ctx);
                 AIRequestUsageModel::handle(ctx).update(ctx, |ai_request_usage_model, ctx| {
                     ai_request_usage_model.refresh_request_usage_async(ctx)
                 });
+            }
+            UserWorkspacesEvent::PurchaseAddonCreditsCheckoutRequired { checkout_url } => {
+                if self.purchase_addon_credits_loading {
+                    self.purchase_addon_credits_loading = false;
+                    ctx.open_url(checkout_url);
+                    self.show_toast(CHECKOUT_PENDING_MESSAGE, ToastFlavor::Default, ctx);
+                    // Credits are granted via webhook once checkout completes;
+                    // `on_page_selected` refreshes billing data when the user
+                    // returns (e.g. via the confirmation page's Open Warp link).
+                }
             }
             UserWorkspacesEvent::PurchaseAddonCreditsRejected(err) => {
                 self.purchase_addon_credits_loading = false;
@@ -528,7 +614,7 @@ impl BillingAndUsagePageView {
             }
             SpendingLimitModalEvent::Update { amount_cents } => {
                 let workspaces = UserWorkspaces::as_ref(ctx);
-                let team_uid = workspaces.current_team_uid();
+                let team_uid = workspaces.team_uid_for_window(ctx.window_id());
                 let usage_settings = workspaces.usage_based_pricing_settings();
 
                 if let Some(team_uid) = team_uid {
@@ -556,7 +642,7 @@ impl BillingAndUsagePageView {
             }
             SpendingLimitModalEvent::Update { amount_cents } => {
                 let workspaces = UserWorkspaces::as_ref(ctx);
-                let team_uid = workspaces.current_team_uid();
+                let team_uid = workspaces.team_uid_for_window(ctx.window_id());
 
                 if let Some(team_uid) = team_uid {
                     UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
@@ -647,26 +733,46 @@ impl BillingAndUsagePageView {
     }
 
     fn update_addon_credits_options(&mut self, ctx: &mut ViewContext<Self>) {
-        self.addon_credits_options = PricingInfoModel::as_ref(ctx)
+        let options = PricingInfoModel::as_ref(ctx)
             .addon_credits_options()
             .map(|opts| opts.to_vec())
             .unwrap_or_default();
-        self.addon_credit_denomination_buttons = self
-            .addon_credits_options
-            .iter()
-            .enumerate()
-            .map(|(i, option)| {
-                ctx.add_typed_action_view(move |_ctx| {
-                    ActionButton::new(option.credits.separate_with_commas(), SecondaryTheme)
-                        .with_icon(Icon::Credits)
-                        .on_click(move |ctx| {
-                            ctx.dispatch_typed_action(
-                                BillingAndUsagePageAction::SelectTopupDenomination(i),
-                            );
-                        })
+        let charge_unit = UserWorkspaces::as_ref(ctx).charge_unit();
+        // Every workspace-metadata poll republishes the (usually unchanged) catalog; rebuilding
+        // the buttons would discard their selection and hover state for nothing.
+        if options == self.addon_credits_options
+            && charge_unit == self.addon_charge_unit
+            && !self.addon_credit_denomination_buttons.is_empty()
+        {
+            return;
+        }
+        self.selected_addon_denomination = self
+            .selected_addon_denomination
+            .min(options.len().saturating_sub(1));
+        self.addon_credits_options = options;
+        self.addon_charge_unit = charge_unit;
+        self.addon_credit_denomination_buttons =
+            self.addon_credits_options
+                .iter()
+                .enumerate()
+                .map(|(i, option)| {
+                    let amount = PackAmount::of(option, charge_unit);
+                    ctx.add_typed_action_view(move |_ctx| {
+                        let button = ActionButton::new(amount.short_label(), SecondaryTheme)
+                            .on_click(move |ctx| {
+                                ctx.dispatch_typed_action(
+                                    BillingAndUsagePageAction::SelectTopupDenomination(i),
+                                );
+                            });
+                        if amount.is_usage() {
+                            button
+                        } else {
+                            button.with_icon(Icon::Credits)
+                        }
+                    })
                 })
-            })
-            .collect();
+                .collect();
+        self.update_denomination_buttons_focus(ctx);
     }
 
     fn update_prorated_mouse_states(&mut self, ctx: &mut ViewContext<Self>) {
@@ -784,8 +890,11 @@ impl TypedActionView for BillingAndUsagePageView {
                     user_workspaces.generate_stripe_billing_portal_link(*team_uid, ctx);
                 });
             }
-            BillingAndUsagePageAction::OpenAdminPanel { team_uid } => {
+            BillingAndUsagePageAction::OpenTeamAdminPanel { team_uid } => {
                 AdminActions::open_admin_panel(*team_uid, ctx);
+            }
+            BillingAndUsagePageAction::OpenWorkspaceAdminPanel => {
+                AdminActions::open_workspace_admin_panel(ctx);
             }
             BillingAndUsagePageAction::ContactSupport => {
                 AdminActions::contact_support(ctx);
@@ -922,29 +1031,25 @@ impl TypedActionView for BillingAndUsagePageView {
             BillingAndUsagePageAction::SelectTopupDenomination(i) => {
                 self.selected_addon_denomination = *i;
                 self.update_denomination_buttons_focus(ctx);
+                let team_uid = UserWorkspaces::as_ref(ctx).team_uid_for_window(ctx.window_id());
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
-                    let team_uid = user_workspaces.current_team_uid();
                     if let Some((workspace, team_uid)) =
                         user_workspaces.current_workspace().zip(team_uid)
-                    {
-                        if workspace
+                        && workspace
                             .settings
                             .addon_credits_settings
                             .auto_reload_enabled
-                        {
-                            if let Some(option) = self
-                                .addon_credits_options
-                                .get(self.selected_addon_denomination)
-                            {
-                                user_workspaces.update_addon_credits_settings(
-                                    team_uid,
-                                    None,
-                                    None,
-                                    Some(option.credits),
-                                    ctx,
-                                );
-                            }
-                        }
+                        && let Some(option) = self
+                            .addon_credits_options
+                            .get(self.selected_addon_denomination)
+                    {
+                        user_workspaces.update_addon_credits_settings(
+                            team_uid,
+                            None,
+                            None,
+                            Some(option.credits),
+                            ctx,
+                        );
                     }
                 });
                 ctx.notify();
@@ -1023,9 +1128,10 @@ pub enum BillingAndUsagePageAction {
     GenerateStripeBillingPortalLink {
         team_uid: ServerId,
     },
-    OpenAdminPanel {
+    OpenTeamAdminPanel {
         team_uid: ServerId,
     },
+    OpenWorkspaceAdminPanel,
     ContactSupport,
     SignupAnonymousUser,
     AttemptLoginGatedUpgrade,
@@ -1048,7 +1154,7 @@ pub enum BillingAndUsagePageAction {
     RenderMoreUsageEntries,
     SelectTopupDenomination(usize),
     PurchaseAddonCredits {
-        team_uid: ServerId,
+        team_uid: Option<ServerId>,
     },
     ShowAddOnCreditModal,
     UpdateAutoReloadEnabled {
@@ -1086,6 +1192,91 @@ enum Divisor {
     Limit(usize),
 }
 
+/// The dollar values of a usage row's credit figures, for a plan charged in cents.
+#[derive(Copy, Clone, Debug, PartialEq)]
+struct UsageCents {
+    used: f64,
+    /// `None` when the server left out the limit's dollar value and for rows without a limit of
+    /// their own.
+    limit: Option<f64>,
+}
+
+/// The current user's allowance figures in cents: for a plan charged in cents, when the server
+/// supplied the used figure. Unlimited subjects keep the credit display.
+fn allowance_usage_cents(
+    charge_unit: ChargeUnit,
+    ai_request_usage_model: &AIRequestUsageModel,
+) -> Option<UsageCents> {
+    match charge_unit {
+        ChargeUnit::Credits => None,
+        ChargeUnit::Cents if ai_request_usage_model.is_unlimited() => None,
+        ChargeUnit::Cents => Some(UsageCents {
+            used: ai_request_usage_model.usage_cents_used()?,
+            limit: ai_request_usage_model.included_usage_cents(),
+        }),
+    }
+}
+
+/// A member's allowance figures in cents: for a plan charged in cents, when the server supplied
+/// the used figure. Unlimited members keep the credit display.
+fn member_usage_cents(
+    charge_unit: ChargeUnit,
+    usage_info: &WorkspaceMemberUsageInfo,
+) -> Option<UsageCents> {
+    match charge_unit {
+        ChargeUnit::Credits => None,
+        ChargeUnit::Cents if usage_info.is_unlimited => None,
+        ChargeUnit::Cents => Some(UsageCents {
+            used: usage_info.usage_cents_used_since_last_refresh?.into_inner(),
+            limit: usage_info
+                .included_usage_cents
+                .map(|cents| cents.into_inner()),
+        }),
+    }
+}
+
+/// Whether a usage row shows dollars: only when every figure it displays has a dollar value, so
+/// a row never mixes units.
+fn shows_dollars(divisor: Option<Divisor>, usage_cents: Option<UsageCents>) -> bool {
+    match divisor {
+        Some(Divisor::Limit(_)) => usage_cents.is_some_and(|cents| cents.limit.is_some()),
+        Some(Divisor::Unlimited) | None => usage_cents.is_some(),
+    }
+}
+
+/// Formats a usage row's `used/limit` figure, in dollars when [`shows_dollars`] and otherwise in
+/// credits.
+fn format_usage_count(
+    used: usize,
+    divisor: Option<Divisor>,
+    usage_cents: Option<UsageCents>,
+) -> String {
+    match (divisor, usage_cents) {
+        (
+            Some(Divisor::Limit(_)),
+            Some(UsageCents {
+                used: used_cents,
+                limit: Some(limit_cents),
+            }),
+        ) => format!(
+            "{}/{}",
+            format_dollars(used_cents as f32),
+            format_dollars(limit_cents as f32)
+        ),
+        (Some(Divisor::Limit(limit)), Some(UsageCents { limit: None, .. }) | None) => format!(
+            "{}/{}",
+            used.separate_with_commas(),
+            limit.separate_with_commas()
+        ),
+        (Some(Divisor::Unlimited), Some(cents)) => {
+            format!("{}/Unlimited", format_dollars(cents.used as f32))
+        }
+        (Some(Divisor::Unlimited), None) => format!("{}/Unlimited", used.separate_with_commas()),
+        (None, Some(cents)) => format_dollars(cents.used as f32),
+        (None, None) => used.separate_with_commas(),
+    }
+}
+
 impl BillingAndUsagePageView {
     /// Renders the ambient agent trial widget showing remaining credits and action buttons.
     /// Returns None if the user has no ambient-only credits (None value from server),
@@ -1114,13 +1305,18 @@ impl BillingAndUsagePageView {
             .with_style(Properties::default().weight(Weight::Semibold))
             .finish();
 
-        let credits_text = if credits_remaining == 1 {
-            "1 credit remaining".to_string()
-        } else {
-            format!(
+        let workspaces = UserWorkspaces::as_ref(app);
+        let usage_cents_remaining = match workspaces.charge_unit() {
+            ChargeUnit::Cents => ai_request_usage_model.ambient_only_usage_cents_remaining(),
+            ChargeUnit::Credits => None,
+        };
+        let credits_text = match usage_cents_remaining {
+            Some(cents) => format!("{} remaining", format_dollars(cents as f32)),
+            None if credits_remaining == 1 => "1 credit remaining".to_string(),
+            None => format!(
                 "{} credits remaining",
                 credits_remaining.separate_with_commas()
-            )
+            ),
         };
         let credits_label = Text::new_inline(credits_text, appearance.ui_font_family(), 12.)
             .with_color(blended_colors::text_sub(theme, theme.surface_1()))
@@ -1168,9 +1364,9 @@ impl BillingAndUsagePageView {
         }
 
         // Only show "Buy more" button for users not on a paid plan.
-        let is_on_paid_plan = UserWorkspaces::as_ref(app)
-            .current_team()
-            .is_some_and(|team| team.billing_metadata.is_user_on_paid_plan());
+        let is_on_paid_plan = workspaces
+            .current_workspace_billing_metadata()
+            .is_some_and(BillingMetadata::is_user_on_paid_plan);
         if !is_on_paid_plan {
             let user_id = AuthStateProvider::as_ref(app).get().user_id();
             let buy_more_button = ui_builder
@@ -1254,13 +1450,13 @@ impl BillingAndUsagePageView {
     fn render_usage_based_pricing_section(
         &self,
         enabled: bool,
-        team: &Team,
+        billing_metadata: &BillingMetadata,
+        team_uid: ServerId,
         appearance: &Appearance,
         app: &AppContext,
         has_admin_permissions: bool,
-        ubp_toggle_loading: bool,
     ) -> Box<dyn Element> {
-        let is_delinquent = team.billing_metadata.is_delinquent_due_to_payment_issue();
+        let is_delinquent = billing_metadata.is_delinquent_due_to_payment_issue();
         let enabled_and_not_delinquent = enabled && !is_delinquent;
 
         let (header_text, description_text) = if has_admin_permissions {
@@ -1304,7 +1500,6 @@ impl BillingAndUsagePageView {
         let mut column = Flex::column();
 
         if has_admin_permissions {
-            let team_uid = team.uid;
             let toggle = appearance
                 .ui_builder()
                 .switch(self.ubp_switch_state.clone())
@@ -1320,7 +1515,7 @@ impl BillingAndUsagePageView {
                     );
                 });
 
-            let toggle = if ubp_toggle_loading || is_delinquent {
+            let toggle = if self.usage_based_pricing_toggle_loading || is_delinquent {
                 toggle.disable().finish()
             } else {
                 toggle.finish()
@@ -1341,7 +1536,7 @@ impl BillingAndUsagePageView {
 
         column.add_child(Container::new(description).with_margin_right(100.).finish());
 
-        if enabled_and_not_delinquent || team.billing_metadata.has_overages_used() {
+        if enabled_and_not_delinquent || billing_metadata.has_overages_used() {
             column.add_child(self.render_monthly_overage_spending_limit(
                 appearance,
                 app,
@@ -1349,7 +1544,7 @@ impl BillingAndUsagePageView {
             ));
             column.add_child(self.render_total_overages_row(appearance, app));
             if let Some(manage_link) =
-                self.render_manage_overages_link(appearance, team.uid, has_admin_permissions)
+                self.render_manage_overages_link(appearance, team_uid, has_admin_permissions)
             {
                 column.add_child(manage_link);
             }
@@ -1599,10 +1794,11 @@ impl BillingAndUsagePageView {
     fn render_addon_credits_panel(
         &self,
         selected_topup_denomination: usize,
-        workspace: &Workspace,
-        team_uid: ServerId,
+        workspace: Option<&Workspace>,
+        team_uid: Option<ServerId>,
         has_admin_permissions: bool,
         bonus_credit_balance: i32,
+        bonus_usage_cents_balance: Option<f64>,
         addon_credits_options: &[AddonCreditsOption],
         addon_credit_denomination_buttons: &[ViewHandle<ActionButton>],
         purchase_addon_credits_loading: bool,
@@ -1614,19 +1810,24 @@ impl BillingAndUsagePageView {
         let bg = appearance.theme().background();
         let ui_builder = appearance.ui_builder();
         let theme = appearance.theme();
+        let charge_unit = UserWorkspaces::as_ref(app).charge_unit();
 
-        let header = Text::new_inline("Add-on credits", appearance.ui_font_family(), 16.)
+        let header_text = match charge_unit {
+            ChargeUnit::Credits => "Add-on credits",
+            ChargeUnit::Cents => "Add-on usage",
+        };
+        let header = Text::new_inline(header_text, appearance.ui_font_family(), 16.)
             .with_color(fg.into())
             .with_style(Properties::default().weight(Weight::Bold))
             .finish();
 
-        let credits_value = Text::new_inline(
-            bonus_credit_balance.separate_with_commas(),
-            appearance.ui_font_family(),
-            16.,
-        )
-        .with_color(fg.into())
-        .finish();
+        let balance_label = match bonus_usage_cents_balance {
+            Some(cents) => format_dollars(cents as f32),
+            None => bonus_credit_balance.separate_with_commas(),
+        };
+        let credits_value = Text::new_inline(balance_label, appearance.ui_font_family(), 16.)
+            .with_color(fg.into())
+            .finish();
 
         let icon = Container::new(
             ConstrainedBox::new(Icon::Credits.to_warpui_icon(fg).finish())
@@ -1644,36 +1845,47 @@ impl BillingAndUsagePageView {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .finish();
 
-        let team_can_purchase_addon_credits = UserWorkspaces::as_ref(app)
-            .current_team()
-            .and_then(|team| team.billing_metadata.tier.purchase_add_on_credits_policy)
-            .is_some_and(|policy| policy.enabled);
-        let can_upgrade_to_build = UserWorkspaces::as_ref(app)
-            .current_workspace()
-            .map(|workspace| workspace.billing_metadata.can_upgrade_to_build_plan())
-            .unwrap_or(false);
+        let workspaces = UserWorkspaces::as_ref(app);
+        let purchase_policy = workspaces.purchase_policy();
+        let team_can_purchase_addon_credits =
+            purchase_policy.is_some_and(|policy| policy.allows_purchases());
+        let premium_bps = purchase_policy.map_or(0, |policy| policy.effective_premium_bps());
+        let can_upgrade_to_build = workspace
+            .is_none_or(|workspace| workspace.billing_metadata.can_upgrade_to_build_plan());
+        let upgrade_url = match team_uid {
+            Some(team_uid) => UserWorkspaces::upgrade_link_for_team(team_uid),
+            None => UserWorkspaces::upgrade_link(
+                AuthStateProvider::as_ref(app)
+                    .get()
+                    .user_id()
+                    .unwrap_or_default(),
+            ),
+        };
 
         let no_credits_access_explanation = match (
             team_can_purchase_addon_credits,
             can_upgrade_to_build,
             has_admin_permissions,
         ) {
-            // If the team can purchase addon credits (which implies they're already on a Build-like plan)
-            // and the current user is a team admin, don't show any explanation, so that we show the
-            // fuller experience with the rest of the settings below this.
+            // If addon credits can be purchased in this context (any purchase-enabled plan,
+            // including free plans buying at a premium) and the current user can manage them,
+            // don't show any explanation, so that we show the fuller experience with the rest
+            // of the settings below this.
             (true, _, true) => None,
             // If the team cannot purchase addon credits, but they can upgrade to a Build-like plan,
             // and the current user is an admin, then we show them a nudge to switch to Build.
             (false, true, true) => {
-                let upgrade_url = UserWorkspaces::upgrade_link_for_team(team_uid);
-                let is_legacy_paid = UserWorkspaces::handle(app)
-                    .as_ref(app)
-                    .current_team()
-                    .is_some_and(|team| team.billing_metadata.is_on_legacy_paid_plan());
-                let (link_text, suffix) = if is_legacy_paid {
-                    ("Switch to the Build plan", " to purchase add-on credits.")
+                let upgrade_url = upgrade_url.clone();
+                let is_legacy_paid = workspace
+                    .is_some_and(|workspace| workspace.billing_metadata.is_on_legacy_paid_plan());
+                let link_text = if is_legacy_paid {
+                    "Switch to the Build plan"
                 } else {
-                    ("Upgrade to the Build plan", " to purchase add-on credits.")
+                    "Upgrade to the Build plan"
+                };
+                let suffix = match charge_unit {
+                    ChargeUnit::Credits => " to purchase add-on credits.",
+                    ChargeUnit::Cents => " to purchase usage.",
                 };
 
                 let text_fragments = vec![
@@ -1713,7 +1925,12 @@ impl BillingAndUsagePageView {
             // they're on an Enterprise-like plan. For admins, we show them a message to contact their
             // Account Executive.
             (false, false, true) => {
-                let paragraph_text = "Contact your Account Executive for more add-on credits.";
+                let paragraph_text = match charge_unit {
+                    ChargeUnit::Credits => {
+                        "Contact your Account Executive for more add-on credits."
+                    }
+                    ChargeUnit::Cents => "Contact your Account Executive for more usage.",
+                };
                 Some(
                     ui_builder
                         .paragraph(paragraph_text)
@@ -1728,7 +1945,10 @@ impl BillingAndUsagePageView {
             // Every other case relates to not being a team admin. If you aren't an admin, we show
             // a generic message telling you to talk to them.
             (_, _, false) => {
-                let paragraph_text = "Contact a team admin to purchase add-on credits.";
+                let paragraph_text = match charge_unit {
+                    ChargeUnit::Credits => "Contact a team admin to purchase add-on credits.",
+                    ChargeUnit::Cents => "Contact a team admin to purchase usage.",
+                };
                 Some(
                     ui_builder
                         .paragraph(paragraph_text)
@@ -1759,15 +1979,22 @@ impl BillingAndUsagePageView {
                 .finish();
         }
 
-        let team_member_count = UserWorkspaces::as_ref(app)
-            .current_team()
-            .map(|team| team.members.len())
-            .unwrap_or(1);
+        let team_member_count = workspace.map_or(1, |workspace| workspace.members.len());
 
+        let (description, team_description) = match charge_unit {
+            ChargeUnit::Credits => (
+                ADDON_CREDITS_DESCRIPTION,
+                ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM,
+            ),
+            ChargeUnit::Cents => (
+                ADDON_USAGE_DESCRIPTION,
+                ADDITIONAL_ADDON_USAGE_DESCRIPTION_FOR_TEAM,
+            ),
+        };
         let paragraph_text = if team_member_count > 1 {
-            format!("{ADDON_CREDITS_DESCRIPTION} {ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM}")
+            format!("{description} {team_description}")
         } else {
-            ADDON_CREDITS_DESCRIPTION.to_string()
+            description.to_string()
         };
         let paragraph = ui_builder
             .paragraph(paragraph_text)
@@ -1785,15 +2012,22 @@ impl BillingAndUsagePageView {
                 on_click_action: None,
                 secondary_text: None,
                 tooltip_override_text: Some(
-                    "Sets the monthly limit spent on add-on credits".to_string(),
+                    match charge_unit {
+                        ChargeUnit::Credits => "Sets the monthly limit spent on add-on credits",
+                        ChargeUnit::Cents => "Sets the monthly limit spent on purchased usage",
+                    }
+                    .to_string(),
                 ),
             },
         );
 
         let spend_limit_text = workspace
-            .settings
-            .addon_credits_settings
-            .max_monthly_spend_cents
+            .and_then(|workspace| {
+                workspace
+                    .settings
+                    .addon_credits_settings
+                    .max_monthly_spend_cents
+            })
             .map(|cents| format!("${:.2}", cents as f64 / 100.0))
             .unwrap_or_else(|| "$200.00".to_string());
 
@@ -1834,39 +2068,41 @@ impl BillingAndUsagePageView {
                         .with_color(appearance.theme().active_ui_text_color().into())
                         .finish();
 
-                let credits_text = if credits_purchased == 1 {
-                    "1 credit".to_string()
-                } else {
-                    format!("{} credits", credits_purchased.separate_with_commas())
-                };
-
-                let credits_component = Container::new(
-                    Text::new_inline(credits_text, appearance.ui_font_family(), 12.)
-                        .with_color(blended_colors::text_disabled(
-                            appearance.theme(),
-                            appearance.theme().surface_1(),
-                        ))
+                let mut right_side =
+                    Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+                // Packs sold in dollars are bought as usage, so the credit count they carry is
+                // not a figure the user was shown when buying them.
+                if charge_unit == ChargeUnit::Credits {
+                    right_side.add_child(
+                        Container::new(
+                            Text::new_inline(
+                                PackAmount::Credits(credits_purchased).label(),
+                                appearance.ui_font_family(),
+                                12.,
+                            )
+                            .with_color(blended_colors::text_disabled(
+                                appearance.theme(),
+                                appearance.theme().surface_1(),
+                            ))
+                            .finish(),
+                        )
+                        .with_margin_right(8.)
                         .finish(),
-                )
-                .with_margin_right(8.)
-                .finish();
-
-                let cost_component = Text::new_inline(
-                    format!("${cost_dollars:.2}"),
-                    appearance.ui_font_family(),
-                    12.,
-                )
-                .with_color(blended_colors::text_sub(
-                    appearance.theme(),
-                    appearance.theme().surface_1(),
-                ))
-                .finish();
-
-                let right_side = Flex::row()
-                    .with_child(credits_component)
-                    .with_child(cost_component)
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .finish();
+                    );
+                }
+                right_side.add_child(
+                    Text::new_inline(
+                        format!("${cost_dollars:.2}"),
+                        appearance.ui_font_family(),
+                        12.,
+                    )
+                    .with_color(blended_colors::text_sub(
+                        appearance.theme(),
+                        appearance.theme().surface_1(),
+                    ))
+                    .finish(),
+                );
+                let right_side = right_side.finish();
 
                 Some(
                     Container::new(
@@ -1888,15 +2124,31 @@ impl BillingAndUsagePageView {
 
         let selected_option = addon_credits_options.get(selected_topup_denomination);
 
-        let auto_reload_enabled = workspace
-            .settings
-            .addon_credits_settings
-            .auto_reload_enabled;
+        let auto_reload_enabled = workspace.is_some_and(|workspace| {
+            workspace
+                .settings
+                .addon_credits_settings
+                .auto_reload_enabled
+        });
 
         let auto_reload_amount = selected_option
-            .map(|option| option.credits.to_string())
+            .map(|option| PackAmount::of(option, charge_unit).label())
             .filter(|_| auto_reload_enabled)
-            .unwrap_or("your selected".to_string());
+            .unwrap_or_else(|| "your selected package".to_string());
+        let auto_reload_description = match charge_unit {
+            ChargeUnit::Credits => format!(
+                "When enabled, auto reload will automatically purchase {auto_reload_amount} when \
+                your add-on credit balance reaches 100 credits remaining."
+            ),
+            ChargeUnit::Cents => format!(
+                "When enabled, auto reload will automatically purchase {auto_reload_amount} when \
+                your purchased usage runs low."
+            ),
+        };
+        let delinquent_warning = match charge_unit {
+            ChargeUnit::Credits => AUTO_RELOAD_DELINQUENT_WARNING_STRING,
+            ChargeUnit::Cents => AUTO_RELOAD_USAGE_DELINQUENT_WARNING_STRING,
+        };
         let auto_reload_switch = ui_builder
             .switch(self.auto_reload_switch.clone())
             .check(auto_reload_enabled);
@@ -1906,10 +2158,14 @@ impl BillingAndUsagePageView {
             auto_reload_switch
                 .build()
                 .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(BillingAndUsagePageAction::UpdateAutoReloadEnabled {
-                        team_uid,
-                        enabled: !auto_reload_enabled,
-                    });
+                    if let Some(team_uid) = team_uid {
+                        ctx.dispatch_typed_action(
+                            BillingAndUsagePageAction::UpdateAutoReloadEnabled {
+                                team_uid,
+                                enabled: !auto_reload_enabled,
+                            },
+                        );
+                    }
                 })
                 .finish()
         };
@@ -1921,10 +2177,7 @@ impl BillingAndUsagePageView {
             Default::default(),
             appearance,
             auto_reload_switch,
-            Some(format!(
-                "When enabled, auto reload will automatically purchase {auto_reload_amount} \
-                credits when your add-on credit balance reaches 100 credits remaining."
-            )),
+            Some(auto_reload_description),
         ))
         .with_padding_right(-TOGGLE_BUTTON_RIGHT_PADDING)
         .finish();
@@ -1939,13 +2192,18 @@ impl BillingAndUsagePageView {
             .finish();
 
         let mut card_content_upper = Flex::column()
-            .with_children([card_header, paragraph, monthly_spend_row])
+            .with_children([card_header, paragraph])
             .with_spacing(8.);
 
+        if team_uid.is_some() {
+            card_content_upper.add_child(monthly_spend_row);
+        }
         if let Some(purchased_row) = purchased_this_month_row {
             card_content_upper.add_child(purchased_row);
         }
-        card_content_upper.add_child(auto_reload_switch);
+        if team_uid.is_some() {
+            card_content_upper.add_child(auto_reload_switch);
+        }
 
         let base_rate = addon_credits_options
             .first()
@@ -1953,7 +2211,7 @@ impl BillingAndUsagePageView {
 
         let (rendered_price, discount_badge) = match selected_option {
             Some(option) => {
-                let price_dollars = option.price_usd_cents as f64 / 100.0;
+                let price_dollars = option.price_usd_cents_with_premium(premium_bps) as f64 / 100.0;
                 let rendered_price = Container::new(
                     Text::new_inline(
                         format!("${price_dollars:.2}"),
@@ -1988,18 +2246,22 @@ impl BillingAndUsagePageView {
             "Buy".to_string()
         };
 
-        let would_exceed_limit = selected_option.is_some_and(|option| {
-            let purchase_cost_cents = option.price_usd_cents;
-            let monthly_limit_cents = workspace
-                .settings
-                .addon_credits_settings
-                .max_monthly_spend_cents
-                .unwrap_or(20000); // Default $200 limit
+        let would_exceed_limit =
+            workspace
+                .zip(selected_option)
+                .is_some_and(|(workspace, option)| {
+                    let purchase_cost_cents = option.price_usd_cents_with_premium(premium_bps);
+                    let monthly_limit_cents = workspace
+                        .settings
+                        .addon_credits_settings
+                        .max_monthly_spend_cents
+                        .unwrap_or(20000); // Default $200 limit
 
-            let already_spent_cents = workspace.bonus_grants_purchased_this_month.cents_spent;
+                    let already_spent_cents =
+                        workspace.bonus_grants_purchased_this_month.cents_spent;
 
-            (already_spent_cents + purchase_cost_cents) > monthly_limit_cents
-        });
+                    (already_spent_cents + purchase_cost_cents) > monthly_limit_cents
+                });
 
         let is_buy_button_disabled =
             purchase_addon_credits_loading || would_exceed_limit || delinquent_due_to_payment_issue;
@@ -2049,11 +2311,17 @@ impl BillingAndUsagePageView {
 
         if auto_reload_enabled {
             card_content_upper.add_child(buy_row.finish());
-            if delinquent_due_to_payment_issue {
-                card_content_upper.add_child(self.render_warning_row(
+            if premium_bps > 0 {
+                card_content_upper.add_child(render_premium_upgrade_savings_note(
+                    upgrade_url.clone(),
+                    premium_bps,
+                    charge_unit,
                     appearance,
-                    AUTO_RELOAD_DELINQUENT_WARNING_STRING.to_string(),
                 ));
+            }
+            if delinquent_due_to_payment_issue {
+                card_content_upper
+                    .add_child(self.render_warning_row(appearance, delinquent_warning.to_string()));
             } else if would_exceed_limit {
                 card_content_upper.add_child(self.render_warning_row(
                     appearance,
@@ -2080,15 +2348,23 @@ impl BillingAndUsagePageView {
                 buy_row.finish(),
             ];
 
-            if delinquent_due_to_payment_issue {
-                card_content_lower_children.push(self.render_warning_row(
+            if premium_bps > 0 {
+                card_content_lower_children.push(render_premium_upgrade_savings_note(
+                    upgrade_url.clone(),
+                    premium_bps,
+                    charge_unit,
                     appearance,
-                    AUTO_RELOAD_DELINQUENT_WARNING_STRING.to_string(),
                 ));
-            } else if workspace
-                .billing_metadata
-                .has_failed_addon_credit_auto_reload_status()
-            {
+            }
+
+            if delinquent_due_to_payment_issue {
+                card_content_lower_children
+                    .push(self.render_warning_row(appearance, delinquent_warning.to_string()));
+            } else if workspace.is_some_and(|workspace| {
+                workspace
+                    .billing_metadata
+                    .has_failed_addon_credit_auto_reload_status()
+            }) {
                 card_content_lower_children.push(self.render_warning_row(
                     appearance,
                     RESTRICTED_BILLING_USAGE_WARNING_STRING.to_string(),
@@ -2136,8 +2412,8 @@ impl BillingAndUsagePageView {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let billing_metadata = UserWorkspaces::as_ref(app)
-            .current_team()
-            .map(|team| team.billing_metadata.clone())
+            .current_workspace_billing_metadata()
+            .cloned()
             .unwrap_or_default();
         let ai_overages = billing_metadata.ai_overages.as_ref();
         let is_period_over_now = ai_overages
@@ -2238,6 +2514,7 @@ impl BillingAndUsagePageView {
         &self,
         used: usize,
         divisor: Option<Divisor>,
+        usage_cents: Option<UsageCents>,
         workspace_is_delinquent_due_to_payment_issue: bool,
         appearance: &Appearance,
         prorated_request_limits_info: Option<ProratedRequestLimitsInfo>,
@@ -2247,9 +2524,10 @@ impl BillingAndUsagePageView {
         let show_alert = workspace_is_delinquent_due_to_payment_issue
             || matches!(divisor, Some(Divisor::Limit(limit)) if used >= limit);
 
-        if let Some(info) = prorated_request_limits_info {
-            if info.is_request_limit_prorated {
-                row.add_child(render_info_icon(
+        if let Some(info) = prorated_request_limits_info
+            && info.is_request_limit_prorated
+        {
+            row.add_child(render_info_icon(
                 appearance,
                 AdditionalInfo::<BillingAndUsagePageAction> {
                     mouse_state: info.mouse_state,
@@ -2261,7 +2539,6 @@ impl BillingAndUsagePageView {
                     },
                 },
             ))
-            }
         }
 
         if show_alert {
@@ -2280,17 +2557,7 @@ impl BillingAndUsagePageView {
         let request_count_label = if workspace_is_delinquent_due_to_payment_issue {
             "Restricted due to billing issue".to_string()
         } else {
-            match divisor {
-                Some(Divisor::Unlimited) => {
-                    format!("{}/Unlimited", used.separate_with_commas())
-                }
-                Some(Divisor::Limit(limit)) => format!(
-                    "{}/{}",
-                    used.separate_with_commas(),
-                    limit.separate_with_commas()
-                ),
-                None => used.separate_with_commas(),
-            }
+            format_usage_count(used, divisor, usage_cents)
         };
 
         row.add_child(
@@ -2331,6 +2598,7 @@ impl BillingAndUsagePageView {
         name: String,
         used: usize,
         divisor: Option<Divisor>,
+        usage_cents: Option<UsageCents>,
         refresh_duration: String,
         workspace_is_delinquent_due_to_payment_issue: bool,
         appearance: &Appearance,
@@ -2341,6 +2609,7 @@ impl BillingAndUsagePageView {
             .with_child(self.render_request_usage_count(
                 used,
                 divisor,
+                usage_cents,
                 workspace_is_delinquent_due_to_payment_issue,
                 appearance,
                 prorated_request_limits_info,
@@ -2365,9 +2634,13 @@ impl BillingAndUsagePageView {
             )
             .finish()
         } else {
-            let header = "Credits";
+            let (header, unit) = if shows_dollars(divisor, usage_cents) {
+                ("Usage", "usage")
+            } else {
+                ("Credits", "credits")
+            };
             let description =
-                format!("This is the {refresh_duration} limit of AI credits for your account.");
+                format!("This is the {refresh_duration} limit of AI {unit} for your account.");
 
             let request_usage_description = FormattedTextElement::from_str(
                 description,
@@ -2438,8 +2711,8 @@ impl BillingAndUsagePageView {
             .format("%b %d at %-I:%M %p")
             .to_string();
         let workspace_is_delinquent_due_to_payment_issue = UserWorkspaces::as_ref(app)
-            .current_team()
-            .map(|team| team.billing_metadata.is_delinquent_due_to_payment_issue())
+            .current_workspace_billing_metadata()
+            .map(BillingMetadata::is_delinquent_due_to_payment_issue)
             .unwrap_or_default();
 
         let mut usage = Flex::column();
@@ -2659,7 +2932,7 @@ impl BillingAndUsagePageView {
     /// contact their admin.
     pub fn render_enterprise_usage_card(
         &self,
-        team_uid: ServerId,
+        team_uid: Option<ServerId>,
         has_admin_permissions: bool,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
@@ -2695,7 +2968,7 @@ impl BillingAndUsagePageView {
             .finish();
 
         // Body text differs for admin vs non-admin
-        let body = if has_admin_permissions {
+        let body = if let Some(team_uid) = team_uid.filter(|_| has_admin_permissions) {
             let admin_panel_url = AdminActions::admin_panel_link_for_team(team_uid);
             let text_fragments = vec![
                 FormattedTextFragment::plain_text(ENTERPRISE_USAGE_CALLOUT_BODY_ADMIN_PREFIX),
@@ -2769,9 +3042,12 @@ impl BillingAndUsagePageView {
             .get()
             .user_email()
             .unwrap_or_default();
-        let team = UserWorkspaces::as_ref(app).current_team();
+        let workspaces = UserWorkspaces::as_ref(app);
+        let team = workspaces.team_for_view_handle(&self.self_handle, app);
+        let billing_metadata = workspaces.current_workspace_billing_metadata();
         let has_admin_permissions =
             team.is_some_and(|team| team.has_admin_permissions(&current_user_email));
+        let charge_unit = workspaces.charge_unit();
 
         let mut usage_header_right_side = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -2858,23 +3134,53 @@ impl BillingAndUsagePageView {
             usage.add_child(ambient_trial_widget);
         }
 
-        if let (Some(workspace), Some(team)) = (workspace, team) {
-            let bonus_credit_balance =
-                ai_request_usage_model.total_workspace_bonus_credits_remaining(workspace.uid);
+        if let Some(chatgpt_usage_card) =
+            render_chatgpt_usage_card(&self.chatgpt_manage_usage_button, appearance, app)
+        {
+            usage.add_child(chatgpt_usage_card);
+        }
+
+        let show_addon_credits_panel = workspace.is_some()
+            || workspaces
+                .purchase_policy()
+                .is_some_and(|policy| policy.allows_purchases());
+        if show_addon_credits_panel {
+            let bonus_credit_balance = workspace.map_or_else(
+                || ai_request_usage_model.total_user_interactive_bonus_credits_remaining(),
+                |workspace| {
+                    ai_request_usage_model
+                        .total_workspace_and_team_bonus_credits_remaining(workspace.uid)
+                },
+            );
+            let bonus_usage_cents_balance = match charge_unit {
+                ChargeUnit::Cents => workspace.map_or_else(
+                    || ai_request_usage_model.total_user_interactive_bonus_usage_cents_remaining(),
+                    |workspace| {
+                        ai_request_usage_model
+                            .total_workspace_and_team_bonus_usage_cents_remaining(workspace.uid)
+                    },
+                ),
+                ChargeUnit::Credits => None,
+            };
 
             // Hide addon credits panel for Enterprise PAYG users when they have 0 credits.
-            let is_enterprise_payg_with_zero_credits = workspace
-                .billing_metadata
-                .is_enterprise_pay_as_you_go_enabled()
-                && bonus_credit_balance == 0;
+            let is_enterprise_payg_with_zero_credits = workspace.is_some_and(|workspace| {
+                workspace
+                    .billing_metadata
+                    .is_enterprise_pay_as_you_go_enabled()
+            }) && bonus_credit_balance == 0;
+
+            let can_manage_addon_credits =
+                team.is_none_or(|team| team.has_admin_permissions(&current_user_email));
 
             if !is_enterprise_payg_with_zero_credits {
                 usage.add_child(self.render_addon_credits_panel(
                     self.selected_addon_denomination,
                     workspace,
-                    team.uid,
-                    has_admin_permissions,
+                    team.map(|team| team.uid),
+                    can_manage_addon_credits,
                     bonus_credit_balance,
+                    bonus_usage_cents_balance,
                     &self.addon_credits_options,
                     &self.addon_credit_denomination_buttons,
                     self.purchase_addon_credits_loading,
@@ -2911,20 +3217,19 @@ impl BillingAndUsagePageView {
 
         // For enterprise plan users with base limit = 0, show a limited usage reporting callout
         // as this is not applicable to them
-        if let Some(t) = team {
-            if t.billing_metadata.customer_type == CustomerType::Enterprise
-                && t.billing_metadata
-                    .tier
-                    .warp_ai_policy
-                    .is_some_and(|p| p.limit == 0)
-            {
-                usage.add_child(self.render_enterprise_usage_card(
-                    t.uid,
-                    has_admin_permissions,
-                    appearance,
-                ));
-                return usage.finish();
-            }
+        if let Some(billing_metadata) = billing_metadata
+            && billing_metadata.customer_type == CustomerType::Enterprise
+            && billing_metadata
+                .tier
+                .warp_ai_policy
+                .is_some_and(|p| p.limit == 0)
+        {
+            usage.add_child(self.render_enterprise_usage_card(
+                team.map(|team| team.uid),
+                has_admin_permissions,
+                appearance,
+            ));
+            return usage.finish();
         }
 
         // Show a summed "Team total" row first.
@@ -2935,6 +3240,11 @@ impl BillingAndUsagePageView {
                 .iter()
                 .map(|m| m.usage_info.requests_used_since_last_refresh as usize)
                 .sum();
+            let team_total_usage_cents = workspace_team_members
+                .iter()
+                .map(|m| member_usage_cents(charge_unit, &m.usage_info).map(|cents| cents.used))
+                .sum::<Option<f64>>()
+                .map(|used| UsageCents { used, limit: None });
             let is_unlimited = ai_request_usage_model.is_unlimited();
 
             let team_divisor = if is_unlimited {
@@ -2947,6 +3257,7 @@ impl BillingAndUsagePageView {
                 "Team total".to_string(),
                 team_total_used,
                 team_divisor,
+                team_total_usage_cents,
                 ai_request_usage_model.refresh_duration_to_string(),
                 workspace_is_delinquent_due_to_payment_issue,
                 appearance,
@@ -2990,6 +3301,7 @@ impl BillingAndUsagePageView {
                         } else {
                             Some(Divisor::Limit(member.usage_info.request_limit as usize))
                         },
+                        member_usage_cents(charge_unit, &member.usage_info),
                         ai_request_usage_model.refresh_duration_to_string(),
                         workspace_is_delinquent_due_to_payment_issue,
                         appearance,
@@ -3023,6 +3335,7 @@ impl BillingAndUsagePageView {
                 } else {
                     Some(Divisor::Limit(ai_request_usage_model.request_limit()))
                 },
+                allowance_usage_cents(charge_unit, ai_request_usage_model),
                 ai_request_usage_model.refresh_duration_to_string(),
                 workspace_is_delinquent_due_to_payment_issue,
                 appearance,
@@ -3064,8 +3377,8 @@ impl BillingAndUsagePageView {
 
         let auth_state = AuthStateProvider::as_ref(app).get();
 
-        let upgrade_cta_text_fragments = if let Some(team) =
-            UserWorkspaces::as_ref(app).current_team()
+        let upgrade_cta_text_fragments = if let (Some(team), Some(billing_metadata)) =
+            (team, billing_metadata)
         {
             if workspace_is_delinquent_due_to_payment_issue {
                 if has_admin_permissions {
@@ -3084,11 +3397,11 @@ impl BillingAndUsagePageView {
                         "Contact your team admin to resolve billing issues.",
                     )]
                 }
-            } else if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
+            } else if billing_metadata.can_upgrade_to_higher_tier_plan() {
                 let upgrade_url = UserWorkspaces::upgrade_link_for_team(team.uid);
                 if has_admin_permissions {
-                    if team.billing_metadata.can_upgrade_to_build_plan() {
-                        if team.billing_metadata.is_on_legacy_paid_plan() {
+                    if billing_metadata.can_upgrade_to_build_plan() {
+                        if billing_metadata.is_on_legacy_paid_plan() {
                             vec![
                                 FormattedTextFragment::hyperlink(
                                     "Switch to the Build plan",
@@ -3103,7 +3416,7 @@ impl BillingAndUsagePageView {
                                 "Upgrade to the Build plan",
                                 upgrade_url,
                             )];
-                            if team.billing_metadata.is_byo_api_key_enabled() {
+                            if billing_metadata.is_byo_api_key_enabled() {
                                 fragments.push(FormattedTextFragment::plain_text(" or "));
                                 fragments.push(FormattedTextFragment::hyperlink_action(
                                     "bring your own key",
@@ -3116,7 +3429,7 @@ impl BillingAndUsagePageView {
                             fragments
                         }
                     } else {
-                        let upgrade_text = match team.billing_metadata.customer_type {
+                        let upgrade_text = match billing_metadata.customer_type {
                             CustomerType::Prosumer => "Upgrade to Turbo plan",
                             CustomerType::Turbo => "Upgrade to Lightspeed plan",
                             _ => "Upgrade",
@@ -3129,7 +3442,7 @@ impl BillingAndUsagePageView {
                 } else {
                     vec![]
                 }
-            } else if team.billing_metadata.is_on_build_plan() {
+            } else if billing_metadata.is_on_build_plan() {
                 vec![
                     FormattedTextFragment::hyperlink(
                         "Upgrade to Max",
@@ -3137,7 +3450,7 @@ impl BillingAndUsagePageView {
                     ),
                     FormattedTextFragment::plain_text(" for more AI credits."),
                 ]
-            } else if team.billing_metadata.is_on_build_max_plan() {
+            } else if billing_metadata.is_on_build_max_plan() {
                 vec![
                     FormattedTextFragment::hyperlink(
                         "Switch to Business",
@@ -3147,8 +3460,8 @@ impl BillingAndUsagePageView {
                         " for security features like SSO and automatically applied zero data retention.",
                     ),
                 ]
-            } else if team.billing_metadata.is_on_build_business_plan()
-                || team.billing_metadata.is_on_legacy_business_plan()
+            } else if billing_metadata.is_on_build_business_plan()
+                || billing_metadata.is_on_legacy_business_plan()
             {
                 vec![
                     FormattedTextFragment::hyperlink(
@@ -3157,7 +3470,7 @@ impl BillingAndUsagePageView {
                     ),
                     FormattedTextFragment::plain_text(" for custom limits and dedicated support."),
                 ]
-            } else if !team.billing_metadata.is_usage_based_pricing_toggleable() {
+            } else if !billing_metadata.is_usage_based_pricing_toggleable() {
                 vec![
                     FormattedTextFragment::hyperlink("Contact support", "mailto:support@warp.dev"),
                     FormattedTextFragment::plain_text(" for more AI usage."),
@@ -3165,7 +3478,7 @@ impl BillingAndUsagePageView {
             } else {
                 vec![]
             }
-        } else {
+        } else if billing_metadata.is_none_or(BillingMetadata::can_upgrade_to_build_plan) {
             let user_id = auth_state.user_id().unwrap_or_default();
             let upgrade_url = UserWorkspaces::upgrade_link(user_id);
             let mut fragments = vec![FormattedTextFragment::hyperlink(
@@ -3183,6 +3496,8 @@ impl BillingAndUsagePageView {
                 " for more credits and access to more models.",
             ));
             fragments
+        } else {
+            vec![]
         };
 
         let mut upgrade_cta = FormattedTextElement::new(
@@ -3226,28 +3541,27 @@ impl BillingAndUsagePageView {
                 .finish(),
         );
 
-        let workspaces = UserWorkspaces::as_ref(app);
-        if let Some(team) = workspaces.current_team() {
-            if team.billing_metadata.is_usage_based_pricing_toggleable() {
-                let usage_based_pricing_settings = workspaces.usage_based_pricing_settings();
+        if let (Some(team), Some(billing_metadata)) = (team, billing_metadata)
+            && billing_metadata.is_usage_based_pricing_toggleable()
+        {
+            let usage_based_pricing_settings = workspaces.usage_based_pricing_settings();
 
-                let enabled = self
-                    .usage_based_pricing_toggle_override
-                    .unwrap_or(usage_based_pricing_settings.enabled);
+            let enabled = self
+                .usage_based_pricing_toggle_override
+                .unwrap_or(usage_based_pricing_settings.enabled);
 
-                usage.add_child(
-                    Container::new(self.render_usage_based_pricing_section(
-                        enabled,
-                        team,
-                        appearance,
-                        app,
-                        has_admin_permissions,
-                        self.usage_based_pricing_toggle_loading,
-                    ))
-                    .with_margin_bottom(16.)
-                    .finish(),
-                );
-            }
+            usage.add_child(
+                Container::new(self.render_usage_based_pricing_section(
+                    enabled,
+                    billing_metadata,
+                    team.uid,
+                    appearance,
+                    app,
+                    has_admin_permissions,
+                ))
+                .with_margin_bottom(16.)
+                .finish(),
+            );
         }
 
         usage.finish()
@@ -3410,17 +3724,14 @@ impl BillingAndUsagePageView {
 
     fn render_team_admin_actions(
         &self,
-        team: &Team,
-        _current_user_id: UserUid,
+        team_uid: ServerId,
+        billing_metadata: &BillingMetadata,
+        has_billing_history: bool,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
-        if team.billing_metadata.customer_type == CustomerType::Enterprise
-            || !team.has_billing_history
-        {
+        if billing_metadata.customer_type == CustomerType::Enterprise || !has_billing_history {
             return None;
         }
-
-        let team_uid = team.uid;
         let content = Container::new(
             appearance
                 .ui_builder()
@@ -3455,16 +3766,16 @@ impl BillingAndUsagePageView {
         )
     }
 
-    fn render_plan_badge_for_team(
+    fn render_plan_badge(
         &self,
-        team: &Team,
+        customer_type: CustomerType,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
-        if team.billing_metadata.customer_type != CustomerType::Unknown {
+        if customer_type != CustomerType::Unknown {
             Some(
                 Container::new(render_customer_type_badge(
                     appearance,
-                    team.billing_metadata.customer_type.to_display_string(),
+                    customer_type.to_display_string(),
                 ))
                 .with_margin_right(12.)
                 .finish(),
@@ -3496,7 +3807,7 @@ impl BillingAndUsagePageView {
                 )
                 .build()
                 .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(BillingAndUsagePageAction::OpenAdminPanel {
+                    ctx.dispatch_typed_action(BillingAndUsagePageAction::OpenTeamAdminPanel {
                         team_uid,
                     });
                 })
@@ -3506,18 +3817,13 @@ impl BillingAndUsagePageView {
         .finish()
     }
 
-    fn render_non_team_user_actions(
+    fn render_personal_upgrade_action(
         &self,
         auth_state: &AuthState,
         appearance: &Appearance,
-    ) -> (Box<dyn Element>, Box<dyn Element>) {
+    ) -> Box<dyn Element> {
         let current_user_id = auth_state.user_id().unwrap_or_default();
-
-        let plan_badge = render_customer_type_badge(appearance, "Free".into());
-
-        let badge_element = Container::new(plan_badge).with_margin_right(16.).finish();
-
-        let compare_plans_button = Container::new(
+        Container::new(
             appearance
                 .ui_builder()
                 .button(ButtonVariant::Link, self.admin_panel_link.clone())
@@ -3542,9 +3848,7 @@ impl BillingAndUsagePageView {
                 .finish(),
         )
         .with_margin_left(12.)
-        .finish();
-
-        (badge_element, compare_plans_button)
+        .finish()
     }
 
     fn render_account_info(
@@ -3563,35 +3867,40 @@ impl BillingAndUsagePageView {
         let mut right_side = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_alignment(MainAxisAlignment::End);
-
-        let current_user_id = auth_state.user_id().unwrap_or_default();
         let workspaces = UserWorkspaces::as_ref(app);
+        let workspace = workspaces.current_workspace();
+        let billing_metadata = workspaces.current_workspace_billing_metadata();
+        let customer_type = billing_metadata
+            .map(|billing_metadata| billing_metadata.customer_type)
+            .unwrap_or_default();
 
-        if let Some(team) = workspaces.current_team() {
-            if let Some(plan_badge) = self.render_plan_badge_for_team(team, appearance) {
-                right_side.add_child(plan_badge);
-            }
+        if let Some(plan_badge) = self.render_plan_badge(customer_type, appearance) {
+            right_side.add_child(plan_badge);
+        }
 
+        if let Some(team) = workspaces.team_for_view_handle(&self.self_handle, app) {
             let current_user_email = auth_state.user_email().unwrap_or_default();
             let has_admin_permissions = team.has_admin_permissions(&current_user_email);
 
             if has_admin_permissions {
-                if let Some(admin_actions) =
-                    self.render_team_admin_actions(team, current_user_id, appearance)
+                if let (Some(workspace), Some(billing_metadata)) = (workspace, billing_metadata)
+                    && let Some(admin_actions) = self.render_team_admin_actions(
+                        team.uid,
+                        billing_metadata,
+                        workspace.has_billing_history,
+                        appearance,
+                    )
                 {
                     right_side.add_child(admin_actions);
                 }
 
-                if team.billing_metadata.is_enterprise_plan() {
+                if billing_metadata.is_some_and(BillingMetadata::is_enterprise_plan) {
                     let admin_panel_button = self.render_admin_panel_button(team.uid, appearance);
                     right_side.add_child(admin_panel_button);
                 }
             }
-        } else {
-            let (plan_badge, compare_plans_button) =
-                self.render_non_team_user_actions(auth_state, appearance);
-            right_side.add_child(plan_badge);
-            right_side.add_child(compare_plans_button);
+        } else if billing_metadata.is_none_or(BillingMetadata::can_upgrade_to_build_plan) {
+            right_side.add_child(self.render_personal_upgrade_action(auth_state, appearance));
         }
 
         plan_header.add_child(right_side.finish());

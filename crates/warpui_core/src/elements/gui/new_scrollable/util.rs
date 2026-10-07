@@ -1,9 +1,9 @@
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 
 use crate::elements::{
-    project_scroll_delta_by_sensitivity, Axis, ClippedScrollStateHandle, RectFExt as _,
-    ScrollToPositionMode,
+    Axis, ClippedScrollStateHandle, RectFExt as _, ScrollToPositionMode,
+    project_scroll_delta_by_sensitivity,
 };
 use crate::units::Pixels;
 use crate::{EventContext, SizeConstraint};

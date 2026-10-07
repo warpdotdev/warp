@@ -12,9 +12,9 @@ use warpui::ui_components::button::ButtonTooltipPosition;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, SingletonEntity, ViewContext, ViewHandle};
 
+use super::BlockType;
 use super::embedded_item::EmbeddedWorkflow;
 use super::view::{EditorViewAction, EditorViewEvent, RichTextEditorView};
-use super::BlockType;
 use crate::appearance::Appearance;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{ObjectIdType, Space};

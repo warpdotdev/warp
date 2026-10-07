@@ -17,7 +17,7 @@ use crate::parsers::SignatureAtTokenIndex;
 fn short_hand_flag_suggestions(
     signature: &SpecSignature,
     partial_without_dashes: &str,
-) -> impl Iterator<Item = MatchedSuggestion> {
+) -> impl Iterator<Item = MatchedSuggestion> + use<> {
     signature
         .short_hand_flags()
         .filter_map(|flag| {
@@ -81,7 +81,7 @@ fn long_hand_flag_suggestions(
     matcher: MatchStrategy,
     partial_without_dashes: &str,
     style: Option<FlagStyle>,
-) -> impl Iterator<Item = MatchedSuggestion> {
+) -> impl Iterator<Item = MatchedSuggestion> + use<> {
     signature
         .long_hand_flags()
         .filter(|flag| style.is_none_or(|style| flag.style == style))
@@ -130,52 +130,51 @@ pub fn complete(
         },
         ..
     } = location
+        && let Some(found_signature) = found_signature
     {
-        if let Some(found_signature) = found_signature {
-            let name = name.as_ref().map(|name| &name.item);
-            return match name {
-                // Case 1: if we are completing on '--<partial>', we surface long hand flags that begin with partial
-                Some(long) if long.starts_with("--") => long_hand_flag_suggestions(
-                    found_signature.signature,
-                    matcher,
-                    &long[2..],
-                    Some(FlagStyle::DoubleDash),
-                )
+        let name = name.as_ref().map(|name| &name.item);
+        return match name {
+            // Case 1: if we are completing on '--<partial>', we surface long hand flags that begin with partial
+            Some(long) if long.starts_with("--") => long_hand_flag_suggestions(
+                found_signature.signature,
+                matcher,
+                &long[2..],
+                Some(FlagStyle::DoubleDash),
+            )
+            .collect(),
+            // Case 2: if we are completing on a single '-', we surface all short hand flags followed by all long hand flags
+            Some(short) if short == "-" => {
+                short_hand_flag_suggestions(found_signature.signature, "")
+                    .chain(long_hand_flag_suggestions(
+                        found_signature.signature,
+                        matcher,
+                        "",
+                        None,
+                    ))
+                    .collect()
+            }
+            // Case 3: if we are completing on '-<partial>', we surface short hand flags that begin with partial,
+            // followed by long hand flags that begin with partial.
+            Some(short) if short.starts_with('-') => {
+                short_hand_flag_suggestions(found_signature.signature, &short[1..])
+                    .chain(long_hand_flag_suggestions(
+                        found_signature.signature,
+                        matcher,
+                        &short[1..],
+                        Some(FlagStyle::SingleDash),
+                    ))
+                    .collect()
+            }
+            // Case 4: if we are completing on whitespace (i.e. no prefix), we surface subcommands,
+            // followed by all long hand flags, followed by all short hand flags
+            None => long_hand_flag_suggestions(found_signature.signature, matcher, "", None)
+                .chain(short_hand_flag_suggestions(found_signature.signature, ""))
                 .collect(),
-                // Case 2: if we are completing on a single '-', we surface all short hand flags followed by all long hand flags
-                Some(short) if short == "-" => {
-                    short_hand_flag_suggestions(found_signature.signature, "")
-                        .chain(long_hand_flag_suggestions(
-                            found_signature.signature,
-                            matcher,
-                            "",
-                            None,
-                        ))
-                        .collect()
-                }
-                // Case 3: if we are completing on '-<partial>', we surface short hand flags that begin with partial,
-                // followed by long hand flags that begin with partial.
-                Some(short) if short.starts_with('-') => {
-                    short_hand_flag_suggestions(found_signature.signature, &short[1..])
-                        .chain(long_hand_flag_suggestions(
-                            found_signature.signature,
-                            matcher,
-                            &short[1..],
-                            Some(FlagStyle::SingleDash),
-                        ))
-                        .collect()
-                }
-                // Case 4: if we are completing on whitespace (i.e. no prefix), we surface subcommands,
-                // followed by all long hand flags, followed by all short hand flags
-                None => long_hand_flag_suggestions(found_signature.signature, matcher, "", None)
-                    .chain(short_hand_flag_suggestions(found_signature.signature, ""))
-                    .collect(),
-                _ => {
-                    log::info!("Reached option completion branch that should be unreachable");
-                    Default::default()
-                }
-            };
-        }
+            _ => {
+                log::info!("Reached option completion branch that should be unreachable");
+                Default::default()
+            }
+        };
     }
 
     Default::default()

@@ -4,15 +4,22 @@
 mod dpi;
 mod keyboard;
 mod mouse;
+mod recording;
 mod screenshot;
 
 use async_trait::async_trait;
+use instant::Instant;
+pub use recording::Recorder;
+pub(crate) use recording::spawn_abandoned_cleanup;
 use warpui_core::r#async::Timer;
 use windows::Win32::System::StationsAndDesktops::{
     CloseDesktop, DESKTOP_ACCESS_FLAGS, DESKTOP_CONTROL_FLAGS, HDESK, OpenInputDesktop,
 };
 
-use crate::{Action, ActionResult, Options};
+use crate::{
+    Action, ActionResult, MouseButton, Options, PointerEvent, PointerEventKind, PointerSink,
+    TargetedAction, Vector2I,
+};
 
 /// Returns whether computer_use can drive input on this machine right now.
 ///
@@ -22,6 +29,12 @@ use crate::{Action, ActionResult, Options};
 /// fails, so we'd rather fail fast here than surface the error mid-action.
 pub fn is_supported_on_current_platform() -> bool {
     probe_input_desktop_available()
+}
+
+/// Reports whether background, per-window control is available. The Windows input stack drives the
+/// screen / foreground window, so per-window background control is unsupported.
+pub fn background_supported() -> bool {
+    false
 }
 
 /// Shared probe used by both [`is_supported_on_current_platform`] and [`Actor::new`] so the
@@ -45,6 +58,48 @@ impl InputDesktop {
         let handle =
             unsafe { OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_ACCESS_FLAGS(0)) };
         handle.ok().map(Self)
+    }
+}
+
+fn record_positioned_event(
+    pointer_sink: Option<&PointerSink>,
+    kind: PointerEventKind,
+    button: Option<MouseButton>,
+    point: Vector2I,
+) {
+    let Some(sink) = pointer_sink else {
+        return;
+    };
+    let point = sink.recording_geometry.frame_point(point);
+    sink.session.record_press_or_move(kind, button, point);
+    push_pointer_event(sink, point, kind, button);
+}
+
+fn record_up(pointer_sink: Option<&PointerSink>, button: MouseButton) {
+    let Some(sink) = pointer_sink else {
+        return;
+    };
+    if let Some(point) = sink.session.record_release(button) {
+        push_pointer_event(sink, point, PointerEventKind::Up, Some(button));
+    }
+}
+
+fn push_pointer_event(
+    sink: &PointerSink,
+    point: Vector2I,
+    kind: PointerEventKind,
+    button: Option<MouseButton>,
+) {
+    let offset = Instant::now()
+        .checked_duration_since(sink.started_at)
+        .unwrap_or_default();
+    if let Ok(mut events) = sink.events.lock() {
+        events.push(PointerEvent {
+            offset,
+            kind,
+            button,
+            point,
+        });
     }
 }
 
@@ -103,8 +158,8 @@ impl super::Actor for Actor {
 
     async fn perform_actions(
         &mut self,
-        actions: &[Action],
-        options: Options,
+        actions: &[TargetedAction],
+        mut options: Options,
     ) -> Result<ActionResult, String> {
         // Probe at the top of every call so transient loss of the input desktop (workstation
         // lock, secure desktop swap, RDP reconnect) surfaces as a descriptive error instead of
@@ -114,8 +169,12 @@ impl super::Actor for Actor {
         }
         let keyboard = &mut self.keyboard;
         let mouse = &mut self.mouse;
+        let pointer_sink = options.pointer_sink.take();
 
-        for action in actions {
+        for targeted in actions {
+            // Per-window targeting is not supported on Windows; act on the screen / foreground
+            // window regardless of the requested target.
+            let action: &Action = &targeted.action;
             match action {
                 Action::Wait(duration) => {
                     Timer::after(*duration).await;
@@ -123,9 +182,26 @@ impl super::Actor for Actor {
                 Action::MouseDown { button, at } => {
                     mouse.move_to(*at)?;
                     mouse.button_down(button)?;
+                    record_positioned_event(
+                        pointer_sink.as_ref(),
+                        PointerEventKind::Down,
+                        Some(*button),
+                        *at,
+                    );
                 }
-                Action::MouseUp { button } => mouse.button_up(button)?,
-                Action::MouseMove { to } => mouse.move_to(*to)?,
+                Action::MouseUp { button } => {
+                    mouse.button_up(button)?;
+                    record_up(pointer_sink.as_ref(), *button);
+                }
+                Action::MouseMove { to } => {
+                    mouse.move_to(*to)?;
+                    record_positioned_event(
+                        pointer_sink.as_ref(),
+                        PointerEventKind::Move,
+                        None,
+                        *to,
+                    );
+                }
                 Action::MouseWheel {
                     at,
                     direction,
@@ -133,6 +209,12 @@ impl super::Actor for Actor {
                 } => {
                     mouse.move_to(*at)?;
                     mouse.scroll(direction, distance)?;
+                    record_positioned_event(
+                        pointer_sink.as_ref(),
+                        PointerEventKind::Scroll,
+                        None,
+                        *at,
+                    );
                 }
                 Action::TypeText { text } => {
                     keyboard.type_text(text)?;
@@ -152,9 +234,9 @@ impl super::Actor for Actor {
             None
         };
 
-        Ok(ActionResult {
+        Ok(ActionResult::legacy(
             screenshot,
-            cursor_position: Some(mouse.current_position()?),
-        })
+            Some(mouse.current_position()?),
+        ))
     }
 }

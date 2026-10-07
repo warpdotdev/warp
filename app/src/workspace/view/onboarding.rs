@@ -1,89 +1,51 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
-
-use onboarding::{ProjectOnboardingSettings, SelectedSettings};
+use onboarding::SelectedSettings;
 use warp_core::execution_mode::AppExecutionMode;
 use warpui::{SingletonEntity as _, ViewContext};
 
-use crate::pane_group::{NewTerminalOptions, PanesLayout};
 use crate::settings::AISettings;
 use crate::terminal::view::{
     AgentOnboardingVersion, OnboardingIntention, OnboardingVersion, TerminalAction,
 };
-use crate::workspace::Workspace;
-use crate::{terminal, FeatureFlag};
+use crate::workspace::{OneTimeModalModel, Workspace};
+use crate::{FeatureFlag, terminal};
 
 /// Configuration for starting the agent onboarding tutorial.
 #[derive(Debug, Clone)]
 pub enum OnboardingTutorial {
     /// Start tutorial without a project context.
     NoProject { intention: OnboardingIntention },
-    /// Start tutorial with a project path, but don't run init.
-    Project {
-        path: PathBuf,
-        intention: OnboardingIntention,
-    },
-    /// Start tutorial with a project path and run init flow first.
-    InitProject {
-        path: PathBuf,
-        intention: OnboardingIntention,
-    },
 }
 
 impl OnboardingTutorial {
     /// Extracts the onboarding intention from any tutorial variant.
     pub(crate) fn intention(&self) -> OnboardingIntention {
         match self {
-            OnboardingTutorial::NoProject { intention }
-            | OnboardingTutorial::Project { intention, .. }
-            | OnboardingTutorial::InitProject { intention, .. } => *intention,
+            OnboardingTutorial::NoProject { intention } => *intention,
         }
     }
 }
 
+/// A tutorial dispatch held back until the blocking one-time modal that was open closes.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct DeferredOnboardingTutorial {
+    has_project: bool,
+    intention: OnboardingIntention,
+}
+
 impl From<SelectedSettings> for OnboardingTutorial {
     fn from(settings: SelectedSettings) -> Self {
-        match settings {
-            SelectedSettings::AgentDrivenDevelopment {
-                project_settings, ..
-            } => match project_settings {
-                ProjectOnboardingSettings::Project {
-                    selected_local_folder,
-                    initialize_projects_automatically,
-                } => {
-                    let path = PathBuf::from(selected_local_folder);
-                    // When AgentView is enabled, /init comes at the end of the tutorial.
-                    if !FeatureFlag::AgentView.is_enabled() && initialize_projects_automatically {
-                        OnboardingTutorial::InitProject {
-                            path,
-                            intention: OnboardingIntention::AgentDrivenDevelopment,
-                        }
-                    } else {
-                        OnboardingTutorial::Project {
-                            path,
-                            intention: OnboardingIntention::AgentDrivenDevelopment,
-                        }
-                    }
-                }
-                ProjectOnboardingSettings::NoProject => OnboardingTutorial::NoProject {
-                    intention: OnboardingIntention::AgentDrivenDevelopment,
-                },
-            },
-            SelectedSettings::Terminal { .. } => OnboardingTutorial::NoProject {
-                intention: OnboardingIntention::Terminal,
-            },
-        }
+        let intention = match settings {
+            SelectedSettings::AgentDrivenDevelopment { .. } => {
+                OnboardingIntention::AgentDrivenDevelopment
+            }
+            SelectedSettings::Terminal { .. } => OnboardingIntention::Terminal,
+        };
+        OnboardingTutorial::NoProject { intention }
     }
 }
 
 impl Workspace {
     /// Start the agent onboarding tutorial.
-    ///
-    /// Depending on the variant of `tutorial`, this will either:
-    /// - `NoProject`: Start the tutorial immediately without any project context
-    /// - `Project`: Change to the project directory and start the tutorial
-    /// - `InitProject`: Open the repository, wait for init to complete, then start the tutorial
     pub(crate) fn start_agent_onboarding_tutorial(
         &mut self,
         tutorial: OnboardingTutorial,
@@ -96,48 +58,6 @@ impl Workspace {
         }
 
         match tutorial {
-            OnboardingTutorial::InitProject {
-                ref path,
-                intention,
-            } => {
-                // Open the repository - this will create a new terminal and trigger init
-                let Some(path_str) = path.to_str() else {
-                    log::error!("Failed to convert path to string: {path:?}");
-                    return;
-                };
-                self.handle_open_repository(path_str, ctx);
-
-                // Subscribe to the terminal view to wait for init completion
-                if let Some(terminal_view_handle) = self.active_session_view(ctx) {
-                    ctx.subscribe_to_view(
-                        &terminal_view_handle,
-                        move |me, terminal_view, event, ctx| {
-                            if let terminal::Event::OnboardingInitCompleted = event {
-                                // Init flow is complete, now start the tutorial
-                                me.dispatch_agent_onboarding_tutorial(true, intention, ctx);
-                                ctx.unsubscribe_to_view(&terminal_view);
-                            }
-                        },
-                    );
-                }
-            }
-            OnboardingTutorial::Project {
-                ref path,
-                intention,
-            } => {
-                // Create a new terminal in the project directory
-                self.add_tab_with_pane_layout(
-                    PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
-                        initial_directory: Some(path.clone()),
-                        hide_homepage: true,
-                        ..Default::default()
-                    })),
-                    Arc::new(HashMap::new()),
-                    None,
-                    ctx,
-                );
-                self.dispatch_tutorial_when_bootstrapped(true, intention, ctx);
-            }
             OnboardingTutorial::NoProject { intention } => {
                 self.dispatch_tutorial_when_bootstrapped(false, intention, ctx);
             }
@@ -157,11 +77,9 @@ impl Workspace {
             return;
         }
 
-        // With new onboarding, skip the guided tour when AI is not enabled
-        // (e.g. terminal-intent users or users who disabled AI).
-        if FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-            && !*AISettings::as_ref(ctx).is_any_ai_enabled
-        {
+        // Skip the guided tour when AI is not enabled (e.g. terminal-intent
+        // users or users who disabled AI).
+        if !*AISettings::as_ref(ctx).is_any_ai_enabled {
             return;
         }
 
@@ -190,13 +108,23 @@ impl Workspace {
         }
     }
 
-    /// Dispatch the agent onboarding tutorial flow to the active terminal.
+    /// Dispatch the agent onboarding tutorial flow to the active terminal. While a blocking
+    /// one-time modal (e.g. the ChatGPT plan modal) is open, the dispatch is held until it
+    /// closes so the callout doesn't compete with the modal for attention and focus.
     fn dispatch_agent_onboarding_tutorial(
-        &self,
+        &mut self,
         has_project: bool,
         intention: OnboardingIntention,
         ctx: &mut ViewContext<Self>,
     ) {
+        if OneTimeModalModel::as_ref(ctx).is_any_modal_open() {
+            self.onboarding_tutorial_deferred_by_modal = Some(DeferredOnboardingTutorial {
+                has_project,
+                intention,
+            });
+            return;
+        }
+
         let version = OnboardingVersion::Agent(if FeatureFlag::AgentView.is_enabled() {
             AgentOnboardingVersion::AgentModality {
                 has_project,
@@ -206,6 +134,23 @@ impl Workspace {
             AgentOnboardingVersion::UniversalInput { has_project }
         });
         self.dispatch_onboarding(TerminalAction::OnboardingFlow(version), ctx);
+        OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+            model.set_onboarding_tutorial_active(true, ctx);
+        });
+    }
+
+    /// Starts a tutorial that was held back by a one-time modal, now that the modal closed.
+    pub(super) fn resume_onboarding_tutorial_deferred_by_modal(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if let Some(DeferredOnboardingTutorial {
+            has_project,
+            intention,
+        }) = self.onboarding_tutorial_deferred_by_modal.take()
+        {
+            self.dispatch_agent_onboarding_tutorial(has_project, intention, ctx);
+        }
     }
 
     /// Dispatch the onboarding tutorial after a pending command (e.g. worktree

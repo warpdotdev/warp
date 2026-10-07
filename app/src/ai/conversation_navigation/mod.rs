@@ -186,7 +186,7 @@ impl ConversationNavigationData {
                     // Skip conversation transcript viewers, as they are stored elsewhere
                     // and should not be presented as regular user conversations.
                     if history_model
-                        .is_terminal_view_conversation_transcript_viewer(terminal_view_id)
+                        .is_terminal_surface_conversation_transcript_viewer(terminal_view_id)
                     {
                         continue;
                     }
@@ -199,7 +199,7 @@ impl ConversationNavigationData {
 
                     // Get all continuable conversations for this terminal view
                     for conversation in
-                        history_model.all_live_conversations_for_terminal_view(terminal_view_id)
+                        history_model.all_live_conversations_for_terminal_surface(terminal_view_id)
                     {
                         if !all_conversation_ids.contains(&conversation.id()) {
                             if conversation.should_exclude_from_navigation() {
@@ -256,7 +256,8 @@ impl ConversationNavigationData {
             .iter()
             .for_each(|(terminal_id, conversation)| {
                 if conversation.should_exclude_from_navigation()
-                    || history_model.is_terminal_view_conversation_transcript_viewer(*terminal_id)
+                    || history_model
+                        .is_terminal_surface_conversation_transcript_viewer(*terminal_id)
                     || !blocklist_filter::conversation_would_render_in_blocklist(conversation)
                 {
                     // Track the ID so the historical loop below doesn't re-add it.
@@ -287,7 +288,8 @@ impl ConversationNavigationData {
             .iter()
             .for_each(|(terminal_id, conversation)| {
                 if conversation.should_exclude_from_navigation()
-                    || history_model.is_terminal_view_conversation_transcript_viewer(*terminal_id)
+                    || history_model
+                        .is_terminal_surface_conversation_transcript_viewer(*terminal_id)
                     || !blocklist_filter::conversation_would_render_in_blocklist(conversation)
                 {
                     // Track the ID so the historical loop below doesn't re-add it.

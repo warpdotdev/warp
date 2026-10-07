@@ -20,10 +20,10 @@ use crate::editor::{
     PlainTextEditorViewAction as EditorAction, PropagateAndNoOpNavigationKeys,
     SingleLineEditorOptions,
 };
+use crate::search::QueryFilter;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::SearchMixer;
 use crate::search::result_renderer::{QueryResultIndex, QueryResultRenderer};
-use crate::search::QueryFilter;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 
@@ -185,10 +185,10 @@ impl<T: Action + Clone> SearchBarState<T> {
 
         // Keep searching until we find an interactable item or we've checked all items
         while attempts < len {
-            if let Some(renderer) = query_result_renderers.get(current_index) {
-                if !renderer.search_result.is_static_separator() {
-                    return Some(current_index);
-                }
+            if let Some(renderer) = query_result_renderers.get(current_index)
+                && !renderer.search_result.is_static_separator()
+            {
+                return Some(current_index);
             }
 
             current_index = direction.move_in_direction(current_index, len);

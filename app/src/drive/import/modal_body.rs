@@ -2,12 +2,13 @@ use std::path::PathBuf;
 
 use futures_util::stream::AbortHandle;
 use pathfinder_geometry::vector::vec2f;
+use warp_errors::report_error;
 use warpui::elements::{
     Align, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, MainAxisAlignment,
     MainAxisSize, MouseStateHandle, ParentElement, Radius,
 };
-use warpui::platform::file_picker::FilePickerError;
 use warpui::platform::Cursor;
+use warpui::platform::file_picker::FilePickerError;
 use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
@@ -16,7 +17,7 @@ use warpui::{
 
 use super::modal::BODY_HEIGHT;
 use super::nodes::{
-    expand_dirs, parse_file, FileContent, FileId, FileUploadState, FolderId, UploadResult,
+    FileContent, FileId, FileUploadState, FolderId, UploadResult, expand_dirs, parse_file,
 };
 use super::queue::{ImportQueue, ImportQueueArgs, ImportQueueEvent, ParentId, RequestContent};
 use crate::appearance::Appearance;
@@ -346,7 +347,7 @@ impl ImportModalBody {
 
             self.in_progress_handle = Some(handle.abort_handle());
         } else {
-            log::error!("State should be path expanded when parsing files");
+            report_error!("State should be path expanded when parsing files");
         };
     }
 

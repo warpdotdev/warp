@@ -4,7 +4,7 @@ use super::path::{sorted_directories_relative_to, sorted_paths_relative_to};
 use crate::completer::context::CompletionContext;
 use crate::completer::matchers::MatchStrategy;
 use crate::completer::suggest::{MatchedSuggestion, Priority, Suggestion, SuggestionType};
-use crate::completer::{engine, get_path_separators, TopLevelCommandCaseSensitivity};
+use crate::completer::{TopLevelCommandCaseSensitivity, engine, get_path_separators};
 use crate::parsers::ParsedToken;
 
 /// Generates top-level completion results based on the fragment of text that is entered into the
@@ -49,17 +49,17 @@ pub async fn complete(
 
     // If `cd`ing into a directory without entering `cd` is enabled, also suggest directories.
     // Note that the directories will be listed _after_ the top level commands.
-    if context.shell_supports_autocd().unwrap_or(false) {
-        if let Some(path_completion_context) = context.path_completion_context() {
-            return command_suggestions
-                .into_iter()
-                .chain(
-                    sorted_directories_relative_to(parsed_token, matcher, path_completion_context)
-                        .await
-                        .into_iter(),
-                )
-                .collect();
-        }
+    if context.shell_supports_autocd().unwrap_or(false)
+        && let Some(path_completion_context) = context.path_completion_context()
+    {
+        return command_suggestions
+            .into_iter()
+            .chain(
+                sorted_directories_relative_to(parsed_token, matcher, path_completion_context)
+                    .await
+                    .into_iter(),
+            )
+            .collect();
     }
 
     command_suggestions.into_iter().collect()
@@ -93,43 +93,22 @@ fn sorted_top_level_commands(
 
 /// Return a top-level command's `Suggestion`
 fn command_suggestion(command: &str, context: &dyn CompletionContext) -> Option<Suggestion> {
-    cfg_if::cfg_if! {
-        if #[cfg(feature = "v2")] {
-            let command_suggestion =
-                context
-                    .command_registry()
-                    .get_signature(command)
-                    .map(|signature| {
-                        Suggestion::with_same_display_and_replacement(
-                            signature.command.name.clone(),
-                            signature.command.description.as_ref().cloned(),
-                            // TODO(CORE-2795) This needs to be overrideable by
-                            // signature.parser_directives.always_case_insensitive
-                            SuggestionType::Command(context.command_case_sensitivity()),
-                            signature.command.priority.into(),
-                        )
-
-                    });
-        } else {
-            let command_suggestion =
-                context
-                    .command_registry()
-                    .signature(command)
-                    .map(|signature| {
-                    let case_sensitivity = if signature.parser_directives.always_case_insensitive {
-                        TopLevelCommandCaseSensitivity::CaseInsensitive
-                    } else {
-                        context.command_case_sensitivity()
-                    };
-                        Suggestion::with_same_display_and_replacement(
-                            signature.name.clone(),
-                            signature.description.as_ref().cloned(),
-                            SuggestionType::Command(case_sensitivity),
-                            signature.priority.into(),
-                        )
-                    });
-        }
-    }
+    let command_suggestion = context
+        .command_registry()
+        .signature(command)
+        .map(|signature| {
+            let case_sensitivity = if signature.parser_directives.always_case_insensitive {
+                TopLevelCommandCaseSensitivity::CaseInsensitive
+            } else {
+                context.command_case_sensitivity()
+            };
+            Suggestion::with_same_display_and_replacement(
+                signature.name.clone(),
+                signature.description.as_ref().cloned(),
+                SuggestionType::Command(case_sensitivity),
+                signature.priority.into(),
+            )
+        });
 
     command_suggestion
         .or_else(|| alias_suggestion(command, context))

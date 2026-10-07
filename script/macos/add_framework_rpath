@@ -1,0 +1,44 @@
+#!/bin/bash
+#
+# Add the `@executable_path/../Frameworks` rpath to one or more Mach-O
+# binaries, skipping any binary that already carries it.
+#
+# `install_name_tool -add_rpath` treats an existing LC_RPATH for the same path
+# as an error, and cargo-bundle 0.11.0 adds this rpath itself whenever it
+# copies at least one framework into the bundle. Bins that declare
+# `osx_frameworks` (`dev`, `stable`, `preview`) therefore arrive with the rpath
+# already set, while bins that declare none (`warp`, `warp-oss`) still need us
+# to add it, so the add has to be conditional rather than dropped.
+
+set -euo pipefail
+
+FRAMEWORKS_RPATH="@executable_path/../Frameworks"
+
+if [[ $# -lt 1 ]]; then
+  echo "Usage: $0 <binary-path>..." >&2
+  exit 1
+fi
+
+for binary_path in "$@"; do
+  if [[ ! -f "$binary_path" ]]; then
+    echo "No binary to add an rpath to at $binary_path" >&2
+    exit 1
+  fi
+
+  # `path` is the LC_RPATH payload field; other load commands (LC_LOAD_DYLIB
+  # and friends) name their payload differently, so track the enclosing command
+  # rather than matching the field name alone.
+  existing_rpaths="$(
+    otool -l "$binary_path" | awk '
+      $1 == "cmd" { in_rpath = ($2 == "LC_RPATH"); next }
+      in_rpath && $1 == "path" { print $2 }
+    '
+  )"
+
+  if grep -Fxq "$FRAMEWORKS_RPATH" <<< "$existing_rpaths"; then
+    echo "$binary_path already has an LC_RPATH for $FRAMEWORKS_RPATH, skipping"
+  else
+    echo "Adding $FRAMEWORKS_RPATH rpath to $binary_path to support mac frameworks (e.g. Sentry)"
+    install_name_tool -add_rpath "$FRAMEWORKS_RPATH" "$binary_path"
+  fi
+done

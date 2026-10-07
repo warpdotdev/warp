@@ -79,9 +79,9 @@ if FeatureFlag::YourFeatureName.is_enabled() {
 // new behavior (unconditionally enabled)
 ```
 
-Use ripgrep to find all occurrences:
+Use ripgrep to find all occurrences. The shared `FeatureFlag` may be used from the headless TUI, so search `crates/warp_tui/` (and other non-`app/` crates), not just `app/` and `warp_core/`:
 ```bash
-rg "YourFeatureName" app/ warp_core/
+rg "YourFeatureName" app/ warp_core/ crates/warp_tui/
 ```
 
 ### 6. Remove keybinding predicates
@@ -115,33 +115,38 @@ Remove any code paths that were only executed when the feature was disabled (the
 After removing the flag:
 
 ```bash
-# Format and lint
+# Run affected tests first
+cargo nextest run -p <affected-package>
+
+# Then run the applicable Clippy check
+cargo clippy -p <affected-package> --all-targets --tests -- -D warnings
+
+# Format once after the code is settled
 ./script/format
-cargo clippy --workspace --all-targets --all-features --tests -- -D warnings
-
-# Run tests
-cargo nextest run --no-fail-fast --workspace --exclude command-signatures-v2
-
-# Build the app
-cargo run
 ```
+
+Add affected packages or test filters when the flag crosses package boundaries.
+
+Do not run the full workspace suite, launch the GUI or TUI, rerun earlier checks after formatting, or add `./script/presubmit` unless the user, task, or approved spec explicitly requires it.
+
+CI owns broader platform and workspace coverage.
 
 ## Best Practices
 
 - Remove feature flags promptly after they're no longer needed to reduce technical debt
 - When removing a flag, remove ALL related code (checks, dead branches, keybinding predicates)
 - Use grep/ripgrep to ensure you've found all occurrences
-- Test thoroughly after removal to ensure no regressions
+- Test the affected behavior after removal to ensure no regressions
 - Consider doing flag removal in a separate PR for easier review
 
 ## Example Search Commands
 
 ```bash
-# Find all occurrences of the flag name
-rg "YourFeatureName" app/ warp_core/
+# Find all occurrences of the flag name (include the TUI and other non-app crates)
+rg "YourFeatureName" app/ warp_core/ crates/warp_tui/
 
 # Find feature flag checks
-rg "FeatureFlag::YourFeatureName" app/
+rg "FeatureFlag::YourFeatureName" app/ crates/warp_tui/
 
 # Find cfg attributes
 rg 'cfg\(feature = "your_feature_name"\)' app/

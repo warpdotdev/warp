@@ -9,11 +9,11 @@ use warpui::{
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::{AgentConversationEntry, AgentConversationEntryId};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
 use crate::ai::blocklist::orchestration_event_streamer::{
     register_agent_event_consumer, unregister_agent_event_consumer,
 };
-use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::terminal::model::session::active_session::ActiveSession;
 
 /// Contains the handles needed to track an active agent view.
@@ -125,15 +125,14 @@ impl ActiveAgentViewsModel {
             }
         }
 
-        if let Some(last_focused_terminal_state) = &mut self.last_focused_terminal_state {
-            if last_focused_terminal_state.focused_terminal_id == terminal_view_id
-                && !matches!(
-                    last_focused_terminal_state.active_conversation_id,
-                    Some(ConversationOrTaskId::TaskId(_))
-                )
-            {
-                last_focused_terminal_state.active_conversation_id = conversation_id;
-            }
+        if let Some(last_focused_terminal_state) = &mut self.last_focused_terminal_state
+            && last_focused_terminal_state.focused_terminal_id == terminal_view_id
+            && !matches!(
+                last_focused_terminal_state.active_conversation_id,
+                Some(ConversationOrTaskId::TaskId(_))
+            )
+        {
+            last_focused_terminal_state.active_conversation_id = conversation_id;
         }
     }
 
@@ -147,14 +146,13 @@ impl ActiveAgentViewsModel {
         ctx: &mut ModelContext<Self>,
     ) {
         // Skip registering this controller if it is already registered.
-        if let Some(existing) = self.agent_view_handles.get(&terminal_view_id) {
-            if existing
+        if let Some(existing) = self.agent_view_handles.get(&terminal_view_id)
+            && existing
                 .controller
                 .upgrade(ctx)
                 .is_some_and(|c| c.id() == controller.id())
-            {
-                return;
-            }
+        {
+            return;
         }
 
         self.agent_view_handles.insert(
@@ -255,6 +253,17 @@ impl ActiveAgentViewsModel {
         }
     }
 
+    /// Whether the terminal view still belongs to an attached pane, including hidden child panes.
+    pub(crate) fn is_terminal_view_attached(
+        &self,
+        terminal_view_id: EntityId,
+        ctx: &AppContext,
+    ) -> bool {
+        self.agent_view_handles
+            .get(&terminal_view_id)
+            .is_some_and(|handles| handles.controller.upgrade(ctx).is_some())
+    }
+
     pub fn handle_pane_focus_change(
         &mut self,
         window_id: WindowId,
@@ -302,12 +311,6 @@ impl ActiveAgentViewsModel {
         self.focused_terminal_states
             .get(&window_id)
             .and_then(|state| state.active_conversation_id)
-    }
-
-    pub fn get_focused_terminal_view_id(&self, window_id: WindowId) -> Option<EntityId> {
-        self.focused_terminal_states
-            .get(&window_id)
-            .map(|state| state.focused_terminal_id)
     }
 
     /// Get the last focused terminal view id (persisted across non-terminal focus changes).
@@ -390,12 +393,12 @@ impl ActiveAgentViewsModel {
         terminal_view_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) {
-        if let Some(task_id) = self.ambient_sessions.remove(&terminal_view_id) {
-            if !self.ambient_sessions.values().any(|id| *id == task_id) {
-                self.last_opened_times
-                    .remove(&ConversationOrTaskId::TaskId(task_id));
-                ctx.emit(ActiveAgentViewsEvent::AmbientSessionClosed { task_id });
-            }
+        if let Some(task_id) = self.ambient_sessions.remove(&terminal_view_id)
+            && !self.ambient_sessions.values().any(|id| *id == task_id)
+        {
+            self.last_opened_times
+                .remove(&ConversationOrTaskId::TaskId(task_id));
+            ctx.emit(ActiveAgentViewsEvent::AmbientSessionClosed { task_id });
         }
     }
 
@@ -518,10 +521,10 @@ impl ActiveAgentViewsModel {
         entry: &AgentConversationEntry,
         ctx: &AppContext,
     ) -> Option<EntityId> {
-        if let Some(task_id) = entry.identity.ambient_agent_task_id {
-            if let Some(terminal_view_id) = self.get_terminal_view_id_for_ambient_task(task_id) {
-                return Some(terminal_view_id);
-            }
+        if let Some(task_id) = entry.identity.ambient_agent_task_id
+            && let Some(terminal_view_id) = self.get_terminal_view_id_for_ambient_task(task_id)
+        {
+            return Some(terminal_view_id);
         }
 
         if let Some(conversation_id) = entry.identity.local_conversation_id {
@@ -571,14 +574,13 @@ impl ActiveAgentViewsModel {
 
         // Collect from interactive agent views (expanded).
         for handles in self.agent_view_handles.values() {
-            if let Some(controller) = handles.controller.upgrade(ctx) {
-                if let Some(conversation_id) = controller
+            if let Some(controller) = handles.controller.upgrade(ctx)
+                && let Some(conversation_id) = controller
                     .as_ref(ctx)
                     .agent_view_state()
                     .active_conversation_id()
-                {
-                    ids.insert(ConversationOrTaskId::ConversationId(conversation_id));
-                }
+            {
+                ids.insert(ConversationOrTaskId::ConversationId(conversation_id));
             }
         }
 

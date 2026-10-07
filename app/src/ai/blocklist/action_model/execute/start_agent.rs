@@ -1,20 +1,15 @@
 use std::collections::HashMap;
 
-use futures::future::BoxFuture;
-use futures::FutureExt;
-use shell_words::split as split_shell_words;
-use warp_cli::agent::Harness;
+use warp_errors::report_error;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
-use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
-use crate::ai::agent::{
-    AIAgentAction, AIAgentActionResultType, AIAgentActionType, LifecycleEventType,
-    StartAgentExecutionMode, StartAgentResult,
-};
+use crate::ai::agent::{LifecycleEventType, StartAgentExecutionMode};
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
-use crate::ai::local_harness_setup::local_harness_product_disabled_message;
+use crate::server::team_scope::RequestTeamScope;
+pub const TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR: &str =
+    "The window's team changed before the child agent could start. Run the orchestration again.";
 
 /// Per-request outcome of a StartAgent dispatch.
 #[derive(Debug, Clone)]
@@ -24,66 +19,6 @@ pub enum StartAgentOutcome {
     },
     /// An error occurred while starting the agent.
     Error(String),
-}
-
-fn invalid_local_child_harness_error(harness_type: &str) -> String {
-    let harness_name = harness_type.trim();
-    if harness_name.is_empty() {
-        "Local child harness type is missing.".to_string()
-    } else {
-        format!("Unsupported local child harness '{harness_name}'.")
-    }
-}
-
-/// Handles local child launch requests produced by older agents, where the
-/// prompt encoded the target CLI command and `execution_mode.harness_type` was
-/// still unset. Normalizing here keeps those requests routed through the Codex
-/// local harness path instead of launching them as Oz child prompts.
-fn parse_legacy_local_child_harness_command(command: &str) -> Option<(String, String)> {
-    let args = split_shell_words(command.trim()).ok()?;
-    match args.as_slice() {
-        [binary, flag, child_prompt]
-            if binary == "codex"
-                && flag == "--dangerously-bypass-approvals-and-sandbox"
-                && !child_prompt.trim().is_empty() =>
-        {
-            Some(("codex".to_string(), child_prompt.clone()))
-        }
-        _ => None,
-    }
-}
-
-fn normalize_legacy_local_child_harness_command(
-    prompt: String,
-    execution_mode: StartAgentExecutionMode,
-) -> (String, StartAgentExecutionMode) {
-    match execution_mode {
-        StartAgentExecutionMode::Local {
-            harness_type: None,
-            model_id,
-        } => {
-            if let Some((harness_type, child_prompt)) =
-                parse_legacy_local_child_harness_command(&prompt)
-            {
-                (
-                    child_prompt,
-                    StartAgentExecutionMode::Local {
-                        harness_type: Some(harness_type),
-                        model_id,
-                    },
-                )
-            } else {
-                (
-                    prompt,
-                    StartAgentExecutionMode::Local {
-                        harness_type: None,
-                        model_id,
-                    },
-                )
-            }
-        }
-        execution_mode => (prompt, execution_mode),
-    }
 }
 
 /// Opaque, monotonically increasing request identifier.
@@ -107,6 +42,7 @@ pub struct StartAgentRequest {
     pub lifecycle_subscription: Option<Vec<LifecycleEventType>>,
     pub parent_conversation_id: AIConversationId,
     pub parent_run_id: Option<String>,
+    pub request_team_scope: RequestTeamScope,
 }
 
 struct PendingStartAgent {
@@ -184,8 +120,9 @@ impl StartAgentExecutor {
                 });
             }
             None => {
-                log::error!(
-                    "No agent identifier found for child conversation {child_conversation_id:?}"
+                report_error!(
+                    "No agent identifier found for child conversation",
+                    extra: { "child_conversation_id" => ?child_conversation_id }
                 );
                 let _ = pending.sender.try_send(StartAgentOutcome::Error(
                     "Server did not assign an agent identifier".to_string(),
@@ -233,7 +170,7 @@ impl StartAgentExecutor {
         };
         if let Some(error_msg) = start_agent_error_message_for_status(
             conversation.status(),
-            conversation.status_error_message(),
+            conversation.status_error_message().as_deref(),
         ) {
             self.complete_pending_as_error(request_id, child_conversation_id, error_msg, ctx);
             return;
@@ -270,7 +207,7 @@ impl StartAgentExecutor {
                 };
                 let error_msg = start_agent_error_message_for_status(
                     conversation.status(),
-                    conversation.status_error_message(),
+                    conversation.status_error_message().as_deref(),
                 );
                 if let Some(error_msg) = error_msg {
                     self.complete_pending_as_error(request_id, *conversation_id, error_msg, ctx);
@@ -290,7 +227,7 @@ impl StartAgentExecutor {
             | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. }
             | BlocklistAIHistoryEvent::SetActiveConversation { .. }
             | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
-            | BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. }
+            | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
             | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
             | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
             | BlocklistAIHistoryEvent::SplitConversation { .. }
@@ -300,228 +237,11 @@ impl StartAgentExecutor {
             | BlocklistAIHistoryEvent::UpdatedConversationTitle { .. }
             | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
             | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
-            | BlocklistAIHistoryEvent::ConversationOwnershipTransferred { .. } => {}
+            | BlocklistAIHistoryEvent::ConversationTransferredBetweenTerminalSurfaces { .. } => {}
             BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
             | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
             | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => {}
         }
-    }
-
-    pub(super) fn should_autoexecute(
-        &self,
-        _input: ExecuteActionInput,
-        _ctx: &mut ModelContext<Self>,
-    ) -> bool {
-        // TODO(QUALITY-342): this should be a setting
-        true
-    }
-
-    pub(super) fn execute(
-        &mut self,
-        input: ExecuteActionInput,
-        ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
-        let AIAgentAction {
-            action:
-                AIAgentActionType::StartAgent {
-                    version,
-                    name,
-                    prompt,
-                    execution_mode,
-                    lifecycle_subscription,
-                },
-            ..
-        } = input.action
-        else {
-            return ActionExecution::InvalidAction;
-        };
-
-        let prompt = prompt.clone();
-        let version = *version;
-        let parent_conversation_id = input.conversation_id;
-        let (prompt, execution_mode) =
-            normalize_legacy_local_child_harness_command(prompt, execution_mode.clone());
-        let (execution_mode, parent_run_id) = match execution_mode {
-            StartAgentExecutionMode::Local {
-                harness_type: None,
-                model_id,
-            } => {
-                // Oz local children resolve their parent's run id from the
-                // parent conversation. This mirrors the third-party-harness
-                // and remote-child branches below; the child task row is
-                // created eagerly at dispatch (see
-                // `launch_local_no_harness_child`) using this value as the
-                // `parent_run_id` on `CreateAgentTask`. Bail out if the
-                // parent has no `run_id` yet — the eager-create path has no
-                // late-binding fallback (the pre-change lazy path would have
-                // linked via `Request.metadata.parent_agent_id` later), so
-                // proceeding would mint an orphan child with no server-side
-                // parent linkage.
-                let parent_run_id = BlocklistAIHistoryModel::as_ref(ctx)
-                    .conversation(&parent_conversation_id)
-                    .and_then(|conversation| conversation.run_id());
-                let Some(parent_run_id) = parent_run_id else {
-                    return ActionExecution::Sync(AIAgentActionResultType::StartAgent(
-                        StartAgentResult::Error {
-                            error:
-                                "Local Oz child agents require the parent run_id to be available."
-                                    .to_string(),
-                            version,
-                        },
-                    ));
-                };
-                (
-                    StartAgentExecutionMode::Local {
-                        harness_type: None,
-                        model_id,
-                    },
-                    Some(parent_run_id),
-                )
-            }
-            StartAgentExecutionMode::Local {
-                harness_type: Some(harness_type),
-                model_id,
-            } => {
-                let Some(harness) = Harness::parse_local_child_harness(&harness_type) else {
-                    return ActionExecution::Sync(AIAgentActionResultType::StartAgent(
-                        StartAgentResult::Error {
-                            error: invalid_local_child_harness_error(&harness_type),
-                            version,
-                        },
-                    ));
-                };
-                if let Some(message) = local_harness_product_disabled_message(harness) {
-                    return ActionExecution::Sync(AIAgentActionResultType::StartAgent(
-                        StartAgentResult::Error {
-                            error: message.to_string(),
-                            version,
-                        },
-                    ));
-                }
-
-                let parent_run_id = BlocklistAIHistoryModel::as_ref(ctx)
-                    .conversation(&parent_conversation_id)
-                    .and_then(|conversation| conversation.run_id());
-                let Some(parent_run_id) = parent_run_id else {
-                    return ActionExecution::Sync(AIAgentActionResultType::StartAgent(
-                        StartAgentResult::Error {
-                            error:
-                                "Local harness child agents require the parent run_id to be available."
-                                    .to_string(),
-                            version,
-                        },
-                    ));
-                };
-
-                (
-                    StartAgentExecutionMode::Local {
-                        harness_type: Some(harness.to_string()),
-                        model_id,
-                    },
-                    Some(parent_run_id),
-                )
-            }
-            StartAgentExecutionMode::Remote {
-                environment_id,
-                skill_references,
-                model_id,
-                computer_use_enabled,
-                worker_host,
-                harness_type,
-                title,
-                auth_secret_name,
-            } => {
-                let harness_type = Harness::parse_orchestration_harness(&harness_type)
-                    .map(|harness| harness.to_string())
-                    .unwrap_or(harness_type);
-                if Harness::parse_orchestration_harness(&harness_type) == Some(Harness::OpenCode) {
-                    return ActionExecution::Sync(AIAgentActionResultType::StartAgent(
-                        StartAgentResult::Error {
-                            error: "Remote child agents do not support the opencode harness yet."
-                                .to_string(),
-                            version,
-                        },
-                    ));
-                }
-
-                // An empty environment_id is allowed and means the child will be spawned with an
-                // empty environment (no preconfigured repositories, secrets, or integrations).
-                // Callers are discouraged from relying on this, but we intentionally do not reject
-                // it here so that agent authors can opt into running without an environment.
-                if environment_id.trim().is_empty() {
-                    log::warn!(
-                        "Starting remote child agent with empty environment_id; the child will run \
-                         with an empty environment."
-                    );
-                }
-                let parent_run_id = BlocklistAIHistoryModel::as_ref(ctx)
-                    .conversation(&parent_conversation_id)
-                    .and_then(|conversation| conversation.run_id());
-                let Some(parent_run_id) = parent_run_id else {
-                    return ActionExecution::Sync(AIAgentActionResultType::StartAgent(
-                        StartAgentResult::Error {
-                            error: "Remote child agents require the parent run_id to be available."
-                                .to_string(),
-                            version,
-                        },
-                    ));
-                };
-
-                (
-                    StartAgentExecutionMode::Remote {
-                        environment_id,
-                        skill_references,
-                        model_id,
-                        computer_use_enabled,
-                        worker_host,
-                        harness_type,
-                        title,
-                        auth_secret_name,
-                    },
-                    Some(parent_run_id),
-                )
-            }
-        };
-
-        let (sender, receiver) = async_channel::bounded(1);
-        let request_id = self.next_request_id();
-        self.pending.insert(
-            request_id,
-            PendingStartAgent {
-                parent_conversation_id,
-                child_conversation_id: None,
-                sender,
-            },
-        );
-
-        ctx.emit(StartAgentExecutorEvent::CreateAgent(Box::new(
-            StartAgentRequest {
-                id: request_id,
-                name: name.clone(),
-                prompt,
-                execution_mode,
-                lifecycle_subscription: lifecycle_subscription.clone(),
-                parent_conversation_id,
-                parent_run_id,
-            },
-        )));
-
-        ActionExecution::new_async(async move { receiver.recv().await }, move |result, _ctx| {
-            match result {
-                Ok(StartAgentOutcome::Started { agent_id }) => {
-                    AIAgentActionResultType::StartAgent(StartAgentResult::Success {
-                        agent_id,
-                        version,
-                    })
-                }
-                Ok(StartAgentOutcome::Error(error)) => {
-                    AIAgentActionResultType::StartAgent(StartAgentResult::Error { error, version })
-                }
-                Err(_) => {
-                    AIAgentActionResultType::StartAgent(StartAgentResult::Cancelled { version })
-                }
-            }
-        })
     }
 
     /// Dispatch a pre-validated StartAgent request. Returns a receiver
@@ -535,10 +255,9 @@ impl StartAgentExecutor {
         lifecycle_subscription: Option<Vec<LifecycleEventType>>,
         parent_conversation_id: AIConversationId,
         parent_run_id: Option<String>,
+        request_team_scope: RequestTeamScope,
         ctx: &mut ModelContext<Self>,
     ) -> async_channel::Receiver<StartAgentOutcome> {
-        let (prompt, execution_mode) =
-            normalize_legacy_local_child_harness_command(prompt, execution_mode);
         let (sender, receiver) = async_channel::bounded(1);
         let request_id = self.next_request_id();
         self.pending.insert(
@@ -558,17 +277,10 @@ impl StartAgentExecutor {
                 lifecycle_subscription,
                 parent_conversation_id,
                 parent_run_id,
+                request_team_scope,
             },
         )));
         receiver
-    }
-
-    pub(super) fn preprocess_action(
-        &mut self,
-        _action: PreprocessActionInput,
-        _ctx: &mut ModelContext<Self>,
-    ) -> BoxFuture<'static, ()> {
-        futures::future::ready(()).boxed()
     }
 }
 
@@ -636,7 +348,3 @@ pub enum StartAgentExecutorEvent {
         conversation_id: AIConversationId,
     },
 }
-
-#[cfg(test)]
-#[path = "start_agent_tests.rs"]
-mod tests;

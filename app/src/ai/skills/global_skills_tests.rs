@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use ai::skills::{get_provider_for_path, ParsedSkill, SkillProvider, SkillScope};
+use ai::skills::{ParsedSkill, SkillProvider, SkillScope, get_provider_for_path};
 use warp_cli::skill::SkillSpec;
 use warp_util::host_id::HostId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;

@@ -1,4 +1,60 @@
 use super::*;
+#[test]
+fn terminal_busy_is_a_recoverable_serialized_tool_error() {
+    let result = RequestCommandOutputResult::TerminalBusy {
+        command: "ls".into(),
+        block_id: "running-command".to_owned().into(),
+    };
+    let action_result = AIAgentActionResultType::RequestCommandOutput(result.clone());
+    assert!(action_result.is_failed());
+    assert!(!action_result.is_successful());
+    assert!(!action_result.is_cancelled());
+    assert!(action_result.should_trigger_request_upon_completion());
+    assert!(result.to_string().contains("not started"));
+    let api::request::input::tool_call_result::Result::RunShellCommand(result) =
+        api::request::input::tool_call_result::Result::try_from(result).unwrap()
+    else {
+        panic!("expected run-shell result");
+    };
+    assert_eq!(result.command, "ls");
+    assert!(matches!(result.result,
+        Some(api::run_shell_command_result::Result::TerminalBusy(busy))
+            if busy.running_command_id == "running-command"));
+}
+
+#[test]
+fn read_files_partial_success_converts_failed_files() {
+    let result =
+        api::request::input::tool_call_result::Result::try_from(ReadFilesResult::Success {
+            files: vec![FileContext::new(
+                "/tmp/success.txt".to_string(),
+                AnyFileContent::StringContent("hello".to_string()),
+                None,
+                None,
+            )],
+            failed_files: vec![ReadFilesFailedFile {
+                path: "/tmp/missing.txt".to_string(),
+                message: "File not found or could not be read".to_string(),
+            }],
+        })
+        .expect("read_files success should convert");
+
+    let api::request::input::tool_call_result::Result::ReadFiles(result) = result else {
+        panic!("expected read_files result");
+    };
+
+    let Some(api::read_files_result::Result::AnyFilesSuccess(success)) = result.result else {
+        panic!("expected any files success result");
+    };
+
+    assert_eq!(success.files.len(), 1);
+    assert_eq!(success.failed_reads.len(), 1);
+    assert_eq!(success.failed_reads[0].path, "/tmp/missing.txt");
+    assert_eq!(
+        success.failed_reads[0].message,
+        "File not found or could not be read"
+    );
+}
 
 #[test]
 fn ask_user_question_skipped_by_auto_approve_converts_to_skipped_answers() {

@@ -13,8 +13,8 @@ use std::fs::File;
 use std::io::{self, Read as _, Seek as _, Write};
 use std::path::{Path, PathBuf};
 use std::process;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::Context as _;
@@ -26,7 +26,7 @@ use sentry::protocol::{Attachment, AttachmentType};
 use sentry::{Breadcrumb, Level};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use warp_core::report_error;
+use warp_errors::report_error;
 
 use super::ToSentryTags;
 
@@ -150,7 +150,7 @@ pub fn run_server(socket_path: &Path) -> anyhow::Result<()> {
             &self,
             result: Result<minidumper::MinidumpBinary, minidumper::Error>,
         ) -> minidumper::LoopAction {
-            if let Err(ref err) = &result {
+            if let Err(err) = &result {
                 log::warn!("Unable to create minidump file: {err:#}");
             }
 
@@ -217,7 +217,7 @@ pub fn run_server(socket_path: &Path) -> anyhow::Result<()> {
         .run(handler, &shutdown, Some(2 * PING_INTERVAL))
         .context("Error running minidump server");
     if let Err(ref err) = result {
-        log::error!("Error running minidump server: {err:#}");
+        report_error!(err);
     }
 
     result
@@ -395,13 +395,15 @@ fn wait_for_server(socket_path: &Path) -> anyhow::Result<minidumper::Client> {
 fn spawn_keepalive_thread(client: Arc<minidumper::Client>) {
     let _ = std::thread::Builder::new()
         .name("minidump-keepalive".to_string())
-        .spawn(move || loop {
-            // Assume that if a ping fails, the server was shut down - the only purpose of this thread
-            // is to prevent an idle timeout.
-            if client.ping().is_err() {
-                return;
+        .spawn(move || {
+            loop {
+                // Assume that if a ping fails, the server was shut down - the only purpose of this thread
+                // is to prevent an idle timeout.
+                if client.ping().is_err() {
+                    return;
+                }
+                std::thread::sleep(PING_INTERVAL);
             }
-            std::thread::sleep(PING_INTERVAL);
         });
 }
 

@@ -2,8 +2,8 @@
 //! We fall back to the existing Warpification behavior and display this banner so the user knows why advanced features are unavailable.
 
 use remote_server::transport::UserFacingError;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::AnsiColorIdentifier;
+use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
@@ -11,14 +11,13 @@ use warpui::elements::{
 use warpui::platform::Cursor;
 use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
+use crate::Appearance;
 use crate::terminal::model::session::SessionId;
 use crate::ui_components::icons::Icon;
-use crate::Appearance;
 
 const BANNER_TITLE: &str = "Couldn't connect to the Warp SSH extension";
 
-const BANNER_BODY: &str =
-    "While advanced features like file browsing and code review are currently \
+const BANNER_BODY: &str = "While advanced features like file browsing and code review are currently \
     disabled, the rest of your Warpified experience is fully available.";
 
 #[derive(Clone, Debug)]

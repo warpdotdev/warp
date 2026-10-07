@@ -15,6 +15,9 @@ Feature flags have two interacting layers:
 
 **Do not remove the flag immediately after promoting to Stable.** Keep it for at least 1–2 release cycles so a rollback is a one-line PR (remove the entry from `default`). Use the `remove-feature-flag` skill for the cleanup step later.
 
+## TUI note
+The per-channel arrays in `warp_core/src/features.rs` (`DOGFOOD_FLAGS`/`PREVIEW_FLAGS`/`RELEASE_FLAGS`) are shared and drive both the GUI desktop app (`app/`) and the headless TUI (`crates/warp_tui`) at runtime. The `app/Cargo.toml` `default` + `app/src/lib.rs` `enabled_features()` compile-time bridge is GUI-app-only. If a promoted feature should also reach the TUI, make sure it is enabled at runtime for the target channel (the shared arrays already do this) and, if the feature relies on a compile-time Cargo feature, that the TUI binary (`crates/warp_tui/Cargo.toml`) enables it too.
+
 ## Promote to Dogfood
 
 Add the flag to `DOGFOOD_FLAGS` in `warp_core/src/features.rs`:
@@ -81,9 +84,15 @@ pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
 ### Validate
 
 ```bash
+cargo clippy -p warp_core --all-targets --tests -- -D warnings
+# Also lint the GUI app when app/Cargo.toml or app/src/lib.rs changed.
+cargo clippy -p warp --all-targets --tests -- -D warnings
+# Also lint the TUI when crates/warp_tui/Cargo.toml changed.
+cargo clippy -p warp_tui --all-targets --tests -- -D warnings
 ./script/format
-cargo clippy --workspace --all-targets --all-features --tests -- -D warnings
 ```
+
+If the promotion changes behavior beyond flag lists or configuration, run affected tests before Clippy. Format once after all other changes are complete. Do not rerun earlier checks after formatting or add a full presubmit unless explicitly required; CI owns broader platform and workspace coverage.
 
 ### Create a follow-up Linear issue
 

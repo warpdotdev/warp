@@ -1,8 +1,8 @@
+use crate::EventContext;
 use crate::elements::{Border, Container, Element, Hoverable, MouseState, MouseStateHandle, Text};
 use crate::fonts::Properties;
 use crate::platform::Cursor;
 use crate::ui_components::components::{UiComponent, UiComponentStyles};
-use crate::EventContext;
 
 pub type OnClickFn = Box<dyn Fn(&mut EventContext)>;
 

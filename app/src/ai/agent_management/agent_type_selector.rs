@@ -333,7 +333,7 @@ impl AgentTypeSelector {
 
         let cloud_agent_option = self.render_option(
             0,
-            Icon::OzCloud,
+            Icon::CloudFilled,
             "Cloud agent",
             "Runs autonomously in a cloud environment you choose. Best for parallel or long-running work.",
             true,
@@ -344,7 +344,7 @@ impl AgentTypeSelector {
 
         let local_agent_option = self.render_option(
             1,
-            Icon::Oz,
+            Icon::Agent,
             "Local agent",
             "Runs on your machine and requires supervision. Best for quick, interactive tasks.",
             false,

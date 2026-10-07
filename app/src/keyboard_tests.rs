@@ -2,7 +2,7 @@ use anyhow::{Ok, Result};
 use vec1::vec1;
 use warpui::keymap::Keystroke;
 
-use crate::keyboard::{PersistedTrigger, UserDefinedKeybinding, REMOVED_KEYBINDING_SERIALIZATION};
+use crate::keyboard::{PersistedTrigger, REMOVED_KEYBINDING_SERIALIZATION, UserDefinedKeybinding};
 
 #[test]
 fn test_short_user_defined_keybinding_to_persisted_trigger() {

@@ -29,7 +29,7 @@ pub fn init() -> anyhow::Result<Initialization> {
 /// hook supplies the authenticated managed-secrets client needed to mint replacements without
 /// broadening tracing initialization to ordinary application processes.
 pub fn start_auth_refresh(
-    client: std::sync::Arc<dyn warp_managed_secrets::client::ManagedSecretsClient>,
+    client: std::sync::Arc<crate::server::server_api::managed_secrets::AppManagedSecretsClient>,
     ctx: &mut warpui::AppContext,
 ) {
     native::start_auth_refresh(client, ctx);

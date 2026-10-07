@@ -3,7 +3,7 @@ use std::path::Path;
 use arborium::tree_sitter::{Language, Node, Parser, TreeCursor};
 use itertools::Itertools;
 
-use super::{coalesce_fragments, Fragment};
+use super::{Fragment, coalesce_fragments};
 
 /// Maximum depth for recursive tree traversal to prevent infinite recursion
 /// or excessive depth in malformed/deeply nested code.

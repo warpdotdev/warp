@@ -40,8 +40,8 @@ use crate::rendering::{GPUPowerPreference, OnGPUDeviceSelected};
 use crate::text_layout::{ClipConfig, Line, StyleAndFont, TextAlignment, TextFrame};
 use crate::windowing::WindowCallbacks;
 use crate::{
-    geometry, rendering, AppContext, ApplicationBundleInfo, Clipboard, DisplayId, DisplayIdx,
-    OptionalPlatformWindow, Scene, WindowId,
+    AppContext, ApplicationBundleInfo, Clipboard, DisplayId, DisplayIdx, OptionalPlatformWindow,
+    Scene, WindowId, geometry, rendering,
 };
 
 #[cfg(not(target_family = "wasm"))]
@@ -53,6 +53,24 @@ lazy_static! {
     pub static ref KEYS_TO_IGNORE: HashSet<Keystroke> =
         HashSet::from([Keystroke::parse("cmdorctrl-v").unwrap()]);
 }
+/// The system backdrop material applied behind a window's transparent content.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema_gen", derive(schemars::JsonSchema))]
+pub enum WindowBackdrop {
+    #[default]
+    None,
+    Mica,
+    Acrylic,
+    MicaAlt,
+}
+
+impl WindowBackdrop {
+    pub const ALL: [Self; 4] = [Self::None, Self::Mica, Self::Acrylic, Self::MicaAlt];
+}
+
+#[cfg(feature = "settings_value")]
+impl settings_value::SettingsValue for WindowBackdrop {}
 
 /// Type of the callback function that provides the result of requesting
 /// desktop notification permissions.
@@ -94,7 +112,7 @@ pub struct WindowOptions {
     pub title: Option<String>,
     pub style: WindowStyle,
     pub background_blur_radius_pixels: Option<u8>,
-    pub background_blur_texture: bool,
+    pub background_backdrop: WindowBackdrop,
     pub gpu_power_preference: GPUPowerPreference,
     pub backend_preference: Option<GraphicsBackend>,
     pub on_gpu_device_info_reported: Box<OnGPUDeviceSelected>,
@@ -116,7 +134,7 @@ impl std::fmt::Debug for WindowOptions {
                 "background_blur_radius_pixels",
                 &self.background_blur_radius_pixels,
             )
-            .field("background_blur_texture", &self.background_blur_texture)
+            .field("background_backdrop", &self.background_backdrop)
             .field("gpu_power_preference", &self.gpu_power_preference)
             .field("backend_preference", &self.backend_preference)
             .field("window_instance", &self.window_instance)
@@ -194,7 +212,8 @@ pub trait Delegate: 'static {
 
     fn system_theme(&self) -> SystemTheme;
 
-    fn open_url(&self, url: &str);
+    /// Opens a URL in its default system handler and returns whether the launch request succeeded.
+    fn open_url(&self, url: &str) -> bool;
 
     /// Opens an absolute file path with native system API.
     fn open_file_path(&self, path: &Path);
@@ -216,7 +235,7 @@ pub trait Delegate: 'static {
 
     /// Retrieve the absolute path of given application's bundle and its executable.
     fn application_bundle_info(&self, bundle_identifier: &str)
-        -> Option<ApplicationBundleInfo<'_>>;
+    -> Option<ApplicationBundleInfo<'_>>;
 
     /// Create a window showing a modal dialog native to the platform. The modal will synchronously
     /// block all other interactions with the app until dismissed. The [`ModalId`] is a handle to
@@ -269,10 +288,10 @@ pub trait Delegate: 'static {
     /// Returns the current microphone access state.
     fn microphone_access_state(&self) -> MicrophoneAccessState;
 
-    /// Returns whether the app is running with a headless rendering backend
-    /// (no GUI or visible output).
-    fn is_headless(&self) -> bool {
-        false
+    /// Returns whether the app is running on a GUI backend that renders to native windows,
+    /// as opposed to a windowless backend with no fonts, native windows, or GPU rendering.
+    fn is_gui(&self) -> bool {
+        true
     }
 }
 
@@ -447,6 +466,7 @@ pub trait Window: 'static + WindowContext + std::any::Any {
     fn toggle_maximized(&self);
     fn toggle_fullscreen(&self);
     fn fullscreen_state(&self) -> FullscreenState;
+    fn set_background_backdrop(&self, _backdrop: WindowBackdrop) {}
     /// Whether the window has the native OS window frame (title bar and buttons).
     fn uses_native_window_decorations(&self) -> bool;
     fn set_titlebar_height(&self, height: f64);
@@ -579,6 +599,14 @@ pub trait WindowManager {
     /// a platform that allows the app to run without any open windows.
     fn activate_app(&self, last_active_window: Option<WindowId>) -> Option<WindowId>;
     fn show_window_and_focus_app(&self, window_id: WindowId, behavior: WindowFocusBehavior);
+
+    /// Returns the window most recently passed to `show_window_and_focus_app`. The `test`
+    /// platform is the only implementor that tracks this, since it otherwise has no way to
+    /// observe focus changes; other platforms report focus via `active_window_id` instead.
+    fn last_window_shown_and_focused_for_test(&self) -> Option<WindowId> {
+        None
+    }
+
     fn hide_app(&self);
     fn hide_window(&self, window_id: WindowId);
     fn set_window_bounds(&self, window_id: WindowId, bound: RectF);
@@ -592,9 +620,6 @@ pub trait WindowManager {
 
     /// Sets the background blur radius for all windows to the given `blur_radius_pixels` value.
     fn set_all_windows_background_blur_radius(&self, blur_radius_pixels: u8);
-
-    /// [Windows only] Sets the background blur texture (Acrylic) for all windows.
-    fn set_all_windows_background_blur_texture(&self, use_blur_texture: bool);
 
     fn set_window_title(&self, window_id: WindowId, title: &str);
 

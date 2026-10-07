@@ -1,7 +1,7 @@
 use crate::platform::mac::rendering::Device;
 use crate::platform::mac::window::WindowState;
 use crate::rendering::wgpu::{Renderer, Resources};
-use crate::{fonts, Scene};
+use crate::{Scene, fonts};
 
 impl super::super::Renderer for Renderer {
     fn render(&mut self, scene: &Scene, window: &WindowState, font_cache: &fonts::Cache) {

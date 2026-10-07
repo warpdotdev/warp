@@ -6,18 +6,21 @@ use std::sync::Arc;
 use email_address::EmailAddress;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
+use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    Align, Border, ChildAnchor, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Element, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
-    MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
-    SavePosition, ScrollTarget, ScrollToPositionMode, Shrinkable, Stack, Text,
+    Align, Border, ChildAnchor, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Element, Flex, FormattedTextElement, HighlightedHyperlink,
+    Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollTarget, ScrollToPositionMode,
+    Shrinkable, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
@@ -28,26 +31,26 @@ use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::ui_components::text_input::TextInput;
 use warpui::{
     AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle,
+    ViewContext, ViewHandle, WeakViewHandle,
 };
 
+use super::SettingsSection;
 use super::admin_actions::AdminActions;
+use super::join_teams_modal::{JoinTeamsModal, JoinTeamsModalEvent};
 use super::settings_page::{
-    render_customer_type_badge, render_separator, render_sub_header, MatchData, PageType,
-    SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
+    MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, render_banner,
+    render_cta_banner, render_customer_type_badge, render_separator, render_sub_header,
 };
 use super::tab_menu::Tabs;
 use super::transfer_ownership_confirmation_modal::{
     TransferOwnershipConfirmationEvent, TransferOwnershipConfirmationModal,
 };
-use super::SettingsSection;
 use crate::ai::AIRequestUsageModel;
 use crate::appearance::Appearance;
 use crate::auth::auth_manager::{AuthManager, LoginGatedFeature};
 use crate::auth::auth_state::AuthState;
 use crate::auth::auth_view_modal::AuthViewVariant;
 use crate::auth::{AuthStateProvider, UserUid};
-use crate::channel::ChannelState;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObjectEventEntrypoint, Space};
 use crate::drive::cloud_action_confirmation_dialog::{
@@ -67,17 +70,21 @@ use crate::server::ids::ServerId;
 use crate::server::telemetry::TelemetryEvent;
 use crate::themes::theme::Blend;
 use crate::themes::{self};
+use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
 use crate::view_components::{
     ClickableTextInput, ClickableTextInputAction, ClickableTextInputEvent, ToastFlavor,
 };
 use crate::word_block_editor::{ChipEditorState, WordBlockEditorView, WordBlockEditorViewEvent};
 use crate::workspace::WorkspaceAction;
-use crate::workspaces::team::{DiscoverableTeam, MembershipRole, Team, TeamDeleteDisabledReason};
+use crate::workspace::util::team_switcher_menu_items;
+use crate::workspaces::team::{
+    DiscoverableTeam, DiscoverableWorkspace, MembershipRole, Team, TeamDeleteDisabledReason,
+};
 use crate::workspaces::update_manager::{TeamUpdateManager, TeamUpdateManagerEvent};
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::{
-    BillingMetadata, CustomerType, DelinquencyStatus, WorkspaceSizePolicy,
+    BillingMetadata, CustomerType, DelinquencyStatus, Workspace, WorkspaceSizePolicy, WorkspaceUid,
 };
 
 const TEAM_MEMBERS_HEADER_POSITION_ID: &str = "team_settings:team_members_header";
@@ -85,6 +92,20 @@ const TEAM_MEMBERS_HEADER_POSITION_ID: &str = "team_settings:team_members_header
 const TEAM_NAME_EDITOR_PLACEHOLDER_TEXT: &str = "Team name";
 const CREATE_TEAM_BUTTON_LEFT_PADDING: f32 = 10.;
 const CREATE_TEAM_DESCRIPTION: &str = "When you create a team, you can collaborate on agent-driven development by sharing cloud agent runs, environments, automations, and artifacts. You can also create a shared knowledge store for teammates and agents alike.";
+
+const OR_JOIN_TEAM_HEADER: &str = "Or, join an existing team within your company";
+const JOIN_TEAM_HEADER: &str = "Join an existing team within your company";
+const BROWSE_TEAMS_BUTTON_LABEL: &str = "Browse teams";
+const SWITCH_TEAM_BUTTON_LABEL: &str = "Switch team";
+const JOIN_WORKSPACE_OR_TEAM_HEADER: &str =
+    "Join an existing workspace or team within your company";
+const OR_JOIN_WORKSPACE_OR_TEAM_HEADER: &str =
+    "Or, join an existing workspace or team within your company";
+const NO_JOINABLE_TEAMS_HEADER: &str = "There are currently no joinable teams.";
+const NO_TEAMS_TO_JOIN_DESCRIPTION: &str =
+    "Contact an admin to join a team to gain access to more features.";
+const ADMIN_PANEL_CTA_LINK_TEXT: &str = "Visit the admin panel";
+const ADMIN_PANEL_CTA_TRAILING_COPY: &str = "to manage and create new teams.";
 
 // Styling for team management page
 const LEAVE_TEAM_BUTTON_LABEL: &str = "Leave team";
@@ -107,13 +128,13 @@ const SUBSECTION_HEADER_FONT_SIZE: f32 = 18.;
 const SUBSUBSECTION_HEADER_FONT_SIZE: f32 = 14.;
 const OWNER_STATE_CHIP_ACCENT_OPACITY: u8 = 30;
 
-const INVITE_LINK_PREFIX: &str = "/team/";
 const INVALID_DOMAINS_INSTRUCTIONS: &str =
     "Some of the provided domains are invalid, or have already been added.";
 
 const INVITE_LINK_TOGGLE_INSTRUCTIONS: &str = "As an admin, you can choose whether to enable or disable the ability for team members to invite others by invitation link.";
-const INVITE_LINK_DOMAIN_RESTRICTIONS_INSTRUCTIONS: &str =
-    "Restrict by domain — only allow users with emails at specific domains to join your team through the invite link.";
+const INVITE_LINK_UNAVAILABLE_INSTRUCTIONS: &str =
+    "Your team’s visibility settings prevent you from creating invite links.";
+const INVITE_LINK_DOMAIN_RESTRICTIONS_INSTRUCTIONS: &str = "Restrict by domain — only allow users with emails at specific domains to join your team through the invite link.";
 
 const INVITE_BY_EMAIL_EXPIRY_INSTRUCTIONS: &str = "Email invitations are valid for 7 days.";
 const INVALID_EMAILS_INSTRUCTIONS: &str =
@@ -121,7 +142,15 @@ const INVALID_EMAILS_INSTRUCTIONS: &str =
 
 const OFFLINE_TEXT: &str = "You are offline.";
 
+const DISABLED_MEMBER_TOOLTIP_TEXT: &str = "This user's account is disabled";
+
 const MAX_CHIP_WIDTH: f32 = 280.;
+const DISCOVERY_BACK_BUTTON_SPACING: f32 = 8.;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TeamFooterAction {
+    Leave,
+    Delete,
+}
 
 lazy_static! {
     static ref DOMAIN_NAME_REGEX: Regex =
@@ -140,6 +169,22 @@ fn owner_state_chip_text_color(theme: &themes::theme::WarpTheme) -> ColorU {
     theme.main_text_color(chip_background).into_solid()
 }
 
+fn dim_color(color: ColorU) -> ColorU {
+    ColorU::new(color.r, color.g, color.b, color.a / 2)
+}
+
+fn item_row_text_color(appearance: &Appearance, is_disabled: bool) -> themes::theme::Fill {
+    if is_disabled {
+        appearance.theme().disabled_ui_text_color()
+    } else {
+        appearance.theme().active_ui_text_color()
+    }
+}
+
+fn disabled_member_tooltip_text(is_disabled: bool) -> Option<&'static str> {
+    is_disabled.then_some(DISABLED_MEMBER_TOOLTIP_TEXT)
+}
+
 #[derive(Debug, Clone)]
 pub enum TeamsPageAction {
     LeaveTeam,
@@ -155,6 +200,13 @@ pub enum TeamsPageAction {
     RemoveUserFromTeam {
         user_uid: UserUid,
         team_uid: ServerId,
+        member_email: String,
+    },
+    RemoveUserFromWorkspace {
+        user_uid: UserUid,
+        workspace_uid: WorkspaceUid,
+        member_email: String,
+        workspace_name: String,
     },
     ToggleIsInviteLinkEnabled {
         team_uid: ServerId,
@@ -183,6 +235,7 @@ pub enum TeamsPageAction {
     OpenAdminPanel {
         team_uid: ServerId,
     },
+    OpenWorkspaceAdminPanel,
     ContactSupport,
     ContactSales,
     /// This action is for toggling the discoverability checkbox before a team is created.
@@ -195,6 +248,16 @@ pub enum TeamsPageAction {
     JoinTeamWithTeamDiscovery {
         team_uid: ServerId,
     },
+    ShowWorkspaceTeams {
+        workspace_uid: WorkspaceUid,
+    },
+    ShowDiscoveryOptions,
+    JoinWorkspaceFromDiscovery {
+        workspace_uid: WorkspaceUid,
+        team_uid: Option<ServerId>,
+    },
+    ShowJoinTeamsModal,
+    ShowTeamSwitcherMenu,
     ShowTransferOwnershipModal {
         new_owner_email: String,
         new_owner_uid: UserUid,
@@ -222,17 +285,21 @@ impl TeamsPageAction {
                 | CreateTeam
                 | DeletePendingEmailInvitation { .. }
                 | RemoveUserFromTeam { .. }
+                | RemoveUserFromWorkspace { .. }
                 | AddDomainRestrictions { .. }
                 | DeleteDomainRestriction { .. }
                 | SendEmailInvites { .. }
                 | GenerateUpgradeLink { .. }
                 | GenerateStripeBillingPortalLink { .. }
                 | OpenAdminPanel { .. }
+                | OpenWorkspaceAdminPanel
                 | ContactSupport
                 | ContactSales
                 | ToggleTeamDiscoverabilityBeforeCreation
                 | ToggleTeamDiscoverability { .. }
                 | JoinTeamWithTeamDiscovery { .. }
+                | ShowWorkspaceTeams { .. }
+                | JoinWorkspaceFromDiscovery { .. }
         )
     }
 }
@@ -246,18 +313,21 @@ impl From<&TeamsPageAction> for LoginGatedFeature {
             CreateTeam => "Create Team",
             DeletePendingEmailInvitation { .. } => "Delete Pending Email Invitation",
             RemoveUserFromTeam { .. } => "Remove User From Team",
+            RemoveUserFromWorkspace { .. } => "Remove User From Workspace",
             AddDomainRestrictions { .. } => "Add Domain Restrictions",
             DeleteDomainRestriction { .. } => "Delete Domain Restriction",
             SendEmailInvites { .. } => "Send Email Invites",
             GenerateUpgradeLink { .. } => "Generate Upgrade Link",
             GenerateStripeBillingPortalLink { .. } => "Generate Stripe Billing Portal Link",
-            OpenAdminPanel { .. } => "Open Admin Panel",
+            OpenAdminPanel { .. } | OpenWorkspaceAdminPanel => "Open Admin Panel",
             ContactSupport => "Contact Support",
             ContactSales => "Contact Sales",
             ToggleTeamDiscoverability { .. } | ToggleTeamDiscoverabilityBeforeCreation => {
                 "Toggle Team Discoverability"
             }
             JoinTeamWithTeamDiscovery { .. } => "Join Team With Team Discovery",
+            ShowWorkspaceTeams { .. } => "Show Workspace Teams",
+            JoinWorkspaceFromDiscovery { .. } => "Join Workspace From Discovery",
             _ => "Unknown reason",
         }
     }
@@ -290,6 +360,9 @@ pub enum TeamsPageViewEvent {
         message: String,
         flavor: ToastFlavor,
     },
+    /// One of this page's modals opened or closed. [`SettingsView`] owns the
+    /// slot they render in, so it has to re-render to pick the change up.
+    ModalVisibilityChanged,
 }
 
 #[derive(Default)]
@@ -311,6 +384,10 @@ struct TeamsWidgetMouseHandles {
     grow_team_warning_cta_button: MouseStateHandle,
     team_members_count_tooltip: MouseStateHandle,
     outgrow_upgrade_link: MouseStateHandle,
+    workspace_admin_panel_link: HighlightedHyperlink,
+    browse_teams_button: MouseStateHandle,
+    switch_team_button: MouseStateHandle,
+    discovery_back_button: MouseStateHandle,
 }
 
 /// TeamsInviteOption is whether the user is looking at invite-by-link or invite-by-email.
@@ -374,6 +451,14 @@ enum GrowTeamWarningCta {
     None,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum TeamsPageSection {
+    CreateTeam,
+    AdminPanelCta,
+    JoinTeams { header: &'static str },
+    NoTeamsToJoin,
+}
+
 /// The order of the ItemState enum values determines the ordering of the members and
 /// invites list in the team management page (see `impl Ord for Item`` below).
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
@@ -382,6 +467,8 @@ enum ItemState {
     Pending,
     Owner,
     Admin,
+    WorkspaceOwner,
+    WorkspaceAdmin,
     Valid,
 }
 
@@ -392,12 +479,19 @@ struct ItemAction {
     action: TeamsPageAction,
 }
 
+#[derive(Clone, Default)]
+struct ItemMouseStates {
+    action: MouseStateHandle,
+    disabled_tooltip: MouseStateHandle,
+}
+
 /// An item (team member, pending email invite, or domain) consists of its text, and actions associated with it.
 #[derive(Clone)]
 pub struct Item {
     text: String,
     actions: Vec<ItemAction>,
     state: ItemState,
+    is_disabled: bool,
 }
 
 impl PartialEq for Item {
@@ -430,6 +524,94 @@ struct DiscoverableTeamState {
     mouse_state_handle: MouseStateHandle,
 }
 
+#[derive(Clone)]
+struct DiscoverableWorkspaceState {
+    workspace: DiscoverableWorkspace,
+    mouse_state_handle: MouseStateHandle,
+    open_team_states: Vec<DiscoverableTeamState>,
+}
+
+impl DiscoverableWorkspaceState {
+    fn new(workspace: DiscoverableWorkspace) -> Self {
+        let open_team_states = workspace
+            .open_teams
+            .iter()
+            .cloned()
+            .map(DiscoverableTeamState::new)
+            .collect();
+        Self {
+            workspace,
+            mouse_state_handle: Default::default(),
+            open_team_states,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum WorkspaceDiscoveryScreen {
+    #[default]
+    Options,
+    OpenTeams(WorkspaceUid),
+}
+impl WorkspaceDiscoveryScreen {
+    fn show_open_teams(&mut self, workspace_uid: WorkspaceUid) {
+        *self = Self::OpenTeams(workspace_uid);
+    }
+
+    fn show_options(&mut self) {
+        *self = Self::Options;
+    }
+
+    fn selected_workspace(
+        self,
+        workspaces: &[DiscoverableWorkspaceState],
+    ) -> Option<&DiscoverableWorkspaceState> {
+        match self {
+            Self::Options => None,
+            Self::OpenTeams(workspace_uid) => workspaces
+                .iter()
+                .find(|state| state.workspace.workspace_uid == workspace_uid),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WorkspaceDiscoveryAction {
+    Continue,
+    Join,
+}
+
+impl WorkspaceDiscoveryAction {
+    fn for_workspace(workspace: &DiscoverableWorkspace) -> Self {
+        if workspace.open_teams.is_empty() {
+            Self::Join
+        } else {
+            Self::Continue
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Continue => "Continue",
+            Self::Join => "Join",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiscoveryJoinTarget {
+    LegacyTeam(ServerId),
+    Workspace {
+        workspace_uid: WorkspaceUid,
+        team_uid: Option<ServerId>,
+    },
+}
+#[derive(Copy, Clone)]
+struct TeamInvitationPermissions {
+    has_admin_permissions: bool,
+    is_workspace_admin: bool,
+}
+
 impl DiscoverableTeamState {
     pub fn new(team: DiscoverableTeam) -> Self {
         Self {
@@ -451,9 +633,14 @@ enum TeamActionConfirmationTarget {
         user_uid: UserUid,
         team_uid: ServerId,
     },
+    RemoveUserFromWorkspace {
+        user_uid: UserUid,
+        workspace_uid: WorkspaceUid,
+    },
 }
 
 pub struct TeamsPageView {
+    self_handle: WeakViewHandle<Self>,
     page: PageType<Self>,
     auth_state: Arc<AuthState>,
     create_team_editor: ViewHandle<EditorView>,
@@ -468,18 +655,25 @@ pub struct TeamsPageView {
     pricing_info_model: ModelHandle<PricingInfoModel>,
     cloud_model: ModelHandle<CloudModel>,
     invite_view: TeamsInviteOption,
-    team_members_mouse_state_handles: Vec<MouseStateHandle>,
-    team_approved_domains_mouse_state_handles: Vec<MouseStateHandle>,
+    team_members_mouse_states: Vec<ItemMouseStates>,
+    team_approved_domains_mouse_states: Vec<ItemMouseStates>,
     team_action_confirmation_dialog: ViewHandle<CloudActionConfirmationDialog>,
     show_team_action_confirmation_dialog: bool,
     pending_team_action_confirmation: Option<TeamActionConfirmationTarget>,
     transfer_ownership_modal_state: ModalViewState<Modal<TransferOwnershipConfirmationModal>>,
+    join_teams_modal_state: ModalViewState<Modal<JoinTeamsModal>>,
     clipped_scroll_state: ClippedScrollStateHandle,
     discoverable_teams_states: Vec<DiscoverableTeamState>,
+    discoverable_workspaces_states: Vec<DiscoverableWorkspaceState>,
+    workspace_discovery_screen: WorkspaceDiscoveryScreen,
+    discovery_join_target: Option<DiscoveryJoinTarget>,
+    open_team_states: Vec<DiscoverableTeamState>,
     rename_team_editor: ViewHandle<ClickableTextInput>,
     checkbox_value: bool,
     member_actions_menu: ViewHandle<Menu<TeamsPageAction>>,
     open_member_actions_menu_index: Option<usize>,
+    team_switcher_menu: ViewHandle<Menu<WorkspaceAction>>,
+    show_team_switcher_menu: bool,
 }
 
 impl Entity for TeamsPageView {
@@ -510,10 +704,16 @@ impl TypedActionView for TeamsPageView {
             TeamsPageAction::CopyLink(link) => self.copy_invite_link(link, ctx),
             TeamsPageAction::LeaveTeam => self.leave_team(ctx),
             TeamsPageAction::CreateTeam => self.create_team(ctx),
-            TeamsPageAction::RemoveUserFromTeam { user_uid, team_uid } => {
-                if FeatureFlag::BillingAndUsagePageV2.is_enabled() {
+            TeamsPageAction::RemoveUserFromTeam {
+                user_uid,
+                team_uid,
+                member_email,
+            } => {
+                if let Some(variant) =
+                    self.remove_team_member_confirmation_variant(member_email, ctx)
+                {
                     self.show_team_action_confirmation(
-                        CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits,
+                        variant,
                         TeamActionConfirmationTarget::RemoveUser {
                             user_uid: *user_uid,
                             team_uid: *team_uid,
@@ -524,6 +724,24 @@ impl TypedActionView for TeamsPageView {
                     self.remove_user_from_team(*user_uid, *team_uid, ctx);
                 }
             }
+            TeamsPageAction::RemoveUserFromWorkspace {
+                user_uid,
+                workspace_uid,
+                member_email,
+                workspace_name,
+            } => {
+                self.show_team_action_confirmation(
+                    CloudActionConfirmationDialogVariant::RemoveWorkspaceMember {
+                        member_email: member_email.clone(),
+                        workspace_name: workspace_name.clone(),
+                    },
+                    TeamActionConfirmationTarget::RemoveUserFromWorkspace {
+                        user_uid: *user_uid,
+                        workspace_uid: *workspace_uid,
+                    },
+                    ctx,
+                );
+            }
             TeamsPageAction::ChangeInviteViewOption(view_option) => {
                 self.change_invite_view_option(view_option, ctx);
             }
@@ -531,13 +749,29 @@ impl TypedActionView for TeamsPageView {
                 self.send_email_invites(*team_uid, ctx);
                 ctx.notify();
             }
+            TeamsPageAction::ShowWorkspaceTeams { workspace_uid } => {
+                if self.discovery_join_target.is_none() {
+                    self.workspace_discovery_screen
+                        .show_open_teams(*workspace_uid);
+                    ctx.notify();
+                }
+            }
+            TeamsPageAction::ShowDiscoveryOptions => {
+                if self.discovery_join_target.is_none() {
+                    self.workspace_discovery_screen.show_options();
+                    ctx.notify();
+                }
+            }
+            TeamsPageAction::JoinWorkspaceFromDiscovery {
+                workspace_uid,
+                team_uid,
+            } => {
+                self.join_workspace_from_discovery(*workspace_uid, *team_uid, ctx);
+                ctx.notify();
+            }
             TeamsPageAction::OpenWarpDrive => ctx.emit(TeamsPageViewEvent::OpenWarpDrive),
             TeamsPageAction::ShowLeaveTeamConfirmationDialog => {
-                let variant = if self.should_show_reload_credits_confirmation(ctx) {
-                    CloudActionConfirmationDialogVariant::LeaveTeamReloadCredits
-                } else {
-                    CloudActionConfirmationDialogVariant::LeaveTeam
-                };
+                let variant = self.leave_team_confirmation_variant(ctx);
                 self.show_team_action_confirmation(
                     variant,
                     TeamActionConfirmationTarget::Leave,
@@ -586,6 +820,9 @@ impl TypedActionView for TeamsPageView {
             TeamsPageAction::OpenAdminPanel { team_uid } => {
                 AdminActions::open_admin_panel(*team_uid, ctx);
             }
+            TeamsPageAction::OpenWorkspaceAdminPanel => {
+                AdminActions::open_workspace_admin_panel(ctx);
+            }
             TeamsPageAction::ContactSupport => {
                 AdminActions::contact_support(ctx);
             }
@@ -603,6 +840,8 @@ impl TypedActionView for TeamsPageView {
                 self.join_team_with_team_discovery(*team_uid, ctx);
                 ctx.notify();
             }
+            TeamsPageAction::ShowJoinTeamsModal => self.show_join_teams_modal(ctx),
+            TeamsPageAction::ShowTeamSwitcherMenu => self.show_team_switcher_dropdown(ctx),
             TeamsPageAction::ShowTransferOwnershipModal {
                 new_owner_email,
                 new_owner_uid,
@@ -650,7 +889,10 @@ impl View for TeamsPageView {
     }
 
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
-        if focus_ctx.is_self_focused() && !self.user_workspaces.as_ref(ctx).has_teams() {
+        if focus_ctx.is_self_focused()
+            && !self.user_workspaces.as_ref(ctx).has_teams()
+            && self.renders_create_team_ui(ctx)
+        {
             ctx.focus(&self.create_team_editor);
             ctx.notify();
         }
@@ -752,29 +994,31 @@ impl TeamsPageView {
             me.handle_email_invites_block_editor_event(event, ctx);
         });
 
-        let current_user_team = user_workspaces.as_ref(ctx).current_team();
+        let current_user_team = user_workspaces.as_ref(ctx).team_for_view(ctx);
 
-        let team_members_mouse_state_handles =
-            current_user_team.map_or_else(Vec::new, |user_team| {
-                user_team
-                    .members
-                    .iter()
-                    .map(|_| Default::default())
-                    .collect()
-            });
+        // Sized from pending invites + members, matching
+        // `update_team_member_mouse_state_handles` below.
+        let team_members_mouse_states = current_user_team.map_or_else(Vec::new, |user_team| {
+            let total_length = user_team.pending_email_invites.len() + user_team.members.len();
+            (0..total_length)
+                .map(|_| ItemMouseStates::default())
+                .collect()
+        });
 
-        let team_approved_domains_mouse_state_handles =
+        let team_approved_domains_mouse_states =
             current_user_team.map_or_else(Vec::new, |user_team| {
                 user_team
                     .invite_link_domain_restrictions
                     .iter()
-                    .map(|_| Default::default())
+                    .map(|_| ItemMouseStates::default())
                     .collect()
             });
 
         let team_name = current_user_team
             .map_or_else(|| "", |team| &team.name)
             .to_string();
+        let open_team_states =
+            Self::open_team_states_for_workspace(user_workspaces.as_ref(ctx).current_workspace());
         let rename_team_editor = ctx.add_typed_action_view(|ctx| {
             let mut input = ClickableTextInput::new(team_name, ctx);
             input.set_placeholder_text("Your new team name", ctx);
@@ -823,6 +1067,36 @@ impl TeamsPageView {
             me.handle_transfer_ownership_modal_close_event(event, ctx);
         });
 
+        let join_teams_modal_body = ctx.add_typed_action_view(|_| JoinTeamsModal::new());
+        ctx.subscribe_to_view(&join_teams_modal_body, |me, _, event, ctx| {
+            me.handle_join_teams_modal_event(event, ctx);
+        });
+        let join_teams_modal = ctx.add_typed_action_view(|ctx| {
+            Modal::new(
+                Some(BROWSE_TEAMS_BUTTON_LABEL.to_string()),
+                join_teams_modal_body,
+                ctx,
+            )
+            .with_modal_style(UiComponentStyles {
+                width: Some(360.),
+                height: Some(424.),
+                ..Default::default()
+            })
+            .with_header_style(UiComponentStyles {
+                height: Some(64.),
+                padding: Some(Coords::uniform(24.).top(18.).bottom(12.)),
+                ..Default::default()
+            })
+            .with_body_style(UiComponentStyles {
+                height: Some(360.),
+                padding: Some(Coords::uniform(24.).top(8.)),
+                ..Default::default()
+            })
+        });
+        ctx.subscribe_to_view(&join_teams_modal, |me, _, event, ctx| {
+            me.handle_join_teams_modal_close_event(event, ctx);
+        });
+
         let member_actions_menu = ctx.add_typed_action_view(|_| Menu::new().with_drop_shadow());
         ctx.subscribe_to_view(&member_actions_menu, |me, _, event, ctx| {
             if let menu::Event::Close { .. } = event {
@@ -831,8 +1105,21 @@ impl TeamsPageView {
             }
         });
 
+        let team_switcher_menu = ctx.add_typed_action_view(|_| {
+            Menu::new()
+                .with_drop_shadow()
+                .prevent_interaction_with_other_elements()
+        });
+        ctx.subscribe_to_view(&team_switcher_menu, |me, _, event, ctx| {
+            if let menu::Event::Close { .. } = event {
+                me.show_team_switcher_menu = false;
+                ctx.notify();
+            }
+        });
+
         let page = PageType::new_monolith(TeamsWidget::default(), None, true);
         TeamsPageView {
+            self_handle: ctx.handle(),
             page,
             auth_state: AuthStateProvider::as_ref(ctx).get().clone(),
             create_team_editor,
@@ -853,29 +1140,40 @@ impl TeamsPageView {
             pricing_info_model,
             cloud_model,
             invite_view: TeamsInviteOption::default(),
-            team_members_mouse_state_handles,
-            team_approved_domains_mouse_state_handles,
+            team_members_mouse_states,
+            team_approved_domains_mouse_states,
             clipped_scroll_state: Default::default(),
             team_action_confirmation_dialog,
             show_team_action_confirmation_dialog: false,
             pending_team_action_confirmation: None,
             transfer_ownership_modal_state: ModalViewState::new(transfer_ownership_modal),
+            join_teams_modal_state: ModalViewState::new(join_teams_modal),
             discoverable_teams_states: Vec::new(),
+            discoverable_workspaces_states: Vec::new(),
+            workspace_discovery_screen: Default::default(),
+            discovery_join_target: None,
+            open_team_states,
             rename_team_editor,
             checkbox_value: true,
             member_actions_menu,
             open_member_actions_menu_index: None,
+            team_switcher_menu,
+            show_team_switcher_menu: false,
         }
     }
 
     fn open_member_actions_menu_for_item(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
-        let Some(team) = self.user_workspaces.as_ref(ctx).current_team() else {
+        let user_workspaces = self.user_workspaces.as_ref(ctx);
+        let Some(team) = user_workspaces.team_for_view(ctx) else {
+            return;
+        };
+        let Some(workspace) = user_workspaces.current_workspace() else {
             return;
         };
         let Some(current_user_email) = self.auth_state.user_email() else {
             return;
         };
-        let items = self.team_to_item_list(team, &current_user_email);
+        let items = Self::team_to_item_list(team, &current_user_email, workspace);
         let items_sorted = items.iter().sorted().collect_vec();
 
         let Some(item) = items_sorted.get(index) else {
@@ -924,12 +1222,19 @@ impl TeamsPageView {
             UserWorkspacesEvent::TeamsChanged => {
                 self.update_team_members_state(ctx);
                 self.update_approved_domains_state(ctx);
+                self.update_open_team_states(ctx);
+                self.sync_discovery_options_with_team_membership(ctx);
 
                 AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
                     usage_model.refresh_request_usage_async(ctx);
                 });
 
                 ctx.emit(TeamsPageViewEvent::TeamsChanged);
+            }
+            UserWorkspacesEvent::CurrentWorkspaceChanged
+            | UserWorkspacesEvent::WindowTeamChanged { .. } => {
+                // A workspace selection change always emits `TeamsChanged` too,
+                // which already refreshes this page.
             }
             UserWorkspacesEvent::ToggleInviteLinksSuccess => {
                 self.show_success("Toggled invite links", ctx);
@@ -992,6 +1297,8 @@ impl TeamsPageView {
                 self.show_error("Failed to toggle team discoverability", Some(err), ctx);
             }
             UserWorkspacesEvent::JoinTeamWithTeamDiscoverySuccess => {
+                self.discovery_join_target = None;
+                self.workspace_discovery_screen.show_options();
                 // Force refresh of Warp Drive objects after joining a team
                 UpdateManager::handle(ctx).update(ctx, move |update_manager, ctx| {
                     update_manager.refresh_updated_objects(ctx);
@@ -1000,7 +1307,7 @@ impl TeamsPageView {
                 let message = self
                     .user_workspaces
                     .as_ref(ctx)
-                    .current_team()
+                    .team_for_view(ctx)
                     .map_or("Successfully joined team".to_string(), |team| {
                         format!("Successfully joined {}", team.name)
                     });
@@ -1008,18 +1315,72 @@ impl TeamsPageView {
                 ctx.notify();
             }
             UserWorkspacesEvent::JoinTeamWithTeamDiscoveryRejected(err) => {
+                self.discovery_join_target = None;
                 self.show_error("Failed to join team", Some(err), ctx);
             }
+            UserWorkspacesEvent::JoinTeamInWorkspaceSuccess { team_uid } => {
+                UpdateManager::handle(ctx).update(ctx, move |update_manager, ctx| {
+                    update_manager.refresh_updated_objects(ctx);
+                });
+                let team_name = self
+                    .user_workspaces
+                    .as_ref(ctx)
+                    .team_from_uid(*team_uid)
+                    .map(|team| team.name.clone())
+                    .unwrap_or_else(|| "team".to_string());
+                self.close_join_teams_modal(ctx);
+                self.show_success(format!("Successfully joined {team_name}"), ctx);
+                #[cfg(not(target_family = "wasm"))]
+                ctx.dispatch_typed_action(&WorkspaceAction::OpenNewWindowForTeam {
+                    team_uid: *team_uid,
+                });
+            }
+            UserWorkspacesEvent::JoinTeamInWorkspaceRejected(err) => {
+                self.join_teams_modal_state.view.update(ctx, |modal, ctx| {
+                    modal.body().update(ctx, |body, ctx| {
+                        body.set_joining_team(None, ctx);
+                    });
+                });
+                self.show_error("Failed to join team", Some(err), ctx);
+            }
+            UserWorkspacesEvent::JoinWorkspaceFromDiscoverySuccess => {
+                self.discovery_join_target = None;
+                self.workspace_discovery_screen = WorkspaceDiscoveryScreen::Options;
+                UpdateManager::handle(ctx).update(ctx, move |update_manager, ctx| {
+                    update_manager.refresh_updated_objects(ctx);
+                });
+                self.show_success("Successfully joined workspace", ctx);
+            }
+            UserWorkspacesEvent::JoinWorkspaceFromDiscoveryRejected(err) => {
+                self.discovery_join_target = None;
+                self.show_error("Failed to join workspace", Some(err), ctx);
+            }
             UserWorkspacesEvent::FetchDiscoverableTeamsSuccess(teams) => {
-                self.discoverable_teams_states = teams
-                    .iter()
-                    .map(|team| DiscoverableTeamState::new(team.clone()))
-                    .collect();
+                self.set_discoverable_team_states(teams);
                 ctx.notify();
             }
-            UserWorkspacesEvent::FetchDiscoverableTeamsRejected(e) => {
+            UserWorkspacesEvent::FetchDiscoveryOptionsSuccess(options) => {
+                self.set_discoverable_team_states(&options.legacy_teams);
+                self.discoverable_workspaces_states = options
+                    .workspaces
+                    .iter()
+                    .cloned()
+                    .map(DiscoverableWorkspaceState::new)
+                    .collect();
+                if let WorkspaceDiscoveryScreen::OpenTeams(workspace_uid) =
+                    self.workspace_discovery_screen
+                    && self
+                        .discoverable_workspaces_states
+                        .iter()
+                        .all(|state| state.workspace.workspace_uid != workspace_uid)
+                {
+                    self.workspace_discovery_screen = WorkspaceDiscoveryScreen::Options;
+                }
+                ctx.notify();
+            }
+            UserWorkspacesEvent::FetchDiscoveryOptionsRejected(e) => {
                 // Don't show toast, only log to sentry
-                log::error!("Failed to fetch discoverable teams: {e:?}");
+                report_error!(e);
             }
             UserWorkspacesEvent::TransferTeamOwnershipSuccess => {
                 self.show_success("Successfully transferred team ownership", ctx);
@@ -1035,6 +1396,28 @@ impl TeamsPageView {
             UserWorkspacesEvent::SetTeamMemberRoleRejected(err) => {
                 self.show_error("Failed to update team member role", Some(err), ctx);
             }
+            UserWorkspacesEvent::RemoveUserFromTeamSuccess => {
+                self.update_team_members_state(ctx);
+                self.show_success("Removed team member", ctx);
+            }
+            UserWorkspacesEvent::RemoveUserFromTeamRejected(err) => {
+                self.show_error(
+                    format!("Failed to remove team member: {err}"),
+                    Some(err),
+                    ctx,
+                );
+            }
+            UserWorkspacesEvent::RemoveUserFromWorkspaceSuccess => {
+                self.update_team_members_state(ctx);
+                self.show_success("Removed workspace member", ctx);
+            }
+            UserWorkspacesEvent::RemoveUserFromWorkspaceRejected(err) => {
+                self.show_error(
+                    format!("Failed to remove workspace member: {err}"),
+                    Some(err),
+                    ctx,
+                );
+            }
             UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess => {
                 // as of right now, this is only emitted on the billing & usage page
             }
@@ -1046,6 +1429,9 @@ impl TeamsPageView {
             }
             UserWorkspacesEvent::PurchaseAddonCreditsSuccess => {
                 // Addon credits purchase success is handled in billing_and_usage_page
+            }
+            UserWorkspacesEvent::PurchaseAddonCreditsCheckoutRequired { .. } => {
+                // Checkout handoff is handled by the surface that initiated the purchase
             }
             UserWorkspacesEvent::PurchaseAddonCreditsRejected(_) => {
                 // Addon credits purchase rejection is handled in billing_and_usage_page
@@ -1066,12 +1452,57 @@ impl TeamsPageView {
                 > 0
     }
 
+    fn remove_team_member_confirmation_variant(
+        &self,
+        member_email: &str,
+        ctx: &AppContext,
+    ) -> Option<CloudActionConfirmationDialogVariant> {
+        let workspace = self.user_workspaces.as_ref(ctx).current_workspace()?;
+        if workspace.is_native_workspaces_enabled() {
+            Some(
+                CloudActionConfirmationDialogVariant::RemoveNativeWorkspaceTeamMember {
+                    member_email: member_email.to_string(),
+                    workspace_name: workspace.name.clone(),
+                },
+            )
+        } else if FeatureFlag::BillingAndUsagePageV2.is_enabled() {
+            Some(CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits)
+        } else {
+            None
+        }
+    }
+    fn leave_team_confirmation_variant(
+        &self,
+        ctx: &ViewContext<Self>,
+    ) -> CloudActionConfirmationDialogVariant {
+        let user_workspaces = self.user_workspaces.as_ref(ctx);
+        if let (Some(workspace), Some(team)) = (
+            user_workspaces.current_workspace(),
+            user_workspaces.team_for_view(ctx),
+        ) && workspace.is_native_workspaces_enabled()
+        {
+            return CloudActionConfirmationDialogVariant::LeaveNativeWorkspaceTeam {
+                team_name: team.name.clone(),
+            };
+        }
+
+        if self.should_show_reload_credits_confirmation(ctx) {
+            CloudActionConfirmationDialogVariant::LeaveTeamReloadCredits
+        } else {
+            CloudActionConfirmationDialogVariant::LeaveTeam
+        }
+    }
+
     fn show_team_action_confirmation(
         &mut self,
         variant: CloudActionConfirmationDialogVariant,
         target: TeamActionConfirmationTarget,
         ctx: &mut ViewContext<Self>,
     ) {
+        // Only one modal renders (see `get_modal_content`), so opening one must clear the other
+        // rather than leave it queued behind for a target the user has moved on from.
+        self.clear_transfer_ownership_modal(ctx);
+        self.clear_join_teams_modal(ctx);
         self.pending_team_action_confirmation = Some(target);
         self.open_member_actions_menu_index = None;
         self.team_action_confirmation_dialog
@@ -1081,21 +1512,30 @@ impl TeamsPageView {
                 ctx.notify();
             });
         self.show_team_action_confirmation_dialog = true;
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
         ctx.notify();
     }
 
-    fn hide_team_action_confirmation(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Drops the confirmation dialog's state without announcing it. Callers that change what is on
+    /// screen emit [`TeamsPageViewEvent::ModalVisibilityChanged`] once for the whole transition.
+    fn clear_team_action_confirmation(&mut self) {
         self.pending_team_action_confirmation = None;
         self.show_team_action_confirmation_dialog = false;
+    }
+
+    fn hide_team_action_confirmation(&mut self, ctx: &mut ViewContext<Self>) {
+        self.clear_team_action_confirmation();
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
         ctx.notify();
     }
 
     fn confirm_pending_team_action(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some(target) = self.pending_team_action_confirmation.take() else {
-            self.hide_team_action_confirmation(ctx);
+        // Take the target first: hiding clears it.
+        let target = self.pending_team_action_confirmation.take();
+        self.hide_team_action_confirmation(ctx);
+        let Some(target) = target else {
             return;
         };
-        self.show_team_action_confirmation_dialog = false;
         match target {
             TeamActionConfirmationTarget::Leave | TeamActionConfirmationTarget::Delete => {
                 self.leave_team(ctx);
@@ -1103,24 +1543,29 @@ impl TeamsPageView {
             TeamActionConfirmationTarget::RemoveUser { user_uid, team_uid } => {
                 self.remove_user_from_team(user_uid, team_uid, ctx);
             }
+            TeamActionConfirmationTarget::RemoveUserFromWorkspace {
+                user_uid,
+                workspace_uid,
+            } => {
+                self.remove_user_from_workspace(user_uid, workspace_uid, ctx);
+            }
         }
         ctx.notify();
     }
 
-    fn should_show_delete_or_leave_team_confirmation_dialog(&self) -> bool {
-        self.show_team_action_confirmation_dialog
-            && matches!(
-                &self.pending_team_action_confirmation,
-                Some(TeamActionConfirmationTarget::Leave | TeamActionConfirmationTarget::Delete)
-            )
-    }
-
-    fn should_show_remove_user_from_team_confirmation_dialog(&self) -> bool {
-        self.show_team_action_confirmation_dialog
-            && matches!(
-                &self.pending_team_action_confirmation,
-                Some(TeamActionConfirmationTarget::RemoveUser { .. })
-            )
+    /// This page's modal overlays, rendered by [`SettingsView`] in its top-level stack rather than
+    /// by the page itself. The page's own stack is the full-height scrolling content, so an overlay
+    /// centered on it lands wherever the scroll offset happens to put it.
+    pub fn get_modal_content(&self) -> Option<Box<dyn Element>> {
+        if self.join_teams_modal_state.is_open() {
+            Some(self.join_teams_modal_state.render())
+        } else if self.transfer_ownership_modal_state.is_open() {
+            Some(self.transfer_ownership_modal_state.render())
+        } else if self.show_team_action_confirmation_dialog {
+            Some(ChildView::new(&self.team_action_confirmation_dialog).finish())
+        } else {
+            None
+        }
     }
 
     /// Scroll to the team membership settings. If an email is provided, it's prepopulated in the
@@ -1192,12 +1637,10 @@ impl TeamsPageView {
                 team_uid,
             } => {
                 self.set_team_member_role(*new_owner_uid, *team_uid, MembershipRole::Owner, ctx);
-                self.transfer_ownership_modal_state.close();
-                ctx.notify();
+                self.close_transfer_ownership_modal(ctx);
             }
             TransferOwnershipConfirmationEvent::Cancel => {
-                self.transfer_ownership_modal_state.close();
-                ctx.notify();
+                self.close_transfer_ownership_modal(ctx);
             }
         }
     }
@@ -1208,11 +1651,91 @@ impl TeamsPageView {
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            ModalEvent::Close => {
-                self.transfer_ownership_modal_state.close();
-                ctx.notify();
+            ModalEvent::Close => self.close_transfer_ownership_modal(ctx),
+        }
+    }
+
+    fn handle_join_teams_modal_event(
+        &mut self,
+        event: &JoinTeamsModalEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            JoinTeamsModalEvent::Join { team_uid } => {
+                self.user_workspaces
+                    .update(ctx, move |user_workspaces, ctx| {
+                        user_workspaces.join_team_in_workspace(*team_uid, ctx);
+                    });
             }
         }
+    }
+
+    fn handle_join_teams_modal_close_event(
+        &mut self,
+        event: &ModalEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            ModalEvent::Close => self.close_join_teams_modal(ctx),
+        }
+    }
+
+    fn clear_join_teams_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        self.join_teams_modal_state.close();
+        ctx.focus_self();
+    }
+
+    fn close_join_teams_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        self.clear_join_teams_modal(ctx);
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
+        ctx.notify();
+    }
+
+    fn show_join_teams_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        self.clear_team_action_confirmation();
+        self.clear_transfer_ownership_modal(ctx);
+        let teams = self
+            .open_team_states
+            .iter()
+            .map(|state| state.team.clone())
+            .collect();
+        self.join_teams_modal_state.view.update(ctx, |modal, ctx| {
+            modal.body().update(ctx, |body, ctx| {
+                body.set_teams(teams, ctx);
+            });
+        });
+        self.join_teams_modal_state.open();
+        ctx.focus(&self.join_teams_modal_state.view);
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
+        ctx.notify();
+    }
+
+    fn show_team_switcher_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
+        let user_workspaces = self.user_workspaces.as_ref(ctx);
+        let Some(workspace) = user_workspaces.current_workspace() else {
+            return;
+        };
+        let current_team_uid = user_workspaces.team_for_view(ctx).map(|team| team.uid);
+        let items = team_switcher_menu_items(&workspace.teams, current_team_uid);
+        self.team_switcher_menu
+            .update(ctx, |menu, ctx| menu.set_items(items, ctx));
+        self.show_team_switcher_menu = true;
+        ctx.focus(&self.team_switcher_menu);
+        ctx.notify();
+    }
+
+    /// Closes the transfer-ownership modal and takes back the focus it was given on open, so
+    /// Escape stops dispatching into a view that is no longer rendered. Announcing the change is
+    /// the caller's job, as it is for [`Self::clear_team_action_confirmation`].
+    fn clear_transfer_ownership_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        self.transfer_ownership_modal_state.close();
+        ctx.focus_self();
+    }
+
+    fn close_transfer_ownership_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        self.clear_transfer_ownership_modal(ctx);
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
+        ctx.notify();
     }
 
     fn show_transfer_ownership_modal(
@@ -1222,6 +1745,8 @@ impl TeamsPageView {
         team_uid: ServerId,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.clear_team_action_confirmation();
+        self.clear_join_teams_modal(ctx);
         self.transfer_ownership_modal_state
             .view
             .update(ctx, |modal, ctx| {
@@ -1231,6 +1756,10 @@ impl TeamsPageView {
                 });
             });
         self.transfer_ownership_modal_state.open();
+        // Focus the modal so Escape closes it (the modal's escape binding only
+        // fires while something inside the modal holds focus).
+        ctx.focus(&self.transfer_ownership_modal_state.view);
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
         ctx.notify();
     }
 
@@ -1282,11 +1811,11 @@ impl TeamsPageView {
     }
 
     fn update_approved_domains_mouse_state_handles(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(team) = self.user_workspaces.as_ref(ctx).current_team() {
-            self.team_approved_domains_mouse_state_handles = team
+        if let Some(team) = self.user_workspaces.as_ref(ctx).team_for_view(ctx) {
+            self.team_approved_domains_mouse_states = team
                 .invite_link_domain_restrictions
                 .iter()
-                .map(|_| Default::default())
+                .map(|_| ItemMouseStates::default())
                 .collect();
         }
         ctx.notify();
@@ -1296,7 +1825,7 @@ impl TeamsPageView {
     // to use when rendering the different word chips on the editor.
     fn update_domains_validator(&mut self, ctx: &mut ViewContext<Self>) {
         let current_domain_restrictions =
-            if let Some(team) = self.user_workspaces.as_ref(ctx).current_team() {
+            if let Some(team) = self.user_workspaces.as_ref(ctx).team_for_view(ctx) {
                 team.invite_link_domain_restrictions
                     .iter()
                     .map(|domain_restriction| domain_restriction.domain.clone())
@@ -1321,6 +1850,25 @@ impl TeamsPageView {
             });
     }
 
+    fn join_workspace_from_discovery(
+        &mut self,
+        workspace_uid: WorkspaceUid,
+        team_uid: Option<ServerId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.discovery_join_target.is_some() {
+            return;
+        }
+        self.discovery_join_target = Some(DiscoveryJoinTarget::Workspace {
+            workspace_uid,
+            team_uid,
+        });
+        self.user_workspaces
+            .update(ctx, move |user_workspaces, ctx| {
+                user_workspaces.join_workspace_from_discovery(workspace_uid, team_uid, ctx);
+            });
+    }
+
     fn update_team_members_state(&mut self, ctx: &mut ViewContext<Self>) {
         self.update_team_member_mouse_state_handles(ctx);
         self.update_email_validator(ctx);
@@ -1335,7 +1883,7 @@ impl TeamsPageView {
         let blocked = self
             .user_workspaces
             .as_ref(ctx)
-            .current_team()
+            .team_for_view(ctx)
             .map(|team| TeamsWidget::grow_team_warning(team).is_some())
             .unwrap_or(false);
         let state = if blocked {
@@ -1349,16 +1897,17 @@ impl TeamsPageView {
     }
 
     fn update_team_member_mouse_state_handles(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(team) = self.user_workspaces.as_ref(ctx).current_team() {
+        if let Some(team) = self.user_workspaces.as_ref(ctx).team_for_view(ctx) {
             let total_length = team.pending_email_invites.len() + team.members.len();
-            self.team_members_mouse_state_handles =
-                (0..total_length).map(|_| Default::default()).collect();
+            self.team_members_mouse_states = (0..total_length)
+                .map(|_| ItemMouseStates::default())
+                .collect();
         }
         ctx.notify();
     }
 
     fn update_team_name(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(team) = self.user_workspaces.as_ref(ctx).current_team() {
+        if let Some(team) = self.user_workspaces.as_ref(ctx).team_for_view(ctx) {
             let team_name = team.name.clone();
             self.rename_team_editor.update(ctx, |editor, ctx| {
                 editor.handle_action(&ClickableTextInputAction::UpdateText(team_name), ctx)
@@ -1370,7 +1919,7 @@ impl TeamsPageView {
     // to use when rendering the different word chips on the editor.
     fn update_email_validator(&mut self, ctx: &mut ViewContext<Self>) {
         let (member_emails, invitee_emails) =
-            if let Some(team) = self.user_workspaces.as_ref(ctx).current_team() {
+            if let Some(team) = self.user_workspaces.as_ref(ctx).team_for_view(ctx) {
                 (
                     team.members
                         .iter()
@@ -1427,9 +1976,9 @@ impl TeamsPageView {
 
         // Log error to sentry
         if let Some(error) = error {
-            log::error!("{message}: {error:#}");
+            report_error!(error);
         } else {
-            log::error!("{message}");
+            report_error!(anyhow::Error::msg(message.clone()));
         }
     }
 
@@ -1465,8 +2014,29 @@ impl TeamsPageView {
             });
     }
 
+    fn remove_user_from_workspace(
+        &mut self,
+        user_uid: UserUid,
+        workspace_uid: WorkspaceUid,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.user_workspaces
+            .update(ctx, move |user_workspaces, ctx| {
+                user_workspaces.remove_user_from_workspace(
+                    user_uid,
+                    workspace_uid,
+                    CloudObjectEventEntrypoint::TeamSettings,
+                    ctx,
+                );
+            });
+    }
+
     fn leave_team(&mut self, ctx: &mut ViewContext<Self>) {
-        let team_uid = self.user_workspaces.as_ref(ctx).current_team_uid();
+        let team_uid = self
+            .user_workspaces
+            .as_ref(ctx)
+            .team_for_view(ctx)
+            .map(|team| team.uid);
         if let Some(team_uid) = team_uid {
             TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
                 manager.leave_team(team_uid, CloudObjectEventEntrypoint::TeamSettings, ctx)
@@ -1620,10 +2190,66 @@ impl TeamsPageView {
     }
 
     fn join_team_with_team_discovery(&mut self, team_uid: ServerId, ctx: &mut ViewContext<Self>) {
+        if self.discovery_join_target.is_some() {
+            return;
+        }
+        self.discovery_join_target = Some(DiscoveryJoinTarget::LegacyTeam(team_uid));
         self.user_workspaces
             .update(ctx, move |user_workspaces, ctx| {
                 user_workspaces.join_team_with_team_discovery(team_uid, ctx);
             });
+    }
+
+    fn set_discoverable_team_states(&mut self, teams: &[DiscoverableTeam]) {
+        self.discoverable_teams_states = teams
+            .iter()
+            .cloned()
+            .map(DiscoverableTeamState::new)
+            .collect();
+    }
+
+    fn sync_discovery_options_with_team_membership(&mut self, ctx: &mut ViewContext<Self>) {
+        let is_teamless = self
+            .user_workspaces
+            .as_ref(ctx)
+            .team_for_view(ctx)
+            .is_none();
+        if !is_teamless {
+            self.discoverable_workspaces_states.clear();
+            self.workspace_discovery_screen = WorkspaceDiscoveryScreen::Options;
+        } else if NetworkStatus::as_ref(ctx).is_online() {
+            self.user_workspaces.update(ctx, |user_workspaces, ctx| {
+                user_workspaces.fetch_discovery_options(ctx);
+            });
+        }
+    }
+
+    #[cfg(target_family = "wasm")]
+    fn open_team_states_for_workspace(
+        _workspace: Option<&Workspace>,
+    ) -> Vec<DiscoverableTeamState> {
+        Vec::new()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn open_team_states_for_workspace(workspace: Option<&Workspace>) -> Vec<DiscoverableTeamState> {
+        let Some(workspace) =
+            workspace.filter(|workspace| workspace.is_native_workspaces_enabled())
+        else {
+            return Vec::new();
+        };
+
+        workspace
+            .joinable_teams()
+            .cloned()
+            .map(DiscoverableTeamState::new)
+            .collect()
+    }
+
+    fn update_open_team_states(&mut self, ctx: &AppContext) {
+        self.open_team_states = Self::open_team_states_for_workspace(
+            self.user_workspaces.as_ref(ctx).current_workspace(),
+        );
     }
 
     fn delete_team_invite(
@@ -1671,8 +2297,16 @@ impl TeamsPageView {
     ) {
         match event {
             ClickableTextInputEvent::Submit(new_name) => {
+                let Some(team_uid) = self
+                    .user_workspaces
+                    .as_ref(ctx)
+                    .team_for_view(ctx)
+                    .map(|team| team.uid)
+                else {
+                    return;
+                };
                 TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
-                    manager.rename_team(new_name.to_string(), ctx)
+                    manager.rename_team(new_name.to_string(), team_uid, ctx)
                 });
                 self.rename_team_editor.update(ctx, |editor, ctx| {
                     editor.handle_action(
@@ -1685,27 +2319,42 @@ impl TeamsPageView {
         }
     }
 
-    /// Find view handle of first input. If user team does not exist, this will default to
-    /// the create_team_editor.
     fn focus_on_next_input(&mut self, ctx: &mut ViewContext<Self>) {
         let workspaces: &UserWorkspaces = self.user_workspaces.as_ref(ctx);
 
-        if let Some(team) = workspaces.current_team() {
-            if team.organization_settings.is_invite_link_enabled {
+        match workspaces.team_for_view(ctx) {
+            Some(team) if team.invite_link.is_some() => {
                 ctx.focus(&self.approve_domains_block_editor);
-            } else {
-                ctx.focus(&self.email_invites_block_editor);
             }
-        } else {
-            ctx.focus(&self.create_team_editor);
+            Some(_) => ctx.focus(&self.email_invites_block_editor),
+            None => {
+                if self.renders_create_team_ui(ctx) {
+                    ctx.focus(&self.create_team_editor);
+                }
+            }
         }
         ctx.notify();
     }
 
-    fn team_to_item_list(&self, team: &Team, current_user_email: &str) -> Vec<Item> {
+    fn renders_create_team_ui(&self, ctx: &AppContext) -> bool {
+        TeamsWidget::page_sections_for(
+            self.user_workspaces.as_ref(ctx).current_workspace(),
+            self.auth_state.user_email().as_deref(),
+            !self.discoverable_teams_states.is_empty(),
+        )
+        .contains(&TeamsPageSection::CreateTeam)
+    }
+
+    fn team_to_item_list(
+        team: &Team,
+        current_user_email: &str,
+        workspace: &Workspace,
+    ) -> Vec<Item> {
         let mut combined = Vec::new();
-        let current_user_has_admin_permissions = team.has_admin_permissions(current_user_email);
+        let current_user_has_admin_permissions =
+            Self::has_admin_permissions(team, workspace, current_user_email);
         let current_user_has_owner_permissions = team.has_owner_permissions(current_user_email);
+        let current_user_is_workspace_admin = workspace.is_workspace_admin(current_user_email);
 
         // pending email invites
         team.pending_email_invites.iter().for_each(|email_invite| {
@@ -1732,6 +2381,7 @@ impl TeamsPageView {
                 text: email_invite.invitee_email.clone(),
                 actions,
                 state,
+                is_disabled: false,
             });
         });
 
@@ -1739,13 +2389,22 @@ impl TeamsPageView {
         team.members.iter().for_each(|member| {
             let team_member_has_owner_permissions = team.has_owner_permissions(&member.email);
             let team_member_has_admin_permissions = team.has_admin_permissions(&member.email);
+            let member_workspace_role = workspace
+                .members
+                .iter()
+                .find(|workspace_member| workspace_member.email == member.email)
+                .map(|workspace_member| workspace_member.role);
 
             let state = if team_member_has_owner_permissions {
                 ItemState::Owner
             } else if team_member_has_admin_permissions {
                 ItemState::Admin
             } else {
-                ItemState::Valid
+                match member_workspace_role {
+                    Some(MembershipRole::Owner) => ItemState::WorkspaceOwner,
+                    Some(MembershipRole::Admin) => ItemState::WorkspaceAdmin,
+                    _ => ItemState::Valid,
+                }
             };
 
             let mut actions = Vec::new();
@@ -1800,6 +2459,23 @@ impl TeamsPageView {
                         action: TeamsPageAction::RemoveUserFromTeam {
                             user_uid: member.uid,
                             team_uid: team.uid,
+                            member_email: member.email.clone(),
+                        },
+                    });
+                }
+
+                if workspace.is_native_workspaces_enabled()
+                    && current_user_is_workspace_admin
+                    && member_workspace_role != Some(MembershipRole::Owner)
+                {
+                    actions.push(ItemAction {
+                        icon: Icon::X,
+                        label: "Remove from workspace".to_string(),
+                        action: TeamsPageAction::RemoveUserFromWorkspace {
+                            user_uid: member.uid,
+                            workspace_uid: workspace.uid,
+                            member_email: member.email.clone(),
+                            workspace_name: workspace.name.clone(),
                         },
                     });
                 }
@@ -1809,10 +2485,16 @@ impl TeamsPageView {
                 text: member.email.clone(),
                 actions,
                 state,
+                is_disabled: member.is_disabled,
             });
         });
 
         combined
+    }
+
+    fn has_admin_permissions(team: &Team, workspace: &Workspace, current_user_email: &str) -> bool {
+        team.has_admin_permissions(current_user_email)
+            || workspace.is_workspace_admin(current_user_email)
     }
 }
 
@@ -1835,12 +2517,6 @@ impl SettingsPageMeta for TeamsPageView {
         );
         self.update_team_members_state(ctx);
         self.update_approved_domains_state(ctx);
-        if NetworkStatus::as_ref(ctx).is_online() {
-            self.user_workspaces
-                .update(ctx, move |user_workspaces, ctx| {
-                    user_workspaces.fetch_discoverable_teams(ctx);
-                });
-        }
     }
 
     fn should_render(&self, _ctx: &AppContext) -> bool {
@@ -2206,19 +2882,21 @@ impl TeamsWidget {
     fn render_team_management_page(
         &self,
         team_metadata: &Team,
-        cloud_model: &CloudModel,
-        ai_request_usage_model: &AIRequestUsageModel,
+        workspace: &Workspace,
         view: &TeamsPageView,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
+        let cloud_model = view.cloud_model.as_ref(app);
+        let ai_request_usage_model = view.ai_request_usage_model.as_ref(app);
         let current_user_email = view.auth_state.user_email().unwrap_or_default();
-        let has_admin_permissions = team_metadata.has_admin_permissions(&current_user_email);
+        let has_admin_permissions =
+            TeamsPageView::has_admin_permissions(team_metadata, workspace, &current_user_email);
         let is_owner = team_metadata.has_owner_permissions(&current_user_email);
-        let remaining_workspace_credits =
-            ai_request_usage_model.total_current_workspace_bonus_credits_remaining(app);
+        let remaining_workspace_and_team_credits =
+            ai_request_usage_model.total_current_workspace_and_team_bonus_credits_remaining(app);
         let delete_disabled_reason = team_metadata
-            .get_delete_disabled_reason(&current_user_email, remaining_workspace_credits);
+            .get_delete_disabled_reason(&current_user_email, remaining_workspace_and_team_credits);
 
         let mut main_content = Flex::column();
         let chip_editor_style = UiComponentStyles::default()
@@ -2228,10 +2906,14 @@ impl TeamsWidget {
             .set_border_color(appearance.theme().foreground().with_opacity(20).into())
             .set_padding(Coords::uniform(0.).top(4.).right(5.));
 
+        let use_workspace_admin_panel = workspace.is_native_workspaces_admin(&current_user_email);
+
         // 1) Team name header
         main_content.add_child(self.render_header(
             has_admin_permissions,
             team_metadata,
+            use_workspace_admin_panel,
+            view.user_workspaces.as_ref(app).can_switch_teams(),
             view,
             appearance,
         ));
@@ -2270,7 +2952,10 @@ impl TeamsWidget {
         // 3) Team invitation flows (invite link / email invites / discovery)
         main_content.add_child(self.render_team_invitation_section(
             team_metadata,
-            has_admin_permissions,
+            TeamInvitationPermissions {
+                has_admin_permissions,
+                is_workspace_admin: use_workspace_admin_panel,
+            },
             view,
             appearance,
             chip_editor_style,
@@ -2289,6 +2974,7 @@ impl TeamsWidget {
         // 5) Team members
         main_content.add_child(self.render_team_members_section(
             team_metadata,
+            workspace,
             &current_user_email,
             view,
             appearance,
@@ -2311,17 +2997,12 @@ impl TeamsWidget {
 
         // 7) Deleting/leaving teams
         let mut button_row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-        let is_enterprise_team =
-            team_metadata.billing_metadata.customer_type == CustomerType::Enterprise;
-        // We don't allow users on enterprise teams to leave or delete their team,
-        // since their enterprise agreement is tied to it, and it helps enforce that others
-        // can't join some other team that doesn't have stricter security guarantees
-        if !is_enterprise_team {
+        let footer_action = Self::team_footer_action(team_metadata, workspace, is_owner);
+        if let Some(footer_action) = footer_action {
             button_row.add_child(
                 Container::new(self.render_leave_or_delete_team_button(
-                    is_owner,
+                    footer_action,
                     delete_disabled_reason.is_none(),
-                    view,
                     appearance,
                 ))
                 .with_padding_right(24.)
@@ -2331,7 +3012,7 @@ impl TeamsWidget {
         // We show some help text if a team can't be deleted...
         if let Some(delete_disabled_reason) = delete_disabled_reason {
             // and if the current user actually has the perms to delete the team
-            if has_admin_permissions && !is_enterprise_team {
+            if has_admin_permissions && footer_action == Some(TeamFooterAction::Delete) {
                 button_row.add_child(
                     Container::new(self.render_delete_disabled_help_text(
                         delete_disabled_reason,
@@ -2347,10 +3028,102 @@ impl TeamsWidget {
         main_content.finish()
     }
 
+    fn render_browse_teams_button(&self, appearance: &Appearance) -> Box<dyn Element> {
+        appearance
+            .ui_builder()
+            .button(
+                ButtonVariant::Link,
+                self.mouse_state_handles.browse_teams_button.clone(),
+            )
+            .with_text_and_icon_label(
+                TextAndIcon::new(
+                    TextAndIconAlignment::IconFirst,
+                    BROWSE_TEAMS_BUTTON_LABEL,
+                    Icon::Search.to_warpui_icon(appearance.theme().accent()),
+                    MainAxisSize::Min,
+                    MainAxisAlignment::Center,
+                    vec2f(14., 14.),
+                )
+                .with_inner_padding(4.),
+            )
+            .build()
+            .with_cursor(Cursor::PointingHand)
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(TeamsPageAction::ShowJoinTeamsModal);
+            })
+            .finish()
+    }
+
+    fn render_switch_team_button(
+        &self,
+        view: &TeamsPageView,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let button = appearance
+            .ui_builder()
+            .button(
+                ButtonVariant::Link,
+                self.mouse_state_handles.switch_team_button.clone(),
+            )
+            .with_text_and_icon_label(
+                TextAndIcon::new(
+                    TextAndIconAlignment::IconFirst,
+                    SWITCH_TEAM_BUTTON_LABEL,
+                    Icon::SwitchHorizontal01.to_warpui_icon(appearance.theme().accent()),
+                    MainAxisSize::Min,
+                    MainAxisAlignment::Center,
+                    vec2f(14., 14.),
+                )
+                .with_inner_padding(4.),
+            )
+            .build()
+            .with_cursor(Cursor::PointingHand)
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(TeamsPageAction::ShowTeamSwitcherMenu);
+            })
+            .finish();
+
+        let mut stack = Stack::new();
+        stack.add_child(button);
+        if view.show_team_switcher_menu {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&view.team_switcher_menu).finish(),
+                OffsetPositioning::offset_from_parent(
+                    vec2f(0., 4.),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::BottomLeft,
+                    ChildAnchor::TopLeft,
+                ),
+            );
+        }
+        stack.finish()
+    }
+
+    fn team_footer_action(
+        team: &Team,
+        workspace: &Workspace,
+        is_team_owner: bool,
+    ) -> Option<TeamFooterAction> {
+        if workspace.is_native_workspaces_enabled() {
+            (!is_team_owner && workspace.teams.len() > 1).then_some(TeamFooterAction::Leave)
+        } else if team.billing_metadata.customer_type == CustomerType::Enterprise {
+            // We don't allow users on enterprise teams to leave or delete their team,
+            // since their enterprise agreement is tied to it, and it helps enforce that others
+            // can't join some other team that doesn't have stricter security guarantees.
+            None
+        } else if is_team_owner {
+            Some(TeamFooterAction::Delete)
+        } else {
+            Some(TeamFooterAction::Leave)
+        }
+    }
+
     fn render_header(
         &self,
         has_admin_permissions: bool,
         team: &Team,
+        use_workspace_admin_panel: bool,
+        can_switch_teams: bool,
         view: &TeamsPageView,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
@@ -2364,13 +3137,19 @@ impl TeamsWidget {
             .with_main_axis_alignment(MainAxisAlignment::Start);
 
         if has_admin_permissions {
-            left_side.add_child(ChildView::new(&view.rename_team_editor).finish());
+            left_side.add_child(
+                Shrinkable::new(1., ChildView::new(&view.rename_team_editor).finish()).finish(),
+            );
         } else {
             left_side.add_child(
-                Text::new_inline(team.name.clone(), appearance.ui_font_family(), 24.)
-                    .with_style(Properties::default().weight(Weight::Bold))
-                    .with_color(appearance.theme().active_ui_text_color().into())
-                    .finish(),
+                Shrinkable::new(
+                    1.,
+                    Text::new_inline(team.name.clone(), appearance.ui_font_family(), 24.)
+                        .with_style(Properties::default().weight(Weight::Bold))
+                        .with_color(appearance.theme().active_ui_text_color().into())
+                        .finish(),
+                )
+                .finish(),
             );
         }
 
@@ -2413,11 +3192,44 @@ impl TeamsWidget {
             | DelinquencyStatus::Unknown => (),
         }
 
-        team_name_header.add_child(left_side.finish());
-
-        // Upgrade / billing links
+        team_name_header
+            .add_child(Shrinkable::new(1., Clipped::new(left_side.finish()).finish()).finish());
+        let has_joinable_teams = !view.open_team_states.is_empty();
+        let mut right_side = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_alignment(MainAxisAlignment::End)
+            .with_main_axis_size(MainAxisSize::Min);
+        if can_switch_teams {
+            right_side.add_child(self.render_switch_team_button(view, appearance));
+        }
+        if has_joinable_teams {
+            let browse_teams_button = self.render_browse_teams_button(appearance);
+            right_side.add_child(if can_switch_teams {
+                Container::new(browse_teams_button)
+                    .with_margin_left(12.)
+                    .finish()
+            } else {
+                browse_teams_button
+            });
+        }
         if has_admin_permissions {
-            team_name_header.add_child(self.render_billing_links(team, appearance));
+            let billing_links =
+                self.render_billing_links(team, use_workspace_admin_panel, appearance);
+            right_side.add_child(if has_joinable_teams || can_switch_teams {
+                Container::new(billing_links)
+                    .with_border(Border::left(1.).with_border_fill(appearance.theme().outline()))
+                    .with_margin_left(12.)
+                    .finish()
+            } else {
+                billing_links
+            });
+        }
+        if has_joinable_teams || has_admin_permissions || can_switch_teams {
+            team_name_header.add_child(
+                Container::new(right_side.finish())
+                    .with_margin_left(16.)
+                    .finish(),
+            );
         }
 
         team_name_header.finish()
@@ -2482,6 +3294,7 @@ impl TeamsWidget {
     fn render_admin_panel_button(
         &self,
         team_uid: ServerId,
+        use_workspace_admin_panel: bool,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         appearance
@@ -2503,12 +3316,21 @@ impl TeamsWidget {
             )
             .build()
             .on_click(move |ctx, _, _| {
-                ctx.dispatch_typed_action(TeamsPageAction::OpenAdminPanel { team_uid });
+                if use_workspace_admin_panel {
+                    ctx.dispatch_typed_action(TeamsPageAction::OpenWorkspaceAdminPanel);
+                } else {
+                    ctx.dispatch_typed_action(TeamsPageAction::OpenAdminPanel { team_uid });
+                }
             })
             .finish()
     }
 
-    fn render_billing_links(&self, team: &Team, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_billing_links(
+        &self,
+        team: &Team,
+        use_workspace_admin_panel: bool,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
         let mut billing_links = Flex::row()
             .with_main_axis_alignment(MainAxisAlignment::End)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -2556,9 +3378,13 @@ impl TeamsWidget {
         }
 
         billing_links.add_child(
-            Container::new(self.render_admin_panel_button(team_uid, appearance))
-                .with_margin_left(12.)
-                .finish(),
+            Container::new(self.render_admin_panel_button(
+                team_uid,
+                use_workspace_admin_panel,
+                appearance,
+            ))
+            .with_margin_left(12.)
+            .finish(),
         );
 
         billing_links.finish()
@@ -2581,50 +3407,48 @@ impl TeamsWidget {
         let mut shared_objects_usage_row =
             Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
 
-        if let Some(policy) = team.billing_metadata.tier.shared_notebooks_policy {
-            if !policy.is_unlimited {
-                let mut shared_notebooks_column = Flex::column();
-                shared_notebooks_column.add_child(
-                    self.render_plan_usage_header("Shared Notebooks".into(), appearance),
-                );
-                let num_shared_notebooks = cloud_model
-                    .active_notebooks_in_space(Space::Team { team_uid: team.uid }, app)
-                    .count();
-                shared_notebooks_column.add_child(
-                    Container::new(self.render_plan_usage_text(
-                        format!("{}/{}", num_shared_notebooks, policy.limit),
-                        appearance,
-                    ))
-                    .with_margin_top(4.)
+        if let Some(policy) = team.billing_metadata.tier.shared_notebooks_policy
+            && !policy.is_unlimited
+        {
+            let mut shared_notebooks_column = Flex::column();
+            shared_notebooks_column
+                .add_child(self.render_plan_usage_header("Shared Notebooks".into(), appearance));
+            let num_shared_notebooks = cloud_model
+                .active_notebooks_in_space(Space::Team { team_uid: team.uid }, app)
+                .count();
+            shared_notebooks_column.add_child(
+                Container::new(self.render_plan_usage_text(
+                    format!("{}/{}", num_shared_notebooks, policy.limit),
+                    appearance,
+                ))
+                .with_margin_top(4.)
+                .finish(),
+            );
+            shared_objects_usage_row.add_child(
+                Container::new(shared_notebooks_column.finish())
+                    .with_margin_right(64.)
                     .finish(),
-                );
-                shared_objects_usage_row.add_child(
-                    Container::new(shared_notebooks_column.finish())
-                        .with_margin_right(64.)
-                        .finish(),
-                );
-            }
+            );
         }
 
-        if let Some(policy) = team.billing_metadata.tier.shared_workflows_policy {
-            if !policy.is_unlimited {
-                let mut shared_workflows_column = Flex::column();
-                shared_workflows_column.add_child(
-                    self.render_plan_usage_header("Shared Workflows".into(), appearance),
-                );
-                let num_shared_workflows = cloud_model
-                    .active_workflows_in_space(Space::Team { team_uid: team.uid }, app)
-                    .count();
-                shared_workflows_column.add_child(
-                    Container::new(self.render_plan_usage_text(
-                        format!("{}/{}", num_shared_workflows, policy.limit),
-                        appearance,
-                    ))
-                    .with_margin_top(4.)
-                    .finish(),
-                );
-                shared_objects_usage_row.add_child(shared_workflows_column.finish());
-            }
+        if let Some(policy) = team.billing_metadata.tier.shared_workflows_policy
+            && !policy.is_unlimited
+        {
+            let mut shared_workflows_column = Flex::column();
+            shared_workflows_column
+                .add_child(self.render_plan_usage_header("Shared Workflows".into(), appearance));
+            let num_shared_workflows = cloud_model
+                .active_workflows_in_space(Space::Team { team_uid: team.uid }, app)
+                .count();
+            shared_workflows_column.add_child(
+                Container::new(self.render_plan_usage_text(
+                    format!("{}/{}", num_shared_workflows, policy.limit),
+                    appearance,
+                ))
+                .with_margin_top(4.)
+                .finish(),
+            );
+            shared_objects_usage_row.add_child(shared_workflows_column.finish());
         }
 
         section.add_child(
@@ -2639,13 +3463,17 @@ impl TeamsWidget {
     fn render_team_invitation_section(
         &self,
         team_metadata: &Team,
-        has_admin_permissions: bool,
+        permissions: TeamInvitationPermissions,
         view: &TeamsPageView,
         appearance: &Appearance,
         chip_editor_style: UiComponentStyles,
         app: &AppContext,
     ) -> Box<dyn Element> {
         let mut invitation_section = Flex::column();
+
+        let user_workspaces = UserWorkspaces::as_ref(app);
+        let is_invite_link_enabled = team_metadata.invite_link.is_some();
+        let is_discoverable = user_workspaces.is_discoverable();
 
         // "team is full" or "billing issue" or some other alert thats restricting you from adding team members
         let warning = Self::grow_team_warning(team_metadata);
@@ -2654,7 +3482,7 @@ impl TeamsWidget {
             let alert = self.render_grow_team_warning_alert(
                 team_metadata,
                 warning,
-                has_admin_permissions,
+                permissions.has_admin_permissions,
                 pricing_info_model,
                 appearance,
             );
@@ -2674,7 +3502,7 @@ impl TeamsWidget {
                 team_metadata,
                 pricing_info_model,
                 appearance,
-                has_admin_permissions,
+                permissions.has_admin_permissions,
             );
             invitation_section.add_child(
                 Container::new(pricing_alert)
@@ -2684,11 +3512,17 @@ impl TeamsWidget {
         }
 
         // Invite by link section
-        // Only show invite-by-link if user is admin OR if invite links are enabled
-        if team_metadata.organization_settings.is_invite_link_enabled || has_admin_permissions {
+        // Only show invite-by-link if user is admin (so they can see the
+        // toggle, or why it's unavailable for a Private/Hidden team) OR if
+        // invite links are actually usable (enabled on a team whose
+        // visibility supports them).
+        if permissions.has_admin_permissions
+            || (team_metadata.visibility.supports_invite_link() && is_invite_link_enabled)
+        {
             invitation_section.add_child(self.render_invite_by_link_section(
                 team_metadata,
-                has_admin_permissions,
+                is_invite_link_enabled,
+                permissions,
                 view,
                 appearance,
                 chip_editor_style,
@@ -2710,11 +3544,12 @@ impl TeamsWidget {
         // team being eligible for discovery.
         let current_user_email = view.auth_state.user_email().unwrap_or_default();
         if team_metadata.billing_metadata.customer_type != CustomerType::Enterprise
-            && has_admin_permissions
+            && permissions.has_admin_permissions
             && team_metadata.is_eligible_for_discovery
         {
             invitation_section.add_child(self.render_discoverability_toggle_section(
                 team_metadata,
+                is_discoverable,
                 &current_user_email,
                 appearance,
             ));
@@ -2726,28 +3561,60 @@ impl TeamsWidget {
     fn render_invite_by_link_section(
         &self,
         team: &Team,
-        has_admin_permissions: bool,
+        is_invite_link_enabled: bool,
+        permissions: TeamInvitationPermissions,
         view: &TeamsPageView,
         appearance: &Appearance,
         chip_editor_style: UiComponentStyles,
     ) -> Box<dyn Element> {
+        let supports_invite_link = team.visibility.supports_invite_link();
         let mut section = Flex::column();
 
         // Header + admin-only subtext on the left, toggle on the right. The
         // text is stacked so the toggle centers against the whole block.
         let header = self.render_subsubsection_header("By link".to_owned(), appearance);
-        let text_column = if has_admin_permissions {
+        let text_column = if permissions.has_admin_permissions {
+            let instructions = if supports_invite_link {
+                self.render_sub_text(
+                    INVITE_LINK_TOGGLE_INSTRUCTIONS.into(),
+                    appearance,
+                    Some(Coords::uniform(0.).right(48.)),
+                )
+            } else {
+                let mut fragments = vec![FormattedTextFragment::plain_text(
+                    INVITE_LINK_UNAVAILABLE_INSTRUCTIONS,
+                )];
+                if permissions.is_workspace_admin {
+                    fragments.extend([
+                        FormattedTextFragment::plain_text(" Update team visibility in the "),
+                        FormattedTextFragment::hyperlink(
+                            "workspace admin panel",
+                            AdminActions::workspace_teams_admin_panel_link(),
+                        ),
+                        FormattedTextFragment::plain_text("."),
+                    ]);
+                }
+                FormattedTextElement::new(
+                    FormattedText::new([FormattedTextLine::Line(fragments)]),
+                    appearance.ui_font_size(),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_family(),
+                    appearance
+                        .theme()
+                        .active_ui_text_color()
+                        .with_opacity(60)
+                        .into(),
+                    self.mouse_state_handles.workspace_admin_panel_link.clone(),
+                )
+                .with_hyperlink_font_color(appearance.theme().accent().into_solid())
+                .register_default_click_handlers(|url, _, ctx| {
+                    ctx.open_url(&url.url);
+                })
+                .finish()
+            };
             Flex::column()
                 .with_child(header)
-                .with_child(
-                    Container::new(self.render_sub_text(
-                        INVITE_LINK_TOGGLE_INSTRUCTIONS.into(),
-                        appearance,
-                        Some(Coords::uniform(0.).right(48.)),
-                    ))
-                    .with_padding_top(8.)
-                    .finish(),
-                )
+                .with_child(Container::new(instructions).with_padding_top(8.).finish())
                 .finish()
         } else {
             Flex::column().with_child(header).finish()
@@ -2759,16 +3626,24 @@ impl TeamsWidget {
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_child(Shrinkable::new(1., text_column).finish());
 
-        // Toggle on the right only renders if user is admin
-        if has_admin_permissions {
+        if permissions.has_admin_permissions {
             let team_uid = team.uid;
-            let current_state = team.organization_settings.is_invite_link_enabled;
+            let current_state = is_invite_link_enabled;
             let invite_by_link_toggle = appearance
                 .ui_builder()
                 .switch(self.mouse_state_handles.invite_by_link_toggle_state.clone())
-                .check(team.organization_settings.is_invite_link_enabled)
+                .check(supports_invite_link && is_invite_link_enabled)
+                .with_disabled(!supports_invite_link)
+                .with_disabled_styles(UiComponentStyles {
+                    background: Some(internal_colors::neutral_4(appearance.theme()).into()),
+                    foreground: Some(internal_colors::neutral_5(appearance.theme()).into()),
+                    ..Default::default()
+                })
                 .build()
                 .on_click(move |ctx, _, _| {
+                    if !supports_invite_link {
+                        return;
+                    }
                     ctx.dispatch_typed_action(TeamsPageAction::ToggleIsInviteLinkEnabled {
                         team_uid,
                         current_state,
@@ -2781,12 +3656,13 @@ impl TeamsWidget {
         section.add_child(invite_by_link_header_row.finish());
 
         // 3) Invite link + domain restrictions
-        // Only renders if invite by link is enabled
-        if team.organization_settings.is_invite_link_enabled {
+        // Only renders if invite by link is enabled and the team's visibility
+        // supports it.
+        if supports_invite_link && is_invite_link_enabled {
             section.add_child(self.render_copy_link_row(team, appearance));
 
             // Render invite link reset text if admin user
-            if has_admin_permissions {
+            if permissions.has_admin_permissions {
                 let team_uid = team.uid;
                 section.add_child(
                     Align::new(
@@ -2813,10 +3689,11 @@ impl TeamsWidget {
             }
 
             // Don't render restricted domains section if user is not an admin AND there are no domain restrictions
-            if has_admin_permissions || !team.invite_link_domain_restrictions.is_empty() {
+            if permissions.has_admin_permissions || !team.invite_link_domain_restrictions.is_empty()
+            {
                 section.add_child(self.render_approved_domains_section(
                     team,
-                    has_admin_permissions,
+                    permissions.has_admin_permissions,
                     view,
                     appearance,
                     chip_editor_style,
@@ -2901,6 +3778,7 @@ impl TeamsWidget {
     fn render_team_members_section(
         &self,
         team: &Team,
+        workspace: &Workspace,
         user_email: &str,
         view: &TeamsPageView,
         appearance: &Appearance,
@@ -2925,8 +3803,8 @@ impl TeamsWidget {
 
         // 2) List of team members
         section.add_child(self.render_item_list(
-            view.team_to_item_list(team, user_email),
-            view.team_members_mouse_state_handles.clone(),
+            TeamsPageView::team_to_item_list(team, user_email, workspace),
+            view.team_members_mouse_states.clone(),
             view,
             appearance,
         ));
@@ -3145,6 +4023,7 @@ impl TeamsWidget {
                     text: domain_restriction.domain.clone(),
                     actions,
                     state: ItemState::Valid,
+                    is_disabled: false,
                 }
             })
             .collect();
@@ -3153,7 +4032,7 @@ impl TeamsWidget {
             section.add_child(
                 Container::new(self.render_item_list(
                     domains_as_items,
-                    view.team_approved_domains_mouse_state_handles.clone(),
+                    view.team_approved_domains_mouse_states.clone(),
                     view,
                     appearance,
                 ))
@@ -3241,6 +4120,7 @@ impl TeamsWidget {
     fn render_discoverability_toggle_section(
         &self,
         team: &Team,
+        is_discoverable: bool,
         current_user_email: &str,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
@@ -3262,7 +4142,7 @@ impl TeamsWidget {
             .finish();
 
         let team_uid = team.uid;
-        let current_state = team.organization_settings.is_discoverable;
+        let current_state = is_discoverable;
         let discoverable_team_toggle = appearance
             .ui_builder()
             .switch(
@@ -3270,7 +4150,7 @@ impl TeamsWidget {
                     .discoverable_team_toggle_state
                     .clone(),
             )
-            .check(team.organization_settings.is_discoverable)
+            .check(is_discoverable)
             .build()
             .on_click(move |ctx, _, _| {
                 ctx.dispatch_typed_action(TeamsPageAction::ToggleTeamDiscoverability {
@@ -3294,23 +4174,19 @@ impl TeamsWidget {
 
     fn render_leave_or_delete_team_button(
         &self,
-        is_team_owner: bool,
+        footer_action: TeamFooterAction,
         can_team_be_deleted: bool,
-        view: &TeamsPageView,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let mut stack = Stack::new();
-
-        let (label, action) = if is_team_owner {
-            (
-                DELETE_TEAM_BUTTON_LABEL,
-                TeamsPageAction::ShowDeleteTeamConfirmationDialog,
-            )
-        } else {
-            (
+        let (label, action) = match footer_action {
+            TeamFooterAction::Leave => (
                 LEAVE_TEAM_BUTTON_LABEL,
                 TeamsPageAction::ShowLeaveTeamConfirmationDialog,
-            )
+            ),
+            TeamFooterAction::Delete => (
+                DELETE_TEAM_BUTTON_LABEL,
+                TeamsPageAction::ShowDeleteTeamConfirmationDialog,
+            ),
         };
 
         let ui_builder = appearance.ui_builder().clone();
@@ -3325,7 +4201,7 @@ impl TeamsWidget {
                     .set_width(LEAVE_TEAM_BUTTON_WIDTH),
             )
             .with_centered_text_label(label.to_owned());
-        let hoverable = if is_team_owner && !can_team_be_deleted {
+        let hoverable = if footer_action == TeamFooterAction::Delete && !can_team_be_deleted {
             button
                 .with_disabled_styles(UiComponentStyles {
                     background: Some(appearance.theme().surface_3().into()),
@@ -3347,26 +4223,10 @@ impl TeamsWidget {
                 .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
         };
 
-        stack.add_child(
-            Container::new(hoverable.finish())
-                .with_padding_top(CONTENT_SEPARATION_PADDING)
-                .with_padding_bottom(CONTENT_SEPARATION_PADDING)
-                .finish(),
-        );
-
-        if view.should_show_delete_or_leave_team_confirmation_dialog() {
-            stack.add_positioned_overlay_child(
-                ChildView::new(&view.team_action_confirmation_dialog).finish(),
-                OffsetPositioning::offset_from_parent(
-                    vec2f(0., 0.),
-                    ParentOffsetBounds::Unbounded,
-                    ParentAnchor::Center,
-                    ChildAnchor::BottomMiddle,
-                ),
-            );
-        }
-
-        stack.finish()
+        Container::new(hoverable.finish())
+            .with_padding_top(CONTENT_SEPARATION_PADDING)
+            .with_padding_bottom(CONTENT_SEPARATION_PADDING)
+            .finish()
     }
 
     fn render_delete_disabled_help_text(
@@ -3422,6 +4282,7 @@ impl TeamsWidget {
         .finish()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_state_chip(
         &self,
         appearance: &Appearance,
@@ -3430,7 +4291,13 @@ impl TeamsWidget {
         chip_color: ColorU,
         font_size: f32,
         font_weight: Weight,
+        dim: bool,
     ) -> Box<dyn Element> {
+        let (text_color, chip_color) = if dim {
+            (dim_color(text_color), dim_color(chip_color))
+        } else {
+            (text_color, chip_color)
+        };
         Container::new(
             Text::new_inline(text, appearance.ui_font_family(), font_size)
                 .with_color(text_color)
@@ -3447,33 +4314,38 @@ impl TeamsWidget {
     fn render_item_list(
         &self,
         items: Vec<Item>,
-        mouse_state_handles: Vec<MouseStateHandle>,
+        mouse_states: Vec<ItemMouseStates>,
         view: &TeamsPageView,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
+        debug_assert_eq!(
+            items.len(),
+            mouse_states.len(),
+            "item list ({}) and mouse-state vector ({}) diverged",
+            items.len(),
+            mouse_states.len()
+        );
         let all_items = items
             .iter()
             .sorted()
-            .zip(mouse_state_handles.iter())
             .enumerate()
-            .map(|(idx, (item, handle))| {
+            .map(|(idx, item)| {
+                let handles = mouse_states[idx].clone();
+
+                let text_color = item_row_text_color(appearance, item.is_disabled);
+                let text_element = Text::new_inline(
+                    item.text.clone(),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size() - 1.,
+                )
+                .with_color(text_color.into_solid())
+                .finish();
+
                 let mut row = Flex::row()
                     .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_main_axis_size(MainAxisSize::Max)
-                    .with_child(
-                        Shrinkable::new(
-                            1.,
-                            Text::new_inline(
-                                item.text.clone(),
-                                appearance.ui_font_family(),
-                                appearance.ui_font_size() - 1.,
-                            )
-                            .with_color(appearance.theme().active_ui_text_color().into())
-                            .finish(),
-                        )
-                        .finish(),
-                    );
+                    .with_child(Shrinkable::new(1., text_element).finish());
 
                 let mut pending_and_close_row = Flex::row()
                     .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
@@ -3492,6 +4364,7 @@ impl TeamsWidget {
                                     .into(),
                                 appearance.ui_font_size() - 1.,
                                 Weight::Normal,
+                                item.is_disabled,
                             ),
                         );
                     }
@@ -3506,6 +4379,45 @@ impl TeamsWidget {
                                     .into(),
                                 appearance.ui_font_size() - 1.,
                                 Weight::Normal,
+                                item.is_disabled,
+                            ),
+                        );
+                    }
+                    ItemState::WorkspaceOwner => {
+                        pending_and_close_row.add_child(
+                            self.render_state_chip(
+                                appearance,
+                                "WORKSPACE OWNER".into(),
+                                owner_state_chip_text_color(appearance.theme()),
+                                appearance
+                                    .theme()
+                                    .accent()
+                                    .with_opacity(OWNER_STATE_CHIP_ACCENT_OPACITY)
+                                    .into(),
+                                appearance.ui_font_size() - 1.,
+                                Weight::Normal,
+                                item.is_disabled,
+                            ),
+                        );
+                    }
+                    ItemState::WorkspaceAdmin => {
+                        pending_and_close_row.add_child(
+                            self.render_state_chip(
+                                appearance,
+                                "WORKSPACE ADMIN".into(),
+                                appearance
+                                    .theme()
+                                    .background()
+                                    .blend(&appearance.theme().foreground().with_opacity(60))
+                                    .into(),
+                                appearance
+                                    .theme()
+                                    .background()
+                                    .blend(&appearance.theme().foreground().with_opacity(25))
+                                    .into(),
+                                appearance.ui_font_size() - 1.,
+                                Weight::Normal,
+                                item.is_disabled,
                             ),
                         );
                     }
@@ -3522,6 +4434,7 @@ impl TeamsWidget {
                                     .into(),
                                 appearance.ui_font_size() - 1.,
                                 Weight::Normal,
+                                item.is_disabled,
                             ),
                         );
                     }
@@ -3542,6 +4455,7 @@ impl TeamsWidget {
                                     .into(),
                                 appearance.ui_font_size() - 1.,
                                 Weight::Normal,
+                                item.is_disabled,
                             ),
                         );
                     }
@@ -3559,7 +4473,7 @@ impl TeamsWidget {
                         let icon = item_action.icon;
                         pending_and_close_row.add_child(
                             Container::new(
-                                Hoverable::new(handle.clone(), move |_mouse_state| {
+                                Hoverable::new(handles.action.clone(), move |_mouse_state| {
                                     Container::new(
                                         ConstrainedBox::new(
                                             icon.to_warpui_icon(
@@ -3591,7 +4505,7 @@ impl TeamsWidget {
                         // Multiple actions - show dots menu
                         let menu_is_open = view.open_member_actions_menu_index == Some(idx);
                         let mut stack = Stack::new();
-                        let dots_button = Hoverable::new(handle.clone(), |_mouse_state| {
+                        let dots_button = Hoverable::new(handles.action.clone(), |_mouse_state| {
                             Container::new(
                                 ConstrainedBox::new(
                                     Icon::DotsVertical
@@ -3646,18 +4560,30 @@ impl TeamsWidget {
 
                 row.add_child(pending_and_close_row.finish());
 
-                let list_element =
-                    Container::new(row.finish()).with_uniform_padding(SCROLLABLE_LIST_ITEM_PADDING);
+                // Overlay variant: the page renders inside a `Clipped` scroll viewport.
+                let row_content = row.finish();
+                let row_content = match disabled_member_tooltip_text(item.is_disabled) {
+                    Some(tooltip_text) => appearance.ui_builder().overlay_tool_tip_on_element(
+                        tooltip_text.to_string(),
+                        handles.disabled_tooltip.clone(),
+                        row_content,
+                        ParentAnchor::TopLeft,
+                        ChildAnchor::BottomLeft,
+                        vec2f(0., -5.),
+                    ),
+                    None => row_content,
+                };
 
-                let container = if idx % 2 == 0 {
+                let list_element =
+                    Container::new(row_content).with_uniform_padding(SCROLLABLE_LIST_ITEM_PADDING);
+
+                if idx % 2 == 0 {
                     list_element
                         .with_background(internal_colors::fg_overlay_1(appearance.theme()))
                         .finish()
                 } else {
                     list_element.finish()
-                };
-
-                container
+                }
             })
             .collect::<Vec<_>>()
             .into_iter();
@@ -3675,16 +4601,8 @@ impl TeamsWidget {
     ) -> Box<dyn Element> {
         let mut section = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
 
-        let (link_text, button_enabled) = match &team_metadata.invite_code {
-            Some(invite_code) => {
-                let link = format!(
-                    "{}{}{}",
-                    ChannelState::server_root_url(),
-                    INVITE_LINK_PREFIX,
-                    invite_code.code
-                );
-                (link, true)
-            }
+        let (link_text, button_enabled) = match &team_metadata.invite_link {
+            Some(invite_link) => (invite_link.clone(), true),
             None => ("Failed to load invite link.".into(), false),
         };
         let theme = appearance.theme();
@@ -3845,29 +4763,37 @@ impl TeamsWidget {
         appearance: &Appearance,
         text: String,
     ) -> Box<dyn Element> {
-        Container::new(
-            Align::new(
-                appearance
-                    .ui_builder()
-                    .span(text)
-                    .with_style(UiComponentStyles {
-                        font_family_id: Some(appearance.ui_font_family()),
-                        font_color: Some(
-                            appearance
-                                .theme()
-                                .sub_text_color(appearance.theme().background())
-                                .into_solid(),
-                        ),
-                        font_size: Some(14.),
-                        ..Default::default()
-                    })
-                    .build()
-                    .finish(),
-            )
-            .left()
-            .finish(),
+        Container::new(self.render_sub_header_text_with_subtext_color(appearance, text))
+            .with_padding_bottom(4.)
+            .finish()
+    }
+
+    /// Unpadded variant of [`Self::render_sub_header_with_subtext_color`], for callers that lay the
+    /// header out next to other content.
+    fn render_sub_header_text_with_subtext_color(
+        &self,
+        appearance: &Appearance,
+        text: String,
+    ) -> Box<dyn Element> {
+        Align::new(
+            appearance
+                .ui_builder()
+                .span(text)
+                .with_style(UiComponentStyles {
+                    font_family_id: Some(appearance.ui_font_family()),
+                    font_color: Some(
+                        appearance
+                            .theme()
+                            .sub_text_color(appearance.theme().background())
+                            .into_solid(),
+                    ),
+                    font_size: Some(14.),
+                    ..Default::default()
+                })
+                .build()
+                .finish(),
         )
-        .with_padding_bottom(4.)
+        .left()
         .finish()
     }
 
@@ -3958,20 +4884,336 @@ impl TeamsWidget {
             .finish()
     }
 
-    fn render_create_team_page_with_banner(
+    fn page_sections_for(
+        workspace: Option<&Workspace>,
+        email: Option<&str>,
+        join_teams: bool,
+    ) -> Vec<TeamsPageSection> {
+        let mut sections = Vec::new();
+        if !workspace.is_some_and(Workspace::is_native_workspaces_enabled) {
+            sections.push(TeamsPageSection::CreateTeam);
+            if join_teams {
+                sections.push(TeamsPageSection::JoinTeams {
+                    header: OR_JOIN_TEAM_HEADER,
+                });
+            }
+            return sections;
+        }
+        let is_workspace_admin = workspace
+            .zip(email)
+            .is_some_and(|(workspace, email)| workspace.is_workspace_admin(email));
+        if join_teams {
+            sections.push(TeamsPageSection::JoinTeams {
+                header: JOIN_TEAM_HEADER,
+            });
+        } else if !is_workspace_admin {
+            sections.push(TeamsPageSection::NoTeamsToJoin);
+        }
+        if is_workspace_admin {
+            sections.push(TeamsPageSection::AdminPanelCta);
+        }
+        sections
+    }
+
+    fn render_teamless_page(
         &self,
         view: &TeamsPageView,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let mut column = Flex::column();
+        if let Some(workspace_state) = view
+            .workspace_discovery_screen
+            .selected_workspace(&view.discoverable_workspaces_states)
+        {
+            return self.render_workspace_open_teams(view, workspace_state, appearance);
+        }
 
-        column.add_child(self.render_create_team_page(view, appearance, app));
+        let has_discovery_options = !view.discoverable_workspaces_states.is_empty()
+            || !view.discoverable_teams_states.is_empty();
+        let sections = Self::page_sections_for(
+            view.user_workspaces.as_ref(app).current_workspace(),
+            view.auth_state.user_email().as_deref(),
+            has_discovery_options,
+        );
 
-        column.finish()
+        let mut page = Flex::column();
+        page.add_child(render_sub_header(appearance, "Teams".to_string(), None));
+
+        for (index, section) in sections.iter().enumerate() {
+            if index > 0 && matches!(sections[index - 1], TeamsPageSection::CreateTeam) {
+                page.add_child(render_separator(appearance));
+            }
+            match section {
+                TeamsPageSection::CreateTeam => {
+                    page.add_child(self.render_create_team_section(view, appearance, app));
+                }
+                TeamsPageSection::AdminPanelCta => {
+                    page.add_child(
+                        Container::new(render_cta_banner(
+                            Icon::Users,
+                            ADMIN_PANEL_CTA_LINK_TEXT,
+                            ADMIN_PANEL_CTA_TRAILING_COPY,
+                            TeamsPageAction::OpenWorkspaceAdminPanel,
+                            appearance,
+                        ))
+                        .with_padding_top(16.)
+                        .finish(),
+                    );
+                }
+                TeamsPageSection::JoinTeams { header } => {
+                    let header = if view.discoverable_workspaces_states.is_empty() {
+                        *header
+                    } else if *header == OR_JOIN_TEAM_HEADER {
+                        OR_JOIN_WORKSPACE_OR_TEAM_HEADER
+                    } else {
+                        JOIN_WORKSPACE_OR_TEAM_HEADER
+                    };
+                    page.add_child(self.render_discovery_options(view, appearance, header));
+                }
+                TeamsPageSection::NoTeamsToJoin => {
+                    let theme = appearance.theme();
+                    let body = Shrinkable::new(
+                        1.,
+                        Text::new(
+                            NO_TEAMS_TO_JOIN_DESCRIPTION.to_string(),
+                            appearance.ui_font_family(),
+                            appearance.ui_font_size(),
+                        )
+                        .with_color(theme.sub_text_color(theme.background()).into())
+                        .finish(),
+                    )
+                    .finish();
+                    page.add_child(self.render_sub_header_with_subtext_color(
+                        appearance,
+                        NO_JOINABLE_TEAMS_HEADER.to_string(),
+                    ));
+                    page.add_child(
+                        Container::new(render_banner(Icon::Info, body, appearance))
+                            .with_padding_top(12.)
+                            .finish(),
+                    );
+                }
+            }
+        }
+
+        page.finish()
     }
 
-    fn render_create_team_page(
+    fn render_discovery_options(
+        &self,
+        view: &TeamsPageView,
+        appearance: &Appearance,
+        header: &str,
+    ) -> Box<dyn Element> {
+        Flex::column()
+            .with_child(self.render_sub_header_with_subtext_color(appearance, header.to_string()))
+            .with_child(self.render_workspace_discovery_section(view, appearance))
+            .with_child(self.render_team_discovery_section(
+                &view.discoverable_teams_states,
+                view.discovery_join_target,
+                appearance,
+            ))
+            .finish()
+    }
+
+    fn render_workspace_discovery_section(
+        &self,
+        view: &TeamsPageView,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let mut workspaces = Flex::column();
+        for workspace_state in &view.discoverable_workspaces_states {
+            workspaces.add_child(
+                Container::new(self.render_discoverable_workspace(
+                    workspace_state,
+                    view.discovery_join_target,
+                    appearance,
+                ))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+                .with_border(Border::all(1.).with_border_fill(appearance.theme().outline()))
+                .with_uniform_padding(16.)
+                .with_margin_top(12.)
+                .finish(),
+            );
+        }
+        workspaces.finish()
+    }
+
+    fn render_discoverable_workspace(
+        &self,
+        workspace_state: &DiscoverableWorkspaceState,
+        joining_target: Option<DiscoveryJoinTarget>,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let workspace = &workspace_state.workspace;
+        let discovery_action = WorkspaceDiscoveryAction::for_workspace(workspace);
+        let is_joining = joining_target
+            == Some(DiscoveryJoinTarget::Workspace {
+                workspace_uid: workspace.workspace_uid,
+                team_uid: None,
+            });
+        let action = match discovery_action {
+            WorkspaceDiscoveryAction::Continue => TeamsPageAction::ShowWorkspaceTeams {
+                workspace_uid: workspace.workspace_uid,
+            },
+            WorkspaceDiscoveryAction::Join => TeamsPageAction::JoinWorkspaceFromDiscovery {
+                workspace_uid: workspace.workspace_uid,
+                team_uid: None,
+            },
+        };
+        let action = joining_target.is_none().then_some(action);
+        let label = if is_joining {
+            "Joining…"
+        } else {
+            discovery_action.label()
+        };
+
+        Flex::column()
+            .with_child(self.render_sub_header(workspace.name.clone(), appearance))
+            .with_child(self.render_sub_text(
+                Self::member_count_label(workspace.member_count),
+                appearance,
+                None,
+            ))
+            .with_child(
+                Container::new(self.render_sub_text(
+                    "Join this workspace and start collaborating on workflows, notebooks, and more."
+                        .to_string(),
+                    appearance,
+                    None,
+                ))
+                .with_padding_top(12.)
+                .with_padding_bottom(12.)
+                .finish(),
+            )
+            .with_child(
+                Container::new(self.render_button(
+                    label,
+                    ButtonVariant::Accent,
+                    workspace_state.mouse_state_handle.clone(),
+                    action,
+                    UiComponentStyles {
+                        font_weight: Some(Weight::Medium),
+                        height: Some(38.),
+                        font_size: Some(14.),
+                        ..Default::default()
+                    },
+                    appearance,
+                ))
+                .with_padding_top(12.)
+                .finish(),
+            )
+            .finish()
+    }
+
+    fn render_workspace_open_teams(
+        &self,
+        view: &TeamsPageView,
+        workspace_state: &DiscoverableWorkspaceState,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        Flex::column()
+            .with_child(self.render_workspace_open_teams_header(view, workspace_state, appearance))
+            .with_child(
+                Container::new(self.render_description(
+                    "Teams are groups in your workspace that share context around specific projects and workflows."
+                        .to_string(),
+                    appearance,
+                ))
+                .with_padding_top(6.)
+                .finish(),
+            )
+            .with_child(self.render_workspace_team_discovery_section(
+                workspace_state,
+                view.discovery_join_target,
+                appearance,
+            ))
+            .finish()
+    }
+
+    /// Back arrow paired with the subpage title, matching the header treatment used by other
+    /// settings subpages.
+    fn render_workspace_open_teams_header(
+        &self,
+        view: &TeamsPageView,
+        workspace_state: &DiscoverableWorkspaceState,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let ui_builder = appearance.ui_builder().clone();
+        let mut back_button = icon_button(
+            appearance,
+            Icon::ArrowLeft,
+            false,
+            self.mouse_state_handles.discovery_back_button.clone(),
+        )
+        .with_tooltip(move || ui_builder.tool_tip("Back".to_string()).build().finish());
+        if view.discovery_join_target.is_some() {
+            back_button = back_button.disabled();
+        }
+
+        Container::new(
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(DISCOVERY_BACK_BUTTON_SPACING)
+                .with_child(
+                    back_button
+                        .build()
+                        .on_click(|ctx, _, _| {
+                            ctx.dispatch_typed_action(TeamsPageAction::ShowDiscoveryOptions);
+                        })
+                        .finish(),
+                )
+                .with_child(self.render_sub_header_text_with_subtext_color(
+                    appearance,
+                    format!("Join teams in {}", workspace_state.workspace.name),
+                ))
+                .finish(),
+        )
+        .with_padding_bottom(4.)
+        .finish()
+    }
+
+    fn render_workspace_team_discovery_section(
+        &self,
+        workspace_state: &DiscoverableWorkspaceState,
+        joining_target: Option<DiscoveryJoinTarget>,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let mut teams = Flex::column();
+        for team_state in &workspace_state.open_team_states {
+            let team_uid = ServerId::from_string_lossy(&team_state.team.team_uid);
+            teams.add_child(
+                Container::new(self.render_single_team_in_team_discovery(
+                    team_state,
+                    TeamsPageAction::JoinWorkspaceFromDiscovery {
+                        workspace_uid: workspace_state.workspace.workspace_uid,
+                        team_uid: Some(team_uid),
+                    },
+                    DiscoveryJoinTarget::Workspace {
+                        workspace_uid: workspace_state.workspace.workspace_uid,
+                        team_uid: Some(team_uid),
+                    },
+                    joining_target,
+                    appearance,
+                ))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+                .with_border(Border::all(1.).with_border_fill(appearance.theme().outline()))
+                .with_uniform_padding(16.)
+                .with_margin_top(12.)
+                .finish(),
+            );
+        }
+        teams.finish()
+    }
+
+    fn member_count_label(member_count: i64) -> String {
+        match member_count {
+            1 => "1 member".to_string(),
+            count => format!("{count} members"),
+        }
+    }
+
+    fn render_create_team_section(
         &self,
         view: &TeamsPageView,
         appearance: &Appearance,
@@ -3979,8 +5221,6 @@ impl TeamsWidget {
     ) -> Box<dyn Element> {
         let mut page = Flex::column();
 
-        // Title, subtitle, and description
-        page.add_child(render_sub_header(appearance, "Teams".to_string(), None));
         page.add_child(
             self.render_sub_header_with_subtext_color(appearance, "Create a team".to_string()),
         );
@@ -4037,18 +5277,6 @@ impl TeamsWidget {
                 .finish(),
         );
 
-        if !view.discoverable_teams_states.is_empty() {
-            // Separator and subtitle
-            page.add_child(render_separator(appearance));
-            page.add_child(self.render_sub_header_with_subtext_color(
-                appearance,
-                "Or, join an existing team within your company".to_string(),
-            ));
-
-            // Team discovery
-            page.add_child(self.render_team_discovery_section(view, appearance));
-        }
-
         page.finish()
     }
 
@@ -4081,12 +5309,13 @@ impl TeamsWidget {
 
     fn render_team_discovery_section(
         &self,
-        view: &TeamsPageView,
+        team_states: &[DiscoverableTeamState],
+        joining_target: Option<DiscoveryJoinTarget>,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let mut team_discovery = Flex::column();
         // Sort teams so teams accepting invites with most teammates appear on top
-        let mut sorted_teams = view.discoverable_teams_states.clone();
+        let mut sorted_teams = team_states.to_vec();
         sorted_teams.sort_by_key(|team_state| {
             (
                 !team_state.team.team_accepting_invites,
@@ -4096,13 +5325,20 @@ impl TeamsWidget {
 
         // Render box for each team
         for team_state in &sorted_teams {
+            let team_uid = ServerId::from_string_lossy(&team_state.team.team_uid);
             team_discovery.add_child(
-                Container::new(self.render_single_team_in_team_discovery(team_state, appearance))
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
-                    .with_border(Border::all(1.).with_border_fill(appearance.theme().outline()))
-                    .with_uniform_padding(16.)
-                    .with_margin_top(12.)
-                    .finish(),
+                Container::new(self.render_single_team_in_team_discovery(
+                    team_state,
+                    TeamsPageAction::JoinTeamWithTeamDiscovery { team_uid },
+                    DiscoveryJoinTarget::LegacyTeam(team_uid),
+                    joining_target,
+                    appearance,
+                ))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+                .with_border(Border::all(1.).with_border_fill(appearance.theme().outline()))
+                .with_uniform_padding(16.)
+                .with_margin_top(12.)
+                .finish(),
             );
         }
         team_discovery.finish()
@@ -4111,6 +5347,9 @@ impl TeamsWidget {
     fn render_single_team_in_team_discovery(
         &self,
         team_state: &DiscoverableTeamState,
+        action: TeamsPageAction,
+        target: DiscoveryJoinTarget,
+        joining_target: Option<DiscoveryJoinTarget>,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let mut single_team = Flex::column();
@@ -4143,9 +5382,15 @@ impl TeamsWidget {
 
         // Join button
         single_team.add_child(
-            Container::new(self.render_join_team_button(team_state, appearance))
-                .with_padding_top(12.)
-                .finish(),
+            Container::new(self.render_join_team_button(
+                team_state,
+                action,
+                target,
+                joining_target,
+                appearance,
+            ))
+            .with_padding_top(12.)
+            .finish(),
         );
 
         single_team.finish()
@@ -4307,16 +5552,18 @@ impl TeamsWidget {
     fn render_join_team_button(
         &self,
         team_state: &DiscoverableTeamState,
+        action: TeamsPageAction,
+        target: DiscoveryJoinTarget,
+        joining_target: Option<DiscoveryJoinTarget>,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         if team_state.team.team_accepting_invites {
+            let is_joining = joining_target == Some(target);
             self.render_button(
-                "Join",
+                if is_joining { "Joining…" } else { "Join" },
                 ButtonVariant::Accent,
                 team_state.mouse_state_handle.clone(),
-                Some(TeamsPageAction::JoinTeamWithTeamDiscovery {
-                    team_uid: ServerId::from_string_lossy(&team_state.team.team_uid),
-                }),
+                joining_target.is_none().then_some(action),
                 UiComponentStyles {
                     font_color: Some(
                         appearance
@@ -4369,19 +5616,17 @@ impl SettingsWidget for TeamsWidget {
         // related to team administration when offline.
         let content = if NetworkStatus::as_ref(app).is_online() {
             let teams = view.user_workspaces.as_ref(app);
-            let cloud_model = view.cloud_model.as_ref(app);
-            let ai_request_usage_model = view.ai_request_usage_model.as_ref(app);
 
-            match teams.current_team() {
-                Some(team) => self.render_team_management_page(
-                    team,
-                    cloud_model,
-                    ai_request_usage_model,
-                    view,
-                    appearance,
-                    app,
-                ),
-                None => self.render_create_team_page_with_banner(view, appearance, app),
+            // A resolved team always lives in the current workspace, so both are
+            // present or the create-team page is shown.
+            match teams
+                .team_for_view_handle(&view.self_handle, app)
+                .zip(teams.current_workspace())
+            {
+                Some((team, workspace)) => {
+                    self.render_team_management_page(team, workspace, view, appearance, app)
+                }
+                None => self.render_teamless_page(view, appearance, app),
             }
         } else {
             appearance
@@ -4391,33 +5636,9 @@ impl SettingsWidget for TeamsWidget {
                 .finish()
         };
 
-        let mut stack = Stack::new();
-        stack.add_child(Flex::column().with_child(content).finish());
-
-        if view.transfer_ownership_modal_state.is_open() {
-            stack.add_positioned_overlay_child(
-                view.transfer_ownership_modal_state.render(),
-                OffsetPositioning::offset_from_parent(
-                    vec2f(0., 0.),
-                    ParentOffsetBounds::WindowByPosition,
-                    ParentAnchor::Center,
-                    ChildAnchor::Center,
-                ),
-            );
-        }
-        if view.should_show_remove_user_from_team_confirmation_dialog() {
-            stack.add_positioned_overlay_child(
-                ChildView::new(&view.team_action_confirmation_dialog).finish(),
-                OffsetPositioning::offset_from_parent(
-                    vec2f(0., 0.),
-                    ParentOffsetBounds::WindowByPosition,
-                    ParentAnchor::Center,
-                    ChildAnchor::Center,
-                ),
-            );
-        }
-
-        stack.finish()
+        // The page's modals are rendered by `SettingsView`, not here; see
+        // `TeamsPageView::get_modal_content`.
+        Flex::column().with_child(content).finish()
     }
 }
 
@@ -4465,3 +5686,7 @@ pub fn test_owner_state_chip_text_contrasts_with_accent_overlay() {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "teams_page_tests.rs"]
+mod teams_page_tests;

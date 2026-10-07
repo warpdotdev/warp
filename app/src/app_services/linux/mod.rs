@@ -2,12 +2,12 @@ use std::collections::HashMap;
 
 use futures_util::FutureExt as _;
 use itertools::Itertools as _;
+use warp_errors::report_if_error;
 use warpui::r#async::executor::BackgroundTask;
 use warpui::{AppContext, SingletonEntity};
 use zbus::{interface, proxy, zvariant};
 
 use crate::channel::ChannelState;
-use crate::report_if_error;
 
 /// Initializes application services.
 pub fn init(ctx: &mut AppContext) {
@@ -31,6 +31,12 @@ pub fn pass_startup_args_to_existing_instance(
 ) -> Result<(), StartupArgsForwardingError> {
     if args.finish_update {
         return Err(StartupArgsForwardingError::IgnoredAfterAutoUpdate);
+    }
+    // Guarded because this module also compiles on FreeBSD, where
+    // enable_crash_recovery is not set and crate::crash_recovery doesn't exist.
+    #[cfg(target_os = "linux")]
+    if crate::crash_recovery::is_crash_recovery_process(args) {
+        return Err(StartupArgsForwardingError::IgnoredForCrashRecoveryProcess);
     }
 
     warpui::r#async::block_on(async {
@@ -72,6 +78,8 @@ pub enum StartupArgsForwardingError {
     /// arguments to the old (terminating) instance.
     #[error("should not forward args after an auto-update")]
     IgnoredAfterAutoUpdate,
+    #[error("should not forward args from the crash recovery process")]
+    IgnoredForCrashRecoveryProcess,
     /// An unknown D-Bus error occurred.
     #[error("unknown dbus error")]
     Unknown(zbus::Error),

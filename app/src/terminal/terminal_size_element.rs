@@ -75,31 +75,29 @@ impl Element for TerminalSizeElement {
             return false;
         };
 
-        if !handled_by_child {
-            if let Some(event_at_z_index) = event.at_z_index(z_index, ctx) {
-                match event_at_z_index {
-                    Event::DragFiles { location } => {
-                        if self.mouse_position_is_in_bounds(*location) {
-                            ctx.dispatch_typed_action(TerminalAction::StartFileDropTarget);
-                        } else {
-                            ctx.dispatch_typed_action(TerminalAction::StopFileDropTarget);
-                        }
-                        return true;
-                    }
-                    Event::DragFileExit => {
+        if !handled_by_child && let Some(event_at_z_index) = event.at_z_index(z_index, ctx) {
+            match event_at_z_index {
+                Event::DragFiles { location } => {
+                    if self.mouse_position_is_in_bounds(*location) {
+                        ctx.dispatch_typed_action(TerminalAction::StartFileDropTarget);
+                    } else {
                         ctx.dispatch_typed_action(TerminalAction::StopFileDropTarget);
-                        return true;
                     }
-                    Event::DragAndDropFiles { paths, location } => {
-                        if self.mouse_position_is_in_bounds(*location) && !paths.is_empty() {
-                            let paths = paths.iter().map(ToOwned::to_owned).collect();
-                            ctx.dispatch_typed_action(TerminalAction::DragAndDropFiles(paths));
-                        }
-                        return true;
+                    return true;
+                }
+                Event::DragFileExit => {
+                    ctx.dispatch_typed_action(TerminalAction::StopFileDropTarget);
+                    return true;
+                }
+                Event::DragAndDropFiles { paths, location } => {
+                    if self.mouse_position_is_in_bounds(*location) && !paths.is_empty() {
+                        let paths = paths.iter().map(ToOwned::to_owned).collect();
+                        ctx.dispatch_typed_action(TerminalAction::DragAndDropFiles(paths));
                     }
-                    _ => {}
-                };
-            }
+                    return true;
+                }
+                _ => {}
+            };
         }
         handled_by_child
     }

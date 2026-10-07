@@ -1,7 +1,9 @@
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 #[cfg(not(target_family = "wasm"))]
 use itertools::Itertools;
+#[cfg(not(target_family = "wasm"))]
+use uuid::Uuid;
 #[cfg(not(target_family = "wasm"))]
 use warpui::SingletonEntity;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle};
@@ -12,12 +14,13 @@ use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessA
 use crate::terminal::model::session::active_session::ActiveSession;
 #[cfg(not(target_family = "wasm"))]
 use crate::{
+    TelemetryEvent,
     ai::{
         agent::{AIAgentAction, AIAgentActionResultType, CallMCPToolResult},
-        blocklist::{action_model::AIAgentActionType, BlocklistAIPermissions},
+        blocklist::{BlocklistAIPermissions, action_model::AIAgentActionType},
         mcp::TemplatableMCPServerManager,
     },
-    send_telemetry_from_app_ctx, TelemetryEvent,
+    send_telemetry_from_app_ctx,
 };
 
 pub struct CallMCPToolExecutor {
@@ -77,7 +80,7 @@ impl CallMCPToolExecutor {
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         #[cfg(target_family = "wasm")]
         {
             ActionExecution::<()>::InvalidAction
@@ -86,6 +89,8 @@ impl CallMCPToolExecutor {
         #[cfg(not(target_family = "wasm"))]
         {
             let server_output_id = get_server_output_id(input.conversation_id, ctx);
+            let conversation_id = input.conversation_id;
+            let action_id = input.action.id.clone();
             let AIAgentAction {
                 action:
                     AIAgentActionType::CallMCPTool {
@@ -139,16 +144,27 @@ impl CallMCPToolExecutor {
             };
 
             let name_owned_inner = name_owned.clone();
+            let operation_id = Uuid::new_v4();
+            log::info!(
+                "MCP tool action: event=started operation_id={operation_id} conversation_id={conversation_id:?} action_id={action_id:?} server_id={server_id:?} tool_name={name_owned:?}"
+            );
             ActionExecution::new_async(
                 async move {
                     reconnecting_peer
                         .call_tool(
                             rmcp::model::CallToolRequestParams::new(name_owned_inner)
                                 .with_arguments(arguments),
+                            operation_id,
                         )
                         .await
                 },
-                move |res, ctx| handle_call_tool_result(res, server_output_id, name_clone, ctx),
+                move |res, ctx| {
+                    let result = handle_call_tool_result(res, server_output_id, name_clone, ctx);
+                    log::info!(
+                        "MCP tool action: event=result_applied operation_id={operation_id} conversation_id={conversation_id:?} action_id={action_id:?}"
+                    );
+                    result
+                },
             )
         }
     }
@@ -224,10 +240,10 @@ fn coerce_number_to_int(n: &mut serde_json::Number) {
 /// multiple `oneOf`/`anyOf`/`allOf` branches: coercion is a no-op on values
 /// the schema does not match.
 fn coerce_value_against_schema(value: &mut serde_json::Value, schema: &serde_json::Value) {
-    if schema_declares_integer(schema) {
-        if let serde_json::Value::Number(n) = value {
-            coerce_number_to_int(n);
-        }
+    if schema_declares_integer(schema)
+        && let serde_json::Value::Number(n) = value
+    {
+        coerce_number_to_int(n);
     }
 
     // Visit every combinator key independently — a schema may declare more than
@@ -255,10 +271,10 @@ fn coerce_value_against_schema(value: &mut serde_json::Value, schema: &serde_jso
             for (k, v) in map.iter_mut() {
                 if let Some(prop_schema) = properties.and_then(|p| p.get(k)) {
                     coerce_value_against_schema(v, prop_schema);
-                } else if let Some(extra_schema) = additional {
-                    if extra_schema.is_object() {
-                        coerce_value_against_schema(v, extra_schema);
-                    }
+                } else if let Some(extra_schema) = additional
+                    && extra_schema.is_object()
+                {
+                    coerce_value_against_schema(v, extra_schema);
                 }
             }
         }
@@ -309,9 +325,9 @@ fn handle_call_tool_result(
                             .content
                             .into_iter()
                             .filter_map(|content| {
-                                use rmcp::model::RawContent::*;
-                                if let Text(raw_text_content) = content.raw {
-                                    Some(raw_text_content.text)
+                                use rmcp::model::ContentBlock::*;
+                                if let Text(text_content) = content {
+                                    Some(text_content.text)
                                 } else {
                                     log::warn!("Error content found unsupported content type");
                                     None

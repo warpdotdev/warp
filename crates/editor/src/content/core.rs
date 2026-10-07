@@ -1,4 +1,5 @@
 use std::ops::Range;
+use std::sync::Arc;
 
 use enum_iterator::all;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
@@ -22,6 +23,23 @@ use crate::content::text::{
     BlockHeaderSize, BlockLineBreakBehavior, BufferBlockItem, BufferBlockStyle, BufferText,
     StyleSummary,
 };
+
+/// Placeholder shown in place of an embedded image whose `data:` payload
+/// exceeds the asset layer's render limit (see
+/// `asset_cache::data_uri_exceeds_limit`).
+const IMAGE_TOO_LARGE_PLACEHOLDER: &str = "Image too large to display";
+fn replace_oversized_data_uri_images(mut text: FormattedText) -> FormattedText {
+    for line in text.lines.iter_mut() {
+        if let FormattedTextLine::Image(image) = line
+            && asset_cache::data_uri_exceeds_limit(&image.source)
+        {
+            *line = FormattedTextLine::Line(vec![FormattedTextFragment::plain_text(
+                IMAGE_TOO_LARGE_PLACEHOLDER,
+            )]);
+        }
+    }
+    text
+}
 
 #[derive(Debug, Clone)]
 pub struct CoreEditorAction {
@@ -347,10 +365,10 @@ impl Buffer {
         );
         log::debug!("=> Overall new range: {:?}", replacement_range.new_range);
 
-        let new_lines = self.styled_blocks_in_range(
+        let new_lines = Arc::new(self.styled_blocks_in_range(
             replacement_range.new_range,
             StyledBlockBoundaryBehavior::Exclusive,
-        );
+        ));
 
         EditResult {
             undo_item: Some(undo_arg),
@@ -542,6 +560,11 @@ impl Buffer {
         // as it is.
         let mut inherit_styling = source.from_user();
 
+        // Replace any embedded `data:` image whose payload exceeds the asset
+        // layer's render limit with a visible placeholder before lowering lines
+        // into the buffer, so an over-limit image surfaces a hint instead of
+        // silently failing to load.
+        let text = replace_oversized_data_uri_images(text);
         for line in text.lines {
             should_override_next_block_style = false;
             match line {
@@ -1066,8 +1089,11 @@ impl Buffer {
     }
 
     fn ensure_plain_text(&mut self, range: Range<CharOffset>) -> CoreEditorActionResult {
-        let updated_range = if range.end >= self.max_charoffset()
-            && self.block_type_at_point(range.end) != BlockType::Text(BufferBlockStyle::PlainText)
+        let buffer_end = self.max_charoffset();
+        let updated_range = if buffer_end == CharOffset::zero()
+            || (range.end >= buffer_end
+                && self.block_type_at_point(range.end)
+                    != BlockType::Text(BufferBlockStyle::PlainText))
         {
             log::trace!("Inserting <text> marker at end of buffer");
             self.content.push(BufferText::BlockMarker {
@@ -1634,3 +1660,7 @@ fn maybe_push_new_block_marker(
         });
     }
 }
+
+#[cfg(test)]
+#[path = "core_tests.rs"]
+mod tests;

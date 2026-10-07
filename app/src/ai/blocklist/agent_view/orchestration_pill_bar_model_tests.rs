@@ -65,7 +65,8 @@ fn toggle_pin_persists_pinned_state_to_sqlite_event() {
         global_resource_handles.model_event_sender = Some(sender);
         app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
 
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         // Restore a conversation that starts unpinned. The history model is
         // the source of truth for the persisted flag.

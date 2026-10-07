@@ -1,5 +1,5 @@
 use ai::workspace::WorkspaceMetadata;
-use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
+use fuzzy_match::{FuzzyMatchResult, match_indices_case_insensitive};
 use itertools::Itertools;
 use warpui::{AppContext, Entity, SingletonEntity};
 
@@ -24,7 +24,11 @@ impl RepoDataSource {
         Self {}
     }
 
-    pub fn top_n(&self, limit: usize, app: &AppContext) -> impl Iterator<Item = RepoSearchItem> {
+    pub fn top_n(
+        &self,
+        limit: usize,
+        app: &AppContext,
+    ) -> impl Iterator<Item = RepoSearchItem> + use<> {
         PersistedWorkspace::as_ref(app)
             .workspaces()
             .filter(|cbm| cbm.path.is_dir())

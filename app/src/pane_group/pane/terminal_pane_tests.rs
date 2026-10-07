@@ -1,5 +1,4 @@
-//! Tests for [`inherit_share_for_local_child`]. These verify the pure
-//! branching independent of the PaneGroup dispatch code.
+//! Tests for terminal-pane child-agent dispatch helpers.
 
 use uuid::Uuid;
 

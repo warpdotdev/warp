@@ -6,12 +6,13 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+warp_errors.workspace = true
 anyhow = { workspace = true }
 async-channel = { workspace = true }
 futures = { workspace = true }
 thiserror = { workspace = true }
 base64 = { workspace = true }
-cpal = "0.17.1"
+cpal = "0.18.2"
 hound = "3.5.1"
 instant = { workspace = true }
 log = { workspace = true }

@@ -27,19 +27,17 @@ pub fn command_at_cursor_has_common_package_installer_prefix(
     let mut segment_text = cmd.joined_by_space();
 
     // If alias auto-expansion is disabled, expand the first token internally using the session alias map.
-    if !is_alias_expansion_enabled {
-        if let (Some(first_token), Some(session_context)) = (cmd.parts.first(), session_context) {
-            if let Some(alias_value) = session_context.session.alias_value(&first_token.item) {
-                if is_expandable_alias(&first_token.item, alias_value) {
-                    // Replace the leading first token in the segment with the alias value.
-                    let suffix = &segment_text[first_token.item.len()..];
-                    let mut new_text = String::with_capacity(alias_value.len() + suffix.len());
-                    new_text.push_str(alias_value);
-                    new_text.push_str(suffix);
-                    segment_text = new_text;
-                }
-            }
-        }
+    if !is_alias_expansion_enabled
+        && let (Some(first_token), Some(session_context)) = (cmd.parts.first(), session_context)
+        && let Some(alias_value) = session_context.session.alias_value(&first_token.item)
+        && is_expandable_alias(&first_token.item, alias_value)
+    {
+        // Replace the leading first token in the segment with the alias value.
+        let suffix = &segment_text[first_token.item.len()..];
+        let mut new_text = String::with_capacity(alias_value.len() + suffix.len());
+        new_text.push_str(alias_value);
+        new_text.push_str(suffix);
+        segment_text = new_text;
     }
 
     is_at_context_package_installer_prefix(&segment_text)

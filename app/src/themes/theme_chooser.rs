@@ -1,6 +1,7 @@
 use pathfinder_color::ColorU;
 use settings::Setting as _;
 use warp_editor::editor::NavigationKey;
+use warp_errors::report_if_error;
 use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
 use warpui::elements::{
     Align, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
@@ -28,21 +29,21 @@ use crate::editor::{
 };
 use crate::referral_theme_status::ReferralThemeStatus;
 use crate::resource_center::{
-    mark_feature_used_and_write_to_user_defaults, Tip, TipAction, TipsCompleted,
+    Tip, TipAction, TipsCompleted, mark_feature_used_and_write_to_user_defaults,
 };
+use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
-use crate::settings::{respect_system_theme, ThemeSettings};
+use crate::settings::{ThemeSettings, respect_system_theme};
 use crate::themes::theme::{
     RespectSystemTheme, SelectedSystemThemes, ThemeKind, WarpTheme, WarpThemeConfig,
 };
 use crate::ui_components::buttons::{close_button, icon_button};
 use crate::ui_components::icons;
 use crate::ui_components::window_focus_dimming::WindowFocusDimming;
-use crate::user_config::{load_theme_configs, themes_dir, WarpConfig, WarpConfigUpdateEvent};
-use crate::util::traffic_lights::{traffic_light_data, TrafficLightData, TrafficLightSide};
+use crate::user_config::{WarpConfig, WarpConfigUpdateEvent, load_theme_configs, themes_dir};
+use crate::util::traffic_lights::{TrafficLightData, TrafficLightSide, traffic_light_data};
 use crate::window_settings::WindowSettings;
 use crate::workspace::PANEL_HEADER_HEIGHT;
-use crate::{report_if_error, send_telemetry_from_ctx};
 
 // All units in px
 const THEME_CHOOSER_TITLE: &str = "Themes";
@@ -428,9 +429,11 @@ impl ThemeChooser {
         match self.mode {
             ThemeChooserMode::SystemAgnostic => {
                 theme_settings.update(ctx, |theme_settings, ctx| {
-                    report_if_error!(theme_settings
-                        .theme_kind
-                        .set_value(selected_kind.clone(), ctx,));
+                    report_if_error!(
+                        theme_settings
+                            .theme_kind
+                            .set_value(selected_kind.clone(), ctx,)
+                    );
                 });
             }
             ThemeChooserMode::SystemLight => {
@@ -839,9 +842,9 @@ impl View for ThemeChooser {
 
     fn accessibility_contents(&self, _: &AppContext) -> Option<AccessibilityContent> {
         Some(AccessibilityContent::new(
-                "Theme chooser. Unfortunately, theme chooser window isn't compatible with screen readers yet.",
-                "Press escape to close.",
-                WarpA11yRole::WindowRole,
+            "Theme chooser. Unfortunately, theme chooser window isn't compatible with screen readers yet.",
+            "Press escape to close.",
+            WarpA11yRole::WindowRole,
         ))
     }
 

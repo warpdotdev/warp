@@ -7,8 +7,8 @@ use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::item::SearchItem;
 use crate::search::mixer::{DataSourceRunErrorWrapper, SyncDataSource};
-use crate::terminal::model::block::Block;
 use crate::terminal::TerminalView;
+use crate::terminal::model::block::Block;
 use crate::workspace::ActiveSession;
 
 const MAX_RESULTS: usize = 20;
@@ -49,7 +49,7 @@ impl BlockDataSource {
 
                     // Process all eligible blocks
                     for block in block_list.blocks().iter() {
-                        if !block.can_be_ai_context(block_list.agent_view_state()) {
+                        if !block.can_be_ai_context(block_list.transcript_scope()) {
                             continue;
                         }
 

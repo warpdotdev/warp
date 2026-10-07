@@ -1,11 +1,10 @@
 use ai::LLMId;
 use pathfinder_color::ColorU;
-use ui_components::{button, Component as _, Options as _};
-use warp_core::features::FeatureFlag;
+use ui_components::{Component as _, Options as _, button};
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warpui_core::elements::{
     AnchorPair, Border, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, Dismiss, Empty, Flex, FormattedTextElement, Hoverable,
@@ -23,11 +22,10 @@ use warpui_core::{
     AppContext, Element, Entity, SingletonEntity as _, TypedActionView, View, ViewContext,
 };
 
-use super::two_line_button::{render_two_line_button, TwoLineButtonSpec};
 use super::OnboardingSlide;
-use crate::model::{NoAiConfirmationSource, OnboardingStateEvent, OnboardingStateModel};
+use super::two_line_button::{TwoLineButtonSpec, render_two_line_button};
+use crate::model::{OnboardingStateEvent, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
-use crate::visuals::agent_visual;
 
 /// Information about a model displayed on the onboarding slide.
 #[derive(Clone, Debug)]
@@ -58,8 +56,10 @@ impl std::fmt::Display for AgentAutonomy {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentDevelopmentSettings {
-    /// The selected model's ID.
-    pub selected_model_id: LLMId,
+    /// The model the user explicitly picked. `None` leaves the profile following the server's
+    /// default model, which can change after onboarding (e.g. when a ChatGPT subscription is
+    /// connected).
+    pub selected_model_id: Option<LLMId>,
     pub autonomy: Option<AgentAutonomy>,
     /// Whether the CLI agent toolbar is enabled (maps to `should_render_cli_agent_footer`).
     pub cli_agent_toolbar_enabled: bool,
@@ -71,10 +71,10 @@ pub struct AgentDevelopmentSettings {
     pub show_agent_notifications: bool,
 }
 
-impl AgentDevelopmentSettings {
-    pub fn new(default_model_id: LLMId) -> Self {
+impl Default for AgentDevelopmentSettings {
+    fn default() -> Self {
         Self {
-            selected_model_id: default_model_id,
+            selected_model_id: None,
             autonomy: Some(AgentAutonomy::default()),
             cli_agent_toolbar_enabled: true,
             session_default: crate::SessionDefault::Agent,
@@ -96,7 +96,6 @@ pub enum AgentSlideAction {
     SelectAutonomy(AgentAutonomy),
     ToggleDisableOz,
     BackClicked,
-    NoAiClicked,
     NextClicked,
 }
 
@@ -114,7 +113,6 @@ pub struct AgentSlide {
     autonomy_none_mouse_state: MouseStateHandle,
 
     back_button: button::Button,
-    no_ai_button: button::Button,
     next_button: button::Button,
     scroll_state: ClippedScrollStateHandle,
     dropdown_scroll_state: ClippedScrollStateHandle,
@@ -159,7 +157,8 @@ impl AgentSlide {
                 | OnboardingStateEvent::IntentionChanged
                 | OnboardingStateEvent::Completed
                 | OnboardingStateEvent::UpgradeRequested
-                | OnboardingStateEvent::NoAiConfirmationChanged => {}
+                | OnboardingStateEvent::NoAiConfirmationChanged
+                | OnboardingStateEvent::AiSellOfferSatisfied => {}
             }
         });
 
@@ -171,7 +170,6 @@ impl AgentSlide {
             autonomy_partial_mouse_state: MouseStateHandle::default(),
             autonomy_none_mouse_state: MouseStateHandle::default(),
             back_button: button::Button::default(),
-            no_ai_button: button::Button::default(),
             next_button: button::Button::default(),
             scroll_state: ClippedScrollStateHandle::new(),
             dropdown_scroll_state: ClippedScrollStateHandle::new(),
@@ -380,10 +378,11 @@ impl AgentSlide {
         let background_for_text = theme.background().into_solid();
         let ui_font_family = appearance.ui_font_family();
 
-        let models = self.onboarding_state.as_ref(app).models();
+        let state = self.onboarding_state.as_ref(app);
+        let models = state.models();
         let selected = models
             .iter()
-            .find(|m| m.id == settings.selected_model_id)
+            .find(|m| m.id == *state.effective_model_id())
             .or_else(|| models.first());
 
         let (title_text, icon) = match selected {
@@ -485,7 +484,7 @@ impl AgentSlide {
 
         let state = self.onboarding_state.as_ref(app);
         let highlighted_id = self.highlighted_model_id.clone();
-        let selected_id = state.agent_settings().selected_model_id.clone();
+        let selected_id = state.effective_model_id().clone();
         let models = state.models();
 
         let mut col = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
@@ -812,22 +811,6 @@ impl AgentSlide {
             },
         );
 
-        let no_ai_keystroke = Keystroke::parse("cmdorctrl-enter").unwrap_or_default();
-        let no_ai_button = self.no_ai_button.render(
-            appearance,
-            button::Params {
-                content: button::Content::Label("I don't want AI".into()),
-                theme: &button::themes::Naked,
-                options: button::Options {
-                    keystroke: Some(no_ai_keystroke),
-                    on_click: Some(Box::new(|ctx, _app, _pos| {
-                        ctx.dispatch_typed_action(AgentSlideAction::NoAiClicked);
-                    })),
-                    ..button::Options::default(appearance)
-                },
-            },
-        );
-
         let enter = Keystroke::parse("enter").unwrap_or_default();
         let next_button = self.next_button.render(
             appearance,
@@ -844,50 +827,28 @@ impl AgentSlide {
             },
         );
 
-        let right_buttons = Flex::row()
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(no_ai_button)
-            .with_child(Container::new(next_button).with_margin_left(8.).finish())
-            .finish();
-
         let (step_index, step_count) = self.onboarding_state.as_ref(app).progress();
         bottom_nav::onboarding_bottom_nav(
             appearance,
             step_index,
             step_count,
             Some(back_button),
-            Some(right_buttons),
+            Some(next_button),
         )
     }
 
-    fn render_visual(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
-        let theme = appearance.theme();
-
-        if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-            let use_vertical = self
-                .onboarding_state
-                .as_ref(app)
-                .ui_customization()
-                .use_vertical_tabs;
-            let path = if use_vertical {
-                "async/png/onboarding/agent_intention/customize_vertical_tabs.png"
-            } else {
-                "async/png/onboarding/agent_intention/customize_horizontal_tabs.png"
-            };
-            layout::onboarding_right_panel_with_bg(path, layout::FOREGROUND_LAYOUT_WIDE)
+    fn render_visual(&self, app: &AppContext) -> Box<dyn Element> {
+        let use_vertical = self
+            .onboarding_state
+            .as_ref(app)
+            .ui_customization()
+            .use_vertical_tabs;
+        let path = if use_vertical {
+            "async/png/onboarding/agent_intention/customize_vertical_tabs.png"
         } else {
-            let panel_background = internal_colors::neutral_2(theme);
-            let neutral = internal_colors::neutral_4(theme);
-
-            let blue = theme.ansi_fg_blue();
-            let green = theme.ansi_fg_green();
-            let yellow = theme.ansi_fg_yellow();
-
-            Container::new(agent_visual(panel_background, neutral, blue, green, yellow))
-                .with_background_color(internal_colors::neutral_1(theme))
-                .finish()
-        }
+            "async/png/onboarding/agent_intention/customize_horizontal_tabs.png"
+        };
+        layout::onboarding_right_panel_with_bg(path, layout::FOREGROUND_LAYOUT_WIDE)
     }
 }
 
@@ -910,7 +871,7 @@ impl View for AgentSlide {
         // base two-column layout.
         layout::static_left(
             || self.render_content(appearance, settings, workspace_enforces_autonomy, app),
-            || self.render_visual(appearance, app),
+            || self.render_visual(app),
         )
     }
 }
@@ -932,7 +893,7 @@ impl AgentSlide {
             // Seed the highlight from the current selection so keyboard nav
             // starts on the selected row.
             let state = self.onboarding_state.as_ref(ctx);
-            let selected_id = state.agent_settings().selected_model_id.clone();
+            let selected_id = state.effective_model_id().clone();
             if let Some(index) = state.models().iter().position(|m| m.id == selected_id) {
                 self.dropdown_scroll_state.scroll_to_position(ScrollTarget {
                     position_id: model_row_position_id(index),
@@ -953,7 +914,7 @@ impl AgentSlide {
         let (model_ids, selected_id) = {
             let state = self.onboarding_state.as_ref(ctx);
             let ids: Vec<LLMId> = state.models().iter().map(|m| m.id.clone()).collect();
-            (ids, state.agent_settings().selected_model_id.clone())
+            (ids, state.effective_model_id().clone())
         };
         let count = model_ids.len();
         if count == 0 {
@@ -1066,12 +1027,6 @@ impl OnboardingSlide for AgentSlide {
             self.set_model_list_expanded(false, ctx);
         }
     }
-
-    fn on_cmd_or_ctrl_enter(&mut self, ctx: &mut ViewContext<Self>) {
-        self.onboarding_state.update(ctx, |model, ctx| {
-            model.request_no_ai_confirmation(NoAiConfirmationSource::Agent, ctx);
-        });
-    }
 }
 
 impl TypedActionView for AgentSlide {
@@ -1119,11 +1074,6 @@ impl TypedActionView for AgentSlide {
             AgentSlideAction::BackClicked => {
                 self.onboarding_state.update(ctx, |state, ctx| {
                     state.back(ctx);
-                });
-            }
-            AgentSlideAction::NoAiClicked => {
-                self.onboarding_state.update(ctx, |model, ctx| {
-                    model.request_no_ai_confirmation(NoAiConfirmationSource::Agent, ctx);
                 });
             }
             AgentSlideAction::NextClicked => {

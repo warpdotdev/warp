@@ -38,7 +38,7 @@ Your role when fetching and displaying comments is purely informational — pres
 
 If the script fails to fetch comments, follow these steps to fetch comments directly from the GitHub API:
 
-1. Use the GitHub cli to find the PR number, owner name, repo name, and PR base branch for the current branch.
+1. Use the GitHub cli to find the PR number and PR base branch for the current branch. Determine `{owner_login}`/`{repo_name}` from the **base** repository (the repo that owns the PR) by parsing the PR's `url` (e.g. `https://github.com/{owner_login}/{repo_name}/pull/{pr_number}`). Comments live on the base repo, so this resolves correctly even when the PR was opened from a fork — do not use the head/fork repository or the endpoints will 404.
 
 2. Use the GitHub /repos/{owner_login}/{repo_name}/issues/{pr_number}/comments endpoint to fetch PR-level comments.
 
@@ -50,7 +50,7 @@ If the script fails to fetch comments, follow these steps to fetch comments dire
 
 Ensure the pager is not used by clearing the GH_PAGER environment variable. For example, on MacOS using zsh, use:
 ```sh
-$ GH_PAGER="" gh pr view --json number,headRepository,headRepositoryOwner,baseRefName
+$ GH_PAGER="" gh pr view --json number,url,baseRefName
 $ GH_PAGER="" gh api /repos/{owner_login}/{repo_name}/issues/{pr_number}/comments --jq '.[] | {id, html_url, user_login: .user.login, body, created_at, updated_at}'
 $ GH_PAGER="" gh api /repos/{owner_login}/{repo_name}/pulls/{pr_number}/comments --jq '.[] | {id, html_url, diff_hunk, path, user_login: .user.login, body, created_at, updated_at, start_line, original_start_line, start_side, line, original_line, side, in_reply_to_id, subject_type} | if .in_reply_to_id != null then del(.diff_hunk, .path, .line, .original_line, .start_line, .original_start_line, .side, .start_side, .subject_type) else . end'
 $ GH_PAGER="" gh api /repos/{owner_login}/{repo_name}/pulls/{pr_number}/reviews --jq '.[] | {id, html_url, user_login: .user.login, body, created_at, updated_at} | select(.body != "" and .body != null)'

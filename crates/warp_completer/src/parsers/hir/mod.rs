@@ -44,6 +44,7 @@ impl ShellCommand {
                     } => Some(
                         NamedArgument {
                             name: flag.name.as_str(),
+                            name_span: flag.name_span,
                             parsed_token: parsed_expression.value(),
                         }
                         .spanned(parsed_expression.span),
@@ -67,6 +68,7 @@ impl ShellCommand {
 #[derive(Debug)]
 pub struct NamedArgument<'a> {
     pub name: &'a str,
+    pub name_span: Span,
     pub parsed_token: &'a ParsedToken,
 }
 
@@ -132,10 +134,10 @@ impl Command {
         if command_call_info.ending_whitespace.is_some() {
             return ParsedToken::empty();
         }
-        if let Some(positionals) = &command_call_info.positionals {
-            if let Some(last) = positionals.last() {
-                return last.parsed_token.clone();
-            }
+        if let Some(positionals) = &command_call_info.positionals
+            && let Some(last) = positionals.last()
+        {
+            return last.parsed_token.clone();
         }
         command_call_info.command_name.parsed_token.clone()
     }
@@ -146,6 +148,8 @@ pub struct CommandCallInfo {
     pub command_name: Spanned<ParsedExpression>,
     pub positionals: Option<Vec<Spanned<ParsedExpression>>>,
     pub flags: Option<Flags>,
+    /// Whether a completed standalone `--` ended option parsing.
+    pub options_terminated: bool,
     /// Any additional whitespace at the end of the command.
     pub ending_whitespace: Option<Span>,
     pub span: Span,
@@ -157,6 +161,7 @@ impl CommandCallInfo {
             command_name: head,
             positionals: None,
             flags: None,
+            options_terminated: false,
             ending_whitespace: None,
             span,
         }

@@ -26,7 +26,7 @@ struct TaskQueue {
 
 /// Tracks confirmed server field values used to deduplicate future updates.
 ///
-/// The queue currently deduplicates only bare `InProgress` states and repeated
+/// The queue currently deduplicates only non-forced bare `InProgress` states and repeated
 /// server conversation tokens.
 #[derive(Default)]
 struct DeliveredTaskState {
@@ -84,6 +84,13 @@ impl LocalTaskUpdateQueue {
             .record_result(in_flight_update, succeeded);
 
         self.take_next_update(task_id)
+    }
+
+    /// Whether the task has no queued or in-flight updates.
+    pub fn is_idle(&self, task_id: &AmbientAgentTaskId) -> bool {
+        self.task_queues.get(task_id).is_none_or(|queue| {
+            queue.in_flight_update.is_none() && queue.pending_updates.is_empty()
+        })
     }
 
     /// Marks a task for final cleanup and removes its queue after updates
@@ -145,7 +152,9 @@ impl TaskQueue {
 
 impl DeliveredTaskState {
     fn apply_to(&self, update: &mut LocalTaskUpdate) {
-        if update.status_message.is_none()
+        // Harness finish-task calls can change server state without updating this cache.
+        if !update.force_task_state
+            && update.status_message.is_none()
             && update.task_state == Some(AgentTaskState::InProgress)
             && self.task_state == update.task_state
         {
@@ -198,7 +207,9 @@ impl LocalTaskUpdate {
     /// meaningful transition. Conflicting field values remain separate FIFO
     /// entries.
     fn try_coalesce(&mut self, newer: Self) -> Result<(), Self> {
-        if !options_compatible(&self.task_state, &newer.task_state)
+        if self.force_task_state
+            || newer.force_task_state
+            || !options_compatible(&self.task_state, &newer.task_state)
             || !options_compatible(&self.session_id, &newer.session_id)
             || !options_compatible(
                 &self.server_conversation_token,
@@ -214,6 +225,7 @@ impl LocalTaskUpdate {
             session_id,
             server_conversation_token,
             status_message,
+            force_task_state: _,
         } = newer;
         if task_state.is_some() {
             self.task_state = task_state;
@@ -246,3 +258,7 @@ fn status_messages_compatible(
         (Some(_), None) | (None, Some(_)) | (None, None) => true,
     }
 }
+
+#[cfg(test)]
+#[path = "update_queue_tests.rs"]
+mod tests;

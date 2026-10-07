@@ -562,12 +562,14 @@ fn test_word_backward_tails_including_symbols() {
 
 #[test]
 fn test_out_of_bounds_is_error() {
-    assert!(vim_word_iterator_from_offset(
-        70,
-        LINE,
-        Direction::Backward,
-        WordBound::Start,
-        WordType::BigWord
-    )
-    .is_err());
+    assert!(
+        vim_word_iterator_from_offset(
+            70,
+            LINE,
+            Direction::Backward,
+            WordBound::Start,
+            WordType::BigWord
+        )
+        .is_err()
+    );
 }

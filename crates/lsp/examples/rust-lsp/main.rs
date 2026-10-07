@@ -14,10 +14,11 @@ use std::time::Duration;
 use chrono::Utc;
 use log::LevelFilter;
 use lsp::supported_servers::LSPServerType;
-use lsp::{spawn_lsp_service, LspServerConfig, LspService, LspServiceInitializationResult};
+use lsp::{LspServerConfig, LspService, LspServiceInitializationResult, spawn_lsp_service};
 use lsp_types::Position;
-use warpui_core::r#async::executor::Background;
+use warp_errors::report_error;
 use warpui_core::r#async::Timer;
+use warpui_core::r#async::executor::Background;
 
 fn init_logging() {
     let mut base_logger = env_logger::builder();
@@ -40,7 +41,7 @@ fn find_workspace_root() -> anyhow::Result<PathBuf> {
             None => {
                 return Err(anyhow::anyhow!(
                     "Could not find workspace root with Cargo.toml"
-                ))
+                ));
             }
         }
     }
@@ -106,7 +107,7 @@ fn main() -> anyhow::Result<()> {
 
     let task = executor.spawn(async move {
         if let Err(e) = async_main(executor_clone, workspace_root).await {
-            log::error!("LSP demo failed: {e}");
+            report_error!(&e);
             eprintln!("LSP demo failed: {e}");
         }
     });

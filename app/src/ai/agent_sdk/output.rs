@@ -5,10 +5,10 @@ use comfy_table::modifiers::UTF8_ROUND_CORNERS;
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, ContentArrangement, Table};
 use jaq_all::data::Runner;
-use jaq_all::fmts::write::Writer;
 use jaq_all::fmts::Format;
+use jaq_all::fmts::write::Writer;
 // Use jaq_json directly to ensure serde support is included.
-use jaq_json::{write as jaq_write, Val};
+use jaq_json::{Val, write as jaq_write};
 use serde::Serialize;
 use tabwriter::TabWriter;
 use warp_cli::agent::OutputFormat;
@@ -91,7 +91,7 @@ impl StdoutBlockingGuard {
 
         #[cfg(unix)]
         {
-            use libc::{fcntl, F_GETFL, F_SETFL, O_NONBLOCK, STDOUT_FILENO};
+            use libc::{F_GETFL, F_SETFL, O_NONBLOCK, STDOUT_FILENO, fcntl};
             // SAFETY: `fcntl` with `F_GETFL` / `F_SETFL` only reads and writes
             // the file status flags on stdout; it does not mutate Rust memory.
             let original_flags = unsafe {
@@ -141,7 +141,7 @@ impl Drop for StdoutBlockingGuard {
     fn drop(&mut self) {
         #[cfg(unix)]
         if let Some(flags) = self.original_flags {
-            use libc::{fcntl, F_SETFL, STDOUT_FILENO};
+            use libc::{F_SETFL, STDOUT_FILENO, fcntl};
             // SAFETY: `fcntl` with `F_SETFL` only updates the file status
             // flags on stdout; it does not mutate Rust memory.
             unsafe {

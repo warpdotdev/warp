@@ -1,8 +1,10 @@
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_if_error;
 use warpui::{App, EntityId, ModelHandle, SingletonEntity};
 
 use super::AgentNotificationsModel;
+use crate::BlocklistAIHistoryModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent_management::notifications::{
@@ -13,7 +15,6 @@ use crate::ai::blocklist::BlocklistAIHistoryEvent;
 use crate::settings::AISettings;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::test_util::settings::initialize_settings_for_tests;
-use crate::{report_if_error, BlocklistAIHistoryModel};
 
 fn setup_app(
     app: &mut App,
@@ -22,7 +23,7 @@ fn setup_app(
     ModelHandle<AgentNotificationsModel>,
 ) {
     initialize_settings_for_tests(app);
-    let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+    let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
     // Registered after the history model since it subscribes to history events; the
     // notifications model reads it to suppress completion notifications when a prompt is queued.
     app.add_singleton_model(crate::ai::blocklist::QueuedQueryModel::new);
@@ -60,7 +61,7 @@ fn artifact_event_accumulates_into_pending() {
 
         history.update(&mut app, |_: &mut BlocklistAIHistoryModel, ctx| {
             ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationArtifacts {
-                terminal_view_id,
+                terminal_surface_id: terminal_view_id,
                 conversation_id,
                 artifact: make_pr_artifact("https://github.com/org/repo/pull/42", "feature-branch"),
             });
@@ -85,14 +86,14 @@ fn multiple_artifacts_accumulated_across_turns() {
 
         history.update(&mut app, |_: &mut BlocklistAIHistoryModel, ctx| {
             ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationArtifacts {
-                terminal_view_id,
+                terminal_surface_id: terminal_view_id,
                 conversation_id,
                 artifact: make_plan_artifact("doc-1", "My Plan"),
             });
         });
         history.update(&mut app, |_: &mut BlocklistAIHistoryModel, ctx| {
             ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationArtifacts {
-                terminal_view_id,
+                terminal_surface_id: terminal_view_id,
                 conversation_id,
                 artifact: make_pr_artifact("https://github.com/org/repo/pull/1", "main"),
             });
@@ -140,9 +141,11 @@ fn add_notification_tracks_unread_activity_when_in_app_notifications_are_hidden(
                     .filtered_count(NotificationFilter::All),
                 1
             );
-            assert!(model
-                .notifications()
-                .has_unread_for_terminal_view(terminal_view_id));
+            assert!(
+                model
+                    .notifications()
+                    .has_unread_for_terminal_view(terminal_view_id)
+            );
         });
     });
 }
@@ -158,7 +161,7 @@ fn flush_drains_pending_artifacts() {
 
         history.update(&mut app, |_: &mut BlocklistAIHistoryModel, ctx| {
             ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationArtifacts {
-                terminal_view_id,
+                terminal_surface_id: terminal_view_id,
                 conversation_id,
                 artifact: make_pr_artifact("https://github.com/org/repo/pull/1", "branch-1"),
             });
@@ -202,7 +205,7 @@ fn deletion_cleans_up_pending_artifacts() {
 
         history.update(&mut app, |_: &mut BlocklistAIHistoryModel, ctx| {
             ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationArtifacts {
-                terminal_view_id,
+                terminal_surface_id: terminal_view_id,
                 conversation_id,
                 artifact: make_pr_artifact("https://github.com/org/repo/pull/1", "branch-1"),
             });
@@ -210,7 +213,7 @@ fn deletion_cleans_up_pending_artifacts() {
 
         history.update(&mut app, |_: &mut BlocklistAIHistoryModel, ctx| {
             ctx.emit(BlocklistAIHistoryEvent::DeletedConversation {
-                terminal_view_id,
+                terminal_surface_id: terminal_view_id,
                 conversation_id,
                 conversation_title: None,
                 run_id: None,
@@ -235,14 +238,14 @@ fn separate_conversations_have_independent_pending_artifacts() {
 
         history.update(&mut app, |_: &mut BlocklistAIHistoryModel, ctx| {
             ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationArtifacts {
-                terminal_view_id,
+                terminal_surface_id: terminal_view_id,
                 conversation_id: conv_a,
                 artifact: make_pr_artifact("https://github.com/org/repo/pull/1", "branch-a"),
             });
         });
         history.update(&mut app, |_: &mut BlocklistAIHistoryModel, ctx| {
             ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationArtifacts {
-                terminal_view_id,
+                terminal_surface_id: terminal_view_id,
                 conversation_id: conv_b,
                 artifact: make_plan_artifact("doc-b", "Plan B"),
             });
@@ -271,10 +274,12 @@ fn should_trigger_notification_returns_true_for_success() {
 
 #[test]
 fn should_trigger_notification_returns_true_for_blocked() {
-    assert!(ConversationStatus::Blocked {
-        blocked_action: "approve diff".to_owned(),
-    }
-    .should_trigger_notification());
+    assert!(
+        ConversationStatus::Blocked {
+            blocked_action: "approve diff".to_owned(),
+        }
+        .should_trigger_notification()
+    );
 }
 
 #[test]

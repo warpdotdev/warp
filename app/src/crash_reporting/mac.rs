@@ -4,7 +4,7 @@ use objc2_foundation::NSString;
 use super::*;
 
 // Functions implemented in objC files.
-extern "C" {
+unsafe extern "C" {
     fn startSentry(
         sentryUrl: &NSString,
         environment: &NSString,

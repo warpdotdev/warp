@@ -1,18 +1,19 @@
+use warpui_core::r#async::LocalBoxFuture;
 use warpui_core::integration::TestDriver;
 use warpui_core::keymap::{CustomTag, Keystroke};
 pub use warpui_core::platform::app::*;
-use warpui_core::r#async::LocalBoxFuture;
 use warpui_core::{AppContext, AssetProvider};
 
 use super::AsInnerMut;
 
 /// Platform-specific app implementation. On any given platform, there are at least two possible
 /// implementations:
-/// * The platform-native backend (e.g. Cocoa on macOS, or Winit+X11/Wayland on Linux)
-/// * A headless backend
+/// * The platform-native GUI backend (e.g. Cocoa on macOS, or Winit+X11/Wayland on Linux)
+/// * A windowless backend that drives an event loop without native windows or rendering, used
+///   by both headless processes and the terminal-rendered TUI
 pub enum AppBackend {
     CurrentPlatform(Box<super::current::App>),
-    Headless(Box<super::headless::App>),
+    Windowless(Box<super::headless::App>),
 }
 
 impl AppBackend {
@@ -26,7 +27,7 @@ impl AppBackend {
                 // We don't report errors for the GUI app on termination.
                 Ok(())
             }
-            AppBackend::Headless(inner) => inner.run(init_fn),
+            AppBackend::Windowless(inner) => inner.run(init_fn),
         }
     }
 }
@@ -61,15 +62,23 @@ impl AppBuilder {
         }
     }
 
-    /// Constructs a new application using the headless backend.
-    pub fn new_headless(
+    /// Allows a windowless frontend with microphone functionality to query the
+    /// platform's existing microphone authorization state.
+    pub fn enable_windowless_microphone_access_query(&mut self) {
+        if let AppBackend::Windowless(inner) = &mut self.inner {
+            inner.enable_microphone_access_query();
+        }
+    }
+
+    /// Constructs a new application using the windowless backend.
+    pub fn new_windowless(
         callbacks: AppCallbacks,
         assets: Box<dyn AssetProvider>,
         test_driver: Option<TestDriver>,
     ) -> Self {
         let inner = super::headless::App::new(callbacks, assets, test_driver.as_ref());
         Self {
-            inner: AppBackend::Headless(Box::new(inner)),
+            inner: AppBackend::Windowless(Box::new(inner)),
             test_driver,
             custom_tag_to_keystroke_fn: None,
             default_keystroke_trigger_for_custom_actions: None,

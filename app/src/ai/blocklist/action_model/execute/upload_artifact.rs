@@ -5,14 +5,15 @@ use std::path::PathBuf;
 #[path = "upload_artifact_tests.rs"]
 mod tests;
 
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 #[cfg(not(target_family = "wasm"))]
 use warpui::SingletonEntity;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::terminal::model::session::active_session::ActiveSession;
+use crate::workspaces::user_workspaces::TeamContext;
 #[cfg(not(target_family = "wasm"))]
 use crate::{
     ai::{
@@ -54,7 +55,8 @@ impl UploadArtifactExecutor {
     pub(super) fn should_autoexecute(
         &self,
         input: ExecuteActionInput,
-        ctx: &mut ModelContext<Self>,
+        scope: &TeamContext<'_>,
+        ctx: &ModelContext<Self>,
     ) -> bool {
         #[cfg(target_family = "wasm")]
         {
@@ -81,6 +83,7 @@ impl UploadArtifactExecutor {
                     &conversation_id,
                     vec![resolved_path],
                     Some(self.terminal_view_id),
+                    scope,
                     ctx,
                 )
                 .is_allowed()
@@ -143,6 +146,7 @@ impl UploadArtifactExecutor {
                         path: resolved_path,
                         run_id: None,
                         conversation_id: Some(server_conversation_token),
+                        title: None,
                         description,
                     };
                     let association = uploader.resolve_upload_association(&request).await?;

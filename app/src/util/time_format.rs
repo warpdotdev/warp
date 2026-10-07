@@ -1,6 +1,14 @@
 use std::ops::Sub;
+use std::time::Duration as StdDuration;
 
 use chrono::{DateTime, Duration, Local, Utc};
+pub fn format_message_timestamp(datetime: &DateTime<Local>) -> String {
+    datetime.format("%-m/%-d at %-I:%M %p").to_string()
+}
+
+pub fn is_trustworthy_message_timestamp(datetime: &DateTime<Local>) -> bool {
+    datetime != &DateTime::<Local>::default()
+}
 
 // Some conversion ratios for time units.
 const SEC_TO_MS: f64 = 1000.;
@@ -115,6 +123,17 @@ fn truncated_quantity_with_unit(num: f64, unit: &str) -> String {
         format!("{truncated_int} {unit} ago")
     } else {
         format!("{truncated_int} {unit}s ago")
+    }
+}
+
+/// Formats elapsed time as a whole-seconds string with proper singular/plural
+/// (e.g. "1 second", "15 seconds").
+pub fn format_elapsed_seconds(elapsed: StdDuration) -> String {
+    let total_seconds = elapsed.as_secs();
+    if total_seconds == 1 {
+        "1 second".to_owned()
+    } else {
+        format!("{total_seconds} seconds")
     }
 }
 

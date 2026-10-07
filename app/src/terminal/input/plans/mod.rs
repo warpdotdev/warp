@@ -9,8 +9,8 @@ use warpui::keymap::Keystroke;
 
 use crate::ai::document::ai_document_model::AIDocumentVersion;
 use crate::terminal::input::inline_menu::{
-    default_navigation_message_items, InlineMenuAction, InlineMenuMessageArgs, InlineMenuRowAction,
-    InlineMenuType,
+    InlineMenuAction, InlineMenuMessageArgs, InlineMenuRowAction, InlineMenuType,
+    default_navigation_message_items,
 };
 use crate::terminal::input::message_bar::{Message, MessageItem};
 

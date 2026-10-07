@@ -48,29 +48,29 @@ use std::borrow::Cow;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, SystemTime};
 
-use anyhow::{anyhow, Context as _};
+use anyhow::{Context as _, anyhow};
 use instant::Instant;
 use opentelemetry::trace::{
     Span as _, SpanBuilder, SpanContext, Status, Tracer as _, TracerProvider as _,
 };
 use opentelemetry::{Context as OtelContext, KeyValue, Value};
 use opentelemetry_otlp::{Protocol, WithExportConfig as _, WithHttpConfig as _};
+use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::error::OTelSdkResult;
 use opentelemetry_sdk::resource::{EnvResourceDetector, TelemetryResourceDetector};
 use opentelemetry_sdk::trace::{
     SdkTracer, SdkTracerProvider, Span as SdkSpan, SpanData, SpanExporter,
 };
-use opentelemetry_sdk::Resource;
 use tracing::subscriber;
-use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt as _;
 use url::{Host, Url};
-use warp_managed_secrets::client::ManagedSecretsClient;
 use warpui::AppContext;
 
-use super::cloud_agent_auth::{self, AuthContext};
 use super::Initialization;
+use super::cloud_agent_auth::{self, AuthContext};
 use crate::channel::ChannelState;
+use crate::server::server_api::managed_secrets::AppManagedSecretsClient;
 use crate::tracing::install_no_subscriber;
 
 /// The tag used to mark spans related to cloud agents, which we use to filter out
@@ -199,7 +199,7 @@ fn build_provider(
 ///
 /// Processes that did not opt in with both an endpoint and valid dispatch credential have no
 /// retained [`AUTH_CONTEXT`] and remain no-ops here.
-pub(super) fn start_auth_refresh(client: Arc<dyn ManagedSecretsClient>, ctx: &mut AppContext) {
+pub(super) fn start_auth_refresh(client: Arc<AppManagedSecretsClient>, ctx: &mut AppContext) {
     if let Some(auth_context) = AUTH_CONTEXT.get() {
         cloud_agent_auth::start_refresh_coordinator(auth_context.clone(), client, ctx);
     }

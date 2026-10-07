@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use futures::StreamExt as _;
 
 use super::proto::{
-    ripgrep_search_response, RipgrepSearchError, RipgrepSearchMatch, RipgrepSearchRequest,
-    RipgrepSearchResponse, RipgrepSearchSubmatch, RipgrepSearchSuccess,
+    RipgrepSearchError, RipgrepSearchMatch, RipgrepSearchRequest, RipgrepSearchResponse,
+    RipgrepSearchSubmatch, RipgrepSearchSuccess, ripgrep_search_response,
 };
 
 /// Server-side cap on the number of matched lines returned by `RipgrepSearch`.

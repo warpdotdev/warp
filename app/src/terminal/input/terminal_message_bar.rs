@@ -2,26 +2,32 @@ use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use pathfinder_color::ColorU;
+use warp_core::ui::Icon;
 use warp_core::ui::theme::WarpTheme;
-use warpui::elements::{Container, Element};
+use warpui::elements::{Container, Element, MouseStateHandle};
 use warpui::keymap::Keystroke;
-use warpui::{AppContext, Entity, ModelHandle, SingletonEntity, View, ViewContext};
+use warpui::{
+    AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+};
 
 use super::buffer_model::InputBufferModel;
 use super::message_bar::common::render_terminal_message;
-use super::message_bar::{truncated_command_for_block, Message, MessageItem, MessageProvider};
+use super::message_bar::{Message, MessageItem, MessageProvider, truncated_command_for_block};
 use crate::ai::blocklist::{
     BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIInputModel,
 };
+use crate::ai::pricing_promotion::{
+    PricingPromotionState, PricingPromotionStateEvent, PricingPromotionSurface,
+};
 use crate::appearance::Appearance;
 use crate::search::slash_command_menu::static_commands::commands;
+use crate::terminal::input::SET_INPUT_MODE_TERMINAL_ACTION_NAME;
 use crate::terminal::input::inline_history::{AcceptHistoryItem, HistoryTab};
 use crate::terminal::input::inline_menu::{InlineMenuModel, InlineMenuModelEvent};
 use crate::terminal::input::message_bar::MessageTransformer;
 use crate::terminal::input::suggestions_mode_model::{
     InputSuggestionsModeEvent, InputSuggestionsModeModel,
 };
-use crate::terminal::input::SET_INPUT_MODE_TERMINAL_ACTION_NAME;
 use crate::terminal::model::TerminalModel;
 use crate::terminal::view::init::SELECT_PREVIOUS_BLOCK_ACTION_NAME;
 use crate::util::bindings::keybinding_name_to_keystroke;
@@ -35,10 +41,15 @@ pub struct TerminalInputMessageBar {
     context_model: ModelHandle<BlocklistAIContextModel>,
     suggestions_mode_model: ModelHandle<InputSuggestionsModeModel>,
     inline_history_model: ModelHandle<InlineMenuModel<AcceptHistoryItem, HistoryTab>>,
+    promotion_close_mouse_state: MouseStateHandle,
 }
 
 impl Entity for TerminalInputMessageBar {
     type Event = ();
+}
+#[derive(Clone, Debug)]
+pub enum TerminalInputMessageBarAction {
+    DismissPricingPromotion,
 }
 
 impl TerminalInputMessageBar {
@@ -71,7 +82,11 @@ impl TerminalInputMessageBar {
                 ctx.notify();
             }
         });
-
+        ctx.subscribe_to_model(&PricingPromotionState::handle(ctx), |_, _, event, ctx| {
+            if matches!(event, PricingPromotionStateEvent::Updated) {
+                ctx.notify();
+            }
+        });
         Self {
             terminal_model,
             ai_input_model,
@@ -79,6 +94,7 @@ impl TerminalInputMessageBar {
             context_model,
             suggestions_mode_model,
             inline_history_model,
+            promotion_close_mouse_state: MouseStateHandle::default(),
         }
     }
 }
@@ -115,6 +131,7 @@ impl View for TerminalInputMessageBar {
             context_model,
             input_model,
             app,
+            promotion_close_mouse_state: &self.promotion_close_mouse_state,
         };
 
         let mut message = ErroredBlockMessageProducer
@@ -149,6 +166,7 @@ pub struct TerminalMessageArgs<'a> {
     context_model: &'a BlocklistAIContextModel,
     input_model: &'a BlocklistAIInputModel,
     app: &'a AppContext,
+    promotion_close_mouse_state: &'a MouseStateHandle,
 }
 
 impl<'a> TerminalMessageArgs<'a> {
@@ -261,10 +279,10 @@ impl MessageProvider<TerminalMessageArgs<'_>> for ContinueConversationMessagePro
 }
 
 mod internal {
+    use crate::terminal::TerminalModel;
     use crate::terminal::model::blocks::{
         BlockHeight, BlockHeightItem, BlockHeightSummary, RichContentItem,
     };
-    use crate::terminal::TerminalModel;
 
     impl TerminalModel {
         pub(super) fn is_last_visible_item_agent_view_block(&self) -> bool {
@@ -340,14 +358,45 @@ impl MessageProvider<TerminalMessageArgs<'_>> for DefaultMessageProducer {
         };
 
         if let Some(keystroke) = keystroke {
-            Some(Message::new(vec![
-                MessageItem::keystroke(keystroke),
-                MessageItem::text(" new /agent conversation"),
-            ]))
+            let promotion_message = PricingPromotionState::as_ref(args.app)
+                .visible_message(PricingPromotionSurface::TerminalMessageBar, args.app);
+            let mut text = " new /agent conversation".to_string();
+            if let Some(promotion_message) = &promotion_message {
+                text.push_str(" · ");
+                text.push_str(promotion_message);
+            }
+            let mut items = vec![MessageItem::keystroke(keystroke), MessageItem::text(text)];
+            if promotion_message.is_some() {
+                items.push(MessageItem::text(" "));
+                items.push(MessageItem::clickable(
+                    vec![MessageItem::icon(Icon::X)],
+                    |ctx| {
+                        ctx.dispatch_typed_action(
+                            TerminalInputMessageBarAction::DismissPricingPromotion,
+                        );
+                    },
+                    args.promotion_close_mouse_state.clone(),
+                ));
+            }
+            Some(Message::new(items))
         } else {
             Some(Message::new(vec![MessageItem::text(
                 "/agent for new conversation",
             )]))
+        }
+    }
+}
+
+impl TypedActionView for TerminalInputMessageBar {
+    type Action = TerminalInputMessageBarAction;
+
+    fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+        match action {
+            TerminalInputMessageBarAction::DismissPricingPromotion => {
+                PricingPromotionState::handle(ctx).update(ctx, |state, ctx| {
+                    state.dismiss(PricingPromotionSurface::TerminalMessageBar, ctx);
+                });
+            }
         }
     }
 }

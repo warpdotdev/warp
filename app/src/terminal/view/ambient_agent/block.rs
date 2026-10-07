@@ -12,7 +12,7 @@ use warpui::{AppContext, Element, ModelHandle};
 
 use super::AmbientAgentViewModel;
 use crate::ai::blocklist::block::view_impl::{
-    WithContentItemSpacing, CONTENT_ITEM_VERTICAL_MARGIN,
+    CONTENT_ITEM_VERTICAL_MARGIN, WithContentItemSpacing,
 };
 use crate::terminal::view::PADDING_LEFT;
 const SETUP_TEXT_BOTTOM_MARGIN: f32 = 8.;

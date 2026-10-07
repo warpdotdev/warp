@@ -1,0 +1,18 @@
+[package]
+authors = ["Warp Team <dev@warp.dev>"]
+edition = "2024"
+name = "secret_redaction"
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+itertools.workspace = true
+lazy_static.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+regex.workspace = true
+regex-automata.workspace = true
+regex_dfas.workspace = true
+string-offset.workspace = true
+warp_core.workspace = true
+warp_errors.workspace = true

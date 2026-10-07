@@ -1,9 +1,3 @@
-use std::fmt::Display;
-use std::str::FromStr;
-
-use serde::{Deserialize, Serialize};
-use uuid::{NonNilUuid, Uuid};
-
 use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
 use crate::ai::agent::{
     AIAgentOutputStatus, CancellationReason, FinishedAIAgentOutput, RenderableAIError,
@@ -17,42 +11,16 @@ pub mod task;
 pub mod telemetry;
 
 pub use task::{
-    cancel_task_silently, cancel_task_with_toast, AgentConfigSnapshot, AgentSource,
-    AmbientAgentLiveSessionState, AmbientAgentTask, AmbientAgentTaskState, TaskStatusMessage,
+    AgentConfigSnapshot, AgentSource, AmbientAgentLiveSessionState, AmbientAgentTask,
+    AmbientAgentTaskState, ExecutionLocation, TaskStatusMessage, cancel_task_silently,
+    cancel_task_with_toast,
 };
 pub const OUT_OF_CREDITS_TASK_FAILURE_MESSAGE: &str =
     "Out of credits. Upgrade your Warp plan to continue running cloud agents.";
 pub const SERVER_OVERLOADED_TASK_FAILURE_MESSAGE: &str =
     "Warp is temporarily overloaded. Please try again shortly.";
 
-#[derive(Debug, thiserror::Error)]
-#[error("Invalid task ID: {0}")]
-pub struct ParseAmbientAgentTaskIdError(#[from] uuid::Error);
-
-/// A globally unique ID for an ambient agent task.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct AmbientAgentTaskId(NonNilUuid);
-
-impl Display for AmbientAgentTaskId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl FromStr for AmbientAgentTaskId {
-    type Err = ParseAmbientAgentTaskIdError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let uuid = Uuid::try_parse(s)?;
-        Ok(Self(NonNilUuid::try_from(uuid)?))
-    }
-}
-
-impl From<AmbientAgentTaskId> for cynic::Id {
-    fn from(id: AmbientAgentTaskId) -> Self {
-        Self::new(id.to_string())
-    }
-}
+pub use ai_types::AmbientAgentTaskId;
 
 /// High-level outcome of an ambient agent conversation.
 #[derive(Clone, Debug)]
@@ -88,8 +56,9 @@ pub fn conversation_output_status_from_conversation(
 
         ConversationStatus::Error => {
             // Prefer the structured error on the last exchange: it carries the precise
-            // error variant and rendering hints that the string-only `status_error_message`
-            // cannot.
+            // error variant and rendering hints. Fall back to the conversation-level
+            // `status_error` for out-of-band failures (e.g. shell exit) recorded
+            // without an exchange. Both drive FAILED-vs-ERROR classification downstream.
             if let Some(AIAgentOutputStatus::Finished {
                 finished_output: FinishedAIAgentOutput::Error { error, .. },
             }) = conversation
@@ -101,18 +70,13 @@ pub fn conversation_output_status_from_conversation(
                     error: error.clone(),
                 });
             }
-            if let Some(error_message) = conversation.status_error_message() {
+            if let Some(error) = conversation.status_error() {
                 return Some(AmbientConversationStatus::Error {
-                    error: RenderableAIError::Other {
-                        error_message: error_message.to_string(),
-                        will_attempt_resume: false,
-                        waiting_for_network: false,
-                        is_user_error: false,
-                    },
+                    error: error.clone(),
                 });
             }
-            // Neither a structured exchange error nor a status message is available;
-            // fall back to whatever terminal outcome the last exchange carries.
+            // No structured error anywhere; fall back to whatever terminal outcome
+            // the last exchange carries.
             terminal_status_from_last_exchange(conversation)
         }
 

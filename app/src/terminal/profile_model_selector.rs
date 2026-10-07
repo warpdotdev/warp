@@ -8,17 +8,17 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    DropShadow, Empty, Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
-    MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement as _, ParentOffsetBounds,
-    Percentage, PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Rect, SavePosition,
-    Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    DEFAULT_UI_LINE_HEIGHT_RATIO, DropShadow, Empty, Expanded, Flex, Hoverable, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement as _,
+    ParentOffsetBounds, Percentage, PositionedElementAnchor, PositionedElementOffsetBounds, Radius,
+    Rect, SavePosition, Stack, Text,
 };
 use warpui::platform::Cursor;
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::UiComponent;
 use warpui::{
     AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity as _, TypedActionView,
-    View, ViewContext, ViewHandle,
+    View, ViewContext, ViewHandle, WeakViewHandle,
 };
 
 const SIDECAR_HORIZONTAL_GAP: f32 = 8.;
@@ -26,27 +26,31 @@ const SIDECAR_POSITION_ID: &str = "model_sidecar_panel";
 
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
-use warp_core::ui::color::{coloru_with_opacity, Opacity};
-use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::color::{Opacity, coloru_with_opacity};
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 
 use crate::ai::blocklist::prompt::PromptIconButtonTheme;
 use crate::ai::blocklist::{
-    BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIInputEvent, BlocklistAIInputModel,
+    BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
+    BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel,
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::custom_model_routers::is_custom_router_id;
+use crate::ai::execution_profiles::ExecutionProfileId;
 use crate::ai::execution_profiles::model_menu_items::{
-    available_model_menu_items, has_reasoning_variants, is_auto,
+    CollapsedModelVariants, available_model_menu_items, has_reasoning_variants, is_auto,
 };
 use crate::ai::execution_profiles::profiles::{
-    AIExecutionProfilesModel, AIExecutionProfilesModelEvent, ClientProfileId,
+    AIExecutionProfilesModel, AIExecutionProfilesModelEvent,
 };
 use crate::ai::harness_availability::{
     HarnessAvailabilityEvent, HarnessAvailabilityModel, HarnessModelInfo,
 };
 use crate::ai::llms::{
-    dedupe_model_display_names, is_using_api_key_for_provider, LLMId, LLMInfo, LLMPreferences,
-    LLMPreferencesEvent, LLMSpec,
+    ByoKeySource, LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, LLMSpec,
+    byo_key_source_for_model, dedupe_model_display_names, is_model_allowed_for_scope,
+    is_using_chatgpt_subscription_for_model, should_show_key_icon_for_model,
 };
 use crate::appearance::Appearance;
 use crate::cloud_object::model::generic_string_model::StringModel;
@@ -54,15 +58,16 @@ use crate::context_chips::display_chip::{udi_font_size, udi_icon_size};
 use crate::context_chips::spacing;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::settings_view::SettingsSection;
-use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
-use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 use crate::terminal::TerminalModel;
+use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
+use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, SecondaryTheme,
 };
 use crate::view_components::{FeaturePopup, NewFeaturePopupEvent, NewFeaturePopupLabel};
 use crate::workspace::WorkspaceAction;
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, TeamContext, UserWorkspaces};
 
 const MENU_WIDTH: f32 = 280.;
 const NEW_MODEL_CHOICES_POPUP_DELAY: Duration = Duration::from_millis(500);
@@ -77,12 +82,21 @@ const HORIZONTAL_PADDING_SCALE: f32 = 0.35;
 const VERTICAL_PADDING: f32 = 2.5;
 const MIN_HORIZONTAL_PADDING: f32 = 3.5;
 const ICON_SPACING: f32 = 8.0;
+/// Gap between the ChatGPT subscription logo and the model name. Matches the model section's
+/// horizontal padding so the logo sits centered between the section's leading edge and the name.
+const CHATGPT_ICON_RIGHT_SPACING: f32 = 4.0;
+/// Size of the ChatGPT subscription logo relative to the chip's icon slot. The logo's SVG is
+/// full-bleed, whereas the glyph icons around it leave roughly a fifth of their box as padding,
+/// so rendering the logo at the full slot size makes it read noticeably larger than its neighbors.
+const CHATGPT_ICON_SCALE: f32 = 0.875;
 const MAX_PROFILE_NAME_WIDTH_SCALE_FACTOR: f32 = 10.0;
 
 const PROFILE_SELECTOR_POSITION_ID: &str = "profile_selector";
 
 const PROFILE_PICKER_TOOLTIP: &str = "Choose an AI execution profile";
 const MODEL_PICKER_TOOLTIP: &str = "Choose an agent model";
+const MODEL_USES_CHATGPT_SUBSCRIPTION_TOOLTIP: &str =
+    "Requests for this model use your ChatGPT plan";
 const MODEL_LOCKED_FOR_FOLLOWUP_TOOLTIP: &str = "Follow-ups use the original run's model";
 const MODEL_REQUIRES_EDIT_ACCESS_TOOLTIP: &str = "Request edit access to change model";
 const HARNESS_DEFAULT_MODEL_LABEL: &str = "default";
@@ -160,6 +174,7 @@ impl ActionButtonTheme for SelectorChipTheme {
 /// A unified profile and model selector component that combines both selectors
 /// into a single component.
 pub struct ProfileModelSelector {
+    self_handle: WeakViewHandle<Self>,
     profile_button: ViewHandle<ActionButton>,
     model_button: ViewHandle<ActionButton>,
     profile_compact_button: ViewHandle<ActionButton>,
@@ -180,6 +195,7 @@ pub struct ProfileModelSelector {
     render_compact: bool,
     hovered_llm_info: Option<LLMInfo>,
     manage_api_key_button: ViewHandle<ActionButton>,
+    manage_chatgpt_usage_button: ViewHandle<ActionButton>,
     terminal_model: Arc<FairMutex<TerminalModel>>,
     all_model_choices: Vec<LLMInfo>,
 }
@@ -192,7 +208,7 @@ pub enum ProfileModelSelectorEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProfileModelSelectorAction {
-    SelectProfile(ClientProfileId),
+    SelectProfile(ExecutionProfileId),
     SelectModel(LLMId),
     SelectAutoModel,
     SelectReasoningModel(String),
@@ -494,6 +510,27 @@ impl ProfileModelSelector {
             },
         );
 
+        // The chip's ChatGPT subscription indicator depends on the active conversation's
+        // per-conversation opt-out, so re-render when that conversation changes or is updated.
+        ctx.subscribe_to_model(
+            &BlocklistAIHistoryModel::handle(ctx),
+            |me, _, event, ctx| {
+                if event
+                    .terminal_surface_id()
+                    .is_some_and(|id| id != me.terminal_view_id)
+                {
+                    return;
+                }
+                if let BlocklistAIHistoryEvent::StartedNewConversation { .. }
+                | BlocklistAIHistoryEvent::SetActiveConversation { .. }
+                | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. } = event
+                {
+                    ctx.notify();
+                }
+            },
+        );
+
         ctx.subscribe_to_model(
             &AIExecutionProfilesModel::handle(ctx),
             |me, _, event, ctx| {
@@ -513,22 +550,6 @@ impl ProfileModelSelector {
                 }
             },
         );
-
-        if let Some(ref ambient_model) = ambient_agent_view_model {
-            ctx.subscribe_to_model(ambient_model, |me, _, event, ctx| {
-                use crate::terminal::view::ambient_agent::AmbientAgentViewModelEvent;
-                if matches!(
-                    event,
-                    AmbientAgentViewModelEvent::HarnessSelected
-                        | AmbientAgentViewModelEvent::HarnessModelSelected
-                        | AmbientAgentViewModelEvent::RunLifecycleChanged
-                        | AmbientAgentViewModelEvent::SessionReady { .. }
-                        | AmbientAgentViewModelEvent::FollowupDispatched
-                ) {
-                    me.refresh_state(ctx);
-                }
-            });
-        }
 
         ctx.subscribe_to_model(
             &HarnessAvailabilityModel::handle(ctx),
@@ -551,7 +572,20 @@ impl ProfileModelSelector {
                 })
         });
 
+        let manage_chatgpt_usage_button = ctx.add_typed_action_view(|_ctx| {
+            let source = ByoKeySource::ChatGPTSubscription;
+            ActionButton::new(source.manage_button_label(), SecondaryTheme)
+                .with_tooltip("Manage ChatGPT usage")
+                .with_size(ButtonSize::XSmall)
+                .on_click(move |ctx| {
+                    if let Some(url) = source.manage_url() {
+                        ctx.dispatch_typed_action(WorkspaceAction::OpenLink(url.to_string()));
+                    }
+                })
+        });
+
         let mut me = Self {
+            self_handle: ctx.handle(),
             profile_button,
             model_button,
             profile_compact_button,
@@ -572,15 +606,56 @@ impl ProfileModelSelector {
             is_blurred: false,
             new_model_popup,
             input_model,
-            ambient_agent_view_model,
+            ambient_agent_view_model: None,
             render_compact: false,
             hovered_llm_info: None,
             manage_api_key_button,
+            manage_chatgpt_usage_button,
             terminal_model,
             all_model_choices: Vec::new(),
         };
-        me.refresh_state(ctx);
+        // Route ambient wiring through the setter so construction and the lazy shared-session
+        // viewer path share one implementation.
+        if let Some(ambient_agent_view_model) = ambient_agent_view_model {
+            me.set_ambient_agent_view_model(ambient_agent_view_model, ctx);
+        } else {
+            me.refresh_state(ctx);
+        }
         me
+    }
+
+    /// Attaches an ambient agent view model to an already-constructed selector. Used on the
+    /// shared-session viewer path where the model is created lazily at `SessionJoined`, after the
+    /// selector was built with `None`. Without this, the model / harness chip reflects the local
+    /// default instead of the viewed cloud run. Mirrors the ambient subscription in [`Self::new`].
+    /// Idempotent: a no-op when a model is already set.
+    pub fn set_ambient_agent_view_model(
+        &mut self,
+        ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.ambient_agent_view_model.is_some() {
+            return;
+        }
+        ctx.subscribe_to_model(&ambient_agent_view_model, |me, _, event, ctx| {
+            if matches!(
+                event,
+                AmbientAgentViewModelEvent::HarnessSelected
+                    | AmbientAgentViewModelEvent::HarnessModelSelected
+                    | AmbientAgentViewModelEvent::RunLifecycleChanged
+                    | AmbientAgentViewModelEvent::SessionReady { .. }
+                    | AmbientAgentViewModelEvent::FollowupDispatched
+            ) {
+                me.refresh_state(ctx);
+            }
+        });
+        self.ambient_agent_view_model = Some(ambient_agent_view_model);
+        self.refresh_state(ctx);
+        ctx.notify();
+    }
+
+    fn team_scope<'a>(&self, app: &'a AppContext) -> TeamContext<'a> {
+        UserWorkspaces::as_ref(app).team_context(&self.self_handle, app)
     }
 
     pub fn set_profile_menu_visibility(&mut self, is_open: bool, ctx: &mut ViewContext<Self>) {
@@ -683,6 +758,9 @@ impl ProfileModelSelector {
         let model_name = if self.is_third_party_harness(ctx) {
             self.harness_model_display_name(ctx)
         } else {
+            let scope = ResolvedTeamScope::from_scope(
+                &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+            );
             let llm_preferences = LLMPreferences::as_ref(ctx);
             let active_llm = if FeatureFlag::InlineMenuHeaders.is_enabled()
                 && self
@@ -692,13 +770,19 @@ impl ProfileModelSelector {
                     .active_block()
                     .is_agent_in_control_or_tagged_in()
             {
-                llm_preferences.get_active_cli_agent_model(ctx, Some(self.terminal_view_id))
+                llm_preferences.get_active_cli_agent_model(&scope, ctx, Some(self.terminal_view_id))
             } else {
-                llm_preferences.get_active_base_model(ctx, Some(self.terminal_view_id))
+                llm_preferences.get_active_base_model(&scope, ctx, Some(self.terminal_view_id))
             };
 
-            if let Some(description) = &active_llm.description {
-                format!("{} ({})", active_llm.display_name, description)
+            // Don't append description for custom model routers — it would add a
+            // redundant "(Custom auto · Local)" suffix to the button label.
+            if !is_custom_router_id(active_llm.id.as_str()) {
+                if let Some(description) = &active_llm.description {
+                    format!("{} ({})", active_llm.display_name, description)
+                } else {
+                    active_llm.display_name.clone()
+                }
             } else {
                 active_llm.display_name.clone()
             }
@@ -826,9 +910,9 @@ impl ProfileModelSelector {
         ];
 
         for profile_id in all_profile_ids {
-            if let Some(profile_info) = profiles_model.get_profile_by_id(profile_id, ctx) {
+            if let Some(profile_info) = profiles_model.get_profile_by_id(&profile_id, ctx) {
                 let profile = profile_info.data();
-                let is_active = *active_profile.id() == profile_id;
+                let is_active = active_profile.id() == &profile_id;
 
                 let mut fields = MenuItemFields::new(profile.display_name());
                 if is_active {
@@ -851,7 +935,8 @@ impl ProfileModelSelector {
 
         self.profile_dropdown.update(ctx, |menu, ctx| {
             menu.set_items(menu_items, ctx);
-            let active_action = ProfileModelSelectorAction::SelectProfile(*active_profile.id());
+            let active_action =
+                ProfileModelSelectorAction::SelectProfile(active_profile.id().clone());
             menu.set_selected_by_action(&active_action, ctx);
         });
     }
@@ -953,9 +1038,12 @@ impl ProfileModelSelector {
             return;
         }
 
+        let scope =
+            ResolvedTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
         let llm_preferences = LLMPreferences::as_ref(ctx);
 
-        let active_llm = llm_preferences.get_active_base_model(ctx, Some(self.terminal_view_id));
+        let active_llm =
+            llm_preferences.get_active_base_model(&scope, ctx, Some(self.terminal_view_id));
 
         let active_profile =
             AIExecutionProfilesModel::as_ref(ctx).active_profile(Some(self.terminal_view_id), ctx);
@@ -966,16 +1054,21 @@ impl ProfileModelSelector {
             .clone()
             .and_then(|id| {
                 llm_preferences
-                    .get_llm_info(&id)
+                    .get_llm_info(&id, ctx)
                     .map(|info| info.id.clone())
             })
-            .unwrap_or_else(|| llm_preferences.get_default_base_model().id.clone());
+            .unwrap_or_else(|| {
+                llm_preferences
+                    .get_default_base_model(&scope, ctx)
+                    .id
+                    .clone()
+            });
 
         let model_id_to_add_profile_default_label_to = Some(&profile_base_model_id);
 
         // Store all model choices for reasoning variant lookups
         self.all_model_choices = llm_preferences
-            .get_base_llm_choices_for_agent_mode(ctx)
+            .get_base_llm_choices_for_agent_mode(&scope, ctx)
             .cloned()
             .collect();
 
@@ -1025,6 +1118,9 @@ impl ProfileModelSelector {
             }
         }
 
+        let scope = self.team_scope(ctx);
+        let conversation =
+            BlocklistAIHistoryModel::as_ref(ctx).active_conversation(self.terminal_view_id);
         let mut items = available_model_menu_items(
             auto_choices,
             |llm| {
@@ -1041,8 +1137,9 @@ impl ProfileModelSelector {
             },
             model_id_to_add_profile_default_label_to,
             Some(&|llm_id| self.model_menu_item_position_id(llm_id)),
-            true,
-            true,
+            CollapsedModelVariants::all(),
+            conversation,
+            &scope,
             ctx,
         );
 
@@ -1064,10 +1161,15 @@ impl ProfileModelSelector {
                 clickable: false,
                 right_side_fields: None,
             });
-            for llm in &custom_choices {
-                let fields = MenuItemFields::new(llm.menu_display_name())
-                    .with_right_side_icon(Icon::Key)
+            for llm in custom_choices
+                .iter()
+                .filter(|llm| is_model_allowed_for_scope(llm_preferences, llm, &scope, ctx))
+            {
+                let mut fields = MenuItemFields::new(llm.menu_display_name())
                     .with_on_select_action(ProfileModelSelectorAction::SelectModel(llm.id.clone()));
+                if should_show_key_icon_for_model(llm, conversation, &scope, ctx) {
+                    fields = fields.with_right_side_icon(Icon::Key);
+                }
                 items.push(MenuItem::Item(fields));
             }
         }
@@ -1092,8 +1194,9 @@ impl ProfileModelSelector {
                 },
                 model_id_to_add_profile_default_label_to,
                 Some(&|llm_id| self.model_menu_item_position_id(llm_id)),
-                true,
-                true,
+                CollapsedModelVariants::all(),
+                conversation,
+                &scope,
                 ctx,
             ));
         }
@@ -1113,13 +1216,16 @@ impl ProfileModelSelector {
         kind: &ModelSpecSidecarKind,
         ctx: &mut ViewContext<Self>,
     ) {
+        let scope =
+            ResolvedTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
         let llm_preferences = LLMPreferences::as_ref(ctx);
-        let active_llm = llm_preferences.get_active_base_model(ctx, Some(self.terminal_view_id));
+        let active_llm =
+            llm_preferences.get_active_base_model(&scope, ctx, Some(self.terminal_view_id));
         let active_llm_id = active_llm.id.clone();
 
         let items: Vec<MenuItem<ProfileModelSelectorAction>> = match kind {
             ModelSpecSidecarKind::Auto => llm_preferences
-                .get_base_llm_choices_for_agent_mode(ctx)
+                .get_base_llm_choices_for_agent_mode(&scope, ctx)
                 .filter(|llm| is_auto(llm))
                 .map(|llm| {
                     let is_selected = llm.id == active_llm_id;
@@ -1166,8 +1272,11 @@ impl ProfileModelSelector {
         base_name: &str,
         ctx: &mut ViewContext<Self>,
     ) {
+        let scope =
+            ResolvedTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
         let llm_preferences = LLMPreferences::as_ref(ctx);
-        let active_llm = llm_preferences.get_active_base_model(ctx, Some(self.terminal_view_id));
+        let active_llm =
+            llm_preferences.get_active_base_model(&scope, ctx, Some(self.terminal_view_id));
         let active_llm_id = active_llm.id.clone();
 
         let items: Vec<MenuItem<ProfileModelSelectorAction>> = self
@@ -1241,8 +1350,16 @@ impl ProfileModelSelector {
                 "Selecting base agent model {} (from model selector)",
                 &llm.id
             );
+            let scope = ResolvedTeamScope::from_scope(
+                &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+            );
             LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
-                preferences.update_preferred_agent_mode_llm(&llm.id, self.terminal_view_id, ctx);
+                preferences.update_preferred_agent_mode_llm(
+                    &scope,
+                    &llm.id,
+                    self.terminal_view_id,
+                    ctx,
+                );
             });
         }
         self.set_model_menu_visibility(false, ctx);
@@ -1303,6 +1420,8 @@ impl ProfileModelSelector {
             MenuType::Main => &self.model_dropdown,
             MenuType::Sidecar => &self.model_spec_sidecar.dropdown,
         };
+        let scope =
+            ResolvedTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
         model_dropdown.read(ctx, |menu, _| {
             menu.items()
                 .get(index)
@@ -1310,13 +1429,15 @@ impl ProfileModelSelector {
                 .and_then(|action| {
                     match action {
                         ProfileModelSelectorAction::SelectModel(llm_id) => {
-                            LLMPreferences::as_ref(ctx).get_llm_info(llm_id).cloned()
+                            LLMPreferences::as_ref(ctx)
+                                .get_llm_info(llm_id, ctx)
+                                .cloned()
                         }
                         ProfileModelSelectorAction::SelectAutoModel => {
                             // Get the first "auto" variant as the generic auto model
                             let llm_prefs = LLMPreferences::as_ref(ctx);
                             llm_prefs
-                                .get_base_llm_choices_for_agent_mode(ctx)
+                                .get_base_llm_choices_for_agent_mode(&scope, ctx)
                                 .find(|llm| is_auto(llm))
                                 .cloned()
                         }
@@ -1651,16 +1772,23 @@ impl ProfileModelSelector {
                 .is_agent_in_control_or_tagged_in();
         drop(terminal_model);
 
-        let model_display_name = if self.is_third_party_harness(app) {
-            self.harness_model_display_name(app)
-        } else if is_lrc {
-            llm_preferences
-                .get_active_cli_agent_model(app, Some(self.terminal_view_id))
-                .menu_display_name()
+        let (model_display_name, is_using_chatgpt_subscription) = if self
+            .is_third_party_harness(app)
+        {
+            (self.harness_model_display_name(app), false)
         } else {
-            llm_preferences
-                .get_active_base_model(app, Some(self.terminal_view_id))
-                .menu_display_name()
+            let scope = UserWorkspaces::as_ref(app).team_context(&self.self_handle, app);
+            let active_llm = if is_lrc {
+                llm_preferences.get_active_cli_agent_model(&scope, app, Some(self.terminal_view_id))
+            } else {
+                llm_preferences.get_active_base_model(&scope, app, Some(self.terminal_view_id))
+            };
+            let conversation =
+                BlocklistAIHistoryModel::as_ref(app).active_conversation(self.terminal_view_id);
+            (
+                active_llm.menu_display_name(),
+                is_using_chatgpt_subscription_for_model(active_llm, conversation, &scope, app),
+            )
         };
 
         let text_color = if self.is_blurred {
@@ -1686,20 +1814,35 @@ impl ProfileModelSelector {
         .with_line_height_ratio(appearance.line_height_ratio())
         .finish();
 
+        let chip_icon = |icon: Icon| {
+            ConstrainedBox::new(icon.to_warpui_icon(Fill::Solid(text_color)).finish())
+                .with_height(icon_size)
+                .with_width(icon_size)
+                .finish()
+        };
+
         let mut content = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
         if is_lrc {
-            let terminal_icon = Icon::Terminal
-                .to_warpui_icon(Fill::Solid(text_color))
-                .finish();
             content = content.with_child(
-                Container::new(
-                    ConstrainedBox::new(terminal_icon)
-                        .with_height(icon_size)
-                        .with_width(icon_size)
-                        .finish(),
-                )
-                .with_margin_right(ICON_SPACING)
-                .finish(),
+                Container::new(chip_icon(Icon::Terminal))
+                    .with_margin_right(ICON_SPACING)
+                    .finish(),
+            );
+        }
+        if is_using_chatgpt_subscription {
+            let logo_size = icon_size * CHATGPT_ICON_SCALE;
+            let logo = ConstrainedBox::new(
+                Icon::OpenAILogo
+                    .to_warpui_icon(Fill::Solid(text_color))
+                    .finish(),
+            )
+            .with_height(logo_size)
+            .with_width(logo_size)
+            .finish();
+            content = content.with_child(
+                Container::new(logo)
+                    .with_margin_right(CHATGPT_ICON_RIGHT_SPACING)
+                    .finish(),
             );
         }
 
@@ -1709,19 +1852,10 @@ impl ProfileModelSelector {
         // and the InlineMenuHeaders feature flag is not enabled
         // (when enabled, clicking opens the inline model selector instead of a dropdown).
         if has_edit_access && !FeatureFlag::InlineMenuHeaders.is_enabled() {
-            let chevron_icon = Icon::ChevronDown
-                .to_warpui_icon(Fill::Solid(text_color))
-                .finish();
-
             content = content.with_child(
-                Container::new(
-                    ConstrainedBox::new(chevron_icon)
-                        .with_height(icon_size)
-                        .with_width(icon_size)
-                        .finish(),
-                )
-                .with_margin_left(ICON_SPACING)
-                .finish(),
+                Container::new(chip_icon(Icon::ChevronDown))
+                    .with_margin_left(ICON_SPACING)
+                    .finish(),
             );
         }
 
@@ -1737,6 +1871,11 @@ impl ProfileModelSelector {
         let is_locked_for_non_oz = self.is_locked_for_non_oz_run(app);
         let is_locked = is_locked_for_followup || is_locked_for_non_oz;
         let can_interact = has_edit_access && !is_locked;
+        let interactive_tooltip = if is_using_chatgpt_subscription {
+            MODEL_USES_CHATGPT_SUBSCRIPTION_TOOLTIP
+        } else {
+            MODEL_PICKER_TOOLTIP
+        };
 
         let hoverable = Hoverable::new(self.model_mouse_state.clone(), move |state| {
             if state.is_hovered() && can_interact {
@@ -1749,7 +1888,7 @@ impl ProfileModelSelector {
 
                 let tooltip = appearance
                     .ui_builder()
-                    .tool_tip(MODEL_PICKER_TOOLTIP.to_owned());
+                    .tool_tip(interactive_tooltip.to_owned());
                 let mut stack = Stack::new();
                 stack.add_child(button_with_hover);
                 stack.add_positioned_overlay_child(
@@ -1925,9 +2064,17 @@ impl ProfileModelSelector {
         .finish()
     }
 
-    fn render_model_spec_api_key(&self, app: &AppContext) -> Box<dyn Element> {
+    fn render_model_spec_api_key(
+        &self,
+        byo_key_source: ByoKeySource,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
+        let manage_button = match byo_key_source {
+            ByoKeySource::UserProvided | ByoKeySource::TeamProvided => &self.manage_api_key_button,
+            ByoKeySource::ChatGPTSubscription => &self.manage_chatgpt_usage_button,
+        };
 
         Container::new(
             Flex::row()
@@ -1944,7 +2091,7 @@ impl ProfileModelSelector {
                             .with_child(
                                 Container::new(
                                     Text::new(
-                                        "Billed to API".to_string(),
+                                        byo_key_source.inference_label().to_string(),
                                         appearance.ui_font_family(),
                                         14.,
                                     )
@@ -1953,7 +2100,11 @@ impl ProfileModelSelector {
                                 )
                                 .finish(),
                             )
-                            .with_child(ChildView::new(&self.manage_api_key_button).finish())
+                            .with_child(
+                                Container::new(ChildView::new(manage_button).finish())
+                                    .with_margin_left(8.)
+                                    .finish(),
+                            )
                             .finish(),
                     )
                     .finish(),
@@ -1968,7 +2119,7 @@ impl ProfileModelSelector {
     fn render_all_model_spec_values(
         &self,
         spec: &LLMSpec,
-        is_using_api_key: bool,
+        byo_key_source: Option<ByoKeySource>,
         bg_bar_color: ColorU,
         app: &AppContext,
     ) -> Box<dyn Element> {
@@ -1981,8 +2132,8 @@ impl ProfileModelSelector {
             ),
             self.render_model_spec_value("Speed".to_string(), spec.speed, bg_bar_color, app),
         ];
-        if is_using_api_key {
-            spec_values.push(self.render_model_spec_api_key(app));
+        if let Some(byo_key_source) = byo_key_source {
+            spec_values.push(self.render_model_spec_api_key(byo_key_source, app));
         } else {
             spec_values.push(self.render_model_spec_value(
                 "Cost".to_string(),
@@ -1998,7 +2149,7 @@ impl ProfileModelSelector {
     fn render_model_spec(
         &self,
         spec: &LLMSpec,
-        is_using_api_key: bool,
+        byo_key_source: Option<ByoKeySource>,
         app: &AppContext,
     ) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
@@ -2010,7 +2161,7 @@ impl ProfileModelSelector {
         );
         let spec = self.render_all_model_spec_values(
             spec,
-            is_using_api_key,
+            byo_key_source,
             internal_colors::neutral_3(theme),
             app,
         );
@@ -2057,7 +2208,7 @@ impl ProfileModelSelector {
         let sidecar_menu = ChildView::new(&self.model_spec_sidecar.dropdown).finish();
         let spec_values = self.render_all_model_spec_values(
             &spec.clone().unwrap_or_default(),
-            false,
+            None,
             internal_colors::neutral_5(theme),
             app,
         );
@@ -2100,7 +2251,11 @@ impl TypedActionView for ProfileModelSelector {
         match action {
             ProfileModelSelectorAction::SelectProfile(profile_id) => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.set_active_profile(self.terminal_view_id, *profile_id, ctx);
+                    profiles_model.set_active_profile(
+                        self.terminal_view_id,
+                        profile_id.clone(),
+                        ctx,
+                    );
                 });
 
                 // Remove any LLM override when switching profiles
@@ -2111,9 +2266,17 @@ impl TypedActionView for ProfileModelSelector {
                 self.set_profile_menu_visibility(false, ctx);
             }
             ProfileModelSelectorAction::SelectModel(llm_id) => {
+                let scope = ResolvedTeamScope::from_scope(
+                    &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+                );
                 LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
                     log::info!("Selecting base agent model {llm_id} (from model selector)");
-                    preferences.update_preferred_agent_mode_llm(llm_id, self.terminal_view_id, ctx);
+                    preferences.update_preferred_agent_mode_llm(
+                        &scope,
+                        llm_id,
+                        self.terminal_view_id,
+                        ctx,
+                    );
                 });
                 self.set_model_menu_visibility(false, ctx);
             }
@@ -2284,8 +2447,11 @@ impl View for ProfileModelSelector {
                         .cloned();
                     Some(self.render_sidecar_spec_panel(&kind, &sidecar_spec, app))
                 } else if let Some(spec) = info.spec.as_ref() {
-                    let is_using_api_key = is_using_api_key_for_provider(&info.provider, app);
-                    Some(self.render_model_spec(spec, is_using_api_key, app))
+                    let conversation = BlocklistAIHistoryModel::as_ref(app)
+                        .active_conversation(self.terminal_view_id);
+                    let byo_key_source =
+                        byo_key_source_for_model(info, conversation, &self.team_scope(app), app);
+                    Some(self.render_model_spec(spec, byo_key_source, app))
                 } else {
                     None
                 };

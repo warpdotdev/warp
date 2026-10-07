@@ -10,7 +10,7 @@ use warpui::{
 
 use crate::ai::agent::icons::yellow_stop_icon;
 use crate::ai::blocklist::block::keyboard_navigable_buttons::{
-    simple_navigation_button, KeyboardNavigableButtons,
+    KeyboardNavigableButtons, simple_navigation_button,
 };
 use crate::ai::blocklist::inline_action::inline_action_header::{
     HeaderConfig, INLINE_ACTION_HEADER_VERTICAL_PADDING,

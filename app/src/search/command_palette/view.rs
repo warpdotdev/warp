@@ -27,18 +27,18 @@ use crate::drive::CloudObjectTypeAndId;
 use crate::features::FeatureFlag;
 use crate::palette::PaletteMode;
 use crate::root_view::OpenLaunchConfigArg;
+use crate::search::QueryFilter;
 use crate::search::action::search_item::MatchedBinding;
 use crate::search::binding_source::{BindingFilterFn, BindingSource};
+use crate::search::command_palette::SelectedItems;
 use crate::search::command_palette::data_sources::DataSourceStore;
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use crate::search::command_palette::zero_state::{self, Event as ZeroStateEvent, ZeroState};
-use crate::search::command_palette::SelectedItems;
 use crate::search::data_source::QueryResult;
 use crate::search::result_renderer::QueryResultRenderer;
 use crate::search::search_bar::{
     SearchBar, SearchBarEvent, SearchBarState, SearchResultOrdering, SelectionUpdate,
 };
-use crate::search::QueryFilter;
 use crate::server::ids::SyncId;
 use crate::server::telemetry::{LaunchConfigUiLocation, TelemetryEvent};
 use crate::session_management::SessionSource;
@@ -46,8 +46,8 @@ use crate::settings::CtrlTabBehavior;
 use crate::terminal::keys_settings::KeysSettings;
 use crate::themes::theme::WarpTheme;
 use crate::view_components::DismissibleToast;
-use crate::workspace::{active_terminal_in_window, ForkedConversationDestination, WorkspaceAction};
-use crate::{send_telemetry_from_ctx, ToastStack};
+use crate::workspace::{ForkedConversationDestination, WorkspaceAction, active_terminal_in_window};
+use crate::{ToastStack, send_telemetry_from_ctx};
 
 lazy_static! {
     /// Set of hardcoded action names that we want to show in the command palette zero state.
@@ -238,8 +238,14 @@ impl View {
         let binding_source = ctx.add_model(|_| BindingSource::None);
         let session_source = ctx.add_model(|_| SessionSource::None);
 
+        let window_id = ctx.window_id();
         let data_source_store = ctx.add_model(|ctx| {
-            DataSourceStore::new(binding_source.clone(), session_source.clone(), ctx)
+            DataSourceStore::new(
+                binding_source.clone(),
+                session_source.clone(),
+                window_id,
+                ctx,
+            )
         });
 
         ctx.observe(&binding_source, |me, _, ctx| {
@@ -328,6 +334,14 @@ impl View {
             .into_iter()
             .flat_map(|results| results.iter())
             .map(|item| &item.search_result)
+    }
+
+    #[cfg(feature = "integration_tests")]
+    pub fn selected_search_result<'a>(
+        &'a self,
+        app: &'a AppContext,
+    ) -> Option<&'a QueryResult<CommandPaletteItemAction>> {
+        self.search_bar_state.as_ref(app).selected_result()
     }
 
     /// Set the active query filter in the search bar to be `filter`.
@@ -730,50 +744,50 @@ impl View {
             });
         }
 
-        if let CommandPaletteItemAction::AcceptBinding { binding } = &result_action {
-            if let Some(action) = &binding.action {
-                match action.as_any().downcast_ref::<WorkspaceAction>() {
-                    Some(WorkspaceAction::TogglePalette {
-                        mode: PaletteMode::LaunchConfig,
-                        source: _,
-                    }) => {
-                        self.reset(ctx);
-                        self.set_active_query_filter(QueryFilter::LaunchConfigurations, ctx);
-                        return;
-                    }
-                    Some(WorkspaceAction::TogglePalette {
-                        mode: PaletteMode::Navigation,
-                        source: _,
-                    }) => {
-                        self.reset(ctx);
-                        self.set_active_query_filter(QueryFilter::Sessions, ctx);
-                        return;
-                    }
-                    Some(WorkspaceAction::TogglePalette {
-                        mode: PaletteMode::Files,
-                        source: _,
-                    }) => {
-                        self.reset(ctx);
-                        self.set_active_query_filter(QueryFilter::Files, ctx);
-                        return;
-                    }
-                    Some(WorkspaceAction::TogglePalette {
-                        mode: PaletteMode::Conversations,
-                        source: _,
-                    }) => {
-                        self.reset(ctx);
-                        self.set_active_query_filter(QueryFilter::Conversations, ctx);
-                        return;
-                    }
-                    Some(WorkspaceAction::TogglePalette {
-                        mode: PaletteMode::Command,
-                        source: _,
-                    }) => {
-                        self.close(ctx, Some(result_action.result_type()));
-                        return;
-                    }
-                    _ => {}
+        if let CommandPaletteItemAction::AcceptBinding { binding } = &result_action
+            && let Some(action) = &binding.action
+        {
+            match action.as_any().downcast_ref::<WorkspaceAction>() {
+                Some(WorkspaceAction::TogglePalette {
+                    mode: PaletteMode::LaunchConfig,
+                    source: _,
+                }) => {
+                    self.reset(ctx);
+                    self.set_active_query_filter(QueryFilter::LaunchConfigurations, ctx);
+                    return;
                 }
+                Some(WorkspaceAction::TogglePalette {
+                    mode: PaletteMode::Navigation,
+                    source: _,
+                }) => {
+                    self.reset(ctx);
+                    self.set_active_query_filter(QueryFilter::Sessions, ctx);
+                    return;
+                }
+                Some(WorkspaceAction::TogglePalette {
+                    mode: PaletteMode::Files,
+                    source: _,
+                }) => {
+                    self.reset(ctx);
+                    self.set_active_query_filter(QueryFilter::Files, ctx);
+                    return;
+                }
+                Some(WorkspaceAction::TogglePalette {
+                    mode: PaletteMode::Conversations,
+                    source: _,
+                }) => {
+                    self.reset(ctx);
+                    self.set_active_query_filter(QueryFilter::Conversations, ctx);
+                    return;
+                }
+                Some(WorkspaceAction::TogglePalette {
+                    mode: PaletteMode::Command,
+                    source: _,
+                }) => {
+                    self.close(ctx, Some(result_action.result_type()));
+                    return;
+                }
+                _ => {}
             }
         }
 
@@ -927,11 +941,11 @@ impl View {
             } => {
                 let file_path = std::path::Path::new(&current_directory).join(&file_name);
 
-                if let Err(e) = std::fs::File::create_new(&file_path) {
-                    if e.kind() != std::io::ErrorKind::AlreadyExists {
-                        log::warn!("Failed to create file {}: {e}", file_path.display());
-                        return;
-                    }
+                if let Err(e) = std::fs::File::create_new(&file_path)
+                    && e.kind() != std::io::ErrorKind::AlreadyExists
+                {
+                    log::warn!("Failed to create file {}: {e}", file_path.display());
+                    return;
                 }
 
                 ctx.emit(Event::OpenFile {

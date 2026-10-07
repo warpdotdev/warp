@@ -2,6 +2,7 @@ use chrono::Utc;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_server_client::auth::AgentIdentity;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
@@ -26,8 +27,8 @@ use crate::editor::{
 use crate::modal::{Modal, ModalViewState};
 use crate::util::truncation::truncate_from_end;
 use crate::view_components::dropdown::{DROPDOWN_PADDING, TOP_MENU_BAR_HEIGHT};
-use crate::view_components::{Dropdown as DropdownView, DropdownItem};
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::view_components::{Dropdown as DropdownView, DropdownItem, FilterableDropdown};
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 const OZ_AGENTS_URL: &str = "https://oz.warp.dev/agents?new=true";
 const API_KEY_DOCS_URL: &str =
@@ -63,7 +64,7 @@ impl ApiKeyType {
 pub struct CreateApiKeyModal {
     name_editor: ViewHandle<EditorView>,
     expiration_dropdown: ViewHandle<DropdownView<CreateApiKeyModalAction>>,
-    agent_dropdown: ViewHandle<DropdownView<CreateApiKeyModalAction>>,
+    agent_dropdown: ViewHandle<FilterableDropdown<CreateApiKeyModalAction>>,
     api_key_type_control: ViewHandle<SegmentedControl<ApiKeyType>>,
     expiration: ExpirationOption,
     cancel_button_mouse_state: MouseStateHandle,
@@ -148,7 +149,7 @@ impl CreateApiKeyModal {
         let font_family = Appearance::as_ref(ctx).ui_font_family();
 
         let has_team = FeatureFlag::TeamApiKeys.is_enabled()
-            && UserWorkspaces::as_ref(ctx).current_team_uid().is_some();
+            && UserWorkspaces::as_ref(ctx).team_for_view(ctx).is_some();
         let has_named_agents = FeatureFlag::NamedAgents.is_enabled();
 
         let name_editor = ctx.add_typed_action_view(|ctx| {
@@ -170,9 +171,11 @@ impl CreateApiKeyModal {
             ctx.add_typed_action_view(DropdownView::<CreateApiKeyModalAction>::new);
 
         let agent_dropdown =
-            ctx.add_typed_action_view(DropdownView::<CreateApiKeyModalAction>::new);
+            ctx.add_typed_action_view(FilterableDropdown::<CreateApiKeyModalAction>::new);
         agent_dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_top_bar_max_width(INPUT_WIDTH);
+            // Match the open menu width to the rendered top-bar (input) width so
+            // the dropdown doesn't overhang the search field.
             dropdown.set_match_menu_width_to_top_bar(true, ctx);
         });
 
@@ -279,11 +282,13 @@ impl CreateApiKeyModal {
     fn fetch_agents(&mut self, ctx: &mut ViewContext<Self>) {
         self.is_loading_agents = true;
         ctx.notify();
+        let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        let team_uid = team_scope.team_uid();
 
         let auth_client =
             crate::server::server_api::ServerApiProvider::as_ref(ctx).get_auth_client();
         ctx.spawn(
-            async move { auth_client.list_agent_identities().await },
+            async move { auth_client.list_agent_identities(team_uid).await },
             |me, res, ctx| {
                 me.is_loading_agents = false;
                 match res {
@@ -292,7 +297,7 @@ impl CreateApiKeyModal {
                         me.populate_agent_dropdown(ctx);
                     }
                     Err(err) => {
-                        log::error!("Failed to load agent identities: {err}");
+                        report_error!(err.context("Failed to load agent identities"));
                         ctx.emit(CreateApiKeyModalEvent::Error {
                             message: "Failed to load agents. Please close and try again."
                                 .to_string(),
@@ -305,6 +310,13 @@ impl CreateApiKeyModal {
     }
 
     fn populate_agent_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.selected_agent_uid.is_none() {
+            self.selected_agent_uid = self
+                .agents
+                .iter()
+                .find(|agent| agent.available)
+                .map(|agent| agent.uid.clone());
+        }
         let items: Vec<DropdownItem<CreateApiKeyModalAction>> = self
             .agents
             .iter()
@@ -318,7 +330,23 @@ impl CreateApiKeyModal {
             .collect();
         self.agent_dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_items(items, ctx);
+            if let Some(selected_agent_uid) = &self.selected_agent_uid {
+                dropdown.set_selected_by_action(
+                    CreateApiKeyModalAction::SelectAgent(selected_agent_uid.clone()),
+                    ctx,
+                );
+            }
         });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_agents_for_test(
+        &mut self,
+        agents: Vec<AgentIdentity>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.agents = agents;
+        self.populate_agent_dropdown(ctx);
     }
 
     fn create(&mut self, ctx: &mut ViewContext<Self>) {
@@ -364,14 +392,13 @@ impl CreateApiKeyModal {
 
         let team_id = if selected_type == ApiKeyType::Team {
             let workspaces = UserWorkspaces::as_ref(ctx);
-            match workspaces.current_team_uid() {
-                Some(uid) => Some(cynic::Id::new(uid.uid())),
+            match workspaces.team_for_view(ctx) {
+                Some(team) => Some(cynic::Id::new(team.uid.uid())),
                 None => {
                     self.request_state = RequestState::Idle;
                     ctx.emit(CreateApiKeyModalEvent::Error {
-                        message:
-                            "Unable to create a team API key because there is no current team."
-                                .to_string(),
+                        message: "Unable to create a team API key because this window has no team."
+                            .to_string(),
                     });
                     ctx.notify();
                     return;
@@ -419,6 +446,9 @@ impl CreateApiKeyModal {
         self.raw_key_copied = false;
         self.raw_key = None;
         self.selected_agent_uid = None;
+        self.agent_dropdown.update(ctx, |dropdown, ctx| {
+            dropdown.clear_filter(ctx);
+        });
         self.name_editor.update(ctx, |editor, ctx| {
             editor.clear_buffer_and_reset_undo_stack(ctx);
         });
@@ -433,7 +463,7 @@ impl CreateApiKeyModal {
 
     fn update_has_team(&mut self, ctx: &mut ViewContext<Self>) {
         let new_has_team = FeatureFlag::TeamApiKeys.is_enabled()
-            && UserWorkspaces::as_ref(ctx).current_team_uid().is_some();
+            && UserWorkspaces::as_ref(ctx).team_for_view(ctx).is_some();
         let new_has_named_agents = FeatureFlag::NamedAgents.is_enabled();
 
         if new_has_team != self.has_team || new_has_named_agents != self.has_named_agents {
@@ -468,6 +498,11 @@ impl CreateApiKeyModal {
         }
     }
 
+    fn is_create_disabled(&self, selected_key_type: ApiKeyType) -> bool {
+        self.request_state == RequestState::Pending
+            || (selected_key_type == ApiKeyType::Agent
+                && (self.selected_agent_uid.is_none() || self.is_loading_agents))
+    }
     fn render_success_content(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
@@ -639,10 +674,7 @@ impl View for CreateApiKeyModal {
                     .finish();
 
                 let is_pending = self.request_state == RequestState::Pending;
-
-                let is_create_disabled = is_pending
-                    || (selected_key_type == ApiKeyType::Agent
-                        && (self.selected_agent_uid.is_none() || self.is_loading_agents));
+                let is_create_disabled = self.is_create_disabled(selected_key_type);
 
                 let mut cancel_button_hover = appearance
                     .ui_builder()
@@ -767,6 +799,13 @@ impl View for CreateApiKeyModal {
                             .finish(),
                         );
                     } else {
+                        // The agent list can grow long, so use a FilterableDropdown
+                        // (search input + substring filtering). Its open menu must
+                        // paint above the fields below it (Name/Expiration), so the
+                        // dropdown is hoisted into the modal's outermost Stack as a
+                        // positioned overlay child anchored to this placeholder,
+                        // rather than rendered inline in the column (which would let
+                        // later siblings paint over the open menu).
                         render_agent_dropdown = true;
                         col.add_child(
                             Container::new(
@@ -943,3 +982,7 @@ fn api_key_type_control_styles(app: &AppContext) -> UiComponentStyles {
         ..Default::default()
     }
 }
+
+#[cfg(test)]
+#[path = "create_api_key_modal_tests.rs"]
+mod tests;

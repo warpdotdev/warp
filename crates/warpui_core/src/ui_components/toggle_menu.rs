@@ -266,11 +266,11 @@ impl ToggleMenu {
         on_toggle_change: Rc<ToggleMenuCallback>,
     ) -> Self {
         let mut selected_idx = toggle_menu_state_handle.get_selected_idx();
-        if let Some(id) = selected_idx {
-            if items.get(id).is_none() {
-                // Previously selected option is out of range, reset to default.
-                selected_idx = None
-            }
+        if let Some(id) = selected_idx
+            && items.get(id).is_none()
+        {
+            // Previously selected option is out of range, reset to default.
+            selected_idx = None
         }
 
         toggle_menu_state_handle.set(ToggleMenuState {

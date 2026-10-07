@@ -1,5 +1,5 @@
 use warpui::integration::TestStep;
-use warpui::{async_assert, ViewHandle};
+use warpui::{ViewHandle, async_assert};
 
 use crate::integration_testing::command_palette::assert_command_palette_is_open;
 use crate::integration_testing::navigation_palette::assert_navigation_mode_enabled_in_command_palette;

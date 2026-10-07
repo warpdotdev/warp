@@ -62,6 +62,7 @@ use crate::render::model::{
 pub enum ContentFormat {
     Markdown,
     PlainText,
+    Ipynb,
 }
 
 /// Configuration struct that holds all the fields needed to reset the entire editor.
@@ -88,6 +89,15 @@ impl<'a> InitialBufferState<'a> {
         Self {
             text,
             format: ContentFormat::Markdown,
+            version: ContentVersion::new(),
+        }
+    }
+
+    /// Create a new InitialBufferState with Jupyter notebook (`.ipynb`) format
+    pub fn ipynb(text: &'a str) -> Self {
+        Self {
+            text,
+            format: ContentFormat::Ipynb,
             version: ContentVersion::new(),
         }
     }
@@ -863,6 +873,31 @@ impl Buffer {
         )
     }
 
+    /// Construct a [`Buffer`] from the JSON contents of a `.ipynb` (Jupyter)
+    /// notebook, converting it directly into formatted text.
+    ///
+    /// Returns an [`ipynb_parser::IpynbError`] if the input is not a parseable
+    /// nbformat v4 notebook, so callers can decide how to present invalid
+    /// notebooks (e.g. routing to a raw text editor) rather than rendering a
+    /// blank or misleading view.
+    pub(crate) fn from_ipynb(
+        ipynb: &str,
+        embedded_item_conversion: Option<EmbeddedItemConversion>,
+        tab_indentation: TabIndentation,
+        selection_model: ModelHandle<BufferSelectionModel>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<Self, ipynb_parser::IpynbError> {
+        let gfm_tables = warp_core::features::FeatureFlag::MarkdownTables.is_enabled();
+        let formatted_text = ipynb_parser::ipynb_to_formatted_text(ipynb, gfm_tables)?;
+        Ok(Self::from_formatted_text(
+            formatted_text,
+            embedded_item_conversion,
+            tab_indentation,
+            selection_model,
+            ctx,
+        ))
+    }
+
     fn replace(
         &mut self,
         state: InitialBufferState,
@@ -912,6 +947,28 @@ impl Buffer {
                 selection_model.clone(),
                 ctx,
             ),
+            ContentFormat::Ipynb => match Buffer::from_ipynb(
+                state.text,
+                callback,
+                indentation,
+                selection_model.clone(),
+                ctx,
+            ) {
+                Ok(buffer) => buffer,
+                Err(e) => {
+                    safe_error! {
+                        safe: ("Failed to render Jupyter notebook; showing raw contents"),
+                        full: ("Failed to render Jupyter notebook: {e}")
+                    }
+                    Buffer::from_formatted_text(
+                        ipynb_parser::raw_fallback_formatted_text(state.text),
+                        callback,
+                        Box::new(|_, _| IndentBehavior::Ignore),
+                        selection_model.clone(),
+                        ctx,
+                    )
+                }
+            },
         };
 
         // Infer line ending from the new content and restore session_platform.
@@ -942,10 +999,10 @@ impl Buffer {
                     new_end_point,
                 }],
                 old_offset,
-                new_lines: self.styled_blocks_in_range(
+                new_lines: Arc::new(self.styled_blocks_in_range(
                     CharOffset::from(1)..self.max_charoffset(),
                     StyledBlockBoundaryBehavior::Exclusive,
-                ),
+                )),
             }),
             anchor_updates,
         }
@@ -1172,7 +1229,7 @@ impl Buffer {
         if line_text.trim().is_empty() {
             line_start
         } else {
-            self.indented_line_start(offset).unwrap_or(line_start)
+            LineIndentation::from_line_start(self, line_start).first_character()
         }
     }
 
@@ -2547,7 +2604,9 @@ impl Buffer {
                 new_end_point: full_points.end,
             }],
             old_offset: range.clone(),
-            new_lines: self.styled_blocks_in_range(range, StyledBlockBoundaryBehavior::Exclusive),
+            new_lines: Arc::new(
+                self.styled_blocks_in_range(range, StyledBlockBoundaryBehavior::Exclusive),
+            ),
         }
     }
 
@@ -4812,8 +4871,9 @@ impl Buffer {
                 // the offset we take as the parameter is right before the block item
                 // marker.
                 old_offset: old_range.clone(),
-                new_lines: self
-                    .styled_blocks_in_range(old_range, StyledBlockBoundaryBehavior::Exclusive),
+                new_lines: Arc::new(
+                    self.styled_blocks_in_range(old_range, StyledBlockBoundaryBehavior::Exclusive),
+                ),
             }),
             ..Default::default()
         }
@@ -4950,8 +5010,9 @@ impl Buffer {
                     new_end_point,
                 }],
                 old_offset: old_range.clone(),
-                new_lines: self
-                    .styled_blocks_in_range(old_range, StyledBlockBoundaryBehavior::Exclusive),
+                new_lines: Arc::new(
+                    self.styled_blocks_in_range(old_range, StyledBlockBoundaryBehavior::Exclusive),
+                ),
             }),
             anchor_updates: vec![],
         }
@@ -5032,8 +5093,9 @@ impl Buffer {
                     new_end_point,
                 }],
                 old_offset: old_range,
-                new_lines: self
-                    .styled_blocks_in_range(new_range, StyledBlockBoundaryBehavior::Exclusive),
+                new_lines: Arc::new(
+                    self.styled_blocks_in_range(new_range, StyledBlockBoundaryBehavior::Exclusive),
+                ),
             }),
             anchor_updates: vec![anchor_update],
         }
@@ -5151,10 +5213,10 @@ impl Buffer {
             delta: Some(EditDelta {
                 precise_deltas,
                 old_offset: undo_item.replacement_range.old_range,
-                new_lines: self.styled_blocks_in_range(
+                new_lines: Arc::new(self.styled_blocks_in_range(
                     undo_item.replacement_range.new_range,
                     StyledBlockBoundaryBehavior::Exclusive,
-                ),
+                )),
             }),
             anchor_updates,
         }
@@ -5200,10 +5262,10 @@ impl Buffer {
             delta: Some(EditDelta {
                 precise_deltas,
                 old_offset: undo_item.replacement_range.old_range,
-                new_lines: self.styled_blocks_in_range(
+                new_lines: Arc::new(self.styled_blocks_in_range(
                     undo_item.replacement_range.new_range,
                     StyledBlockBoundaryBehavior::Exclusive,
-                ),
+                )),
             }),
             anchor_updates,
         }

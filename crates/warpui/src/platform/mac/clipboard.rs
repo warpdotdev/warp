@@ -6,10 +6,10 @@ use anyhow::Result;
 use cocoa::base::id;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString};
-use objc2_foundation::{ns_string, NSArray, NSData, NSString};
+use objc2_foundation::{NSArray, NSData, NSString, ns_string};
 use warpui_core::clipboard::{ClipboardContent, ImageData};
 
-extern "C" {
+unsafe extern "C" {
     fn getFilePathsFromPasteboard() -> id;
 }
 
@@ -136,6 +136,7 @@ impl Clipboard {
                 ns_string!("public.gif"),
                 ns_string!("public.webp"),
                 ns_string!("public.svg-image"),
+                ns_string!("public.tiff"),
                 ns_string!("com.compuserve.gif"),
             ];
 
@@ -154,6 +155,7 @@ impl Clipboard {
                             "public.gif" | "com.compuserve.gif" => "image/gif",
                             "public.webp" => "image/webp",
                             "public.svg-image" => "image/svg+xml",
+                            "public.tiff" => "image/tiff",
                             _ => "image/unknown",
                         };
 

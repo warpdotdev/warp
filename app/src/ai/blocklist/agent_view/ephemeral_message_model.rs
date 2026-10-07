@@ -54,6 +54,7 @@ impl EphemeralMessage {
 }
 
 /// Manages messages that are dismissed either explicitly by the input or after a fixed duration.
+#[derive(Default)]
 pub struct EphemeralMessageModel {
     current_message: Option<EphemeralMessage>,
     clear_timer_handle: Option<SpawnedFutureHandle>,
@@ -66,16 +67,12 @@ pub enum EphemeralMessageModelEvent {
 
 impl EphemeralMessageModel {
     pub fn new() -> Self {
-        Self {
-            current_message: None,
-            clear_timer_handle: None,
-        }
+        Self::default()
     }
 
     pub fn current_message(&self) -> Option<&EphemeralMessage> {
         self.current_message.as_ref()
     }
-
     /// Shows a message with the given dismissal strategy.
     pub fn show_ephemeral_message(
         &mut self,

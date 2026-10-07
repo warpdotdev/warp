@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt;
 
 use cloud_objects::cloud_object::{
@@ -5,24 +6,43 @@ use cloud_objects::cloud_object::{
 };
 use cloud_objects::ids::GenericStringObjectId;
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::{JsonModel, JsonSerializer};
 
 /// Source-control provider hosting an environment's repositories.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum CodeForge {
     #[default]
     #[serde(rename = "GITHUB")]
     GitHub,
     #[serde(rename = "GITLAB")]
     GitLab,
+    /// Azure DevOps (Azure Repos). `owner` carries the
+    /// `organization/project` pair, mirroring GitLab's nested namespaces.
+    #[serde(rename = "AZURE_DEVOPS")]
+    AzureDevOps,
+    /// Explicit "no code forge" container value: a repo-less environment
+    /// that clones nothing and relies entirely on `setup_commands`.
+    #[serde(rename = "NONE")]
+    None,
+    // Catches a forge value this client build doesn't recognize yet (e.g. the
+    // server adds one before this client updates), so the rest of the
+    // environment still deserializes instead of the whole object failing.
+    #[serde(other)]
+    Unknown,
 }
 
 impl CodeForge {
+    /// The clonable host for this forge, empty for `None`/`Unknown` since
+    /// neither identifies one; callers must not fall back to `github.com`
+    /// for either, which would authenticate against the wrong host.
     pub const fn host(self) -> &'static str {
         match self {
             CodeForge::GitHub => "github.com",
             CodeForge::GitLab => "gitlab.com",
+            CodeForge::AzureDevOps => "dev.azure.com",
+            CodeForge::None | CodeForge::Unknown => "",
         }
     }
 }
@@ -32,6 +52,9 @@ impl fmt::Display for CodeForge {
         match self {
             CodeForge::GitHub => write!(f, "GitHub"),
             CodeForge::GitLab => write!(f, "GitLab"),
+            CodeForge::AzureDevOps => write!(f, "Azure DevOps"),
+            CodeForge::None => write!(f, "None"),
+            CodeForge::Unknown => write!(f, "Unknown"),
         }
     }
 }
@@ -63,11 +86,17 @@ impl fmt::Display for GithubRepo {
 pub struct SourceRepo {
     /// The repository's explicit source-control provider.
     ///
-    /// When absent, this inherits the associated environment's effective forge.
+    /// When absent, a single-forge environment fills this from the container
+    /// primary. A mixed environment leaves it unset so clone fails closed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code_forge: Option<CodeForge>,
     pub owner: String,
     pub repo: String,
+    /// Ref to check out after cloning this repository (commit SHA, branch, or
+    /// tag). Absent leaves the clone on the default branch. Benchmark trials
+    /// use it to start from a pinned base commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkout_ref: Option<String>,
 }
 
 impl SourceRepo {
@@ -76,20 +105,43 @@ impl SourceRepo {
             code_forge: Some(code_forge),
             owner,
             repo,
+            checkout_ref: None,
         }
     }
     pub fn with_default_code_forge(&self, code_forge: CodeForge) -> Self {
-        Self::new(
-            self.code_forge.unwrap_or(code_forge),
-            self.owner.clone(),
-            self.repo.clone(),
-        )
+        Self {
+            code_forge: Some(self.code_forge.unwrap_or(code_forge)),
+            owner: self.owner.clone(),
+            repo: self.repo.clone(),
+            checkout_ref: self.checkout_ref.clone(),
+        }
+    }
+    /// Returns a copy of this repository pinned to `checkout_ref`.
+    pub fn with_checkout_ref(mut self, checkout_ref: Option<String>) -> Self {
+        self.checkout_ref = checkout_ref;
+        self
     }
 
     pub fn https_clone_url(&self) -> String {
+        // Azure Repos clone URLs carry a `_git` segment between the
+        // organization/project pair and the repository, and no `.git` suffix:
+        // https://dev.azure.com/{organization}/{project}/_git/{repository}.
+        if self.code_forge == Some(CodeForge::AzureDevOps) {
+            let mut clone_url =
+                Url::parse("https://dev.azure.com").expect("valid Azure DevOps URL");
+            {
+                let mut path_segments = clone_url
+                    .path_segments_mut()
+                    .expect("Azure DevOps URL supports path segments");
+                path_segments.extend(self.owner.split('/'));
+                path_segments.push("_git");
+                path_segments.push(&self.repo);
+            }
+            return clone_url.into();
+        }
         format!(
             "https://{}/{}/{}.git",
-            self.code_forge.unwrap_or_default().host(),
+            self.code_forge.map(CodeForge::host).unwrap_or(""),
             self.owner,
             self.repo
         )
@@ -169,9 +221,18 @@ pub struct AmbientAgentEnvironment {
     pub description: Option<String>,
     /// Source-control provider hosting this environment's repositories.
     ///
-    /// Absent means GitHub for legacy environments.
+    /// Absent means GitHub for legacy environments. This is the primary/legacy
+    /// forge used to fill a repository that omits its own, never a mixed-host
+    /// marker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code_forge: Option<CodeForge>,
+    /// Concrete forges enabled on this environment.
+    ///
+    /// Present (including empty) is authoritative. Absent is a legacy payload
+    /// that predates the field; the set is then derived from `code_forge` and
+    /// the repositories.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_forges: Option<Vec<CodeForge>>,
     /// List of GitHub repositories
     #[serde(default)]
     pub github_repos: Vec<GithubRepo>,
@@ -181,9 +242,13 @@ pub struct AmbientAgentEnvironment {
     /// `github_repos`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_repos: Option<Vec<SourceRepo>>,
-    /// Base image specification
-    #[serde(flatten)]
-    pub base_image: BaseImage,
+    /// Base image specification.
+    ///
+    /// Absent when the environment does not pin a base image. The server may
+    /// omit the docker image, so the client must not fail to deserialize an
+    /// environment that lacks one.
+    #[serde(flatten, default, skip_serializing_if = "Option::is_none")]
+    pub base_image: Option<BaseImage>,
     /// List of setup commands to run after cloning
     #[serde(default)]
     pub setup_commands: Vec<String>,
@@ -196,6 +261,9 @@ pub struct AmbientAgentEnvironment {
     ///   - `Some([...])`: these specific secrets are the default
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secrets: Option<Vec<EnvironmentSecretRef>>,
+    /// Runner supplying compute for runs that do not name one themselves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_runner_uid: Option<String>,
 }
 
 impl AmbientAgentEnvironment {
@@ -210,36 +278,130 @@ impl AmbientAgentEnvironment {
             name,
             description,
             code_forge: None,
+            code_forges: None,
             github_repos,
             source_repos: None,
-            base_image: BaseImage::DockerImage(docker_image),
+            base_image: Some(BaseImage::DockerImage(docker_image)),
             setup_commands,
             providers: ProvidersConfig::default(),
             secrets: None,
+            default_runner_uid: None,
         }
     }
 
-    /// Returns the environment's source-control provider, defaulting to GitHub
-    /// for legacy environments.
+    /// Returns the environment's primary source-control provider, defaulting to
+    /// GitHub for legacy environments. This fills a repository that omits its
+    /// own forge only when the environment is not mixed; see [`Self::effective_repos`].
     pub fn effective_code_forge(&self) -> CodeForge {
         self.code_forge.unwrap_or_default()
     }
 
-    /// Returns the authoritative provider-neutral repository list.
-    pub fn effective_repos(&self) -> Vec<SourceRepo> {
-        let code_forge = self.effective_code_forge();
+    /// Returns the concrete forges enabled on this environment.
+    ///
+    /// Declared `code_forges` keep `Unknown` members so a future forge next to
+    /// GitHub is not treated as a single-forge environment.
+    pub fn effective_code_forges(&self) -> Vec<CodeForge> {
+        if let Some(code_forges) = &self.code_forges {
+            return unique_declared_forges(code_forges.iter().copied());
+        }
+        let mut forges = unique_clonable_forges(
+            self.declared_repos()
+                .into_iter()
+                .filter_map(|repo| repo.code_forge),
+        );
+        match self.effective_code_forge() {
+            CodeForge::None => {
+                if forges.is_empty() {
+                    return Vec::new();
+                }
+            }
+            primary @ (CodeForge::GitHub | CodeForge::GitLab | CodeForge::AzureDevOps) => {
+                if !forges.contains(&primary) {
+                    forges.push(primary);
+                    forges.sort_by_key(|forge| *forge as u8);
+                }
+            }
+            CodeForge::Unknown => {}
+        }
+        forges
+    }
+
+    fn is_mixed_environment(&self) -> bool {
+        let forges = self.effective_code_forges();
+        forges.len() > 1 || forges.contains(&CodeForge::Unknown)
+    }
+
+    fn fill_forge_for_repo(&self, repo: &SourceRepo) -> Option<CodeForge> {
+        if let Some(code_forge) = repo.code_forge {
+            return Some(code_forge);
+        }
+        if self.is_mixed_environment() {
+            return None;
+        }
+        Some(self.effective_code_forge())
+    }
+
+    fn declared_repos(&self) -> Vec<SourceRepo> {
         match &self.source_repos {
-            Some(source_repos) => source_repos
-                .iter()
-                .map(|repo| repo.with_default_code_forge(code_forge))
-                .collect(),
-            None => self
-                .github_repos
-                .iter()
-                .map(|repo| SourceRepo::new(code_forge, repo.owner.clone(), repo.repo.clone()))
-                .collect(),
+            Some(source_repos) => source_repos.clone(),
+            None => self.github_repos.iter().map(SourceRepo::from).collect(),
         }
     }
+
+    /// Display string for this environment's base image, empty when the
+    /// environment does not pin a base image.
+    pub fn base_image_display(&self) -> String {
+        self.base_image
+            .as_ref()
+            .map(|image| image.to_string())
+            .unwrap_or_default()
+    }
+
+    /// Returns the authoritative provider-neutral repository list.
+    ///
+    /// A repository that omits `code_forge` inherits the container primary in a
+    /// single-forge environment. In a mixed environment it is left unset so the
+    /// clone path can fail rather than silently choosing GitHub.
+    pub fn effective_repos(&self) -> Vec<SourceRepo> {
+        self.declared_repos()
+            .into_iter()
+            .map(|repo| SourceRepo {
+                code_forge: self.fill_forge_for_repo(&repo),
+                owner: repo.owner,
+                repo: repo.repo,
+                checkout_ref: repo.checkout_ref,
+            })
+            .collect()
+    }
+}
+
+fn unique_declared_forges(forges: impl IntoIterator<Item = CodeForge>) -> Vec<CodeForge> {
+    let mut seen = HashSet::new();
+    let mut unique = Vec::new();
+    for forge in forges {
+        if matches!(forge, CodeForge::None) {
+            continue;
+        }
+        if seen.insert(forge) {
+            unique.push(forge);
+        }
+    }
+    unique
+}
+
+fn unique_clonable_forges(forges: impl IntoIterator<Item = CodeForge>) -> Vec<CodeForge> {
+    let mut seen = HashSet::new();
+    let mut unique = Vec::new();
+    for forge in forges {
+        if matches!(
+            forge,
+            CodeForge::GitHub | CodeForge::GitLab | CodeForge::AzureDevOps
+        ) && seen.insert(forge)
+        {
+            unique.push(forge);
+        }
+    }
+    unique
 }
 
 impl JsonModel for AmbientAgentEnvironment {

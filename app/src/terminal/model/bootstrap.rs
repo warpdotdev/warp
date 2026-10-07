@@ -1,3 +1,4 @@
+use warp_errors::report_error;
 /// Stages during the course of bootstrapping the shell.  
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum BootstrapStage {
@@ -25,7 +26,7 @@ impl BootstrapStage {
             }
             BootstrapStage::Bootstrapped => BootstrapStage::PostBootstrapPrecmd,
             BootstrapStage::PostBootstrapPrecmd => {
-                log::error!(
+                report_error!(
                     "calling next_stage on an already bootstrapped block that has seen precmd"
                 );
                 BootstrapStage::PostBootstrapPrecmd

@@ -2,6 +2,8 @@ mod docker;
 pub mod parse_url_paths;
 pub mod web_intent_parser;
 
+pub(crate) mod browser_url_resolution;
+
 #[cfg(target_family = "wasm")]
 pub mod browser_url_handler;
 
@@ -9,10 +11,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{Result, anyhow, ensure};
 use itertools::Itertools;
 use session_sharing_protocol::common::SessionId;
 use url::Url;
+#[cfg(not(target_family = "wasm"))]
+use warp_errors::report_error;
 use warp_util::path::LineAndColumnArg;
 use warpui::notification::UserNotification;
 use warpui::platform::TerminationMode;
@@ -22,33 +26,37 @@ use self::docker::open_docker_container;
 use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
+use crate::ai::chatgpt_subscription::{CHATGPT_LINK_URI_HOST, ChatGPTSubscriptionModel};
 use crate::cloud_object::ObjectType;
 use crate::drive::{OpenWarpDriveObjectArgs, OpenWarpDriveObjectSettings};
 use crate::features::FeatureFlag;
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::linear::{LinearAction, LinearIssueWork};
 use crate::root_view::{
-    open_new_window_get_handles, open_new_with_workspace_source, NewWorkspaceSource,
-    OpenLaunchConfigArg,
+    NewWorkspaceSource, OpenLaunchConfigArg, open_new_window_get_handles,
+    open_new_with_workspace_source,
 };
 use crate::server::ids::ServerId;
 use crate::server::telemetry::{LaunchConfigUiLocation, TelemetryEvent};
-use crate::settings_view::{OpenTeamsSettingsModalArgs, SettingsSection};
+use crate::settings_view::{
+    OpenTeamsSettingsModalArgs, SettingsSection, settings_widget_deeplink_target,
+};
 use crate::tab_configs::TabConfig;
 use crate::user_config::{load_launch_configs, load_tab_configs, tab_configs_dir};
 use crate::util::openable_file_type::{
-    is_file_openable_in_warp, is_markdown_file, is_runnable_shell_script, starts_with_shebang,
+    is_file_openable_in_warp, is_markdown_file, is_runnable_shell_script,
+    renders_in_warp_notebook_viewer, starts_with_shebang,
 };
 use crate::view_components::DismissibleToast;
 use crate::workspace::auto_handoff::trigger_auto_handoff_to_cloud;
 use crate::workspace::util::PaneViewLocator;
 use crate::workspace::{
-    active_terminal_in_window, AutoCloudHandoffTrigger, ToastStack, Workspace, WorkspaceAction,
-    WorkspaceRegistry,
+    AutoCloudHandoffTrigger, ToastStack, Workspace, WorkspaceAction, WorkspaceRegistry,
+    active_terminal_in_window,
 };
 use crate::{
-    quake_mode_window_id, quake_mode_window_is_open, safe_info, send_telemetry_from_app_ctx,
-    ChannelState, OpenPath,
+    ChannelState, OpenPath, quake_mode_window_id, quake_mode_window_is_open, safe_info,
+    send_telemetry_from_app_ctx,
 };
 
 const DESKTOP_REDIRECT_URI_PATH: &str = "/desktop_redirect";
@@ -60,9 +68,35 @@ pub struct OpenMCPSettingsArgs {
     pub autoinstall: Option<String>,
 }
 
+/// Args for the `warp://settings` deeplink family, dispatched to the
+/// `root_view:open_settings_in_{existing,new}_window` actions.
+pub enum OpenSettingsArgs {
+    /// `warp://settings` — open a settings tab on the default page.
+    Default,
+    /// `warp://settings?q=<query>` — open settings with the search bar pre-filled.
+    Search { query: String },
+    /// `warp://settings?widget=<widget_id>` — open settings scrolled to a widget.
+    Widget {
+        page: SettingsSection,
+        widget_id: &'static str,
+    },
+}
+
 /// Source query parameter value indicating auth was initiated from cloud agent setup.
 /// Used to skip opening settings page after GitHub auth completes.
 pub const CLOUD_SETUP_SOURCE: &str = "cloud_setup";
+
+/// Query parameter the web checkout confirmation page appends to the desktop
+/// hand-off to report that the purchase went through. It is the shared
+/// convention across every product the web can sell (a subscription plan or a
+/// one-time credit pack), so the client has a single success signal to react to.
+pub const CHECKOUT_SUCCESSFUL_PARAM: &str = "checkoutSuccessful";
+
+/// Whether an incoming deeplink reports a completed web checkout.
+pub fn url_reports_checkout_success(url: &Url) -> bool {
+    url.query_pairs()
+        .any(|(key, value)| key == CHECKOUT_SUCCESSFUL_PARAM && value == "true")
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum UriHost {
@@ -93,6 +127,8 @@ pub enum UriHost {
     TabConfig,
     /// Focuses a specific terminal pane by its persistent session UUID.
     Session,
+    /// Result of a browser flow that links a ChatGPT account to the signed-in user.
+    ChatGPTLink,
 }
 
 impl FromStr for UriHost {
@@ -116,6 +152,9 @@ impl FromStr for UriHost {
             "linear" => Ok(Self::Linear),
             "tab_config" if FeatureFlag::TabConfigs.is_enabled() => Ok(Self::TabConfig),
             "session" => Ok(Self::Session),
+            CHATGPT_LINK_URI_HOST if FeatureFlag::ChatGPTSubscription.is_enabled() => {
+                Ok(Self::ChatGPTLink)
+            }
             _ => Err(anyhow!("Received url with unexpected host: {}", s)),
         }
     }
@@ -145,6 +184,14 @@ impl UriHost {
                             log::Level::Info,
                         );
                     });
+            }
+            UriHost::ChatGPTLink => {
+                ChatGPTSubscriptionModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.handle_link_redirect(url, ctx);
+                });
+                if let Some(window_id) = primary_window_id {
+                    ctx.windows().show_window_and_focus_app(window_id);
+                }
             }
             UriHost::Team => {
                 match url.path_segments().into_iter().flatten().last() {
@@ -337,6 +384,9 @@ impl UriHost {
             }
             UriHost::Settings => {
                 // We support opening different settings pages through URI:
+                // - warp://settings - opens a settings tab on the default page
+                // - warp://settings?q={query} - opens settings with the search bar pre-filled
+                // - warp://settings?widget={widget_id} - opens settings scrolled to a widget
                 // - warp://settings/teams?invite={email} - opens team settings with invite modal
                 // - warp://settings/billing_and_usage - opens billing and usage settings page
                 // - warp://settings/environments - opens environments settings page
@@ -344,80 +394,123 @@ impl UriHost {
                 // - warp://settings/platform - opens platform settings page
                 // - warp://settings/appearance - opens appearance settings page (themes, fonts, etc.)
                 // - warp://settings/warp_agent - opens the Warp Agent settings page (inference / API keys)
+                let query_string: HashMap<_, _> = url.query_pairs().collect();
+                // A bare `warp://settings` (or a trailing slash) yields an empty path
+                // segment; treat that as "no sub-page" so the query-param routing below
+                // handles it.
                 let settings_sub_page: Option<String> = url
                     .path_segments()
                     .into_iter()
                     .flatten()
                     .last()
+                    .filter(|s| !s.is_empty())
                     .map(|s| s.to_string());
-                let query_string: HashMap<_, _> = url.query_pairs().collect();
 
-                if let Some(settings_sub_page) = settings_sub_page {
-                    match settings_sub_page.as_str() {
-                        "teams" => {
-                            let invite_email = query_string.get("invite").map(|s| s.to_string());
-                            let args = OpenTeamsSettingsModalArgs { invite_email };
+                match settings_sub_page.as_deref() {
+                    Some("teams") => {
+                        let invite_email = query_string.get("invite").map(|s| s.to_string());
+                        let args = OpenTeamsSettingsModalArgs { invite_email };
+                        dispatch_action_in_new_or_existing_window(
+                            primary_window_id,
+                            "root_view:open_team_settings_with_email_invite_in_existing_window",
+                            "root_view:open_team_settings_with_email_invite_in_new_window",
+                            &args,
+                            ctx,
+                        );
+                    }
+                    Some("environments") => {
+                        // Notify that GitHub auth completed so views can refresh
+                        GitHubAuthNotifier::handle(ctx).update(ctx, |notifier, ctx| {
+                            notifier.notify_auth_completed(ctx);
+                        });
+
+                        // Open settings page unless auth was initiated from cloud setup
+                        // (cloud setup users should stay on their current page)
+                        let source = query_string.get("source").map(|s| s.as_ref());
+                        let skip_settings = source == Some(CLOUD_SETUP_SOURCE);
+                        if !skip_settings {
                             dispatch_action_in_new_or_existing_window(
                                 primary_window_id,
-                                "root_view:open_team_settings_with_email_invite_in_existing_window",
-                                "root_view:open_team_settings_with_email_invite_in_new_window",
-                                &args,
+                                "root_view:open_settings_page_in_existing_window",
+                                "root_view:open_settings_page_in_new_window",
+                                &SettingsSection::CloudEnvironments,
                                 ctx,
                             );
-                        }
-                        "environments" => {
-                            // Notify that GitHub auth completed so views can refresh
-                            GitHubAuthNotifier::handle(ctx).update(ctx, |notifier, ctx| {
-                                notifier.notify_auth_completed(ctx);
-                            });
-
-                            // Open settings page unless auth was initiated from cloud setup
-                            // (cloud setup users should stay on their current page)
-                            let source = query_string.get("source").map(|s| s.as_ref());
-                            let skip_settings = source == Some(CLOUD_SETUP_SOURCE);
-                            if !skip_settings {
-                                dispatch_action_in_new_or_existing_window(
-                                    primary_window_id,
-                                    "root_view:open_settings_page_in_existing_window",
-                                    "root_view:open_settings_page_in_new_window",
-                                    &SettingsSection::CloudEnvironments,
-                                    ctx,
-                                );
-                            }
-                        }
-                        "mcp" => {
-                            // warp://settings/mcp?autoinstall=<name> auto-installs a gallery MCP server.
-                            // The value is matched case-insensitively against gallery titles.
-                            let autoinstall =
-                                query_string.get("autoinstall").map(|v| v.to_string());
-                            let args = OpenMCPSettingsArgs { autoinstall };
-                            dispatch_action_in_new_or_existing_window(
-                                primary_window_id,
-                                "root_view:open_mcp_settings_in_existing_window",
-                                "root_view:open_mcp_settings_in_new_window",
-                                &args,
-                                ctx,
-                            );
-                        }
-                        // Subpages that open a settings section directly with no extra
-                        // parameters (e.g. billing_and_usage, platform, appearance,
-                        // warp_agent) are resolved via `settings_section_for_simple_subpage`.
-                        other => {
-                            if let Some(section) = settings_section_for_simple_subpage(other) {
-                                dispatch_action_in_new_or_existing_window(
-                                    primary_window_id,
-                                    "root_view:open_settings_page_in_existing_window",
-                                    "root_view:open_settings_page_in_new_window",
-                                    &section,
-                                    ctx,
-                                );
-                            } else {
-                                log::warn!("Failed to open settings pane with uri={url}");
-                            }
                         }
                     }
-                } else {
-                    log::warn!("Failed to open settings pane with uri={url}");
+                    Some("mcp") => {
+                        // warp://settings/mcp?autoinstall=<name> auto-installs a gallery MCP server.
+                        // The value is matched case-insensitively against gallery titles.
+                        let autoinstall = query_string.get("autoinstall").map(|v| v.to_string());
+                        let args = OpenMCPSettingsArgs { autoinstall };
+                        dispatch_action_in_new_or_existing_window(
+                            primary_window_id,
+                            "root_view:open_mcp_settings_in_existing_window",
+                            "root_view:open_mcp_settings_in_new_window",
+                            &args,
+                            ctx,
+                        );
+                    }
+                    // No special sub-page: route the bare host, the `q` (search) and
+                    // `widget` (scroll-to) query params, and the simple section
+                    // sub-pages (e.g. billing_and_usage, platform, appearance,
+                    // warp_agent) resolved via `settings_section_for_simple_subpage`.
+                    maybe_simple_subpage => {
+                        let simple_section =
+                            maybe_simple_subpage.and_then(settings_section_for_simple_subpage);
+                        // Pull the non-empty `q` search query out of the already
+                        // parsed pairs to pre-fill the settings search bar.
+                        let search_query = query_string
+                            .get("q")
+                            .map(|query| query.to_string())
+                            .filter(|query| !query.is_empty());
+                        let widget_target = query_string
+                            .get("widget")
+                            .and_then(|slug| settings_widget_deeplink_target(slug));
+
+                        if let Some((page, widget_id)) = widget_target {
+                            // `?widget=` scrolls to a specific widget; it takes
+                            // precedence over `?q=` since searching would filter the
+                            // target widget out of view.
+                            let args = OpenSettingsArgs::Widget { page, widget_id };
+                            dispatch_action_in_new_or_existing_window(
+                                primary_window_id,
+                                "root_view:open_settings_in_existing_window",
+                                "root_view:open_settings_in_new_window",
+                                &args,
+                                ctx,
+                            );
+                        } else if let Some(query) = search_query {
+                            let args = OpenSettingsArgs::Search { query };
+                            dispatch_action_in_new_or_existing_window(
+                                primary_window_id,
+                                "root_view:open_settings_in_existing_window",
+                                "root_view:open_settings_in_new_window",
+                                &args,
+                                ctx,
+                            );
+                        } else if let Some(section) = simple_section {
+                            dispatch_action_in_new_or_existing_window(
+                                primary_window_id,
+                                "root_view:open_settings_page_in_existing_window",
+                                "root_view:open_settings_page_in_new_window",
+                                &section,
+                                ctx,
+                            );
+                        } else if maybe_simple_subpage.is_none() {
+                            // Bare `warp://settings` opens the default settings page.
+                            let args = OpenSettingsArgs::Default;
+                            dispatch_action_in_new_or_existing_window(
+                                primary_window_id,
+                                "root_view:open_settings_in_existing_window",
+                                "root_view:open_settings_in_new_window",
+                                &args,
+                                ctx,
+                            );
+                        } else {
+                            log::warn!("Failed to open settings pane: unrecognized sub-page");
+                        }
+                    }
                 }
             }
             UriHost::Home => {
@@ -429,7 +522,7 @@ impl UriHost {
                     let result = crate::ai::mcp::TemplatableMCPServerManager::handle(ctx)
                         .update(ctx, |manager, _ctx| manager.handle_oauth_callback(url));
                     if let Err(e) = result {
-                        log::error!("Failed to handle MCP OAuth callback: {e:?}");
+                        report_error!(e.context("Failed to handle MCP OAuth callback"));
                     }
                 }
             }
@@ -530,6 +623,8 @@ impl UriHost {
             // Handler picks the window itself based on `?new_window=true`.
             Self::TabConfig => W::Nothing,
             Self::Session => W::Nothing,
+            // The handler focuses the primary window itself once the result is recorded.
+            Self::ChatGPTLink => W::Nothing,
         }
     }
 }
@@ -954,13 +1049,18 @@ impl Action {
                     return;
                 };
 
-                if let Some(workspace) = workspaces.pop() {
-                    workspace.update(ctx, |workspace, ctx| {
-                        workspace
-                            .handle_action(&WorkspaceAction::OpenRepository { path: None }, ctx);
-                    });
-                } else {
-                    log::warn!("no workspace views in window {window_id} for open repo action");
+                match workspaces.pop() {
+                    Some(workspace) => {
+                        workspace.update(ctx, |workspace, ctx| {
+                            workspace.handle_action(
+                                &WorkspaceAction::OpenRepository { path: None },
+                                ctx,
+                            );
+                        });
+                    }
+                    _ => {
+                        log::warn!("no workspace views in window {window_id} for open repo action");
+                    }
                 }
             }
             Action::CloudAgentSetup => {
@@ -979,14 +1079,18 @@ impl Action {
                     return;
                 };
 
-                if let Some(workspace) = workspaces.pop() {
-                    workspace.update(ctx, |workspace, ctx| {
-                        workspace.handle_action(&WorkspaceAction::OpenCloudAgentSetupGuide, ctx);
-                    });
-                } else {
-                    log::warn!(
-                        "no workspace views in window {window_id} for cloud agent setup action"
-                    );
+                match workspaces.pop() {
+                    Some(workspace) => {
+                        workspace.update(ctx, |workspace, ctx| {
+                            workspace
+                                .handle_action(&WorkspaceAction::OpenCloudAgentSetupGuide, ctx);
+                        });
+                    }
+                    _ => {
+                        log::warn!(
+                            "no workspace views in window {window_id} for cloud agent setup action"
+                        );
+                    }
                 }
             }
             Action::NewCloudAgentConversation => {
@@ -1002,14 +1106,17 @@ impl Action {
                     return;
                 };
 
-                if let Some(workspace) = workspaces.pop() {
-                    workspace.update(ctx, |workspace, ctx| {
-                        workspace.handle_action(&WorkspaceAction::AddAmbientAgentTab, ctx);
-                    });
-                } else {
-                    log::warn!(
-                        "no workspace views in window {window_id} for new cloud agent conversation action"
-                    );
+                match workspaces.pop() {
+                    Some(workspace) => {
+                        workspace.update(ctx, |workspace, ctx| {
+                            workspace.handle_action(&WorkspaceAction::AddAmbientAgentTab, ctx);
+                        });
+                    }
+                    _ => {
+                        log::warn!(
+                            "no workspace views in window {window_id} for new cloud agent conversation action"
+                        );
+                    }
                 }
             }
             Action::NewAgentConversation => {
@@ -1081,23 +1188,22 @@ impl Action {
                         .and_then(|window_id| active_terminal_view_id_in_window(window_id, ctx));
                 }
 
-                if let Some(terminal_view_id) = terminal_view_id {
-                    if let Some((window_id, workspace)) =
+                if let Some(terminal_view_id) = terminal_view_id
+                    && let Some((window_id, workspace)) =
                         find_workspace_for_terminal_view(terminal_view_id, ctx)
-                    {
-                        ctx.windows().show_window_and_focus_app(window_id);
-                        workspace.update(ctx, |workspace, ctx| {
-                            workspace.handle_action(
-                                &WorkspaceAction::FocusTerminalViewInWorkspace { terminal_view_id },
-                                ctx,
-                            );
-                        });
-                        // Notify after focusing so Cloud Mode panes can retry in the selected pane.
-                        GitHubAuthNotifier::handle(ctx).update(ctx, |notifier, ctx| {
-                            notifier.notify_auth_completed(ctx);
-                        });
-                        return;
-                    }
+                {
+                    ctx.windows().show_window_and_focus_app(window_id);
+                    workspace.update(ctx, |workspace, ctx| {
+                        workspace.handle_action(
+                            &WorkspaceAction::FocusTerminalViewInWorkspace { terminal_view_id },
+                            ctx,
+                        );
+                    });
+                    // Notify after focusing so Cloud Mode panes can retry in the selected pane.
+                    GitHubAuthNotifier::handle(ctx).update(ctx, |notifier, ctx| {
+                        notifier.notify_auth_completed(ctx);
+                    });
+                    return;
                 }
 
                 GitHubAuthNotifier::handle(ctx).update(ctx, |notifier, ctx| {
@@ -1212,7 +1318,7 @@ fn get_primary_window(
 /// What `open_file` should do with an incoming `file://` URL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OpenFileAction {
-    /// Open in the markdown notebook pane.
+    /// Open in the notebook viewer pane (Markdown, or Jupyter when enabled).
     Notebook,
     /// Open in Warp's code/text editor pane.
     Editor,
@@ -1223,8 +1329,16 @@ enum OpenFileAction {
 
 /// Pure routing decision for `open_file`. Extracted so it can be unit-tested without
 /// standing up a full `AppContext`.
-fn classify_open_file_action(path: &Path) -> OpenFileAction {
-    if is_markdown_file(path) {
+///
+/// The Markdown Viewer preference is passed in because macOS can hand Markdown
+/// file URLs to Warp via the file type registration in `Info.plist`. Since Warp
+/// cannot easily update that registration when the user toggles the viewer
+/// preference, the URI handler must check the preference before routing a
+/// Markdown file to the in-Warp notebook viewer. Other notebook viewer formats,
+/// such as Jupyter notebooks, are controlled by their own routing checks.
+fn classify_open_file_action(path: &Path, prefer_markdown_viewer: bool) -> OpenFileAction {
+    if renders_in_warp_notebook_viewer(path) && (!is_markdown_file(path) || prefer_markdown_viewer)
+    {
         OpenFileAction::Notebook
     } else if is_runnable_shell_script(path) {
         OpenFileAction::ExecuteInSession
@@ -1243,7 +1357,8 @@ fn can_open_file_editor_path(path: &Path) -> bool {
 }
 
 /// Handle an incoming `file://` URL.
-/// * Markdown files are opened as notebook panes.
+/// * Markdown files are opened as notebook panes when the viewer preference is enabled.
+/// * Jupyter notebook files are opened as notebook panes when their feature flag is enabled.
 /// * For directories, open a new session at the directory path.
 /// * For other files, open a new session at the parent directory path, then possibly execute the
 ///   file.
@@ -1253,7 +1368,15 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
             .map(|view_id| (window_id, view_id))
     });
 
-    let action = classify_open_file_action(&path);
+    #[cfg(feature = "local_fs")]
+    let prefer_markdown_viewer = {
+        use crate::util::file::external_editor::EditorSettings;
+        *EditorSettings::as_ref(ctx).prefer_markdown_viewer
+    };
+    #[cfg(not(feature = "local_fs"))]
+    let prefer_markdown_viewer = true;
+
+    let action = classify_open_file_action(&path, prefer_markdown_viewer);
 
     if action == OpenFileAction::Notebook {
         if let Some((primary_window_id, root_view_id)) = primary_window_and_view {
@@ -1271,7 +1394,7 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
         #[cfg(feature = "local_fs")]
         {
             use crate::code::editor_management::CodeSource;
-            use crate::root_view::{open_new_with_workspace_source, NewWorkspaceSource};
+            use crate::root_view::{NewWorkspaceSource, open_new_with_workspace_source};
             use crate::util::file::external_editor::EditorSettings;
             use crate::util::openable_file_type::resolve_file_target_to_open_in_warp;
 
@@ -1285,6 +1408,7 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
                 open_new_with_workspace_source(
                     NewWorkspaceSource::Session {
                         options: Box::default(),
+                        initial_team_uid: None,
                     },
                     ctx,
                 )
@@ -1293,13 +1417,13 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
 
             ctx.windows().show_window_and_focus_app(window_id);
 
-            if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) {
-                if let Some(workspace) = workspaces.into_iter().next() {
-                    workspace.update(ctx, |workspace, ctx| {
-                        let source = CodeSource::Finder { path: path.clone() };
-                        workspace.open_file_with_target(path, target, None, source, ctx);
-                    });
-                }
+            if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
+                && let Some(workspace) = workspaces.into_iter().next()
+            {
+                workspace.update(ctx, |workspace, ctx| {
+                    let source = CodeSource::Finder { path: path.clone() };
+                    workspace.open_file_with_target(path, target, None, source, ctx);
+                });
             }
         }
     } else {
@@ -1322,10 +1446,10 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
             );
 
             // Run command after session has been added
-            if path.is_file() {
-                if let Some(path_str) = path.to_str() {
-                    execute_file(primary_window_id, path_str, ctx);
-                }
+            if path.is_file()
+                && let Some(path_str) = path.to_str()
+            {
+                execute_file(primary_window_id, path_str, ctx);
             }
         } else {
             let open_path = OpenPath {
@@ -1336,10 +1460,10 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
             // Run command after window has been added
             if path.is_file() {
                 let active_window_id = ctx.windows().active_window();
-                if let Some(primary_window_id) = get_primary_window(active_window_id, ctx) {
-                    if let Some(path_str) = path.to_str() {
-                        execute_file(primary_window_id, path_str, ctx);
-                    }
+                if let Some(primary_window_id) = get_primary_window(active_window_id, ctx)
+                    && let Some(path_str) = path.to_str()
+                {
+                    execute_file(primary_window_id, path_str, ctx);
                 }
             }
         }
@@ -1358,7 +1482,7 @@ fn open_file_editor(
     #[cfg(feature = "local_fs")]
     {
         use crate::code::editor_management::CodeSource;
-        use crate::root_view::{open_new_with_workspace_source, NewWorkspaceSource};
+        use crate::root_view::{NewWorkspaceSource, open_new_with_workspace_source};
         use crate::util::file::external_editor::EditorSettings;
         use crate::util::openable_file_type::resolve_file_target_to_open_in_warp;
 
@@ -1379,6 +1503,7 @@ fn open_file_editor(
             open_new_with_workspace_source(
                 NewWorkspaceSource::Session {
                     options: Box::default(),
+                    initial_team_uid: None,
                 },
                 ctx,
             )
@@ -1387,17 +1512,17 @@ fn open_file_editor(
 
         ctx.windows().show_window_and_focus_app(window_id);
 
-        if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) {
-            if let Some(workspace) = workspaces.into_iter().next() {
-                workspace.update(ctx, |workspace, ctx| {
-                    let source = CodeSource::Link {
-                        path: path.clone(),
-                        range_start: line_col,
-                        range_end: None,
-                    };
-                    workspace.open_file_with_target(path, target, line_col, source, ctx);
-                });
-            }
+        if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
+            && let Some(workspace) = workspaces.into_iter().next()
+        {
+            workspace.update(ctx, |workspace, ctx| {
+                let source = CodeSource::Link {
+                    path: path.clone(),
+                    range_start: line_col,
+                    range_end: None,
+                };
+                workspace.open_file_with_target(path, target, line_col, source, ctx);
+            });
         }
     }
 }
@@ -1572,7 +1697,7 @@ fn dispatch_action_in_new_or_existing_window<T: 'static>(
 fn settings_section_for_simple_subpage(subpage: &str) -> Option<SettingsSection> {
     match subpage {
         "billing_and_usage" => Some(SettingsSection::BillingAndUsage),
-        "platform" => Some(SettingsSection::OzCloudAPIKeys),
+        "platform" => Some(SettingsSection::WarpCloudAgentAPIKeys),
         "appearance" => Some(SettingsSection::Appearance),
         "warp_agent" => Some(SettingsSection::WarpAgent),
         _ => None,
@@ -1609,7 +1734,8 @@ fn validate_custom_uri(url: &Url) -> Result<UriHost> {
         | UriHost::Codex
         | UriHost::Linear
         | UriHost::TabConfig
-        | UriHost::Session => true,
+        | UriHost::Session
+        | UriHost::ChatGPTLink => true,
         // Auth and Home only allow the desktop redirect path
         UriHost::Auth | UriHost::Home => false,
     };

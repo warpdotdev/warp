@@ -38,26 +38,26 @@ impl WorkflowsDataSource {
         workflows_by_source.insert(WorkflowSource::Local, user_workflows);
 
         #[cfg(feature = "local_fs")]
-        if let Some(session_context) = session_context {
-            if session_context.session.is_local() {
-                let project_workflows =
-                    LocalWorkflows::handle(app).update(app, move |local_workflows, _| {
-                        if let Ok(working_directory) = std::path::PathBuf::try_from(
-                            session_context.current_working_directory.clone(),
-                        ) {
-                            local_workflows
-                                .project_workflows(&working_directory, UseCache::No)
-                                .cloned()
-                                .collect_vec()
-                        } else {
-                            log::warn!(
-                                "Unable to convert session working directory into OS-native path"
-                            );
-                            Vec::new()
-                        }
-                    });
-                workflows_by_source.insert(WorkflowSource::Project, project_workflows);
-            }
+        if let Some(session_context) = session_context
+            && session_context.session.is_local()
+        {
+            let project_workflows =
+                LocalWorkflows::handle(app).update(app, move |local_workflows, _| {
+                    if let Ok(working_directory) = std::path::PathBuf::try_from(
+                        session_context.current_working_directory.clone(),
+                    ) {
+                        local_workflows
+                            .project_workflows(&working_directory, UseCache::No)
+                            .cloned()
+                            .collect_vec()
+                    } else {
+                        log::warn!(
+                            "Unable to convert session working directory into OS-native path"
+                        );
+                        Vec::new()
+                    }
+                });
+            workflows_by_source.insert(WorkflowSource::Project, project_workflows);
         }
 
         workflows_by_source.insert(

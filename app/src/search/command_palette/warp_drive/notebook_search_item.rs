@@ -13,7 +13,7 @@ use crate::search::command_palette::render_util::render_search_item_icon;
 use crate::search::command_palette::styles::SEARCH_ITEM_TEXT_PADDING;
 use crate::search::item::{IconLocation, SearchItem};
 use crate::search::notebooks::fuzzy_match::{
-    render_notebook_matched_content_with_highlight, FuzzyMatchNotebookResult,
+    FuzzyMatchNotebookResult, render_notebook_matched_content_with_highlight,
 };
 use crate::search::result_renderer::ItemHighlightState;
 use crate::ui_components::icons::Icon;

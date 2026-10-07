@@ -1,6 +1,6 @@
+use warp_core::ui::Icon;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::Icon;
 use warpui::elements::{
     Axis, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
     Expanded, Flex, Hoverable, MouseState, ParentElement, Radius, Text, Wrap, WrapFillEntireRun,

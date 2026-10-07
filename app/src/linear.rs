@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use url::Url;
 
 /// Actions that can be performed via the `warp://linear/...` deeplink.

@@ -331,23 +331,18 @@ fn init_sentry(user_id: Option<UserUid>, email: Option<String>, ctx: &mut AppCon
             // If the crash recovery process is running, mark any exception as "handled".
             // The crash recovery process will attempt to the handle that crash, if
             // we crash when handling we'll report that as an unhandled event to sentry.
-            if crash_recovery_metadata.is_crash_recovery_process_running {
-                if let Some(mechanism) = exception.mechanism.as_mut() {
-                    if let Some(false) = mechanism.handled {
-                        crash_recovery_metadata.was_unhandled_event();
-                    }
-
-                    mechanism.handled = Some(true);
+            if crash_recovery_metadata.is_crash_recovery_process_running
+                && let Some(mechanism) = exception.mechanism.as_mut()
+            {
+                if let Some(false) = mechanism.handled {
+                    crash_recovery_metadata.was_unhandled_event();
                 }
+
+                mechanism.handled = Some(true);
             }
         }
 
-        for (k, v) in APPLICATION_LIFECYCLE_STAGE.read().to_sentry_tags() {
-            event.tags.insert(k.to_string(), v);
-        }
-        for (k, v) in TAGS.read().iter() {
-            event.tags.insert(k.clone(), v.clone());
-        }
+        set_event_tags(&mut event);
 
         Some(event)
     }));
@@ -359,7 +354,7 @@ fn init_sentry(user_id: Option<UserUid>, email: Option<String>, ctx: &mut AppCon
     // Initialize the appropriate native Sentry SDK.
     #[cfg(enable_crash_recovery)]
     {
-        use crate::crash_recovery::{is_crash_recovery_process_running, CrashRecovery};
+        use crate::crash_recovery::{CrashRecovery, is_crash_recovery_process_running};
 
         // If the crash recovery process is running, defer initialization of Sentry native until the
         // crash recovery process is torn down. Unlike Sentry Rust, we can't easily mark events as
@@ -518,9 +513,23 @@ fn release_version() -> &'static str {
     ChannelState::app_version().unwrap_or("<no tag>")
 }
 
+fn set_event_tags(event: &mut sentry::protocol::Event<'_>) {
+    for (key, value) in APPLICATION_LIFECYCLE_STAGE.read().to_sentry_tags() {
+        event.tags.insert(key.to_string(), value);
+    }
+    for (key, value) in TAGS.read().iter() {
+        event.tags.insert(key.clone(), value.clone());
+    }
+}
+
 /// Sets the warp.client_type Sentry tag.
 pub fn set_client_type_tag(client_id: &str) {
     set_tag("warp.client_type", client_id);
+}
+
+/// Sets the warp.task_id Sentry tag.
+pub fn set_task_id_tag(task_id: &str) {
+    set_tag("warp.task_id", task_id);
 }
 
 /// Initializes the warp.virtual_env Sentry tag group.
@@ -615,3 +624,7 @@ impl ToSentryTags for &AntivirusInfo {
         )]
     }
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

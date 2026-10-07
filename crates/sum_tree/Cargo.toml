@@ -2,11 +2,12 @@
 authors = ["Warp Team <dev@warp.dev>"]
 name = "sum_tree"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 publish.workspace = true
 license.workspace = true
 
 [dependencies]
+warp_errors.workspace = true
 arrayvec.workspace = true
 log.workspace = true
 

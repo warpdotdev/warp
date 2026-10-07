@@ -6,20 +6,20 @@ use std::rc::Rc;
 
 use cocoa::base::{id, nil};
 use lazy_static::lazy_static;
-use objc2::rc::{autoreleasepool, Retained};
+use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::Sel;
-use objc2::{sel, MainThreadMarker};
+use objc2::{MainThreadMarker, sel};
 use objc2_app_kit::{
     NSApplication, NSControlStateValue, NSDownArrowFunctionKey, NSEndFunctionKey,
-    NSEventModifierFlags, NSF10FunctionKey, NSF11FunctionKey, NSF12FunctionKey, NSF13FunctionKey,
-    NSF14FunctionKey, NSF15FunctionKey, NSF16FunctionKey, NSF17FunctionKey, NSF18FunctionKey,
-    NSF19FunctionKey, NSF1FunctionKey, NSF20FunctionKey, NSF2FunctionKey, NSF3FunctionKey,
-    NSF4FunctionKey, NSF5FunctionKey, NSF6FunctionKey, NSF7FunctionKey, NSF8FunctionKey,
-    NSF9FunctionKey, NSHomeFunctionKey, NSInsertFunctionKey, NSLeftArrowFunctionKey, NSMenu,
+    NSEventModifierFlags, NSF1FunctionKey, NSF2FunctionKey, NSF3FunctionKey, NSF4FunctionKey,
+    NSF5FunctionKey, NSF6FunctionKey, NSF7FunctionKey, NSF8FunctionKey, NSF9FunctionKey,
+    NSF10FunctionKey, NSF11FunctionKey, NSF12FunctionKey, NSF13FunctionKey, NSF14FunctionKey,
+    NSF15FunctionKey, NSF16FunctionKey, NSF17FunctionKey, NSF18FunctionKey, NSF19FunctionKey,
+    NSF20FunctionKey, NSHomeFunctionKey, NSInsertFunctionKey, NSLeftArrowFunctionKey, NSMenu,
     NSMenuItem, NSPageDownFunctionKey, NSPageUpFunctionKey, NSRightArrowFunctionKey,
     NSUpArrowFunctionKey,
 };
-use objc2_foundation::{ns_string, NSInteger, NSString};
+use objc2_foundation::{NSInteger, NSString, ns_string};
 use warpui_core::actions::StandardAction;
 use warpui_core::keymap::Keystroke;
 use warpui_core::platform::menu::{
@@ -118,7 +118,7 @@ impl MenuItemData {
 /// We hand Cocoa a void* which is really an unwrapped Box<Rc<MenuItemData>>.
 /// The NSMenuItem logically holds a reference count on this Rc, which is balanced in our dealloc callback below.
 /// The following functions are invoked from Cocoa.
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C-unwind" fn warp_menu_item_needs_update(item: id, ctx: *mut c_void) {
     let ctx = MenuItemData::read_context(ctx);
     let props: MenuItemProperties = ctx.props.borrow().clone();
@@ -142,20 +142,20 @@ extern "C-unwind" fn warp_menu_item_needs_update(item: id, ctx: *mut c_void) {
     unsafe { apply_changes(updated_properties, item) };
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C-unwind" fn warp_menu_item_triggered(_item: id, ctx: *mut c_void) {
     let func = &MenuItemData::read_context(ctx).triggered;
     callback_dispatcher().menu_item_triggered(func);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C-unwind" fn warp_menu_item_deallocated(ctx: *mut c_void) {
     MenuItemData::consume_context(ctx)
 }
 
 // Declarations of functions implemented in ObjC files.
 // These signatures must be manually synced - there's no type checking here.
-extern "C" {
+unsafe extern "C" {
     fn make_delegated_menu(title: id) -> id;
     fn make_warp_custom_menu_item(ctx: *mut c_void) -> id;
     fn set_menu_item_submenu(item: id, submenu: id);
@@ -320,95 +320,104 @@ unsafe fn apply_changes(changes: MenuItemPropertyChanges, item: id) {
 }
 
 unsafe fn make_submenu(menu_items: Vec<MenuItem>) -> id {
-    let nsmenu = make_delegated_menu(ns_string!("") as *const NSString as id);
-    let nsmenu_ref = &*nsmenu.cast::<NSMenu>();
-    for menu_item in menu_items {
-        nsmenu_ref.addItem(&*make_menu_item(menu_item).cast::<NSMenuItem>());
+    unsafe {
+        let nsmenu = make_delegated_menu(ns_string!("") as *const NSString as id);
+        let nsmenu_ref = &*nsmenu.cast::<NSMenu>();
+        for menu_item in menu_items {
+            nsmenu_ref.addItem(&*make_menu_item(menu_item).cast::<NSMenuItem>());
+        }
+        nsmenu
     }
-    nsmenu
 }
 
 unsafe fn make_menu_item(menu_item: MenuItem) -> id {
-    match menu_item {
-        MenuItem::Custom(custom_menu_item) => {
-            let props = custom_menu_item.properties;
-            let data = Rc::new(MenuItemData {
-                props: RefCell::new(props.clone()),
-                triggered: custom_menu_item.callback,
-                update: custom_menu_item.updater,
-            });
+    unsafe {
+        match menu_item {
+            MenuItem::Custom(custom_menu_item) => {
+                let props = custom_menu_item.properties;
+                let data = Rc::new(MenuItemData {
+                    props: RefCell::new(props.clone()),
+                    triggered: custom_menu_item.callback,
+                    update: custom_menu_item.updater,
+                });
 
-            let nsmenu_item = make_warp_custom_menu_item(MenuItemData::into_context(data));
+                let nsmenu_item = make_warp_custom_menu_item(MenuItemData::into_context(data));
 
-            // Set initial properties for the item.
-            apply_changes(
-                MenuItemPropertyChanges::for_new_item(props, custom_menu_item.submenu),
-                nsmenu_item,
-            );
+                // Set initial properties for the item.
+                apply_changes(
+                    MenuItemPropertyChanges::for_new_item(props, custom_menu_item.submenu),
+                    nsmenu_item,
+                );
 
-            nsmenu_item
+                nsmenu_item
+            }
+            MenuItem::Standard(standard_action) => {
+                let mtm = MainThreadMarker::new_unchecked();
+                let properties = resolve_standard_action(standard_action);
+                let nsmenu_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+                    mtm.alloc(),
+                    properties.title,
+                    Some(properties.action),
+                    properties.shortcut,
+                );
+                nsmenu_item.setKeyEquivalentModifierMask(properties.modifiers);
+                nsmenu_item.setTag(standard_action as NSInteger);
+                Retained::autorelease_ptr(nsmenu_item) as id
+            }
+            MenuItem::Separator => Retained::autorelease_ptr(NSMenuItem::separatorItem(
+                MainThreadMarker::new_unchecked(),
+            )) as id,
+            MenuItem::Services => make_services_menu_item(),
         }
-        MenuItem::Standard(standard_action) => {
-            let mtm = MainThreadMarker::new_unchecked();
-            let properties = resolve_standard_action(standard_action);
-            let nsmenu_item = NSMenuItem::initWithTitle_action_keyEquivalent(
-                mtm.alloc(),
-                properties.title,
-                Some(properties.action),
-                properties.shortcut,
-            );
-            nsmenu_item.setKeyEquivalentModifierMask(properties.modifiers);
-            nsmenu_item.setTag(standard_action as NSInteger);
-            Retained::autorelease_ptr(nsmenu_item) as id
-        }
-        MenuItem::Separator => {
-            Retained::autorelease_ptr(NSMenuItem::separatorItem(MainThreadMarker::new_unchecked()))
-                as id
-        }
-        MenuItem::Services => make_services_menu_item(),
     }
 }
 
 /// \return an autoreleased NSMenuItem with a submenu represented by \p menu.
 // This supports creating the top-level menu bar.
 unsafe fn make_top_level_menu_item(menu: Menu) -> id {
-    let mtm = MainThreadMarker::new_unchecked();
-    let nsmenu = make_delegated_menu(Retained::as_ptr(&NSString::from_str(&menu.title)) as id);
-    let nsmenu = &*nsmenu.cast::<NSMenu>();
+    unsafe {
+        let mtm = MainThreadMarker::new_unchecked();
+        let nsmenu = make_delegated_menu(Retained::as_ptr(&NSString::from_str(&menu.title)) as id);
+        let nsmenu = &*nsmenu.cast::<NSMenu>();
 
-    if menu.is_window_menu() {
-        // `setWindowsMenu` gives us all the default window menu items like
-        // 'Enter Full Screen' and 'Tile Window to Left of Screen'.
-        NSApplication::sharedApplication(mtm).setWindowsMenu(Some(nsmenu));
+        if menu.is_window_menu() {
+            // `setWindowsMenu` gives us all the default window menu items like
+            // 'Enter Full Screen' and 'Tile Window to Left of Screen'.
+            NSApplication::sharedApplication(mtm).setWindowsMenu(Some(nsmenu));
+        }
+
+        for menu_item in menu.menu_items {
+            nsmenu.addItem(&*make_menu_item(menu_item).cast::<NSMenuItem>());
+        }
+
+        let menuitem = NSMenuItem::new(mtm);
+        menuitem.setSubmenu(Some(nsmenu));
+        Retained::autorelease_ptr(menuitem) as id
     }
-
-    for menu_item in menu.menu_items {
-        nsmenu.addItem(&*make_menu_item(menu_item).cast::<NSMenuItem>());
-    }
-
-    let menuitem = NSMenuItem::new(mtm);
-    menuitem.setSubmenu(Some(nsmenu));
-    Retained::autorelease_ptr(menuitem) as id
 }
 
 /// \return an NSMenu representing the given menu bar.
 pub unsafe fn make_main_menu(menubar: MenuBar) -> Retained<NSMenu> {
-    let mtm = MainThreadMarker::new_unchecked();
-    let main_menu = NSMenu::new(mtm);
-    for menu in menubar.menus {
-        main_menu.addItem(&*make_top_level_menu_item(menu).cast::<NSMenuItem>());
+    unsafe {
+        let mtm = MainThreadMarker::new_unchecked();
+        let main_menu = NSMenu::new(mtm);
+        for menu in menubar.menus {
+            main_menu.addItem(&*make_top_level_menu_item(menu).cast::<NSMenuItem>());
+        }
+        main_menu
     }
-    main_menu
 }
 
 /// \return an NSMenu representing the given dock menu.
 pub unsafe fn make_dock_menu(menu: Menu) -> Retained<NSMenu> {
-    let mtm = MainThreadMarker::new_unchecked();
-    let dock_menu = NSMenu::new(mtm);
-    for item in menu.menu_items {
-        dock_menu.addItem(&*make_menu_item(item).cast::<NSMenuItem>());
+    unsafe {
+        let mtm = MainThreadMarker::new_unchecked();
+        let dock_menu = NSMenu::new(mtm);
+        for item in menu.menu_items {
+            dock_menu.addItem(&*make_menu_item(item).cast::<NSMenuItem>());
+        }
+        dock_menu
     }
-    dock_menu
 }
 
 #[cfg(test)]

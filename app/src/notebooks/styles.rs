@@ -7,10 +7,10 @@ use warpui::elements::{
 use warpui::platform::Cursor;
 use warpui::ui_components::components::UiComponent as _;
 use warpui::units::{IntoPixels, Pixels};
-use warpui::{fonts, Element};
+use warpui::{Element, fonts};
 
 use crate::appearance::Appearance;
-use crate::settings::{derived_notebook_font_size, FontSettings};
+use crate::settings::{FontSettings, derived_notebook_font_size};
 use crate::themes::theme::Fill;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;

@@ -4,13 +4,13 @@ use warpui::elements::{
     MainAxisAlignment, MouseStateHandle, ParentElement, Wrap,
 };
 use warpui::ui_components::components::UiComponent;
-use warpui::{AppContext, Entity, View, ViewContext, ViewHandle};
+use warpui::{AppContext, Entity, TypedActionView, View, ViewContext, ViewHandle};
 
+use super::SettingsSection;
 use super::settings_page::{
     MatchData, PageType, SettingsPageEvent, SettingsPageMeta, SettingsPageViewHandle,
     SettingsWidget,
 };
-use super::SettingsSection;
 use crate::appearance::Appearance;
 use crate::channel::ChannelState;
 use crate::themes::theme::ColorScheme;
@@ -30,6 +30,9 @@ impl AboutPageView {
 
 impl Entity for AboutPageView {
     type Event = SettingsPageEvent;
+}
+impl TypedActionView for AboutPageView {
+    type Action = ();
 }
 
 impl View for AboutPageView {

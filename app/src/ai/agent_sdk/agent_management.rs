@@ -6,20 +6,20 @@ use std::io::Write as _;
 use anyhow::anyhow;
 use comfy_table::Cell;
 use serde::Serialize;
+use warp_cli::SortOrderArg;
 use warp_cli::agent::{
     AgentCreateArgs, AgentDeleteArgs, AgentGetArgs, AgentListArgs, AgentSortByArg, AgentUpdateArgs,
     OutputFormat,
 };
 use warp_cli::json_filter::JsonOutput;
-use warp_cli::SortOrderArg;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::output::TableFormat;
+use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{
     AgentResponse, CreateAgentRequest, SecretRef, UpdateAgentRequest,
 };
-use crate::server::server_api::ServerApiProvider;
 
 /// Singleton model that runs async work for named-agent CLI commands.
 struct AgentManagementRunner;
@@ -90,15 +90,35 @@ impl AgentManagementRunner {
         output_format: OutputFormat,
         ctx: &mut ModelContext<Self>,
     ) -> anyhow::Result<()> {
+        let refresh = super::common::refresh_workspace_metadata(ctx);
+        ctx.spawn(refresh, move |runner, result, ctx| {
+            if let Err(error) = result {
+                super::report_fatal_error(error, ctx);
+                return;
+            }
+            if let Err(error) = runner.list_after_refresh(args, output_format, ctx) {
+                super::report_fatal_error(error, ctx);
+            }
+        });
+        Ok(())
+    }
+
+    fn list_after_refresh(
+        &self,
+        args: AgentListArgs,
+        output_format: OutputFormat,
+        ctx: &mut ModelContext<Self>,
+    ) -> anyhow::Result<()> {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let team_scope = super::common::request_team_scope_for_cli(&args.team_selection, ctx)?;
         let future = async move {
             ensure_json_sort_is_not_requested(output_format, &args.json_output, &args)?;
 
             if matches!(output_format, OutputFormat::Json) || args.json_output.force_json_output() {
-                let response = ai_client.list_agents_raw().await?;
+                let response = ai_client.list_agents_raw(team_scope).await?;
                 super::output::print_raw_json(response, &args.json_output)?;
             } else {
-                let mut agents = ai_client.list_agents().await?;
+                let mut agents = ai_client.list_agents(team_scope).await?;
                 sort_agents(&mut agents, args.sort_by, args.sort_order);
                 print_agents(&agents, output_format)?;
             }
@@ -135,22 +155,35 @@ impl AgentManagementRunner {
         output_format: OutputFormat,
         ctx: &mut ModelContext<Self>,
     ) -> anyhow::Result<()> {
+        let refresh = super::common::refresh_workspace_metadata(ctx);
+        ctx.spawn(refresh, move |runner, result, ctx| {
+            if let Err(error) = result {
+                super::report_fatal_error(error, ctx);
+                return;
+            }
+            if let Err(error) = runner.create_after_refresh(args, output_format, ctx) {
+                super::report_fatal_error(error, ctx);
+            }
+        });
+        Ok(())
+    }
+
+    fn create_after_refresh(
+        &self,
+        args: AgentCreateArgs,
+        output_format: OutputFormat,
+        ctx: &mut ModelContext<Self>,
+    ) -> anyhow::Result<()> {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let team_scope = super::common::request_team_scope_for_cli(&args.team_selection, ctx)?;
         let future = async move {
             let json_output = args.json_output.clone();
-            let request = CreateAgentRequest {
-                name: args.name,
-                description: args.description,
-                secrets: secret_refs(args.secrets),
-                skills: args.skills,
-                base_model: args.base_model,
-                environment_id: args.environment,
-            };
+            let request = build_create_request(args);
             if matches!(output_format, OutputFormat::Json) || json_output.force_json_output() {
-                let response = ai_client.create_agent_raw(request).await?;
+                let response = ai_client.create_agent_raw(request, team_scope).await?;
                 super::output::print_raw_json(response, &json_output)?;
             } else {
-                let agent = ai_client.create_agent(request).await?;
+                let agent = ai_client.create_agent(request, team_scope).await?;
                 print_single_agent(&agent, output_format)?;
             }
             Ok(())
@@ -169,61 +202,16 @@ impl AgentManagementRunner {
         let future = async move {
             let uid = args.uid.clone();
             let json_output = args.json_output.clone();
-            let current_agent = if args.add_secrets.is_empty()
-                && args.remove_secrets.is_empty()
-                && args.add_skills.is_empty()
-                && args.remove_skills.is_empty()
-            {
-                None
-            } else {
+            let needs_current_agent = !args.add_secrets.is_empty()
+                || !args.remove_secrets.is_empty()
+                || !args.add_skills.is_empty()
+                || !args.remove_skills.is_empty();
+            let current_agent = if needs_current_agent {
                 Some(ai_client.get_agent(&uid).await?)
+            } else {
+                None
             };
-            let request = UpdateAgentRequest {
-                name: args.name,
-                description: if args.remove_description {
-                    Some(String::new())
-                } else {
-                    args.description
-                },
-                secrets: if args.remove_all_secrets {
-                    Some(vec![])
-                } else if args.add_secrets.is_empty() && args.remove_secrets.is_empty() {
-                    None
-                } else {
-                    let current_agent = current_agent
-                        .as_ref()
-                        .expect("current agent is fetched when applying secret deltas");
-                    Some(apply_secret_deltas(
-                        &current_agent.secrets,
-                        args.add_secrets,
-                        args.remove_secrets,
-                    ))
-                },
-                skills: if args.remove_all_skills {
-                    Some(vec![])
-                } else if args.add_skills.is_empty() && args.remove_skills.is_empty() {
-                    None
-                } else {
-                    let current_agent = current_agent
-                        .as_ref()
-                        .expect("current agent is fetched when applying skill deltas");
-                    Some(apply_string_deltas(
-                        &current_agent.skills,
-                        args.add_skills,
-                        args.remove_skills,
-                    ))
-                },
-                base_model: if args.remove_base_model {
-                    Some(String::new())
-                } else {
-                    args.base_model
-                },
-                environment_id: if args.remove_environment {
-                    Some(String::new())
-                } else {
-                    args.environment
-                },
-            };
+            let request = build_update_request(args, current_agent.as_ref());
             if request_is_empty(&request) {
                 return Err(anyhow!("No updates requested"));
             }
@@ -260,6 +248,84 @@ impl AgentManagementRunner {
 
 fn secret_refs(secrets: Vec<String>) -> Vec<SecretRef> {
     secrets.into_iter().map(|name| SecretRef { name }).collect()
+}
+
+/// Build the public API create request from the CLI args.
+///
+/// Extracted from `create` so the field forwarding (including `prompt`) can be
+/// unit-tested without a live server.
+fn build_create_request(args: AgentCreateArgs) -> CreateAgentRequest {
+    CreateAgentRequest {
+        name: args.name,
+        description: args.description,
+        prompt: args.prompt,
+        secrets: secret_refs(args.secrets),
+        skills: args.skills,
+        base_model: args.base_model,
+        environment_id: args.environment,
+    }
+}
+
+/// Build the public API update request from the CLI args.
+///
+/// Each scalar field uses the API's PATCH semantics: `--remove-*` sends an
+/// empty value to clear it, the replacement flag sends the new value, and
+/// omitting both leaves it unchanged (`None`). `current_agent` is only required
+/// when secret/skill deltas are applied. Extracted from `update` so the field
+/// forwarding (including `prompt`) can be unit-tested without a live server.
+fn build_update_request(
+    args: AgentUpdateArgs,
+    current_agent: Option<&AgentResponse>,
+) -> UpdateAgentRequest {
+    UpdateAgentRequest {
+        name: args.name,
+        description: if args.remove_description {
+            Some(String::new())
+        } else {
+            args.description
+        },
+        prompt: if args.remove_prompt {
+            Some(String::new())
+        } else {
+            args.prompt
+        },
+        secrets: if args.remove_all_secrets {
+            Some(vec![])
+        } else if args.add_secrets.is_empty() && args.remove_secrets.is_empty() {
+            None
+        } else {
+            let current_agent =
+                current_agent.expect("current agent is fetched when applying secret deltas");
+            Some(apply_secret_deltas(
+                &current_agent.secrets,
+                args.add_secrets,
+                args.remove_secrets,
+            ))
+        },
+        skills: if args.remove_all_skills {
+            Some(vec![])
+        } else if args.add_skills.is_empty() && args.remove_skills.is_empty() {
+            None
+        } else {
+            let current_agent =
+                current_agent.expect("current agent is fetched when applying skill deltas");
+            Some(apply_string_deltas(
+                &current_agent.skills,
+                args.add_skills,
+                args.remove_skills,
+            ))
+        },
+        base_model: if args.remove_base_model {
+            Some(String::new())
+        } else {
+            args.base_model
+        },
+        environment_id: if args.remove_environment {
+            Some(String::new())
+        } else {
+            args.environment
+        },
+    }
 }
 
 /// Add and remove the requested secrets, starting with `current` as a baseline.
@@ -301,6 +367,7 @@ fn apply_string_deltas(
 fn request_is_empty(request: &UpdateAgentRequest) -> bool {
     request.name.is_none()
         && request.description.is_none()
+        && request.prompt.is_none()
         && request.secrets.is_none()
         && request.skills.is_none()
         && request.base_model.is_none()
@@ -359,6 +426,24 @@ fn sort_agents(
     });
 }
 
+const PROMPT_DISPLAY_MAX_CHARS: usize = 60;
+
+fn display_prompt(prompt: Option<&str>) -> String {
+    let Some(prompt) = prompt else {
+        return display_optional(None);
+    };
+    let prompt = prompt.lines().collect::<Vec<_>>().join(" ");
+    if prompt.chars().count() <= PROMPT_DISPLAY_MAX_CHARS {
+        return prompt;
+    }
+
+    prompt
+        .chars()
+        .take(PROMPT_DISPLAY_MAX_CHARS - 1)
+        .chain(std::iter::once('…'))
+        .collect()
+}
+
 impl TableFormat for AgentResponse {
     fn header() -> Vec<Cell> {
         vec![
@@ -370,6 +455,7 @@ impl TableFormat for AgentResponse {
             Cell::new("Skills"),
             Cell::new("Base model"),
             Cell::new("Environment"),
+            Cell::new("Prompt"),
         ]
     }
 
@@ -385,6 +471,7 @@ impl TableFormat for AgentResponse {
             Cell::new(display_list(self.skills.iter().map(String::as_str))),
             Cell::new(display_optional(self.base_model.as_deref())),
             Cell::new(display_optional(self.environment_id.as_deref())),
+            Cell::new(display_prompt(self.prompt.as_deref())),
         ]
     }
 }

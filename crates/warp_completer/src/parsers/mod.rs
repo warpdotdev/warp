@@ -1,9 +1,6 @@
-#[cfg_attr(feature = "v2", path = "v2.rs")]
-#[cfg_attr(not(feature = "v2"), path = "legacy.rs")]
-mod imp;
-#[cfg(not(feature = "v2"))]
-pub use imp::SignatureAtTokenIndex;
-use imp::*;
+mod legacy;
+pub use legacy::SignatureAtTokenIndex;
+use legacy::*;
 
 mod errors;
 pub use errors::{ArgumentError, ParseError, ParseErrorReason};
@@ -159,17 +156,17 @@ fn parse_arg(
     }
     let arg_types_to_validate =
         arg_signature.map(ArgType::get_arg_types_to_validate_from_arg_signature);
-    if let Some(arg_types_to_validate) = arg_types_to_validate {
-        if !arg_types_to_validate.is_empty() {
-            return (
-                ParsedExpression::new(
-                    Expression::ValidatableArgument(arg_types_to_validate),
-                    ParsedToken(lite_arg.item.clone()),
-                )
-                .spanned(lite_arg.span),
-                None,
-            );
-        }
+    if let Some(arg_types_to_validate) = arg_types_to_validate
+        && !arg_types_to_validate.is_empty()
+    {
+        return (
+            ParsedExpression::new(
+                Expression::ValidatableArgument(arg_types_to_validate),
+                ParsedToken(lite_arg.item.clone()),
+            )
+            .spanned(lite_arg.span),
+            None,
+        );
     }
     (
         ParsedExpression::new(Expression::Literal, ParsedToken(lite_arg.item.clone()))

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use pathfinder_geometry::rect::RectF;
 use warpui::elements::DraggableState;
-use warpui::geometry::vector::{vec2f, Vector2F};
+use warpui::geometry::vector::{Vector2F, vec2f};
 use warpui::platform::TerminationMode;
 use warpui::windowing::WindowManager;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};
@@ -88,8 +88,8 @@ use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};
 ///
 /// View transfers between windows are handled by `transfer_view_tree_to_window`.
 use crate::tab::tab_position_id;
-use crate::workspace::view::{tab_bar_rects_for_window, TransferredTab, TAB_BAR_POSITION_ID};
 use crate::workspace::WorkspaceRegistry;
+use crate::workspace::view::{TAB_BAR_POSITION_ID, TransferredTab, tab_bar_rects_for_window};
 
 /// Identifies a window and tab-bar index where a dragged tab can be attached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -426,6 +426,46 @@ impl CrossWindowTabDrag {
             .is_some_and(|d| d.source_placeholder_consumed)
     }
 
+    /// Returns the index of the detached-placeholder slot that the source
+    /// window's **horizontal** tab bar should collapse to zero width, or
+    /// `None` to keep every slot at full width.
+    ///
+    /// The placeholder is collapsed only while the dragged tab is actually
+    /// away from `window_id` — floating in the dedicated preview window, or
+    /// ghosted / handed off into another window. While the cursor is back
+    /// over this window's own tab bar (`reordering_in_source`) the placeholder
+    /// is the live drag slot, reordered in place exactly like an in-window
+    /// drag, so it must stay full width. Collapsing it there hides the drop
+    /// zone and, because a zero-width slot makes the adjacent-swap thresholds
+    /// in `Workspace::calculate_updated_tab_index` (`left.max_x` vs
+    /// `right.min_x`) overlap, makes the placeholder oscillate every frame —
+    /// the "fuzzy shake". The vertical tabs panel never collapses the
+    /// placeholder, which is why it does not exhibit this.
+    pub fn collapsed_source_placeholder_index(&self, window_id: WindowId) -> Option<usize> {
+        let drag = self.active_drag.as_ref()?;
+        if drag.source_window_id != window_id || drag.reordering_in_source {
+            return None;
+        }
+        let has_handoff = matches!(drag.phase, DragPhase::InsertedInTarget { .. });
+        if drag.has_dedicated_preview_window() || has_handoff {
+            self.source_placeholder_tab_index()
+        } else {
+            None
+        }
+    }
+
+    /// Test-only override of the in-progress drag's `reordering_in_source`
+    /// flag, which is otherwise only set from within `on_drag` once the cursor
+    /// re-enters the source window's tab bar. Lets unit tests exercise
+    /// [`Self::collapsed_source_placeholder_index`] without driving a full
+    /// multi-window drag.
+    #[cfg(test)]
+    pub(crate) fn set_reordering_in_source_for_test(&mut self, reordering_in_source: bool) {
+        if let Some(drag) = self.active_drag.as_mut() {
+            drag.reordering_in_source = reordering_in_source;
+        }
+    }
+
     pub fn has_dedicated_preview_window(&self) -> bool {
         self.active_drag
             .as_ref()
@@ -561,13 +601,12 @@ impl CrossWindowTabDrag {
     /// `source_placeholder_tab_index` all operate on the placeholder's current
     /// position rather than its original one. No-op for single-tab drags.
     pub fn set_source_placeholder_index(&mut self, index: usize) {
-        if let Some(drag) = self.active_drag.as_mut() {
-            if let DragSource::MultiTabWindow {
+        if let Some(drag) = self.active_drag.as_mut()
+            && let DragSource::MultiTabWindow {
                 source_tab_index, ..
             } = &mut drag.source
-            {
-                *source_tab_index = index;
-            }
+        {
+            *source_tab_index = index;
         }
     }
 
@@ -1099,24 +1138,23 @@ impl CrossWindowTabDrag {
         // Ghost phase: drop at the ghost's insertion position without any
         // prior view-tree transfer. Return DropInto so the workspace calls
         // perform_handoff (real transfer) and then finalize.
-        if let Some(drag) = self.active_drag.as_ref() {
-            if let DragPhase::GhostInTarget {
+        if let Some(drag) = self.active_drag.as_ref()
+            && let DragPhase::GhostInTarget {
                 target_window_id,
                 target_insertion_index,
                 ..
             } = drag.phase
-            {
-                let target = AttachTarget {
-                    window_id: target_window_id,
-                    insertion_index: target_insertion_index,
-                };
-                log::info!(
-                    "tab_drag: on_drop GhostInTarget -> DropResult::DropInto target_wid={} insertion_index={}",
-                    target.window_id,
-                    target.insertion_index
-                );
-                return DropResult::DropInto { target };
-            }
+        {
+            let target = AttachTarget {
+                window_id: target_window_id,
+                insertion_index: target_insertion_index,
+            };
+            log::info!(
+                "tab_drag: on_drop GhostInTarget -> DropResult::DropInto target_wid={} insertion_index={}",
+                target.window_id,
+                target.insertion_index
+            );
+            return DropResult::DropInto { target };
         }
 
         // Source-reorder drop: the detached placeholder is already positioned
@@ -1124,19 +1162,19 @@ impl CrossWindowTabDrag {
         // Resolved directly from `reordering_in_source` (not
         // `cross_window_attach_target`) so it still works now that the source
         // is focused and in front of the preview.
-        if let Some(drag) = self.active_drag.as_ref() {
-            if drag.reordering_in_source {
-                let target = AttachTarget {
-                    window_id: drag.source_window_id,
-                    insertion_index: drag.source_tab_index(),
-                };
-                log::info!(
-                    "tab_drag: on_drop ReorderInSource -> DropResult::DropInto target_wid={} insertion_index={}",
-                    target.window_id,
-                    target.insertion_index
-                );
-                return DropResult::DropInto { target };
-            }
+        if let Some(drag) = self.active_drag.as_ref()
+            && drag.reordering_in_source
+        {
+            let target = AttachTarget {
+                window_id: drag.source_window_id,
+                insertion_index: drag.source_tab_index(),
+            };
+            log::info!(
+                "tab_drag: on_drop ReorderInSource -> DropResult::DropInto target_wid={} insertion_index={}",
+                target.window_id,
+                target.insertion_index
+            );
+            return DropResult::DropInto { target };
         }
 
         let (phase_name, has_dedicated_preview, drop_resolution_attempted_before) =
@@ -1359,28 +1397,34 @@ impl CrossWindowTabDrag {
             return DropResult::ClosePreviewOnly { preview_window_id };
         }
 
-        if let Some(ws) = WorkspaceRegistry::as_ref(ctx).get(preview_window_id, ctx) {
-            ws.update(ctx, |ws, ctx| {
-                ws.set_is_tab_drag_preview(false);
-                // The preview's `suppress_detach_panes_on_window_close` flag
-                // is latched to `true` by every forward handoff out of the
-                // preview (`prepare_for_transferred_tab_attach` in
-                // `execute_handoff_multi_tab_to_other`) and is *not* cleared
-                // by `reverse_handoff` for the multi-tab case (only
-                // `is_tab_drag_preview` is restored there). Promoting the
-                // preview to a permanent window without clearing this flag
-                // would leave a normal-looking window that silently skips
-                // pane-detach on its next user-initiated close.
-                ws.set_suppress_detach_panes_on_window_close(false);
-                ws.sync_window_button_visibility(ctx);
-                ws.update_titlebar_height(ctx);
-                ctx.notify();
-            });
-        } else {
+        let Some(ws) = WorkspaceRegistry::as_ref(ctx).get(preview_window_id, ctx) else {
+            // The preview window's workspace is already gone, so there is no
+            // window to promote and the dragged pane group no longer lives in
+            // a preview we control. Falling through would return
+            // `RemoveSourceTab` / `CloseSourceWindow` keyed on a now-stale
+            // `source_tab_index`, tearing out a bystander tab or panicking in
+            // `remove_tab`. Bail without touching the source.
             log::warn!(
-                "tab_drag: finalize_preview_as_new_window no workspace for preview_wid={preview_window_id}"
+                "tab_drag: finalize_preview_as_new_window no workspace for preview_wid={preview_window_id} -> NoOp"
             );
-        }
+            return DropResult::NoOp;
+        };
+        ws.update(ctx, |ws, ctx| {
+            ws.set_is_tab_drag_preview(false);
+            // The preview's `suppress_detach_panes_on_window_close` flag
+            // is latched to `true` by every forward handoff out of the
+            // preview (`prepare_for_transferred_tab_attach` in
+            // `execute_handoff_multi_tab_to_other`) and is *not* cleared
+            // by `reverse_handoff` for the multi-tab case (only
+            // `is_tab_drag_preview` is restored there). Promoting the
+            // preview to a permanent window without clearing this flag
+            // would leave a normal-looking window that silently skips
+            // pane-detach on its next user-initiated close.
+            ws.set_suppress_detach_panes_on_window_close(false);
+            ws.sync_window_button_visibility(ctx);
+            ws.update_titlebar_height(ctx);
+            ctx.notify();
+        });
         ctx.windows().show_window_and_focus_app(preview_window_id);
         Self::deferred_focus(preview_window_id, ctx);
 
@@ -1869,33 +1913,33 @@ fn cross_window_attach_target(
             }
         };
 
-    if source_window_id != preview_window_id {
-        if let Some(window_bounds) = ctx.window_bounds(&source_window_id) {
-            for tab_bar_position in tab_bar_rects_for_window(source_window_id, ctx) {
-                let tab_bar_position_on_screen = RectF::new(
-                    vec2f(
-                        window_bounds.min_x() + tab_bar_position.min_x(),
-                        window_bounds.min_y() + tab_bar_position.min_y(),
-                    ),
-                    tab_bar_position.size(),
-                );
-                if !expanded_rect(tab_bar_position_on_screen, TAB_BAR_HIT_MARGIN)
-                    .contains_point(cursor_position_on_screen)
-                {
-                    continue;
-                }
-                let insertion_index = compute_insertion_index_for_window(
-                    source_window_id,
-                    caller_window_id,
-                    cursor_position_on_screen,
-                    ctx,
-                );
-                update_best_target(
-                    source_window_id,
-                    insertion_index,
-                    tab_bar_position_on_screen,
-                );
+    if source_window_id != preview_window_id
+        && let Some(window_bounds) = ctx.window_bounds(&source_window_id)
+    {
+        for tab_bar_position in tab_bar_rects_for_window(source_window_id, ctx) {
+            let tab_bar_position_on_screen = RectF::new(
+                vec2f(
+                    window_bounds.min_x() + tab_bar_position.min_x(),
+                    window_bounds.min_y() + tab_bar_position.min_y(),
+                ),
+                tab_bar_position.size(),
+            );
+            if !expanded_rect(tab_bar_position_on_screen, TAB_BAR_HIT_MARGIN)
+                .contains_point(cursor_position_on_screen)
+            {
+                continue;
             }
+            let insertion_index = compute_insertion_index_for_window(
+                source_window_id,
+                caller_window_id,
+                cursor_position_on_screen,
+                ctx,
+            );
+            update_best_target(
+                source_window_id,
+                insertion_index,
+                tab_bar_position_on_screen,
+            );
         }
     }
 
@@ -1946,27 +1990,30 @@ fn compute_insertion_index_for_window(
     cursor_position_on_screen: Vector2F,
     ctx: &AppContext,
 ) -> usize {
-    if target_window_id == caller_window_id {
-        if let Some(ws) = WorkspaceRegistry::as_ref(ctx).get(caller_window_id, ctx) {
-            return ws.read(ctx, |workspace, ctx| {
-                workspace.tab_insertion_index_for_cursor(
-                    target_window_id,
-                    cursor_position_on_screen,
-                    ctx,
-                )
-            });
-        }
-    }
-
-    if let Some(ws) = WorkspaceRegistry::as_ref(ctx).get(target_window_id, ctx) {
-        ws.read(ctx, |workspace, ctx| {
+    if target_window_id == caller_window_id
+        && let Some(ws) = WorkspaceRegistry::as_ref(ctx).get(caller_window_id, ctx)
+    {
+        return ws.read(ctx, |workspace, ctx| {
             workspace.tab_insertion_index_for_cursor(
                 target_window_id,
                 cursor_position_on_screen,
                 ctx,
             )
-        })
-    } else {
-        0
+        });
+    }
+
+    match WorkspaceRegistry::as_ref(ctx).get(target_window_id, ctx) {
+        Some(ws) => ws.read(ctx, |workspace, ctx| {
+            workspace.tab_insertion_index_for_cursor(
+                target_window_id,
+                cursor_position_on_screen,
+                ctx,
+            )
+        }),
+        _ => 0,
     }
 }
+
+#[cfg(test)]
+#[path = "cross_window_tab_drag_tests.rs"]
+mod tests;

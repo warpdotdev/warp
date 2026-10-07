@@ -12,8 +12,8 @@ use strum_macros::EnumIter;
 #[cfg(not(target_family = "wasm"))]
 pub use templatable_manager::McpIntegration;
 pub use templatable_manager::TemplatableMCPServerManager;
-use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon;
+use warp_core::ui::appearance::Appearance;
 
 use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::cloud_object::model::json_model::JsonModel;
@@ -21,9 +21,9 @@ use crate::cloud_object::{
     CloudObjectUuid, GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType,
     Revision,
 };
-use crate::drive::items::mcp_server::WarpDriveMCPServer;
-use crate::drive::items::WarpDriveItem;
 use crate::drive::CloudObjectTypeAndId;
+use crate::drive::items::WarpDriveItem;
+use crate::drive::items::mcp_server::WarpDriveMCPServer;
 #[cfg(not(target_family = "wasm"))]
 use crate::persistence::model::MCPEnvironmentVariables;
 use crate::server::ids::SyncId;
@@ -49,6 +49,8 @@ cfg_if::cfg_if! {
 
 pub mod gallery;
 pub use gallery::MCPGalleryManager;
+#[cfg(not(target_family = "wasm"))]
+pub mod builtin;
 pub mod templatable;
 #[cfg(not(target_family = "wasm"))]
 pub use cloud_object_models::{
@@ -66,6 +68,8 @@ pub use templatable_installation::{VariableType, VariableValue};
 pub mod parsing;
 #[cfg(not(target_family = "wasm"))]
 pub use parsing::ParsedTemplatableMCPServerResult;
+#[cfg(not(target_family = "wasm"))]
+use warp_errors::report_error;
 #[cfg(not(target_family = "wasm"))]
 pub mod reconnecting_peer;
 
@@ -110,7 +114,7 @@ impl StringModel for MCPServer {
         QueueItem::UpdateMCPServer {
             model: object.model().clone().into(),
             id: object.id,
-            revision: revision_ts.or_else(|| object.metadata.revision.clone()),
+            revision: revision_ts.or(object.metadata.revision),
         }
     }
 
@@ -289,12 +293,11 @@ fn find_server_map(
 
     let pointers = ["/mcp/servers", "/servers", "/mcpServers"];
     for pointer in pointers.into_iter() {
-        if let Some(value) = config.pointer(pointer) {
-            if let Ok(servers) =
+        if let Some(value) = config.pointer(pointer)
+            && let Ok(servers) =
                 serde_json::from_value::<HashMap<String, JSONMCPServer>>(value.clone())
-            {
-                return Ok(servers);
-            }
+        {
+            return Ok(servers);
         }
     }
     serde_json::from_value::<HashMap<String, JSONMCPServer>>(config)
@@ -377,7 +380,9 @@ impl MCPServerExt for MCPServer {
         // serde_json::to_string_pretty should never fail on our JSONMCPServer type, but better to
         // not crash the app if it does.
         .unwrap_or_else(|err| {
-            log::error!("Could not serialize MCP server to user json: {err:?}");
+            report_error!(
+                anyhow::Error::new(err).context("Could not serialize MCP server to user json")
+            );
             Default::default()
         })
     }
@@ -417,7 +422,9 @@ impl MCPServerExt for MCPServer {
         // serde_json::to_string_pretty should never fail on our JSONMCPServer type, but better to
         // not crash the app if it does.
         .unwrap_or_else(|err| {
-            log::error!("Could not serialize MCP server to user json: {err:?}");
+            report_error!(
+                anyhow::Error::new(err).context("Could not serialize MCP server to user json")
+            );
             Default::default()
         });
 
@@ -456,7 +463,8 @@ impl MCPServerExt for MCPServer {
                     apply_values(&mut cli_server.static_env_vars, &env_vars);
                 }
                 Err(error) => {
-                    log::error!("Could not read MCP server environment variables from sqlite: {error:?}");
+                    report_error!(anyhow::Error::new(error)
+                        .context("Could not read MCP server environment variables from sqlite"));
                 }
             }
         }
@@ -484,10 +492,22 @@ pub enum MCPServerUpdate {
     },
 }
 
+/// The home directory that global (non-Warp) provider configs are resolved against. Tests
+/// redirect it through `HOME`; `dirs::home_dir()` ignores that variable on Windows.
+pub(crate) fn home_dir() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(home) = std::env::var_os("HOME")
+        && !home.is_empty()
+    {
+        return Some(PathBuf::from(home));
+    }
+    dirs::home_dir()
+}
+
 pub(crate) fn home_config_file_path(provider: MCPProvider) -> Option<PathBuf> {
     match provider {
         MCPProvider::Warp => warp_core::paths::warp_home_mcp_config_file_path(),
-        _ => dirs::home_dir().map(|home_dir| home_dir.join(provider.home_config_path())),
+        _ => home_dir().map(|home_dir| home_dir.join(provider.home_config_path())),
     }
 }
 
@@ -511,10 +531,15 @@ impl MCPProvider {
 
     pub fn icon(&self) -> Icon {
         match self {
-            MCPProvider::Warp => Icon::Warp,
+            // Warp's own agent MCP config — use the Warp agent brand mark.
+            MCPProvider::Warp => Icon::Agent,
             MCPProvider::Claude => Icon::ClaudeLogo,
             MCPProvider::Codex => Icon::OpenAILogo,
-            MCPProvider::Agents => Icon::Warp,
+            // "Other Agents" is the cross-tool .agents/.mcp.json convention for
+            // third-party agent tooling (not Warp-branded). Use a neutral AI
+            // icon so this row never carries the Warp agent mark, and the two
+            // rows remain visually distinct once Icon::Agent gets its own asset.
+            MCPProvider::Agents => Icon::AiAssistant,
         }
     }
 

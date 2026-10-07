@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use async_channel::Sender;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -14,7 +14,7 @@ use cloud_object_client::{
 pub use cloud_object_client::{GuestIdentifier, ObjectClient};
 use cloud_object_models::JsonSerializer;
 use cynic::{MutationBuilder, QueryBuilder, SubscriptionBuilder};
-use warp_core::report_error;
+use warp_errors::report_error;
 use warp_graphql::error::UserFacingErrorInterface;
 use warp_graphql::generic_string_object::GenericStringObjectInput;
 use warp_graphql::mutations::add_object_guests::{
@@ -153,8 +153,8 @@ use crate::server::ids::{ClientId, HashableId, ServerId, ServerIdAndType, SyncId
 use crate::server::server_api::ServerApi;
 use crate::server::sync_queue::SerializedModel;
 use crate::settings::Preference;
-use crate::workflows::workflow_enum::WorkflowEnum;
 use crate::workflows::WorkflowId;
+use crate::workflows::workflow_enum::WorkflowEnum;
 use crate::workspaces::gql_convert::object_update_message_from_gql;
 use crate::workspaces::user_profiles::UserProfileWithUID;
 
@@ -699,11 +699,7 @@ impl ObjectClient for ServerApi {
             },
             message_sender,
             stream_ready_sender,
-            self.iap_state
-                .as_ref()
-                .and_then(|state| state.proxy_auth_header())
-                .into_iter()
-                .collect(),
+            self.iap_proxy_auth_header().into_iter().collect(),
         )
         .await;
 
@@ -836,6 +832,11 @@ impl ObjectClient for ServerApi {
                                     gso,
                                 );
                             }
+                            // GSO formats unknown to this client build (e.g. the
+                            // server-only `JsonRunner`) are skipped so syncing of
+                            // known objects still succeeds instead of failing to
+                            // decode the whole response.
+                            warp_graphql::generic_string_object::GenericStringObjectFormat::Unknown => {}
                         }
                     }
                 }
@@ -1410,6 +1411,9 @@ fn parse_server_gso<T, S>(
         Ok(object) => {
             map.entry(format).or_default().push(Box::new(object));
         }
-        Err(err) => report_error!(err.context(format!("Failed to convert {format:?} {uid}"))),
+        Err(err) => report_error!(
+            err.context(format!("Failed to convert {format:?}")),
+            extra: { "uid" => %uid }
+        ),
     }
 }

@@ -1,9 +1,9 @@
 use chrono::{Duration, Utc};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::{
-    AgentConfigSnapshot, AmbientAgentTask, AmbientAgentTaskState, TaskStatusErrorCode,
-    TaskStatusMessage,
+    AgentConfigSnapshot, AgentSource, AmbientAgentLiveSessionState, AmbientAgentTask,
+    AmbientAgentTaskState, ExecutionLocation, TaskStatusErrorCode, TaskStatusMessage,
 };
 
 fn make_task(snapshot_name: Option<&str>, title: &str) -> AmbientAgentTask {
@@ -24,6 +24,7 @@ fn make_task(snapshot_name: Option<&str>, title: &str) -> AmbientAgentTask {
         run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: None,
+        execution_location: None,
         session_id: None,
         session_link: None,
         creator: None,
@@ -35,6 +36,8 @@ fn make_task(snapshot_name: Option<&str>, title: &str) -> AmbientAgentTask {
         artifacts: vec![],
         last_event_sequence: None,
         children: vec![],
+        debug_agent_available: false,
+        scope: None,
     }
 }
 
@@ -49,6 +52,7 @@ fn task_json_with_run_time(run_time_key: &str, run_time: Value) -> Value {
         "started_at": now,
         "updated_at": now,
         "status_message": null,
+        "execution_location": "LOCAL",
         "session_id": null,
         "session_link": null,
         "creator": null,
@@ -142,4 +146,124 @@ fn ambient_agent_task_deserializes_run_time_iso8601() {
         serde_json::from_value(task_json_with_run_time("run_time", json!("PT2M30S"))).unwrap();
 
     assert_eq!(task.run_time(), Some(Duration::seconds(150)));
+    assert_eq!(task.execution_location, Some(ExecutionLocation::Local));
+}
+
+#[test]
+fn ambient_agent_task_deserializes_and_totals_request_usage() {
+    let mut task = task_json_with_run_time("run_time", json!("PT1S"));
+    task["request_usage"] = json!({
+        "inference_cost": 10.0,
+        "compute_cost": 2.0,
+        "platform_cost": 3.0,
+        "inference_cost_usd": 0.18,
+        "compute_cost_usd": 0.036,
+        "platform_cost_usd": 0.054
+    });
+
+    let task: AmbientAgentTask = serde_json::from_value(task).unwrap();
+
+    assert_eq!(task.credits_used(), Some(15.0));
+    assert_eq!(task.cost_in_cents(), Some(27.0));
+}
+
+#[test]
+fn ambient_agent_task_totals_available_request_usage_dollar_components() {
+    let mut task = task_json_with_run_time("run_time", json!("PT1S"));
+    task["request_usage"] = json!({
+        "inference_cost_usd": 0.18
+    });
+
+    let task: AmbientAgentTask = serde_json::from_value(task).unwrap();
+
+    assert_eq!(task.cost_in_cents(), Some(18.0));
+}
+
+#[test]
+fn ambient_agent_task_has_no_dollar_cost_when_usd_fields_are_missing() {
+    let mut task = task_json_with_run_time("run_time", json!("PT1S"));
+    task["request_usage"] = json!({
+        "inference_cost": 10.0,
+        "compute_cost": 2.0,
+        "platform_cost": 3.0
+    });
+
+    let task: AmbientAgentTask = serde_json::from_value(task).unwrap();
+
+    assert_eq!(task.credits_used(), Some(15.0));
+    assert_eq!(task.cost_in_cents(), None);
+}
+
+#[test]
+fn ambient_agent_task_deserializes_github_webhook_source() {
+    let mut task = task_json_with_run_time("run_time", json!("PT1S"));
+    task["source"] = json!("GITHUB_WEBHOOK");
+
+    let task: AmbientAgentTask = serde_json::from_value(task).unwrap();
+
+    assert_eq!(task.source, Some(AgentSource::GitHubWebhook));
+    assert!(task.blocks_cloud_followups());
+}
+
+#[test]
+fn ambient_agent_task_deserializes_orchestration_source() {
+    let mut task = task_json_with_run_time("run_time", json!("PT1S"));
+    task["source"] = json!("ORCHESTRATION");
+
+    let task: AmbientAgentTask = serde_json::from_value(task).unwrap();
+
+    assert_eq!(task.source, Some(AgentSource::Orchestration));
+    assert!(!task.blocks_cloud_followups());
+}
+
+#[test]
+fn retained_failed_and_error_tasks_have_attachable_live_sessions() {
+    let session_id = "22222222-2222-2222-2222-222222222222";
+
+    for state in [AmbientAgentTaskState::Failed, AmbientAgentTaskState::Error] {
+        let mut task = make_task(None, "Retained failed task");
+        task.state = state;
+        task.session_link = Some(format!("https://app.warp.dev/session/{session_id}"));
+        task.is_sandbox_running = true;
+
+        assert!(task.has_active_execution());
+        assert!(!task.can_submit_cloud_followup());
+        assert!(matches!(
+            task.active_live_session_state(),
+            AmbientAgentLiveSessionState::Attachable {
+                session_id: resolved_session_id
+            } if resolved_session_id.to_string() == session_id
+        ));
+    }
+}
+
+#[test]
+fn ended_failed_task_with_stale_session_metadata_is_inactive() {
+    let mut task = make_task(None, "Ended failed task");
+    task.state = AmbientAgentTaskState::Failed;
+    task.session_id = Some("22222222-2222-2222-2222-222222222222".to_string());
+    task.session_link =
+        Some("https://app.warp.dev/session/22222222-2222-2222-2222-222222222222".to_string());
+    task.is_sandbox_running = false;
+
+    assert_eq!(
+        task.active_live_session_state(),
+        AmbientAgentLiveSessionState::Inactive
+    );
+    assert!(!task.has_active_execution());
+    assert!(task.can_submit_cloud_followup());
+}
+
+#[test]
+fn succeeded_task_does_not_become_attachable_from_stale_running_metadata() {
+    let mut task = make_task(None, "Succeeded task");
+    task.state = AmbientAgentTaskState::Succeeded;
+    task.session_id = Some("22222222-2222-2222-2222-222222222222".to_string());
+    task.is_sandbox_running = true;
+
+    assert_eq!(
+        task.active_live_session_state(),
+        AmbientAgentLiveSessionState::Inactive
+    );
+    assert!(!task.has_active_execution());
 }

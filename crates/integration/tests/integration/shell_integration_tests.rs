@@ -40,6 +40,7 @@ integration_tests! {
     test_ps1_value_not_null_or_exit,
     // Tests bash-specific behavior.
     test_custom_ps1_expansion_bash,
+    test_bash_honor_ps1_expands_dynamic_prompt_once,
     // Tests zsh-specific behavior.
     test_auto_title,
     // Tests zsh-specific behavior.
@@ -60,6 +61,14 @@ integration_tests! {
     test_builtin_completions,
     // Tests bootstrap reports completable keywords.
     test_keyword_completions,
+    // Native shell completions, driven against the user's real shell.
+    test_native_shell_completions_menu,
+    test_zsh_native_completions_without_compinit_use_filepaths,
+    test_command_runs_cleanly_after_native_shell_completion,
+    test_native_shell_completions_used_when_no_bundled_spec,
+    test_native_shell_completions_skipped_when_a_bundled_spec_answers,
+    test_native_shell_completions_reach_a_spec_command_native_only,
+    test_native_shell_completions_powershell_member_access,
     // Tests bash-specific behavior.
     test_histcontrol_env_var,
     // Tests initial working directory behavior.
@@ -77,6 +86,9 @@ integration_tests! {
     test_color_overrides_in_prompt_dont_crash,
     // Tests zsh-specific behavior with nounset option.
     test_zsh_bootstraps_with_nounset_option,
+    test_zsh_cursor_mode_vi_bindings_do_not_corrupt_commands,
+    // Tests PowerShell-specific behavior with PSReadLine's vi edit mode.
+    test_pwsh_vi_edit_mode_does_not_corrupt_commands,
 
     // Tests of ssh wrapper logic from bootstrap script.
     test_ssh_wrapper_into_bash,
@@ -98,6 +110,8 @@ integration_tests! {
     // Tests of custom prompt behavior.
     test_copy_prompt_from_block_honor_ps1_enabled,
     test_copy_prompt_from_input_honor_ps1_enabled,
+    test_copy_block_command_and_output_honor_ps1_disabled,
+    test_copy_block_command_and_output_honor_ps1_enabled,
     // Tests zsh-specific right-prompt behavior in Warp prompt mode.
     test_warp_prompt_unsets_zsh_rprompt,
 

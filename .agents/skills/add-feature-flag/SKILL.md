@@ -11,6 +11,9 @@ Add a new feature flag to gate code changes in the Warp codebase.
 
 Feature flags in Warp are compile-time flags that allow features to be selectively enabled for different channels (e.g.: Dev, Stable). They use a small runtime plumbing layer that checks if a flag is enabled.
 
+## TUI note
+The `FeatureFlag` enum (`warp_core/src/features.rs`) and the runtime `FeatureFlag::X.is_enabled()` check are SHARED by both front-ends: the GUI desktop app (`app/`) and the headless TUI (`crates/warp_tui`). The Cargo-feature steps in this skill (`app/Cargo.toml`, `app/src/lib.rs`) are GUI-app-specific. Prefer runtime `is_enabled()` checks so a flag works in both front-ends with no per-binary wiring. Only if you truly need a compile-time Cargo feature in the TUI, wire it into `crates/warp_tui/Cargo.toml` as well. Test the TUI with `./script/run-tui`.
+
 ## Steps
 
 ### 1. Add to Cargo.toml

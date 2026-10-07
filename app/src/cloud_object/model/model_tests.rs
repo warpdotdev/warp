@@ -16,26 +16,26 @@ use crate::auth::{AuthStateProvider, UserUid};
 use crate::cloud_object::model::actions::ObjectActions;
 use crate::cloud_object::model::generic_string_model::GenericStringModel;
 use crate::cloud_object::model::view::{
-    CloudViewModel, EditorState, UpdateTimestamp, EDITOR_TIMEOUT_DURATION_MINUTES,
+    CloudViewModel, EDITOR_TIMEOUT_DURATION_MINUTES, EditorState, UpdateTimestamp,
 };
 use crate::cloud_object::{
     CloudObjectMetadata, CloudObjectPermissions, CloudObjectStatuses, CloudObjectSyncStatus,
     NumInFlightRequests, ObjectIdType, Owner, ServerMetadata, ServerPermissions,
 };
-use crate::drive::folders::{CloudFolderModel, FolderId};
 use crate::drive::DriveIndexVariant;
+use crate::drive::folders::{CloudFolderModel, FolderId};
 use crate::features::FeatureFlag;
 use crate::notebooks::{CloudNotebookModel, NotebookId};
 use crate::server::cloud_objects::listener::ObjectUpdateMessage;
 use crate::server::cloud_objects::update_manager::InitialLoadResponse;
 use crate::server::ids::{ServerId, ServerIdAndType};
+use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::object::ObjectClient;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
-use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
-use crate::settings::{init_and_register_user_preferences, Preference};
+use crate::settings::{Preference, init_and_register_user_preferences};
 use crate::system::SystemStats;
 use crate::workflows::CloudWorkflowModel;
 use crate::workspaces::team::Team;
@@ -63,12 +63,14 @@ lazy_static! {
         None,
         None,
         None,
+        None,
     );
 
     static ref TEST_WORKSPACE: Workspace = Workspace::from_local_cache(
         WorkspaceUid::from(ServerId::from(1)),
         "Test Workspace".to_string(),
         Some(vec![TEST_TEAM.clone()]),
+        None,
     );
 }
 
@@ -327,11 +329,7 @@ fn move_object(id: ServerId, folder_id: Option<FolderId>, app: &mut App) {
 
         let metadata = ServerMetadata {
             uid: id,
-            revision: object
-                .metadata()
-                .revision
-                .clone()
-                .expect("Revision is required"),
+            revision: object.metadata().revision.expect("Revision is required"),
             current_editor_uid: object.metadata().current_editor_uid.clone(),
             metadata_last_updated_ts: (object
                 .metadata()
@@ -962,12 +960,16 @@ fn test_force_refresh_correctly_resets_timestamp() {
             });
 
         // Initialize app with pending refresh = true!
+        let start = Utc::now();
         initialize_app(&mut app, Vec::new(), Arc::new(cloud_object_server_api_mock));
 
         // Spend time waiting for the initial load to finish etc.
         warpui::r#async::Timer::after(Duration::from_secs(1)).await;
 
-        // Check that pending refresh is within the acceptable hour range.
+        // Check that pending refresh is within the acceptable hour range. The lower bound is
+        // measured from `start`: the refresh is scheduled relative to the clock at the moment it
+        // completes, which is before this check runs, so comparing against `Utc::now()` here
+        // fails whenever the random offset lands on the minimum.
         CloudModel::handle(&app).read(&app, |model, _ctx| {
             let time_option = model.time_of_next_force_refresh;
             assert!(time_option.is_some());
@@ -977,8 +979,7 @@ fn test_force_refresh_correctly_resets_timestamp() {
                     + chrono::Duration::minutes(MAX_MINUTES_UNTIL_NEXT_FORCE_REFRESH))
             );
             assert!(
-                time >= (Utc::now()
-                    + chrono::Duration::minutes(MIN_MINUTES_UNTIL_NEXT_FORCE_REFRESH))
+                time >= (start + chrono::Duration::minutes(MIN_MINUTES_UNTIL_NEXT_FORCE_REFRESH))
             );
         });
     })
@@ -1790,15 +1791,19 @@ fn test_shared_object_in_unshared_folder() {
             assert!(!notebook.is_trashed(cloud_model));
 
             // Check that iteration APIs include the notebook where it's expected.
-            assert!(cloud_model
-                .active_cloud_objects_in_space(Space::Shared, ctx)
-                .any(|obj| obj.uid() == notebook.uid()));
-            assert!(cloud_model
-                .active_cloud_objects_in_location_without_descendents(
-                    CloudObjectLocation::Space(Space::Shared),
-                    ctx
-                )
-                .any(|obj| obj.uid() == notebook.uid()));
+            assert!(
+                cloud_model
+                    .active_cloud_objects_in_space(Space::Shared, ctx)
+                    .any(|obj| obj.uid() == notebook.uid())
+            );
+            assert!(
+                cloud_model
+                    .active_cloud_objects_in_location_without_descendents(
+                        CloudObjectLocation::Space(Space::Shared),
+                        ctx
+                    )
+                    .any(|obj| obj.uid() == notebook.uid())
+            );
             assert_eq!(
                 cloud_model
                     .trashed_cloud_objects_in_space(Space::Shared, ctx)

@@ -281,6 +281,7 @@ fn make_version_info(version_string: impl Into<String>, is_rollback: bool) -> Ve
         is_rollback: Some(is_rollback),
         version_for_new_users: None,
         cli_version: None,
+        tui_version: None,
     }
 }
 

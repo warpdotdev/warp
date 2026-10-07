@@ -10,9 +10,10 @@ use warp_core::user_preferences::GetUserPreferences;
 use warpui::{App, SingletonEntity};
 
 use super::{
-    initialize_cloud_preferences_syncer, ClientIdProvider, CloudPreferencesSyncer,
-    ForceCloudToMatchLocal, SETTINGS_FILE_LAST_SYNCED_HASH_KEY,
+    ClientIdProvider, CloudPreferencesSyncer, ForceCloudToMatchLocal,
+    SETTINGS_FILE_LAST_SYNCED_HASH_KEY, initialize_cloud_preferences_syncer,
 };
+use crate::ASSETS;
 use crate::auth::auth_state::AuthState;
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
 use crate::cloud_object::{
@@ -23,7 +24,7 @@ use crate::cloud_object::{
 };
 use crate::server::cloud_objects::fake_object_client::FakeObjectClient;
 use crate::server::cloud_objects::test_utils::{
-    create_update_manager_struct, initialize_app, UpdateManagerStruct,
+    UpdateManagerStruct, create_update_manager_struct, initialize_app,
 };
 use crate::server::cloud_objects::update_manager::{InitialLoadResponse, UpdateManager};
 use crate::server::ids::{ClientId, ServerId, ServerIdAndType, SyncId};
@@ -31,7 +32,7 @@ use crate::server::sync_queue::SyncQueue;
 use crate::settings::cloud_preferences::{
     CloudPreferenceModel, CloudPreferencesSettings, Platform,
 };
-use crate::ASSETS;
+use crate::test_util::assert_eventually;
 
 define_settings_group!(TestSettings, settings: [
     all_platforms_cloud_setting: AllPlatforms {
@@ -39,6 +40,7 @@ define_settings_group!(TestSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     all_platforms_always_sync_cloud_setting: AllPlatformsAlwaysSync {
@@ -46,6 +48,7 @@ define_settings_group!(TestSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     mac_only_cloud_setting: MacOnly {
@@ -53,6 +56,7 @@ define_settings_group!(TestSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::MAC,
         sync_to_cloud: SyncToCloud::PerPlatform(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     linux_only_cloud_setting: LinuxOnly {
@@ -60,6 +64,7 @@ define_settings_group!(TestSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::LINUX,
         sync_to_cloud: SyncToCloud::PerPlatform(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     platform_specific_cloud_setting: PlatformSpecific {
@@ -67,6 +72,7 @@ define_settings_group!(TestSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::PerPlatform(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     non_value_syncable_setting: NonValueSyncable {
@@ -74,6 +80,7 @@ define_settings_group!(TestSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     non_cloud_setting: NonCloud {
@@ -81,6 +88,7 @@ define_settings_group!(TestSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     hashset_cloud_setting: HashSetSetting {
@@ -88,6 +96,7 @@ define_settings_group!(TestSettings, settings: [
         default: HashSet::default(),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
 ]);
@@ -197,16 +206,13 @@ async fn spawned_sync_queue_future_at_index(app: &mut App, index: usize) {
         .await
 }
 async fn wait_for_num_spawned_futures(app: &mut App, expected_num: usize, message: &str) {
-    for _ in 0..50 {
-        let num_spawned_futures =
-            SyncQueue::handle(app).read(app, |sync_queue, _ctx| sync_queue.spawned_futures().len());
-        if num_spawned_futures == expected_num {
-            return;
-        }
-        warpui::r#async::Timer::after(Duration::from_millis(100)).await;
-    }
-
-    assert_num_spawned_futures(app, expected_num, message);
+    assert_eventually!(
+        1000 => SyncQueue::handle(app).read(app, |sync_queue, _ctx| {
+            sync_queue.spawned_futures().len() == expected_num
+        }),
+        "{message}: expected {expected_num} spawned futures, found {}",
+        SyncQueue::handle(app).read(app, |sync_queue, _ctx| sync_queue.spawned_futures().len())
+    );
 }
 
 async fn await_spawned_futures(app: &mut App, num_futures: usize, message: &str) {
@@ -740,7 +746,7 @@ fn test_sync_cloud_pref_to_local_on_initial_load_or_collab_update() {
         enable_settings_sync(&mut app);
 
         app.add_singleton_model(|ctx| {
-            let syncer = CloudPreferencesSyncer::new(false, std::path::PathBuf::new(), ctx);
+            let syncer = CloudPreferencesSyncer::new(false, std::path::PathBuf::new(), true, ctx);
             // This should sync the cloud preferences at this point
             syncer.sync(ForceCloudToMatchLocal::No, ctx);
             syncer
@@ -970,7 +976,7 @@ fn test_sync_local_pref_to_cloud_doesnt_update_equal_pref() {
 
         enable_settings_sync(&mut app);
         app.add_singleton_model(|ctx| {
-            let syncer = CloudPreferencesSyncer::new(false, std::path::PathBuf::new(), ctx);
+            let syncer = CloudPreferencesSyncer::new(false, std::path::PathBuf::new(), true, ctx);
             // This should sync the cloud preferences at this point
             syncer.sync(ForceCloudToMatchLocal::No, ctx);
             syncer
@@ -1051,7 +1057,7 @@ fn test_cloud_preferences_setting_enabling_setting_syncs_prefs() {
         // Now enable settings sync
         enable_settings_sync(&mut app);
         app.add_singleton_model(|ctx| {
-            let syncer = CloudPreferencesSyncer::new(false, std::path::PathBuf::new(), ctx);
+            let syncer = CloudPreferencesSyncer::new(false, std::path::PathBuf::new(), true, ctx);
             // This should sync the cloud preferences at this point
             syncer.sync(ForceCloudToMatchLocal::No, ctx);
             syncer
@@ -1130,7 +1136,7 @@ fn test_cloud_pref_not_synced_when_current_value_not_syncable() {
 
         // Add the syncer and trigger sync
         app.add_singleton_model(|ctx| {
-            let syncer = CloudPreferencesSyncer::new(false, std::path::PathBuf::new(), ctx);
+            let syncer = CloudPreferencesSyncer::new(false, std::path::PathBuf::new(), true, ctx);
             // This should sync the cloud preferences at this point
             syncer.sync(ForceCloudToMatchLocal::No, ctx);
             syncer

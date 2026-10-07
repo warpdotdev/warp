@@ -2,6 +2,7 @@ use std::sync::{Arc, OnceLock};
 
 use warp_core::channel::Channel;
 
+mod miss_cache;
 pub mod registry;
 
 pub use registry::CommandRegistry;

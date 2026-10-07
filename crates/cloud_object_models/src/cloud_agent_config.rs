@@ -32,8 +32,10 @@ impl AgentConfig {
     /// while `AgentConfigSnapshot` is the runtime config format (e.g. `model_id`).
     pub fn to_ambient_config(&self) -> AgentConfigSnapshot {
         AgentConfigSnapshot {
+            experimental: None,
             name: Some(self.name.clone()),
             environment_id: None,
+            runner_id: None,
             model_id: self.base_model_id.clone(),
             base_prompt: self.base_prompt.clone(),
             mcp_servers: self.mcp_servers.clone().map(|m| m.into_iter().collect()),
@@ -43,6 +45,7 @@ impl AgentConfig {
             computer_use_enabled: None,
             harness: None,
             harness_auth_secrets: None,
+            additional_source_repos: None,
         }
     }
 }

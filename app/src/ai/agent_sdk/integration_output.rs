@@ -183,28 +183,27 @@ fn print_integration_card(integration: &SimpleIntegration) {
     table.add_row(vec![env_row]);
 
     // Model row (only if present).
-    if let Some(ListedSimpleIntegrationConfig { model_id, .. }) = &integration.integration_config {
-        if !model_id.is_empty() {
-            let model_row = crate::ai::agent_sdk::text_layout::render_labeled_wrapped_field(
-                "Model",
-                model_id,
-                MAX_LINE_WIDTH,
-            );
-            table.add_row(vec![model_row]);
-        }
+    if let Some(ListedSimpleIntegrationConfig { model_id, .. }) = &integration.integration_config
+        && !model_id.is_empty()
+    {
+        let model_row = crate::ai::agent_sdk::text_layout::render_labeled_wrapped_field(
+            "Model",
+            model_id,
+            MAX_LINE_WIDTH,
+        );
+        table.add_row(vec![model_row]);
     }
 
     // Base prompt row (only if present).
     if let Some(ListedSimpleIntegrationConfig { base_prompt, .. }) = &integration.integration_config
+        && !base_prompt.is_empty()
     {
-        if !base_prompt.is_empty() {
-            let base_prompt_row = crate::ai::agent_sdk::text_layout::render_labeled_wrapped_field(
-                "Base prompt",
-                base_prompt,
-                MAX_LINE_WIDTH,
-            );
-            table.add_row(vec![base_prompt_row]);
-        }
+        let base_prompt_row = crate::ai::agent_sdk::text_layout::render_labeled_wrapped_field(
+            "Base prompt",
+            base_prompt,
+            MAX_LINE_WIDTH,
+        );
+        table.add_row(vec![base_prompt_row]);
     }
 
     // MCP servers row (only if present).

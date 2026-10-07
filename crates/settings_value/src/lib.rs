@@ -18,8 +18,8 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use instant::Duration;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 // Re-export the derive macro when available.
 use serde_json::Value;
 #[cfg(feature = "derive")]
@@ -80,11 +80,11 @@ pub trait SettingsValue: Serialize + DeserializeOwned {
     /// The default delegates to `schemars::JsonSchema`, which is correct for
     /// passthrough types.  Override when `to_file_value` produces a different
     /// shape than serde (e.g. Duration → integer seconds).
-    fn file_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema
+    fn file_schema(sgen: &mut schemars::SchemaGenerator) -> schemars::Schema
     where
         Self: schemars::JsonSchema,
     {
-        gen.subschema_for::<Self>()
+        sgen.subschema_for::<Self>()
     }
 }
 
@@ -217,11 +217,11 @@ impl SettingsValue for Duration {
         value.as_u64().map(Duration::from_secs)
     }
 
-    fn file_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema
+    fn file_schema(sgen: &mut schemars::SchemaGenerator) -> schemars::Schema
     where
         Self: schemars::JsonSchema,
     {
-        gen.subschema_for::<u64>()
+        sgen.subschema_for::<u64>()
     }
 }
 

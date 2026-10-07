@@ -14,6 +14,7 @@ jobs:
   analyze:
     name: Analyze feature flags
     runs-on: namespace-profile-ubuntu-small
+    if: github.repository_owner == 'warpdotdev'
     permissions:
       contents: read
       pull-requests: read
@@ -25,7 +26,7 @@ jobs:
       artifact_url: ${{ steps.upload_feature_flag_log.outputs.artifact-url }}
     steps:
       - name: Check out code
-        uses: namespacelabs/nscloud-checkout-action@938f5d2d403d6224d9a0c0dc559b1dae09c2ede4 # v8.1.1
+        uses: namespacelabs/nscloud-checkout-action@66f2dc6f6c42a8ac6c4e53473c4840006822831e # v9.0.1
         with:
           fetch-depth: 0
 
@@ -155,13 +156,13 @@ jobs:
       contents: read
     steps:
       - name: Check out code
-        uses: namespacelabs/nscloud-checkout-action@938f5d2d403d6224d9a0c0dc559b1dae09c2ede4 # v8.1.1
+        uses: namespacelabs/nscloud-checkout-action@66f2dc6f6c42a8ac6c4e53473c4840006822831e # v9.0.1
         with:
           ref: ${{ needs.analyze.outputs.analyzed_sha }}
           fetch-depth: 0
 
       - name: Setup Rust cache
-        uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9 # v1.4.2
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
         with:
           cache: rust
 
@@ -212,7 +213,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Check out code
-        uses: namespacelabs/nscloud-checkout-action@938f5d2d403d6224d9a0c0dc559b1dae09c2ede4 # v8.1.1
+        uses: namespacelabs/nscloud-checkout-action@66f2dc6f6c42a8ac6c4e53473c4840006822831e # v9.0.1
         with:
           ref: ${{ needs.analyze.outputs.analyzed_sha }}
           fetch-depth: 0
@@ -229,7 +230,7 @@ jobs:
 
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
           app-id: ${{ secrets.OZ_MGMT_GHA_APP_ID }}
           private-key: ${{ secrets.OZ_MGMT_GHA_PRIVATE_KEY }}
@@ -242,7 +243,7 @@ jobs:
           base: ${{ github.event.repository.default_branch }}
           commit-message: "Clean up ${{ needs.analyze.outputs.flag_name }} feature flag"
           branch: "oz-agent/cleanup-feature-flag-${{ needs.analyze.outputs.flag_name }}"
-          author: "Oz Agent <oz-agent@warp.dev>"
+          author: "Warp <agent@warp.dev>"
           delete-branch: true
           reviewers: ${{ needs.analyze.outputs.reviewers }}
           title: "Clean up ${{ needs.analyze.outputs.flag_name }} feature flag"
@@ -256,7 +257,7 @@ jobs:
           echo "Pull request created: ${{ steps.create_pr.outputs.pull-request-url }}"
         
       - name: Send Slack notification
-        uses: slackapi/slack-github-action@af78098f536edbc4de71162a307590698245be95 # v3.0.1
+        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
         if: ${{ steps.create_pr.outputs.pull-request-operation == 'created' }}
         with:
           method: chat.postMessage

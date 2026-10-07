@@ -17,10 +17,12 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionContext, CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
 use crate::terminal::{CLIAgent, TerminalView};
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 
 /// Handles updating the local LLM preferences when a selected agent model update is received.
 /// This function is shared between the viewer and sharer to ensure consistent behavior.
 pub(crate) fn apply_selected_agent_model_update(
+    weak_view_handle: &WeakViewHandle<TerminalView>,
     terminal_view_id: warpui::EntityId,
     selected_model: &SelectedAgentModel,
     _guard: &ActiveRemoteUpdate,
@@ -28,10 +30,17 @@ pub(crate) fn apply_selected_agent_model_update(
 ) {
     let model_id = LLMId::from(selected_model.model_id().to_owned());
 
+    let Some(view) = weak_view_handle.upgrade(ctx) else {
+        return;
+    };
+    let scope = ResolvedTeamScope::from_scope(
+        &UserWorkspaces::as_ref(ctx).team_context_for_window(view.window_id(ctx)),
+    );
+
     // Check if this is already our current model - if so, skip the update to avoid loops
     let llm_prefs = LLMPreferences::as_ref(ctx);
     let current_model_id = llm_prefs
-        .get_active_base_model(ctx, Some(terminal_view_id))
+        .get_active_base_model(&scope, ctx, Some(terminal_view_id))
         .id
         .clone();
     if current_model_id == model_id {
@@ -41,7 +50,7 @@ pub(crate) fn apply_selected_agent_model_update(
     // Check if the model is available to the viewer. If not, skip the update.
     // This handles cases where the viewer and sharer have different model permissions.
     let model_is_available = llm_prefs
-        .get_base_llm_choices_for_agent_mode(ctx)
+        .get_base_llm_choices_for_agent_mode(&scope, ctx)
         .any(|info| info.id == model_id);
     if !model_is_available {
         log::warn!("Skipping shared-session model update - {model_id} is unknown");
@@ -52,7 +61,7 @@ pub(crate) fn apply_selected_agent_model_update(
 
     // Update the local LLMPreferences to match the selected model
     LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-        prefs.update_preferred_agent_mode_llm(&model_id, terminal_view_id, ctx);
+        prefs.update_preferred_agent_mode_llm(&scope, &model_id, terminal_view_id, ctx);
     });
 }
 
@@ -209,8 +218,11 @@ pub(crate) fn apply_selected_conversation_update(
                 view.ai_context_model().update(ctx, |context_model, ctx| {
                     if FeatureFlag::AgentView.is_enabled() {
                         // Check if we're already in an empty agent view to avoid feedback loop.
-                        let agent_view_state = agent_view_controller.as_ref(ctx).agent_view_state();
-                        if let Some(conversation_id) = agent_view_state.active_conversation_id() {
+                        if let Some(conversation_id) = agent_view_controller
+                            .as_ref(ctx)
+                            .agent_view_state()
+                            .active_conversation_id()
+                        {
                             let history_model = BlocklistAIHistoryModel::handle(ctx);
                             let is_empty = history_model
                                 .as_ref(ctx)
@@ -315,11 +327,13 @@ fn build_selected_conversation_update_agent_view_enabled(
     history_model: &ModelHandle<BlocklistAIHistoryModel>,
     ctx: &mut AppContext,
 ) -> Option<UniversalDeveloperInputContextUpdate> {
-    let agent_view_state = agent_view_controller.as_ref(ctx).agent_view_state();
-
-    let selected_conversation = if !agent_view_state.is_active() {
+    let agent_view_controller = agent_view_controller.as_ref(ctx);
+    let selected_conversation = if !agent_view_controller.is_active() {
         SelectedConversation::NoConversation
-    } else if let Some(conversation_id) = agent_view_state.active_conversation_id() {
+    } else if let Some(conversation_id) = agent_view_controller
+        .agent_view_state()
+        .active_conversation_id()
+    {
         let conversation = history_model.as_ref(ctx).conversation(&conversation_id);
         let server_token_opt = conversation
             .and_then(|c| c.server_conversation_token().cloned())

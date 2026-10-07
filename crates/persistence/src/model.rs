@@ -43,6 +43,7 @@ pub struct Window {
     pub agent_management_filters: Option<String>,
     pub left_panel_open: Option<bool>,
     pub vertical_tabs_panel_open: Option<bool>,
+    pub team_uid: Option<String>,
 }
 
 #[derive(Identifiable, Insertable, Queryable)]
@@ -109,6 +110,7 @@ pub struct Team {
     pub name: String,
     pub server_uid: String,
     pub billing_metadata_json: Option<String>,
+    pub feature_model_choice_json: Option<String>,
 }
 
 #[derive(Insertable, AsChangeset)]
@@ -117,6 +119,7 @@ pub struct NewTeam {
     pub name: String,
     pub server_uid: String,
     pub billing_metadata_json: Option<String>,
+    pub feature_model_choice_json: Option<String>,
 }
 
 #[derive(Identifiable, Queryable)]
@@ -127,6 +130,7 @@ pub struct TeamMemberRow {
     pub user_uid: String,
     pub email: String,
     pub role: String,
+    pub is_disabled: bool,
 }
 
 #[derive(Insertable)]
@@ -136,6 +140,7 @@ pub struct NewTeamMember {
     pub user_uid: String,
     pub email: String,
     pub role: String,
+    pub is_disabled: bool,
 }
 
 #[derive(Identifiable, Insertable, Queryable)]
@@ -144,6 +149,7 @@ pub struct Workspace {
     pub name: String,
     pub server_uid: String,
     pub is_selected: bool,
+    pub feature_model_choice_json: Option<String>,
 }
 
 #[derive(Insertable, AsChangeset)]
@@ -152,6 +158,7 @@ pub struct NewWorkspace {
     pub name: String,
     pub server_uid: String,
     pub is_selected: bool,
+    pub feature_model_choice_json: Option<String>,
 }
 
 #[derive(Identifiable, Insertable, Queryable)]
@@ -340,6 +347,7 @@ pub struct NewWindow {
     pub agent_management_filters: Option<String>,
     pub left_panel_open: Option<bool>,
     pub vertical_tabs_panel_open: Option<bool>,
+    pub team_uid: Option<String>,
 }
 
 #[derive(Identifiable, Queryable, Associations)]
@@ -906,6 +914,12 @@ pub struct AgentConversationRecord {
     pub conversation_id: String,
     pub conversation_data: String,
     pub last_modified_at: NaiveDateTime,
+    /// Serialized [`AgentConversationSummary`], computed from the task
+    /// snapshot at write time so startup can list conversations without
+    /// loading or decoding `agent_tasks`. `None` on rows written before the
+    /// column existed; readers fall back to deriving from tasks (and
+    /// backfill the column).
+    pub summary: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Queryable, Selectable)]
@@ -950,48 +964,181 @@ pub struct AgentConversation {
 impl AgentConversation {
     /// Returns `true` if the conversation is restorable.
     ///
-    /// A conversation is restorable if:
-    /// - It contains a single task or fewer, OR
-    /// - It has exactly one parentless (root) task, OR
-    /// - It has multiple parentless tasks but exactly one of them has
-    ///   non-empty `messages`. This permits restoring conversations whose
-    ///   persisted state was corrupted by the pre-QUALITY-774 optimistic-root
-    ///   writer bug, where a stub root row co-existed with the real server
-    ///   root row. `AIConversation::new_restored` deterministically picks
-    ///   the real root in that shape via its restore-side dedupe.
-    ///
-    /// Non-root tasks need not be validated here: any task that does not
-    /// match the parentless predicate has, by construction, a non-empty
-    /// `parent_task_id`.
+    /// See [`tasks_are_restorable`] for the exact rules.
     pub fn is_restorable(&self) -> bool {
-        if self.tasks.len() <= 1 {
-            return true;
+        tasks_are_restorable(self.tasks.iter())
+    }
+}
+
+/// Returns `true` if a conversation with the given task snapshot is
+/// restorable.
+///
+/// A conversation is restorable if:
+/// - It contains a single task or fewer, OR
+/// - It has exactly one parentless (root) task, OR
+/// - It has multiple parentless tasks but exactly one of them has
+///   non-empty `messages`. This permits restoring conversations whose
+///   persisted state was corrupted by the pre-QUALITY-774 optimistic-root
+///   writer bug, where a stub root row co-existed with the real server
+///   root row. `AIConversation::new_restored` deterministically picks
+///   the real root in that shape via its restore-side dedupe.
+///
+/// Non-root tasks need not be validated here: any task that does not
+/// match the parentless predicate has, by construction, a non-empty
+/// `parent_task_id`.
+pub fn tasks_are_restorable<'a>(tasks: impl IntoIterator<Item = &'a api::Task>) -> bool {
+    let tasks: Vec<&api::Task> = tasks.into_iter().collect();
+    if tasks.len() <= 1 {
+        return true;
+    }
+
+    // Find parentless (root) tasks - tasks with no dependencies or with an
+    // empty parent_task_id.
+    let root_tasks: Vec<_> = tasks
+        .iter()
+        .filter(|task| {
+            task.dependencies
+                .as_ref()
+                .map(|deps| deps.parent_task_id.is_empty())
+                .unwrap_or(true)
+        })
+        .collect();
+
+    match root_tasks.len() {
+        // Malformed: no parentless task means no root to anchor restore on.
+        0 => false,
+        // Single root: the normal happy path.
+        1 => true,
+        // Multi-root: only permit the specific [stub + real] shape
+        // produced by the pre-QUALITY-774 optimistic-root writer bug,
+        // where exactly one parentless row carries the real conversation
+        // content. The restore-side dedupe in
+        // `AIConversation::new_restored` will pick that real root.
+        _ => root_tasks.iter().filter(|t| !t.messages.is_empty()).count() == 1,
+    }
+}
+
+/// Returns the working directory of the first message in the task that
+/// carries directory context, if any.
+pub fn api_task_initial_working_directory(task: &api::Task) -> Option<String> {
+    task.messages
+        .iter()
+        .find_map(|message| {
+            message.message.as_ref().and_then(|content| {
+                let context = match content {
+                    api::message::Message::UserQuery(user_query) => user_query.context.as_ref(),
+                    api::message::Message::ToolCallResult(tool_call_result) => {
+                        tool_call_result.context.as_ref()
+                    }
+                    api::message::Message::SystemQuery(system_query) => {
+                        system_query.context.as_ref()
+                    }
+                    _ => None,
+                };
+
+                context
+                    .and_then(|ctx| ctx.directory.as_ref())
+                    .map(|dir| dir.pwd.clone())
+            })
+        })
+        .filter(|pwd| !pwd.is_empty())
+}
+
+/// Task-derived conversation metadata, serialized into the `summary` column
+/// of `agent_conversations` at write time.
+///
+/// This lets startup build the conversation history list from
+/// `agent_conversations` rows alone, without loading or protobuf-decoding the
+/// (potentially very large) `agent_tasks` blobs.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AgentConversationSummary {
+    /// The conversation's initial user query (or passive diff summary).
+    /// Empty when the conversation has no root task with a user query.
+    #[serde(default)]
+    pub initial_query: String,
+    /// Display title: the root task description, falling back to
+    /// `initial_query`.
+    #[serde(default)]
+    pub title: String,
+    /// The working directory of the first message carrying directory context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_working_directory: Option<String>,
+    /// Mirror of [`tasks_are_restorable`] over the persisted task snapshot.
+    pub is_restorable: bool,
+    /// True when the conversation only contains passive `AutoCodeDiff` system
+    /// queries and no user queries; such conversations are hidden from the
+    /// history list.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_unlisted_auto_code_diff: bool,
+}
+
+impl AgentConversationSummary {
+    /// Derives the summary from a conversation's full task snapshot.
+    pub fn from_tasks<'a>(tasks: impl IntoIterator<Item = &'a api::Task>) -> Self {
+        let tasks: Vec<&api::Task> = tasks.into_iter().collect();
+
+        let mut has_user_query = false;
+        let mut has_auto_code_diff = false;
+        for task in &tasks {
+            for message in &task.messages {
+                match &message.message {
+                    Some(api::message::Message::UserQuery(_)) => {
+                        has_user_query = true;
+                    }
+                    Some(api::message::Message::SystemQuery(sys)) => {
+                        if let Some(api::message::system_query::Type::AutoCodeDiff(_)) = &sys.r#type
+                        {
+                            has_auto_code_diff = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
 
-        // Find parentless (root) tasks - tasks with no dependencies or with an
-        // empty parent_task_id.
-        let root_tasks: Vec<_> = self
-            .tasks
-            .iter()
-            .filter(|task| {
-                task.dependencies
-                    .as_ref()
-                    .map(|deps| deps.parent_task_id.is_empty())
-                    .unwrap_or(true)
-            })
-            .collect();
+        let root_task = tasks.iter().find(|task| task.dependencies.is_none());
 
-        match root_tasks.len() {
-            // Malformed: no parentless task means no root to anchor restore on.
-            0 => false,
-            // Single root: the normal happy path.
-            1 => true,
-            // Multi-root: only permit the specific [stub + real] shape
-            // produced by the pre-QUALITY-774 optimistic-root writer bug,
-            // where exactly one parentless row carries the real conversation
-            // content. The restore-side dedupe in
-            // `AIConversation::new_restored` will pick that real root.
-            _ => root_tasks.iter().filter(|t| !t.messages.is_empty()).count() == 1,
+        // The first user query in the root task (or, for a passive code
+        // diff, the summary of the diff).
+        let initial_query = root_task
+            .map(|task| {
+                task.messages
+                    .iter()
+                    .find_map(|msg| match &msg.message {
+                        Some(api::message::Message::UserQuery(user_query)) => {
+                            Some(user_query.query.clone())
+                        }
+                        Some(api::message::Message::ToolCall(tool_call)) => {
+                            match tool_call.tool.as_ref()? {
+                                api::message::tool_call::Tool::ApplyFileDiffs(diff_suggestion) => {
+                                    Some(diff_suggestion.summary.clone())
+                                }
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+
+        // The title is the root task description, falling back to
+        // `initial_query` when the description is empty.
+        let title = root_task
+            .map(|task| task.description.clone())
+            .filter(|desc| !desc.is_empty())
+            .unwrap_or_else(|| initial_query.clone());
+
+        let initial_working_directory = tasks
+            .iter()
+            .find_map(|task| api_task_initial_working_directory(task));
+
+        Self {
+            initial_query,
+            title,
+            initial_working_directory,
+            is_restorable: tasks_are_restorable(tasks.iter().copied()),
+            is_unlisted_auto_code_diff: has_auto_code_diff && !has_user_query,
         }
     }
 }
@@ -1021,7 +1168,7 @@ fn is_false(value: &bool) -> bool {
 }
 
 // Serializes to `conversation_data` column in `agent_conversations`.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct AgentConversationData {
     pub server_conversation_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1080,10 +1227,26 @@ pub struct AgentConversationData {
     /// pill bar. Orchestrator conversations always serialize as `false`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub pinned: bool,
+    /// Whether the user chose Warp-funded inference for this conversation after a ChatGPT
+    /// token-sharing failure. Sent as `skip_chatgpt_subscription` on every request.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub use_warp_credits_instead_of_chatgpt: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AIAgentActionId(pub String);
+
+impl From<AIAgentActionId> for ai_types::AIAgentActionId {
+    fn from(value: AIAgentActionId) -> Self {
+        Self::from(value.0)
+    }
+}
+
+impl From<ai_types::AIAgentActionId> for AIAgentActionId {
+    fn from(value: ai_types::AIAgentActionId) -> Self {
+        AIAgentActionId(String::from(value))
+    }
+}
 
 pub type TokenUsageCategory = String;
 
@@ -1140,10 +1303,10 @@ impl ModelTokenUsage {
             self.model_id.clone(),
             stream_finished::ModelTokenUsage {
                 model_id: self.model_id.clone(),
-                total_tokens,
+                total_tokens: u64::from(total_tokens),
                 token_usage_by_category: usage_by_category
                     .iter()
-                    .map(|(cat, tokens)| (cat.clone(), *tokens))
+                    .map(|(cat, tokens)| (cat.clone(), u64::from(*tokens)))
                     .collect(),
             },
         ))
@@ -1167,11 +1330,11 @@ impl ModelTokenUsage {
             self.model_id.clone(),
             stream_finished::ModelTokenUsage {
                 model_id: self.model_id.clone(),
-                total_tokens: self.custom_endpoint_tokens,
+                total_tokens: u64::from(self.custom_endpoint_tokens),
                 token_usage_by_category: self
                     .custom_endpoint_token_usage_by_category
                     .iter()
-                    .map(|(cat, tokens)| (cat.clone(), *tokens))
+                    .map(|(cat, tokens)| (cat.clone(), u64::from(*tokens)))
                     .collect(),
             },
         ))
@@ -1181,14 +1344,16 @@ impl ModelTokenUsage {
     pub fn to_proto_combined(&self) -> stream_finished::ModelTokenUsage {
         stream_finished::ModelTokenUsage {
             model_id: self.model_id.clone(),
-            total_tokens: self.warp_tokens + self.byok_tokens + self.custom_endpoint_tokens,
+            total_tokens: u64::from(self.warp_tokens)
+                + u64::from(self.byok_tokens)
+                + u64::from(self.custom_endpoint_tokens),
             token_usage_by_category: self
                 .warp_token_usage_by_category
                 .iter()
                 .chain(self.byok_token_usage_by_category.iter())
                 .chain(self.custom_endpoint_token_usage_by_category.iter())
                 .fold(HashMap::new(), |mut acc, (cat, tokens)| {
-                    *acc.entry(cat.clone()).or_insert(0) += tokens;
+                    *acc.entry(cat.clone()).or_insert(0) += u64::from(*tokens);
                     acc
                 }),
         }
@@ -1464,6 +1629,160 @@ impl From<&ContextWindowSegment> for stream_finished::ContextWindowSegment {
     }
 }
 
+/// A flat breakdown of charged usage — input/output/cache-read/cache-write
+/// inference cost (in US cents) plus platform cost, and the matching token
+/// counts — summed across every usage category and model. Mirrors the Go
+/// `SumChargedUsage` helper (`warp-server` `logic/ai/multi_agent/usage`);
+/// computed client-side from the wire's category/model-keyed
+/// `RequestCharges` map so downstream displays don't need to walk the map
+/// themselves.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq)]
+pub struct ChargedUsageTotals {
+    pub input_cost_in_cents: f32,
+    #[serde(default)]
+    pub input_cost_in_credits: f32,
+    pub output_cost_in_cents: f32,
+    #[serde(default)]
+    pub output_cost_in_credits: f32,
+    pub input_cache_read_cost_in_cents: f32,
+    #[serde(default)]
+    pub input_cache_read_cost_in_credits: f32,
+    pub input_cache_write_cost_in_cents: f32,
+    #[serde(default)]
+    pub input_cache_write_cost_in_credits: f32,
+    pub platform_cost_in_cents: f32,
+    #[serde(default)]
+    pub platform_cost_in_credits: f32,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub input_cache_read_tokens: u32,
+    pub input_cache_write_tokens: u32,
+    /// Number of web searches performed, summed across every usage category
+    /// and model. `#[serde(default)]` so blobs persisted before this field
+    /// existed still deserialize.
+    #[serde(default)]
+    pub web_search_count: u32,
+    /// Cumulative cost of web searches performed, in US cents. Included in
+    /// [`Self::total_cost_in_cents`] since it's part of the real, actually-
+    /// charged dollar total (see `warp-proto-apis` PR #363).
+    #[serde(default)]
+    pub web_search_cost_in_cents: f32,
+    #[serde(default)]
+    pub web_search_cost_in_credits: f32,
+}
+
+impl ChargedUsageTotals {
+    /// Total inference + platform + web-search cost, in US cents.
+    pub fn total_cost_in_cents(&self) -> f32 {
+        self.input_cost_in_cents
+            + self.output_cost_in_cents
+            + self.input_cache_read_cost_in_cents
+            + self.input_cache_write_cost_in_cents
+            + self.platform_cost_in_cents
+            + self.web_search_cost_in_cents
+    }
+
+    pub fn total_cost_in_credits(&self) -> f32 {
+        self.input_cost_in_credits
+            + self.output_cost_in_credits
+            + self.input_cache_read_cost_in_credits
+            + self.input_cache_write_cost_in_credits
+            + self.platform_cost_in_credits
+            + self.web_search_cost_in_credits
+    }
+
+    /// Total tokens across every category (input + output + cache-read + cache-write).
+    pub fn total_tokens(&self) -> u32 {
+        self.input_tokens
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.input_cache_read_tokens)
+            .saturating_add(self.input_cache_write_tokens)
+    }
+
+    fn add_inference_usage(&mut self, usage: &api::InferenceUsage) {
+        if let Some(token_count) = usage.token_count.as_ref() {
+            // Wire counts are u64 (proto TokenCount); persisted totals stay u32 and saturate.
+            // TODO(Xavientois): widen these fields to u64 to match the proto TokenCount and drop
+            // the saturating narrowing.
+            self.input_tokens = self
+                .input_tokens
+                .saturating_add(u32::try_from(token_count.input).unwrap_or(u32::MAX));
+            self.output_tokens = self
+                .output_tokens
+                .saturating_add(u32::try_from(token_count.output).unwrap_or(u32::MAX));
+            self.input_cache_read_tokens = self
+                .input_cache_read_tokens
+                .saturating_add(u32::try_from(token_count.input_cache_read).unwrap_or(u32::MAX));
+            self.input_cache_write_tokens = self
+                .input_cache_write_tokens
+                .saturating_add(u32::try_from(token_count.input_cache_write).unwrap_or(u32::MAX));
+        }
+        if let Some(token_cost) = usage.token_cost.as_ref() {
+            self.input_cost_in_cents += token_cost.input_cost_in_cents;
+            self.input_cost_in_credits += token_cost.input_cost_in_credits;
+            self.output_cost_in_cents += token_cost.output_cost_in_cents;
+            self.output_cost_in_credits += token_cost.output_cost_in_credits;
+            self.input_cache_read_cost_in_cents += token_cost.input_cache_read_cost_in_cents;
+            self.input_cache_read_cost_in_credits += token_cost.input_cache_read_cost_in_credits;
+            self.input_cache_write_cost_in_cents += token_cost.input_cache_write_cost_in_cents;
+            self.input_cache_write_cost_in_credits += token_cost.input_cache_write_cost_in_credits;
+        }
+        self.web_search_count += usage.web_search_count;
+        self.web_search_cost_in_cents += usage.web_search_cost_in_cents;
+        self.web_search_cost_in_credits += usage.web_search_cost_in_credits;
+    }
+}
+
+impl std::ops::AddAssign for ChargedUsageTotals {
+    fn add_assign(&mut self, rhs: Self) {
+        self.input_cost_in_cents += rhs.input_cost_in_cents;
+        self.input_cost_in_credits += rhs.input_cost_in_credits;
+        self.output_cost_in_cents += rhs.output_cost_in_cents;
+        self.output_cost_in_credits += rhs.output_cost_in_credits;
+        self.input_cache_read_cost_in_cents += rhs.input_cache_read_cost_in_cents;
+        self.input_cache_read_cost_in_credits += rhs.input_cache_read_cost_in_credits;
+        self.input_cache_write_cost_in_cents += rhs.input_cache_write_cost_in_cents;
+        self.input_cache_write_cost_in_credits += rhs.input_cache_write_cost_in_credits;
+        self.platform_cost_in_cents += rhs.platform_cost_in_cents;
+        self.platform_cost_in_credits += rhs.platform_cost_in_credits;
+        self.input_tokens = self.input_tokens.saturating_add(rhs.input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(rhs.output_tokens);
+        self.input_cache_read_tokens = self
+            .input_cache_read_tokens
+            .saturating_add(rhs.input_cache_read_tokens);
+        self.input_cache_write_tokens = self
+            .input_cache_write_tokens
+            .saturating_add(rhs.input_cache_write_tokens);
+        self.web_search_count += rhs.web_search_count;
+        self.web_search_cost_in_cents += rhs.web_search_cost_in_cents;
+        self.web_search_cost_in_credits += rhs.web_search_cost_in_credits;
+    }
+}
+
+impl From<&api::RequestCharges> for ChargedUsageTotals {
+    /// Sums a category-keyed `RequestCharges` map (per-turn or cumulative)
+    /// into a single flat breakdown, mirroring the Go `SumChargedUsage`
+    /// helper. Categories and models are summed together; per-category/
+    /// per-model detail is discarded, matching the single
+    /// pricing-breakdown-section display convention (`warp` PR #15015).
+    fn from(charges: &api::RequestCharges) -> Self {
+        let mut totals = Self::default();
+        for usage in charges.usage_by_category.values() {
+            for inference_usage in usage
+                .direct_api_inference_usage
+                .values()
+                .chain(usage.byok_inference_usage.values())
+                .chain(usage.custom_endpoint_inference_usage.values())
+            {
+                totals.add_inference_usage(inference_usage);
+            }
+            totals.platform_cost_in_cents += usage.platform_usage_in_cents;
+            totals.platform_cost_in_credits += usage.platform_usage_in_credits;
+        }
+        totals
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ConversationUsageMetadata {
     pub was_summarized: bool,
@@ -1471,8 +1790,27 @@ pub struct ConversationUsageMetadata {
     pub credits_spent: f32,
     #[serde(default)]
     pub platform_credits_spent: f32,
+    /// Server-authoritative cumulative cost billed to the customer in US cents (inference at
+    /// the customer's own price plus platform cost), for conversations whose charges arrived
+    /// via GraphQL rather than the stream. `None` when the server could not establish a
+    /// complete billed total; it must not be treated as numeric zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_billed_cost_in_cents: Option<f32>,
     #[serde(default)]
     pub credits_spent_for_last_block: Option<f32>,
+    /// Per-category charged-usage breakdown for the most recent block (all
+    /// agent outputs since the last user input), summed via
+    /// [`ChargedUsageTotals::from`] from `StreamFinished.request_charges`.
+    /// `None` when the server didn't provide charges (flag off) or before
+    /// any block has completed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub charged_usage_for_last_block: Option<ChargedUsageTotals>,
+    /// Cumulative per-category charged-usage breakdown summed across the
+    /// whole conversation so far, from
+    /// `ConversationUsageMetadata.total_charges`. `None` when the server
+    /// didn't provide it (flag off, or a legacy conversation).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_charged_usage: Option<ChargedUsageTotals>,
     #[serde(default)]
     pub token_usage: Vec<ModelTokenUsage>,
     #[serde(default)]
@@ -1484,6 +1822,16 @@ pub struct ConversationUsageMetadata {
 impl ConversationUsageMetadata {
     pub fn total_tool_calls(&self) -> i32 {
         self.tool_usage_metadata.total_tool_calls()
+    }
+
+    /// Cumulative cost billed to the customer so far in the conversation, in US cents.
+    /// Prefers the summed per-turn charges, which carry billed cents on the wire, and falls
+    /// back to the GraphQL total for conversations restored without them. `None` when neither
+    /// is known.
+    pub fn billed_cost_in_cents(&self) -> Option<f32> {
+        self.total_charged_usage
+            .map(|charged| charged.total_cost_in_cents())
+            .or(self.total_billed_cost_in_cents)
     }
 }
 

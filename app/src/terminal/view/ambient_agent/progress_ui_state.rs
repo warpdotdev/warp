@@ -1,12 +1,12 @@
 //! UI state for the ambient agent progress/loading screen.
 
+use warpui::ModelHandle;
 use warpui::elements::shimmering_text::ShimmeringTextStateHandle;
 use warpui::elements::{MouseStateHandle, SelectionHandle};
-use warpui::ModelHandle;
 
 use crate::ai::agent_tips::AITipModel;
-use crate::terminal::view::ambient_agent::model::AmbientAgentViewModel;
 use crate::terminal::view::ambient_agent::CloudModeTip;
+use crate::terminal::view::ambient_agent::model::AmbientAgentViewModel;
 
 /// UI state for rendering the ambient agent progress screen (loading or error).
 /// This keeps all cloud mode UI handles together and separates them from the main TerminalView.

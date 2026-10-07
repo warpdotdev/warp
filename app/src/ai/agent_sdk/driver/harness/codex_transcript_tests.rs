@@ -5,7 +5,7 @@ use anyhow::Result;
 use tempfile::TempDir;
 use uuid::Uuid;
 
-use super::super::claude_transcript::read_jsonl;
+use super::super::transcript_persistence::read_jsonl_capture;
 use super::*;
 
 /// Walk `sessions_root` for `session_id`'s rollout and assemble an envelope.
@@ -16,7 +16,7 @@ fn read_envelope(
     let Some(path) = find_session_file(sessions_root, session_id) else {
         return Ok(None);
     };
-    let entries = read_jsonl(&path)?;
+    let entries = read_jsonl_capture(&path)?.entries;
     let meta = parse_session_meta(entries.first()).unwrap_or_default();
     Ok(Some(CodexTranscriptEnvelope::new(
         session_id, meta, entries,
@@ -44,13 +44,16 @@ fn session_meta_line(uuid: Uuid, cwd: &str, timestamp: &str, cli_version: &str) 
 fn codex_sessions_root_honors_codex_home_env() {
     let tmp = TempDir::new().unwrap();
     let prev = std::env::var(CODEX_HOME_ENV).ok();
-    std::env::set_var(CODEX_HOME_ENV, tmp.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(CODEX_HOME_ENV, tmp.path()) };
 
     let root = codex_sessions_root().unwrap();
 
     match prev {
-        Some(v) => std::env::set_var(CODEX_HOME_ENV, v),
-        None => std::env::remove_var(CODEX_HOME_ENV),
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(v) => unsafe { std::env::set_var(CODEX_HOME_ENV, v) },
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        None => unsafe { std::env::remove_var(CODEX_HOME_ENV) },
     }
     assert_eq!(root, tmp.path().join(CODEX_SESSIONS_SUBDIR));
 }

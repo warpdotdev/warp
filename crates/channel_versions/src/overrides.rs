@@ -129,6 +129,9 @@ impl VersionInfo {
         if let Some(cli_version) = other.cli_version {
             self.cli_version = Some(cli_version);
         }
+        if let Some(tui_version) = other.tui_version {
+            self.tui_version = Some(tui_version);
+        }
     }
 }
 

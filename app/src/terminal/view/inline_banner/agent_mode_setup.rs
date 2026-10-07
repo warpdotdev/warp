@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 
-use warpui::elements::{MouseStateHandle, Text};
 use warpui::Element;
+use warpui::elements::{MouseStateHandle, Text};
 
 use super::{
-    render_inline_block_list_banner, InlineBannerButtonState, InlineBannerCloseButton,
-    InlineBannerContent, InlineBannerStyle, InlineBannerTextButton, InlineBannerTextButtonFont,
-    InlineBannerTextButtonVariant,
+    InlineBannerButtonState, InlineBannerCloseButton, InlineBannerContent, InlineBannerStyle,
+    InlineBannerTextButton, InlineBannerTextButtonFont, InlineBannerTextButtonVariant,
+    render_inline_block_list_banner,
 };
 use crate::appearance::Appearance;
 use crate::terminal::view::inline_banner::InlineBannerIcon;
@@ -83,13 +83,15 @@ pub fn render_agent_mode_setup_banner(
                 aspect_ratio: 1.,
                 color_override: Some(appearance.theme().active_ui_text_color().into_solid()),
             }),
-            content: Some(vec![Text::new(
-                SPEEDBUMP_TEXT,
-                appearance.ui_font_family(),
-                appearance.monospace_font_size() - 2.,
-            )
-            .with_color(appearance.theme().nonactive_ui_text_color().into_solid())
-            .soft_wrap(true)]),
+            content: Some(vec![
+                Text::new(
+                    SPEEDBUMP_TEXT,
+                    appearance.ui_font_family(),
+                    appearance.monospace_font_size() - 2.,
+                )
+                .with_color(appearance.theme().nonactive_ui_text_color().into_solid())
+                .soft_wrap(true),
+            ]),
             vertical_align_title_content: true,
         },
     )

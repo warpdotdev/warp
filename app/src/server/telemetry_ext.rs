@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::execution_mode;
 use warpui::telemetry::EventPayload;
@@ -57,10 +57,10 @@ impl TelemetryExt for warpui::telemetry::Event {
                 // visual obfuscation is a UX preference, while telemetry-side
                 // redaction is a defence-in-depth measure for data leaving the
                 // device. See `secret_redaction.rs` for details.
-                if self.contains_ugc {
-                    if let Some(value) = value.as_mut() {
-                        redact_secrets_in_value(value);
-                    }
+                if self.contains_ugc
+                    && let Some(value) = value.as_mut()
+                {
+                    redact_secrets_in_value(value);
                 }
                 form_rudder_track_message(
                     user_id.map(|uid| UserUid::new(uid.as_str())),

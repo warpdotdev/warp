@@ -12,8 +12,8 @@ use warpui::{
 
 use crate::appearance::Appearance;
 use crate::drive::settings::WarpDriveSettings;
-use crate::search::command_palette::FilterChipRenderer;
 use crate::search::QueryFilter;
+use crate::search::command_palette::FilterChipRenderer;
 use crate::settings::AISettings;
 use crate::workspace::Workspace;
 
@@ -80,7 +80,7 @@ impl ZeroState {
     fn valid_query_filters(
         app: &AppContext,
         window_id: WindowId,
-    ) -> impl Iterator<Item = QueryFilter> {
+    ) -> impl Iterator<Item = QueryFilter> + use<> {
         let show_warp_drive = WarpDriveSettings::is_warp_drive_enabled(app);
 
         let mut valid_filters = vec![];

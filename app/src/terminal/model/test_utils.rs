@@ -2,9 +2,8 @@
 //! constituents, like [`Block`]s and [`BlockList`]s for use
 //! in unit tests.
 //!
-//! Note that the example code in the documentation of this module
-//! is marked as no_run only  because it's currently not possible
-//! to reference `#[cfg(test)]` symbols from doctests.
+//! The example code in this module's documentation is marked `no_run`: it is
+//! compiled to keep the examples correct, but not executed.
 
 use std::collections::HashMap;
 use std::io::sink;
@@ -14,7 +13,10 @@ use pathfinder_geometry::vector::Vector2F;
 use warp_core::command::ExitCode;
 use warpui::r#async::executor::Background;
 
-use super::ansi::{CommandFinishedValue, Handler, PrecmdValue, PreexecValue, Processor};
+use super::ansi::{
+    CommandFinishedValue, CompletionMetadata, Handler, PrecmdValue, PreexecValue, Processor,
+    PromptMetadata,
+};
 use super::block::{Block, BlockId, BlockSize};
 use super::blocks::BlockList;
 use super::bootstrap::BootstrapStage;
@@ -133,7 +135,9 @@ fn block_padding() -> BlockPadding {
 ///     .with_terminal_events_tx(events_tx)
 ///     .build();
 ///
-/// let block = SerializedBlock::new_for_test("test".into(), "test".into());
+/// // `.into()` produces the `SerializedBlockListItem` that `with_restored_blocks`
+/// // expects; its type lives in a private module so it can't be named directly.
+/// let block = SerializedBlock::new_for_test("test".into(), "test".into()).into();
 ///
 /// let block_list = TestBlockListBuilder::new()
 ///     .with_channel_event_proxy(channel_event_proxy)
@@ -373,25 +377,20 @@ impl TerminalModel {
     /// Simulates the completion of a block.
     /// Assumes that a block was running to begin with.
     pub fn finish_block(&mut self) {
-        self.command_finished(CommandFinishedValue {
+        let completion_metadata = CompletionMetadata {
             exit_code: ExitCode::from(0),
             next_block_id: BlockId::new(),
+        };
+        self.command_finished(CommandFinishedValue {
+            completion_metadata: completion_metadata.clone(),
             session_id: None,
         });
-        self.precmd(PrecmdValue {
-            pwd: None,
-            git_head: None,
-            git_branch: None,
-            virtual_env: None,
-            conda_env: None,
-            node_version: None,
-            session_id: Some(0),
-            kube_config: None,
-            ps1: None,
-            honor_ps1: None,
-            rprompt: None,
-            ps1_is_encoded: Some(true),
-            is_after_in_band_command: false,
+        self.precmd_with_completion_metadata(PrecmdValue {
+            completion_metadata,
+            prompt_metadata: PromptMetadata {
+                session_id: Some(0),
+                ..Default::default()
+            },
         });
     }
 

@@ -4,22 +4,22 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use ai::skills::{
-    provider_rank, ParsedSkill, SkillPathOrigin, SkillProvider, SkillReference, SkillScope,
+    ParsedSkill, SkillPathOrigin, SkillProvider, SkillReference, SkillScope, provider_rank,
 };
 pub use file_watchers::{
-    extract_skill_parent_directory, read_skills_from_directories, SkillWatcher, SkillWatcherEvent,
+    SkillWatcher, SkillWatcherEvent, extract_skill_parent_directory, read_skills_from_directories,
 };
 use warp_core::features::FeatureFlag;
 use warp_util::host_id::HostId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
+use super::bundled::{BundledSkill, BundledSkills};
 #[cfg(test)]
 use super::bundled::{
-    activation_for_bundled_skill, build_bundled_skill_context, read_bundled_skills,
-    BundledSkillActivation,
+    BundledSkillActivation, activation_for_bundled_skill, build_bundled_skill_context,
+    read_bundled_skills,
 };
-use super::bundled::{BundledSkill, BundledSkills};
 use super::{ActiveSkillLookupError, SkillDescriptor, SkillManagerEvent, SkillPathQuery};
 use crate::ai::skills::skill_utils::SkillDeduplicator;
 
@@ -132,15 +132,15 @@ impl SkillManager {
             | (None, LocalOrRemotePath::Remote(_)) => false,
         };
 
-        if let Some(home_dir) = self.home_directory_for_origin(path_origin) {
-            if let Some(home_skill_paths) = self.directory_skills.get(&home_dir) {
-                skill_paths.extend(
-                    home_skill_paths
-                        .iter()
-                        .cloned()
-                        .map(|path| (home_dir.clone(), path)),
-                );
-            }
+        if let Some(home_dir) = self.home_directory_for_origin(path_origin)
+            && let Some(home_skill_paths) = self.directory_skills.get(&home_dir)
+        {
+            skill_paths.extend(
+                home_skill_paths
+                    .iter()
+                    .cloned()
+                    .map(|path| (home_dir.clone(), path)),
+            );
         }
 
         if self.is_cloud_environment {
@@ -550,30 +550,61 @@ impl SkillManager {
                 self.handle_skills_deleted(paths);
             }
         }
-        if home_skills_changed {
-            ctx.emit(SkillManagerEvent::HomeSkillsChanged);
-        }
+        ctx.emit(SkillManagerEvent::SkillsChanged {
+            home_skills_changed,
+        });
     }
 
     pub fn handle_skills_added(&mut self, skills: Vec<ParsedSkill>) {
         for skill in skills {
-            if let Ok(parent_dir) = extract_skill_parent_directory(&skill.path) {
-                self.directory_skills
-                    .entry(parent_dir)
-                    .or_default()
-                    .insert(skill.path.clone());
+            match extract_skill_parent_directory(&skill.path) {
+                Ok(parent_dir) => {
+                    self.directory_skills
+                        .entry(parent_dir)
+                        .or_default()
+                        .insert(skill.path.clone());
 
-                self.skills_by_name
-                    .entry(skill.name.clone())
-                    .or_default()
-                    .insert(skill.path.clone());
-                self.skills_by_path.insert(skill.path.clone(), skill);
-            } else {
-                log::warn!(
-                    "Could not extract parent directory for skill: {:?}",
-                    skill.path
-                );
+                    self.skills_by_name
+                        .entry(skill.name.clone())
+                        .or_default()
+                        .insert(skill.path.clone());
+                    self.skills_by_path.insert(skill.path.clone(), skill);
+                }
+                _ => {
+                    log::warn!(
+                        "Could not extract parent directory for skill: {:?}",
+                        skill.path
+                    );
+                }
             }
+        }
+    }
+
+    /// Registers skills loaded from `WARP_SKILL_DIRS` environment variable directories
+    /// as personal (home) tier skills.
+    ///
+    /// Unlike [`handle_skills_added`], this method does not require each skill's path
+    /// to follow a known provider directory structure. Skills are stored directly
+    /// under the local home directory bucket so they are always in scope—the same
+    /// precedence as `~/.agents/skills` and other personal skills.
+    ///
+    /// Call this after reading skills with [`ai::skills::read_skills_for_skills_dirs`].
+    pub fn add_skills_dirs_skills(&mut self, skills: Vec<ParsedSkill>) {
+        let Some(home_dir) = dirs::home_dir() else {
+            log::warn!("WARP_SKILL_DIRS: home directory unavailable; cannot register env skills");
+            return;
+        };
+        let home_dir = LocalOrRemotePath::Local(home_dir);
+        for skill in skills {
+            self.directory_skills
+                .entry(home_dir.clone())
+                .or_default()
+                .insert(skill.path.clone());
+            self.skills_by_name
+                .entry(skill.name.clone())
+                .or_default()
+                .insert(skill.path.clone());
+            self.skills_by_path.insert(skill.path.clone(), skill);
         }
     }
 

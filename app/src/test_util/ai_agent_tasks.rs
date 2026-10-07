@@ -2,6 +2,7 @@ use warp_multi_agent_api as api;
 
 pub fn create_message(id: &str, task_id: &str) -> api::Message {
     api::Message {
+        fetched_memories: vec![],
         id: id.to_string(),
         task_id: task_id.to_string(),
         server_message_data: String::new(),
@@ -23,6 +24,7 @@ pub fn create_subagent_tool_call_message(
     metadata: Option<api::message::tool_call::subagent::Metadata>,
 ) -> api::Message {
     api::Message {
+        fetched_memories: vec![],
         id: id.to_string(),
         task_id: task_id.to_string(),
         server_message_data: String::new(),

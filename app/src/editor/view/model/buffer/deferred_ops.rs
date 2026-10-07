@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
-use super::time::ReplicaId;
 use super::Operation;
+use super::time::ReplicaId;
 
 /// An operation queue to defer buffer edits
 /// that cannot yet be applied.

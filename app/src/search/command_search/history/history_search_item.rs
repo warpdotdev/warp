@@ -14,8 +14,8 @@ use crate::appearance::Appearance;
 use crate::search::command_search::searcher::{AcceptedHistoryItem, CommandSearchItemAction};
 use crate::search::item::SearchItem;
 use crate::search::result_renderer::ItemHighlightState;
-use crate::terminal::rich_history::render_rich_history;
 use crate::terminal::HistoryEntry;
+use crate::terminal::rich_history::render_rich_history;
 use crate::ui_components::icons::Icon as UiIcon;
 use crate::util::time_format::format_approx_duration_from_now;
 
@@ -25,6 +25,7 @@ const COMMAND_METADATA_LEFT_MARGIN_FROM_METADATA: f32 = 8.;
 pub struct HistorySearchItem {
     pub entry: Arc<HistoryEntry>,
     pub match_result: fuzzy_match::FuzzyMatchResult,
+    pub score: OrderedFloat<f64>,
 }
 
 impl SearchItem for HistorySearchItem {
@@ -141,7 +142,7 @@ impl SearchItem for HistorySearchItem {
     }
 
     fn score(&self) -> OrderedFloat<f64> {
-        OrderedFloat(self.match_result.score as f64)
+        self.score
     }
 
     fn accept_result(&self) -> CommandSearchItemAction {
@@ -172,24 +173,24 @@ impl HistorySearchItem {
 
         let mut metadata_row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
 
-        if let Some(exit_code) = self.entry.exit_code {
-            if !exit_code.was_successful() {
-                metadata_row.add_child(
-                    Container::new(
-                        ConstrainedBox::new(
-                            Icon::new(
-                                UiIcon::AlertTriangle.into(),
-                                item_highlight_state.main_text_fill(appearance).into_solid(),
-                            )
-                            .finish(),
+        if let Some(exit_code) = self.entry.exit_code
+            && !exit_code.was_successful()
+        {
+            metadata_row.add_child(
+                Container::new(
+                    ConstrainedBox::new(
+                        Icon::new(
+                            UiIcon::AlertTriangle.into(),
+                            item_highlight_state.main_text_fill(appearance).into_solid(),
                         )
-                        .with_max_height(appearance.ui_font_size())
-                        .with_max_width(appearance.ui_font_size())
                         .finish(),
                     )
+                    .with_max_height(appearance.ui_font_size())
+                    .with_max_width(appearance.ui_font_size())
                     .finish(),
-                );
-            }
+                )
+                .finish(),
+            );
         }
 
         if let Some(start) = self.entry.start_ts {

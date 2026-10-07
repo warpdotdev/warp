@@ -3,10 +3,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::CommandBuilder;
 #[cfg(feature = "local_fs")]
 use crate::install::fetch_latest_metadata_from_github;
 use crate::language_server_candidate::{LanguageServerCandidate, LanguageServerMetadata};
-use crate::CommandBuilder;
 
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 pub struct GoPlsCandidate {

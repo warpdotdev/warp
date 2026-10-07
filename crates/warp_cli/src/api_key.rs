@@ -4,6 +4,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use crate::SortOrderArg;
 use crate::date_time::parse_rfc3339;
 use crate::json_filter::JsonOutput;
+use crate::scope::{ObjectScope, TeamSelection};
 
 /// API key-related subcommands.
 #[derive(Debug, Clone, Subcommand)]
@@ -29,6 +30,8 @@ impl ApiKeyCommand {
 
 #[derive(Debug, Clone, Args)]
 pub struct ListApiKeysArgs {
+    #[command(flatten)]
+    pub scope: ObjectScope,
     /// Sort field.
     #[arg(long = "sort-by", value_enum, value_name = "FIELD")]
     pub sort_by: Option<ApiKeySortByArg>,
@@ -44,6 +47,8 @@ pub struct ListApiKeysArgs {
 
 #[derive(Debug, Clone, Args)]
 pub struct CreateApiKeyArgs {
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
     /// Name of the API key to create.
     pub name: String,
 

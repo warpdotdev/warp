@@ -46,7 +46,8 @@ fn test_parse_text_styles() {
         ),
         vec![FormattedTextLine::Line(vec![
             FormattedTextFragment::plain_text("So"),
-            FormattedTextFragment::bold("me"),
+            // font-weight:600 preserves as Semibold rather than collapsing to Bold.
+            FormattedTextFragment::weighted("me", Some(CustomWeight::Semibold)),
         ])]
     );
 
@@ -137,9 +138,61 @@ fn test_parse_text_styles() {
         ),
         vec![FormattedTextLine::Line(vec![
             FormattedTextFragment::strikethrough("Strike"),
-            FormattedTextFragment::bold("Bold"),
+            // font-weight:600 preserves as Semibold rather than collapsing to Bold.
+            FormattedTextFragment::weighted("Bold", Some(CustomWeight::Semibold)),
         ]),]
     )
+}
+
+#[test]
+fn test_parse_numeric_font_weights_preserve_custom_weight() {
+    // Regression test for #14429: numeric CSS font weights on pasted HTML must round-trip to the
+    // matching `CustomWeight`, not collapse to bold-or-plain. Prior behavior mapped every
+    // weight > 400 to Bold and everything else to no weight, dropping Light/Medium/Black/etc.
+    let cases = [
+        ("100", Some(CustomWeight::Thin)),
+        ("200", Some(CustomWeight::ExtraLight)),
+        ("300", Some(CustomWeight::Light)),
+        ("400", None),
+        ("500", Some(CustomWeight::Medium)),
+        ("600", Some(CustomWeight::Semibold)),
+        ("700", Some(CustomWeight::Bold)),
+        ("800", Some(CustomWeight::ExtraBold)),
+        ("900", Some(CustomWeight::Black)),
+    ];
+
+    for (css_weight, expected) in cases {
+        let html =
+            format!("<meta charset='utf-8'>So<span style=\"font-weight:{css_weight}\">me</span>");
+        assert_eq!(
+            test_parse_html(&html),
+            vec![FormattedTextLine::Line(vec![
+                FormattedTextFragment::plain_text("So"),
+                FormattedTextFragment::weighted("me", expected),
+            ])],
+            "font-weight:{css_weight} should map to {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn test_parse_keyword_font_weights() {
+    // `bold`/`bolder` keywords stay Bold; `normal`/`lighter` carry no custom weight.
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'>So<span style=\"font-weight:bold\">me</span>"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("So"),
+            FormattedTextFragment::bold("me"),
+        ])]
+    );
+
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'>So<span style=\"font-weight:normal\">me</span>"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("So"),
+            FormattedTextFragment::plain_text("me"),
+        ])]
+    );
 }
 
 #[test]

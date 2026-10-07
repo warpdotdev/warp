@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use warpui::{App, AssetProvider, View, ViewHandle, WindowId};
 
 pub mod agent_mode;
+pub mod ai_document;
 pub mod assertions;
 pub mod block;
 pub mod block_filtering;
@@ -20,6 +21,7 @@ pub mod keybindings;
 pub mod launch_configs;
 pub mod navigation_palette;
 pub mod notebook;
+pub mod orchestration_navigation;
 pub mod pane_group;
 pub mod persistence;
 #[cfg(target_os = "macos")]

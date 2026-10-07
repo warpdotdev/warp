@@ -188,20 +188,29 @@ pub(crate) enum SetupStep {
     CloudProviderSetup,
     McpServerStartup,
     AgentProfileConfiguration,
-    ProfileMcpServerStartup,
     SharedSessionEstablishment,
     GlobalSkillResolution,
     GlobalSkillRepoClone,
     EnvironmentRepoClone,
+    CacheSetup,
     EnvironmentSetupCommands,
     EnvironmentCodebaseIndexing,
     FileBasedMcpDiscovery,
     FileBasedMcpReadiness,
+    InitialGlobalMcpScan,
+    InitialGlobalMcpReadiness,
     EnvironmentSkillLoading,
     GlobalSkillLoading,
+    SkillsDirsLoading,
     ConversationResumeLoading,
     ThirdPartyHarnessPreparation,
     ThirdPartyHarnessExternalConversation,
+    /// Sub-steps of [`SetupStep::ThirdPartyHarnessPreparation`] that track plugin
+    /// install/update latency and reliability individually.
+    ThirdPartyHarnessPreparationNotificationPluginInstall,
+    ThirdPartyHarnessPreparationNotificationPluginUpdate,
+    ThirdPartyHarnessPreparationPlatformPluginInstall,
+    ThirdPartyHarnessPreparationPlatformPluginUpdate,
 }
 
 macro_rules! span_and_name {
@@ -240,9 +249,6 @@ impl SetupStep {
             Self::AgentProfileConfiguration => {
                 span_and_name!("setup_agent_profile_configuration")
             }
-            Self::ProfileMcpServerStartup => {
-                span_and_name!("setup_profile_mcp_server_startup")
-            }
             Self::SharedSessionEstablishment => {
                 span_and_name!("setup_shared_session_establishment")
             }
@@ -254,6 +260,9 @@ impl SetupStep {
             }
             Self::EnvironmentRepoClone => {
                 span_and_name!("setup_environment_repo_clone")
+            }
+            Self::CacheSetup => {
+                span_and_name!("setup_caches")
             }
             Self::EnvironmentSetupCommands => {
                 span_and_name!("setup_environment_setup_commands")
@@ -267,11 +276,20 @@ impl SetupStep {
             Self::FileBasedMcpReadiness => {
                 span_and_name!("setup_file_based_mcp_readiness")
             }
+            Self::InitialGlobalMcpScan => {
+                span_and_name!("setup_initial_global_mcp_scan")
+            }
+            Self::InitialGlobalMcpReadiness => {
+                span_and_name!("setup_initial_global_mcp_readiness")
+            }
             Self::EnvironmentSkillLoading => {
                 span_and_name!("setup_environment_skill_loading")
             }
             Self::GlobalSkillLoading => {
                 span_and_name!("setup_global_skill_loading")
+            }
+            Self::SkillsDirsLoading => {
+                span_and_name!("setup_skills_dirs_loading")
             }
             Self::ConversationResumeLoading => {
                 span_and_name!("setup_conversation_resume_loading")
@@ -281,6 +299,18 @@ impl SetupStep {
             }
             Self::ThirdPartyHarnessExternalConversation => {
                 span_and_name!("setup_third_party_harness_external_conversation")
+            }
+            Self::ThirdPartyHarnessPreparationNotificationPluginInstall => {
+                span_and_name!("setup_third_party_harness_preparation_notification_plugin_install")
+            }
+            Self::ThirdPartyHarnessPreparationNotificationPluginUpdate => {
+                span_and_name!("setup_third_party_harness_preparation_notification_plugin_update")
+            }
+            Self::ThirdPartyHarnessPreparationPlatformPluginInstall => {
+                span_and_name!("setup_third_party_harness_preparation_platform_plugin_install")
+            }
+            Self::ThirdPartyHarnessPreparationPlatformPluginUpdate => {
+                span_and_name!("setup_third_party_harness_preparation_platform_plugin_update")
             }
         }
     }

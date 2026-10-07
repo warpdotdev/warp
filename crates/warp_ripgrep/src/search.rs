@@ -139,9 +139,9 @@ mod process_impl {
     use std::path::PathBuf;
     use std::process::Stdio;
 
+    use futures::StreamExt as _;
     use futures::io::{AsyncBufReadExt as _, BufReader};
     use futures::stream::Stream;
-    use futures::StreamExt as _;
 
     use super::{Match, Submatch};
     use crate::types::RipgrepMessage;

@@ -1,19 +1,21 @@
-use std::sync::mpsc;
 #[cfg(test)]
 use std::sync::Arc;
 #[cfg(not(test))]
 use std::sync::OnceLock;
+use std::sync::mpsc;
 #[cfg(not(target_family = "wasm"))]
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, Write as _},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use chrono::{Local, SecondsFormat};
 #[cfg(test)]
 use parking_lot::Mutex;
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
+#[cfg(not(target_family = "wasm"))]
+use warp_errors::report_error;
 
 use super::ContextChipKind;
 use crate::terminal::shell::ShellType;
@@ -131,9 +133,17 @@ impl PromptChipLogger {
 
 #[cfg(not(target_family = "wasm"))]
 pub(crate) fn log_file_path() -> anyhow::Result<PathBuf> {
-    let log_directory = warp_logging::log_directory()?;
-    let channel_logfile_name = warp_core::channel::ChannelState::logfile_name();
-    Ok(log_directory.join(prompt_chip_log_filename(&channel_logfile_name)))
+    let log_path = warp_logging::log_file_path()?;
+    prompt_chip_log_file_path(&log_path)
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn prompt_chip_log_file_path(log_path: &Path) -> anyhow::Result<PathBuf> {
+    let channel_logfile_name = log_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow::anyhow!("Resolved log path has no filename"))?;
+    Ok(log_path.with_file_name(prompt_chip_log_filename(channel_logfile_name)))
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -161,9 +171,9 @@ fn spawn_log_writer(log_path: PathBuf) -> io::Result<mpsc::Sender<String>> {
 fn write_log_entries(mut file: File, rx: mpsc::Receiver<String>, log_path: PathBuf) {
     while let Ok(entry) = rx.recv() {
         if let Err(err) = file.write_all(entry.as_bytes()).and_then(|_| file.flush()) {
-            log::error!(
-                "Failed to write prompt chip log entry to {}: {err:#}",
-                log_path.display()
+            report_error!(
+                anyhow::Error::new(err).context("Failed to write prompt chip log entry"),
+                extra: { "log_path" => %log_path.display() }
             );
             return;
         }

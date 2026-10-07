@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use super::{
-    compare_versions, run_cli_command_logged, CliAgentPluginManager, PluginInstallError,
-    PluginInstructionStep, PluginInstructions,
+    CliAgentPluginManager, PluginInstallError, PluginInstructionStep, PluginInstructions,
+    compare_versions, run_cli_command_logged,
 };
 use crate::features::FeatureFlag;
 use crate::terminal::model::session::LocalCommandExecutor;
@@ -26,9 +26,9 @@ const CODEX_CONFIG_DIR: &str = ".codex";
 const CODEX_HOME_ENV: &str = "CODEX_HOME";
 
 // Keep in sync with the plugin version in warpdotdev/codex-warp.
-const MINIMUM_PLUGIN_VERSION: &str = "0.4.0";
+const MINIMUM_PLUGIN_VERSION: &str = "0.4.2";
 // Keep in sync with the orchestration plugin version in warpdotdev/codex-warp.
-const MINIMUM_PLATFORM_PLUGIN_VERSION: &str = "0.4.0";
+const MINIMUM_PLATFORM_PLUGIN_VERSION: &str = "0.4.1";
 
 pub(super) struct CodexPluginManager {
     executor: LocalCommandExecutor,
@@ -154,6 +154,7 @@ impl CliAgentPluginManager for CodexPluginManager {
         if !FeatureFlag::CodexPlugin.is_enabled() {
             return Ok(());
         }
+        log::info!("[PLUGIN_INSTALL] updating codex plugin");
         let mut log = String::new();
         ensure_codex_home_dir()?;
         self.ensure_marketplace(&mut log).await?;
@@ -462,10 +463,10 @@ fn codex_warp_marketplace_config(codex_dir: &Path) -> Option<CodexWarpMarketplac
 
 /// Checks `CODEX_HOME` first, falls back to `~/.codex`.
 fn codex_home_dir() -> io::Result<PathBuf> {
-    if let Ok(codex_home) = env::var(CODEX_HOME_ENV) {
-        if !codex_home.is_empty() {
-            return Ok(PathBuf::from(codex_home));
-        }
+    if let Ok(codex_home) = env::var(CODEX_HOME_ENV)
+        && !codex_home.is_empty()
+    {
+        return Ok(PathBuf::from(codex_home));
     }
     dirs::home_dir()
         .map(|home| home.join(CODEX_CONFIG_DIR))

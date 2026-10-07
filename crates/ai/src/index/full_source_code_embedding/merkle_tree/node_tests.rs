@@ -826,9 +826,9 @@ fn test_merkle_node_multiple_operations() {
 
             // The hash of our modified node should match the hash of the manually constructed node
             assert_eq!(
-            node.hash, expected_node.hash,
-            "Hash after all operations should match hash of node constructed with expected structure"
-        );
+                node.hash, expected_node.hash,
+                "Hash after all operations should match hash of node constructed with expected structure"
+            );
         },
     );
 }

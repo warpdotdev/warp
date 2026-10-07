@@ -7,27 +7,29 @@ use std::io;
 use std::iter::DoubleEndedIterator;
 use std::num::NonZeroUsize;
 use std::ops::{Range, RangeInclusive};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::{DateTime, Duration, FixedOffset, Local};
 use enum_iterator::all;
 use hex;
 use instant::Instant;
 pub use interaction_mode::*;
-use lazy_static::lazy_static;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 pub use serialized_block::*;
 use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_terminal::model::grid::Dimensions as _;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use warp_util::lazy::Lazy;
 use warp_util::path::user_friendly_path;
 use warpui::r#async::executor::Background;
 use warpui::record_trace_event;
 use warpui::units::{IntoLines, Lines};
 
+pub use super::BlockId;
 use super::bootstrap::BootstrapStage;
 use super::find::RegexDFAs;
 use super::grid::grid_handler::{GridHandler, PerformResetGridChecks};
@@ -37,30 +39,31 @@ use super::image_map::StoredImageMetadata;
 use super::kitty::{KittyAction, KittyResponse};
 use super::secrets::RespectObfuscatedSecrets;
 use super::selection::ScrollDelta;
-use super::session::{command_executor, Sessions};
-pub use super::BlockId;
+use super::session::{Sessions, command_executor};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::redaction::redact_secrets;
-use crate::ai::blocklist::agent_view::{AgentViewDisplayMode, AgentViewState};
 use crate::context_chips::prompt_snapshot::PromptSnapshot;
 use crate::server::block::DisplaySetting;
 use crate::server::ids::SyncId;
 use crate::terminal::block_filter::BlockFilterQuery;
 use crate::terminal::block_list_element::GridType;
 use crate::terminal::event::{
-    BlockCompletedEvent, BlockLatencyData, BlockMetadataReceivedEvent, BlockType,
-    BlockWorkingDirectoryUpdatedEvent, Event, UserBlockCompleted,
+    BlockCompletedEvent, BlockMetadataReceivedEvent, BlockType, BlockWorkingDirectoryUpdatedEvent,
+    Event, UserBlockCompleted,
 };
 use crate::terminal::event_listener::ChannelEventListener;
-use crate::terminal::model::ansi::{self, PrecmdValue, PreexecValue, Processor};
+use crate::terminal::model::GridStorage;
+use crate::terminal::model::ansi::{
+    self, Handler, PrecmdValue, PreexecValue, Processor, PromptMetadata,
+};
 use crate::terminal::model::blockgrid::BlockGrid;
+use crate::terminal::model::blocks::BlockList;
 use crate::terminal::model::grid::grid_handler::TermMode;
 use crate::terminal::model::index::{Point, VisibleRow};
 use crate::terminal::model::iterm_image::ITermImage;
 use crate::terminal::model::secrets::ObfuscateSecrets;
 use crate::terminal::model::session::SessionId;
 use crate::terminal::model::terminal_model::{BlockIndex, WithinBlock};
-use crate::terminal::model::GridStorage;
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::WithinBlockBanner;
 use crate::terminal::{BlockPadding, ShellHost, SizeInfo};
@@ -76,6 +79,33 @@ pub const LONG_RUNNING_BOTTOM_PADDING_LINES: f32 = 0.2;
 /// https://github.com/warpdotdev/command-corrections/blob/main/src/lib.rs#L109
 pub(super) fn has_block_failed(exit_code: ExitCode, block_state: BlockState) -> bool {
     block_state == BlockState::DoneWithExecution && !exit_code.was_successful()
+}
+
+/// Selects which conversation-associated blocks contribute to a transcript layout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TranscriptScope {
+    /// Includes every block regardless of its conversation associations.
+    Unfiltered,
+    /// Includes top-level terminal blocks.
+    #[default]
+    Terminal,
+    /// Includes blocks visible in one conversation.
+    Conversation(AIConversationId),
+}
+
+impl TranscriptScope {
+    /// Returns the scoped conversation, if any.
+    pub fn conversation_id(self) -> Option<AIConversationId> {
+        match self {
+            Self::Conversation(conversation_id) => Some(conversation_id),
+            Self::Unfiltered | Self::Terminal => None,
+        }
+    }
+
+    /// Returns whether the scope displays a conversation transcript.
+    pub fn is_conversation(self) -> bool {
+        matches!(self, Self::Conversation(_))
+    }
 }
 
 pub(super) const MAX_SERIALIZED_STYLIZED_OUTPUT_LINES: usize = 5000;
@@ -114,13 +144,6 @@ const BACKGROUND_OUTPUT_RENDER_DELAY_MS: u64 = 100;
 /// how many rows to take for much narrower terminals, to ensure we have enough content
 /// for block summaries given to AI.
 const MIN_TERMINAL_WIDTH_FOR_TRUNCATION_CALCULATIONS: usize = 150;
-
-lazy_static! {
-    /// A set of commands that perform minimal work that we use as a baseline to measure the latency of blocks.
-    /// Note that while the empty command doesn't invoke pre-exec, it still does get a newline from
-    /// the shell, and runs precmd.
-    static ref BASELINE_COMMANDS: HashSet<&'static str> = HashSet::from(["", "pwd", "whoami", "cd"]);
-}
 
 /// Blocklist Env Var metadata associated with this block.
 #[derive(Debug, Clone)]
@@ -505,6 +528,32 @@ pub struct PromptInfo {
     pub prompt_snapshot: Option<String>,
 }
 
+/// Resolution is keyed on `BlockId`, not `BlockIndex`: block removal (e.g. clearing the screen)
+/// can reindex the remaining blocks, so a `BlockIndex` captured at construction time may no
+/// longer point at the same block (or may silently resolve to a different one entirely) by the
+/// time a deferred field is first read, possibly much later.
+macro_rules! lazy_block_field {
+    ($id:ident, $body:expr) => {{
+        let id = $id.clone();
+        Lazy::deferred(move |block_list: &BlockList| {
+            match block_list.block_with_id(&id) {
+                Some(block) => $body(block),
+                None => {
+                    report_error!(
+                        "Tried to lazily compute a UserBlockCompleted field for a block that no longer exists",
+                        extra: {
+                            "block_id" => ?id,
+                            "compute_call" => stringify!($body),
+                        }
+                    );
+                    debug_assert!(false, "The block should always exist for lazy computation");
+                    Default::default()
+                }
+            }
+        })
+    }};
+}
+
 impl From<&Block> for BlockType {
     fn from(block: &Block) -> Self {
         if block.is_for_in_band_command {
@@ -518,7 +567,7 @@ impl From<&Block> for BlockType {
             BootstrapStage::RestoreBlocks => BlockType::Restored,
             BootstrapStage::WarpInput | BootstrapStage::Bootstrapped => BlockType::BootstrapHidden,
             BootstrapStage::ScriptExecution => {
-                if block.is_empty(&AgentViewState::Inactive) {
+                if block.is_empty(&TranscriptScope::Terminal) {
                     BlockType::BootstrapHidden
                 } else {
                     let serialized_block = block.into();
@@ -526,66 +575,30 @@ impl From<&Block> for BlockType {
                 }
             }
             BootstrapStage::PostBootstrapPrecmd => {
-                let serialized_block = block.into();
-
                 if block.is_background() {
-                    BlockType::Background(Arc::new(serialized_block))
+                    BlockType::Background(Arc::new(block.into()))
                 } else {
-                    let command = block.command_to_string();
-                    let mut command_with_obfuscated_secrets =
-                        block.command_with_secrets_obfuscated(false);
-
-                    let (output_truncated, mut output_truncated_with_obfuscated_secrets) =
-                        if block.is_ai_ugc_telemetry_enabled {
-                            // If telemetry is enabled, we collect the full output but are limiting it to
-                            // the first and last 2500 lines in case the block is very large.
-                            (
-                                block.output_grid().content_summary(2500, 2500, false),
-                                block.output_grid().content_summary(2500, 2500, true),
-                            )
-                        } else {
-                            (
-                                block
-                                    .output_grid()
-                                    .contents_to_string(false, Some(MAX_SERIALIZED_OUTPUT_LINES)),
-                                block
-                                    .output_grid()
-                                    .contents_to_string_force_secrets_obfuscated(
-                                        false,
-                                        Some(MAX_SERIALIZED_OUTPUT_LINES),
-                                    ),
-                            )
-                        };
-
-                    // If secret redaction is disabled, we manually scan for secrets and redact them.
-                    if matches!(
-                        block.prompt_and_command_grid().should_scan_for_secrets,
-                        ObfuscateSecrets::No
-                    ) {
-                        redact_secrets(&mut command_with_obfuscated_secrets);
-                    }
-                    if matches!(
-                        block.output_grid().should_scan_for_secrets,
-                        ObfuscateSecrets::No
-                    ) {
-                        redact_secrets(&mut output_truncated_with_obfuscated_secrets);
-                    }
-
-                    BlockType::User(UserBlockCompleted {
-                        index: block.block_index,
-                        serialized_block: Arc::new(serialized_block),
-                        command,
-                        command_with_obfuscated_secrets,
-                        output_truncated,
-                        output_truncated_with_obfuscated_secrets,
-                        was_part_of_agent_interaction: block.agent_interaction_metadata().is_some(),
-                        started_at: block.command_start_time(),
-                        num_output_lines: block.output_grid().len() as u64,
-                        num_output_lines_truncated: block
-                            .output_grid()
-                            .grid_handler()
-                            .num_lines_truncated(),
-                    })
+                    // Captured (by stable `BlockId`, not `BlockIndex` — see `resolve_and_compute`)
+                    // by the `Lazy::deferred` closures below so they can look up this block again
+                    // (via a `&BlockList` given later, at read time) without holding onto `block`
+                    // itself.
+                    let index = block.block_index;
+                    let id = block.id().clone();
+                    BlockType::User(UserBlockCompleted::new(
+                        index,
+                        lazy_block_field!(id, |block| Arc::new(SerializedBlock::from(block))),
+                        lazy_block_field!(id, Block::command_to_string),
+                        lazy_block_field!(id, Block::compute_command_with_obfuscated_secrets),
+                        lazy_block_field!(id, Block::compute_output_truncated),
+                        lazy_block_field!(
+                            id,
+                            Block::compute_output_truncated_with_obfuscated_secrets
+                        ),
+                        block.agent_interaction_metadata().is_some(),
+                        block.command_start_time(),
+                        block.output_grid().len() as u64,
+                        block.output_grid().grid_handler().num_lines_truncated(),
+                    ))
                 }
             }
         }
@@ -1118,7 +1131,7 @@ impl Block {
     }
 
     /// Replaces the block's lprompt and command combined grid with the given one.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn set_prompt_and_command_grid(&mut self, prompt_and_command_grid: BlockGrid) {
         self.header_grid
             .set_prompt_and_command_grid(prompt_and_command_grid);
@@ -1137,14 +1150,14 @@ impl Block {
     }
 
     /// Replaces the block's rprompt grid with the given one.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub(super) fn set_rprompt_grid(&mut self, rprompt_grid: BlockGrid) {
         self.rprompt_grid = rprompt_grid;
     }
 
     /// Replaces the block's output grid with the given one.
     /// Useful for test functions.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn set_output_grid(&mut self, output_grid: BlockGrid) {
         self.output_grid = output_grid;
     }
@@ -1350,9 +1363,9 @@ impl Block {
         self.header_grid.clone_command_from_blockgrid(command);
     }
 
-    pub fn is_empty(&self, agent_view_state: &AgentViewState) -> bool {
+    pub fn is_empty(&self, transcript_scope: &TranscriptScope) -> bool {
         // TODO(vorporeal): this should use a larger epsilon
-        self.height(agent_view_state).as_f64() < f64::EPSILON
+        self.height(transcript_scope).as_f64() < f64::EPSILON
     }
 
     pub fn is_restored(&self) -> bool {
@@ -1373,17 +1386,13 @@ impl Block {
     }
 
     /// If true, this block is hidden and has a height of 0.
-    pub fn should_hide_block(&self, agent_view_state: &AgentViewState) -> bool {
+    pub fn should_hide_block(&self, transcript_scope: &TranscriptScope) -> bool {
         if self.hidden {
             return true;
         }
         if FeatureFlag::AgentView.is_enabled() {
-            match agent_view_state {
-                AgentViewState::Active {
-                    display_mode: AgentViewDisplayMode::FullScreen,
-                    conversation_id: active_id,
-                    ..
-                } => {
+            match transcript_scope {
+                TranscriptScope::Conversation(active_id) => {
                     // Agent view is active - show only blocks that belong to this conversation
                     let visible_in_conversation = match &self.agent_view_visibility {
                         AgentViewVisibility::Terminal {
@@ -1407,11 +1416,7 @@ impl Block {
                         return true;
                     }
                 }
-                AgentViewState::Active {
-                    display_mode: AgentViewDisplayMode::Inline,
-                    ..
-                }
-                | AgentViewState::Inactive => {
+                TranscriptScope::Terminal => {
                     // Terminal view - hide blocks that were created in agent mode
                     if matches!(
                         self.agent_view_visibility,
@@ -1420,6 +1425,7 @@ impl Block {
                         return true;
                     }
                 }
+                TranscriptScope::Unfiltered => {}
             }
         }
 
@@ -1489,9 +1495,9 @@ impl Block {
     /// The active block is included when it is eligible so viewers can restore the active prompt.
     pub fn is_scrollback_block_for_shared_session(
         &self,
-        agent_view_state: &AgentViewState,
+        transcript_scope: &TranscriptScope,
     ) -> bool {
-        !self.should_hide_block(agent_view_state) && !self.is_restored()
+        !self.should_hide_block(transcript_scope) && !self.is_restored()
     }
 
     pub fn index(&self) -> BlockIndex {
@@ -1499,15 +1505,15 @@ impl Block {
     }
 
     /// `true` if the block is rendered in the blocklist.
-    pub fn is_visible(&self, agent_view_state: &AgentViewState) -> bool {
-        self.height(agent_view_state) > Lines::zero()
+    pub fn is_visible(&self, transcript_scope: &TranscriptScope) -> bool {
+        self.height(transcript_scope) > Lines::zero()
     }
 
     /// Height is the source-of-truth determinant for whether or not a block is hidden (i.e. if it
-    /// has a height of 0). Thus it depends on agent_view_state, which affects whether or not a
-    /// given block should be hidden.
-    pub fn height(&self, agent_view_state: &AgentViewState) -> Lines {
-        if self.should_hide_block(agent_view_state) {
+    /// has a height of 0). Thus it depends on the transcript scope, which affects whether a block
+    /// should be hidden.
+    pub fn height(&self, transcript_scope: &TranscriptScope) -> Lines {
+        if self.should_hide_block(transcript_scope) {
             Lines::zero()
         } else {
             self.block_banner_height()
@@ -1581,9 +1587,8 @@ impl Block {
 
         let block_type: BlockType = self.into();
         self.event_proxy
-            .send_terminal_event(Event::BlockCompleted(BlockCompletedEvent {
+            .send_app_event(Event::BlockCompleted(BlockCompletedEvent {
                 block_type,
-                block_latency_data: self.block_latency_data(),
                 num_secrets_obfuscated: self.num_secrets_obfuscated(),
                 block_index: self.block_index,
                 block_id: self.id.clone(),
@@ -1594,24 +1599,6 @@ impl Block {
 
     pub fn num_secrets_obfuscated(&self) -> usize {
         self.header_grid.num_secrets_obfuscated() + self.output_grid.num_secrets_obfuscated()
-    }
-
-    fn block_latency_data(&self) -> Option<BlockLatencyData> {
-        // We only want to record block latency data for normal execution
-        // outside of the bootstrap sequence.
-        if self.bootstrap_stage.is_done() && !self.is_background() && !self.is_static() {
-            let command = self.header_grid.command_to_string_with_max_rows(Some(1));
-            BASELINE_COMMANDS.get(command.as_str()).and_then(|command| {
-                self.header_grid
-                    .command_start_time()
-                    .map(|started_at| BlockLatencyData {
-                        command,
-                        started_at,
-                    })
-            })
-        } else {
-            None
-        }
     }
 
     /// Gets optimized content summary for a single block using terminal-width-aware truncation,
@@ -1752,9 +1739,19 @@ impl Block {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn set_was_long_running(&mut self, was_long_running: AtomicBool) {
         self.was_long_running = was_long_running;
+    }
+
+    pub fn is_command_cursor_visible(&self) -> bool {
+        self.is_active_and_long_running()
+            && self.is_command_grid_active()
+            && self.is_mode_set(TermMode::SHOW_CURSOR)
+    }
+
+    pub fn is_output_cursor_visible(&self) -> bool {
+        self.is_active_and_long_running() && self.is_mode_set(TermMode::SHOW_CURSOR)
     }
 
     pub fn command_with_secrets_obfuscated(&self, include_escape_sequences: bool) -> String {
@@ -1788,18 +1785,8 @@ impl Block {
         self.header_grid.is_command_finished()
     }
 
-    pub fn command_and_output_with_secret_obfuscated(
-        &self,
-        include_escape_sequences: bool,
-    ) -> (String, String) {
-        let mut command = self.command_with_secrets_obfuscated(include_escape_sequences);
-        let mut output = self
-            .output_grid()
-            .contents_to_string_force_secrets_obfuscated(
-                include_escape_sequences,
-                Some(MAX_SERIALIZED_STYLIZED_OUTPUT_LINES),
-            );
-
+    fn compute_command_with_obfuscated_secrets(&self) -> String {
+        let mut command = self.command_with_secrets_obfuscated(false);
         // If secret redaction is disabled, we manually scan for secrets and redact them.
         if matches!(
             self.prompt_and_command_grid().should_scan_for_secrets,
@@ -1807,14 +1794,40 @@ impl Block {
         ) {
             redact_secrets(&mut command);
         }
+        command
+    }
+
+    fn compute_output_truncated(&self) -> String {
+        if self.is_ai_ugc_telemetry_enabled {
+            // If telemetry is enabled, we collect the full output but are limiting it to
+            // the first and last 2500 lines in case the block is very large.
+            self.output_grid().content_summary(2500, 2500, false)
+        } else {
+            self.output_grid()
+                .contents_to_string(false, Some(MAX_SERIALIZED_OUTPUT_LINES))
+        }
+    }
+
+    /// Computes [`UserBlockCompleted::output_truncated_with_obfuscated_secrets`] lazily from the live
+    /// block.
+    fn compute_output_truncated_with_obfuscated_secrets(&self) -> String {
+        let mut output = if self.is_ai_ugc_telemetry_enabled {
+            self.output_grid().content_summary(2500, 2500, true)
+        } else {
+            self.output_grid()
+                .contents_to_string_force_secrets_obfuscated(
+                    false,
+                    Some(MAX_SERIALIZED_OUTPUT_LINES),
+                )
+        };
+        // If secret redaction is disabled, we manually scan for secrets and redact them.
         if matches!(
             self.output_grid().should_scan_for_secrets,
             ObfuscateSecrets::No
         ) {
             redact_secrets(&mut output);
         }
-
-        (command, output)
+        output
     }
 
     pub fn prompt_grid(&self) -> &BlockGrid {
@@ -2005,10 +2018,16 @@ impl Block {
     /// Returns the offset, in pixels, at which the rprompt should be rendered
     /// relative to the prompt.
     pub fn rprompt_render_offset(&self, size: &SizeInfo) -> Vector2F {
+        let right_margin = match self.shell_host.as_ref().map(|shell| shell.shell_type) {
+            Some(ShellType::Fish | ShellType::PowerShell) => 0,
+            // TODO: Honor ZLE_RPROMPT_INDENT instead of assuming zsh's default.
+            Some(ShellType::Zsh | ShellType::Bash) | None => 1,
+        };
         let rprompt_width_cells = self.rprompt_grid.grid_storage().max_cursor_point.col;
         let rprompt_width_px = rprompt_width_cells as f32 * size.cell_width_px.as_f32();
         Vector2F::new(
-            (self.prompt_grid_columns().saturating_sub(1) as f32 * size.cell_width_px().as_f32())
+            (self.prompt_grid_columns().saturating_sub(right_margin) as f32
+                * size.cell_width_px().as_f32())
                 - rprompt_width_px,
             self.prompt_number_of_rows().saturating_sub(1) as f32 * size.cell_height_px().as_f32(),
         )
@@ -2217,6 +2236,14 @@ impl Block {
     pub fn output_to_string_force_full_grid_contents(&self) -> String {
         self.output_grid()
             .contents_to_string_force_full_grid_contents(false, None)
+    }
+
+    pub fn command_and_output_to_string(&self) -> String {
+        if self.honor_ps1() {
+            self.bounds_to_string(self.start_point(), self.end_point())
+        } else {
+            format!("{}\n{}", self.command_to_string(), self.output_to_string())
+        }
     }
 
     pub fn output_with_secrets_unobfuscated(&self) -> String {
@@ -2598,7 +2625,7 @@ impl Block {
             x if x < (self.output_grid_offset() + self.output_grid_displayed_height()) => {
                 BlockSection::OutputGrid((row - self.output_grid_offset()).max(Lines::zero()))
             }
-            x if x < self.height(&AgentViewState::Inactive) => BlockSection::PaddingBottom,
+            x if x < self.height(&TranscriptScope::Terminal) => BlockSection::PaddingBottom,
             _ => BlockSection::NotContained,
         }
     }
@@ -2858,8 +2885,8 @@ impl Block {
     }
 
     /// Returns `true` if this block is a valid option to use as context for an AI model.
-    pub fn can_be_ai_context(&self, agent_view_state: &AgentViewState) -> bool {
-        self.is_visible(agent_view_state)
+    pub fn can_be_ai_context(&self, transcript_scope: &TranscriptScope) -> bool {
+        self.is_visible(transcript_scope)
             && !self.is_in_band_command_block()
             && !self.is_agent_monitoring()
     }
@@ -2930,13 +2957,100 @@ impl Block {
         }
         self.output_grid.clear_marked_text();
     }
+
+    pub(super) fn apply_precmd(&mut self, data: PromptMetadata) {
+        record_trace_event!("command_execution:block:precmd");
+        let is_after_in_band_command = data.was_sent_after_in_band_command();
+        self.header_grid.prompt_only_precmd(data.clone());
+
+        self.state = BlockState::BeforeExecution;
+        self.pwd = data.pwd;
+        self.git_branch.clone_from(&data.git_head);
+        self.git_branch_name.clone_from(&data.git_branch);
+        self.virtual_env = data.virtual_env;
+        self.conda_env = data.conda_env;
+        self.node_version = data.node_version;
+        self.session_id = data.session_id.map(Into::into);
+        self.rprompt.clone_from(&data.rprompt);
+
+        if let Some(rprompt) = data.rprompt {
+            self.init_rprompt_grid(&rprompt);
+        }
+
+        self.precmd_state = PrecmdState::AfterPrecmd;
+        self.event_proxy
+            .send_app_event(Event::BlockMetadataReceived(BlockMetadataReceivedEvent {
+                block_metadata: self.metadata(),
+                block_index: self.block_index,
+                is_after_in_band_command,
+                is_done_bootstrapping: matches!(
+                    self.bootstrap_stage,
+                    BootstrapStage::PostBootstrapPrecmd
+                ),
+            }));
+    }
+
+    pub(super) fn apply_preexec(&mut self, data: PreexecValue) {
+        record_trace_event!("command_execution:block:prexec");
+
+        self.ensure_started_for_preexec();
+        self.header_grid.preexec(data.clone());
+
+        let is_for_in_band_command = command_executor::is_in_band_command(data.command.as_str());
+        if self.bootstrap_stage() == BootstrapStage::PostBootstrapPrecmd {
+            self.event_proxy.send_app_event(Event::AfterBlockStarted {
+                block_id: self.id.clone(),
+                command: self.command_to_string(),
+                is_for_in_band_command,
+            });
+        }
+
+        self.leading_linefeeds_ignored = 0;
+        self.output_grid.start();
+        self.state = BlockState::Executing;
+        self.is_for_in_band_command = is_for_in_band_command;
+
+        self.wakeup_after_delay();
+    }
+
+    /// Moves an unfinished block through the minimum execution transition needed before completion.
+    pub(super) fn ensure_executing_for_completion(&mut self) {
+        if self.finished() || self.state != BlockState::BeforeExecution {
+            return;
+        }
+
+        self.ensure_started_for_preexec();
+        self.header_grid.finish_command_grid();
+        self.leading_linefeeds_ignored = 0;
+        self.output_grid.start();
+        self.state = BlockState::Executing;
+        self.is_for_in_band_command |=
+            command_executor::is_in_band_command(self.command_to_string().as_str());
+    }
+
+    /// Starts the block when `Preexec` is the first observed start evidence.
+    pub(super) fn ensure_started_for_preexec(&mut self) {
+        // This condition is a hack to fix a bug with shells that don't support bracketed paste,
+        // e.g. legacy Bash versions, 4.4 or earlier.
+        // https://lists.gnu.org/archive/html/info-gnu/2016-09/msg00012.html
+        // The bug happens when multi-line commands are submitted, see CORE-1698. Without bracketed
+        // paste, we get multiple blocks per [`crate::terminal::input::Event::ExecuteCommand`]. We
+        // generally assume the code path on ExecuteCommand is responsible for starting the active
+        // block. So, `self.started()` should always be true by this point. However, this assumption
+        // is violated if we get multiple blocks per ExecuteCommand event. So, as a fallback, we
+        // start the block here if it hasn't happened already. Note: the displayed command duration
+        // in the "block label" may be under-estimated in this case.
+        if !self.started() && self.state == BlockState::BeforeExecution {
+            self.start();
+        }
+    }
 }
 
 /// Used in the ansi::Handler implementation for Block below. Performs
 /// the provided method call on the active grid, the command grid if in input mode
 /// or the output grid if in output mode.
 macro_rules! delegate {
-    ($self:ident.$method:ident( $( $arg:expr ),* )) => {
+    ($self:ident.$method:ident( $( $arg:expr_2021 ),* )) => {
         match $self.header_grid.receiving_chars_for_prompt {
             Some(ansi::PromptKind::Initial) => {
                 $self.header_grid.$method($( $arg ),*)
@@ -2961,7 +3075,7 @@ macro_rules! delegate {
 
 /// Like `delegate!`, but image completions are output, even before preexec.
 macro_rules! delegate_image_completion {
-    ($self:ident.$method:ident( $( $arg:expr ),* )) => {
+    ($self:ident.$method:ident( $( $arg:expr_2021 ),* )) => {
         match $self.header_grid.receiving_chars_for_prompt {
             Some(ansi::PromptKind::Initial) => {
                 $self.header_grid.$method($( $arg ),*)
@@ -2990,7 +3104,9 @@ macro_rules! delegate_image_completion {
 
 impl ansi::Handler for Block {
     fn set_title(&mut self, _: Option<String>) {
-        log::error!("Handler method Block::set_title should never be called. This should be handled by TerminalModel.");
+        report_error!(
+            "Handler method Block::set_title should never be called. This should be handled by TerminalModel."
+        );
     }
 
     fn set_cursor_style(&mut self, style: Option<ansi::CursorStyle>) {
@@ -3003,6 +3119,10 @@ impl ansi::Handler for Block {
 
     fn input(&mut self, c: char) {
         delegate!(self.input(c));
+    }
+
+    fn set_hyperlink(&mut self, hyperlink: Option<warp_terminal::model::ansi::Hyperlink>) {
+        delegate!(self.set_hyperlink(hyperlink));
     }
 
     fn goto(&mut self, row: VisibleRow, column: usize) {
@@ -3233,11 +3353,15 @@ impl ansi::Handler for Block {
     }
 
     fn push_title(&mut self) {
-        log::error!("Handler method Block::push_title should never be called. This should be handled by TerminalModel.");
+        report_error!(
+            "Handler method Block::push_title should never be called. This should be handled by TerminalModel."
+        );
     }
 
     fn pop_title(&mut self) {
-        log::error!("Handler method Block::pop_title should never be called. This should be handled by TerminalModel.");
+        report_error!(
+            "Handler method Block::pop_title should never be called. This should be handled by TerminalModel."
+        );
     }
 
     fn prompt_marker(&mut self, marker: ansi::PromptMarker) {
@@ -3283,7 +3407,7 @@ impl ansi::Handler for Block {
                 }
                 // Reset the indicator for receiving prompt characters.
                 self.header_grid.receiving_chars_for_prompt = None;
-                self.event_proxy.send_terminal_event(Event::PromptUpdated);
+                self.event_proxy.send_app_event(Event::PromptUpdated);
             }
         }
     }
@@ -3309,7 +3433,7 @@ impl ansi::Handler for Block {
         // that genuinely care about CWD changes opt in by also listening to
         // `BlockWorkingDirectoryUpdated`.
         self.event_proxy
-            .send_terminal_event(Event::BlockWorkingDirectoryUpdated(
+            .send_app_event(Event::BlockWorkingDirectoryUpdated(
                 BlockWorkingDirectoryUpdatedEvent {
                     block_metadata: self.metadata(),
                     block_index: self.block_index,
@@ -3326,74 +3450,16 @@ impl ansi::Handler for Block {
             ));
     }
 
-    fn precmd(&mut self, data: PrecmdValue) {
-        record_trace_event!("command_execution:block:precmd");
-        let is_after_in_band_command = data.was_sent_after_in_band_command();
+    fn precmd_with_completion_metadata(&mut self, data: PrecmdValue) {
+        self.apply_precmd(data.prompt_metadata);
+    }
 
-        self.header_grid.precmd(data.clone());
-
-        self.state = BlockState::BeforeExecution;
-        self.pwd = data.pwd;
-        self.git_branch.clone_from(&data.git_head);
-        self.git_branch_name.clone_from(&data.git_branch);
-        self.virtual_env = data.virtual_env;
-        self.conda_env = data.conda_env;
-        self.node_version = data.node_version;
-        self.session_id = data.session_id.map(Into::into);
-        self.rprompt.clone_from(&data.rprompt);
-
-        if let Some(rprompt) = data.rprompt {
-            self.init_rprompt_grid(&rprompt);
-        }
-
-        self.precmd_state = PrecmdState::AfterPrecmd;
-        self.event_proxy
-            .send_terminal_event(Event::BlockMetadataReceived(BlockMetadataReceivedEvent {
-                block_metadata: self.metadata(),
-                block_index: self.block_index,
-                is_after_in_band_command,
-                is_done_bootstrapping: matches!(
-                    self.bootstrap_stage,
-                    BootstrapStage::PostBootstrapPrecmd
-                ),
-            }));
+    fn prompt_only_precmd(&mut self, data: PromptMetadata) {
+        self.apply_precmd(data);
     }
 
     fn preexec(&mut self, data: PreexecValue) {
-        record_trace_event!("command_execution:block:prexec");
-
-        // This condition is a hack to fix a bug with shells that don't support bracketed paste,
-        // e.g. legacy Bash versions, 4.4 or earlier.
-        // https://lists.gnu.org/archive/html/info-gnu/2016-09/msg00012.html
-        // The bug happens when multi-line commands are submitted, see CORE-1698. Without bracketed
-        // paste, we get multiple blocks per [`crate::terminal::input::Event::ExecuteCommand`]. We
-        // generally assume the code path on ExecuteCommand is responsible for starting the active
-        // block. So, `self.started()` should always be true by this point. However, this assumption
-        // is violated if we get multiple blocks per ExecuteCommand event. So, as a fallback, we
-        // start the block here if it hasn't happened already. Note: the displayed command duration
-        // in the "block label" may be under-estimated in this case.
-        if !self.started() && self.state == BlockState::BeforeExecution {
-            self.start();
-        }
-
-        self.header_grid.preexec(data.clone());
-
-        let is_for_in_band_command = command_executor::is_in_band_command(data.command.as_str());
-        if self.bootstrap_stage() == BootstrapStage::PostBootstrapPrecmd {
-            self.event_proxy
-                .send_terminal_event(Event::AfterBlockStarted {
-                    block_id: self.id.clone(),
-                    command: self.command_to_string(),
-                    is_for_in_band_command,
-                });
-        }
-
-        self.leading_linefeeds_ignored = 0;
-        self.output_grid.start();
-        self.state = BlockState::Executing;
-        self.is_for_in_band_command = is_for_in_band_command;
-
-        self.wakeup_after_delay();
+        self.apply_preexec(data);
     }
 
     fn on_finish_byte_processing(&mut self, input: &ansi::ProcessorInput<'_>) {

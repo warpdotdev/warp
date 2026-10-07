@@ -5,22 +5,22 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
 use ai::skills::{
-    provider_parent_directory_for_skills_root, provider_rank, ParsedSkill, SkillPathOrigin,
-    SkillProvider,
+    ParsedSkill, SkillPathOrigin, SkillProvider, provider_parent_directory_for_skills_root,
+    provider_rank,
 };
 use lazy_static::lazy_static;
 use siphasher::sip::SipHasher;
+use warp_core::ui::Icon;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::Icon;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::prelude::MouseStateHandle;
 use warpui::{AppContext, Element, EventContext, SingletonEntity};
 
 use super::{SkillDescriptor, SkillManager};
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::blocklist::view_util::render_provider_icon_button;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::view_util::render_provider_icon_button;
 
 lazy_static! {
     static ref CONTENT_HASHER: SipHasher = SipHasher::new_with_keys(0, 0);

@@ -4,11 +4,15 @@ use warpui::{AppContext, EntityId, SingletonEntity, ViewContext, ViewHandle, Win
 
 use super::OneTimeModalModel;
 use crate::appearance::Appearance;
+use crate::menu::{MenuItem, MenuItemFields};
 use crate::pane_group::PaneId;
+use crate::server::ids::ServerId;
 use crate::terminal::TerminalView;
+use crate::ui_components::icons::Icon;
 use crate::window_settings::WindowSettings;
 use crate::workspace::tab_group::TabGroupId;
-use crate::workspace::Workspace;
+use crate::workspace::{Workspace, WorkspaceAction};
+use crate::workspaces::team::Team;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 /// What composes a pane (i.e. the pane group and the pane itself).
@@ -32,8 +36,6 @@ pub(super) struct WorkspaceMouseStates {
     pub(super) left_panel_icon: MouseStateHandle,
     pub(super) settings_icon: MouseStateHandle,
     pub(super) dismiss_banner_button: MouseStateHandle,
-    pub(super) sign_in_button: MouseStateHandle,
-    pub(super) sign_up_button: MouseStateHandle,
     pub(super) offline_icon: MouseStateHandle,
     pub(super) avatar_icon: MouseStateHandle,
     pub(super) header_dimming: MouseStateHandle,
@@ -42,6 +44,7 @@ pub(super) struct WorkspaceMouseStates {
     pub(super) session_config_tab_config_chip_close: MouseStateHandle,
     pub(super) tools_panel_icon: MouseStateHandle,
     pub(super) title_bar_search_bar: MouseStateHandle,
+    pub(super) team_switcher_pill: MouseStateHandle,
     #[cfg(target_family = "wasm")]
     pub(super) warp_logo: MouseStateHandle,
 }
@@ -64,21 +67,13 @@ impl WelcomeTipsViewState {
     }
 
     pub fn close_popup(&mut self) {
-        if let WelcomeTipsViewState::Available {
-            ref mut is_popup_open,
-            ..
-        } = self
-        {
+        if let WelcomeTipsViewState::Available { is_popup_open, .. } = self {
             *is_popup_open = false;
         }
     }
 
     pub fn toggle_popup(&mut self) {
-        if let WelcomeTipsViewState::Available {
-            ref mut is_popup_open,
-            ..
-        } = self
-        {
+        if let WelcomeTipsViewState::Available { is_popup_open, .. } = self {
             *is_popup_open = !*is_popup_open;
         }
     }
@@ -120,7 +115,6 @@ pub struct WorkspaceState {
     pub is_agent_management_view_open: bool,
     pub is_codex_modal_open: bool,
     pub is_cloud_agent_capacity_modal_open: bool,
-    pub is_free_tier_limit_hit_modal_open: bool,
     pub is_prompt_suggestions_unavailable_modal_open: bool,
     pub is_tab_config_params_modal_open: bool,
     pub is_session_config_modal_open: bool,
@@ -164,7 +158,6 @@ impl WorkspaceState {
             || self.is_enable_auto_reload_modal_open
             || self.is_codex_modal_open
             || self.is_cloud_agent_capacity_modal_open
-            || self.is_free_tier_limit_hit_modal_open
             || self.is_prompt_suggestions_unavailable_modal_open
             || self.is_tab_config_params_modal_open
             || self.is_session_config_modal_open
@@ -209,7 +202,6 @@ impl WorkspaceState {
         self.is_enable_auto_reload_modal_open = false;
         self.is_codex_modal_open = false;
         self.is_cloud_agent_capacity_modal_open = false;
-        self.is_free_tier_limit_hit_modal_open = false;
         self.is_prompt_suggestions_unavailable_modal_open = false;
         self.is_tab_config_params_modal_open = false;
         self.is_session_config_modal_open = false;
@@ -407,11 +399,39 @@ fn get_terminal_background_opacity(window_id: WindowId, app: &AppContext) -> u8 
         .background_opacity
         .effective_opacity(window_id, app);
 
-    if let Some(img) = theme.background_image() {
-        let opacity_ratio = background_opacity as f32 / 100.;
-        // Scale the overlay opacity with the background opacity ratio.
-        (((100 - img.opacity) as f32) * opacity_ratio) as u8
-    } else {
-        background_opacity
+    match theme.background_image() {
+        Some(img) => {
+            let opacity_ratio = background_opacity as f32 / 100.;
+            // Scale the overlay opacity with the background opacity ratio.
+            (((100 - img.opacity) as f32) * opacity_ratio) as u8
+        }
+        _ => background_opacity,
     }
+}
+
+/// Builds the team-switcher dropdown items: a "Teams" header followed by one entry per team,
+/// marking the current team with a check icon.
+pub fn team_switcher_menu_items(
+    teams: &[Team],
+    current_team_uid: Option<ServerId>,
+) -> Vec<MenuItem<WorkspaceAction>> {
+    let mut items = vec![
+        MenuItem::Header {
+            fields: MenuItemFields::new("Teams"),
+            clickable: false,
+            right_side_fields: None,
+        },
+        MenuItem::Separator,
+    ];
+    items.extend(teams.iter().map(|team| {
+        let mut fields = MenuItemFields::new(team.name.clone())
+            .with_on_select_action(WorkspaceAction::OpenNewWindowForTeam { team_uid: team.uid });
+        fields = if Some(team.uid) == current_team_uid {
+            fields.with_icon(Icon::Check)
+        } else {
+            fields.with_indent()
+        };
+        fields.into_item()
+    }));
+    items
 }

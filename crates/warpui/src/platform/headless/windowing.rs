@@ -1,25 +1,24 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::mpsc;
 
 use anyhow::Result;
 
-use super::event_loop::AppEvent;
+use super::event_loop::{AppEvent, EventSender};
+use crate::WindowId;
 use crate::geometry::rect::RectF;
-use crate::geometry::vector::{vec2f, Vector2F};
+use crate::geometry::vector::{Vector2F, vec2f};
 use crate::platform::{self, WindowOptions};
 use crate::windowing::WindowCallbacks;
-use crate::WindowId;
 
 pub struct WindowManager {
     windows: HashMap<WindowId, Rc<Window>>,
     active_window: RefCell<Option<WindowId>>,
-    event_sender: mpsc::Sender<AppEvent>,
+    event_sender: EventSender,
 }
 
 impl WindowManager {
-    pub(super) fn new(event_sender: mpsc::Sender<AppEvent>) -> Self {
+    pub(super) fn new(event_sender: EventSender) -> Self {
         Self {
             windows: HashMap::new(),
             active_window: RefCell::new(None),
@@ -112,10 +111,6 @@ impl warpui_core::platform::WindowManager for WindowManager {
     }
 
     fn set_all_windows_background_blur_radius(&self, _blur_radius_pixels: u8) {
-        // No-op for headless.
-    }
-
-    fn set_all_windows_background_blur_texture(&self, _use_blur_texture: bool) {
         // No-op for headless.
     }
 

@@ -5,6 +5,7 @@ use ai::agent::orchestration_config::{
     OrchestrationConfig, OrchestrationConfigStatus, OrchestrationExecutionMode,
 };
 use settings::Setting;
+use warp_cli::agent::Harness;
 use warp_core::execution_mode::ExecutionMode;
 use warp_core::features::FeatureFlag;
 use warpui::{App, Entity, EntityId, ModelHandle};
@@ -15,23 +16,26 @@ use crate::ai::agent::task::TaskId;
 use crate::ai::blocklist::{
     BlocklistAIHistoryModel, BlocklistAIPermissions, StartAgentExecutorEvent, StartAgentRequest,
 };
-use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::cloud_agent_settings::{AuthSecretPreference, CloudAgentSettings};
 use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentSaveStatus};
-use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::RunAgentsPermission;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
+use crate::ai::orchestration::populate_default_auth_secret_for_execution;
 use crate::appearance::Appearance;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
-use crate::server::ids::SyncId;
+use crate::server::ids::{ServerId, SyncId};
 use crate::server::sync_queue::SyncQueue;
 use crate::settings::PrivacySettings;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::test_util::settings::initialize_settings_for_tests_with_mode;
 use crate::workspaces::team_tester::TeamTesterStatus;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{
+    TeamContextForOperation, TeamScope, TeamlessScopeForTest, UserWorkspaces,
+};
 use crate::{
     AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider, LaunchMode,
 };
@@ -84,10 +88,77 @@ fn persist_plan_config_with_harness(
                     execution_mode: OrchestrationExecutionMode::Remote {
                         environment_id: "env-1".to_string(),
                         worker_host: "warp".to_string(),
+                        runner_id: String::new(),
                     },
                 },
                 status,
             );
+    });
+}
+
+fn team_scope_for_team(team_uid: i64) -> TeamContextForOperation {
+    TeamContextForOperation::new_for_test(ServerId::from(team_uid))
+}
+
+fn persist_scoped_default_auth_secret<S: TeamScope + ?Sized>(
+    app: &mut App,
+    team_scope: &S,
+    harness: Harness,
+    secret_name: &str,
+) {
+    CloudAgentSettings::handle(app).update(app, |settings, ctx| {
+        settings.persist_auth_secret_preference(
+            team_scope,
+            harness,
+            Some(AuthSecretPreference::Named(secret_name.to_string())),
+            ctx,
+        );
+    });
+}
+
+#[test]
+fn scoped_auth_secret_default_overrides_legacy_fallback_for_its_team() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        let team_a_scope = team_scope_for_team(7);
+        let team_b_scope = team_scope_for_team(8);
+        persist_default_auth_secret(&mut app, "claude", "legacy-personal-key");
+        persist_scoped_default_auth_secret(
+            &mut app,
+            &team_a_scope,
+            Harness::Claude,
+            "team-a-anthropic-key",
+        );
+        let AIAgentActionType::RunAgents(mut team_b_request) =
+            remote_run_agents_action("claude").action
+        else {
+            panic!("expected run_agents action");
+        };
+        let mut team_a_request = team_b_request.clone();
+        let mut personal_request = team_b_request.clone();
+
+        state.executor.update(&mut app, |_, ctx| {
+            populate_default_auth_secret_for_execution(&mut team_b_request, &team_b_scope, ctx);
+            populate_default_auth_secret_for_execution(&mut team_a_request, &team_a_scope, ctx);
+            populate_default_auth_secret_for_execution(
+                &mut personal_request,
+                &TeamlessScopeForTest,
+                ctx,
+            );
+        });
+
+        assert_eq!(
+            team_b_request.harness_auth_secret_name.as_deref(),
+            Some("legacy-personal-key")
+        );
+        assert_eq!(
+            team_a_request.harness_auth_secret_name.as_deref(),
+            Some("team-a-anthropic-key")
+        );
+        assert_eq!(
+            personal_request.harness_auth_secret_name.as_deref(),
+            Some("legacy-personal-key")
+        );
     });
 }
 
@@ -100,6 +171,7 @@ fn should_autoexecute_duplicate_launched_agent_denial() {
                 state.conversation_id,
                 &[RunAgentsAgentOutcome {
                     name: "child".to_string(),
+                    resolved_model_id: String::new(),
                     kind: RunAgentsAgentOutcomeKind::Launched {
                         agent_id: "agent-123".to_string(),
                     },
@@ -131,6 +203,7 @@ fn execute_denies_duplicate_launched_agent() {
                 state.conversation_id,
                 &[RunAgentsAgentOutcome {
                     name: "child".to_string(),
+                    resolved_model_id: String::new(),
                     kind: RunAgentsAgentOutcomeKind::Launched {
                         agent_id: "agent-123".to_string(),
                     },
@@ -164,9 +237,10 @@ fn execute_denies_duplicate_launched_agent() {
 
 fn initialize_run_agents_test(app: &mut App, mode: ExecutionMode) -> RunAgentsTestState {
     initialize_settings_for_tests_with_mode(app, mode, false);
+    app.update(warp_core::telemetry::testing::MockTelemetryContextProvider::register);
     let global_resource_handles = GlobalResourceHandles::mock(app);
     app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
-    let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+    let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
     app.add_singleton_model(AgentNotificationsModel::new);
@@ -190,8 +264,13 @@ fn initialize_run_agents_test(app: &mut App, mode: ExecutionMode) -> RunAgentsTe
         history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
     });
     let start_agent_executor = app.add_model(StartAgentExecutor::new);
-    let executor =
-        app.add_model(|_| RunAgentsExecutor::new(start_agent_executor.clone(), terminal_view_id));
+    let executor = app.add_model(|_| {
+        RunAgentsExecutor::new(
+            start_agent_executor.clone(),
+            terminal_view_id,
+            UserWorkspaces::teamless_context_resolver_for_test(),
+        )
+    });
 
     RunAgentsTestState {
         conversation_id,
@@ -230,11 +309,14 @@ fn remote_run_agents_action(harness_type: &str) -> AIAgentAction {
                 environment_id: "env-1".to_string(),
                 worker_host: "warp".to_string(),
                 computer_use_enabled: false,
+                runner_id: String::new(),
             },
             agent_run_configs: vec![RunAgentsAgentRunConfig {
                 name: "child".to_string(),
                 prompt: "Help".to_string(),
                 title: String::new(),
+                agent_identity_uid: String::new(),
+                model_id: String::new(),
             }],
             plan_id: String::new(),
             harness_auth_secret_name: None,
@@ -257,6 +339,8 @@ fn local_codex_run_agents_maps_to_local_harness_mode_when_flag_enabled() {
         name: "child".to_string(),
         prompt: "Investigate the failure".to_string(),
         title: String::new(),
+        agent_identity_uid: String::new(),
+        model_id: String::new(),
     };
 
     let mode = run_agents_to_start_agent_mode(
@@ -590,8 +674,8 @@ fn cancel_during_plan_publication_does_not_dispatch_children() {
 
 fn set_run_agents_permission(app: &mut App, permission: RunAgentsPermission) {
     AIExecutionProfilesModel::handle(app).update(app, |profiles, ctx| {
-        let profile_id = *profiles.active_profile(None, ctx).id();
-        profiles.set_run_agents(profile_id, permission, ctx);
+        let profile_id = profiles.active_profile(None, ctx).id().clone();
+        profiles.set_run_agents(&profile_id, permission, ctx);
     });
 }
 
@@ -612,6 +696,139 @@ fn should_not_autoexecute_without_approved_plan_or_always_allow_profile() {
         });
 
         assert!(!should_autoexecute);
+    });
+}
+
+#[test]
+fn should_autoexecute_for_child_conversation_without_plan_or_profile() {
+    // A child conversation lives in a hidden pane where a confirmation card
+    // would be invisible, so its run_agents must auto-execute even without an
+    // approved plan config or an always-allow profile.
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        let child_conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                history.start_new_child_conversation(
+                    EntityId::new(),
+                    "mid-tree".to_string(),
+                    state.conversation_id,
+                    None,
+                    false,
+                    ctx,
+                )
+            });
+        let action = remote_run_agents_action("oz");
+
+        let should_autoexecute = state.executor.update(&mut app, |executor, ctx| {
+            executor.should_autoexecute(
+                ExecuteActionInput {
+                    action: &action,
+                    conversation_id: child_conversation_id,
+                },
+                ctx,
+            )
+        });
+
+        assert!(should_autoexecute);
+    });
+}
+
+#[test]
+fn child_run_agents_executes_when_multi_level_orchestration_enabled() {
+    let _flag = FeatureFlag::MultiLevelOrchestration.override_enabled(true);
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        let child_conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                history.start_new_child_conversation(
+                    EntityId::new(),
+                    "mid-tree".to_string(),
+                    state.conversation_id,
+                    None,
+                    false,
+                    ctx,
+                )
+            });
+        let action = remote_run_agents_action("oz");
+
+        let should_autoexecute = state.executor.update(&mut app, |executor, ctx| {
+            executor.should_autoexecute(
+                ExecuteActionInput {
+                    action: &action,
+                    conversation_id: child_conversation_id,
+                },
+                ctx,
+            )
+        });
+        assert!(should_autoexecute);
+
+        let execution = state.executor.update(&mut app, |executor, ctx| {
+            executor
+                .execute(
+                    ExecuteActionInput {
+                        action: &action,
+                        conversation_id: child_conversation_id,
+                    },
+                    ctx,
+                )
+                .into()
+        });
+        assert!(matches!(execution, AnyActionExecution::Async { .. }));
+    });
+}
+
+#[test]
+fn execute_denies_child_run_agents_when_multi_level_orchestration_disabled() {
+    let _flag = FeatureFlag::MultiLevelOrchestration.override_enabled(false);
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        let child_conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                history.start_new_child_conversation(
+                    EntityId::new(),
+                    "mid-tree".to_string(),
+                    state.conversation_id,
+                    None,
+                    false,
+                    ctx,
+                )
+            });
+        let action = remote_run_agents_action("oz");
+
+        // Auto-execution still bypasses the confirmation card (invisible in a
+        // hidden pane) so the denial below renders instead of hanging the run.
+        let should_autoexecute = state.executor.update(&mut app, |executor, ctx| {
+            executor.should_autoexecute(
+                ExecuteActionInput {
+                    action: &action,
+                    conversation_id: child_conversation_id,
+                },
+                ctx,
+            )
+        });
+        assert!(should_autoexecute);
+
+        let execution = state.executor.update(&mut app, |executor, ctx| {
+            executor
+                .execute(
+                    ExecuteActionInput {
+                        action: &action,
+                        conversation_id: child_conversation_id,
+                    },
+                    ctx,
+                )
+                .into()
+        });
+        let AnyActionExecution::Sync(AIAgentActionResultType::RunAgents(RunAgentsResult::Denied {
+            reason,
+        })) = execution
+        else {
+            panic!("expected synchronous run_agents denial");
+        };
+        assert_eq!(
+            reason,
+            "Multi-level orchestration is not enabled on this client."
+        );
     });
 }
 
@@ -721,7 +938,7 @@ fn populate_default_auth_secret_for_autoexecute_uses_persisted_secret() {
         };
 
         state.executor.update(&mut app, |_, ctx| {
-            populate_default_auth_secret_for_execution(&mut request, ctx);
+            populate_default_auth_secret_for_execution(&mut request, &TeamlessScopeForTest, ctx);
         });
 
         assert_eq!(

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use warp_errors::report_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::nodes::{self, FileId};
@@ -74,7 +75,7 @@ impl FileCompletionCounter {
                     *counter == 0
                 }
                 None => {
-                    log::error!("File completion counter should exist but it doesn't");
+                    report_error!("File completion counter should exist but it doesn't");
                     false
                 }
             };

@@ -1,6 +1,9 @@
 use warp_cli::agent::Harness;
 
-use super::{auth_check_command_for, validate_cli_installed};
+use super::{
+    HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER, auth_check_command_for,
+    prepare_harness_failure_output, validate_cli_installed,
+};
 use crate::ai::agent_sdk::driver::AgentDriverError;
 
 fn assert_harness_setup_failed(err: &AgentDriverError) -> (&str, &str) {
@@ -8,6 +11,14 @@ fn assert_harness_setup_failed(err: &AgentDriverError) -> (&str, &str) {
         AgentDriverError::HarnessSetupFailed { harness, reason } => (harness, reason),
         other => panic!("expected HarnessSetupFailed, got: {other}"),
     }
+}
+
+#[test]
+fn harness_failure_output_uses_harness_truncation_marker() {
+    let output = format!("START{}END", "x".repeat(4_096));
+
+    let prepared = prepare_harness_failure_output(&output);
+    assert!(prepared.contains(HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER));
 }
 
 #[cfg(not(windows))]
@@ -38,8 +49,8 @@ fn validate_cli_installed_includes_docs_url_in_error() {
 
 #[test]
 fn claude_runtime_error_patterns_returns_slice() {
-    use super::claude_code::ClaudeHarness;
     use super::ThirdPartyHarness;
+    use super::claude_code::ClaudeHarness;
     // Patterns are initially empty until validated needles are filled in.
     // The trait method must still be callable.
     let _: &[&str] = ClaudeHarness.runtime_error_patterns();
@@ -47,15 +58,15 @@ fn claude_runtime_error_patterns_returns_slice() {
 
 #[test]
 fn codex_runtime_error_patterns_returns_slice() {
-    use super::codex::CodexHarness;
     use super::ThirdPartyHarness;
+    use super::codex::CodexHarness;
     let _: &[&str] = CodexHarness.runtime_error_patterns();
 }
 
 #[test]
 fn gemini_runtime_error_patterns_is_empty_by_default() {
-    use super::gemini::GeminiHarness;
     use super::ThirdPartyHarness;
+    use super::gemini::GeminiHarness;
     assert!(GeminiHarness.runtime_error_patterns().is_empty());
 }
 
