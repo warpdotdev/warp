@@ -172,7 +172,7 @@ fn workspace_member_usage_conversion_preserves_billed_cents() {
 }
 
 #[test]
-fn tier_conversion_bills_in_dollars_only_for_a_cents_charge_unit() {
+fn tier_conversion_maps_the_charge_unit() {
     let gql_tier = |charge_unit: GqlChargeUnit| GqlTier {
         name: "Build".to_string(),
         description: "Build tier".to_string(),
@@ -199,10 +199,19 @@ fn tier_conversion_bills_in_dollars_only_for_a_cents_charge_unit() {
         usage_visibility_policy: None,
     };
 
-    assert!(Tier::from(gql_tier(GqlChargeUnit::Cents)).billed_in_dollars);
-    assert!(!Tier::from(gql_tier(GqlChargeUnit::Credits)).billed_in_dollars);
-    // A unit from a newer server falls back to the credits display.
-    assert!(!Tier::from(gql_tier(GqlChargeUnit::Other)).billed_in_dollars);
+    assert_eq!(
+        Tier::from(gql_tier(GqlChargeUnit::Cents)).charge_unit,
+        ChargeUnit::Cents
+    );
+    assert_eq!(
+        Tier::from(gql_tier(GqlChargeUnit::Credits)).charge_unit,
+        ChargeUnit::Credits
+    );
+    // A unit from a newer server fails closed to credits.
+    assert_eq!(
+        Tier::from(gql_tier(GqlChargeUnit::Other("TOKENS".to_string()))).charge_unit,
+        ChargeUnit::Credits
+    );
 }
 
 #[test]

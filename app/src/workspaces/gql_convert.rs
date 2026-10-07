@@ -86,9 +86,9 @@ use crate::server::graphql::schema::object_action_history_from_gql;
 use crate::server::ids::ServerId;
 use crate::settings::AgentModeCommandExecutionPredicate;
 use crate::workspaces::workspace::{
-    AiOverages, BonusGrantsPurchased, ByoApiKeyPolicy, ByoEndpointPolicy, CodebaseContextPolicy,
-    EnterpriseCreditsAutoReloadPolicy, EnterprisePayAsYouGoPolicy, ManagedByokByoePolicy,
-    MultiAdminPolicy, NativeWorkspacesPolicy, PurchaseAddOnCreditsPolicy,
+    AiOverages, BonusGrantsPurchased, ByoApiKeyPolicy, ByoEndpointPolicy, ChargeUnit,
+    CodebaseContextPolicy, EnterpriseCreditsAutoReloadPolicy, EnterprisePayAsYouGoPolicy,
+    ManagedByokByoePolicy, MultiAdminPolicy, NativeWorkspacesPolicy, PurchaseAddOnCreditsPolicy,
     UsageBasedPricingSettings, UserTier, WorkspaceUid,
 };
 
@@ -708,12 +708,21 @@ fn convert_billing_cycle_usage(history: GqlBillingCycleUsageHistory) -> BillingC
     }
 }
 
-/// Whether a tier's charge unit means its usage is billed in dollars. A unit this client does
-/// not know stays on credits, the display every server supports.
-fn charges_in_dollars(charge_unit: GqlChargeUnit) -> bool {
-    match charge_unit {
-        GqlChargeUnit::Cents => true,
-        GqlChargeUnit::Credits | GqlChargeUnit::Other => false,
+impl From<GqlChargeUnit> for ChargeUnit {
+    fn from(gql_charge_unit: GqlChargeUnit) -> ChargeUnit {
+        match gql_charge_unit {
+            GqlChargeUnit::Credits => ChargeUnit::Credits,
+            GqlChargeUnit::Cents => ChargeUnit::Cents,
+            GqlChargeUnit::Other(value) => {
+                report_error!(
+                    "Invalid ChargeUnit. Make sure to update client GraphQL types!",
+                    extra: { "value" => %value },
+                    warp_errors::ReportErrorLogMode::OncePerRun
+                );
+                // Fail closed to the unit every server supports.
+                ChargeUnit::Credits
+            }
+        }
     }
 }
 
@@ -722,7 +731,7 @@ impl From<GqlTier> for Tier {
         Self {
             name: gql_tier.name,
             description: gql_tier.description,
-            billed_in_dollars: charges_in_dollars(gql_tier.charge_unit),
+            charge_unit: gql_tier.charge_unit.into(),
             warp_ai_policy: gql_tier.warp_ai_policy.map(From::from),
             workspace_size_policy: gql_tier.team_size_policy.map(From::from),
             shared_notebooks_policy: gql_tier.shared_notebooks_policy.map(From::from),
@@ -1549,7 +1558,7 @@ pub fn workspaces_metadata_response_from_gql(
                 .tier
                 .purchase_add_on_credits_policy
                 .map(Into::into),
-            billed_in_dollars: charges_in_dollars(billing_metadata.tier.charge_unit),
+            charge_unit: billing_metadata.tier.charge_unit.into(),
         })
         .unwrap_or_default();
 

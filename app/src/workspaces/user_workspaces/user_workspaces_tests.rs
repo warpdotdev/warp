@@ -86,10 +86,10 @@ use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
-    AdminEnablementSetting, ByoFirstPartyKey, EnforceableSetting, HostEnablementSetting,
-    LinkSharingSettings, LlmHostSettings, ManagedByokByoePolicy, MultiAdminPolicy,
-    PurchaseAddOnCreditsPolicy, SandboxedAgentSettings, SplitListSetting, TeamByoSettings,
-    TeamLinkSharingSettings, Workspace, WorkspaceMember, WorkspaceMemberUsageInfo,
+    AdminEnablementSetting, ByoFirstPartyKey, ChargeUnit, EnforceableSetting,
+    HostEnablementSetting, LinkSharingSettings, LlmHostSettings, ManagedByokByoePolicy,
+    MultiAdminPolicy, PurchaseAddOnCreditsPolicy, SandboxedAgentSettings, SplitListSetting,
+    TeamByoSettings, TeamLinkSharingSettings, Workspace, WorkspaceMember, WorkspaceMemberUsageInfo,
 };
 
 #[derive(Default)]
@@ -4800,15 +4800,16 @@ fn test_billing_unit_falls_back_to_the_user_level_tier_for_teamless_users() {
             ),
             false,
         );
-        assert!(response.user_tier.billed_in_dollars);
+        assert_eq!(response.user_tier.charge_unit, ChargeUnit::Cents);
         apply_workspaces_metadata(&mut app, response);
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
             assert!(user_workspaces.current_workspace().is_none());
-            assert!(
-                user_workspaces.is_billed_in_dollars(),
-                "the user-level tier should decide the billing unit without a workspace"
+            assert_eq!(
+                user_workspaces.charge_unit(),
+                ChargeUnit::Cents,
+                "the user-level tier should decide the charge unit without a workspace"
             );
         });
     })
@@ -4830,9 +4831,10 @@ fn test_workspace_tier_decides_the_billing_unit_over_the_user_level_tier() {
             ),
         );
         app.read(|ctx| {
-            assert!(
-                UserWorkspaces::as_ref(ctx).is_billed_in_dollars(),
-                "a dollars-billed workspace tier should win without any user-level tier"
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).charge_unit(),
+                ChargeUnit::Cents,
+                "a cents-charged workspace tier should win without any user-level tier"
             );
         });
 
@@ -4850,9 +4852,10 @@ fn test_workspace_tier_decides_the_billing_unit_over_the_user_level_tier() {
             ),
         );
         app.read(|ctx| {
-            assert!(
-                !UserWorkspaces::as_ref(ctx).is_billed_in_dollars(),
-                "a credits-billed workspace tier should win over the user-level fallback"
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).charge_unit(),
+                ChargeUnit::Credits,
+                "a credits-charged workspace tier should win over the user-level fallback"
             );
         });
     })

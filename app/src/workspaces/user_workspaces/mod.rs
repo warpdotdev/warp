@@ -153,7 +153,7 @@ pub struct WorkspacesMetadataResponse {
     /// on the metadata query so every refresh keeps the shared state fresh.
     pub ai_credit_availability: Option<AICreditAvailability>,
     /// The user-level plan terms; the teamless fallback (see
-    /// [`UserWorkspaces::purchase_policy`] and [`UserWorkspaces::is_billed_in_dollars`]).
+    /// [`UserWorkspaces::purchase_policy`] and [`UserWorkspaces::charge_unit`]).
     pub user_tier: UserTier,
 }
 
