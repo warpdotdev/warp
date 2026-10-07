@@ -22,6 +22,7 @@ pub use warp_terminal::event::ExitReason;
 use warp_terminal::event::validate_and_decode_in_band_command_output_to_bytes;
 pub use warp_terminal::model::{BlockIndex, RangeInModel};
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use warp_terminal::util::extensions::trim_trailing_spaces_per_line;
 use warpui::AppContext;
 use warpui::assets::asset_cache::Asset;
 use warpui::r#async::executor::Background;
@@ -1884,12 +1885,15 @@ impl TerminalModel {
         inverted_blocklist: bool,
         app: &AppContext,
     ) -> Option<String> {
-        if self.alt_screen_active {
+        let selected = if self.alt_screen_active {
             self.alt_screen.selection_to_string(semantic_selection)
         } else {
             self.block_list
                 .selection_to_string(semantic_selection, inverted_blocklist, app)
-        }
+        };
+        // The grid pads rows to the terminal width, so drop that padding before it reaches the
+        // clipboard.
+        selected.map(|text| trim_trailing_spaces_per_line(&text))
     }
 
     /// Returns the underlying text string for the given range in the model.
