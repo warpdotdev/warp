@@ -145,21 +145,23 @@ fn real_summarization_is_counted_once_and_synthetic_compaction_is_free() {
 }
 
 #[test]
-fn missing_context_or_required_native_counters_disables_cost_only() {
-    for mut event in [
-        record("a", "t1", 10, 2, 10, 2),
-        record("b", "t1", 10, 2, 10, 2),
-    ] {
-        if event["payload"]["response_id"] == "b" {
-            event["payload"]["usage"]
-                .as_object_mut()
-                .unwrap()
-                .remove("cache_write_input_tokens");
-        }
-        let snapshot = capture(&[event]);
-        assert_eq!(snapshot.payload.cost_estimation, None);
-        assert_eq!(snapshot.payload.output_tokens, Some(2));
-    }
+fn missing_context_disables_cost_only() {
+    let snapshot = capture(&[record("a", "t1", 10, 2, 10, 2)]);
+    assert_eq!(snapshot.payload.cost_estimation, None);
+    assert_eq!(snapshot.payload.output_tokens, Some(2));
+}
+
+#[test]
+fn missing_required_native_counter_disables_cost_only() {
+    let mut event = record("a", "t1", 10, 2, 10, 2);
+    event["payload"]["usage"]
+        .as_object_mut()
+        .unwrap()
+        .remove("cache_write_input_tokens");
+
+    let snapshot = capture(&[context("t1", "gpt-a"), event]);
+    assert_eq!(snapshot.payload.cost_estimation, None);
+    assert_eq!(snapshot.payload.output_tokens, Some(2));
 }
 
 #[test]
