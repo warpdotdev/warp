@@ -1,280 +1,223 @@
-use std::ops::Deref;
-
 use serde_json::{Value, json};
 
-use crate::api::{ClaudeUsage, CoverageStatus, HarnessUsageSnapshot, UsageSnapshot};
-use crate::test_helpers::totals;
-use crate::{
-    CaptureDiagnostics, ExtractionDiagnostics, ExtractionOutcome, JsonlDiagnostics, JsonlLimits,
-    JsonlReadStatus, ReasonCode, extract_claude, parse_jsonl,
-};
+use super::*;
+use crate::api::{CostStatus, CoverageStatus};
+use crate::{JsonlDiagnostics, JsonlReadStatus};
 
-const JSONL_LIMITS: JsonlLimits = JsonlLimits {
-    max_line_bytes: 4 * 1024,
-    max_total_bytes: 16 * 1024,
-    max_records: 16,
-};
-
-struct TestCapture {
-    snapshot: UsageSnapshot<ClaudeUsage>,
-    diagnostics: ExtractionDiagnostics,
+fn response(id: &str, input: i64, output: i64) -> Value {
+    json!({"type":"assistant","message":{"id":id,"model":"claude-a","content":[],
+        "usage":{"input_tokens":input,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":output}}})
 }
-
-impl Deref for TestCapture {
-    type Target = UsageSnapshot<ClaudeUsage>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.snapshot
-    }
-}
-
-fn capture(entries: &[Value]) -> TestCapture {
-    let diagnostics = CaptureDiagnostics {
+fn diagnostics() -> CaptureDiagnostics {
+    CaptureDiagnostics {
         root: JsonlDiagnostics {
             status: JsonlReadStatus::Readable,
-            records_read: entries.len(),
             ..Default::default()
         },
         ..Default::default()
-    };
-    usable(extract_claude("root", entries, [], &diagnostics))
-}
-
-fn usable(outcome: ExtractionOutcome) -> TestCapture {
-    let ExtractionOutcome::Usable(extracted) = outcome else {
-        panic!("expected usable capture");
-    };
-    let extracted = *extracted;
-    let HarnessUsageSnapshot::ClaudeCode(snapshot) = extracted.snapshot else {
-        unreachable!()
-    };
-    TestCapture {
-        snapshot,
-        diagnostics: extracted.diagnostics,
     }
 }
-
-#[test]
-fn a_category_missing_from_one_response_makes_observed_totals_partial() {
-    let snapshot = capture(&[
-        response("a", json!({"input_tokens":10,"output_tokens":1}), json!([])),
-        response("b", json!({"output_tokens":2}), json!([])),
-    ]);
-    assert_eq!(
-        totals(&snapshot.payload),
-        json!({"input_tokens":10,"output_tokens":3})
-    );
-    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
+fn policy() -> ThresholdPolicy {
+    ThresholdPolicy::parse(
+        json!({"schema_version":1,"models":{"claude-a":{"kind":"input_gt","tokens":100}}}),
+    )
+    .unwrap()
 }
-
-#[test]
-fn conflicting_tool_names_leave_response_usage_unchanged() {
-    let snapshot = capture(&[
-        response(
-            "a",
-            json!({"input_tokens":4}),
-            json!([{"type":"tool_use","id":"t","name":"Read"}]),
-        ),
-        response(
-            "a",
-            json!({"input_tokens":4}),
-            json!([{"type":"tool_use","id":"t","name":"Write"},{"type":"tool_use","id":"u","name":"Read"}]),
-        ),
-    ]);
-    let payload = serde_json::to_value(&snapshot.payload).unwrap();
-    assert_eq!(totals(&snapshot.payload), json!({"input_tokens":4}));
-    assert_eq!(payload["toolCalls"], json!({"total":1,"byName":{"Read":1}}));
-    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Known);
-    assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Partial);
-}
-
-fn response(id: &str, usage: Value, content: Value) -> Value {
-    json!({"type":"assistant","message":{"id":id,"model":"claude-a","usage":usage,"content":content}})
-}
-
-#[test]
-fn evolving_and_model_less_responses_preserve_usage_and_distinct_tool_blocks() {
-    let entries = parse_jsonl(
-        include_bytes!("fixtures/claude.jsonl").as_slice(),
-        JSONL_LIMITS,
-    );
-    let snapshot = capture(&entries.entries);
-    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
-    assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Known);
-    assert_eq!(
-        serde_json::to_value(&snapshot.payload).unwrap(),
-        serde_json::from_str::<Value>(include_str!("fixtures/claude_payload.json")).unwrap()
-    );
-}
-
-#[test]
-fn known_metadata_does_not_degrade_usage_coverage() {
-    let snapshot = capture(&[
-        json!({"type":"permission-mode","mode":"default"}),
-        json!({"type":"attachment","attachment":{"type":"deferred_tools_delta"}}),
-        json!({"type":"ai-title","title":"A title"}),
-        response("a", json!({"input_tokens":10}), json!([])),
-    ]);
-    assert_eq!(totals(&snapshot.payload), json!({"input_tokens":10}));
-    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Known);
-    assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Known);
-}
-
-#[test]
-fn empty_optional_classification_is_unknown() {
-    let snapshot = capture(&[json!({
-        "type":"assistant",
-        "message": {
-            "id":"a",
-            "model":"claude-a",
-            "usage":{"input_tokens":10,"inference_geo":""},
-            "content":[]
-        }
-    })]);
-    let payload = serde_json::to_value(&snapshot.payload).unwrap();
-    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Known);
-    assert_eq!(totals(&snapshot.payload), json!({"input_tokens":10}));
-    assert_eq!(
-        payload["requests"],
-        json!([{"model":"claude-a","usage":{"input_tokens":10}}])
-    );
-}
-
-#[test]
-fn conflicting_response_does_not_discard_independent_tool_data() {
-    let snapshot = capture(&[
-        response("a", json!({"input_tokens":10,"output_tokens":3}), json!([])),
-        response("a", json!({"input_tokens":9,"output_tokens":4}), json!([])),
-        response(
-            "b",
-            json!({"input_tokens":2}),
-            json!([{"type":"tool_use","id":"t","name":"Read"}]),
-        ),
-        response("", json!({"input_tokens":900}), json!([])),
-    ]);
-    let payload = serde_json::to_value(&snapshot.payload).unwrap();
-    assert_eq!(totals(&snapshot.payload), json!({"input_tokens":2}));
-    assert_eq!(payload["toolCalls"], json!({"total":1,"byName":{"Read":1}}));
-    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
-    assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Known);
-    assert_eq!(
-        snapshot.diagnostics.reasons[&ReasonCode::AmbiguousAccounting],
-        1
-    );
-}
-
-#[test]
-fn overlapping_partial_vectors_are_not_reconstructed_from_maxima() {
-    let snapshot = capture(&[
-        response("a", json!({"input_tokens":10,"output_tokens":5}), json!([])),
-        response("a", json!({"input_tokens":11}), json!([])),
-        response("b", json!({"output_tokens":2}), json!([])),
-    ]);
-    assert_eq!(totals(&snapshot.payload), json!({"output_tokens":2}));
-    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
-}
-
-#[test]
-fn overflow_omits_the_counter_without_rounding_large_integers() {
-    let snapshot = capture(&[
-        response(
-            "a",
-            json!({"input_tokens":9223372036854775807_i64,"output_tokens":9007199254740993_i64}),
-            json!([]),
-        ),
-        response("b", json!({"input_tokens":1,"output_tokens":0}), json!([])),
-        response("c", json!({"input_tokens":-1}), json!([])),
-        response(
-            "d",
-            json!({"input_tokens":9223372036854775808_u64}),
-            json!([]),
-        ),
-    ]);
-    assert_eq!(
-        totals(&snapshot.payload),
-        json!({"output_tokens":9007199254740993_i64})
-    );
-    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
-    assert!(
-        snapshot
-            .diagnostics
-            .reasons
-            .contains_key(&ReasonCode::ResourceLimit)
-    );
-    assert!(
-        snapshot
-            .diagnostics
-            .reasons
-            .contains_key(&ReasonCode::InvalidData)
-    );
-}
-
-#[test]
-fn subagent_counts_are_included_without_claiming_unreadable_scope() {
-    let root = vec![response("a", json!({"input_tokens":10}), json!([]))];
-    let child = vec![response("b", json!({"input_tokens":20}), json!([]))];
-    let diagnostics = CaptureDiagnostics {
-        root: JsonlDiagnostics {
-            status: JsonlReadStatus::Readable,
-            ..Default::default()
-        },
-        subagents: [
-            (
-                "agent-a".to_owned(),
-                JsonlDiagnostics {
-                    status: JsonlReadStatus::Readable,
-                    ..Default::default()
-                },
-            ),
-            ("agent-b".to_owned(), JsonlDiagnostics::default()),
-        ]
-        .into(),
-        subagent_discovery_incomplete: true,
+fn capture(entries: &[Value]) -> crate::api::UsageSnapshot<ClaudeUsage> {
+    let ExtractionOutcome::Usable(result) =
+        extract_claude("root", entries, [], &diagnostics(), Some(&policy()))
+    else {
+        panic!("unavailable")
     };
-    let snapshot = usable(extract_claude(
+    let HarnessUsageSnapshot::ClaudeCode(snapshot) = result.snapshot else {
+        panic!("wrong provider")
+    };
+    snapshot
+}
+#[test]
+fn streaming_revisions_replace_usage_but_distinct_responses_add() {
+    let snapshot = capture(&[
+        response("a", 50, 0),
+        response("a", 50, 5),
+        response("b", 50, 5),
+    ]);
+    assert_eq!(snapshot.payload.output_tokens, Some(10));
+    let group = &snapshot.payload.cost_estimation.unwrap().groups[0];
+    assert_eq!(
+        group.pre_threshold.as_ref().unwrap().input_tokens,
+        Some(100)
+    );
+    assert_eq!(snapshot.coverage.cost_status, CostStatus::Known);
+}
+#[test]
+fn threshold_is_strict_and_includes_cache_reads_and_creation() {
+    let mut cached = response("c", 50, 3);
+    cached["message"]["usage"]["cache_read_input_tokens"] = json!(30);
+    cached["message"]["usage"]["cache_creation_input_tokens"] = json!(21);
+    cached["message"]["usage"]["cache_creation"] =
+        json!({"ephemeral_5m_input_tokens":1,"ephemeral_1h_input_tokens":20});
+    let snapshot = capture(&[response("a", 99, 1), response("b", 100, 2), cached]);
+    let group = &snapshot.payload.cost_estimation.unwrap().groups[0];
+    assert_eq!(
+        group.pre_threshold.as_ref().unwrap().input_tokens,
+        Some(199)
+    );
+    assert_eq!(
+        group.post_threshold.as_ref().unwrap().input_tokens,
+        Some(50)
+    );
+    assert_eq!(
+        group
+            .post_threshold
+            .as_ref()
+            .unwrap()
+            .cache_creation
+            .as_ref()
+            .unwrap()
+            .ephemeral_1h_input_tokens,
+        Some(20)
+    );
+}
+#[test]
+fn missing_ttl_split_disables_cost_not_known_output_or_tools() {
+    let mut entry = response("a", 50, 5);
+    entry["message"]["usage"]["cache_creation_input_tokens"] = json!(10);
+    entry["message"]["content"] = json!([{"type":"tool_use","id":"tool","name":"Read"}]);
+    let snapshot = capture(&[entry]);
+    assert_eq!(snapshot.payload.cost_estimation, None);
+    assert_eq!(snapshot.payload.output_tokens, Some(5));
+    assert_eq!(snapshot.coverage.output_token_status, CoverageStatus::Known);
+    assert_eq!(snapshot.payload.tool_calls.unwrap().total, 1);
+}
+
+#[test]
+fn contradictory_cache_partitions_do_not_discard_observed_output() {
+    let mut entry = response("a", 50, 5);
+    entry["message"]["usage"]["cache_creation_input_tokens"] = json!(10);
+    entry["message"]["usage"]["cache_creation"] =
+        json!({"ephemeral_5m_input_tokens":1,"ephemeral_1h_input_tokens":2});
+    let snapshot = capture(&[entry]);
+    assert_eq!(snapshot.payload.cost_estimation, None);
+    assert_eq!(snapshot.payload.output_tokens, Some(5));
+    assert_eq!(
+        snapshot.coverage.output_token_status,
+        CoverageStatus::Partial
+    );
+}
+#[test]
+fn conflicting_identity_keeps_independent_tool_counts() {
+    let mut entry = response("a", 50, 5);
+    entry["message"]["content"] = json!([{"type":"tool_use","id":"tool","name":"Read"}]);
+    let snapshot = capture(&[entry, response("a", 49, 6), response("b", 2, 0)]);
+    assert_eq!(snapshot.payload.cost_estimation, None);
+    assert_eq!(snapshot.payload.output_tokens, Some(0));
+    assert_eq!(
+        snapshot.coverage.output_token_status,
+        CoverageStatus::Partial
+    );
+    assert_eq!(snapshot.payload.tool_calls.unwrap().total, 1);
+}
+#[test]
+fn subagents_are_included_and_capture_holes_disable_cost() {
+    let child = vec![response("b", 10, 2)];
+    let mut diagnostics = diagnostics();
+    diagnostics
+        .subagents
+        .insert("child".into(), diagnostics.root.clone());
+    let root = vec![response("a", 10, 1)];
+    let ExtractionOutcome::Usable(result) = extract_claude(
         "root",
         &root,
-        [("agent-a", child.as_slice())],
+        [("child", child.as_slice())],
         &diagnostics,
-    ));
-    assert_eq!(totals(&snapshot.payload), json!({"input_tokens":30}));
-    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
-    assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Unavailable);
-    assert!(
-        snapshot
-            .diagnostics
-            .reasons
-            .contains_key(&ReasonCode::IncompleteInput)
-    );
+        Some(&policy()),
+    ) else {
+        panic!("unavailable")
+    };
+    let HarnessUsageSnapshot::ClaudeCode(snapshot) = result.snapshot else {
+        panic!("wrong provider")
+    };
+    assert_eq!(snapshot.payload.output_tokens, Some(3));
+    assert_eq!(snapshot.coverage.cost_status, CostStatus::Known);
+    diagnostics.subagent_discovery_incomplete = true;
+    let ExtractionOutcome::Usable(result) = extract_claude(
+        "root",
+        &root,
+        [("child", child.as_slice())],
+        &diagnostics,
+        Some(&policy()),
+    ) else {
+        panic!("unavailable")
+    };
+    let HarnessUsageSnapshot::ClaudeCode(snapshot) = result.snapshot else {
+        panic!("wrong provider")
+    };
+    assert_eq!(snapshot.payload.cost_estimation, None);
+    assert_eq!(snapshot.payload.output_tokens, Some(3));
 }
-
 #[test]
-fn readable_empty_is_not_missing_or_an_oversized_scope() {
+fn missing_policy_or_unknown_model_is_not_a_local_threshold_guess() {
+    let entry = response("a", 200, 5);
+    let ExtractionOutcome::Usable(result) = extract_claude(
+        "root",
+        std::slice::from_ref(&entry),
+        [],
+        &diagnostics(),
+        None,
+    ) else {
+        panic!("unavailable")
+    };
+    let HarnessUsageSnapshot::ClaudeCode(snapshot) = result.snapshot else {
+        panic!("wrong provider")
+    };
+    assert_eq!(snapshot.payload.cost_estimation, None);
+    assert_eq!(snapshot.payload.output_tokens, Some(5));
+    let mut unknown = entry;
+    unknown["message"]["model"] = json!("unknown");
+    assert_eq!(capture(&[unknown]).payload.cost_estimation, None);
+}
+#[test]
+fn readable_empty_is_measured_zero_but_missing_is_unavailable() {
     let snapshot = capture(&[]);
-    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Unavailable);
-    assert_eq!(
-        serde_json::to_value(&snapshot.payload).unwrap(),
-        json!({"requests":[],"toolCalls":{"total":0,"byName":{}}})
-    );
-    assert!(matches!(
-        extract_claude("root", &[], [], &CaptureDiagnostics::default()),
-        ExtractionOutcome::Unavailable(_)
-    ));
-    let scope = "x".repeat(257);
-    assert!(matches!(
-        extract_claude(&scope, &[], [], &CaptureDiagnostics::default()),
-        ExtractionOutcome::Unavailable(_)
-    ));
+    assert_eq!(snapshot.payload.output_tokens, Some(0));
+    assert_eq!(snapshot.payload.cost_estimation.unwrap().groups.len(), 0);
+    let ExtractionOutcome::Usable(result) = extract_claude(
+        "root",
+        &[],
+        [],
+        &CaptureDiagnostics::default(),
+        Some(&policy()),
+    ) else {
+        panic!("unavailable")
+    };
+    let HarnessUsageSnapshot::ClaudeCode(snapshot) = result.snapshot else {
+        panic!("wrong provider")
+    };
+    assert_eq!(snapshot.payload.output_tokens, None);
+    assert_eq!(snapshot.payload.cost_estimation, None);
 }
-
 #[test]
-fn synthetic_messages_and_tool_results_do_not_add_usage() {
-    let snapshot = capture(&[
-        json!({"type":"assistant","message":{"id":"fake","model":"<synthetic>","usage":{"input_tokens":100},"content":[{"type":"tool_use","id":"t","name":"Read"}]}}),
-        json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t"}]}}),
-    ]);
+fn synthetic_compaction_and_api_errors_do_not_add_usage() {
+    let mut synthetic = response("synthetic", 999, 999);
+    synthetic["isSynthetic"] = json!(true);
+    let mut error = response("error", 999, 999);
+    error["isApiErrorMessage"] = json!(true);
+    let snapshot = capture(&[synthetic, error, response("summary", 10, 3)]);
+    assert_eq!(snapshot.payload.output_tokens, Some(3));
+}
+#[test]
+fn output_overflow_never_recovers_but_large_integer_is_exact() {
     assert_eq!(
-        serde_json::to_value(&snapshot.payload).unwrap(),
-        json!({"requests":[],"toolCalls":{"total":0,"byName":{}}})
+        capture(&[response("a", 1, 9_007_199_254_740_993)])
+            .payload
+            .output_tokens,
+        Some(9_007_199_254_740_993)
     );
+    let snapshot = capture(&[
+        response("a", 1, i64::MAX),
+        response("b", 1, 1),
+        response("c", 1, 0),
+    ]);
+    assert_eq!(snapshot.payload.output_tokens, None);
+    assert_eq!(snapshot.payload.cost_estimation, None);
 }

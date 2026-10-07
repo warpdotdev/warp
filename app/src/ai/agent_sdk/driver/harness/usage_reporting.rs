@@ -100,7 +100,7 @@ impl CaptureIdentity {
                         return None;
                     }
                 }
-                request.has_usable_category().then_some(request)
+                Some(request)
             }
             ExtractionOutcome::Unavailable(diagnostics) => {
                 log::debug!(

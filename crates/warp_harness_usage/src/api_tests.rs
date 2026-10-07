@@ -1,219 +1,192 @@
-use chrono::{TimeZone, Utc};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::*;
-use crate::{
-    CaptureDiagnostics, ExtractionOutcome, JsonlDiagnostics, JsonlReadStatus, MAX_REQUESTS,
-    extract_claude,
-};
-
-fn request(snapshot: HarnessUsageSnapshot) -> HarnessUsageRequest {
-    HarnessUsageRequest::new(
-        7,
-        3,
-        Utc.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap(),
-        snapshot,
-    )
-}
-
 #[test]
-fn requests_match_contract_fixtures() {
-    for fixture in [
-        include_str!("fixtures/api/claude.json"),
-        include_str!("fixtures/api/codex.json"),
-    ] {
-        let expected: Value = serde_json::from_str(fixture).unwrap();
-        let usage = expected["snapshot"]["payload"]["requests"][0]["usage"].clone();
-        let attribution = Attribution {
-            model: expected["snapshot"]["payload"]["requests"][0]["model"]
-                .as_str()
-                .map(str::to_owned),
-            service_tier: expected["snapshot"]["payload"]["requests"][0]["service_tier"]
-                .as_str()
-                .map(str::to_owned),
-            inference_geo: expected["snapshot"]["payload"]["requests"][0]["inference_geo"]
-                .as_str()
-                .map(str::to_owned),
-            speed: expected["snapshot"]["payload"]["requests"][0]["speed"]
-                .as_str()
-                .map(str::to_owned),
+fn native_captures_match_shared_wire_fixtures() {
+    let fixtures: serde_json::Value =
+        serde_json::from_str(include_str!("../testdata/cost_inputs_v3.json")).unwrap();
+    for fixture in fixtures
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|fixture| fixture["valid"] == true)
+    {
+        let entries = fixture["entries"].as_array().unwrap();
+        let policy = ThresholdPolicy::parse(fixture["policy"].clone());
+        let diagnostics = crate::CaptureDiagnostics {
+            root: crate::JsonlDiagnostics {
+                status: if fixture["complete"] == true {
+                    crate::JsonlReadStatus::Readable
+                } else {
+                    crate::JsonlReadStatus::Missing
+                },
+                ..Default::default()
+            },
+            ..Default::default()
         };
-        let tools = &expected["snapshot"]["payload"]["toolCalls"];
-        let tool_calls = Some(ToolCalls {
-            total: tools["total"].as_i64().unwrap(),
-            by_name: serde_json::from_value(tools["byName"].clone()).unwrap(),
-        });
-        let mut findings = Findings::default();
-        let coverage = Coverage {
-            token_status: CoverageStatus::Known,
-            tool_status: CoverageStatus::Known,
-        };
-        let snapshot = if expected["harness"] == "CLAUDE_CODE" {
-            let counts = Counters::parse(
-                &usage,
-                [
-                    "/input_tokens",
-                    "/output_tokens",
-                    "/cache_read_input_tokens",
-                    "/cache_creation_input_tokens",
-                    "/cache_creation/ephemeral_5m_input_tokens",
-                    "/cache_creation/ephemeral_1h_input_tokens",
-                ],
-                &mut findings,
-            )
-            .unwrap();
-            HarnessUsageSnapshot::ClaudeCode(UsageSnapshot {
-                coverage,
-                payload: UsagePayload::new(
-                    vec![RequestUsage {
-                        attribution,
-                        usage: ClaudeUsage::from(counts),
-                    }],
-                    None,
-                    tool_calls,
-                ),
-            })
+        let outcome = if fixture["report"]["harness"] == "CODEX" {
+            crate::extract_codex("root", entries, &diagnostics, policy.as_ref())
         } else {
-            let counts = Counters::parse(
-                &usage,
-                [
-                    "/input_tokens",
-                    "/cached_input_tokens",
-                    "/output_tokens",
-                    "/reasoning_output_tokens",
-                    "/total_tokens",
-                    "/cache_write_input_tokens",
-                ],
-                &mut findings,
-            )
-            .unwrap();
-            HarnessUsageSnapshot::Codex(UsageSnapshot {
-                coverage,
-                payload: UsagePayload::new(
-                    vec![RequestUsage {
-                        attribution,
-                        usage: CodexUsage::from(counts),
-                    }],
-                    None,
-                    tool_calls,
-                ),
-            })
+            crate::extract_claude("root", entries, [], &diagnostics, policy.as_ref())
         };
-        assert_eq!(serde_json::to_value(request(snapshot)).unwrap(), expected);
+        let crate::ExtractionOutcome::Usable(result) = outcome else {
+            panic!("unavailable capture")
+        };
+        let request = HarnessUsageRequest::new(
+            42,
+            1,
+            "2026-01-01T12:00:00Z".parse().unwrap(),
+            result.snapshot,
+        );
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            fixture["report"],
+            "{}",
+            fixture["name"]
+        );
     }
 }
 
 #[test]
-fn row_and_body_bounds_conserve_usage_and_keep_a_deterministic_prefix() {
-    let entries = (0..MAX_REQUESTS + 3).rev().map(|index| json!({
-        "type":"assistant",
-        "message":{"id":format!("{index:05}"), "model":format!("{index:05}{}", "m".repeat(251)),
-            "usage":{"input_tokens":1,"output_tokens":2,"service_tier":"s".repeat(256),
-                "inference_geo":"g".repeat(256),"speed":"f".repeat(256)}, "content":[]}
-    })).collect::<Vec<_>>();
-    let diagnostics = CaptureDiagnostics {
-        root: JsonlDiagnostics {
-            status: JsonlReadStatus::Readable,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let ExtractionOutcome::Usable(extracted) = extract_claude("root", &entries, [], &diagnostics)
-    else {
-        panic!("usable bounded capture");
-    };
-    let HarnessUsageSnapshot::ClaudeCode(snapshot) = &extracted.snapshot else {
-        unreachable!()
-    };
-    assert_eq!(snapshot.payload.requests.len(), MAX_REQUESTS);
+fn policy_rejects_unsupported_or_malformed_rules_without_a_rule_identity() {
+    for value in [
+        json!({"schema_version":2,"models":{}}),
+        json!({"schema_version":1,"models":{"model":{"kind":"input_gt","tokens":0}}}),
+        json!({"schema_version":1,"models":{"model":{"kind":"none","tokens":1}}}),
+        json!({"schema_version":1,"models":{"model":{"kind":"unknown"}}}),
+        json!({"schema_version":1,"models":{"MODEL":{"kind":"none"}}}),
+    ] {
+        assert!(ThresholdPolicy::parse(value).is_none());
+    }
+    let policy =
+        ThresholdPolicy::parse(json!({"schema_version":1,"models":{"model":{"kind":"none"}}}))
+            .unwrap();
+    assert_eq!(policy.models["model"], ThresholdRule::None);
     assert_eq!(
-        snapshot
-            .payload
-            .unattributed_usage
-            .as_ref()
-            .unwrap()
-            .input_tokens,
-        Some(3)
-    );
-    let mut report = request(extracted.snapshot);
-    assert!(report.bound_to_body().unwrap());
-    let encoded = serde_json::to_vec(&report).unwrap();
-    assert!(encoded.len() <= MAX_BODY_BYTES);
-    assert!(!report.bound_to_body().unwrap());
-    assert_eq!(encoded, serde_json::to_vec(&report).unwrap());
-    let HarnessUsageSnapshot::ClaudeCode(snapshot) = report.snapshot else {
-        unreachable!()
-    };
-    let retained = snapshot.payload.requests.len();
-    assert!(retained > 0 && retained < MAX_REQUESTS);
-    assert!(
-        snapshot.payload.requests[0]
-            .attribution
-            .model
-            .as_ref()
-            .unwrap()
-            .starts_with("00000")
-    );
-    assert!(
-        snapshot.payload.requests[retained - 1]
-            .attribution
-            .model
-            .as_ref()
-            .unwrap()
-            .starts_with(&format!("{:05}", retained - 1))
-    );
-    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
-    let remainder = snapshot.payload.unattributed_usage.unwrap();
-    assert_eq!(
-        retained as i64 + remainder.input_tokens.unwrap(),
-        entries.len() as i64
-    );
-    assert_eq!(
-        2 * retained as i64 + remainder.output_tokens.unwrap(),
-        2 * entries.len() as i64
+        normalize_model(" Claude-A-20260101[1m]-latest "),
+        "claude-a"
     );
 }
 
 #[test]
-fn compaction_does_not_revive_overflowed_remainder_components() {
-    let usage = ClaudeUsage {
-        input_tokens: Some(1),
-        output_tokens: Some(1),
-        cache_read_input_tokens: None,
-        cache_creation_input_tokens: None,
-        cache_creation: None,
-    };
-    let mut payload = UsagePayload::new(
-        vec![RequestUsage {
-            attribution: Attribution {
-                model: Some("x".repeat(MAX_BODY_BYTES)),
-                ..Default::default()
-            },
-            usage,
-        }],
-        Some(ClaudeUsage {
-            input_tokens: None,
-            output_tokens: Some(2),
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
-            cache_creation: None,
-        }),
-        None,
-    );
-    payload.unattributed_overflowed = vec![true, false, false, false, false, false];
-    let mut report = request(HarnessUsageSnapshot::ClaudeCode(UsageSnapshot {
-        coverage: Coverage {
-            token_status: CoverageStatus::Partial,
-            tool_status: CoverageStatus::Unavailable,
+fn ten_thousand_responses_in_one_key_do_not_consume_wire_capacity() {
+    let policy = ThresholdPolicy::parse(
+        json!({"schema_version":1,"models":{"model":{"kind":"input_gt","tokens":272000}}}),
+    )
+    .unwrap();
+    let entries = (0..10000).map(|index| json!({
+        "type":"assistant","message":{"id":format!("response-{index}"),"model":"model","content":[],
+        "usage":{"input_tokens":100000,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}
+    })).collect::<Vec<_>>();
+    let diagnostics = crate::CaptureDiagnostics {
+        root: crate::JsonlDiagnostics {
+            status: crate::JsonlReadStatus::Readable,
+            ..Default::default()
         },
-        payload,
-    }));
-    assert!(report.bound_to_body().unwrap());
-    let HarnessUsageSnapshot::ClaudeCode(snapshot) = report.snapshot else {
-        unreachable!()
+        ..Default::default()
     };
-    assert!(snapshot.payload.requests.is_empty());
-    let remainder = snapshot.payload.unattributed_usage.unwrap();
-    assert_eq!(remainder.input_tokens, None);
-    assert_eq!(remainder.output_tokens, Some(3));
+    let crate::ExtractionOutcome::Usable(result) =
+        crate::extract_claude("root", &entries, [], &diagnostics, Some(&policy))
+    else {
+        panic!("unavailable")
+    };
+    let HarnessUsageSnapshot::ClaudeCode(snapshot) = result.snapshot else {
+        panic!("wrong provider")
+    };
+    let group = &snapshot.payload.cost_estimation.unwrap().groups[0];
+    assert_eq!(
+        group.pre_threshold.as_ref().unwrap().input_tokens,
+        Some(1_000_000_000)
+    );
+    assert_eq!(group.post_threshold, None);
+    assert_eq!(snapshot.payload.output_tokens, Some(10000));
+}
+
+#[test]
+fn group_limit_drops_all_cost_but_continues_output() {
+    let policy =
+        ThresholdPolicy::parse(json!({"schema_version":1,"models":{"model":{"kind":"none"}}}))
+            .unwrap();
+    let mut entries = (0..128).map(|index| json!({
+        "type":"assistant","message":{"id":format!("response-{index}"),"model":"model","content":[],
+        "usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1,"service_tier":format!("tier-{index}")}}
+    })).collect::<Vec<_>>();
+    let diagnostics = crate::CaptureDiagnostics {
+        root: crate::JsonlDiagnostics {
+            status: crate::JsonlReadStatus::Readable,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let crate::ExtractionOutcome::Usable(result) =
+        crate::extract_claude("root", &entries, [], &diagnostics, Some(&policy))
+    else {
+        panic!("unavailable")
+    };
+    let HarnessUsageSnapshot::ClaudeCode(snapshot) = result.snapshot else {
+        panic!("wrong provider")
+    };
+    assert_eq!(snapshot.payload.cost_estimation.unwrap().groups.len(), 128);
+    entries.push(json!({
+        "type":"assistant","message":{"id":"overflow","model":"model","content":[{"type":"tool_use","id":"tool","name":"Read"}],
+        "usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1,"service_tier":"overflow"}}
+    }));
+    let crate::ExtractionOutcome::Usable(result) =
+        crate::extract_claude("root", &entries, [], &diagnostics, Some(&policy))
+    else {
+        panic!("unavailable")
+    };
+    let HarnessUsageSnapshot::ClaudeCode(snapshot) = result.snapshot else {
+        panic!("wrong provider")
+    };
+    assert_eq!(snapshot.payload.cost_estimation, None);
+    assert_eq!(snapshot.payload.output_tokens, Some(129));
+    assert_eq!(snapshot.coverage.output_token_status, CoverageStatus::Known);
+    assert_eq!(snapshot.payload.tool_calls.unwrap().total, 1);
+}
+
+#[test]
+fn oversized_cost_is_removed_before_retry_bytes_are_frozen() {
+    let mut request = HarnessUsageRequest::new(
+        1,
+        1,
+        Utc::now(),
+        HarnessUsageSnapshot::Codex(UsageSnapshot {
+            coverage: Coverage {
+                cost_status: CostStatus::Known,
+                output_token_status: CoverageStatus::Known,
+                tool_status: CoverageStatus::Unavailable,
+            },
+            payload: UsagePayload::new(
+                Some(CostEstimation {
+                    groups: vec![UsageGroup {
+                        attribution: Attribution {
+                            model: Some("x".repeat(MAX_BODY_BYTES)),
+                            ..Default::default()
+                        },
+                        long_context_threshold_tokens: None,
+                        pre_threshold: Some(CodexUsage {
+                            input_tokens: Some(0),
+                            cached_input_tokens: Some(0),
+                            cache_write_input_tokens: Some(0),
+                            output_tokens: Some(0),
+                            reasoning_output_tokens: None,
+                            total_tokens: None,
+                        }),
+                        post_threshold: None,
+                    }],
+                }),
+                Some(0),
+                None,
+            ),
+        }),
+    );
+    assert!(request.bound_to_body().unwrap());
+    let wire = serde_json::to_value(&request).unwrap();
+    assert_eq!(wire["snapshot"]["coverage"]["cost_status"], "unavailable");
+    assert_eq!(wire["snapshot"]["payload"]["output_tokens"], 0);
+    assert!(wire["snapshot"]["payload"].get("cost_estimation").is_none());
+    let bytes = serde_json::to_vec(&request).unwrap();
+    assert!(!request.bound_to_body().unwrap());
+    assert_eq!(serde_json::to_vec(&request).unwrap(), bytes);
 }

@@ -20,10 +20,6 @@ pub(super) fn encode_request(request: &HarnessUsageRequest) -> Result<Vec<u8>> {
         request.execution_id > 0 && request.capture_sequence > 0,
         "Invalid harness capture identity"
     );
-    ensure!(
-        request.has_usable_category(),
-        "No usable harness usage category"
-    );
     let body = serde_json::to_vec(request)?;
     ensure!(
         body.len() <= MAX_BODY_BYTES,

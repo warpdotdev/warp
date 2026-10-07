@@ -8,7 +8,7 @@ use mockito::Matcher;
 use serde_json::json;
 use warp_core::channel::ChannelState;
 use warp_harness_usage::api::{
-    ClaudeUsage, Coverage, CoverageStatus, HarnessUsageRequest, HarnessUsageSnapshot, ToolCalls,
+    CostStatus, Coverage, CoverageStatus, HarnessUsageRequest, HarnessUsageSnapshot, ToolCalls,
     UsagePayload, UsageSnapshot,
 };
 use warp_server_client::base_client::{AMBIENT_WORKLOAD_TOKEN_HEADER, CLOUD_AGENT_ID_HEADER};
@@ -31,18 +31,13 @@ fn report() -> HarnessUsageRequest {
         Utc.with_ymd_and_hms(2026, 9, 10, 12, 0, 0).unwrap(),
         HarnessUsageSnapshot::ClaudeCode(UsageSnapshot {
             coverage: Coverage {
-                token_status: CoverageStatus::Known,
+                cost_status: CostStatus::Unavailable,
+                output_token_status: CoverageStatus::Known,
                 tool_status: CoverageStatus::Partial,
             },
             payload: UsagePayload::new(
-                Vec::new(),
-                Some(ClaudeUsage {
-                    input_tokens: Some(9_007_199_254_740_993),
-                    output_tokens: None,
-                    cache_read_input_tokens: None,
-                    cache_creation_input_tokens: None,
-                    cache_creation: None,
-                }),
+                None,
+                Some(9_007_199_254_740_993),
                 Some(ToolCalls {
                     total: 1,
                     by_name: BTreeMap::from([("Read".into(), 1)]),
@@ -197,6 +192,9 @@ fn publication_preserves_http_failure_classification() {
                 .create()
         };
         let server = ServerApi::new_for_test();
+        server
+            .base_client
+            .set_ambient_workload_token_for_test("synthetic-workload-token".into(), None);
 
         let error =
             block_on(server.publish_harness_usage_for_task(&task_id(), &report())).unwrap_err();

@@ -649,12 +649,16 @@ async fn capture_and_upload_transcript(
     log::info!("Uploading Claude Code transcript to conversation {conversation_id}");
 
     let config_dir = claude_config_dir().context("Failed to resolve Claude config dir")?;
+    let metadata = client
+        .get_transcript_upload_metadata(conversation_id)
+        .await?;
     let harness_working_dir = harness_working_dir.to_path_buf();
     let capture = capture_transcript_with_retry(persistence.is_reporting_enabled(), || {
         let identity = persistence.begin_capture();
         let harness_working_dir = harness_working_dir.clone();
         let config_dir = config_dir.clone();
         let claude_version = claude_version.clone();
+        let policy = metadata.threshold_policy.clone();
         async move {
             tokio::task::spawn_blocking(move || {
                 capture_transcript_with_usage(
@@ -664,6 +668,7 @@ async fn capture_and_upload_transcript(
                     claude_version,
                     require_main_transcript,
                     identity,
+                    policy.as_ref(),
                 )
             })
             .await
@@ -673,7 +678,7 @@ async fn capture_and_upload_transcript(
     })
     .await?
     .context("Claude transcript capture returned no data")?;
-    upload_captured_transcript(client, conversation_id, capture).await
+    upload_captured_transcript(client, &metadata.target, capture).await
 }
 
 fn capture_transcript_with_usage(
@@ -683,6 +688,7 @@ fn capture_transcript_with_usage(
     claude_version: Option<String>,
     require_main_transcript: bool,
     identity: Option<CaptureIdentity>,
+    policy: Option<&warp_harness_usage::api::ThresholdPolicy>,
 ) -> Result<CapturedTranscript> {
     let captured_at = Utc::now();
     let (mut envelope, diagnostics) = read_envelope_with_diagnostics(
@@ -705,6 +711,7 @@ fn capture_transcript_with_usage(
                     .iter()
                     .map(|(id, entries)| (id.as_str(), entries.as_slice())),
                 &diagnostics,
+                policy,
             ),
         )
     });

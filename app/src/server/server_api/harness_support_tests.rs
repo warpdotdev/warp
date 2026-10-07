@@ -1,4 +1,37 @@
 use crate::ai::artifacts::Artifact;
+#[test]
+fn transcript_metadata_decodes_target_independently_of_policy() {
+    use serde_json::json;
+
+    use super::TranscriptUploadMetadata;
+
+    for policy in [
+        None,
+        Some(json!(null)),
+        Some(json!({"schema_version": 2, "models": {}})),
+        Some(json!({"schema_version": 1, "models": {"model": {"kind": "input_gt", "tokens": 0}}})),
+    ] {
+        let mut value = json!({"url": "https://example.com/upload", "method": "PUT"});
+        if let Some(policy) = policy {
+            value["threshold_policy"] = policy;
+        }
+        let metadata: TranscriptUploadMetadata = serde_json::from_value(value).unwrap();
+        assert_eq!(metadata.target.method, "PUT");
+        assert!(metadata.threshold_policy.is_none());
+    }
+    let metadata: TranscriptUploadMetadata = serde_json::from_value(json!({
+        "url": "https://example.com/upload", "method": "PUT",
+        "threshold_policy": {"schema_version": 1, "models": {"model": {"kind": "none"}}}
+    }))
+    .unwrap();
+    assert!(metadata.threshold_policy.is_some());
+    assert!(
+        serde_json::from_value::<TranscriptUploadMetadata>(json!({
+            "threshold_policy": {"schema_version": 1, "models": {}}
+        }))
+        .is_err()
+    );
+}
 
 /// The server marshals its unset Go maps and slices as `null`, which a POST
 /// target routinely carries for `headers`.

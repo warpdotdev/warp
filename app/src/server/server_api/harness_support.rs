@@ -41,6 +41,26 @@ pub struct UploadTarget {
     pub fields: Vec<UploadField>,
 }
 
+/// Transcript upload target with independently decoded pricing metadata.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct TranscriptUploadMetadata {
+    #[serde(flatten)]
+    pub target: UploadTarget,
+    #[serde(default, deserialize_with = "deserialize_threshold_policy")]
+    pub threshold_policy: Option<warp_harness_usage::api::ThresholdPolicy>,
+}
+
+fn deserialize_threshold_policy<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<warp_harness_usage::api::ThresholdPolicy>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize as _;
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(warp_harness_usage::api::ThresholdPolicy::parse(value))
+}
+
 /// A single multipart form field on a POST upload target.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct UploadField {
@@ -322,10 +342,10 @@ pub trait HarnessSupportClient: 'static + Send + Sync {
     async fn create_external_conversation(&self, format: &str) -> Result<ServerConversationToken>;
 
     /// Get a presigned upload target for the conversation's raw transcript.
-    async fn get_transcript_upload_target(
+    async fn get_transcript_upload_metadata(
         &self,
         conversation_id: &ServerConversationToken,
-    ) -> Result<UploadTarget>;
+    ) -> Result<TranscriptUploadMetadata>;
 
     /// Get a presigned upload target for the conversation's block snapshot.
     async fn get_block_snapshot_upload_target(
@@ -521,10 +541,10 @@ impl HarnessSupportClient for ServerApi {
         Ok(ServerConversationToken::new(response.conversation_id))
     }
 
-    async fn get_transcript_upload_target(
+    async fn get_transcript_upload_metadata(
         &self,
         conversation_id: &ServerConversationToken,
-    ) -> Result<UploadTarget> {
+    ) -> Result<TranscriptUploadMetadata> {
         self.post_public_api(
             "harness-support/transcript",
             &GetUploadTargetRequest {

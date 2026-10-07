@@ -1,0 +1,351 @@
+[
+  {
+    "name": "codex",
+    "valid": true,
+    "complete": true,
+    "entries": [
+      {
+        "type": "turn_context",
+        "payload": {
+          "turn_id": "turn",
+          "model": "gpt-6.1-sol"
+        }
+      },
+      {
+        "type": "event_msg",
+        "payload": {
+          "type": "token_usage_record",
+          "thread_id": "root",
+          "turn_id": "turn",
+          "session_id": "owner",
+          "root_turn_id": "turn",
+          "response_id": "response",
+          "usage": {
+            "input_tokens": 100,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 9007199254740993
+          },
+          "turn_token_usage": {
+            "input_tokens": 100,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 9007199254740993
+          },
+          "thread_token_usage": {
+            "input_tokens": 100,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 9007199254740993
+          }
+        }
+      }
+    ],
+    "policy": {
+      "schema_version": 1,
+      "models": {
+        "gpt-6.1-sol": {
+          "kind": "input_gt",
+          "tokens": 272000
+        },
+        "claude-sonnet-5": {
+          "kind": "none"
+        }
+      }
+    },
+    "report": {
+      "execution_id": 42,
+      "capture_sequence": 1,
+      "captured_at": "2026-01-01T12:00:00Z",
+      "harness": "CODEX",
+      "snapshot": {
+        "coverage": {
+          "cost_status": "known",
+          "output_token_status": "known",
+          "tool_status": "known"
+        },
+        "payload": {
+          "format": "cost_inputs_v3",
+          "cost_estimation": {
+            "groups": [
+              {
+                "model": "gpt-6.1-sol",
+                "long_context_threshold_tokens": 272000,
+                "pre_threshold": {
+                  "input_tokens": 100,
+                  "cached_input_tokens": 0,
+                  "cache_write_input_tokens": 0,
+                  "output_tokens": 9007199254740993
+                }
+              }
+            ]
+          },
+          "output_tokens": 9007199254740993,
+          "toolCalls": {
+            "total": 0,
+            "byName": {}
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "claude",
+    "valid": true,
+    "complete": true,
+    "entries": [
+      {
+        "type": "assistant",
+        "message": {
+          "id": "response",
+          "model": "claude-sonnet-5",
+          "content": [],
+          "usage": {
+            "input_tokens": 2,
+            "output_tokens": 4,
+            "cache_read_input_tokens": 1,
+            "cache_creation_input_tokens": 3,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 1,
+              "ephemeral_1h_input_tokens": 2
+            }
+          }
+        }
+      }
+    ],
+    "policy": {
+      "schema_version": 1,
+      "models": {
+        "gpt-6.1-sol": {
+          "kind": "input_gt",
+          "tokens": 272000
+        },
+        "claude-sonnet-5": {
+          "kind": "none"
+        }
+      }
+    },
+    "report": {
+      "execution_id": 42,
+      "capture_sequence": 1,
+      "captured_at": "2026-01-01T12:00:00Z",
+      "harness": "CLAUDE_CODE",
+      "snapshot": {
+        "coverage": {
+          "cost_status": "known",
+          "output_token_status": "known",
+          "tool_status": "known"
+        },
+        "payload": {
+          "format": "cost_inputs_v3",
+          "cost_estimation": {
+            "groups": [
+              {
+                "model": "claude-sonnet-5",
+                "pre_threshold": {
+                  "input_tokens": 2,
+                  "output_tokens": 4,
+                  "cache_read_input_tokens": 1,
+                  "cache_creation_input_tokens": 3,
+                  "cache_creation": {
+                    "ephemeral_5m_input_tokens": 1,
+                    "ephemeral_1h_input_tokens": 2
+                  }
+                }
+              }
+            ]
+          },
+          "output_tokens": 4,
+          "toolCalls": {
+            "total": 0,
+            "byName": {}
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "aggregate_only",
+    "valid": true,
+    "complete": true,
+    "entries": [
+      {
+        "type": "turn_context",
+        "payload": {
+          "turn_id": "turn",
+          "model": "gpt-6.1-sol"
+        }
+      },
+      {
+        "type": "event_msg",
+        "payload": {
+          "type": "token_usage_record",
+          "thread_id": "root",
+          "turn_id": "turn",
+          "session_id": "owner",
+          "root_turn_id": "turn",
+          "response_id": "response",
+          "usage": {
+            "input_tokens": 100,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 9007199254740993
+          },
+          "turn_token_usage": {
+            "input_tokens": 100,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 9007199254740993
+          },
+          "thread_token_usage": {
+            "input_tokens": 100,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 9007199254740993
+          }
+        }
+      }
+    ],
+    "policy": null,
+    "report": {
+      "execution_id": 42,
+      "capture_sequence": 1,
+      "captured_at": "2026-01-01T12:00:00Z",
+      "harness": "CODEX",
+      "snapshot": {
+        "coverage": {
+          "cost_status": "unavailable",
+          "output_token_status": "known",
+          "tool_status": "known"
+        },
+        "payload": {
+          "format": "cost_inputs_v3",
+          "output_tokens": 9007199254740993,
+          "toolCalls": {
+            "total": 0,
+            "byName": {}
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "unavailable",
+    "valid": true,
+    "complete": false,
+    "entries": [],
+    "policy": {
+      "schema_version": 1,
+      "models": {
+        "gpt-6.1-sol": {
+          "kind": "input_gt",
+          "tokens": 272000
+        },
+        "claude-sonnet-5": {
+          "kind": "none"
+        }
+      }
+    },
+    "report": {
+      "execution_id": 42,
+      "capture_sequence": 1,
+      "captured_at": "2026-01-01T12:00:00Z",
+      "harness": "CODEX",
+      "snapshot": {
+        "coverage": {
+          "cost_status": "unavailable",
+          "output_token_status": "unavailable",
+          "tool_status": "unavailable"
+        },
+        "payload": {
+          "format": "cost_inputs_v3"
+        }
+      }
+    }
+  },
+  {
+    "name": "empty",
+    "valid": true,
+    "complete": true,
+    "entries": [],
+    "policy": {
+      "schema_version": 1,
+      "models": {
+        "gpt-6.1-sol": {
+          "kind": "input_gt",
+          "tokens": 272000
+        },
+        "claude-sonnet-5": {
+          "kind": "none"
+        }
+      }
+    },
+    "report": {
+      "execution_id": 42,
+      "capture_sequence": 1,
+      "captured_at": "2026-01-01T12:00:00Z",
+      "harness": "CODEX",
+      "snapshot": {
+        "coverage": {
+          "cost_status": "known",
+          "output_token_status": "known",
+          "tool_status": "known"
+        },
+        "payload": {
+          "format": "cost_inputs_v3",
+          "cost_estimation": {
+            "groups": []
+          },
+          "output_tokens": 0,
+          "toolCalls": {
+            "total": 0,
+            "byName": {}
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "mixed_format",
+    "valid": false,
+    "complete": true,
+    "entries": [],
+    "policy": {
+      "schema_version": 1,
+      "models": {
+        "gpt-6.1-sol": {
+          "kind": "input_gt",
+          "tokens": 272000
+        },
+        "claude-sonnet-5": {
+          "kind": "none"
+        }
+      }
+    },
+    "report": {
+      "execution_id": 42,
+      "capture_sequence": 1,
+      "captured_at": "2026-01-01T12:00:00Z",
+      "harness": "CODEX",
+      "snapshot": {
+        "coverage": {
+          "cost_status": "known",
+          "output_token_status": "known",
+          "tool_status": "known"
+        },
+        "payload": {
+          "format": "cost_inputs_v3",
+          "cost_estimation": {
+            "groups": []
+          },
+          "output_tokens": 0,
+          "toolCalls": {
+            "total": 0,
+            "byName": {}
+          },
+          "requests": []
+        }
+      }
+    }
+  }
+]

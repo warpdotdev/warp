@@ -1,26 +1,20 @@
+use std::collections::BTreeMap;
+
 use serde_json::Value;
 
-use crate::api::{Attribution, RequestUsage, ToolCalls, UsagePayload};
-use crate::{Findings, MAX_REQUESTS, ReasonCode};
+use crate::api::{
+    Attribution, CostEstimation, CostStatus, Coverage, ThresholdPolicy, ThresholdRule, ToolCalls,
+    UsageGroup, UsagePayload, UsageSnapshot, normalize_model,
+};
+use crate::{Findings, MAX_GROUPS, ReasonCode};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Counters<const N: usize> {
-    pub(crate) values: [Option<i64>; N],
-    pub(crate) overflowed: [bool; N],
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Counters {
+    pub(crate) values: [Option<i64>; 6],
 }
 
-impl<const N: usize> Default for Counters<N> {
-    fn default() -> Self {
-        Self {
-            values: [None; N],
-            overflowed: [false; N],
-        }
-    }
-}
-
-impl<const N: usize> Counters<N> {
-    /// Parse known nonnegative counters while preserving absent fields as unknown.
-    pub(crate) fn parse(value: &Value, paths: [&str; N], findings: &mut Findings) -> Option<Self> {
+impl Counters {
+    pub(crate) fn parse(value: &Value, paths: [&str; 6], findings: &mut Findings) -> Option<Self> {
         if !value.is_object() {
             findings.token(ReasonCode::InvalidData);
             return None;
@@ -32,196 +26,236 @@ impl<const N: usize> Counters<N> {
                     Some(count) => result.values[index] = Some(count),
                     None => {
                         findings.token(ReasonCode::InvalidData);
-                        return None;
                     }
                 }
             }
         }
-        if !result.any() {
-            findings.token(ReasonCode::IncompleteInput);
-            return None;
-        }
         Some(result)
     }
 
-    pub(crate) fn any(&self) -> bool {
-        self.values.iter().any(Option::is_some)
-    }
-
-    pub(crate) fn restore_overflow(&mut self, overflowed: &[bool]) {
-        for (index, overflowed) in overflowed.iter().copied().enumerate().take(N) {
-            if overflowed {
-                self.values[index] = None;
-                self.overflowed[index] = true;
-            }
-        }
-    }
-
-    pub(crate) fn add(&mut self, other: &Self, findings: &mut Findings) {
-        for index in 0..N {
-            if other.overflowed[index] {
-                self.values[index] = None;
-                self.overflowed[index] = true;
-            }
-            if self.overflowed[index] {
-                continue;
-            }
-            if let Some(value) = other.values[index] {
-                // An overflowed component stays unknown so later observations cannot make it
-                // appear exact again.
-                let sum = self.values[index].unwrap_or_default().checked_add(value);
-                self.values[index] = sum;
-                if sum.is_none() {
-                    self.overflowed[index] = true;
-                    findings.token(ReasonCode::ResourceLimit);
-                }
-            }
-        }
-    }
-
-    pub(crate) fn same_fields(&self, other: &Self) -> bool {
+    pub(crate) fn covers(&self, previous: &Self) -> bool {
         self.values
             .iter()
-            .zip(&other.values)
-            .all(|(left, right)| left.is_some() == right.is_some())
-    }
-
-    pub(crate) fn decreased(&self, previous: &Self) -> bool {
-        self.values
-            .iter()
-            .zip(&previous.values)
-            .any(|(current, previous)| {
-                matches!((current, previous), (Some(current), Some(previous)) if current < previous)
+            .zip(previous.values)
+            .all(|(current, previous)| match (*current, previous) {
+                (Some(current), Some(previous)) => current >= previous,
+                (_, None) => true,
+                (None, Some(_)) => false,
             })
     }
 
-    pub(crate) fn delta(&self, previous: &Self) -> Self {
-        let mut result = Self::default();
-        for index in 0..N {
-            if let (Some(current), Some(previous)) = (self.values[index], previous.values[index]) {
-                result.values[index] = current.checked_sub(previous).filter(|delta| *delta >= 0);
-            }
+    pub(crate) fn add_complete(&mut self, other: &Self) -> bool {
+        for (sum, count) in self.values.iter_mut().zip(other.values) {
+            *sum = match (*sum, count) {
+                (Some(sum), Some(count)) => match sum.checked_add(count) {
+                    Some(sum) => Some(sum),
+                    None => return false,
+                },
+                _ => None,
+            };
         }
-        result
-    }
-
-    pub(crate) fn new_fields(&self, previous: &Self) -> Self {
-        let mut result = Self::default();
-        for index in 0..N {
-            if previous.values[index].is_none() {
-                result.values[index] = self.values[index];
-            }
-        }
-        result
-    }
-
-    pub(crate) fn matches_observed(&self, observed: &Self) -> bool {
-        self.values
-            .iter()
-            .zip(&observed.values)
-            .all(|(current, observed)| observed.is_none() || current == observed)
-    }
-
-    fn omit_missing_fields(&mut self, latest: &Self) {
-        for index in 0..N {
-            if latest.values[index].is_none() {
-                self.values[index] = None;
-                self.overflowed[index] = false;
-            }
-        }
-    }
-
-    pub(crate) fn covers(&self, previous: &Self) -> bool {
-        (0..N).all(|index| match (self.values[index], previous.values[index]) {
-            (Some(current), Some(previous)) => current >= previous,
-            (_, None) => true,
-            (None, Some(_)) => false,
-        })
+        true
     }
 }
 
-pub(crate) struct Accounting<const N: usize> {
-    /// Aggregate used only to diagnose counter drift and overflow, never emitted in the payload.
-    pub(crate) diagnostic_total: Counters<N>,
-    requests: Vec<(Attribution, Counters<N>)>,
-    unattributed: Counters<N>,
+#[derive(Clone, Copy)]
+pub(crate) enum Provider {
+    Claude,
+    Codex,
 }
 
-impl<const N: usize> Default for Accounting<N> {
-    fn default() -> Self {
+impl Provider {
+    fn output_index(self) -> usize {
+        match self {
+            Self::Claude => 1,
+            Self::Codex => 2,
+        }
+    }
+
+    fn input(self, usage: &Counters) -> Option<i64> {
+        let values = usage.values;
+        match self {
+            Self::Claude => {
+                let [input, output, reads, writes, short, long] = values;
+                output?;
+                let writes = writes?;
+                if (writes > 0 || short.is_some() || long.is_some())
+                    && short?.checked_add(long?)? != writes
+                {
+                    return None;
+                }
+                input?.checked_add(reads?)?.checked_add(writes)
+            }
+            Self::Codex => {
+                let [input, reads, output, reasoning, total, writes] = values;
+                let input = input?;
+                let output = output?;
+                if reads?.checked_add(writes?)? > input
+                    || reasoning.is_some_and(|reasoning| reasoning > output)
+                    || total.is_some_and(|total| input.checked_add(output) != Some(total))
+                {
+                    return None;
+                }
+                Some(input)
+            }
+        }
+    }
+}
+
+struct Group {
+    cutoff: Option<i64>,
+    pre: Option<Counters>,
+    post: Option<Counters>,
+}
+
+pub(crate) struct Accounting<'a> {
+    provider: Provider,
+    policy: Option<&'a ThresholdPolicy>,
+    groups: Option<BTreeMap<Attribution, Group>>,
+    output: Option<i64>,
+    output_overflow: bool,
+    output_measured: bool,
+    output_partial: bool,
+}
+
+impl<'a> Accounting<'a> {
+    pub(crate) fn new(provider: Provider, policy: Option<&'a ThresholdPolicy>) -> Self {
         Self {
-            diagnostic_total: Counters::default(),
-            requests: Vec::new(),
-            unattributed: Counters::default(),
+            provider,
+            policy,
+            groups: policy.map(|_| BTreeMap::new()),
+            output: Some(0),
+            output_overflow: false,
+            output_measured: false,
+            output_partial: false,
         }
     }
-}
 
-impl<const N: usize> Accounting<N> {
-    pub(crate) fn omit_missing_fields(&mut self, latest: &Counters<N>) {
-        self.requests.retain_mut(|(_, usage)| {
-            usage.omit_missing_fields(latest);
-            usage.any()
-        });
-        self.unattributed.omit_missing_fields(latest);
-    }
-
-    pub(crate) fn merge(&mut self, other: Self, findings: &mut Findings) {
-        if self.diagnostic_total.any()
-            && other.diagnostic_total.any()
-            && !self.diagnostic_total.same_fields(&other.diagnostic_total)
-        {
-            findings.token(ReasonCode::IncompleteInput);
-        }
-        self.diagnostic_total.add(&other.diagnostic_total, findings);
-        self.unattributed.add(&other.unattributed, findings);
-        for (attribution, usage) in other.requests {
-            self.request(&usage, &attribution, findings);
-        }
+    pub(crate) fn invalidate_cost(&mut self) {
+        self.groups = None;
     }
 
     pub(crate) fn request(
         &mut self,
-        usage: &Counters<N>,
+        usage: &Counters,
         attribution: &Attribution,
         findings: &mut Findings,
     ) {
-        if self.requests.len() >= MAX_REQUESTS {
-            self.unattributed.add(usage, findings);
-            findings.token(ReasonCode::ResourceLimit);
+        if !self.output_overflow {
+            if let Some(count) = usage.values[self.provider.output_index()] {
+                self.output_measured = true;
+                self.output = self.output.unwrap_or_default().checked_add(count);
+                if self.output.is_none() {
+                    self.output_overflow = true;
+                    self.invalidate_cost();
+                    findings.reason(ReasonCode::ResourceLimit);
+                }
+            } else {
+                self.output_partial = true;
+                findings.reason(ReasonCode::IncompleteInput);
+            }
+        }
+        let Some(groups) = &mut self.groups else {
+            return;
+        };
+        let rule = attribution
+            .model
+            .as_ref()
+            .and_then(|model| self.policy?.models.get(&normalize_model(model)));
+        let Some(input) = self.provider.input(usage) else {
+            self.invalidate_cost();
+            findings.reason(ReasonCode::IncompleteInput);
+            return;
+        };
+        let cutoff = match rule {
+            Some(ThresholdRule::None) => None,
+            Some(ThresholdRule::InputGt { tokens }) => Some(*tokens),
+            None => {
+                self.invalidate_cost();
+                findings.reason(ReasonCode::IncompleteInput);
+                return;
+            }
+        };
+        let mut key = attribution.clone();
+        key.service_tier = normalized_modifier(key.service_tier, &["", "default", "standard"]);
+        key.inference_geo = normalized_modifier(key.inference_geo, &["", "global"]);
+        key.speed = normalized_modifier(key.speed, &["", "standard"]);
+        if !groups.contains_key(&key) && groups.len() == MAX_GROUPS {
+            self.invalidate_cost();
+            findings.reason(ReasonCode::ResourceLimit);
+            return;
+        }
+        let group = groups.entry(key).or_insert(Group {
+            cutoff,
+            pre: None,
+            post: None,
+        });
+        let mut usage = usage.clone();
+        if matches!(self.provider, Provider::Claude) && usage.values[3] == Some(0) {
+            usage.values[4] = Some(0);
+            usage.values[5] = Some(0);
+        }
+        let band = if cutoff.is_some_and(|cutoff| input > cutoff) {
+            &mut group.post
         } else {
-            self.requests.push((attribution.clone(), usage.clone()));
+            &mut group.pre
+        };
+        if let Some(sum) = band {
+            if !sum.add_complete(&usage) {
+                self.invalidate_cost();
+                findings.reason(ReasonCode::ResourceLimit);
+            }
+        } else {
+            *band = Some(usage);
         }
     }
 
-    pub(crate) fn unassigned(&mut self, usage: &Counters<N>, findings: &mut Findings) {
-        self.unattributed.add(usage, findings);
-    }
-
-    pub(crate) fn has_usage(&self) -> bool {
-        self.unattributed.any() || self.requests.iter().any(|(_, usage)| usage.any())
-    }
-
-    pub(crate) fn payload<T: From<Counters<N>>>(
-        self,
+    pub(crate) fn finish<T: From<Counters>>(
+        mut self,
         tool_calls: Option<ToolCalls>,
-    ) -> UsagePayload<T> {
-        let unattributed_overflowed = self.unattributed.overflowed.to_vec();
-        let unattributed_usage = self.unattributed.any().then(|| self.unattributed.into());
-        let requests = self
-            .requests
-            .into_iter()
-            .filter(|(_, usage)| usage.any())
-            .map(|(attribution, usage)| RequestUsage {
-                attribution,
-                usage: usage.into(),
-            })
-            .collect();
-        UsagePayload {
-            requests,
-            unattributed_usage,
-            tool_calls,
-            unattributed_overflowed,
+        findings: &Findings,
+    ) -> UsageSnapshot<T> {
+        if findings.tokens_partial || findings.limit_exceeded {
+            self.invalidate_cost();
+        }
+        let cost_estimation = self.groups.map(|groups| CostEstimation {
+            groups: groups
+                .into_iter()
+                .map(|(attribution, group)| UsageGroup {
+                    attribution,
+                    long_context_threshold_tokens: group.cutoff,
+                    pre_threshold: group.pre.map(T::from),
+                    post_threshold: group.post.map(T::from),
+                })
+                .collect(),
+        });
+        let output = if !self.output_measured
+            && (self.output_partial || findings.tokens_partial || findings.limit_exceeded)
+        {
+            None
+        } else {
+            self.output
+        };
+        UsageSnapshot {
+            coverage: Coverage {
+                cost_status: if cost_estimation.is_some() {
+                    CostStatus::Known
+                } else {
+                    CostStatus::Unavailable
+                },
+                output_token_status: Findings::status(
+                    output.is_some(),
+                    self.output_partial || findings.tokens_partial,
+                ),
+                tool_status: Findings::status(tool_calls.is_some(), findings.tools_partial),
+            },
+            payload: UsagePayload::new(cost_estimation, output, tool_calls),
         }
     }
+}
+
+fn normalized_modifier(value: Option<String>, neutral: &[&str]) -> Option<String> {
+    value
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !neutral.contains(&value.as_str()))
 }

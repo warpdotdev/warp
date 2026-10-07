@@ -1,14 +1,13 @@
-use std::collections::BTreeSet;
-use std::mem;
+use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use crate::api::{Attribution, CodexUsage, Coverage, HarnessUsageSnapshot, UsageSnapshot};
+use crate::api::{Attribution, CodexUsage, HarnessUsageSnapshot, ThresholdPolicy};
 use crate::claude::classification;
-use crate::counters::{Accounting, Counters};
+use crate::counters::{Accounting, Counters, Provider};
 use crate::tools::Tools;
 use crate::{
-    CaptureDiagnostics, ExtractedUsage, ExtractionOutcome, Findings, MAX_SCOPE_ENTRIES, ReasonCode,
+    CaptureDiagnostics, ExtractedUsage, ExtractionOutcome, Findings, MAX_IDENTITIES, ReasonCode,
     identifier,
 };
 
@@ -20,24 +19,9 @@ const PATHS: [&str; 6] = [
     "/total_tokens",
     "/cache_write_input_tokens",
 ];
-impl From<&CodexUsage> for Counters<6> {
-    fn from(usage: &CodexUsage) -> Self {
-        Self {
-            values: [
-                usage.input_tokens,
-                usage.cached_input_tokens,
-                usage.output_tokens,
-                usage.reasoning_output_tokens,
-                usage.total_tokens,
-                usage.cache_write_input_tokens,
-            ],
-            ..Self::default()
-        }
-    }
-}
 
-impl From<Counters<6>> for CodexUsage {
-    fn from(counts: Counters<6>) -> Self {
+impl From<Counters> for CodexUsage {
+    fn from(counts: Counters) -> Self {
         let [
             input_tokens,
             cached_input_tokens,
@@ -49,226 +33,253 @@ impl From<Counters<6>> for CodexUsage {
         Self {
             input_tokens,
             cached_input_tokens,
+            cache_write_input_tokens,
             output_tokens,
             reasoning_output_tokens,
             total_tokens,
-            cache_write_input_tokens,
         }
     }
 }
 
-#[derive(Default)]
-struct Segment {
-    latest: Option<Counters<6>>,
-    ambiguous: bool,
-    accounting: Accounting<6>,
+struct Response {
+    record: Value,
+    usage: Option<Counters>,
+    attribution: Attribution,
 }
 
-impl Segment {
-    fn finish(mut self, accounting: &mut Accounting<6>, findings: &mut Findings) {
-        if let Some(total) = self.latest {
-            self.accounting.diagnostic_total = total;
-            accounting.merge(self.accounting, findings);
-        }
-    }
-}
-
-/// Extract cumulative usage from the captured root Codex rollout.
-///
-/// Repeated checkpoints are reconciled as cumulative totals. Differences between checkpoints
-/// are used to attribute newly observed usage when the provider's last-usage vector confirms
-/// the delta. Native child rollouts are outside this extractor's captured scope.
-///
-/// The result can remain usable with partial token or tool coverage when events are incomplete
-/// or ambiguous; it is unavailable when no usable category remains.
-///
-/// The records and diagnostics must describe the same frozen capture.
+/// Extract root rollout usage from native response records, reconciling their cumulative totals.
 pub fn extract_codex(
     session_id: &str,
     entries: &[Value],
     diagnostics: &CaptureDiagnostics,
+    policy: Option<&ThresholdPolicy>,
 ) -> ExtractionOutcome {
     let mut findings = Findings::default();
     findings.capture(diagnostics);
     if !identifier(session_id, &mut findings) {
         return ExtractionOutcome::Unavailable(findings.diagnostics());
     }
-    let mut session = session_id.to_owned();
-    let mut sessions = BTreeSet::from([session.clone()]);
-    let mut seen_metadata = false;
-    let mut segment = Segment::default();
-    let mut accounting = Accounting::default();
-    let mut attribution = Attribution::default();
+    let mut contexts = BTreeMap::<String, Attribution>::new();
+    let mut tier = None;
+    let mut responses = BTreeMap::<String, Response>::new();
+    let mut thread_sum = Counters {
+        values: [Some(0); 6],
+    };
+    let mut turn_sums = BTreeMap::<(String, String, String), Counters>::new();
     let mut tools = Tools::default();
+    let mut legacy_usage = false;
     for entry in entries {
         let payload = &entry["payload"];
-        match entry.get("type").and_then(Value::as_str) {
+        let record = match entry.get("type").and_then(Value::as_str) {
             Some("session_meta") => {
-                let Some(id) = payload.get("id").and_then(Value::as_str) else {
-                    findings.token(ReasonCode::InvalidData);
-                    findings.tools_partial = true;
-                    continue;
-                };
-                if !identifier(id, &mut findings) {
-                    break;
+                if payload.get("id").and_then(Value::as_str) != Some(session_id) {
+                    findings.token(ReasonCode::AmbiguousAccounting);
                 }
-                if id != session {
-                    if !seen_metadata || sessions.contains(id) {
-                        findings.token(ReasonCode::AmbiguousAccounting);
-                        findings.tools_partial = true;
-                        segment.ambiguous = true;
-                        continue;
-                    }
-                    if sessions.len() >= MAX_SCOPE_ENTRIES {
-                        findings.limit(ReasonCode::ResourceLimit);
-                        break;
-                    }
-                    mem::take(&mut segment).finish(&mut accounting, &mut findings);
-                    attribution = Attribution::default();
-                    session = id.to_owned();
-                    sessions.insert(session.clone());
-                }
-                seen_metadata = true;
+                None
             }
             Some("turn_context") => {
-                attribution = Attribution {
-                    model: classification(payload.get("model"), &mut findings),
-                    service_tier: classification(payload.get("service_tier"), &mut findings),
-                    ..Default::default()
-                };
+                if let Some(turn) = payload.get("turn_id").and_then(Value::as_str)
+                    && identifier(turn, &mut findings)
+                {
+                    let attribution = Attribution {
+                        model: classification(payload.get("model"), &mut findings),
+                        service_tier: tier.clone(),
+                        ..Default::default()
+                    };
+                    if contexts
+                        .get(turn)
+                        .is_some_and(|previous| previous != &attribution)
+                    {
+                        findings.token(ReasonCode::AmbiguousAccounting);
+                    } else if contexts.len() < MAX_IDENTITIES {
+                        contexts.insert(turn.to_owned(), attribution);
+                    } else {
+                        findings.token(ReasonCode::ResourceLimit);
+                    }
+                }
+                None
             }
             Some("event_msg") => match payload.get("type").and_then(Value::as_str) {
-                Some("token_count") => {
-                    observe_checkpoint(&payload["info"], &attribution, &mut segment, &mut findings)
+                Some("token_usage_record") => Some(payload),
+                Some("thread_settings_applied") => {
+                    if payload
+                        .get("thread_id")
+                        .is_some_and(|owner| owner.as_str() != Some(session_id))
+                    {
+                        continue;
+                    }
+                    tier = classification(
+                        payload.pointer("/thread_settings/service_tier"),
+                        &mut findings,
+                    );
+                    None
                 }
+                Some("token_count") => {
+                    legacy_usage |= payload.get("info").is_some_and(|info| !info.is_null());
+                    if let Some(total) = payload.pointer("/info/total_token_usage") {
+                        if let Some(total) = Counters::parse(total, PATHS, &mut findings) {
+                            // Codex's full-context marker resets categories without incurring provider usage.
+                            let synthetic_context = total.values[4].is_some_and(|count| {
+                                payload
+                                    .pointer("/info/model_context_window")
+                                    .and_then(Value::as_i64)
+                                    == Some(count)
+                            }) && [0, 1, 2, 3, 5]
+                                .into_iter()
+                                .all(|index| total.values[index] == Some(0));
+                            if !synthetic_context
+                                && [0, 1, 2, 3, 5].into_iter().any(|index| {
+                                    total.values[index].is_some_and(|count| {
+                                        Some(count) != thread_sum.values[index]
+                                    })
+                                })
+                            {
+                                findings.token(ReasonCode::AmbiguousAccounting);
+                            }
+                        } else {
+                            findings.token(ReasonCode::IncompleteInput);
+                        }
+                    }
+                    None
+                }
+                Some(name) if name.contains("usage") || name.contains("token") => {
+                    findings.token(ReasonCode::InvalidData);
+                    None
+                }
+                Some(_) => None,
                 None => {
                     findings.token(ReasonCode::InvalidData);
-                    findings.tools_partial = true;
+                    None
                 }
-                Some(name) if name.contains("token") || name.contains("usage") => {
-                    findings.token(ReasonCode::InvalidData);
+            },
+            Some("compacted") => payload
+                .get("latest_token_usage_record")
+                .filter(|record| !record.is_null()),
+            Some("response_item") => {
+                match payload.get("type").and_then(Value::as_str) {
+                    Some("function_call" | "custom_tool_call") => tools.observe(
+                        session_id,
+                        payload.get("call_id").and_then(Value::as_str),
+                        payload.get("name").and_then(Value::as_str),
+                        &mut findings,
+                    ),
+                    Some(
+                        "message"
+                        | "reasoning"
+                        | "function_call_output"
+                        | "custom_tool_call_output",
+                    ) => {}
+                    _ => findings.tool(ReasonCode::InvalidData),
                 }
-                Some(_) => {}
-            },
-            Some("response_item") => match payload.get("type").and_then(Value::as_str) {
-                Some("function_call" | "custom_tool_call") => tools.observe(
-                    &session,
-                    payload.get("call_id").and_then(Value::as_str),
-                    payload.get("name").and_then(Value::as_str),
-                    &mut findings,
-                ),
-                Some(
-                    "message" | "reasoning" | "function_call_output" | "custom_tool_call_output",
-                ) => {}
-                _ => findings.tool(ReasonCode::InvalidData),
-            },
-            Some("compacted") => {}
+                None
+            }
             _ => {
                 findings.token(ReasonCode::InvalidData);
                 findings.tools_partial = true;
+                None
             }
-        }
-        if findings.limit_exceeded {
-            break;
-        }
-    }
-    segment.finish(&mut accounting, &mut findings);
-    let tool_calls = tools.finish(diagnostics.root.is_complete(), &mut findings);
-    let has_usage = accounting.has_usage();
-    if findings.limit_exceeded || (!has_usage && tool_calls.is_none()) {
-        return ExtractionOutcome::Unavailable(findings.diagnostics());
-    }
-    let token_status = Findings::status(has_usage, findings.tokens_partial);
-    let tool_status = Findings::status(tool_calls.is_some(), findings.tools_partial);
-    let diagnostics = findings.diagnostics();
-    ExtractionOutcome::Usable(Box::new(ExtractedUsage {
-        snapshot: HarnessUsageSnapshot::Codex(UsageSnapshot {
-            coverage: Coverage {
-                token_status,
-                tool_status,
-            },
-            payload: accounting.payload(tool_calls),
-        }),
-        diagnostics,
-    }))
-}
-
-fn observe_checkpoint(
-    info: &Value,
-    attribution: &Attribution,
-    segment: &mut Segment,
-    findings: &mut Findings,
-) {
-    if segment.ambiguous {
-        return;
-    }
-    if info.is_null() {
-        return;
-    }
-    let Some(total) = info.get("total_token_usage") else {
-        findings.token(ReasonCode::IncompleteInput);
-        return;
-    };
-    let Some(total) = parse_usage(total, findings) else {
-        return;
-    };
-    let last = info
-        .get("last_token_usage")
-        .filter(|usage| !usage.is_null())
-        .and_then(|usage| parse_usage(usage, findings));
-    if segment.latest.as_ref() == Some(&total) {
-        return;
-    }
-    if let Some(previous) = &segment.latest {
-        if total.decreased(previous) {
-            // A decrease is not proof of a new lifetime; retain only the unambiguous prefix.
-            segment.ambiguous = true;
+        };
+        let Some(record) = record else { continue };
+        let ids = [
+            "thread_id",
+            "turn_id",
+            "session_id",
+            "root_turn_id",
+            "response_id",
+        ]
+        .map(|field| record.get(field).and_then(Value::as_str));
+        let [
+            Some(thread),
+            Some(turn),
+            Some(owner),
+            Some(root),
+            Some(response_id),
+        ] = ids
+        else {
+            findings.token(ReasonCode::InvalidData);
+            continue;
+        };
+        if thread != session_id
+            || !ids
+                .into_iter()
+                .flatten()
+                .all(|id| identifier(id, &mut findings))
+        {
             findings.token(ReasonCode::AmbiguousAccounting);
-            return;
+            continue;
         }
-        if !total.same_fields(previous) {
-            segment.accounting.omit_missing_fields(&total);
-            let baseline = total.new_fields(previous);
-            if baseline.any() {
-                segment.accounting.unassigned(&baseline, findings);
-            }
-            findings.token(ReasonCode::AmbiguousAccounting);
-        }
-        let delta = total.delta(previous);
-        if delta.values.iter().flatten().any(|count| *count > 0) {
-            if last
-                .as_ref()
-                .is_some_and(|last| last.matches_observed(&delta))
-            {
-                segment.accounting.request(&delta, attribution, findings);
-            } else {
-                segment.accounting.unassigned(&delta, findings);
+        // A compacted checkpoint copies the same response, without its event discriminator.
+        let mut canonical = record.clone();
+        canonical
+            .as_object_mut()
+            .map(|record| record.remove("type"));
+        if let Some(previous) = responses.get_mut(response_id) {
+            if previous.record != canonical {
+                previous.usage = None;
                 findings.token(ReasonCode::AmbiguousAccounting);
             }
+            continue;
         }
-    } else if last.as_ref() == Some(&total) {
-        segment.accounting.request(&total, attribution, findings);
-    } else {
-        // Turn context does not establish the model of history preceding the first checkpoint.
-        segment.accounting.unassigned(&total, findings);
-        findings.token(ReasonCode::AmbiguousAccounting);
+        if responses.len() == MAX_IDENTITIES {
+            findings.token(ReasonCode::ResourceLimit);
+            continue;
+        }
+        let usage = Counters::parse(&record["usage"], PATHS, &mut findings);
+        let attribution = contexts.get(turn).cloned().unwrap_or_default();
+        if attribution.model.is_none() {
+            findings.reason(ReasonCode::IncompleteInput);
+        }
+        if let Some(usage) = &usage {
+            let turn_sum = turn_sums
+                .entry((turn.to_owned(), owner.to_owned(), root.to_owned()))
+                .or_insert(Counters {
+                    values: [Some(0); 6],
+                });
+            if !thread_sum.add_complete(usage) || !turn_sum.add_complete(usage) {
+                findings.token(ReasonCode::ResourceLimit);
+            }
+            for (field, sum) in [
+                ("thread_token_usage", &thread_sum),
+                ("turn_token_usage", turn_sum),
+            ] {
+                if let Some(total) = Counters::parse(&record[field], PATHS, &mut findings) {
+                    if total
+                        .values
+                        .iter()
+                        .zip(sum.values)
+                        .any(|(total, sum)| total.is_some() && *total != sum)
+                    {
+                        findings.token(ReasonCode::AmbiguousAccounting);
+                    }
+                } else {
+                    findings.token(ReasonCode::IncompleteInput);
+                }
+            }
+        }
+        responses.insert(
+            response_id.to_owned(),
+            Response {
+                record: canonical,
+                usage,
+                attribution,
+            },
+        );
     }
-    segment.latest = Some(total);
-}
-
-fn parse_usage(value: &Value, findings: &mut Findings) -> Option<Counters<6>> {
-    let usage = Counters::parse(value, PATHS, findings)?;
-    let [input, cached, output, reasoning, total, writes] = usage.values;
-    let invalid = matches!((input, cached), (Some(input), Some(cached)) if cached > input)
-        || matches!((input, writes), (Some(input), Some(writes)) if writes > input)
-        || matches!((input, cached, writes), (Some(input), Some(cached), Some(writes)) if cached.checked_add(writes).is_none_or(|sum| sum > input))
-        || matches!((output, reasoning), (Some(output), Some(reasoning)) if reasoning > output)
-        || matches!((input, output, total), (Some(input), Some(output), Some(total)) if input.checked_add(output) != Some(total));
-    if invalid {
-        findings.token(ReasonCode::InvalidData);
-        return None;
+    let mut accounting = Accounting::new(Provider::Codex, policy);
+    if legacy_usage && responses.is_empty() {
+        findings.token(ReasonCode::IncompleteInput);
     }
-    Some(usage)
+    for response in responses.into_values() {
+        if let Some(usage) = response.usage {
+            accounting.request(&usage, &response.attribution, &mut findings);
+        }
+    }
+    let tool_calls = tools.finish(diagnostics.root.is_complete(), &mut findings);
+    let snapshot = accounting.finish(tool_calls, &findings);
+    ExtractionOutcome::Usable(Box::new(ExtractedUsage {
+        snapshot: HarnessUsageSnapshot::Codex(snapshot),
+        diagnostics: findings.diagnostics(),
+    }))
 }
 
 #[cfg(test)]

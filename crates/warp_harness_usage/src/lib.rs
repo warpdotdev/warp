@@ -1,15 +1,13 @@
 //! Native, cumulative usage observations from captured third-party harness histories.
 //!
 //! The crate parses captured records, accounts for provider-specific usage semantics, and
-//! produces typed snapshots with requests, tool calls, and coverage diagnostics.
+//! produces bounded pricing aggregates with independent output, tools, and diagnostics.
 pub mod api;
 
 mod capture;
 mod claude;
 mod codex;
 mod counters;
-#[cfg(test)]
-mod test_helpers;
 mod tools;
 
 use std::collections::BTreeMap;
@@ -26,8 +24,8 @@ pub const MAX_SCOPE_LENGTH: usize = 256;
 /// Maximum number of sessions or captured subagent scopes included in one snapshot.
 pub const MAX_SCOPE_ENTRIES: usize = 64;
 const MAX_IDENTITIES: usize = 100_000;
-/// Maximum number of inference request rows retained in a snapshot.
-pub const MAX_REQUESTS: usize = 4096;
+/// Maximum number of homogeneous cost groups retained in a snapshot.
+pub const MAX_GROUPS: usize = 128;
 const MAX_TOOL_NAMES: usize = 256;
 
 /// Counts of diagnostic conditions observed while reading or accounting for a capture.
