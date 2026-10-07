@@ -20,7 +20,7 @@ fn set_credits(
     });
 }
 
-fn set_cost_in_cents(
+fn set_billed_cost_in_cents(
     app: &mut App,
     history: &warpui::ModelHandle<BlocklistAIHistoryModel>,
     id: AIConversationId,
@@ -30,7 +30,7 @@ fn set_cost_in_cents(
         history
             .conversation_mut(&id)
             .expect("conversation must be loaded")
-            .set_cost_in_cents_for_test(cost_in_cents);
+            .set_billed_cost_in_cents_for_test(cost_in_cents);
     });
 }
 
@@ -169,8 +169,8 @@ fn sums_cost_in_cents_when_all_contributors_have_a_baseline() {
 
         set_credits(&mut app, &history, orchestrator_id, 3.0);
         set_credits(&mut app, &history, child_id, 30.0);
-        set_cost_in_cents(&mut app, &history, orchestrator_id, Some(6.0));
-        set_cost_in_cents(&mut app, &history, child_id, Some(60.0));
+        set_billed_cost_in_cents(&mut app, &history, orchestrator_id, Some(6.0));
+        set_billed_cost_in_cents(&mut app, &history, child_id, Some(60.0));
 
         history.read(&app, |history, _| {
             let rollup = compute_orchestration_rollup(orchestrator_id, history)
@@ -181,7 +181,7 @@ fn sums_cost_in_cents_when_all_contributors_have_a_baseline() {
 }
 
 #[test]
-fn sums_charged_usage_cost_over_divergent_provider_cost() {
+fn sums_charged_usage_cost_over_divergent_billed_baseline() {
     App::test((), |mut app| async move {
         initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
@@ -200,10 +200,10 @@ fn sums_charged_usage_cost_over_divergent_provider_cost() {
 
         set_credits(&mut app, &history, orchestrator_id, 3.0);
         set_credits(&mut app, &history, child_id, 30.0);
-        // Deliberately diverge each contributor's provider-only baseline
-        // from its charged-usage total.
-        set_cost_in_cents(&mut app, &history, orchestrator_id, Some(6.0));
-        set_cost_in_cents(&mut app, &history, child_id, Some(60.0));
+        // Deliberately diverge each contributor's snapshot baseline from its
+        // charged-usage total.
+        set_billed_cost_in_cents(&mut app, &history, orchestrator_id, Some(6.0));
+        set_billed_cost_in_cents(&mut app, &history, child_id, Some(60.0));
         set_charged_usage(&mut app, &history, orchestrator_id, 5.0, 0);
         set_charged_usage(&mut app, &history, child_id, 50.0, 0);
 
@@ -213,7 +213,7 @@ fn sums_charged_usage_cost_over_divergent_provider_cost() {
             assert_eq!(
                 rollup.total_cost_in_cents,
                 Some(55.0),
-                "the rollup total must come from charged usage, not the divergent provider baseline"
+                "the rollup total must come from charged usage, not the divergent snapshot baseline"
             );
         });
     });
@@ -239,9 +239,9 @@ fn omits_cost_in_cents_when_any_contributor_lacks_a_baseline() {
 
         set_credits(&mut app, &history, orchestrator_id, 3.0);
         set_credits(&mut app, &history, child_id, 30.0);
-        set_cost_in_cents(&mut app, &history, orchestrator_id, Some(6.0));
+        set_billed_cost_in_cents(&mut app, &history, orchestrator_id, Some(6.0));
         // Child has no known cost baseline (e.g. a legacy conversation).
-        set_cost_in_cents(&mut app, &history, child_id, None);
+        set_billed_cost_in_cents(&mut app, &history, child_id, None);
 
         history.read(&app, |history, _| {
             let rollup = compute_orchestration_rollup(orchestrator_id, history)

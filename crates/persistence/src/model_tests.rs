@@ -94,33 +94,21 @@ fn is_restorable_accepts_empty_and_single_task_conversations() {
     assert!(conversation_with_tasks(vec![parentless_task("root", 0)]).is_restorable());
 }
 
+/// Conversations persisted before the provider cost was dropped still carry it; the blob must
+/// keep deserializing and the stale key must not be written back.
 #[test]
-fn conversation_usage_metadata_defaults_missing_provider_cost_to_unknown() {
+fn conversation_usage_metadata_ignores_a_persisted_provider_cost() {
     let metadata: ConversationUsageMetadata = serde_json::from_str(
-        r#"{"was_summarized":false,"context_window_usage":0.0,"credits_spent":0.0}"#,
+        r#"{"was_summarized":false,"context_window_usage":0.0,"credits_spent":1.5,"total_provider_cost_in_cents":3.2}"#,
     )
     .unwrap();
 
-    assert_eq!(metadata.total_provider_cost_in_cents, None);
+    assert_eq!(metadata.credits_spent, 1.5);
+    assert_eq!(metadata.total_billed_cost_in_cents, None);
     assert!(
         !serde_json::to_string(&metadata)
             .unwrap()
             .contains("total_provider_cost_in_cents")
-    );
-}
-
-#[test]
-fn conversation_usage_metadata_preserves_known_zero_provider_cost() {
-    let metadata: ConversationUsageMetadata = serde_json::from_str(
-        r#"{"was_summarized":false,"context_window_usage":0.0,"credits_spent":0.0,"total_provider_cost_in_cents":0.0}"#,
-    )
-    .unwrap();
-
-    assert_eq!(metadata.total_provider_cost_in_cents, Some(0.0));
-    assert!(
-        serde_json::to_string(&metadata)
-            .unwrap()
-            .contains("\"total_provider_cost_in_cents\":0.0")
     );
 }
 

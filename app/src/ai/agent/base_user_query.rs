@@ -99,7 +99,6 @@ impl BaseUserQuery {
     /// A query whose author cannot be established, marked with a `ServerSynthesized` origin
     /// naming `reason` so warp-server neither treats it as fresh local input nor leaves it
     /// looking like the sharer's own.
-    #[cfg(any(test, feature = "local_tty"))]
     pub(crate) fn unattributed(reason: &str) -> Self {
         Self::from_proto(api::request::input::UserQuery {
             origin: Some(api::UserQueryOrigin {

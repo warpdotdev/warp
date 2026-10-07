@@ -387,6 +387,9 @@ impl From<GqlUgcCollectionEnablementSetting> for UgcCollectionEnablementSetting 
 
 impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
     fn from(gql: &gql_usage::ConversationUsage) -> Self {
+        let usage_metadata =
+            persistence::model::ConversationUsageMetadata::from(&gql.usage_metadata);
+        let total_cost_in_cents = usage_metadata.billed_cost_in_cents();
         let persistence::model::ConversationUsageMetadata {
             credits_spent,
             platform_credits_spent,
@@ -395,7 +398,7 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
             context_window_usage,
             context_window_segments,
             ..
-        } = (&gql.usage_metadata).into();
+        } = usage_metadata;
         ConversationUsageInfo {
             credits_spent,
             platform_credits_spent,
@@ -410,9 +413,9 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
             commands_executed: tool.run_command_stats.commands_executed,
             // GAP: the settings usage-history surface sources this view from
             // a GraphQL query that does not yet expose a token count or
-            // per-category cost breakdown (Milestone 3 / vertical B).
+            // per-block breakdown (Milestone 3 / vertical B).
             total_tokens: None,
-            total_cost_in_cents: None,
+            total_cost_in_cents,
             tokens_for_last_block: None,
             cost_in_cents_for_last_block: None,
         }

@@ -659,7 +659,7 @@ pub enum TuiUsageDisplayMode {
     /// Credits spent — the same number the GUI's usage footer shows (default).
     #[default]
     Credits,
-    /// Provider dollar cost.
+    /// Billed dollar cost.
     Cost,
 }
 
@@ -671,7 +671,7 @@ settings::macros::implement_setting_for_enum!(
     surface: settings::SettingSurfaces::TUI,
     private: false,
     toml_path: "agents.usage_display_mode",
-    description: "Which unit the usage entry displays in Warp Agent CLI: credits or provider cost.",
+    description: "Which unit the usage entry displays in Warp Agent CLI: credits or dollars.",
 );
 
 /// Unit for GUI usage and spend displays.

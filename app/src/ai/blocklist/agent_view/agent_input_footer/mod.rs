@@ -58,7 +58,7 @@ use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHi
 use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::usage::icon_for_context_window_usage;
 use crate::ai::blocklist::usage::usage_popover_view::{
-    UsagePopoverEvent, UsagePopoverView, conversation_total_text,
+    UsagePopoverEvent, UsagePopoverView, conversation_total_text, conversation_usage_display_unit,
 };
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
@@ -119,7 +119,7 @@ use crate::workspace::ToastStack;
 #[cfg(not(target_family = "wasm"))]
 use crate::workspace::WorkspaceAction;
 use crate::workspace::view::TOGGLE_PROJECT_EXPLORER_BINDING_NAME;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 const ENABLE_NLD_TOOLTIP: &str = "Enable terminal command autodetection";
 const DISABLE_NLD_TOOLTIP: &str = "Disable terminal command autodetection";
@@ -801,7 +801,14 @@ impl AgentInputFooter {
         ctx.subscribe_to_model(&NetworkStatus::handle(ctx), |_, _, _, ctx| {
             ctx.notify();
         });
-        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |_, _, _, ctx| {
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            // The tier carries the unit the usage tooltip renders in.
+            if matches!(
+                event,
+                UserWorkspacesEvent::TeamsChanged | UserWorkspacesEvent::CurrentWorkspaceChanged
+            ) {
+                me.update_usage_button(ctx);
+            }
             ctx.notify();
         });
         ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |_, _, _, ctx| {
@@ -2239,7 +2246,7 @@ impl AgentInputFooter {
                     "Conversation usage: {}",
                     conversation_total_text(
                         conversation,
-                        AISettings::as_ref(ctx).usage_display_unit,
+                        conversation_usage_display_unit(conversation, ctx),
                     )
                 )
             })

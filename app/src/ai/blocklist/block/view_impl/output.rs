@@ -104,11 +104,12 @@ use crate::ai::blocklist::inline_action::web_search::WebSearchView;
 use crate::ai::blocklist::keyboard_navigable_buttons::KeyboardNavigableButtons;
 use crate::ai::blocklist::secret_redaction::SecretRedactionState;
 use crate::ai::blocklist::usage::request_metadata_turn_view::{
-    RequestMetadataTurnView, turn_panel_tooltip_text_for_data,
+    RequestMetadataTurnView, turn_panel_tooltip_text_for_data, turn_panel_usage_display_unit,
 };
 use crate::ai::blocklist::usage::rollup::compute_orchestration_rollup;
 use crate::ai::blocklist::view_util::{
-    FAILED_OUTPUT_USAGE_NOTICE_TEXT, format_usage, should_show_failed_output_usage_notice,
+    FAILED_OUTPUT_USAGE_NOTICE_TEXT, effective_usage_unit, format_usage,
+    should_show_failed_output_usage_notice,
 };
 use crate::ai::blocklist::{AIBlockResponseRating, BlocklistAIActionModel, SuggestionChipView};
 use crate::ai::paths::shell_native_absolute_path;
@@ -119,7 +120,6 @@ use crate::ai::skills::{
 use crate::appearance::Appearance;
 use crate::code::diff_viewer::DisplayMode;
 use crate::code::editor_management::CodeSource;
-use crate::settings::AISettings;
 use crate::settings_view::SettingsSection;
 use crate::terminal::ShellLaunchData;
 #[cfg(not(target_family = "wasm"))]
@@ -3747,7 +3747,7 @@ fn render_turn_panel_button(
     let appearance = Appearance::as_ref(app);
     let ui_builder = appearance.ui_builder().clone();
     let tooltip_text =
-        turn_panel_tooltip_text_for_data(data, AISettings::as_ref(app).usage_display_unit);
+        turn_panel_tooltip_text_for_data(data, turn_panel_usage_display_unit(data, app));
 
     icon_button(
         appearance,
@@ -3824,13 +3824,12 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
         Icon::ChevronRight
     };
 
-    let usage_display_unit = AISettings::as_ref(app).usage_display_unit;
     let total_credits_spent = headline_credits;
-    let mut usage_text = format_usage(
+    let mut usage_text = usage_pill_text(
         total_credits_spent,
         headline_tokens,
         headline_cost_in_cents,
-        usage_display_unit,
+        app,
     );
     if let Some(credits_spent_for_last_block) = conversation.credits_spent_for_last_block() {
         // Only show the credits spent for the last block if it is different from the total credits spent
@@ -3845,11 +3844,11 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
             // bound to the orchestrator's own last block, same as
             // `credits_spent_for_last_block` above.
             let last_block_charged_usage = conversation.charged_usage_for_last_block();
-            let last_block_text = format_usage(
+            let last_block_text = usage_pill_text(
                 credits_spent_for_last_block,
                 last_block_charged_usage.map(|usage| usage.total_tokens()),
                 last_block_charged_usage.map(|usage| usage.total_cost_in_cents()),
-                usage_display_unit,
+                app,
             );
             usage_text = format!("{usage_text} (+{last_block_text})");
         }
@@ -3942,6 +3941,21 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
     })
     .with_cursor(Cursor::PointingHand)
     .finish()
+}
+
+/// One figure of the block footer's usage pill, in the unit resolved for it.
+fn usage_pill_text(
+    credits: f32,
+    tokens: Option<u32>,
+    cost_in_cents: Option<f32>,
+    app: &AppContext,
+) -> String {
+    format_usage(
+        credits,
+        tokens,
+        cost_in_cents,
+        effective_usage_unit(cost_in_cents, app),
+    )
 }
 
 pub fn action_icon<V: View>(

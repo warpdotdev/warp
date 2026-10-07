@@ -26,7 +26,6 @@ query GetConversationUsage(
             contextWindowUsage
             creditsSpent
             platformCreditsSpent
-            totalProviderCostInCents
             totalBilledCostInCents
             totalPlatformCostInCents
             summarized
@@ -120,7 +119,6 @@ pub struct ConversationUsageMetadata {
     pub context_window_segments: Vec<ContextWindowSegment>,
     pub credits_spent: f64,
     pub platform_credits_spent: f64,
-    pub total_provider_cost_in_cents: Option<f64>,
     pub total_billed_cost_in_cents: Option<f64>,
     pub total_platform_cost_in_cents: Option<f64>,
     pub summarized: bool,
@@ -211,7 +209,6 @@ impl From<&ConversationUsageMetadata> for persistence::model::ConversationUsageM
             context_window_usage: gql.context_window_usage as f32,
             credits_spent: gql.credits_spent as f32,
             platform_credits_spent: gql.platform_credits_spent as f32,
-            total_provider_cost_in_cents: gql.total_provider_cost_in_cents.map(|cost| cost as f32),
             total_billed_cost_in_cents: total_billed_cost_in_cents(
                 gql.total_billed_cost_in_cents,
                 gql.total_platform_cost_in_cents,

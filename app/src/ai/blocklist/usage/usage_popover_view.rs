@@ -28,7 +28,7 @@ use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryEvent;
 use crate::ai::blocklist::usage::colors::chart_color;
-use crate::ai::blocklist::view_util::format_credits;
+use crate::ai::blocklist::view_util::{effective_usage_unit, format_credits, format_dollars};
 use crate::ai::llms::LLMPreferences;
 use crate::appearance::Appearance;
 use crate::persistence::model::{
@@ -927,7 +927,6 @@ impl View for UsagePopoverView {
         self.render_count_for_test
             .set(self.render_count_for_test.get() + 1);
         let appearance = Appearance::as_ref(app);
-        let usage_display_unit = AISettings::as_ref(app).usage_display_unit;
         let theme = appearance.theme();
         let history = BlocklistAIHistoryModel::as_ref(app);
         let Some(conversation_id) = self.conversation_id else {
@@ -936,6 +935,7 @@ impl View for UsagePopoverView {
         let Some(conversation) = history.conversation(&conversation_id) else {
             return Empty::new().finish();
         };
+        let usage_display_unit = conversation_usage_display_unit(conversation, app);
         let llm_preferences = LLMPreferences::as_ref(app);
         let custom_endpoint_label =
             |config_key: &str| llm_preferences.custom_endpoint_usage_display_label(config_key);
@@ -1611,47 +1611,44 @@ fn conversation_charged_totals(conversation: &AIConversation) -> Option<ChargedU
     )
 }
 
+/// The conversation's billed total in US cents: [`conversation_charged_totals`] when known,
+/// otherwise the server's cumulative billed snapshot. `None` when neither is known.
+pub(crate) fn conversation_total_cost_in_cents(conversation: &AIConversation) -> Option<f32> {
+    conversation_charged_totals(conversation)
+        .map(|totals| totals.total_cost_in_cents())
+        .or_else(|| conversation.usage_totals().total_cost_in_cents())
+}
+
+/// The unit the conversation's usage figures display in (see [`effective_usage_unit`]).
+pub(crate) fn conversation_usage_display_unit(
+    conversation: &AIConversation,
+    app: &AppContext,
+) -> UsageDisplayUnit {
+    effective_usage_unit(conversation_total_cost_in_cents(conversation), app)
+}
+
 /// The conversation-level total: [`conversation_charged_totals`] when known,
-/// falling back to the server-seeded provider cost for dollars and to the
+/// falling back to the server's billed snapshot for dollars and to the
 /// metadata's cumulative `credits_spent` for credits. A conversation with
 /// neither renders an em dash rather than a fake zero.
 pub(crate) fn conversation_total_text(
     conversation: &AIConversation,
     usage_display_unit: UsageDisplayUnit,
 ) -> String {
-    let charged_totals = conversation_charged_totals(conversation);
-    let usage_totals = conversation.usage_totals();
     match usage_display_unit {
-        UsageDisplayUnit::Dollars => charged_totals
-            .map(|totals| totals.total_cost_in_cents())
-            .or(usage_totals.total_cost_in_cents())
+        UsageDisplayUnit::Dollars => conversation_total_cost_in_cents(conversation)
             .map(format_dollars)
             .unwrap_or_else(|| EM_DASH.to_string()),
-        UsageDisplayUnit::Credits => charged_totals
+        UsageDisplayUnit::Credits => conversation_charged_totals(conversation)
             .map(|totals| totals.total_cost_in_credits())
             // `credits_spent` is a plain float, so zero is indistinguishable from
             // "never reported"; only a positive figure counts as known.
-            .or_else(|| (usage_totals.credits_spent > 0.0).then_some(usage_totals.credits_spent))
+            .or_else(|| {
+                let credits_spent = conversation.usage_totals().credits_spent;
+                (credits_spent > 0.0).then_some(credits_spent)
+            })
             .map(format_credits)
             .unwrap_or_else(|| EM_DASH.to_string()),
-    }
-}
-
-/// Formats a US-cent amount as dollars. A non-zero amount that would round to
-/// `$0.00` is shown as `<$0.01`, since rounding it to zero would misleadingly
-/// suggest no cost was incurred.
-fn format_dollars(cost_in_cents: f32) -> String {
-    // Summing float costs can produce `-0.0`, which would print as `$-0.00`.
-    let cost_in_cents = if cost_in_cents == 0.0 {
-        0.0
-    } else {
-        cost_in_cents
-    };
-    let dollars = cost_in_cents / 100.;
-    if cost_in_cents > 0.0 && dollars < 0.01 {
-        "<$0.01".to_string()
-    } else {
-        format!("${dollars:.2}")
     }
 }
 

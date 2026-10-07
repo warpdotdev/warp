@@ -1790,11 +1790,6 @@ pub struct ConversationUsageMetadata {
     pub credits_spent: f32,
     #[serde(default)]
     pub platform_credits_spent: f32,
-    /// Server-authoritative cumulative provider cost in US cents. `None`
-    /// means the server did not provide a historical cost (for example, a
-    /// legacy conversation); it must not be treated as numeric zero.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total_provider_cost_in_cents: Option<f32>,
     /// Server-authoritative cumulative cost billed to the customer in US cents (inference at
     /// the customer's own price plus platform cost), for conversations whose charges arrived
     /// via GraphQL rather than the stream. `None` when the server could not establish a

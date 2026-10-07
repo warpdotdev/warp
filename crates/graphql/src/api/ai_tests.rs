@@ -45,7 +45,6 @@ fn conversion_populates_token_usage_and_tool_usage_metadata() {
         }],
         credits_spent: 12.5,
         platform_credits_spent: 2.5,
-        total_provider_cost_in_cents: Some(3.2),
         total_billed_cost_in_cents: Some(6.0),
         total_platform_cost_in_cents: Some(0.5),
         summarized: true,
@@ -80,7 +79,6 @@ fn conversion_populates_token_usage_and_tool_usage_metadata() {
     assert_eq!(converted.context_window_usage, 0.42);
     assert_eq!(converted.credits_spent, 12.5);
     assert_eq!(converted.platform_credits_spent, 2.5);
-    assert_eq!(converted.total_provider_cost_in_cents, Some(3.2));
     assert_eq!(converted.total_billed_cost_in_cents, Some(6.5));
     assert_eq!(converted.credits_spent_for_last_block, None);
 
@@ -131,7 +129,6 @@ fn conversion_merges_warp_and_byok_usage_for_same_model() {
         context_window_segments: vec![],
         credits_spent: 0.0,
         platform_credits_spent: 0.0,
-        total_provider_cost_in_cents: None,
         total_billed_cost_in_cents: None,
         total_platform_cost_in_cents: Some(0.5),
         summarized: false,
