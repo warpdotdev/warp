@@ -19,6 +19,7 @@ use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::lrc_activity::{LrcActivityMonitor, SAMPLE_INTERVAL};
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
+use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentActionId, AIAgentActionResultType, AIAgentActionType, AIAgentPtyWriteMode, LrcActivity,
     ReadShellCommandOutputResult, RequestCommandOutputResult, ShellCommandDelay, ShellCommandError,
@@ -81,6 +82,18 @@ impl ShellCommandExecutor {
             control_handback_sender: None,
             activity_monitor: Arc::new(LrcActivityMonitor::new()),
         }
+    }
+
+    pub(crate) fn interrupt_for_injected_followup(
+        &self,
+        conversation_id: AIConversationId,
+        block_id: BlockId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        ctx.emit(ShellCommandExecutorEvent::InterruptForInjectedFollowup {
+            conversation_id,
+            block_id,
+        });
     }
 
     /// Begins collecting liveness signals for the command this action will
@@ -283,16 +296,6 @@ impl ShellCommandExecutor {
                 wait_until_completion,
                 ..
             } => {
-                if model
-                    .block_list()
-                    .active_block()
-                    .is_active_and_long_running()
-                {
-                    // If there is an active block, we can't execute another command.
-                    return ActionExecution::Sync(AIAgentActionResultType::RequestCommandOutput(
-                        RequestCommandOutputResult::CancelledBeforeExecution,
-                    ));
-                }
                 // If another conversation has taken over the agent view since this command
                 // was requested, cancel instead of executing.
                 let is_displaced_by_other_conversation = model
@@ -302,6 +305,19 @@ impl ShellCommandExecutor {
                 if is_displaced_by_other_conversation {
                     return ActionExecution::Sync(AIAgentActionResultType::RequestCommandOutput(
                         RequestCommandOutputResult::CancelledBeforeExecution,
+                    ));
+                }
+                if model
+                    .block_list()
+                    .active_block()
+                    .is_active_and_long_running()
+                {
+                    // If there is an active block, we can't execute another command.
+                    return ActionExecution::Sync(AIAgentActionResultType::RequestCommandOutput(
+                        RequestCommandOutputResult::TerminalBusy {
+                            command: command.clone(),
+                            block_id: model.block_list().active_block().id().clone(),
+                        },
                     ));
                 }
                 // If the command might use pager and can't be interacted with,
@@ -1014,6 +1030,10 @@ pub enum ShellCommandExecutorEvent {
         mode: AIAgentPtyWriteMode,
     },
     CancelExecution,
+    InterruptForInjectedFollowup {
+        conversation_id: AIConversationId,
+        block_id: BlockId,
+    },
     /// Emitted when the agent requests to transfer control of a long-running command to the user.
     TransferControlToUser {
         action_id: AIAgentActionId,

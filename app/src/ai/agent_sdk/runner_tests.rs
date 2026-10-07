@@ -2,15 +2,17 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use warp_cli::agent::OutputFormat;
-use warp_cli::runner::UpdateRunnerArgs;
+use warp_cli::runner::{RunnerMacosVersionArg, UpdateRunnerArgs};
 use warp_cli::scope::{ObjectScope, TeamSelection};
 use warp_graphql::object::{Space, SpaceType};
-use warp_graphql::queries::get_runners::{Runner, RunnerConfig, RunnerOs};
+use warp_graphql::queries::get_runners::{
+    MacOsConfig, Runner, RunnerConfig, RunnerMacOsVersion, RunnerOs,
+};
 use warpui::App;
 
 use super::{
-    RunnerArch, RunnerArchArg, RunnerOsArg, confirm_delete, execute_update, merge_instance_shape,
-    resolve_arch, resolve_create_request_scope, resolve_updated_name,
+    RunnerArch, RunnerArchArg, RunnerOsArg, build_update_input, confirm_delete, execute_update,
+    merge_instance_shape, resolve_arch, resolve_create_request_scope, resolve_updated_name,
 };
 use crate::server::ids::ServerId;
 use crate::server::server_api::factory::{MockFactoryClient, UpsertedRunner};
@@ -277,6 +279,106 @@ fn merge_instance_shape_updates_dimensions_independently() {
 fn merge_instance_shape_errors_on_partial_shape_without_existing() {
     assert!(merge_instance_shape(Some(8), None, None).is_err());
     assert!(merge_instance_shape(None, Some(16), None).is_err());
+}
+
+fn config_with(mutate: impl FnOnce(&mut RunnerConfig)) -> RunnerConfig {
+    let mut config = runner("runner-1", "runner-name").config;
+    mutate(&mut config);
+    config
+}
+
+fn unrecognized_os_config() -> RunnerConfig {
+    config_with(|config| config.os = RunnerOs::Unknown)
+}
+
+fn unrecognized_arch_config() -> RunnerConfig {
+    config_with(|config| config.arch = RunnerArch::Unknown)
+}
+
+fn unrecognized_macos_version_config() -> RunnerConfig {
+    config_with(|config| {
+        config.os = RunnerOs::Macos;
+        config.mac = Some(MacOsConfig {
+            version: Some(RunnerMacOsVersion::Unknown),
+        });
+    })
+}
+
+fn assert_update_refused(existing: &RunnerConfig, args: &UpdateRunnerArgs, field: &str) {
+    let error = build_update_input(args, existing).expect_err("the update should be refused");
+    assert!(error.to_string().contains(field), "{error}");
+}
+
+#[test]
+fn update_refuses_to_resend_an_unrecognized_os() {
+    let args = update_args(Some("runner-1"), None);
+
+    assert_update_refused(&unrecognized_os_config(), &args, "OS");
+}
+
+#[test]
+fn update_accepts_an_explicit_os_for_a_runner_with_an_unrecognized_one() {
+    let args = UpdateRunnerArgs {
+        os: Some(RunnerOsArg::Linux),
+        ..update_args(Some("runner-1"), None)
+    };
+
+    let input = build_update_input(&args, &unrecognized_os_config()).unwrap();
+
+    assert_eq!(input.os, Some(RunnerOs::Linux));
+}
+
+#[test]
+fn update_refuses_to_resend_an_unrecognized_architecture() {
+    let args = update_args(Some("runner-1"), None);
+
+    assert_update_refused(&unrecognized_arch_config(), &args, "architecture");
+}
+
+#[test]
+fn update_accepts_an_explicit_architecture_for_a_runner_with_an_unrecognized_one() {
+    let args = UpdateRunnerArgs {
+        arch: Some(RunnerArchArg::X8664),
+        ..update_args(Some("runner-1"), None)
+    };
+
+    let input = build_update_input(&args, &unrecognized_arch_config()).unwrap();
+
+    assert_eq!(input.arch, Some(RunnerArch::X8664));
+}
+
+#[test]
+fn update_refuses_to_resend_an_unrecognized_macos_version() {
+    let args = update_args(Some("runner-1"), None);
+
+    assert_update_refused(&unrecognized_macos_version_config(), &args, "macOS version");
+}
+
+#[test]
+fn update_accepts_an_explicit_macos_version_for_a_runner_with_an_unrecognized_one() {
+    let args = UpdateRunnerArgs {
+        macos_version: Some(RunnerMacosVersionArg::Macos26),
+        ..update_args(Some("runner-1"), None)
+    };
+
+    let input = build_update_input(&args, &unrecognized_macos_version_config()).unwrap();
+
+    assert_eq!(
+        input.mac.and_then(|mac| mac.version),
+        Some(RunnerMacOsVersion::Macos26)
+    );
+}
+
+#[test]
+fn update_drops_an_unrecognized_macos_version_when_switching_to_linux() {
+    let args = UpdateRunnerArgs {
+        os: Some(RunnerOsArg::Linux),
+        ..update_args(Some("runner-1"), None)
+    };
+
+    let input = build_update_input(&args, &unrecognized_macos_version_config()).unwrap();
+
+    assert!(input.mac.is_none());
 }
 
 #[test]

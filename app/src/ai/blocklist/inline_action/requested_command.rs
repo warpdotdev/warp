@@ -778,6 +778,31 @@ impl RequestedCommandView {
     fn maybe_render_footer(&self, app: &AppContext) -> Option<Box<dyn Element>> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
+        if let Some(result) = self
+            .action_model
+            .as_ref(app)
+            .get_action_result(&self.action_id)
+            && let AIAgentActionResultType::RequestCommandOutput(
+                result @ RequestCommandOutputResult::TerminalBusy { .. },
+            ) = &result.result
+        {
+            return Some(
+                Container::new(
+                    Text::new(
+                        result.to_string(),
+                        appearance.ui_font_family(),
+                        appearance.ui_font_size(),
+                    )
+                    .with_color(blended_colors::text_sub(theme, theme.surface_1()))
+                    .finish(),
+                )
+                .with_horizontal_padding(INLINE_ACTION_HORIZONTAL_PADDING)
+                .with_vertical_padding(4.)
+                .with_background(theme.surface_1())
+                .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(7.)))
+                .finish(),
+            );
+        }
 
         let citations_padding = 4.;
         let citations_font_size = appearance.monospace_font_size() - 2.;
@@ -1428,7 +1453,8 @@ impl RequestedCommandView {
                                 // All completed commands are expandable (including interrupted ones)
                                 RequestCommandOutputResult::Completed { .. } => true,
                                 // Cancelled before execution are not expandable
-                                RequestCommandOutputResult::CancelledBeforeExecution => false,
+                                RequestCommandOutputResult::CancelledBeforeExecution
+                                | RequestCommandOutputResult::TerminalBusy { .. } => false,
                                 _ => result.result.is_successful() || result.result.is_failed(),
                             }
                         }
