@@ -172,11 +172,11 @@ fn workspace_member_usage_conversion_preserves_billed_cents() {
 }
 
 #[test]
-fn tier_conversion_preserves_billed_in_dollars() {
-    let gql_tier = |billed_in_dollars: bool| GqlTier {
+fn tier_conversion_bills_in_dollars_only_for_a_cents_charge_unit() {
+    let gql_tier = |charge_unit: GqlChargeUnit| GqlTier {
         name: "Build".to_string(),
         description: "Build tier".to_string(),
-        billed_in_dollars,
+        charge_unit,
         warp_ai_policy: None,
         team_size_policy: None,
         shared_notebooks_policy: None,
@@ -199,8 +199,10 @@ fn tier_conversion_preserves_billed_in_dollars() {
         usage_visibility_policy: None,
     };
 
-    assert!(Tier::from(gql_tier(true)).billed_in_dollars);
-    assert!(!Tier::from(gql_tier(false)).billed_in_dollars);
+    assert!(Tier::from(gql_tier(GqlChargeUnit::Cents)).billed_in_dollars);
+    assert!(!Tier::from(gql_tier(GqlChargeUnit::Credits)).billed_in_dollars);
+    // A unit from a newer server falls back to the credits display.
+    assert!(!Tier::from(gql_tier(GqlChargeUnit::Other)).billed_in_dollars);
 }
 
 #[test]

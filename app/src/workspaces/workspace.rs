@@ -545,9 +545,9 @@ pub enum HostEnablementSetting {
 pub struct Tier {
     pub name: String,
     pub description: String,
-    /// Whether AI usage on this tier is billed in dollars rather than credits. The server's
-    /// rollout signal for dollars-first displays; the credit figures stay authoritative while it
-    /// is false, even when a response also carries cents.
+    /// Whether the tier's `chargeUnit` is cents, i.e. the server bills its AI usage in dollars
+    /// rather than credits. The rollout signal for dollars-first displays; the credit figures
+    /// stay authoritative while it is false, even when a response also carries cents.
     pub billed_in_dollars: bool,
     pub warp_ai_policy: Option<WarpAiPolicy>,
     pub workspace_size_policy: Option<WorkspaceSizePolicy>,

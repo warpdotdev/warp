@@ -7,7 +7,8 @@ use regex::Regex;
 use settings::{PrivatePreferences, PublicPreferences};
 use warp_graphql::billing::{
     BillingMetadata as GqlBillingMetadata, BonusGrantsInfo as GqlBonusGrantsInfo,
-    CustomerType as GqlCustomerType, DelinquencyStatus as GqlDelinquencyStatus,
+    ChargeUnit as GqlChargeUnit, CustomerType as GqlCustomerType,
+    DelinquencyStatus as GqlDelinquencyStatus,
     PurchaseAddOnCreditsPolicy as GqlPurchaseAddOnCreditsPolicy, Tier as GqlTier,
 };
 use warp_graphql::queries::get_workspaces_metadata_for_user::{
@@ -4130,7 +4131,7 @@ fn gql_tier(purchase_policy: Option<GqlPurchaseAddOnCreditsPolicy>) -> GqlTier {
     GqlTier {
         name: "Free".to_string(),
         description: "Free tier".to_string(),
-        billed_in_dollars: false,
+        charge_unit: GqlChargeUnit::Credits,
         warp_ai_policy: None,
         team_size_policy: None,
         shared_notebooks_policy: None,
@@ -4546,7 +4547,7 @@ fn gql_user(
 ) -> GqlUser {
     gql_user_with_tier(
         user_purchase_policy.map(|policy| UserPurchasePolicyTier {
-            billed_in_dollars: false,
+            charge_unit: GqlChargeUnit::Credits,
             purchase_add_on_credits_policy: Some(policy),
         }),
         workspaces,
@@ -4792,7 +4793,7 @@ fn test_billing_unit_falls_back_to_the_user_level_tier_for_teamless_users() {
         let response = workspaces_metadata_response_from_gql(
             gql_user_with_tier(
                 Some(UserPurchasePolicyTier {
-                    billed_in_dollars: true,
+                    charge_unit: GqlChargeUnit::Cents,
                     purchase_add_on_credits_policy: None,
                 }),
                 vec![gql_workspace(PLACEHOLDER_WORKSPACE_UID, None)],
@@ -4820,7 +4821,7 @@ fn test_workspace_tier_decides_the_billing_unit_over_the_user_level_tier() {
         register_ai_usage_model(&mut app);
 
         let mut dollars_workspace = gql_workspace("workspace_uid123456789", None);
-        dollars_workspace.billing_metadata.tier.billed_in_dollars = true;
+        dollars_workspace.billing_metadata.tier.charge_unit = GqlChargeUnit::Cents;
         apply_workspaces_metadata(
             &mut app,
             workspaces_metadata_response_from_gql(
@@ -4840,7 +4841,7 @@ fn test_workspace_tier_decides_the_billing_unit_over_the_user_level_tier() {
             workspaces_metadata_response_from_gql(
                 gql_user_with_tier(
                     Some(UserPurchasePolicyTier {
-                        billed_in_dollars: true,
+                        charge_unit: GqlChargeUnit::Cents,
                         purchase_add_on_credits_policy: None,
                     }),
                     vec![gql_workspace("workspace_uid123456789", None)],
