@@ -3,7 +3,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use build_cache::metadata::{CacheMetadataError, CacheUsage};
+use build_cache::metadata::CacheUsage;
 use build_cache::{CacheSetupError, CacheSetupReport, RepoIdentity, RepositoryCacheSource};
 use cloud_object_models::SourceRepo;
 use warp_completer::completer::CommandExitStatus;
@@ -82,10 +82,10 @@ pub(super) async fn setup_caches(
     )
     .await;
 
-    if let Err(error) = report
-        .cache_usage(&cache_root)
-        .and_then(|usage| record_cache_usage(&cache_root, usage, additional_usage))
-    {
+    if let Err(error) = report.cache_usage(&cache_root).and_then(|mut usage| {
+        usage.extend(additional_usage);
+        build_cache::metadata::write_cache_metadata(&cache_root, usage)
+    }) {
         log::warn!("Namespace cache usage metadata was not updated: {error}");
     }
     let mut degraded = report_degradations(&report);
@@ -119,14 +119,6 @@ pub(super) async fn setup_caches(
     }
 }
 
-fn record_cache_usage(
-    cache_root: &Path,
-    mut usage: Vec<CacheUsage>,
-    additional_usage: Vec<CacheUsage>,
-) -> Result<(), CacheMetadataError> {
-    usage.extend(additional_usage);
-    build_cache::metadata::write_cache_metadata(cache_root, usage)
-}
 /// Report any cache setup failures to Sentry.
 fn report_degradations(report: &CacheSetupReport) -> bool {
     let mut degraded = false;

@@ -26,9 +26,9 @@ use warpui::{ModelContext, ModelSpawner, SingletonEntity};
 #[cfg(feature = "local_fs")]
 use super::cache_setup;
 use super::environment_checkout_protocol::{
-    CheckoutBatch, CheckoutFailureKind, CheckoutFailureReport, CheckoutRequest,
-    CloneFailureIdentityDiagnostics, parse_resolved_head_sha, sanitize_git_author_name,
-    sanitize_git_credential_username,
+    CheckoutBatch, CheckoutFailureKind, CheckoutReport, CheckoutRequest,
+    CloneFailureIdentityDiagnostics, ResolvedHeads, parse_resolved_head_sha,
+    sanitize_git_author_name, sanitize_git_credential_username,
 };
 use super::terminal::TerminalDriver;
 use super::{AgentDriverError, Harness, failure_output, git_credentials};
@@ -205,12 +205,11 @@ fn checkout_path(working_dir: &Path, repo_name: &str) -> String {
 fn environment_snapshot(
     repos: &[RepositoryCloneRequest],
     working_dir: &Path,
-    resolved_heads: &[Option<String>],
+    resolved_heads: &ResolvedHeads,
 ) -> EnvironmentSnapshot {
     let repositories = repos
         .iter()
-        .zip(resolved_heads)
-        .filter_map(|(request, resolved_head_sha)| {
+        .filter_map(|request| {
             Some(RepositoryRevision {
                 code_forge: request.remote.code_forge?,
                 repo_owner: request.remote.owner.clone(),
@@ -221,7 +220,7 @@ fn environment_snapshot(
                     .as_ref()
                     .map(RepositoryHeadRef::value)
                     .map(str::to_string),
-                resolved_head_sha: resolved_head_sha.clone()?,
+                resolved_head_sha: resolved_heads.get(&request.checkout_name)?.clone(),
             })
         })
         .collect::<Vec<_>>();
@@ -910,11 +909,11 @@ pub(super) async fn clone_repos(
     .map(|_| ())
 }
 
+/// Construct a command line for the Git checkout helper, executable in the driver's terminal session.
 fn build_checkout_helper_command(
     executable: &Path,
     requests_file: &Path,
-    failure_report: &Path,
-    resolved_heads_report: Option<&Path>,
+    report_file: &Path,
     remove_origins_only: bool,
     shell_type: ShellType,
 ) -> String {
@@ -929,33 +928,36 @@ fn build_checkout_helper_command(
     } else {
         ""
     };
-    let heads = resolved_heads_report
-        .map(|path| format!(" --resolved-heads-report {}", quote(path)))
-        .unwrap_or_default();
     let operation = if remove_origins_only {
         " --remove-origins-only"
     } else {
         ""
     };
     format!(
-        "{prefix}{} environment-checkout --requests-file {} --failure-report {}{heads}{operation}",
+        "{prefix}{} environment-checkout --requests-file {} --report-file {}{operation}",
         quote(executable),
         quote(requests_file),
-        quote(failure_report)
+        quote(report_file)
     )
 }
 
-fn read_checkout_failures(path: &Path, request_count: usize) -> Option<CheckoutFailureReport> {
+/// Take the per-checkout report written by the Git helper subcommand, discarding one that does
+/// not describe the batch that was sent.
+fn read_checkout_report(path: &Path, request_count: usize) -> Option<CheckoutReport> {
     let bytes = std::fs::read(path);
     let _ = std::fs::remove_file(path);
-    let mut report: CheckoutFailureReport = serde_json::from_slice(&bytes.ok()?).ok()?;
+    let mut report: CheckoutReport = serde_json::from_slice(&bytes.ok()?).ok()?;
     let mut indexes = HashSet::new();
-    if report.failures.is_empty()
-        || !report.failures.iter().all(|failure| {
-            failure.request_index < request_count && indexes.insert(failure.request_index)
-        })
-    {
+    if !report.outcomes.iter().all(|outcome| {
+        outcome.request_index < request_count && indexes.insert(outcome.request_index)
+    }) {
         return None;
+    }
+    for outcome in &mut report.outcomes {
+        outcome.resolved_head = outcome
+            .resolved_head
+            .as_deref()
+            .and_then(parse_resolved_head_sha);
     }
     if let Some(identity) = &mut report.identity_diagnostics {
         identity.author = identity
@@ -978,21 +980,45 @@ fn read_checkout_failures(path: &Path, request_count: usize) -> Option<CheckoutF
     Some(report)
 }
 
-fn read_resolved_heads(path: &Path, request_count: usize) -> Vec<Option<String>> {
-    let bytes = std::fs::read(path);
-    let _ = std::fs::remove_file(path);
-    let heads = bytes
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Vec<Option<String>>>(&bytes).ok());
-    match heads {
-        Some(heads) if heads.len() == request_count => heads
-            .into_iter()
-            .map(|head| head.as_deref().and_then(parse_resolved_head_sha))
-            .collect(),
-        _ => vec![None; request_count],
+/// The HEAD commits the report resolved, keyed by checkout name. Checkouts whose HEAD the helper
+/// could not resolve are absent.
+fn reported_resolved_heads(report: &CheckoutReport, batch: &CheckoutBatch) -> ResolvedHeads {
+    report
+        .outcomes
+        .iter()
+        .filter_map(|outcome| {
+            let request = batch.repositories.get(outcome.request_index)?;
+            Some((
+                request.checkout_name.clone(),
+                outcome.resolved_head.clone()?,
+            ))
+        })
+        .collect()
+}
+
+/// Logs how each checkout in the batch went, and how long it took.
+fn log_checkout_timing(report: &CheckoutReport, batch: &CheckoutBatch) {
+    for outcome in &report.outcomes {
+        let Some(request) = batch.repositories.get(outcome.request_index) else {
+            continue;
+        };
+        let status = match outcome.failure {
+            Some(kind) => format!("{kind:?} failure"),
+            None => "succeeded".to_owned(),
+        };
+        safe_info!(
+            safe: ("Environment checkout finished"),
+            full: (
+                "Environment checkout {}: {status} in {}ms",
+                request.checkout_name,
+                outcome.duration_ms
+            )
+        );
     }
 }
 
+/// Build batch configuration for the Git checkout helper to clone the requested repositories
+/// into `working_dir`.
 fn checkout_requests_batch(
     repos: &[RepositoryCloneRequest],
     working_dir: &Path,
@@ -1030,8 +1056,7 @@ fn checkout_requests_batch(
 
 struct CheckoutHelperResult {
     command_result: ExecutedCommand,
-    failure_report: Option<CheckoutFailureReport>,
-    resolved_heads: Vec<Option<String>>,
+    report: Option<CheckoutReport>,
 }
 
 async fn execute_checkout_helper(
@@ -1043,8 +1068,7 @@ async fn execute_checkout_helper(
         reason: "could not create private checkout request directory",
     })?;
     let requests_file = directory.path().join("requests.json");
-    let failure_report = directory.path().join("failures.json");
-    let resolved_heads_report = (!remove_origins_only).then(|| directory.path().join("heads.json"));
+    let report_file = directory.path().join("report.json");
     let bytes = serde_json::to_vec(batch).map_err(|_| PrepareEnvironmentError::CheckoutHelper {
         reason: "could not serialize checkout requests",
     })?;
@@ -1058,23 +1082,20 @@ async fn execute_checkout_helper(
     let command = build_checkout_helper_command(
         &executable,
         &requests_file,
-        &failure_report,
-        resolved_heads_report.as_deref(),
+        &report_file,
         remove_origins_only,
         active_shell_type(spawner).await,
     );
     let result = execute_command(command, spawner).await;
     let _ = std::fs::remove_file(&requests_file);
     let command_result = result?;
-    let failures = read_checkout_failures(&failure_report, batch.repositories.len());
-    let resolved_heads = resolved_heads_report
-        .as_deref()
-        .map(|path| read_resolved_heads(path, batch.repositories.len()))
-        .unwrap_or_default();
+    let report = read_checkout_report(&report_file, batch.repositories.len());
+    if let Some(report) = &report {
+        log_checkout_timing(report, batch);
+    }
     Ok(CheckoutHelperResult {
         command_result,
-        failure_report: failures,
-        resolved_heads,
+        report,
     })
 }
 
@@ -1089,14 +1110,16 @@ async fn clone_checkout_requests(
     let batch = checkout_requests_batch(repos, working_dir)?;
     let CheckoutHelperResult {
         command_result,
-        mut failure_report,
-        resolved_heads,
+        mut report,
     } = execute_checkout_helper(&batch, false, spawner).await?;
-    let identity_diagnostics = failure_report
+    let identity_diagnostics = report
         .as_mut()
         .and_then(|report| report.identity_diagnostics.take())
         .unwrap_or_default();
-    let failures = failure_report.map(|report| report.failures);
+    let failures = report
+        .as_ref()
+        .map(|report| report.failures().collect::<Vec<_>>())
+        .filter(|failures| !failures.is_empty());
     if command_result.exit_code != 0.into() {
         let failed_requests = match &failures {
             Some(failures) => failures
@@ -1113,7 +1136,7 @@ async fn clone_checkout_requests(
         if let Some(failures) = &failures
             && failures
                 .iter()
-                .all(|failure| failure.kind == CheckoutFailureKind::Checkout)
+                .all(|failure| failure.failure == Some(CheckoutFailureKind::Checkout))
         {
             return Err(PrepareEnvironmentError::CheckoutFailed {
                 repo_name,
@@ -1130,7 +1153,7 @@ async fn clone_checkout_requests(
             Some(failures) => Some(failure_output::prepare_failure_output(
                 &failures
                     .iter()
-                    .map(|failure| failure.output.as_str())
+                    .map(|failure| failure.diagnostics.as_str())
                     .collect::<Vec<_>>()
                     .join("\n"),
                 CLONE_FAILURE_OUTPUT_TRUNCATION_MARKER,
@@ -1143,6 +1166,10 @@ async fn clone_checkout_requests(
             identity_diagnostics,
         });
     }
+    let resolved_heads = report
+        .as_ref()
+        .map(|report| reported_resolved_heads(report, &batch))
+        .unwrap_or_default();
     Ok(environment_snapshot(repos, working_dir, &resolved_heads))
 }
 

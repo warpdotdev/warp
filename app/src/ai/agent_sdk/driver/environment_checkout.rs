@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::{fmt, io};
@@ -11,15 +12,17 @@ use cloud_object_models::{CodeForge, SourceRepo};
 use command::Stdio;
 use command::r#async::Command;
 use futures::{AsyncWriteExt as _, StreamExt as _, stream};
+use instant::Instant;
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncReadExt as _};
 use warp_cli::agent::{RepositoryForge, RepositoryHeadRef};
 use warp_cli::environment_checkout::EnvironmentCheckoutArgs;
+use warp_core::features::FeatureFlag;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::cache_setup;
 use super::environment_checkout_protocol::{
-    CheckoutBatch, CheckoutFailure, CheckoutFailureKind, CheckoutFailureReport, CheckoutRequest,
+    CheckoutBatch, CheckoutFailureKind, CheckoutOutcome, CheckoutReport, CheckoutRequest,
     CloneFailureCredentialIdentity, CloneFailureIdentityDiagnostics, parse_resolved_head_sha,
     sanitize_git_author_name, sanitize_git_credential_username,
 };
@@ -32,6 +35,7 @@ const MIRRORS_DIRECTORY: &str = "git-mirrors";
 const IDENTITY_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 const HEAD_CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Runs the environment checkout command to completion.
 pub(crate) fn run(args: &EnvironmentCheckoutArgs) -> anyhow::Result<()> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -40,6 +44,7 @@ pub(crate) fn run(args: &EnvironmentCheckoutArgs) -> anyhow::Result<()> {
         .block_on(run_async(args))
 }
 
+/// Returns a redacted label naming the request's repository and checkout directory for logs.
 fn repository_label(request: &CheckoutRequest) -> String {
     let repo = source_repo(request);
     failure_output::prepare_failure_output(
@@ -54,6 +59,7 @@ fn repository_label(request: &CheckoutRequest) -> String {
     )
 }
 
+/// Removes the `origin` remote configuration from an existing checkout, leaving its refs intact.
 async fn remove_origin(target: &Path, git: &mut Git) -> Result<(), ()> {
     if !fs::symlink_metadata(target)
         .await
@@ -64,10 +70,11 @@ async fn remove_origin(target: &Path, git: &mut Git) -> Result<(), ()> {
         return Err(());
     }
 
-    let remotes = git.run(target, &["remote"]).await?;
+    let remotes = git.run("remote list", target, &["remote"]).await?;
     if remotes.lines().any(|remote| remote == "origin") {
         // Removing the remote itself can collide on case-insensitive tracking-ref lock paths.
         git.run(
+            "origin remote removal",
             target,
             &["config", "--local", "--remove-section", "remote.origin"],
         )
@@ -76,6 +83,8 @@ async fn remove_origin(target: &Path, git: &mut Git) -> Result<(), ()> {
     Ok(())
 }
 
+/// Performs the checkout batch described by `args`, writing one report describing the state,
+/// timing, diagnostics and - for successful checkouts - the resolved `HEAD` of every request.
 async fn run_async(args: &EnvironmentCheckoutArgs) -> anyhow::Result<()> {
     let bytes = fs::read(&args.requests_file)
         .await
@@ -85,56 +94,27 @@ async fn run_async(args: &EnvironmentCheckoutArgs) -> anyhow::Result<()> {
     let mirror_root = (!args.remove_origins_only)
         .then(optional_mirror_root)
         .flatten();
-    let results = checkout_batch(
-        &batch,
-        mirror_root.as_deref(),
-        args.remove_origins_only,
-        log::logger(),
-    )
-    .await?;
-    let failures = results
-        .into_iter()
-        .enumerate()
-        .filter_map(|(request_index, result)| {
-            result.err().map(|(kind, output)| CheckoutFailure {
-                request_index,
-                kind,
-                output,
-            })
-        })
-        .collect::<Vec<_>>();
-    let failed = !failures.is_empty();
+    let mut outcomes =
+        checkout_batch(&batch, mirror_root.as_deref(), args.remove_origins_only).await?;
+    let failed = outcomes.iter().any(|outcome| outcome.failure.is_some());
     let identity_diagnostics = if failed && !args.remove_origins_only {
-        Some(collect_failure_identity(&batch, &failures).await)
+        Some(collect_failure_identity(&batch, &outcomes).await)
     } else {
         None
     };
-    let bytes = serde_json::to_vec(&CheckoutFailureReport {
-        failures,
+    if !failed && !args.remove_origins_only {
+        resolve_heads(&batch, &mut outcomes).await;
+    }
+    let bytes = serde_json::to_vec(&CheckoutReport {
+        outcomes,
         identity_diagnostics,
     })?;
-    fs::write(&args.failure_report, bytes)
+    fs::write(&args.report_file, bytes)
         .await
-        .map_err(|error| {
-            sanitized_error("could not write environment checkout failure report", error)
-        })?;
+        .map_err(|error| sanitized_error("could not write environment checkout report", error))?;
     if failed {
         Err(anyhow!("structured repository checkout failed"))
     } else {
-        if !args.remove_origins_only
-            && let Some(path) = &args.resolved_heads_report
-        {
-            let heads = capture_resolved_heads(&batch).await;
-            if let Err(error) = fs::write(path, serde_json::to_vec(&heads)?).await {
-                log::warn!(
-                    "{}",
-                    sanitized_error(
-                        "could not write structured repository resolved HEAD report",
-                        error
-                    )
-                );
-            }
-        }
         Ok(())
     }
 }
@@ -150,43 +130,47 @@ fn sanitized_error(context: &str, error: impl fmt::Display) -> anyhow::Error {
     )
 }
 
-async fn capture_resolved_heads(batch: &CheckoutBatch) -> Vec<Option<String>> {
+/// Records each checkout's `HEAD` commit in its outcome. Checkouts that cannot be resolved, and
+/// any left once resolution exceeds `HEAD_CAPTURE_TIMEOUT`, stay unresolved.
+async fn resolve_heads(batch: &CheckoutBatch, outcomes: &mut [CheckoutOutcome]) {
     let capture = async {
-        let mut heads = Vec::new();
-        for request in &batch.repositories {
+        for outcome in outcomes.iter_mut() {
+            let Some(request) = batch.repositories.get(outcome.request_index) else {
+                continue;
+            };
             let mut git = Git::default();
-            let head = git
+            outcome.resolved_head = git
                 .run(
+                    "HEAD resolution",
                     &batch.working_dir.join(&request.checkout_name),
                     &["rev-parse", "--verify", "HEAD"],
                 )
                 .await
                 .ok()
                 .and_then(|head| parse_resolved_head_sha(&head));
-            if let Some(head) = &head {
-                log::info!(
+            match &outcome.resolved_head {
+                Some(head) => log::info!(
                     "Repository {}: resolved HEAD {head}",
                     repository_label(request)
-                );
-            } else {
-                log::warn!(
+                ),
+                None => log::warn!(
                     "Repository {}: could not resolve HEAD\n{}",
                     repository_label(request),
                     git.diagnostics
-                );
+                ),
             }
-            heads.push(head);
         }
-        heads
     };
-    tokio::time::timeout(HEAD_CAPTURE_TIMEOUT, capture)
+    if tokio::time::timeout(HEAD_CAPTURE_TIMEOUT, capture)
         .await
-        .unwrap_or_else(|_| {
-            log::warn!("Timed out capturing structured repository resolved HEADs");
-            vec![None; batch.repositories.len()]
-        })
+        .is_err()
+    {
+        log::warn!("Timed out capturing structured repository resolved HEADs");
+    }
 }
 
+/// Runs `git` with an optional stdin `input` and returns its stdout, or `None` if it fails,
+/// produces truncated output, or exceeds `IDENTITY_QUERY_TIMEOUT`.
 async fn identity_query(cwd: &Path, args: &[&str], input: Option<&str>) -> Option<String> {
     tokio::time::timeout(IDENTITY_QUERY_TIMEOUT, async {
         let mut child = Command::new("git")
@@ -220,6 +204,7 @@ async fn identity_query(cwd: &Path, args: &[&str], input: Option<&str>) -> Optio
     .flatten()
 }
 
+/// Extracts the sanitized username from `git credential fill` output, if it has exactly one.
 fn git_credential_username(stdout: &str) -> Option<String> {
     let mut usernames = stdout
         .lines()
@@ -231,19 +216,18 @@ fn git_credential_username(stdout: &str) -> Option<String> {
     sanitize_git_credential_username(username)
 }
 
+/// Collects the git author and the credential username per forge host, to help diagnose failed
+/// checkouts.
 async fn collect_failure_identity(
     batch: &CheckoutBatch,
-    failures: &[CheckoutFailure],
+    outcomes: &[CheckoutOutcome],
 ) -> CloneFailureIdentityDiagnostics {
     let mut seen = HashSet::new();
-    let hosts = failures
+    let hosts = outcomes
         .iter()
-        .map(|failure| {
-            source_repo(&batch.repositories[failure.request_index])
-                .code_forge
-                .unwrap_or_default()
-                .host()
-        })
+        .filter(|outcome| outcome.failure.is_some())
+        .filter_map(|outcome| batch.repositories.get(outcome.request_index))
+        .map(|request| source_repo(request).code_forge.unwrap_or_default().host())
         .filter(|host| seen.insert(*host))
         .collect::<Vec<_>>();
     let credentials = futures::future::join_all(hosts.into_iter().map(|host| async move {
@@ -264,6 +248,7 @@ async fn collect_failure_identity(
     }
 }
 
+/// Reports the git mirror directory as cache usage when it exists under `cache_root`.
 pub(super) fn mirror_cache_usage(cache_root: &Path) -> Vec<CacheUsage> {
     if std::fs::symlink_metadata(cache_root.join(MIRRORS_DIRECTORY))
         .is_ok_and(|metadata| metadata.is_dir())
@@ -278,7 +263,12 @@ pub(super) fn mirror_cache_usage(cache_root: &Path) -> Vec<CacheUsage> {
     }
 }
 
+/// Returns the canonical, writable directory that holds the git mirrors, or `None` when mirror
+/// caching is disabled or the directory is unusable.
 fn optional_mirror_root() -> Option<PathBuf> {
+    if !FeatureFlag::GitMirrorCache.is_enabled() {
+        return None;
+    }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let cache_root = cache_setup::enabled_cache_root()?;
@@ -306,6 +296,7 @@ fn optional_mirror_root() -> Option<PathBuf> {
     }
 }
 
+/// Converts the request's source identity into a [`SourceRepo`].
 fn source_repo(request: &CheckoutRequest) -> SourceRepo {
     let forge = match request.source.code_forge {
         RepositoryForge::GitHub => CodeForge::GitHub,
@@ -319,6 +310,7 @@ fn source_repo(request: &CheckoutRequest) -> SourceRepo {
     )
 }
 
+/// Returns the cache key that identifies the mirror for the request's source repository.
 fn mirror_key(request: &CheckoutRequest) -> RepoCacheKey {
     let repo = source_repo(request);
     RepoCacheKey::derive(&RepoIdentity::new(
@@ -328,14 +320,13 @@ fn mirror_key(request: &CheckoutRequest) -> RepoCacheKey {
     ))
 }
 
-type CheckoutResult = Result<(), (CheckoutFailureKind, String)>;
-
+/// Runs every request in the batch, returning one outcome per request in order. Requests that
+/// share a mirror run one after another, and at most `CHECKOUT_WORKERS` groups run concurrently.
 async fn checkout_batch(
     batch: &CheckoutBatch,
     mirror_root: Option<&Path>,
     remove_origins_only: bool,
-    logger: &dyn log::Log,
-) -> anyhow::Result<Vec<CheckoutResult>> {
+) -> anyhow::Result<Vec<CheckoutOutcome>> {
     batch.validate().map_err(|error| anyhow!(error))?;
     let mut groups = HashMap::<_, Vec<_>>::new();
     for (index, request) in batch.repositories.iter().enumerate() {
@@ -344,61 +335,91 @@ async fn checkout_batch(
             .or_default()
             .push((index, request));
     }
-    let mut results = vec![None; batch.repositories.len()];
+    let mut outcomes = vec![None; batch.repositories.len()];
     let mut completed = stream::iter(groups.into_values().map(|requests| async move {
-        let mut results = Vec::new();
+        let mut outcomes = Vec::new();
         for (index, request) in requests {
             let label = repository_label(request);
-            let emit = |category: &str| {
-                log::info!(logger: logger, "Repository {label}: {category}");
-            };
-            emit("started");
+            log::info!("Repository {label}: starting checkout");
+            let started = Instant::now();
             let mut git = Git::default();
             let result = if remove_origins_only {
                 remove_origin(&batch.working_dir.join(&request.checkout_name), &mut git)
                     .await
                     .map_err(|_| CheckoutFailureKind::RemoveOrigin)
             } else {
-                checkout(request, &batch.working_dir, mirror_root, &mut git, &emit).await
+                checkout(request, &batch.working_dir, mirror_root, &mut git).await
             };
-            emit(if result.is_ok() { "finished" } else { "failed" });
-            results.push((index, result.map_err(|kind| (kind, git.diagnostics))));
+            let duration = started.elapsed();
+            log::info!(
+                "Repository {label}: {} after {duration:.1?}",
+                if result.is_ok() { "finished" } else { "failed" }
+            );
+            outcomes.push(CheckoutOutcome {
+                request_index: index,
+                failure: result.err(),
+                diagnostics: git.diagnostics,
+                duration_ms: u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
+                resolved_head: None,
+            });
         }
-        results
+        outcomes
     }))
     .buffer_unordered(CHECKOUT_WORKERS);
     while let Some(group) = completed.next().await {
-        for (index, result) in group {
-            results[index] = Some(result);
+        for outcome in group {
+            let index = outcome.request_index;
+            outcomes[index] = Some(outcome);
         }
     }
-    let results = results
+    let outcomes = outcomes
         .into_iter()
-        .map(|result| result.expect("checkout worker result"))
+        .map(|outcome| outcome.expect("checkout worker outcome"))
         .collect::<Vec<_>>();
-    for (index, result) in results.iter().enumerate() {
-        if let Err((_, diagnostics)) = result {
-            log::error!(logger: logger,
-                "Repository {} diagnostics:\n{diagnostics}",
-                repository_label(&batch.repositories[index])
+    for outcome in &outcomes {
+        if outcome.failure.is_some() {
+            log::error!(
+                "Repository {} diagnostics:\n{}",
+                repository_label(&batch.repositories[outcome.request_index]),
+                outcome.diagnostics
             );
         }
     }
-    Ok(results)
+    Ok(outcomes)
 }
 
+/// Git CLI wrapper that buffers diagnostic messages. Every request reports them in the checkout
+/// report, so they are redacted and bounded in size.
 #[derive(Default)]
 struct Git {
     diagnostics: String,
 }
 
+/// Borrows owned arguments as `&str` slices.
+fn as_args(args: &[String]) -> Vec<&str> {
+    args.iter().map(String::as_str).collect()
+}
+
 impl Git {
-    async fn run(&mut self, cwd: &Path, args: &[&str]) -> Result<String, ()> {
-        let operation = args.first().copied().unwrap_or("command");
+    /// Runs `git` in `cwd` and returns its stdout on success. What git reports, and any failure,
+    /// is kept in the diagnostics for later reporting, described by `operation`.
+    async fn run(&mut self, operation: &str, cwd: &Path, args: &[&str]) -> Result<String, ()> {
+        self.run_with_env(operation, cwd, args, &[]).await
+    }
+
+    /// Like [`Git::run`], with additional environment variables set for the process.
+    async fn run_with_env(
+        &mut self,
+        operation: &str,
+        cwd: &Path,
+        args: &[&str],
+        env: &[(&str, &OsStr)],
+    ) -> Result<String, ()> {
         let child = Command::new("git")
             .current_dir(cwd)
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GCM_INTERACTIVE", "never")
+            .envs(env.iter().copied())
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -449,6 +470,7 @@ impl Git {
         }
     }
 
+    /// Appends `output` to the diagnostics, keeping them redacted and bounded in size.
     fn record(&mut self, output: &str) {
         let combined = format!("{}\n{output}", self.diagnostics);
         self.diagnostics =
@@ -460,6 +482,8 @@ impl Git {
     }
 }
 
+/// Reads `reader` to the end, retaining only the tail of long output. The flag reports whether
+/// any output was dropped.
 async fn capture(mut reader: impl AsyncRead + Unpin) -> io::Result<(String, bool)> {
     let mut bytes = VecDeque::new();
     let mut buffer = [0; 8192];
@@ -493,12 +517,13 @@ async fn capture(mut reader: impl AsyncRead + Unpin) -> io::Result<(String, bool
     ))
 }
 
+/// Checks out one request into `working_dir`. Existing checkouts are updated in place; new ones
+/// are built from the mirror when `mirror_root` is set, falling back to the network if that fails.
 async fn checkout(
     request: &CheckoutRequest,
     working_dir: &Path,
     mirror_root: Option<&Path>,
     git: &mut Git,
-    emit: &impl Fn(&str),
 ) -> Result<(), CheckoutFailureKind> {
     let target = working_dir.join(&request.checkout_name);
     let existing = match fs::symlink_metadata(&target).await {
@@ -519,30 +544,18 @@ async fn checkout(
     }
     if let Some(root) = mirror_root {
         let mirror = root.join(mirror_key(request).as_str());
-        let mut created_target = false;
-        let cached = async {
-            refresh_mirror(&mirror, &url, git, emit).await?;
-            fs::create_dir(&target).await.map_err(|error| {
-                git.record_error("could not create cached checkout target", error)
-            })?;
-            created_target = true;
-            checkout_cached(request, &url, &target, &mirror, git)
-                .await
-                .map_err(|_| ())
-        }
-        .await;
-        if cached.is_ok() {
+        if attempt_cached_checkout(request, &url, &target, &mirror, git).await?
+            == CachedCheckout::Built
+        {
             return Ok(());
         }
-        emit("cache failure; using network fallback");
+        let label = repository_label(request);
+        log::info!("Repository {label}: unable to use cache, falling back to direct clone");
         if !git.diagnostics.is_empty() {
-            emit(&format!("cache failure diagnostics:\n{}", git.diagnostics));
-        }
-        if created_target {
-            fs::remove_dir_all(&target).await.map_err(|error| {
-                git.record_error("could not remove failed cached checkout target", error);
-                CheckoutFailureKind::Clone
-            })?;
+            log::info!(
+                "Repository {label}: cache failure diagnostics:\n{}",
+                git.diagnostics
+            );
         }
         git.diagnostics.clear();
     }
@@ -550,15 +563,62 @@ async fn checkout(
         git.record_error("could not create checkout target", error);
         CheckoutFailureKind::Clone
     })?;
-    checkout_network(request, &url, &target, git).await
+    checkout_direct(request, &url, &target, git).await
 }
 
+/// Result of trying to build a checkout from the mirror.
+#[derive(Debug, PartialEq, Eq)]
+enum CachedCheckout {
+    Built,
+    /// The attempt did not produce a checkout, and no checkout it created is left behind.
+    Failed,
+}
+
+/// Refreshes the mirror and builds the checkout at `target` from it. Only a checkout that this
+/// attempt created is removed when it fails, so a `target` that already exists is never touched.
+/// Fails outright if a failed checkout cannot be removed, since the target is then unusable.
+async fn attempt_cached_checkout(
+    request: &CheckoutRequest,
+    url: &str,
+    target: &Path,
+    mirror: &Path,
+    git: &mut Git,
+) -> Result<CachedCheckout, CheckoutFailureKind> {
+    let label = repository_label(request);
+    let Ok(default) = refresh_mirror(mirror, url, &label, git).await else {
+        return Ok(CachedCheckout::Failed);
+    };
+    if let Err(error) = fs::create_dir(target).await {
+        git.record_error("could not create cached checkout target", error);
+        return Ok(CachedCheckout::Failed);
+    }
+    if checkout_cached(request, url, target, mirror, &default, git)
+        .await
+        .is_ok()
+    {
+        return Ok(CachedCheckout::Built);
+    }
+    fs::remove_dir_all(target).await.map_err(|error| {
+        git.record_error("could not remove failed cached checkout target", error);
+        CheckoutFailureKind::Clone
+    })?;
+    Ok(CachedCheckout::Failed)
+}
+
+/// Ensures `mirror` is a valid, up-to-date bare copy of `url`, rebuilding it if it is not. Returns
+/// the remote's default branch, which the mirror's `HEAD` follows.
+///
+/// The mirror holds every ref the remote advertises, including ones such as pull request refs
+/// that no branch reaches, so checkouts can resolve any commit the remote can serve from it. It is
+/// always a complete copy because checkouts borrow its objects. Its configuration is rewritten on
+/// every use so that nothing left over from earlier runs, such as a URL carrying credentials or
+/// unrelated settings, is trusted.
 async fn refresh_mirror(
     mirror: &Path,
     url: &str,
+    label: &str,
     git: &mut Git,
-    emit: &impl Fn(&str),
-) -> Result<(), ()> {
+) -> Result<String, ()> {
     let parent = mirror
         .parent()
         .ok_or_else(|| git.record("cache mirror has no parent directory"))?;
@@ -572,11 +632,13 @@ async fn refresh_mirror(
         .ok_or_else(|| git.record("cache mirror config path is not valid UTF-8"))?;
     let canonical_config = format!(
         "[core]\n\trepositoryformatversion = 0\n\tbare = true\n\
-         [remote \"origin\"]\n\turl = {url}\n\tfetch = +refs/heads/*:refs/heads/*\n"
+         [remote \"origin\"]\n\turl = {url}\n\tfetch = +refs/*:refs/*\n\tmirror = true\n"
     );
+    // A mirror configured as partial would lack objects that checkouts expect to borrow from it.
     let mut valid = existing.as_ref().is_ok_and(|metadata| metadata.is_dir())
         && git
             .run(
+                "cache mirror config read",
                 parent,
                 &[
                     "config",
@@ -604,16 +666,20 @@ async fn refresh_mirror(
             .await
             .map_err(|error| git.record_error("could not write cache mirror config", error))?;
         valid = git
-            .run(mirror, &["rev-parse", "--is-bare-repository"])
+            .run(
+                "cache mirror bare check",
+                mirror,
+                &["rev-parse", "--is-bare-repository"],
+            )
             .await
             .is_ok_and(|value| value.trim() == "true");
     }
     if valid {
-        emit("cache hit");
+        log::info!("Repository {label}: found valid cache");
     } else {
         match existing {
             Ok(metadata) => {
-                emit("invalid cache; rebuilding");
+                log::info!("Repository {label}: invalid cache; rebuilding");
                 if !metadata.is_dir() {
                     fs::remove_file(mirror).await.map_err(|error| {
                         git.record_error("could not remove invalid cache mirror file", error)
@@ -624,42 +690,59 @@ async fn refresh_mirror(
                     })?;
                 }
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => emit("cold cache population"),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                log::info!("Repository {label}: preparing cache");
+            }
             Err(error) => {
                 git.record_error("could not inspect cache mirror", error);
                 return Err(());
             }
         }
-        git.run(parent, &["init", "--bare", "--quiet", path])
-            .await?;
-        fs::write(&config_path, &canonical_config)
-            .await
-            .map_err(|error| git.record_error("could not write new cache mirror config", error))?;
+        // `--mirror` makes a bare repository whose `+refs/*:refs/*` refspec lets later fetches
+        // update and prune every ref, not only branches.
+        git.run(
+            "cache mirror clone",
+            parent,
+            &["clone", "--mirror", "--quiet", "--", url, path],
+        )
+        .await?;
     }
+    // `--prune` and `--prune-tags` drop refs deleted upstream so removed history is not served
+    // from the mirror. Protocol v2 keeps the ref advertisement small for repositories with many
+    // refs, and submodules are irrelevant to a bare mirror.
     git.run(
+        "cache mirror fetch",
         mirror,
         &[
+            "-c",
+            "protocol.version=2",
             "fetch",
+            "--no-recurse-submodules",
             "--prune",
             "--prune-tags",
             "origin",
-            "+refs/heads/*:refs/heads/*",
-            "+refs/tags/*:refs/tags/*",
         ],
     )
     .await?;
+    // Fetching never moves the mirror's `HEAD`, so follow the remote's default branch explicitly.
     let head = remote_default_branch(mirror, git).await?;
     git.run(
+        "cache mirror HEAD update",
         mirror,
         &["symbolic-ref", "HEAD", &format!("refs/heads/{head}")],
     )
     .await?;
-    Ok(())
+    Ok(head)
 }
 
+/// Returns the validated name of the branch that the `origin` remote's `HEAD` points to.
 async fn remote_default_branch(target: &Path, git: &mut Git) -> Result<String, ()> {
     let output = git
-        .run(target, &["ls-remote", "--symref", "origin", "HEAD"])
+        .run(
+            "default branch lookup",
+            target,
+            &["ls-remote", "--symref", "origin", "HEAD"],
+        )
         .await?;
     let branch = output
         .lines()
@@ -667,12 +750,17 @@ async fn remote_default_branch(target: &Path, git: &mut Git) -> Result<String, (
             line.strip_prefix("ref: refs/heads/")
                 .and_then(|value| value.strip_suffix("\tHEAD"))
         })
-        .ok_or_else(|| git.record("Git ls-remote did not report a symbolic default branch"))?;
-    git.run(target, &["check-ref-format", "--branch", branch])
-        .await?;
+        .ok_or_else(|| git.record("git ls-remote did not report a symbolic default branch"))?;
+    git.run(
+        "default branch validation",
+        target,
+        &["check-ref-format", "--branch", branch],
+    )
+    .await?;
     Ok(branch.to_owned())
 }
 
+/// Moves a repository that is already present to the requested head.
 async fn checkout_existing(
     request: &CheckoutRequest,
     url: &str,
@@ -681,7 +769,11 @@ async fn checkout_existing(
 ) -> Result<(), CheckoutFailureKind> {
     if request.fetch_branch_only {
         let action = if git
-            .run(target, &["remote", "get-url", "origin"])
+            .run(
+                "origin remote lookup",
+                target,
+                &["remote", "get-url", "origin"],
+            )
             .await
             .is_ok()
         {
@@ -689,86 +781,172 @@ async fn checkout_existing(
         } else {
             "add"
         };
-        git.run(target, &["remote", action, "origin", url])
-            .await
-            .map_err(|_| CheckoutFailureKind::Checkout)?;
-    }
-    checkout_requested_head(request, target, true, git)
+        git.run(
+            "origin remote update",
+            target,
+            &["remote", action, "origin", url],
+        )
         .await
-        .map(|_| ())
+        .map_err(|_| CheckoutFailureKind::Checkout)?;
+    }
+    checkout_requested_head(request, target, git).await
 }
 
-async fn checkout_network(
+/// Builds the checkout for `request` directly from the remote, without a mirror.
+async fn checkout_direct(
     request: &CheckoutRequest,
     url: &str,
     target: &Path,
     git: &mut Git,
 ) -> Result<(), CheckoutFailureKind> {
+    // Branch-only and pinned-commit requests start from an empty repository because a clone would
+    // also download the default branch's history, which they do not want.
     if request.fetch_branch_only || matches!(request.head, Some(RepositoryHeadRef::CommitSha(_))) {
-        git.run(target, &["init", "--quiet"])
+        git.run("checkout initialization", target, &["init", "--quiet"])
             .await
             .map_err(|_| CheckoutFailureKind::Clone)?;
-        git.run(target, &["remote", "add", "origin", url])
-            .await
-            .map_err(|_| CheckoutFailureKind::Clone)?;
-    } else {
-        clone_repository(request, url, target, &["--filter=blob:none"], git).await?;
-    }
-    checkout_requested_head(request, target, true, git)
+        git.run(
+            "origin remote creation",
+            target,
+            &["remote", "add", "origin", url],
+        )
         .await
-        .map(|_| ())
+        .map_err(|_| CheckoutFailureKind::Clone)?;
+    } else {
+        clone_repository(request, url, target, git).await?;
+    }
+    checkout_requested_head(request, target, git).await
 }
 
+/// Creates a self-contained checkout of `request` that reuses the objects already in the local
+/// mirror instead of downloading them again. The result does not depend on the mirror afterwards.
+///
+/// The repository is assembled with `init` and `fetch` so the refs it tracks and its checkout are
+/// controlled precisely. The mirror's objects are borrowed through
+/// `GIT_ALTERNATE_OBJECT_DIRECTORIES`, an environment variable so that no
+/// `objects/info/alternates` file is left behind, and `repack` then copies them into the
+/// checkout. Unpinned requests end on a local branch of the default branch; pinned requests are
+/// detached so `HEAD` is exactly the requested head. Branch-only requests fetch just that branch,
+/// stored under the default branch's tracking ref.
 async fn checkout_cached(
     request: &CheckoutRequest,
     url: &str,
     target: &Path,
     mirror: &Path,
+    default: &str,
     git: &mut Git,
 ) -> Result<(), CheckoutFailureKind> {
-    let reference = mirror.to_str().ok_or_else(|| {
-        git.record("cache mirror reference path is not valid UTF-8");
-        CheckoutFailureKind::Clone
-    })?;
-    clone_repository(
-        request,
-        url,
+    let clone_error = CheckoutFailureKind::Clone;
+    let checkout_error = CheckoutFailureKind::Checkout;
+    git.run(
+        "cached checkout initialization",
         target,
-        &["--reference", reference, "--dissociate"],
-        git,
+        &["init", "--quiet"],
     )
-    .await?;
-    if let Some(default) = checkout_requested_head(request, target, false, git).await?
-        && let Some(head) = &request.head
-        && head.value() != default
-    {
-        git.run(
-            target,
-            &[
-                "update-ref",
-                "-d",
-                &format!("refs/remotes/origin/{}", head.value()),
-            ],
-        )
+    .await
+    .map_err(|_| clone_error)?;
+    git.run(
+        "origin remote creation",
+        target,
+        &["remote", "add", "origin", url],
+    )
+    .await
+    .map_err(|_| clone_error)?;
+
+    let default_ref = format!("refs/remotes/origin/{default}");
+    let owned = |args: &[&str]| args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+    let (fetch, checkout) = match (&request.head, request.fetch_branch_only) {
+        (Some(RepositoryHeadRef::Branch(branch)), true) => {
+            let refspec = format!("+refs/heads/{branch}:{default_ref}");
+            git.run(
+                "branch refspec configuration",
+                target,
+                &["config", "--replace-all", "remote.origin.fetch", &refspec],
+            )
+            .await
+            .map_err(|_| checkout_error)?;
+            (
+                owned(&["fetch", "--no-tags", "origin"]),
+                owned(&["checkout", "--detach", &default_ref]),
+            )
+        }
+        (Some(RepositoryHeadRef::CommitSha(_)) | None, true) => {
+            git.record("branch-only checkout requires a branch");
+            return Err(checkout_error);
+        }
+        (head, false) => {
+            // Track every branch and tag, as a clone would.
+            let mut fetch = owned(&[
+                "fetch",
+                "origin",
+                "+refs/heads/*:refs/remotes/origin/*",
+                "+refs/tags/*:refs/tags/*",
+            ]);
+            let checkout = match head {
+                Some(RepositoryHeadRef::Branch(branch)) => owned(&[
+                    "checkout",
+                    "--detach",
+                    &format!("refs/remotes/origin/{branch}"),
+                ]),
+                Some(RepositoryHeadRef::CommitSha(sha)) => {
+                    // No branch or tag necessarily reaches a pinned commit, so fetch it by SHA.
+                    fetch.push(sha.clone());
+                    owned(&["checkout", "--detach", sha])
+                }
+                // A local branch tracking the default branch, so work starts from a normal branch.
+                None => owned(&["checkout", "-B", default, &default_ref]),
+            };
+            (fetch, checkout)
+        }
+    };
+    let objects = mirror.join("objects");
+    let alternates = [("GIT_ALTERNATE_OBJECT_DIRECTORIES", objects.as_os_str())];
+    git.run_with_env("cached fetch", target, &as_args(&fetch), &alternates)
         .await
-        .map_err(|_| CheckoutFailureKind::Checkout)?;
-    }
+        .map_err(|_| checkout_error)?;
+    git.run_with_env("cached checkout", target, &as_args(&checkout), &alternates)
+        .await
+        .map_err(|_| checkout_error)?;
+    // Fetching never sets `origin/HEAD`, which tools use to find the default branch.
+    git.run(
+        "origin HEAD update",
+        target,
+        &["symbolic-ref", "refs/remotes/origin/HEAD", &default_ref],
+    )
+    .await
+    .map_err(|_| checkout_error)?;
+    // Dissociate only after checkout so the checked-out HEAD keeps objects fetched by explicit
+    // SHA, which no ref reaches.
+    git.run_with_env(
+        "cached object repack",
+        target,
+        &["repack", "-a", "-d"],
+        &alternates,
+    )
+    .await
+    .map_err(|_| clone_error)?;
     Ok(())
 }
 
+/// Clones the remote into `target`, deferring file contents until needed. When a head is
+/// requested the working tree is left for the caller to move to it, and `fetch_branch_only`
+/// limits the clone to that branch.
+///
+/// The clone is blobless (`--filter=blob:none`) so history is available without downloading every
+/// file version up front. A requested head makes the clone skip its own checkout
+/// (`--no-checkout`), because the default branch it would check out is not wanted.
 async fn clone_repository(
     request: &CheckoutRequest,
     url: &str,
     target: &Path,
-    options: &[&str],
     git: &mut Git,
 ) -> Result<(), CheckoutFailureKind> {
-    let mut args = vec!["clone"];
+    let mut args = vec!["clone", "--filter=blob:none"];
     if request.head.is_some() {
         args.push("--no-checkout");
     }
-    args.extend(options);
     if request.fetch_branch_only {
+        // Only the requested branch's history is wanted, without tags.
         args.extend([
             "--no-tags",
             "--single-branch",
@@ -795,21 +973,28 @@ async fn clone_repository(
         git.record("checkout target has no parent directory");
         CheckoutFailureKind::Clone
     })?;
-    git.run(parent, &args)
+    git.run("clone", parent, &args)
         .await
         .map_err(|_| CheckoutFailureKind::Clone)?;
     Ok(())
 }
 
+/// Moves a repository that has an `origin` remote to the head requested by `request`, leaving
+/// it detached. Does nothing when the request has no head.
+///
+/// A branch-only request fetches just the requested branch and stores it under the default
+/// branch's tracking ref, so the repository holds a single remote-tracking branch that
+/// `origin/HEAD` resolves to. Any other head is fetched by name, which also reaches commits that
+/// no branch points to. Fetches are blobless so file contents are downloaded only for what gets
+/// checked out.
 async fn checkout_requested_head(
     request: &CheckoutRequest,
     target: &Path,
-    blobless: bool,
     git: &mut Git,
-) -> Result<Option<String>, CheckoutFailureKind> {
+) -> Result<(), CheckoutFailureKind> {
     let checkout_error = CheckoutFailureKind::Checkout;
     let Some(head) = &request.head else {
-        return Ok(None);
+        return Ok(());
     };
     if request.fetch_branch_only {
         let default = remote_default_branch(target, git)
@@ -817,21 +1002,32 @@ async fn checkout_requested_head(
             .map_err(|_| checkout_error)?;
         let refspec = format!("+refs/heads/{}:refs/remotes/origin/{default}", head.value());
         git.run(
+            "branch refspec configuration",
             target,
             &["config", "--replace-all", "remote.origin.fetch", &refspec],
         )
         .await
         .map_err(|_| checkout_error)?;
-        let mut fetch = vec!["fetch", "--no-tags"];
-        if blobless {
-            fetch.push("--filter=blob:none");
-        }
-        fetch.push("origin");
-        git.run(target, &fetch).await.map_err(|_| checkout_error)?;
-        git.run(target, &["checkout", "--detach", "FETCH_HEAD"])
-            .await
-            .map_err(|_| checkout_error)?;
+        // Tags are skipped because only the requested branch is wanted.
         git.run(
+            "branch fetch",
+            target,
+            &["fetch", "--no-tags", "--filter=blob:none", "origin"],
+        )
+        .await
+        .map_err(|_| checkout_error)?;
+        // Detached, so the working tree is exactly the requested head and not a local branch
+        // that could drift from it.
+        git.run(
+            "requested head checkout",
+            target,
+            &["checkout", "--detach", "FETCH_HEAD"],
+        )
+        .await
+        .map_err(|_| checkout_error)?;
+        // Fetching never sets `origin/HEAD`, which tools use to find the default branch.
+        git.run(
+            "origin HEAD update",
             target,
             &[
                 "symbolic-ref",
@@ -841,19 +1037,23 @@ async fn checkout_requested_head(
         )
         .await
         .map_err(|_| checkout_error)?;
-        Ok(Some(default))
     } else {
-        let mut fetch = vec!["fetch"];
-        if blobless {
-            fetch.push("--filter=blob:none");
-        }
-        fetch.extend(["origin", head.value()]);
-        git.run(target, &fetch).await.map_err(|_| checkout_error)?;
-        git.run(target, &["checkout", "--detach", "FETCH_HEAD"])
-            .await
-            .map_err(|_| checkout_error)?;
-        Ok(None)
+        git.run(
+            "requested head fetch",
+            target,
+            &["fetch", "--filter=blob:none", "origin", head.value()],
+        )
+        .await
+        .map_err(|_| checkout_error)?;
+        git.run(
+            "requested head checkout",
+            target,
+            &["checkout", "--detach", "FETCH_HEAD"],
+        )
+        .await
+        .map_err(|_| checkout_error)?;
     }
+    Ok(())
 }
 
 #[cfg(test)]

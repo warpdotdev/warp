@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::path::PathBuf;
 
@@ -52,20 +52,42 @@ pub enum CheckoutFailureKind {
     RemoveOrigin,
 }
 
+/// What became of a single checkout request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CheckoutFailure {
+pub struct CheckoutOutcome {
+    /// Position of the request in the batch this outcome belongs to.
     pub request_index: usize,
-    pub kind: CheckoutFailureKind,
-    pub output: String,
+    /// Why the checkout did not complete, absent when it succeeded.
+    pub failure: Option<CheckoutFailureKind>,
+    /// Redacted, size-bounded git output collected while the checkout ran.
+    pub diagnostics: String,
+    /// Wall-clock time the checkout took.
+    pub duration_ms: u64,
+    /// Commit the checkout ended on, absent when it was not resolved.
+    pub resolved_head: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+/// Everything the checkout helper reports back about the batch it ran.
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CheckoutFailureReport {
-    pub failures: Vec<CheckoutFailure>,
+pub struct CheckoutReport {
+    pub outcomes: Vec<CheckoutOutcome>,
     pub identity_diagnostics: Option<CloneFailureIdentityDiagnostics>,
 }
+
+impl CheckoutReport {
+    /// The outcomes of the checkouts that did not succeed.
+    pub fn failures(&self) -> impl Iterator<Item = &CheckoutOutcome> {
+        self.outcomes
+            .iter()
+            .filter(|outcome| outcome.failure.is_some())
+    }
+}
+
+/// Resolved HEAD commit of each checkout, keyed by checkout name. Checkouts whose HEAD could not
+/// be resolved are absent.
+pub type ResolvedHeads = BTreeMap<String, String>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

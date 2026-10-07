@@ -10,10 +10,8 @@ fn hidden_command_parses_paths_and_traces_without_payload() {
         "environment-checkout",
         "--requests-file",
         "a path/request.json",
-        "--failure-report",
+        "--report-file",
         "a path/report.json",
-        "--resolved-heads-report",
-        "a path/heads.json",
         "--remove-origins-only",
     ])
     .unwrap();
@@ -25,11 +23,7 @@ fn hidden_command_parses_paths_and_traces_without_payload() {
         panic!("checkout command")
     };
     assert_eq!(args.requests_file, PathBuf::from("a path/request.json"));
-    assert_eq!(args.failure_report, PathBuf::from("a path/report.json"));
-    assert_eq!(
-        args.resolved_heads_report,
-        Some(PathBuf::from("a path/heads.json"))
-    );
+    assert_eq!(args.report_file, PathBuf::from("a path/report.json"));
     assert!(args.remove_origins_only);
     assert!(
         !Args::clap_command()

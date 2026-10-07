@@ -4,10 +4,9 @@ use std::path::PathBuf;
 pub struct EnvironmentCheckoutArgs {
     #[arg(long)]
     pub requests_file: PathBuf,
+    /// Where to write the per-checkout report describing how the batch went.
     #[arg(long)]
-    pub failure_report: PathBuf,
-    #[arg(long)]
-    pub resolved_heads_report: Option<PathBuf>,
+    pub report_file: PathBuf,
     #[arg(long)]
     pub remove_origins_only: bool,
 }

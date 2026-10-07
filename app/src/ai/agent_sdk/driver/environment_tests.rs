@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use cloud_object_models::CodeForge;
 use command::blocking::Command;
@@ -12,12 +12,14 @@ use warp_cli::agent::{
 };
 use warp_core::command::ExitCode;
 
-use super::super::environment_checkout_protocol::is_valid_git_object_id;
+use super::super::environment_checkout_protocol::{
+    CheckoutBatch, CheckoutRequest, ResolvedHeads, is_valid_git_object_id,
+};
 use super::{
     CloneFailureIdentityDiagnostics, PrepareEnvironmentError, RepositoryCloneRequest,
     SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER, SetupCommandPhase, await_setup_phase,
     build_checkout_helper_command, environment_snapshot, merge_repos_deduped,
-    parse_resolved_head_sha, read_checkout_failures, read_resolved_heads,
+    parse_resolved_head_sha, read_checkout_report, reported_resolved_heads,
     repository_clone_requests, setup_command_failure, single_repo_name,
     validate_repository_preparation_overrides,
 };
@@ -65,20 +67,45 @@ fn setup_timeout_covers_command_start_and_exit_without_resetting_deadline() {
     }
 }
 #[test]
-fn resolved_head_reports_preserve_positions_and_are_removed_on_every_read() {
+fn reported_heads_are_keyed_by_checkout_name_and_omit_unresolved_heads() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("heads.json");
+    let path = directory.path().join("report.json");
     let sha = "0123456789abcdef0123456789abcdef01234567";
-    std::fs::write(&path, format!(r#"["{sha}",null,"invalid"]"#)).unwrap();
-    assert_eq!(
-        read_resolved_heads(&path, 3),
-        vec![Some(sha.to_owned()), None, None]
-    );
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"outcomes":[
+                {{"request_index":0,"failure":null,"diagnostics":"","duration_ms":12,"resolved_head":"{sha}"}},
+                {{"request_index":1,"failure":null,"diagnostics":"","duration_ms":34,"resolved_head":"not-a-sha"}}
+            ]}}"#
+        ),
+    )
+    .unwrap();
+    let report = read_checkout_report(&path, 2).unwrap();
     assert!(!path.exists());
-    for bytes in ["{", "[]"] {
-        std::fs::write(&path, bytes).unwrap();
-        assert_eq!(read_resolved_heads(&path, 3), vec![None; 3]);
-        assert!(!path.exists());
+    assert_eq!(report.outcomes[0].duration_ms, 12);
+    assert_eq!(
+        reported_resolved_heads(&report, &checkout_batch(["warp", "invalid"])),
+        ResolvedHeads::from([("warp".to_owned(), sha.to_owned())])
+    );
+}
+
+fn checkout_batch<const COUNT: usize>(checkout_names: [&str; COUNT]) -> CheckoutBatch {
+    CheckoutBatch {
+        working_dir: PathBuf::from("/workspace"),
+        repositories: checkout_names
+            .into_iter()
+            .map(|checkout_name| CheckoutRequest {
+                source: RepositoryIdentity {
+                    code_forge: RepositoryForge::GitHub,
+                    repo_owner: "warpdotdev".to_owned(),
+                    repo_name: checkout_name.to_owned(),
+                },
+                checkout_name: checkout_name.to_owned(),
+                head: None,
+                fetch_branch_only: false,
+            })
+            .collect(),
     }
 }
 
@@ -316,7 +343,7 @@ fn parse_resolved_head_sha_accepts_trimmed_valid_object_ids() {
 }
 
 #[test]
-fn environment_snapshot_keeps_resolved_heads_in_request_order() {
+fn environment_snapshot_matches_resolved_heads_to_requests_by_checkout_name() {
     let requests = vec![
         clone_request(
             repo(CodeForge::GitHub, "warpdotdev", "warp"),
@@ -335,7 +362,10 @@ fn environment_snapshot_keeps_resolved_heads_in_request_order() {
     let snapshot = environment_snapshot(
         &requests,
         Path::new("/workspace"),
-        &[Some(first_sha.to_string()), Some(second_sha.to_string())],
+        &ResolvedHeads::from([
+            ("api".to_owned(), second_sha.to_owned()),
+            ("warp".to_owned(), first_sha.to_owned()),
+        ]),
     );
 
     assert_eq!(snapshot.repositories.len(), 2);
@@ -360,10 +390,10 @@ fn environment_snapshot_omits_unresolved_heads() {
     let snapshot = environment_snapshot(
         &requests,
         Path::new("/workspace"),
-        &[
-            None,
-            Some("0123456789abcdef0123456789abcdef01234567".to_string()),
-        ],
+        &ResolvedHeads::from([(
+            "second".to_owned(),
+            "0123456789abcdef0123456789abcdef01234567".to_owned(),
+        )]),
     );
 
     assert_eq!(snapshot.repositories.len(), 1);
@@ -559,7 +589,7 @@ fn substituted_request_uses_target_identity_and_source_checkout_path() {
     let snapshot = environment_snapshot(
         &requests,
         Path::new("/workspace"),
-        &[Some(source_sha.to_string())],
+        &ResolvedHeads::from([("warp".to_owned(), source_sha.to_owned())]),
     );
     assert_eq!(snapshot.repositories[0].repo_name, "warp-for-benchmarks");
     assert_eq!(snapshot.repositories[0].checkout_path, "warp");
@@ -873,13 +903,12 @@ fn checkout_helper_quotes_paths_without_embedding_repository_payloads() {
         let command = build_checkout_helper_command(
             Path::new("/Applications/Warp's App/Contents/MacOS/warp"),
             Path::new("/private/a path/requests.json"),
-            Path::new("/private/a path/failures.json"),
-            Some(Path::new("/private/a path/heads.json")),
+            Path::new("/private/a path/report.json"),
             true,
             shell,
         );
         assert!(command.contains("environment-checkout --requests-file"));
-        assert!(command.contains("' --failure-report '"));
+        assert!(command.contains("' --report-file '"));
         assert!(!command.contains("github.com") && !command.contains("sh -c"));
         assert_eq!(command.starts_with("& "), shell == ShellType::PowerShell);
         assert!(command.ends_with(" --remove-origins-only"));
@@ -887,25 +916,30 @@ fn checkout_helper_quotes_paths_without_embedding_repository_payloads() {
 }
 
 #[test]
-fn failure_reports_are_validated_and_removed_on_every_read() {
+fn checkout_reports_are_validated_and_removed_on_every_read() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("failures.json");
+    let path = directory.path().join("report.json");
     std::fs::write(
         &path,
-        r#"{"failures":[{"request_index":1,"kind":"Checkout","output":"unknown ref"}]}"#,
+        r#"{"outcomes":[
+            {"request_index":0,"failure":null,"diagnostics":"","duration_ms":5,"resolved_head":null},
+            {"request_index":1,"failure":"Checkout","diagnostics":"unknown ref","duration_ms":9,"resolved_head":null}
+        ]}"#,
     )
     .unwrap();
-    let failures = read_checkout_failures(&path, 2).unwrap();
-    assert_eq!(failures.failures.len(), 1);
-    assert_eq!(failures.failures[0].request_index, 1);
+    let report = read_checkout_report(&path, 2).unwrap();
+    let failures = report.failures().collect::<Vec<_>>();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].request_index, 1);
+    assert_eq!(failures[0].diagnostics, "unknown ref");
     assert!(!path.exists());
     for bytes in [
         "{",
-        r#"{"failures":[{"request_index":2,"kind":"Clone","output":""}]}"#,
-        r#"{"failures":[{"request_index":0,"kind":"Clone","output":""},{"request_index":0,"kind":"Clone","output":""}]}"#,
+        r#"{"outcomes":[{"request_index":2,"failure":"Clone","diagnostics":"","duration_ms":0,"resolved_head":null}]}"#,
+        r#"{"outcomes":[{"request_index":0,"failure":"Clone","diagnostics":"","duration_ms":0,"resolved_head":null},{"request_index":0,"failure":"Clone","diagnostics":"","duration_ms":0,"resolved_head":null}]}"#,
     ] {
         std::fs::write(&path, bytes).unwrap();
-        assert!(read_checkout_failures(&path, 2).is_none());
+        assert!(read_checkout_report(&path, 2).is_none());
         assert!(!path.exists());
     }
 }
