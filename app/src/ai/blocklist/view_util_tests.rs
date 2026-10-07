@@ -1,6 +1,5 @@
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
-use warp_errors::report_if_error;
 use warpui::App;
 
 use super::*;
@@ -17,7 +16,10 @@ fn initialize_usage_unit_test_app(app: &mut App) {
 
 fn set_usage_display_unit(app: &mut App, unit: UsageDisplayUnit) {
     AISettings::handle(app).update(app, |settings, ctx| {
-        report_if_error!(settings.usage_display_unit.set_value(unit, ctx));
+        settings
+            .usage_display_unit
+            .set_value(unit, ctx)
+            .expect("usage display unit should be settable in tests");
     });
 }
 
