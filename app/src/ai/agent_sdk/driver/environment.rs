@@ -275,10 +275,12 @@ fn is_valid_git_object_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
+/// Workspace inputs used to prepare a run's repositories, commands, and skills.
 #[derive(Default)]
 pub(crate) struct WorkspaceConfiguration {
     pub source_repos: Vec<SourceRepo>,
     pub setup_commands: Vec<String>,
+    pub factory_skill_dirs: Option<Vec<PathBuf>>,
     pub has_environment: bool,
     clone_requests: Vec<RepositoryCloneRequest>,
 }
@@ -311,6 +313,7 @@ impl WorkspaceConfiguration {
         Ok(Self {
             source_repos,
             setup_commands,
+            factory_skill_dirs: None,
             has_environment: environment.is_some(),
             clone_requests,
         })
@@ -327,6 +330,7 @@ impl WorkspaceConfiguration {
                 .map(|repo| repo.source.clone())
                 .collect(),
             setup_commands,
+            factory_skill_dirs: None,
             has_environment: false,
             clone_requests,
         })
@@ -411,6 +415,7 @@ pub(crate) fn prepare_environment(
         let WorkspaceConfiguration {
             source_repos,
             setup_commands,
+            factory_skill_dirs: _,
             clone_requests,
             has_environment: _,
         } = workspace;

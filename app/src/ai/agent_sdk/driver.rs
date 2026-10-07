@@ -620,7 +620,6 @@ pub struct AgentDriverOptions {
     /// Cloud providers to configure within the agent's session.
     pub cloud_providers: Vec<Box<dyn cloud_provider::CloudProvider>>,
     pub workspace: environment::WorkspaceConfiguration,
-    pub factory_skill_dirs: Option<Vec<PathBuf>>,
     pub computer_use_config: Option<(bool, Option<LLMId>)>,
     /// Selected execution harness for this run.
     pub selected_harness: Harness,
@@ -716,7 +715,7 @@ pub struct AgentDriver {
     cloud_providers: Vec<Box<dyn cloud_provider::CloudProvider>>,
 
     workspace: Option<environment::WorkspaceConfiguration>,
-    factory_skill_dirs: Option<Vec<PathBuf>>,
+    skill_dirs: Vec<PathBuf>,
     computer_use_configured: bool,
 
     // End-of-run snapshot upload controls.
@@ -1083,7 +1082,6 @@ impl AgentDriver {
             resume,
             cloud_providers,
             workspace,
-            factory_skill_dirs,
             computer_use_config,
             selected_harness,
             third_party_harness_model_config,
@@ -1149,7 +1147,7 @@ impl AgentDriver {
             selected_harness,
             third_party_harness_model_config.as_ref(),
         ));
-        if let Some(dirs) = &factory_skill_dirs {
+        if let Some(dirs) = &workspace.factory_skill_dirs {
             env_vars.insert(
                 OsString::from(WARP_SKILL_DIRS_ENV),
                 OsString::from(dirs.iter().map(|dir| dir.to_string_lossy()).join(",")),
@@ -1170,6 +1168,10 @@ impl AgentDriver {
         }
 
         let resolved_env_vars = Arc::new(env_vars);
+        let skill_dirs = workspace
+            .factory_skill_dirs
+            .clone()
+            .unwrap_or_else(parse_skills_dirs_env);
 
         let terminal_driver = terminal::TerminalDriver::create(
             terminal::TerminalDriverOptions {
@@ -1186,7 +1188,10 @@ impl AgentDriver {
         if let Some((enabled, model_id)) = computer_use_config {
             let terminal_view_id = terminal_driver.as_ref(ctx).terminal_view().id();
             AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
-                profiles.set_session_computer_use(terminal_view_id, enabled, model_id, ctx);
+                profiles.set_session_computer_use(terminal_view_id, enabled, ctx);
+            });
+            LLMPreferences::handle(ctx).update(ctx, |preferences, _| {
+                preferences.set_computer_use_llm_override(terminal_view_id, model_id);
             });
         }
 
@@ -1284,7 +1289,7 @@ impl AgentDriver {
             resume_payload,
             cloud_providers,
             workspace: Some(workspace),
-            factory_skill_dirs,
+            skill_dirs,
             computer_use_configured,
             snapshot_disabled: snapshot_disabled_value,
             snapshot_upload_timeout: snapshot_upload_timeout
@@ -1338,7 +1343,7 @@ impl AgentDriver {
             resume_payload: None,
             cloud_providers: Vec::new(),
             workspace: Some(environment::WorkspaceConfiguration::default()),
-            factory_skill_dirs: None,
+            skill_dirs: parse_skills_dirs_env(),
             computer_use_configured: false,
             snapshot_disabled: false,
             snapshot_upload_timeout: snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT,
@@ -1361,6 +1366,9 @@ impl AgentDriver {
             let terminal_view_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
             AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
                 profiles.clear_session_computer_use(terminal_view_id, ctx);
+            });
+            LLMPreferences::handle(ctx).update(ctx, |preferences, _| {
+                preferences.clear_computer_use_llm_override(terminal_view_id);
             });
         }
         let terminal = self.terminal_driver.as_ref(ctx).terminal_view().clone();
@@ -2073,11 +2081,9 @@ impl AgentDriver {
     /// variable is a no-op.
     async fn load_skills_dirs(foreground: &ModelSpawner<Self>) {
         let dirs = foreground
-            .spawn(|me, _| me.factory_skill_dirs.clone())
+            .spawn(|me, _| me.skill_dirs.clone())
             .await
-            .ok()
-            .flatten()
-            .unwrap_or_else(parse_skills_dirs_env);
+            .unwrap_or_default();
         if dirs.is_empty() {
             return;
         }
@@ -3079,6 +3085,7 @@ impl AgentDriver {
             server_api,
             managed_mcp_client,
             terminal_driver,
+            skill_dirs,
         ) = foreground
             .spawn(|me, ctx| {
                 if me.harness.is_some() {
@@ -3095,6 +3102,7 @@ impl AgentDriver {
                     ServerApiProvider::as_ref(ctx).get(),
                     ServerApiProvider::as_ref(ctx).get_managed_mcp_client(),
                     me.terminal_driver.clone(),
+                    me.skill_dirs.clone(),
                 ))
             })
             .await
@@ -3184,6 +3192,7 @@ impl AgentDriver {
                 terminal_driver,
                 resume,
                 &resolved_env_vars,
+                &skill_dirs,
                 &secrets_for_harness,
                 &resolved_mcp_servers,
                 third_party_harness_model_config.as_ref(),

@@ -1,8 +1,7 @@
 use chrono::{TimeZone, Utc};
 use futures::executor::block_on;
 use itertools::Itertools;
-use mockito::{Matcher, Mock, Server};
-use serde_json::{Value, json};
+use mockito::{Matcher, Server};
 use warp_graphql::ai::PlatformErrorCode;
 use warp_graphql::platform_error::{PlatformErrorInfo, PlatformErrorMessageFormat};
 use warp_server_client::base_client::{CLOUD_AGENT_ID_HEADER, TEAM_UID_HEADER};
@@ -26,135 +25,6 @@ use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeF
 
 fn request_scope_for_team(team_uid: ServerId) -> RequestTeamScope {
     RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid))
-}
-
-fn execution_bootstrap_response() -> Value {
-    json!({
-        "data": {
-            "executionConfig": {
-                "__typename": "ExecutionConfigOutput",
-                "config": {
-                    "taskId": "task-one",
-                    "executionId": "1",
-                    "conversationId": null,
-                    "parentRunId": null,
-                    "harness": "OZ",
-                    "modelId": null,
-                    "reasoningLevel": null,
-                    "profileId": null,
-                    "mcpServersJson": "{}",
-                    "skills": [],
-                    "factorySkillDirs": [],
-                    "computerUseEnabled": false,
-                    "computerUseModelId": null,
-                    "inferenceProviders": null,
-                    "repositories": [],
-                    "setupCommands": [],
-                    "providers": null,
-                    "sessionSharingAcls": [],
-                    "skipInitialTurn": false,
-                    "idleOnCompleteSeconds": null,
-                    "idleOnFailSeconds": null,
-                    "snapshotDisabled": false
-                }
-            },
-            "taskSecrets": {
-                "__typename": "TaskSecretsOutput",
-                "secrets": [{
-                    "name": "API_KEY",
-                    "value": {"__typename": "ManagedSecretRawValue", "value": "secret"}
-                }]
-            },
-            "task": {
-                "__typename": "TaskOutput",
-                "task": {
-                    "taskId": "task-one",
-                    "attachments": [{
-                        "fileId": "file-one",
-                        "filename": "file-one_test.txt",
-                        "downloadUrl": "https://example.com/file",
-                        "mimeType": "text/plain"
-                    }]
-                }
-            }
-        }
-    })
-}
-
-fn mock_execution_bootstrap(response: Value, workload_token: &str) -> Mock {
-    let mut server = warp_core::channel::ChannelState::mock_server();
-    server
-        .mock("POST", "/graphql/v2")
-        .match_query(Matcher::UrlEncoded(
-            "op".into(),
-            "ExecutionBootstrap".into(),
-        ))
-        .match_body(Matcher::PartialJson(json!({
-            "variables": {
-                "configInput": {"taskId": "task-one", "executionId": "1"},
-                "secretsInput": {"taskId": "task-one", "workloadToken": workload_token},
-                "taskInput": {"taskId": "task-one"}
-            }
-        })))
-        .with_status(200)
-        .with_body(response.to_string())
-        .expect(1)
-        .create()
-}
-
-fn execution_bootstrap_server_api() -> ServerApi {
-    let api = ServerApi::new_for_test();
-    api.base_client
-        .set_ambient_workload_token_for_test("test-workload-token".to_owned(), None);
-    api
-}
-
-#[test]
-fn execution_bootstrap_fetches_config_secrets_and_attachments_once() {
-    let request = mock_execution_bootstrap(execution_bootstrap_response(), "token-success");
-    let data = block_on(execution_bootstrap_server_api().get_execution_bootstrap(
-        "task-one",
-        "1",
-        "token-success".into(),
-    ))
-    .unwrap();
-    assert_eq!(data.config.task_id.inner(), "task-one");
-    assert_eq!(data.config.execution_id.inner(), "1");
-    assert!(data.secrets.unwrap().contains_key("API_KEY"));
-    assert_eq!(data.attachments.unwrap()[0].filename, "file-one_test.txt");
-    request.assert();
-}
-
-#[test]
-fn execution_bootstrap_preserves_independent_secret_and_attachment_errors() {
-    let mut response = execution_bootstrap_response();
-    response["data"]["taskSecrets"] = json!({
-        "__typename": "UserFacingError",
-        "error": {"__typename": "InvalidSecretError", "message": "Unable to access task secrets"},
-        "responseContext": {"serverVersion": null}
-    });
-    response["data"]["task"] = json!({
-        "__typename": "UserFacingError",
-        "error": {"__typename": "InvalidAttachmentError", "message": "Unable to access task"},
-        "responseContext": {"serverVersion": null}
-    });
-    let request = mock_execution_bootstrap(response, "token-errors");
-    let data = block_on(execution_bootstrap_server_api().get_execution_bootstrap(
-        "task-one",
-        "1",
-        "token-errors".into(),
-    ))
-    .unwrap();
-    assert_eq!(data.config.execution_id.inner(), "1");
-    assert_eq!(
-        data.secrets.unwrap_err().to_string(),
-        "Unable to access task secrets"
-    );
-    assert_eq!(
-        data.attachments.unwrap_err().to_string(),
-        "Unable to access task"
-    );
-    request.assert();
 }
 
 #[test]

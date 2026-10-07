@@ -3,68 +3,19 @@ use warp_graphql::queries::execution_config::{
 };
 
 use super::*;
-use crate::ai::ambient_agents::task::TaskScope;
 use crate::workspaces::user_workspaces::TeamScope;
 
 #[test]
-fn execution_identity_must_match_both_requested_ids() {
-    let config = ExecutionConfiguration {
-        task_id: cynic::Id::new("task-one"),
-        execution_id: cynic::Id::new("execution-one"),
-        conversation_id: None,
-        parent_run_id: None,
-        harness: AgentHarness::Oz,
-        model_id: None,
-        reasoning_level: None,
-        profile_id: None,
-        mcp_servers_json: "{}".to_owned(),
-        skills: Vec::new(),
-        factory_skill_dirs: Vec::new(),
-        computer_use_enabled: true,
-        computer_use_model_id: None,
-        inference_providers: None,
-        repositories: Vec::new(),
-        setup_commands: Vec::new(),
-        providers: None,
-        session_sharing_acls: Vec::new(),
-        skip_initial_turn: false,
-        idle_on_complete_seconds: None,
-        idle_on_fail_seconds: None,
-        snapshot_disabled: false,
-    };
-    assert!(validate_identity(&config, "task-one", "execution-one").is_ok());
-    assert!(validate_identity(&config, "task-two", "execution-one").is_err());
-    assert!(validate_identity(&config, "task-one", "execution-two").is_err());
-}
-
-#[test]
-fn execution_scope_uses_authoritative_rest_team_uid() {
+fn execution_scope_uses_configuration_team_uid() {
     let team_id = ServerId::from(7);
-    let scope = TaskScope {
-        scope_type: "team".to_owned(),
-        uid: team_id.to_string(),
-    };
-    assert_eq!(team_scope(Some(&scope)).unwrap().team_uid(), Some(team_id));
-    let personal = TaskScope {
-        scope_type: "user".to_owned(),
-        uid: "owner".to_owned(),
-    };
-    assert_eq!(team_scope(Some(&personal)).unwrap().team_uid(), None);
-    assert!(
-        team_scope(Some(&TaskScope {
-            scope_type: "unknown".to_owned(),
-            uid: "owner".to_owned(),
-        }))
-        .is_err()
+    assert_eq!(
+        team_scope(Some(&cynic::Id::new(team_id.to_string())))
+            .unwrap()
+            .team_uid(),
+        Some(team_id)
     );
-    assert!(team_scope(None).is_err());
-    assert!(
-        team_scope(Some(&TaskScope {
-            scope_type: "team".to_owned(),
-            uid: "invalid-uid".to_owned(),
-        }))
-        .is_err()
-    );
+    assert_eq!(team_scope(None).unwrap().team_uid(), None);
+    assert!(team_scope(Some(&cynic::Id::new("invalid-uid"))).is_err());
 }
 
 #[test]

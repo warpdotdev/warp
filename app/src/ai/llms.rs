@@ -1278,7 +1278,6 @@ impl LLMPreferences {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn set_computer_use_llm_override(
         &mut self,
         terminal_view_id: EntityId,
@@ -1289,7 +1288,6 @@ impl LLMPreferences {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn clear_computer_use_llm_override(&mut self, terminal_view_id: EntityId) {
         self.computer_use_llm_for_terminal_view
             .remove(&terminal_view_id);

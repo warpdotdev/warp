@@ -138,13 +138,13 @@ impl ThirdPartyHarness for CodexHarness {
         terminal_driver: ModelHandle<TerminalDriver>,
         resume: Option<ResumePayload>,
         resolved_env_vars: &HashMap<OsString, OsString>,
+        skill_dirs: &[PathBuf],
         resolved_secrets: &HashMap<String, ManagedSecretValue>,
         resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
         third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
         // Prepare the environment config files.
         prepare_codex_environment_config(
-            workspace_root,
             harness_working_dir,
             system_prompt,
             resolved_env_vars,
@@ -156,6 +156,7 @@ impl ThirdPartyHarness for CodexHarness {
             harness: self.cli_agent().command_prefix().to_owned(),
             error,
         })?;
+        publish_skills_for_codex(workspace_root, harness_working_dir, skill_dirs);
 
         // The ResumePayload shouldn't contain non-Codex information, error if it does.
         let codex_resume = resume.map(CodexResumeInfo::try_from).transpose()?;
@@ -588,7 +589,6 @@ const CODEX_MODEL_REASONING_EFFORT_KEY: &str = "model_reasoning_effort";
 /// release to change this.
 const CODEX_MODEL_MIGRATIONS_TARGET: &str = "gpt-5.4";
 fn prepare_codex_environment_config(
-    workspace_root: &Path,
     harness_working_dir: &Path,
     system_prompt: Option<&str>,
     resolved_env_vars: &HashMap<OsString, OsString>,
@@ -619,7 +619,6 @@ fn prepare_codex_environment_config(
         third_party_harness_model_config,
         openai_base_url.as_deref(),
     )?;
-    publish_skills_for_codex(workspace_root, harness_working_dir, resolved_env_vars);
     Ok(())
 }
 
@@ -640,19 +639,15 @@ fn prepare_codex_environment_config(
 fn publish_skills_for_codex(
     workspace_root: &Path,
     harness_working_dir: &Path,
-    resolved_env_vars: &HashMap<OsString, OsString>,
+    skill_dirs: &[PathBuf],
 ) {
     let skill_root = harness_working_dir.join(".agents").join("skills");
     let is_sandbox = warp_isolation_platform::detect().is_some();
-    let source_dirs = super::skill_dirs_publish::source_dirs_from_env(
-        workspace_root,
-        resolved_env_vars.get(OsStr::new(ai::skills::WARP_SKILL_DIRS_ENV)),
-    );
     let published = super::skill_dirs_publish::publish_skills_for_harness(
         &skill_root,
         workspace_root,
         is_sandbox,
-        source_dirs.as_deref(),
+        skill_dirs,
     );
     super::skill_dirs_publish::exclude_published_skill_paths_from_git(
         harness_working_dir,

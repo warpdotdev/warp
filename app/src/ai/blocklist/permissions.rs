@@ -224,14 +224,7 @@ impl BlocklistAIPermissions {
     ) -> AIExecutionProfile {
         let active_profile =
             AIExecutionProfilesModel::as_ref(ctx).active_profile(terminal_view_id, ctx);
-        let mut profile = self.permissions_profile_for_id(active_profile.id(), scope, ctx);
-        profile.computer_use = self.get_computer_use_setting(terminal_view_id, scope, ctx);
-        if let Some(selection) = terminal_view_id
-            .and_then(|id| AIExecutionProfilesModel::as_ref(ctx).session_computer_use(id))
-        {
-            profile.computer_use_model = selection.model_id.clone();
-        }
-        profile
+        self.permissions_profile_for_id(active_profile.id(), scope, ctx)
     }
 
     /// Returns the applicable workspace autonomy settings based on execution mode.

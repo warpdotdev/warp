@@ -1,4 +1,4 @@
-use super::task_attachments::{TaskInput, TaskResult};
+use super::task_attachments::{TaskAttachment, TaskInput};
 use super::task_secrets::{TaskSecretsInput, TaskSecretsResult};
 use crate::ai::AgentHarness;
 use crate::error::UserFacingError;
@@ -7,7 +7,7 @@ use crate::schema;
 
 #[derive(cynic::QueryVariables, Debug)]
 pub struct ExecutionBootstrapVariables {
-    pub config_input: ExecutionConfigInput,
+    pub execution_id: cynic::Id,
     pub secrets_input: TaskSecretsInput,
     pub task_input: TaskInput,
     pub request_context: RequestContext,
@@ -16,52 +16,37 @@ pub struct ExecutionBootstrapVariables {
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "RootQuery", variables = "ExecutionBootstrapVariables")]
 pub struct ExecutionBootstrap {
-    #[arguments(input: $config_input, requestContext: $request_context)]
-    pub execution_config: ExecutionConfigResult,
     #[arguments(input: $secrets_input, requestContext: $request_context)]
     pub task_secrets: TaskSecretsResult,
     #[arguments(input: $task_input, requestContext: $request_context)]
-    pub task: TaskResult,
+    pub task: BootstrapTaskResult,
 }
 
 crate::client::define_operation! {
     execution_bootstrap(ExecutionBootstrapVariables) -> ExecutionBootstrap;
 }
 
-#[derive(cynic::QueryVariables, Debug)]
-pub struct ExecutionConfigVariables {
-    pub input: ExecutionConfigInput,
-    pub request_context: RequestContext,
-}
-
-#[derive(cynic::InputObject, Debug)]
-pub struct ExecutionConfigInput {
-    pub task_id: cynic::Id,
-    pub execution_id: cynic::Id,
-}
-
-#[derive(cynic::QueryFragment, Debug)]
-#[cynic(graphql_type = "RootQuery", variables = "ExecutionConfigVariables")]
-pub struct ExecutionConfig {
-    #[arguments(input: $input, requestContext: $request_context)]
-    pub execution_config: ExecutionConfigResult,
-}
-
-crate::client::define_operation! {
-    execution_config(ExecutionConfigVariables) -> ExecutionConfig;
-}
-
 #[derive(cynic::InlineFragments, Debug)]
-pub enum ExecutionConfigResult {
-    ExecutionConfigOutput(Box<ExecutionConfigOutput>),
+#[cynic(graphql_type = "TaskResult", variables = "ExecutionBootstrapVariables")]
+pub enum BootstrapTaskResult {
+    TaskOutput(Box<BootstrapTaskOutput>),
     UserFacingError(UserFacingError),
     #[cynic(fallback)]
     Unknown,
 }
 
 #[derive(cynic::QueryFragment, Debug)]
-pub struct ExecutionConfigOutput {
-    pub config: ExecutionConfiguration,
+#[cynic(graphql_type = "TaskOutput", variables = "ExecutionBootstrapVariables")]
+pub struct BootstrapTaskOutput {
+    pub task: BootstrapTask,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "Task", variables = "ExecutionBootstrapVariables")]
+pub struct BootstrapTask {
+    #[arguments(executionId: $execution_id)]
+    pub execution_config: ExecutionConfiguration,
+    pub attachments: Vec<TaskAttachment>,
 }
 
 #[derive(cynic::QueryFragment, Debug)]
@@ -70,6 +55,7 @@ pub struct ExecutionConfiguration {
     pub execution_id: cynic::Id,
     pub conversation_id: Option<cynic::Id>,
     pub parent_run_id: Option<cynic::Id>,
+    pub team_id: Option<cynic::Id>,
     pub harness: AgentHarness,
     pub model_id: Option<String>,
     pub reasoning_level: Option<String>,

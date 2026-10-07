@@ -70,10 +70,9 @@ fn paired_task_data_downloads_listed_attachment_without_refetching_it() {
         download_url: format!("{}/attachment", server.url()),
         mime_type: "text/plain".to_owned(),
     };
-    App::test((), |mut app| async move {
-        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-        let runner = app.add_singleton_model(|_| AgentDriverRunner);
-        let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
+    App::test((), |app| async move {
+        let provider = app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        let server_api = provider.read(&app, |provider, _| provider.get());
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -95,7 +94,7 @@ fn paired_task_data_downloads_listed_attachment_without_refetching_it() {
             harness: HarnessKind::Oz,
         };
         AgentDriverRunner::prepare_execution_task_data(
-            &foreground,
+            server_api,
             &ai_client,
             TASK_ID.parse().unwrap(),
             std::collections::HashMap::from([(
@@ -283,7 +282,6 @@ pub(crate) fn agent_driver_options() -> AgentDriverOptions {
         resume: None,
         cloud_providers: vec![],
         workspace: WorkspaceConfiguration::default(),
-        factory_skill_dirs: None,
         computer_use_config: None,
         selected_harness: Harness::Oz,
         third_party_harness_model_config: None,

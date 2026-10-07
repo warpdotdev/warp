@@ -8,44 +8,26 @@ use warp_cli::mcp::MCPSpec;
 use warp_cli::share::{ShareAccessLevel, ShareRequest, ShareSubject};
 use warp_graphql::ai::AgentHarness;
 use warp_graphql::queries::execution_config::{
-    CloudProviderClientConfigs, CodeForge, ExecutionConfiguration, ExecutionRepository,
-    ExecutionRepositoryRefType, SessionSharingAccessLevel, SessionSharingAclSpec,
-    SessionSharingSubjectType, SourceRepo as ConfigSourceRepo,
+    CloudProviderClientConfigs, CodeForge, ExecutionRepository, ExecutionRepositoryRefType,
+    SessionSharingAccessLevel, SessionSharingAclSpec, SessionSharingSubjectType,
+    SourceRepo as ConfigSourceRepo,
 };
 
 use super::driver::environment::ResolvedRepository;
 use super::{config_file, mcp_config};
-use crate::ai::ambient_agents::task::TaskScope;
 use crate::ai::cloud_environments::{
     AwsProviderConfig, GcpProviderConfig, ProvidersConfig, SourceRepo,
 };
 use crate::server::ids::ServerId;
 use crate::workspaces::user_workspaces::HeadlessTeamScope;
 
-pub(super) fn validate_identity(
-    config: &ExecutionConfiguration,
-    task_id: &str,
-    execution_id: &str,
-) -> anyhow::Result<()> {
-    if config.task_id.inner() != task_id || config.execution_id.inner() != execution_id {
-        bail!("Execution configuration identity did not match the requested task and execution");
-    }
-    Ok(())
-}
-
-pub(super) fn team_scope(scope: Option<&TaskScope>) -> anyhow::Result<HeadlessTeamScope> {
-    let scope = scope.context("Execution task metadata is missing its owner scope")?;
-    if scope.is_team() {
-        Ok(HeadlessTeamScope::Team(
-            ServerId::try_from(scope.uid.as_str())
+pub(super) fn team_scope(team_id: Option<&cynic::Id>) -> anyhow::Result<HeadlessTeamScope> {
+    match team_id {
+        Some(team_id) => Ok(HeadlessTeamScope::Team(
+            ServerId::try_from(team_id.inner())
                 .context("Execution task has an invalid team UID")?,
-        ))
-    } else if scope.scope_type.eq_ignore_ascii_case("user")
-        || scope.scope_type.eq_ignore_ascii_case("personal")
-    {
-        Ok(HeadlessTeamScope::Personal)
-    } else {
-        bail!("Execution task has an invalid ownership scope")
+        )),
+        None => Ok(HeadlessTeamScope::Personal),
     }
 }
 
@@ -83,61 +65,70 @@ fn source_repo(source: ConfigSourceRepo) -> anyhow::Result<SourceRepo> {
     ))
 }
 
-fn repository(repo: ExecutionRepository) -> anyhow::Result<ResolvedRepository> {
-    let source = SourceRepo::new(forge(repo.forge)?, repo.owner, repo.name);
-    let checkout = repo
-        .ref_
-        .map(|reference| match reference.type_ {
-            ExecutionRepositoryRefType::Branch => Ok(RepositoryHeadRef::Branch(reference.value)),
-            ExecutionRepositoryRefType::CommitSha => {
-                Ok(RepositoryHeadRef::CommitSha(reference.value))
-            }
-            ExecutionRepositoryRefType::Unknown => bail!("Unsupported execution repository ref"),
-        })
-        .transpose()?;
-    let clone_from = repo.clone_from.map(source_repo).transpose()?;
-    Ok(ResolvedRepository {
-        source,
-        checkout,
-        clone_from,
-        preserve_origin: repo.preserve_origin,
-    })
-}
-
 pub(super) fn repositories(
     repositories: Vec<ExecutionRepository>,
 ) -> anyhow::Result<Vec<ResolvedRepository>> {
-    repositories.into_iter().map(repository).collect()
-}
-
-fn sharing_acl(acl: SessionSharingAclSpec) -> anyhow::Result<ShareRequest> {
-    let subject = match acl.subject_type {
-        SessionSharingSubjectType::Team if acl.email.is_none() => ShareSubject::Team,
-        SessionSharingSubjectType::Public if acl.email.is_none() => ShareSubject::Public,
-        SessionSharingSubjectType::UserEmail => {
-            let email = acl.email.filter(|email| !email.trim().is_empty());
-            ShareSubject::User {
-                email: email.context("User sharing ACL has no email")?,
-            }
-        }
-        SessionSharingSubjectType::Unknown => bail!("Unsupported execution sharing subject"),
-        SessionSharingSubjectType::Team | SessionSharingSubjectType::Public => {
-            bail!("Invalid execution sharing ACL")
-        }
-    };
-    let access_level = match acl.access {
-        SessionSharingAccessLevel::View => ShareAccessLevel::View,
-        SessionSharingAccessLevel::Edit => ShareAccessLevel::Edit,
-        SessionSharingAccessLevel::Unknown => bail!("Unsupported execution sharing access"),
-    };
-    Ok(ShareRequest {
-        subject,
-        access_level,
-    })
+    repositories
+        .into_iter()
+        .map(|repo| {
+            let source = SourceRepo::new(forge(repo.forge)?, repo.owner, repo.name);
+            let checkout = repo
+                .ref_
+                .map(|reference| match reference.type_ {
+                    ExecutionRepositoryRefType::Branch => {
+                        Ok(RepositoryHeadRef::Branch(reference.value))
+                    }
+                    ExecutionRepositoryRefType::CommitSha => {
+                        Ok(RepositoryHeadRef::CommitSha(reference.value))
+                    }
+                    ExecutionRepositoryRefType::Unknown => {
+                        bail!("Unsupported execution repository ref")
+                    }
+                })
+                .transpose()?;
+            let clone_from = repo.clone_from.map(source_repo).transpose()?;
+            Ok(ResolvedRepository {
+                source,
+                checkout,
+                clone_from,
+                preserve_origin: repo.preserve_origin,
+            })
+        })
+        .collect()
 }
 
 pub(super) fn sharing_acls(acls: Vec<SessionSharingAclSpec>) -> anyhow::Result<Vec<ShareRequest>> {
-    acls.into_iter().map(sharing_acl).collect()
+    acls.into_iter()
+        .map(|acl| {
+            let subject = match acl.subject_type {
+                SessionSharingSubjectType::Team if acl.email.is_none() => ShareSubject::Team,
+                SessionSharingSubjectType::Public if acl.email.is_none() => ShareSubject::Public,
+                SessionSharingSubjectType::UserEmail => {
+                    let email = acl.email.filter(|email| !email.trim().is_empty());
+                    ShareSubject::User {
+                        email: email.context("User sharing ACL has no email")?,
+                    }
+                }
+                SessionSharingSubjectType::Unknown => {
+                    bail!("Unsupported execution sharing subject")
+                }
+                SessionSharingSubjectType::Team | SessionSharingSubjectType::Public => {
+                    bail!("Invalid execution sharing ACL")
+                }
+            };
+            let access_level = match acl.access {
+                SessionSharingAccessLevel::View => ShareAccessLevel::View,
+                SessionSharingAccessLevel::Edit => ShareAccessLevel::Edit,
+                SessionSharingAccessLevel::Unknown => {
+                    bail!("Unsupported execution sharing access")
+                }
+            };
+            Ok(ShareRequest {
+                subject,
+                access_level,
+            })
+        })
+        .collect()
 }
 
 pub(super) fn providers(config: Option<CloudProviderClientConfigs>) -> ProvidersConfig {

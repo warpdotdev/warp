@@ -210,8 +210,13 @@ pub(super) async fn prepare_local_harness_child_launch(
             // auth/session state. We still prepare harness config files here,
             // but there are no Warp-managed secrets to materialize into the
             // hidden child pane.
-            prepare_claude_environment_config(&working_dir, &working_dir, &HashMap::new())
-                .map_err(|error| error.to_string())?;
+            prepare_claude_environment_config(
+                &working_dir,
+                &working_dir,
+                &HashMap::new(),
+                &ai::skills::parse_skills_dirs_env(),
+            )
+            .map_err(|error| error.to_string())?;
             if let Some(manager) = plugin_manager_for(third_party_harness.cli_agent()) {
                 ensure_local_claude_child_plugins(manager.as_ref()).await;
             }

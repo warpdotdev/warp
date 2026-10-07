@@ -19,8 +19,6 @@ use crate::ai::blocklist::permissions::{
 use crate::ai::execution_profiles::ComputerUsePermission;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::{ActionPermission, WriteToPtyPermission};
-#[cfg(not(target_family = "wasm"))]
-use crate::ai::llms::LLMId;
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -112,7 +110,6 @@ fn execution_computer_use_is_scoped_to_the_terminal() {
     App::test((), |mut app| async move {
         let state = initialize_permissions_test(&mut app);
         let other_terminal = EntityId::new();
-        let selected_model = LLMId::from("computer-use-model");
         let initial_profile = state.profile_model.read(&app, |profiles, ctx| {
             profiles
                 .active_profile(Some(state.terminal_view_id), ctx)
@@ -120,12 +117,7 @@ fn execution_computer_use_is_scoped_to_the_terminal() {
                 .clone()
         });
         state.profile_model.update(&mut app, |profiles, ctx| {
-            profiles.set_session_computer_use(
-                state.terminal_view_id,
-                true,
-                Some(selected_model.clone()),
-                ctx,
-            );
+            profiles.set_session_computer_use(state.terminal_view_id, true, ctx);
         });
         state.permissions.read(&app, |permissions, ctx| {
             assert_eq!(
@@ -135,12 +127,6 @@ fn execution_computer_use_is_scoped_to_the_terminal() {
                     ctx
                 ),
                 ComputerUsePermission::AlwaysAllow
-            );
-            assert_eq!(
-                permissions
-                    .active_permissions_profile(Some(state.terminal_view_id), &test_scope(), ctx)
-                    .computer_use_model,
-                Some(selected_model.clone())
             );
             assert_ne!(
                 permissions.get_computer_use_setting(Some(other_terminal), &test_scope(), ctx),
@@ -190,7 +176,7 @@ fn workspace_computer_use_policy_overrides_session_selection() {
     App::test((), |mut app| async move {
         let state = initialize_permissions_test(&mut app);
         state.profile_model.update(&mut app, |profiles, ctx| {
-            profiles.set_session_computer_use(state.terminal_view_id, true, None, ctx);
+            profiles.set_session_computer_use(state.terminal_view_id, true, ctx);
         });
         state.user_workspaces.update(&mut app, |workspaces, ctx| {
             workspaces.setup_test_workspace(ctx);
@@ -206,12 +192,6 @@ fn workspace_computer_use_policy_overrides_session_selection() {
                     &test_scope(),
                     ctx
                 ),
-                ComputerUsePermission::Never
-            );
-            assert_eq!(
-                permissions
-                    .active_permissions_profile(Some(state.terminal_view_id), &test_scope(), ctx)
-                    .computer_use,
                 ComputerUsePermission::Never
             );
         });

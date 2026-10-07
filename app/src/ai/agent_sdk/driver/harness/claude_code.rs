@@ -151,13 +151,19 @@ impl ThirdPartyHarness for ClaudeHarness {
         terminal_driver: ModelHandle<TerminalDriver>,
         resume: Option<ResumePayload>,
         resolved_env_vars: &HashMap<OsString, OsString>,
+        skill_dirs: &[PathBuf],
         _resolved_secrets: &HashMap<String, ManagedSecretValue>,
         resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
         _third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
         // Prepare the environment config files.
-        prepare_claude_environment_config(workspace_root, harness_working_dir, resolved_env_vars)
-            .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
+        prepare_claude_environment_config(
+            workspace_root,
+            harness_working_dir,
+            resolved_env_vars,
+            skill_dirs,
+        )
+        .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
             harness: self.cli_agent().command_prefix().to_owned(),
             error,
         })?;
@@ -719,6 +725,7 @@ pub(crate) fn prepare_claude_environment_config(
     workspace_root: &Path,
     harness_working_dir: &Path,
     resolved_env_vars: &HashMap<OsString, OsString>,
+    skill_dirs: &[PathBuf],
 ) -> Result<()> {
     let claude_json_path = claude_global_config_path()?;
     let claude_dir = claude_config_dir()?;
@@ -730,7 +737,7 @@ pub(crate) fn prepare_claude_environment_config(
         api_key_suffix.as_deref(),
     )?;
     prepare_claude_settings(&claude_settings_path)?;
-    publish_skills_for_claude(workspace_root, harness_working_dir, resolved_env_vars);
+    publish_skills_for_claude(workspace_root, harness_working_dir, skill_dirs);
     Ok(())
 }
 
@@ -750,19 +757,15 @@ pub(crate) fn prepare_claude_environment_config(
 fn publish_skills_for_claude(
     workspace_root: &Path,
     harness_working_dir: &Path,
-    resolved_env_vars: &HashMap<OsString, OsString>,
+    skill_dirs: &[PathBuf],
 ) {
     let skill_root = harness_working_dir.join(".claude").join("skills");
     let is_sandbox = warp_isolation_platform::detect().is_some();
-    let source_dirs = super::skill_dirs_publish::source_dirs_from_env(
-        workspace_root,
-        resolved_env_vars.get(OsStr::new(ai::skills::WARP_SKILL_DIRS_ENV)),
-    );
     let published = super::skill_dirs_publish::publish_skills_for_harness(
         &skill_root,
         workspace_root,
         is_sandbox,
-        source_dirs.as_deref(),
+        skill_dirs,
     );
     super::skill_dirs_publish::exclude_published_skill_paths_from_git(
         harness_working_dir,

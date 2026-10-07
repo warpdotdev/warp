@@ -3384,7 +3384,6 @@ type RootMutation {
 }
 
 type RootQuery {
-  executionConfig(input: ExecutionConfigInput!, requestContext: RequestContext!): ExecutionConfigResult!
   apiKeys(requestContext: RequestContext!): APIKeyPropertiesResult!
   cloudObject(input: CloudObjectInput!, requestContext: RequestContext!): CloudObjectResult!
   codebaseContextConfig(requestContext: RequestContext!): CodebaseContextConfigResult!
@@ -3870,6 +3869,10 @@ merged with other task queries into a single unified query.
 type Task {
   """List of attachments (images/files) associated with this task."""
   attachments: [TaskAttachment!]!
+  """
+  Configuration for the active cloud execution. Requires the execution's workload token.
+  """
+  executionConfig(executionId: ID!): ExecutionConfiguration!
 
   """The ID of the task."""
   taskId: ID!
@@ -5142,10 +5145,6 @@ enum WriteToPtyAutonomyValue {
   RESPECT_USER_SETTING
 }
 
-input ExecutionConfigInput {
-  taskId: ID!
-  executionId: ID!
-}
 
 type ExecutionSkillSpec {
   spec: String!
@@ -5219,7 +5218,8 @@ type ExecutionConfiguration {
   executionId: ID!
   conversationId: ID
   parentRunId: ID
-  teamScoped: Boolean!
+  """The owning team's UID, or null for a personal task."""
+  teamId: ID
   harness: AgentHarness!
   modelId: String
   reasoningLevel: String
@@ -5240,10 +5240,6 @@ type ExecutionConfiguration {
   snapshotDisabled: Boolean!
 }
 
-type ExecutionConfigOutput implements Response {
-  config: ExecutionConfiguration!
-  responseContext: ResponseContext!
-}
 enum CodeForge {
   GITHUB
   GITLAB
@@ -5255,9 +5251,3 @@ type SourceRepo {
   owner: String!
   repo: String!
 }
-
-type InvalidExecutionConfigError implements UserFacingErrorInterface {
-  message: String!
-}
-
-union ExecutionConfigResult = ExecutionConfigOutput | UserFacingError
