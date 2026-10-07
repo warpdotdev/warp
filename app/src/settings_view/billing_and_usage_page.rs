@@ -51,7 +51,7 @@ use crate::auth::auth_view_modal::AuthViewVariant;
 use crate::auth::{AuthManager, AuthStateProvider, UserUid};
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::modal::{Modal, ModalEvent, ModalViewState};
-use crate::pricing::addon_pack::{PackAmount, PackUnit};
+use crate::pricing::addon_pack::PackAmount;
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::server::ids::ServerId;
 use crate::server::telemetry::TelemetryEvent;
@@ -68,7 +68,7 @@ use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::{
-    BillingMetadata, CustomerType, Workspace, WorkspaceMemberUsageInfo,
+    BillingMetadata, ChargeUnit, CustomerType, Workspace, WorkspaceMemberUsageInfo,
 };
 use crate::{WorkspaceAction, send_telemetry_from_ctx};
 
@@ -151,14 +151,14 @@ pub(crate) const CHECKOUT_PENDING_MESSAGE: &str = "Opening your browser to compl
 pub(crate) fn render_premium_upgrade_savings_note(
     upgrade_url: String,
     premium_bps: i32,
-    unit: PackUnit,
+    charge_unit: ChargeUnit,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let percent = format_addon_premium_percent(premium_bps);
-    let purchasable = match unit {
-        PackUnit::Credits => "add-on credits",
-        PackUnit::Usage => "usage",
+    let purchasable = match charge_unit {
+        ChargeUnit::Credits => "add-on credits",
+        ChargeUnit::Cents => "usage",
     };
     let fragments = vec![
         FormattedTextFragment::plain_text(format!("Save {percent} on {purchasable} by ")),
@@ -270,8 +270,8 @@ pub struct BillingAndUsagePageView {
     load_more_button: ViewHandle<ActionButton>,
     selected_addon_denomination: usize,
     addon_credits_options: Vec<AddonCreditsOption>,
-    /// The unit the denomination buttons were last built for.
-    addon_pack_unit: PackUnit,
+    /// The charge unit the denomination buttons were last built for.
+    addon_charge_unit: ChargeUnit,
     addon_credit_denomination_buttons: Vec<ViewHandle<ActionButton>>,
     purchase_addon_credits_loading: bool,
     prorated_request_limits_info_mouse_states: Vec<MouseStateHandle>,
@@ -442,7 +442,7 @@ impl BillingAndUsagePageView {
             load_more_button,
             selected_addon_denomination: 0,
             addon_credits_options: Default::default(),
-            addon_pack_unit: PackUnit::Credits,
+            addon_charge_unit: ChargeUnit::Credits,
             addon_credit_denomination_buttons: Default::default(),
             purchase_addon_credits_loading: false,
             prorated_request_limits_info_mouse_states: Default::default(),
@@ -533,9 +533,9 @@ impl BillingAndUsagePageView {
             }
             UserWorkspacesEvent::PurchaseAddonCreditsSuccess => {
                 self.purchase_addon_credits_loading = false;
-                let message = match PackUnit::for_viewer(ctx) {
-                    PackUnit::Credits => "Successfully purchased add-on credits",
-                    PackUnit::Usage => "Successfully purchased usage",
+                let message = match UserWorkspaces::as_ref(ctx).charge_unit() {
+                    ChargeUnit::Credits => "Successfully purchased add-on credits",
+                    ChargeUnit::Cents => "Successfully purchased usage",
                 };
                 self.show_toast(message, ToastFlavor::Success, ctx);
                 AIRequestUsageModel::handle(ctx).update(ctx, |ai_request_usage_model, ctx| {
@@ -737,11 +737,11 @@ impl BillingAndUsagePageView {
             .addon_credits_options()
             .map(|opts| opts.to_vec())
             .unwrap_or_default();
-        let unit = PackUnit::for_viewer(ctx);
+        let charge_unit = UserWorkspaces::as_ref(ctx).charge_unit();
         // Every workspace-metadata poll republishes the (usually unchanged) catalog; rebuilding
         // the buttons would discard their selection and hover state for nothing.
         if options == self.addon_credits_options
-            && unit == self.addon_pack_unit
+            && charge_unit == self.addon_charge_unit
             && !self.addon_credit_denomination_buttons.is_empty()
         {
             return;
@@ -750,13 +750,13 @@ impl BillingAndUsagePageView {
             .selected_addon_denomination
             .min(options.len().saturating_sub(1));
         self.addon_credits_options = options;
-        self.addon_pack_unit = unit;
+        self.addon_charge_unit = charge_unit;
         self.addon_credit_denomination_buttons =
             self.addon_credits_options
                 .iter()
                 .enumerate()
                 .map(|(i, option)| {
-                    let amount = PackAmount::of(option, unit);
+                    let amount = PackAmount::of(option, charge_unit);
                     ctx.add_typed_action_view(move |_ctx| {
                         let button = ActionButton::new(amount.short_label(), SecondaryTheme)
                             .on_click(move |ctx| {
@@ -1809,11 +1809,11 @@ impl BillingAndUsagePageView {
         let bg = appearance.theme().background();
         let ui_builder = appearance.ui_builder();
         let theme = appearance.theme();
-        let unit = PackUnit::for_viewer(app);
+        let charge_unit = UserWorkspaces::as_ref(app).charge_unit();
 
-        let header_text = match unit {
-            PackUnit::Credits => "Add-on credits",
-            PackUnit::Usage => "Add-on usage",
+        let header_text = match charge_unit {
+            ChargeUnit::Credits => "Add-on credits",
+            ChargeUnit::Cents => "Add-on usage",
         };
         let header = Text::new_inline(header_text, appearance.ui_font_family(), 16.)
             .with_color(fg.into())
@@ -1882,9 +1882,9 @@ impl BillingAndUsagePageView {
                 } else {
                     "Upgrade to the Build plan"
                 };
-                let suffix = match unit {
-                    PackUnit::Credits => " to purchase add-on credits.",
-                    PackUnit::Usage => " to purchase usage.",
+                let suffix = match charge_unit {
+                    ChargeUnit::Credits => " to purchase add-on credits.",
+                    ChargeUnit::Cents => " to purchase usage.",
                 };
 
                 let text_fragments = vec![
@@ -1924,9 +1924,11 @@ impl BillingAndUsagePageView {
             // they're on an Enterprise-like plan. For admins, we show them a message to contact their
             // Account Executive.
             (false, false, true) => {
-                let paragraph_text = match unit {
-                    PackUnit::Credits => "Contact your Account Executive for more add-on credits.",
-                    PackUnit::Usage => "Contact your Account Executive for more usage.",
+                let paragraph_text = match charge_unit {
+                    ChargeUnit::Credits => {
+                        "Contact your Account Executive for more add-on credits."
+                    }
+                    ChargeUnit::Cents => "Contact your Account Executive for more usage.",
                 };
                 Some(
                     ui_builder
@@ -1942,9 +1944,9 @@ impl BillingAndUsagePageView {
             // Every other case relates to not being a team admin. If you aren't an admin, we show
             // a generic message telling you to talk to them.
             (_, _, false) => {
-                let paragraph_text = match unit {
-                    PackUnit::Credits => "Contact a team admin to purchase add-on credits.",
-                    PackUnit::Usage => "Contact a team admin to purchase usage.",
+                let paragraph_text = match charge_unit {
+                    ChargeUnit::Credits => "Contact a team admin to purchase add-on credits.",
+                    ChargeUnit::Cents => "Contact a team admin to purchase usage.",
                 };
                 Some(
                     ui_builder
@@ -1978,12 +1980,12 @@ impl BillingAndUsagePageView {
 
         let team_member_count = workspace.map_or(1, |workspace| workspace.members.len());
 
-        let (description, team_description) = match unit {
-            PackUnit::Credits => (
+        let (description, team_description) = match charge_unit {
+            ChargeUnit::Credits => (
                 ADDON_CREDITS_DESCRIPTION,
                 ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM,
             ),
-            PackUnit::Usage => (
+            ChargeUnit::Cents => (
                 ADDON_USAGE_DESCRIPTION,
                 ADDITIONAL_ADDON_USAGE_DESCRIPTION_FOR_TEAM,
             ),
@@ -2009,9 +2011,9 @@ impl BillingAndUsagePageView {
                 on_click_action: None,
                 secondary_text: None,
                 tooltip_override_text: Some(
-                    match unit {
-                        PackUnit::Credits => "Sets the monthly limit spent on add-on credits",
-                        PackUnit::Usage => "Sets the monthly limit spent on purchased usage",
+                    match charge_unit {
+                        ChargeUnit::Credits => "Sets the monthly limit spent on add-on credits",
+                        ChargeUnit::Cents => "Sets the monthly limit spent on purchased usage",
                     }
                     .to_string(),
                 ),
@@ -2069,7 +2071,7 @@ impl BillingAndUsagePageView {
                     Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
                 // Packs sold in dollars are bought as usage, so the credit count they carry is
                 // not a figure the user was shown when buying them.
-                if unit == PackUnit::Credits {
+                if charge_unit == ChargeUnit::Credits {
                     right_side.add_child(
                         Container::new(
                             Text::new_inline(
@@ -2129,22 +2131,22 @@ impl BillingAndUsagePageView {
         });
 
         let auto_reload_amount = selected_option
-            .map(|option| PackAmount::of(option, unit).label())
+            .map(|option| PackAmount::of(option, charge_unit).label())
             .filter(|_| auto_reload_enabled)
             .unwrap_or_else(|| "your selected package".to_string());
-        let auto_reload_description = match unit {
-            PackUnit::Credits => format!(
+        let auto_reload_description = match charge_unit {
+            ChargeUnit::Credits => format!(
                 "When enabled, auto reload will automatically purchase {auto_reload_amount} when \
                 your add-on credit balance reaches 100 credits remaining."
             ),
-            PackUnit::Usage => format!(
+            ChargeUnit::Cents => format!(
                 "When enabled, auto reload will automatically purchase {auto_reload_amount} when \
                 your purchased usage runs low."
             ),
         };
-        let delinquent_warning = match unit {
-            PackUnit::Credits => AUTO_RELOAD_DELINQUENT_WARNING_STRING,
-            PackUnit::Usage => AUTO_RELOAD_USAGE_DELINQUENT_WARNING_STRING,
+        let delinquent_warning = match charge_unit {
+            ChargeUnit::Credits => AUTO_RELOAD_DELINQUENT_WARNING_STRING,
+            ChargeUnit::Cents => AUTO_RELOAD_USAGE_DELINQUENT_WARNING_STRING,
         };
         let auto_reload_switch = ui_builder
             .switch(self.auto_reload_switch.clone())
@@ -2312,7 +2314,7 @@ impl BillingAndUsagePageView {
                 card_content_upper.add_child(render_premium_upgrade_savings_note(
                     upgrade_url.clone(),
                     premium_bps,
-                    unit,
+                    charge_unit,
                     appearance,
                 ));
             }
@@ -2349,7 +2351,7 @@ impl BillingAndUsagePageView {
                 card_content_lower_children.push(render_premium_upgrade_savings_note(
                     upgrade_url.clone(),
                     premium_bps,
-                    unit,
+                    charge_unit,
                     appearance,
                 ));
             }

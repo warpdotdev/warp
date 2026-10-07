@@ -30,7 +30,7 @@ use crate::ai::request_usage_model::{
 use crate::auth::AuthStateProvider;
 use crate::features::FeatureFlag;
 use crate::menu::MenuItemFields;
-use crate::pricing::addon_pack::{PackAmount, PackUnit, pack_menu_label};
+use crate::pricing::addon_pack::{PackAmount, pack_menu_label};
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::send_telemetry_from_ctx;
 use crate::server::ids::ServerId;
@@ -38,6 +38,7 @@ use crate::server::telemetry::{OutOfCreditsBannerAction, TelemetryEvent};
 use crate::settings_view::create_discount_badge;
 use crate::view_components::{Dropdown, DropdownAction};
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::workspace::ChargeUnit;
 
 #[derive(Default)]
 struct MouseStates {
@@ -302,7 +303,7 @@ impl BuyCreditsBanner {
 
     fn render_auto_reload_checkbox(
         &self,
-        unit: PackUnit,
+        charge_unit: ChargeUnit,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -336,7 +337,7 @@ impl BuyCreditsBanner {
             .addon_credits_options
             .get(self.selected_denomination_index)
             .map_or(PackAmount::Credits(0), |option| {
-                PackAmount::of(option, unit)
+                PackAmount::of(option, charge_unit)
             });
         let tooltip_text = match selected_amount {
             PackAmount::UsageCents(_) => format!(
@@ -405,7 +406,7 @@ impl BuyCreditsBanner {
         let premium_bps = workspaces
             .purchase_policy()
             .map_or(0, |policy| policy.effective_premium_bps());
-        let unit = PackUnit::for_viewer(ctx);
+        let charge_unit = UserWorkspaces::as_ref(ctx).charge_unit();
         let base_rate = self
             .addon_credits_options
             .first()
@@ -415,7 +416,7 @@ impl BuyCreditsBanner {
             .iter()
             .enumerate()
             .map(|(index, option)| {
-                let primary_text = pack_menu_label(option, premium_bps, unit);
+                let primary_text = pack_menu_label(option, premium_bps, charge_unit);
                 let discount_percent = if base_rate > 0.0 {
                     let actual_rate = option.rate();
                     ((base_rate - actual_rate) / base_rate * 100.0).round() as u32
@@ -592,11 +593,15 @@ impl BuyCreditsBanner {
 
     /// Rendered instead of the out-of-credits banner after a purchase was
     /// handed off to the browser for checkout.
-    fn render_checkout_pending(&self, unit: PackUnit, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_checkout_pending(
+        &self,
+        charge_unit: ChargeUnit,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let description = match unit {
-            PackUnit::Credits => "Credits will be added to your account after checkout.",
-            PackUnit::Usage => "Usage will be added to your account after checkout.",
+        let description = match charge_unit {
+            ChargeUnit::Credits => "Credits will be added to your account after checkout.",
+            ChargeUnit::Cents => "Usage will be added to your account after checkout.",
         };
 
         let alert_icon = Container::new(
@@ -701,15 +706,15 @@ impl BuyCreditsBanner {
             .is_some_and(|billing| billing.is_delinquent_due_to_payment_issue());
         let auto_reload_banner_toggle_ff =
             FeatureFlag::BuildPlanAutoReloadBannerToggle.is_enabled();
-        let unit = PackUnit::for_viewer(app);
-        let (title, exceeds_limit_text, admin_description, member_description) = match unit {
-            PackUnit::Credits => (
+        let charge_unit = UserWorkspaces::as_ref(app).charge_unit();
+        let (title, exceeds_limit_text, admin_description, member_description) = match charge_unit {
+            ChargeUnit::Credits => (
                 "Out of credits",
                 "Purchasing these credits would take you over your monthly spend limit. ",
                 "Add more credits to your account to continue using the Warp Agent.",
                 "Contact a team admin to purchase more credits to continue.",
             ),
-            PackUnit::Usage => (
+            ChargeUnit::Cents => (
                 "Out of usage",
                 "This purchase would take you over your monthly spend limit. ",
                 "Add more usage to your account to continue using the Warp Agent.",
@@ -892,7 +897,7 @@ impl BuyCreditsBanner {
 
             if auto_reload_banner_toggle_ff {
                 children.push(
-                    Container::new(self.render_auto_reload_checkbox(unit, appearance))
+                    Container::new(self.render_auto_reload_checkbox(charge_unit, appearance))
                         .with_margin_right(8.)
                         .finish(),
                 );
@@ -1015,7 +1020,10 @@ impl View for BuyCreditsBanner {
             }
             BuyCreditsBannerDisplayState::OutOfCredits => {
                 if self.checkout_pending {
-                    self.render_checkout_pending(PackUnit::for_viewer(app), appearance)
+                    self.render_checkout_pending(
+                        UserWorkspaces::as_ref(app).charge_unit(),
+                        appearance,
+                    )
                 } else {
                     self.render_out_of_credits(appearance, app)
                 }

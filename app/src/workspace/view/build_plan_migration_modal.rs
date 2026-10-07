@@ -21,13 +21,13 @@ use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use crate::pricing::addon_pack::{PackUnit, pack_menu_label};
+use crate::pricing::addon_pack::pack_menu_label;
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::terminal::general_settings::GeneralSettings;
 use crate::ui_components::blended_colors;
 use crate::view_components::{Dropdown, DropdownEvent, DropdownItem, ToastFlavor};
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
-use crate::workspaces::workspace::CustomerType;
+use crate::workspaces::workspace::{ChargeUnit, CustomerType};
 
 const BUTTON_DIAMETER: f32 = 20.;
 const DROPDOWN_WIDTH: f32 = 160.;
@@ -205,7 +205,7 @@ impl BuildPlanMigrationModal {
         let premium_bps = UserWorkspaces::as_ref(ctx)
             .purchase_policy()
             .map_or(0, |policy| policy.effective_premium_bps());
-        let unit = PackUnit::for_viewer(ctx);
+        let unit = UserWorkspaces::as_ref(ctx).charge_unit();
         self.reload_denominations_dropdown
             .update(ctx, |dropdown, ctx| {
                 dropdown.set_items(
