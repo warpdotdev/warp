@@ -3006,7 +3006,7 @@ impl Block {
         }
 
         self.leading_linefeeds_ignored = 0;
-        self.output_grid.start();
+        self.output_grid.start_command_body();
         self.state = BlockState::Executing;
         self.is_for_in_band_command = is_for_in_band_command;
 

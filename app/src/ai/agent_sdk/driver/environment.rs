@@ -282,6 +282,7 @@ pub(crate) struct RepositoryPreparationOptions {
     setup_commands: Vec<String>,
     preparation_overrides: Vec<RepositoryPreparationOverride>,
     remove_origins: bool,
+    factory_clone_index: Option<usize>,
 }
 
 impl RepositoryPreparationOptions {
@@ -296,7 +297,13 @@ impl RepositoryPreparationOptions {
             setup_commands,
             preparation_overrides,
             remove_origins,
+            factory_clone_index: None,
         }
+    }
+
+    pub fn with_factory_clone_index(mut self, index: Option<usize>) -> Self {
+        self.factory_clone_index = index;
+        self
     }
 }
 
@@ -380,6 +387,7 @@ pub(crate) fn prepare_environment(
             setup_commands,
             preparation_overrides: repository_preparation_overrides,
             remove_origins: remove_repository_origins,
+            factory_clone_index,
         } = repository_options;
         validate_repository_preparation_overrides(
             &source_repos,
@@ -403,6 +411,7 @@ pub(crate) fn prepare_environment(
             &repository_preparation_overrides,
             remove_repository_origins,
             setup_commands,
+            factory_clone_index,
             should_index_codebase,
             Arc::clone(&repo_channels),
             setup_events,
@@ -472,7 +481,7 @@ const FACTORY_REPO_DIR_ENV_VAR: &str = "WARP_FACTORY_REPO_DIR";
 pub(super) fn prepend_factory_definition_clone(
     setup_commands: &mut Vec<String>,
     shell_type: Option<ShellType>,
-) {
+) -> Option<usize> {
     let clone_url = std::env::var(FACTORY_REPO_CLONE_URL_ENV_VAR).unwrap_or_default();
     let clone_dir = std::env::var(FACTORY_REPO_DIR_ENV_VAR).unwrap_or_default();
     prepend_factory_definition_clone_for_values(
@@ -480,7 +489,7 @@ pub(super) fn prepend_factory_definition_clone(
         &clone_dir,
         shell_type.unwrap_or(ShellType::Bash),
         setup_commands,
-    );
+    )
 }
 
 fn prepend_factory_definition_clone_for_values(
@@ -488,18 +497,20 @@ fn prepend_factory_definition_clone_for_values(
     clone_dir: &str,
     shell_type: ShellType,
     setup_commands: &mut Vec<String>,
-) {
+) -> Option<usize> {
     if clone_url.trim().is_empty() || clone_dir.trim().is_empty() {
-        return;
+        return setup_commands
+            .iter()
+            .position(|command| command.contains(FACTORY_REPO_CLONE_URL_ENV_VAR));
     }
     // Environments provisioned before run-scoped cloning still persist their
     // own copy of the clone command; leave that copy in charge rather than
     // attempting the checkout twice.
-    if setup_commands
+    if let Some(index) = setup_commands
         .iter()
-        .any(|command| command.contains(FACTORY_REPO_CLONE_URL_ENV_VAR))
+        .position(|command| command.contains(FACTORY_REPO_CLONE_URL_ENV_VAR))
     {
-        return;
+        return Some(index);
     }
     // The command expands the variables in the session shell instead of
     // inlining their values so the credential-bearing URL never appears in
@@ -507,6 +518,7 @@ fn prepend_factory_definition_clone_for_values(
     // into an already-present target directory fails, which is treated as a
     // fatal setup-command error upstream.
     setup_commands.insert(0, factory_definition_clone_command(shell_type));
+    Some(0)
 }
 
 fn factory_definition_clone_command(shell_type: ShellType) -> String {
@@ -532,6 +544,7 @@ async fn prepare_environment_impl(
     repository_preparation_overrides: &[RepositoryPreparationOverride],
     remove_repository_origins: bool,
     setup_commands: Vec<String>,
+    factory_clone_index: Option<usize>,
     should_index_codebase: bool,
     repo_channels: Arc<Mutex<HashMap<PathBuf, oneshot::Sender<()>>>>,
     setup_events: SetupClientEventReporter,
@@ -621,6 +634,8 @@ async fn prepare_environment_impl(
     }
 
     let has_setup_commands = !setup_commands.is_empty();
+    let had_customer_commands = setup_commands.len() > usize::from(factory_clone_index.is_some());
+    let mut user_setup_duration = Some(Duration::ZERO);
     let setup_result = if has_setup_commands {
         setup_events
             .record_result(SetupStep::EnvironmentSetupCommands, async {
@@ -649,6 +664,17 @@ async fn prepare_environment_impl(
                         let output =
                             fetch_block_output_plaintext(&command_result.block_id, spawner).await;
                         return Err(setup_command_failure(command_for_error, output));
+                    }
+                    if Some(index) != factory_clone_index {
+                        let block_id = command_result.block_id.clone();
+                        let body_duration = spawner
+                            .spawn(move |driver, ctx| driver.command_body_duration(&block_id, ctx))
+                            .await
+                            .ok()
+                            .flatten();
+                        user_setup_duration = user_setup_duration
+                            .zip(body_duration)
+                            .and_then(|(total, body)| total.checked_add(body));
                     }
 
                     let working_dir_string = working_dir.to_string_lossy().to_string();
@@ -721,6 +747,7 @@ async fn prepare_environment_impl(
             .await;
     setup_result?;
     remove_origins_result?;
+    setup_events.set_user_setup(user_setup_duration, had_customer_commands);
 
     if should_index_codebase && source_repos.is_empty() {
         log::info!("No repositories to index for codebase context");

@@ -2209,12 +2209,13 @@ fn blobless_clone_walks_path_limited_history_without_network() {
 #[test]
 fn factory_clone_is_prepended_when_clone_values_are_present() {
     let mut setup_commands = vec!["make setup".to_string()];
-    super::prepend_factory_definition_clone_for_values(
+    let factory_clone_index = super::prepend_factory_definition_clone_for_values(
         "https://t:token@definitions.example.com/team/factory.git",
         "acme_factory_repo",
         ShellType::Bash,
         &mut setup_commands,
     );
+    assert_eq!(factory_clone_index, Some(0));
     assert_eq!(
         setup_commands,
         vec![
@@ -2249,12 +2250,13 @@ fn factory_clone_references_env_vars_with_the_session_shells_syntax() {
 #[test]
 fn factory_clone_is_skipped_without_clone_values() {
     let mut setup_commands = vec!["make setup".to_string()];
-    super::prepend_factory_definition_clone_for_values(
+    let factory_clone_index = super::prepend_factory_definition_clone_for_values(
         "",
         "",
         ShellType::Bash,
         &mut setup_commands,
     );
+    assert_eq!(factory_clone_index, None);
     super::prepend_factory_definition_clone_for_values(
         "url",
         "  ",
@@ -2278,14 +2280,15 @@ fn factory_clone_defers_to_a_persisted_environment_copy() {
     // left alone rather than duplicated.
     let persisted =
         "git clone \"$WARP_FACTORY_REPO_CLONE_URL\" \"$WARP_FACTORY_REPO_DIR\"".to_string();
-    let mut setup_commands = vec![persisted.clone(), "make setup".to_string()];
-    super::prepend_factory_definition_clone_for_values(
+    let mut setup_commands = vec!["make setup".to_string(), persisted.clone()];
+    let factory_clone_index = super::prepend_factory_definition_clone_for_values(
         "https://t:token@definitions.example.com/team/factory.git",
         "acme_factory_repo",
         ShellType::Bash,
         &mut setup_commands,
     );
-    assert_eq!(setup_commands, vec![persisted, "make setup".to_string()]);
+    assert_eq!(factory_clone_index, Some(1));
+    assert_eq!(setup_commands, vec!["make setup".to_string(), persisted]);
 }
 
 #[test]

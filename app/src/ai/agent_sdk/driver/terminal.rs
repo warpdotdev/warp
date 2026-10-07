@@ -469,6 +469,20 @@ impl TerminalDriver {
             .map(SerializedBlock::from)
     }
 
+    pub(super) fn command_body_duration(
+        &self,
+        block_id: &BlockId,
+        ctx: &AppContext,
+    ) -> Option<Duration> {
+        let terminal = self.terminal_view.as_ref(ctx);
+        let model = terminal.model.lock();
+        model
+            .block_list()
+            .block_with_id(block_id)?
+            .output_grid()
+            .command_body_duration()
+    }
+
     /// Full visible plaintext of `block_id`'s output grid (no ANSI escape
     /// sequences; secrets obfuscated). Used by the harness output monitor
     /// to detect whether the block has stalled — two byte-identical

@@ -472,14 +472,30 @@ pub struct AgentRunClientEventRequest {
 #[serde(untagged)]
 pub enum AgentRunClientEventPayload {
     SetupMetric(AgentRunClientSetupMetricPayload),
+    Startup(AgentRunClientStartupPayload),
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AgentRunClientStartupPayload {
+    pub user_setup: UserSetupMeasurement,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct UserSetupMeasurement {
+    pub version: u8,
+    pub duration_us: i64,
+    pub had_setup_commands: bool,
+    pub sandbox_os: &'static str,
+    pub sandbox_arch: &'static str,
+}
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AgentRunClientSetupMetricPayload {
     pub start_ts: DateTime<Utc>,
     pub finish_ts: DateTime<Utc>,
     pub latency_ms: i64,
     pub is_error: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_setup: Option<UserSetupMeasurement>,
 }
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub struct AgentRunEnvironmentSnapshotRequest {
@@ -527,6 +543,7 @@ impl AgentRunClientEventRequest {
                         .num_milliseconds()
                         .max(0),
                     is_error,
+                    user_setup: None,
                 },
             )),
         }

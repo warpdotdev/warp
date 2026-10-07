@@ -2250,7 +2250,7 @@ impl AgentDriver {
                 // The Factory definition checkout is run-scoped: the dispatch decides
                 // whether this run gets one by attaching the clone variables,
                 // independent of which environment the run executes in.
-                environment::prepend_factory_definition_clone(
+                let factory_clone_index = environment::prepend_factory_definition_clone(
                     &mut setup_commands,
                     session_shell_type,
                 );
@@ -2312,7 +2312,8 @@ impl AgentDriver {
                                         setup_commands,
                                         repository_preparation_overrides,
                                         remove_repository_origins,
-                                    ),
+                                    )
+                                    .with_factory_clone_index(factory_clone_index),
                                     setup_events_for_environment,
                                     environment_snapshot_reporter.clone(),
                                     ctx,
@@ -2349,6 +2350,7 @@ impl AgentDriver {
                     }
                 } else {
                     environment_snapshot_reporter.report(EnvironmentSnapshot::empty());
+                    setup_events.set_user_setup(Some(Duration::ZERO), false);
                 }
                 if matches!(&task.harness, HarnessKind::Oz) {
                     let managed_mcp_client = foreground
@@ -2454,6 +2456,7 @@ impl AgentDriver {
                 )
                 .await?;
 
+                setup_events.post_startup_setup_measurement().await;
                 let status_rx = foreground
                     .spawn(move |me, ctx| me.execute_run(task.prompt, ctx))
                     .await?;
