@@ -10,6 +10,7 @@ use crate::ai::request_usage_model::{
 };
 use crate::terminal::general_settings::GeneralSettings;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::ChargeUnit;
 
 pub struct BonusGrantNotificationModel {
     /// In-memory tracking of grants shown during this session. This prevents duplicate
@@ -45,7 +46,7 @@ impl BonusGrantNotificationModel {
     fn check_for_new_bonus_grants(&mut self, ctx: &mut ModelContext<Self>) {
         let usage_model = AIRequestUsageModel::as_ref(ctx);
         let bonus_grants = usage_model.bonus_grants();
-        let billed_in_dollars = UserWorkspaces::as_ref(ctx).is_billed_in_dollars();
+        let charge_unit = UserWorkspaces::as_ref(ctx).charge_unit();
 
         let shown_grants = GeneralSettings::as_ref(ctx)
             .bonus_grants_shown
@@ -79,7 +80,7 @@ impl BonusGrantNotificationModel {
             let message = if let Some(user_facing_message) = &grant.user_facing_message {
                 user_facing_message.clone()
             } else {
-                Self::format_generic_grant_message(grant, billed_in_dollars)
+                Self::format_generic_grant_message(grant, charge_unit)
             };
 
             let grant_key = Self::create_grant_key(grant);
@@ -107,15 +108,19 @@ impl BonusGrantNotificationModel {
         }
     }
 
-    /// Describes a grant in dollars when the plan is billed in dollars (`billed_in_dollars`, from
-    /// the tier) and the grant carries a dollar value, otherwise in credits.
-    fn format_generic_grant_message(grant: &BonusGrant, billed_in_dollars: bool) -> String {
+    /// Describes a grant in dollars for a plan charged in cents when the grant carries a dollar
+    /// value, otherwise in credits.
+    fn format_generic_grant_message(grant: &BonusGrant, charge_unit: ChargeUnit) -> String {
         let scope_text = match grant.scope {
             BonusGrantScope::User => "account",
             BonusGrantScope::Team(_) => "team",
             BonusGrantScope::Workspace(_) => "workspace",
         };
-        match grant.usage_cents_granted.filter(|_| billed_in_dollars) {
+        let usage_cents_granted = match charge_unit {
+            ChargeUnit::Cents => grant.usage_cents_granted,
+            ChargeUnit::Credits => None,
+        };
+        match usage_cents_granted {
             Some(cents) => format!(
                 "{} has been added to your {scope_text}.",
                 format_dollars(cents as f32)

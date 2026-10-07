@@ -1192,7 +1192,7 @@ enum Divisor {
     Limit(usize),
 }
 
-/// The dollar values of a usage row's credit figures, for a plan billed in dollars.
+/// The dollar values of a usage row's credit figures, for a plan charged in cents.
 #[derive(Copy, Clone, Debug, PartialEq)]
 struct UsageCents {
     used: f64,
@@ -1201,38 +1201,38 @@ struct UsageCents {
     limit: Option<f64>,
 }
 
-/// The current user's allowance figures in cents. `None` unless the plan is billed in dollars
-/// (`billed_in_dollars`, from the tier) and the server supplied the used figure; unlimited
-/// subjects keep the credit display.
+/// The current user's allowance figures in cents: for a plan charged in cents, when the server
+/// supplied the used figure. Unlimited subjects keep the credit display.
 fn allowance_usage_cents(
-    billed_in_dollars: bool,
+    charge_unit: ChargeUnit,
     ai_request_usage_model: &AIRequestUsageModel,
 ) -> Option<UsageCents> {
-    if !billed_in_dollars || ai_request_usage_model.is_unlimited() {
-        return None;
+    match charge_unit {
+        ChargeUnit::Credits => None,
+        ChargeUnit::Cents if ai_request_usage_model.is_unlimited() => None,
+        ChargeUnit::Cents => Some(UsageCents {
+            used: ai_request_usage_model.usage_cents_used()?,
+            limit: ai_request_usage_model.included_usage_cents(),
+        }),
     }
-    Some(UsageCents {
-        used: ai_request_usage_model.usage_cents_used()?,
-        limit: ai_request_usage_model.included_usage_cents(),
-    })
 }
 
-/// A member's allowance figures in cents. `None` unless the plan is billed in dollars
-/// (`billed_in_dollars`, from the tier) and the server supplied the used figure; unlimited
-/// members keep the credit display.
+/// A member's allowance figures in cents: for a plan charged in cents, when the server supplied
+/// the used figure. Unlimited members keep the credit display.
 fn member_usage_cents(
-    billed_in_dollars: bool,
+    charge_unit: ChargeUnit,
     usage_info: &WorkspaceMemberUsageInfo,
 ) -> Option<UsageCents> {
-    if !billed_in_dollars || usage_info.is_unlimited {
-        return None;
+    match charge_unit {
+        ChargeUnit::Credits => None,
+        ChargeUnit::Cents if usage_info.is_unlimited => None,
+        ChargeUnit::Cents => Some(UsageCents {
+            used: usage_info.usage_cents_used_since_last_refresh?.into_inner(),
+            limit: usage_info
+                .included_usage_cents
+                .map(|cents| cents.into_inner()),
+        }),
     }
-    Some(UsageCents {
-        used: usage_info.usage_cents_used_since_last_refresh?.into_inner(),
-        limit: usage_info
-            .included_usage_cents
-            .map(|cents| cents.into_inner()),
-    })
 }
 
 /// Whether a usage row shows dollars: only when every figure it displays has a dollar value, so
@@ -1306,9 +1306,10 @@ impl BillingAndUsagePageView {
             .finish();
 
         let workspaces = UserWorkspaces::as_ref(app);
-        let usage_cents_remaining = ai_request_usage_model
-            .ambient_only_usage_cents_remaining()
-            .filter(|_| workspaces.is_billed_in_dollars());
+        let usage_cents_remaining = match workspaces.charge_unit() {
+            ChargeUnit::Cents => ai_request_usage_model.ambient_only_usage_cents_remaining(),
+            ChargeUnit::Credits => None,
+        };
         let credits_text = match usage_cents_remaining {
             Some(cents) => format!("{} remaining", format_dollars(cents as f32)),
             None if credits_remaining == 1 => "1 credit remaining".to_string(),
@@ -3046,7 +3047,7 @@ impl BillingAndUsagePageView {
         let billing_metadata = workspaces.current_workspace_billing_metadata();
         let has_admin_permissions =
             team.is_some_and(|team| team.has_admin_permissions(&current_user_email));
-        let billed_in_dollars = workspaces.is_billed_in_dollars();
+        let charge_unit = workspaces.charge_unit();
 
         let mut usage_header_right_side = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -3151,15 +3152,16 @@ impl BillingAndUsagePageView {
                         .total_workspace_and_team_bonus_credits_remaining(workspace.uid)
                 },
             );
-            let bonus_usage_cents_balance = workspace
-                .map_or_else(
+            let bonus_usage_cents_balance = match charge_unit {
+                ChargeUnit::Cents => workspace.map_or_else(
                     || ai_request_usage_model.total_user_interactive_bonus_usage_cents_remaining(),
                     |workspace| {
                         ai_request_usage_model
                             .total_workspace_and_team_bonus_usage_cents_remaining(workspace.uid)
                     },
-                )
-                .filter(|_| billed_in_dollars);
+                ),
+                ChargeUnit::Credits => None,
+            };
 
             // Hide addon credits panel for Enterprise PAYG users when they have 0 credits.
             let is_enterprise_payg_with_zero_credits = workspace.is_some_and(|workspace| {
@@ -3240,9 +3242,7 @@ impl BillingAndUsagePageView {
                 .sum();
             let team_total_usage_cents = workspace_team_members
                 .iter()
-                .map(|m| {
-                    member_usage_cents(billed_in_dollars, &m.usage_info).map(|cents| cents.used)
-                })
+                .map(|m| member_usage_cents(charge_unit, &m.usage_info).map(|cents| cents.used))
                 .sum::<Option<f64>>()
                 .map(|used| UsageCents { used, limit: None });
             let is_unlimited = ai_request_usage_model.is_unlimited();
@@ -3301,7 +3301,7 @@ impl BillingAndUsagePageView {
                         } else {
                             Some(Divisor::Limit(member.usage_info.request_limit as usize))
                         },
-                        member_usage_cents(billed_in_dollars, &member.usage_info),
+                        member_usage_cents(charge_unit, &member.usage_info),
                         ai_request_usage_model.refresh_duration_to_string(),
                         workspace_is_delinquent_due_to_payment_issue,
                         appearance,
@@ -3335,7 +3335,7 @@ impl BillingAndUsagePageView {
                 } else {
                     Some(Divisor::Limit(ai_request_usage_model.request_limit()))
                 },
-                allowance_usage_cents(billed_in_dollars, ai_request_usage_model),
+                allowance_usage_cents(charge_unit, ai_request_usage_model),
                 ai_request_usage_model.refresh_duration_to_string(),
                 workspace_is_delinquent_due_to_payment_issue,
                 appearance,
