@@ -45,6 +45,7 @@ use super::settings_page::{
 };
 use super::{SettingsAction, SettingsSection, ToggleSettingActionPair, flags};
 use crate::ai::blocklist::BlocklistAIPermissions;
+use crate::ai::blocklist::view_util::format_dollars;
 use crate::ai::execution_profiles::model_menu_items::{
     CollapsedModelVariants, available_model_menu_items,
 };
@@ -84,6 +85,7 @@ use crate::view_components::{
     WarningBoxConfig, render_warning_box,
 };
 use crate::workspaces::user_workspaces::{ResolvedTeamScope, TeamContext, UserWorkspacesEvent};
+use crate::workspaces::workspace::ChargeUnit;
 use crate::{TelemetryEvent, UserWorkspaces, send_telemetry_from_ctx};
 
 const AI_SETTINGS_DROPDOWN_WIDTH: f32 = 250.;
@@ -1901,6 +1903,50 @@ fn render_ai_list(
         .finish()
 }
 
+/// The dollar values of the allowance's credit figures, for a plan charged in cents.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct AllowanceCents {
+    used: f64,
+    limit: f64,
+}
+
+/// The current user's allowance in cents: for a plan charged in cents, when the server supplied
+/// both figures. Unlimited subjects keep the credit display.
+fn allowance_cents(
+    charge_unit: ChargeUnit,
+    is_unlimited: bool,
+    usage_cents_used: Option<f64>,
+    included_usage_cents: Option<f64>,
+) -> Option<AllowanceCents> {
+    match charge_unit {
+        ChargeUnit::Credits => None,
+        ChargeUnit::Cents if is_unlimited => None,
+        ChargeUnit::Cents => Some(AllowanceCents {
+            used: usage_cents_used?,
+            limit: included_usage_cents?,
+        }),
+    }
+}
+
+/// Formats the allowance's `used/limit` figure, in dollars when available and otherwise in
+/// credits.
+fn format_allowance_count(
+    used: usize,
+    limit: usize,
+    is_unlimited: bool,
+    allowance_cents: Option<AllowanceCents>,
+) -> String {
+    match (is_unlimited, allowance_cents) {
+        (true, _) => "Unlimited".to_string(),
+        (false, Some(cents)) => format!(
+            "{}/{}",
+            format_dollars(cents.used as f32),
+            format_dollars(cents.limit as f32)
+        ),
+        (false, None) => format!("{used}/{limit}"),
+    }
+}
+
 struct UsageWidget {
     view_handle: WeakViewHandle<AgentProfilesPageView>,
     requests_highlight_index: HighlightedHyperlink,
@@ -1918,6 +1964,7 @@ impl UsageWidget {
         used: usize,
         limit: usize,
         is_unlimited: bool,
+        allowance_cents: Option<AllowanceCents>,
         workspace_is_delinquent_due_to_payment_issue: bool,
         appearance: &Appearance,
     ) -> Box<dyn warpui::Element> {
@@ -1937,10 +1984,8 @@ impl UsageWidget {
 
         let request_count_label = if workspace_is_delinquent_due_to_payment_issue {
             "Restricted due to billing issue".to_string()
-        } else if is_unlimited {
-            "Unlimited".to_string()
         } else {
-            format!("{used}/{limit}")
+            format_allowance_count(used, limit, is_unlimited, allowance_cents)
         };
 
         row.add_child(
@@ -1983,6 +2028,7 @@ impl UsageWidget {
         used: usize,
         limit: usize,
         is_unlimited: bool,
+        allowance_cents: Option<AllowanceCents>,
         workspace_is_delinquent_due_to_payment_issue: bool,
         appearance: &Appearance,
     ) -> Box<dyn warpui::Element> {
@@ -1992,6 +2038,7 @@ impl UsageWidget {
                 used,
                 limit,
                 is_unlimited,
+                allowance_cents,
                 workspace_is_delinquent_due_to_payment_issue,
                 appearance,
             ));
@@ -2072,7 +2119,8 @@ impl SettingsWidget for UsageWidget {
         let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
         let next_refresh_time = ai_request_usage_model.next_refresh_time();
         let formatted_next_refresh_time = next_refresh_time.format("%b %d").to_string();
-        let workspace_is_delinquent_due_to_payment_issue = UserWorkspaces::as_ref(app)
+        let workspaces = UserWorkspaces::as_ref(app);
+        let workspace_is_delinquent_due_to_payment_issue = workspaces
             .team_for_view_handle(&self.view_handle, app)
             .map(|team| team.billing_metadata.is_delinquent_due_to_payment_issue())
             .unwrap_or_default();
@@ -2109,24 +2157,36 @@ impl SettingsWidget for UsageWidget {
         .with_padding_bottom(HEADER_PADDING)
         .finish();
 
+        let allowance_cents = allowance_cents(
+            workspaces.charge_unit(),
+            ai_request_usage_model.is_unlimited(),
+            ai_request_usage_model.usage_cents_used(),
+            ai_request_usage_model.included_usage_cents(),
+        );
+        let (header, unit) = if allowance_cents.is_some() {
+            ("Usage", "usage")
+        } else {
+            ("Credits", "credits")
+        };
         let request_limit_description = format!(
-            "This is the {} limit of AI credits for your account.",
+            "This is the {} limit of AI {unit} for your account.",
             ai_request_usage_model.refresh_duration_to_string()
         );
 
         let request_usage_row = self.render_ai_usage_limit_row(
-            "Credits",
+            header,
             request_limit_description,
             ai_request_usage_model.requests_used(),
             ai_request_usage_model.request_limit(),
             ai_request_usage_model.is_unlimited(),
+            allowance_cents,
             workspace_is_delinquent_due_to_payment_issue,
             appearance,
         );
 
         let auth_state = AuthStateProvider::as_ref(app).get();
         let upgrade_cta_text_fragments = if let Some(team) =
-            UserWorkspaces::as_ref(app).team_for_view_handle(&self.view_handle, app)
+            workspaces.team_for_view_handle(&self.view_handle, app)
         {
             let current_user_email = auth_state.user_email().unwrap_or_default();
             let has_admin_permissions = team.has_admin_permissions(&current_user_email);
@@ -3183,3 +3243,7 @@ impl AgentsWidget {
             .finish()
     }
 }
+
+#[cfg(test)]
+#[path = "agent_profiles_page_tests.rs"]
+mod tests;

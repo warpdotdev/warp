@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use futures::future::BoxFuture;
 use oauth2::{RefreshToken, TokenResponse as _};
 use rmcp::transport::auth::{
-    AuthClient, AuthorizationManager, CredentialStore, InMemoryCredentialStore, OAuthClientConfig,
-    OAuthState, StoredCredentials,
+    AuthClient, AuthorizationManager, AuthorizationRequest, CredentialStore,
+    InMemoryCredentialStore, OAuthClientConfig, OAuthState, StoredCredentials,
 };
 use rmcp::transport::{AuthError, AuthorizationSession};
 use serde::de::DeserializeOwned;
@@ -247,8 +247,14 @@ pub struct AuthContext {
 /// Result of OAuth callback.
 #[derive(Debug, Clone)]
 pub enum CallbackResult {
-    Success { code: String, csrf_token: String },
-    Error { error: Option<String> },
+    Success {
+        code: String,
+        csrf_token: String,
+        issuer: Option<String>,
+    },
+    Error {
+        error: Option<String>,
+    },
 }
 
 /// Makes an authenticated client for the given authorization server.
@@ -335,7 +341,7 @@ pub async fn make_authenticated_client(
         ));
     }
 
-    let metadata = auth_manager.discover_metadata().await?;
+    let metadata = auth_manager.resolve_metadata().await?.metadata;
 
     // Configure the auth manager's OAuth client using dynamic or static client registration.
     let mut oauth_state = if let Some(provider) = metadata
@@ -387,7 +393,7 @@ pub async fn make_authenticated_client(
         // Try dynamic client registration.
         let mut oauth_state = OAuthState::Unauthorized(auth_manager);
         oauth_state
-            .start_authorization(&[], &redirect_uri, Some("Warp"))
+            .start_authorization(AuthorizationRequest::new(&redirect_uri).with_client_name("Warp"))
             .await?;
         oauth_state
     };
@@ -414,8 +420,12 @@ pub async fn make_authenticated_client(
     // Wait for the authorization code from the OAuth callback channel.
     let oauth_result = callback_receiver.receive(&csrf_state).await?;
 
-    let (code, csrf_token) = match &oauth_result {
-        CallbackResult::Success { code, csrf_token } => (code, csrf_token),
+    let (code, csrf_token, issuer) = match &oauth_result {
+        CallbackResult::Success {
+            code,
+            csrf_token,
+            issuer,
+        } => (code, csrf_token, issuer),
         CallbackResult::Error { error } => {
             return Err(AuthError::AuthorizationFailed(
                 error.as_deref().unwrap_or("unknown error").to_string(),
@@ -424,7 +434,9 @@ pub async fn make_authenticated_client(
     };
 
     // Handle the callback with the received authorization code and CSRF token.
-    oauth_state.handle_callback(code, csrf_token).await?;
+    oauth_state
+        .handle_callback_with_issuer(code, csrf_token, issuer.as_deref())
+        .await?;
 
     let auth_manager = oauth_state.into_authorization_manager().ok_or_else(|| {
         AuthError::InternalError("Failed to create authorization manager".to_string())

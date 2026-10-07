@@ -17,6 +17,7 @@ use warpui::{AppContext, Element, Entity, SingletonEntity as _, View, ViewContex
 use crate::features::FeatureFlag;
 use crate::menu::MenuItemFields;
 use crate::modal::{MODAL_PADDING, MODAL_WIDTH, Modal, ModalEvent};
+use crate::pricing::addon_pack::pack_menu_label;
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::{AutoReloadModalAction, TelemetryEvent};
@@ -155,6 +156,7 @@ impl EnableAutoReloadModalBody {
         let premium_bps = workspaces
             .purchase_policy()
             .map_or(0, |policy| policy.effective_premium_bps());
+        let unit = UserWorkspaces::as_ref(ctx).charge_unit();
         let base_rate = self
             .addon_credits_options
             .first()
@@ -164,13 +166,7 @@ impl EnableAutoReloadModalBody {
             .iter()
             .enumerate()
             .map(|(index, option)| {
-                let price_cents = option.price_usd_cents_with_premium(premium_bps);
-                let price_label = if price_cents % 100 == 0 {
-                    format!("${}", price_cents / 100)
-                } else {
-                    format!("${:.2}", price_cents as f64 / 100.)
-                };
-                let primary_text = format!("{price_label} / {} credits", option.credits);
+                let primary_text = pack_menu_label(option, premium_bps, unit);
                 let discount_percent = if base_rate > 0.0 {
                     let actual_rate = option.rate();
                     ((base_rate - actual_rate) / base_rate * 100.0).round() as u32

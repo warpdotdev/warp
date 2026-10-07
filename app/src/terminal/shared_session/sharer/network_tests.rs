@@ -32,8 +32,9 @@ use websocket::{Error as WebsocketError, Message, Sink, Stream, WebsocketMessage
 use super::{
     AMBIENT_CREATE_SESSION_MAX_ATTEMPTS, ConfirmedReconnection, MAX_PRE_RECONNECT_BYTES,
     MAX_PRE_RECONNECT_MESSAGES, Network, NetworkEvent, PTY_READS_BATCH_THRESHOLD,
-    PtyBytesBatchStatus, Stage, StartupFailure, StartupRetryState, confirm_reconnection,
-    share_with_team_uid_for_init_payload, startup_max_attempts,
+    PtyBytesBatchStatus, RECONNECT_ATTEMPT_TIMEOUT, RECONNECT_CYCLE_TIMEOUT, Stage, StartupFailure,
+    StartupRetryState, confirm_reconnection, share_with_team_uid_for_init_payload,
+    startup_max_attempts,
 };
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
@@ -451,13 +452,28 @@ fn test_explicit_rejection_does_not_retry() {
                 response.to_json().unwrap(),
             ))]))],
             RetryOption::linear(Duration::from_millis(1), 18),
-            Duration::from_secs(1),
-            Duration::from_secs(2),
+            RECONNECT_ATTEMPT_TIMEOUT,
+            RECONNECT_CYCLE_TIMEOUT,
         );
-        assert_eventually!(
-            network.read(&app, |network, _| matches!(network.stage, Stage::Finished)),
-            "Explicit rejection must be terminal"
-        );
+        let (failure_tx, failure_rx) = async_channel::bounded(1);
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&network, move |_, event, _| {
+                if matches!(event, NetworkEvent::FailedToReconnect) {
+                    failure_tx.try_send(()).unwrap();
+                }
+            });
+        });
+
+        failure_rx
+            .recv()
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("Explicit rejection must be terminal")
+            .unwrap();
+        network.read(&app, |network, _| {
+            assert!(matches!(network.stage, Stage::Finished));
+            assert!(network.ws_proxy_tx.is_closed());
+        });
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
     });
 }
@@ -474,13 +490,29 @@ fn test_explicit_termination_does_not_retry() {
                 response.to_json().unwrap(),
             ))]))],
             RetryOption::linear(Duration::from_millis(1), 18),
-            Duration::from_secs(1),
-            Duration::from_secs(2),
+            RECONNECT_ATTEMPT_TIMEOUT,
+            RECONNECT_CYCLE_TIMEOUT,
         );
-        assert_eventually!(
-            network.read(&app, |network, _| matches!(network.stage, Stage::Finished)),
-            "Explicit termination must be terminal"
-        );
+        let (termination_tx, termination_rx) = async_channel::bounded(1);
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&network, move |_, event, _| {
+                if let NetworkEvent::SessionTerminated { reason } = event {
+                    termination_tx.try_send(reason.clone()).unwrap();
+                }
+            });
+        });
+
+        let reason = termination_rx
+            .recv()
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("Explicit termination must be terminal")
+            .unwrap();
+        assert!(matches!(reason, SessionTerminatedReason::ExceededSizeLimit));
+        network.read(&app, |network, _| {
+            assert!(matches!(network.stage, Stage::Finished));
+            assert!(network.ws_proxy_tx.is_closed());
+        });
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
     });
 }

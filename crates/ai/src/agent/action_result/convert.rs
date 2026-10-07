@@ -166,6 +166,24 @@ impl TryFrom<RequestCommandOutputResult> for api::request::input::tool_call_resu
             RequestCommandOutputResult::CancelledBeforeExecution => {
                 Err(ConvertToAPITypeError::Ignore)
             }
+            RequestCommandOutputResult::TerminalBusy { command, block_id } =>
+            {
+                #[allow(deprecated)]
+                Ok(
+                    api::request::input::tool_call_result::Result::RunShellCommand(
+                        api::RunShellCommandResult {
+                            command,
+                            output: Default::default(),
+                            exit_code: Default::default(),
+                            result: Some(api::run_shell_command_result::Result::TerminalBusy(
+                                api::run_shell_command_result::TerminalBusy {
+                                    running_command_id: block_id.to_string(),
+                                },
+                            )),
+                        },
+                    ),
+                )
+            }
             RequestCommandOutputResult::Denylisted { command } =>
             {
                 #[allow(deprecated)]

@@ -60,6 +60,7 @@ pub mod text {
                     RequestCommandOutputResult::CancelledBeforeExecution => {
                         writeln!(w, "{CANCELLED_MESSAGE}")
                     }
+                    RequestCommandOutputResult::TerminalBusy { .. } => writeln!(w, "{result}"),
                     RequestCommandOutputResult::Denylisted { .. } => {
                         writeln!(
                             w,
@@ -866,6 +867,11 @@ pub mod json {
                             "Command was not allowed to run due to presence on denylist",
                         ),
                     }),
+                    RequestCommandOutputResult::TerminalBusy { .. } => {
+                        Some(JsonMessage::ToolError {
+                            error: Cow::Owned(result.to_string()),
+                        })
+                    }
                 },
                 AIAgentActionResultType::WriteToLongRunningShellCommand(result) => match result {
                     WriteToLongRunningShellCommandResult::Snapshot { .. } => {

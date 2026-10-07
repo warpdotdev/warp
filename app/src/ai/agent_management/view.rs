@@ -55,7 +55,9 @@ use crate::ai::agent_management::telemetry::{
 };
 use crate::ai::ambient_agents::{AgentSource, cancel_task_with_toast};
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
-use crate::ai::blocklist::view_util::{UsageLabelKind, format_usage, usage_label};
+use crate::ai::blocklist::view_util::{
+    UsageLabelKind, effective_usage_unit, format_usage, usage_label,
+};
 use crate::ai::conversation_details_panel::{
     ConversationDetailsData, ConversationDetailsPanel, ConversationDetailsPanelEvent,
 };
@@ -1882,7 +1884,7 @@ impl AgentManagementView {
             metadata_parts.push(format_request_usage(
                 credits,
                 entry.display.cost_in_cents,
-                AISettings::as_ref(app).usage_display_unit,
+                effective_usage_unit(entry.display.cost_in_cents, app),
             ));
         }
 

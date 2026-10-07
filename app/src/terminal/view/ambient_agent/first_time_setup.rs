@@ -16,6 +16,7 @@ use warpui::fonts::{Properties, Weight};
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use crate::ai::ambient_agents::github_auth_url::{AuthSource, GithubAuthRedirectTarget};
+use crate::ai::blocklist::view_util::format_dollars;
 use crate::ai::request_usage_model::AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD;
 use crate::ai::{AIRequestUsageModel, cloud_environments};
 use crate::appearance::Appearance;
@@ -25,12 +26,41 @@ use crate::settings_view::update_environment_form::{
     EnvironmentFormInitArgs, UpdateEnvironmentForm, UpdateEnvironmentFormEvent,
 };
 use crate::ui_components::blended_colors;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::ChargeUnit;
 
 /// Max width for the content area (matches Figma: 592px)
 const CONTENT_MAX_WIDTH: f32 = 592.;
 const FORM_PADDING: f32 = 24.;
 const SECTION_SPACING: f32 = 16.;
 const HEADER_SPACING: f32 = 4.;
+
+/// The ambient trial balance shown in the free credits banner.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TrialCredits {
+    credits: i32,
+    /// The dollar value of `credits`, in cents, for a plan charged in cents whose trial grants
+    /// all carry one.
+    usage_cents: Option<f64>,
+}
+
+impl TrialCredits {
+    fn banner_text(self) -> String {
+        match self.usage_cents {
+            Some(cents) => format!(
+                "You have {} of free usage for Oz cloud agents.",
+                format_dollars(cents as f32)
+            ),
+            None if self.credits == 1 => {
+                "You have 1 free credit to use on Oz cloud agents.".to_string()
+            }
+            None => format!(
+                "You have {} free credits to use on Oz cloud agents.",
+                self.credits
+            ),
+        }
+    }
+}
 
 /// Events emitted by FirstTimeCloudAgentSetupView.
 #[derive(Debug, Clone)]
@@ -200,14 +230,19 @@ impl FirstTimeCloudAgentSetupView {
     /// Renders the free credits banner - displayed INSIDE the form card at the top.
     fn render_free_credits_banner(
         &self,
-        credits: i32,
+        credits: TrialCredits,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
 
+        let badge_text = if credits.usage_cents.is_some() {
+            "Free usage"
+        } else {
+            "Free credits"
+        };
         // Badge with blue border
         let badge = Container::new(
-            Text::new("Free credits", appearance.ui_font_family(), 12.)
+            Text::new(badge_text, appearance.ui_font_family(), 12.)
                 .with_style(Properties::default().weight(Weight::Semibold))
                 .with_color(theme.accent().into())
                 .finish(),
@@ -218,16 +253,7 @@ impl FirstTimeCloudAgentSetupView {
         .with_border(Border::all(1.).with_border_fill(theme.accent()))
         .finish();
 
-        // Banner text - dynamic based on credits
-        let credits_text = if credits == 1 {
-            "You have 1 free credit to use on Oz cloud agents.".to_string()
-        } else {
-            format!(
-                "You have {} free credits to use on Oz cloud agents.",
-                credits
-            )
-        };
-        let text = Text::new(credits_text, appearance.ui_font_family(), 12.)
+        let text = Text::new(credits.banner_text(), appearance.ui_font_family(), 12.)
             .with_color(blended_colors::text_sub(theme, theme.surface_1()))
             .finish();
 
@@ -255,7 +281,11 @@ impl FirstTimeCloudAgentSetupView {
     }
 
     /// Renders the form card container with subtle background.
-    fn render_form_card(&self, credits: Option<i32>, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_form_card(
+        &self,
+        credits: Option<TrialCredits>,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
         let card_bg = blended_colors::fg_overlay_1(appearance.theme()).into();
 
         let mut card_content =
@@ -314,9 +344,17 @@ impl View for FirstTimeCloudAgentSetupView {
 
         // Retrieve ambient credits and apply threshold filter
         // Only show banner if user has ambient credits >= threshold
-        let credits_to_display = AIRequestUsageModel::as_ref(app)
+        let request_usage_model = AIRequestUsageModel::as_ref(app);
+        let credits_to_display = request_usage_model
             .ambient_only_credits_remaining()
-            .filter(|&credits| credits >= AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD);
+            .filter(|&credits| credits >= AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD)
+            .map(|credits| TrialCredits {
+                credits,
+                usage_cents: match UserWorkspaces::as_ref(app).charge_unit() {
+                    ChargeUnit::Cents => request_usage_model.ambient_only_usage_cents_remaining(),
+                    ChargeUnit::Credits => None,
+                },
+            });
 
         // Build main content column:
         // 1. Header (title + description) - OUTSIDE the card
@@ -372,3 +410,7 @@ impl View for FirstTimeCloudAgentSetupView {
             .finish()
     }
 }
+
+#[cfg(test)]
+#[path = "first_time_setup_tests.rs"]
+mod tests;

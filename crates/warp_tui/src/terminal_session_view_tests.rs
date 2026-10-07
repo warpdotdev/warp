@@ -17,14 +17,17 @@ use warp::settings::{
     TuiThemeSettings, TuiUsageDisplayMode, TuiVoiceInputHoldKey, TuiZeroStateObject,
 };
 use warp::terminal::model::ansi::{Handler, InputBufferValue, Mode};
+use warp::terminal::model::session::SessionInfo;
+use warp::terminal::model::session::command_executor::LocalCommandExecutor;
+use warp::terminal::shell::ShellType;
 use warp::tui_export::{
     AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId, AIAgentInput,
     AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentTodo, AIAgentTodoList,
     AIBlockModel, AIBlockOutputStatus, AIConversationAutoexecuteMode, AIConversationId,
     AIRequestType, AgentViewEntryOrigin, AskUserQuestionItem, AskUserQuestionOption,
     AskUserQuestionType, BlockPadding, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-    ConversationStatus, ConversationUsageTotals, Harness, InputTypeAutoDetectionSource, LLMId,
-    LLMPreferences, LinkedWorkflowData, LongRunningCommandControlState, MessageId,
+    ChargeUnit, ConversationStatus, ConversationUsageTotals, Harness, InputTypeAutoDetectionSource,
+    LLMId, LLMPreferences, LinkedWorkflowData, LongRunningCommandControlState, MessageId,
     OutputStatusUpdateCallback, ParsedSlashCommandInput, PtyIntent, PtyIntentEvent,
     ResolvedTeamScope, ServerOutputId, Session, Shared, SizeInfo, SizeUpdate,
     SlashCommandDataSource as _, SlashCommandKind, TaskId, TranscriptScope, TuiMcpAction,
@@ -42,7 +45,7 @@ use warpui::platform::WindowStyle;
 use warpui::{
     AddWindowOptions, EntityIdMap, ModelHandle, ReadModel, SingletonEntity, UpdateModel, ViewHandle,
 };
-use warpui_core::r#async::Timer;
+use warpui_core::r#async::{FutureExt as _, Timer};
 use warpui_core::elements::tui::{
     Color, TuiBuffer, TuiBufferExt, TuiConstrainedBox, TuiConstraint, TuiContainer, TuiElement,
     TuiEvent, TuiEventContext, TuiFlex, TuiLayoutContext, TuiPaintContext, TuiPaintSurface,
@@ -1042,25 +1045,72 @@ fn shell_mode_reserves_tab_even_when_attachments_render() {
     assert!(!attachment_focus_available(true, true));
     assert!(!attachment_focus_available(false, false));
 }
+
 #[test]
 fn shell_completion_source_warmup_loads_path_executables() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
-        let session = Arc::new(Session::test());
+        let command_dir = TempDir::new().unwrap();
+        #[cfg(unix)]
+        let shell_path = std::path::PathBuf::from("/bin/bash");
+        #[cfg(windows)]
+        let shell_path = std::path::PathBuf::from(
+            std::env::var_os("ProgramFiles").expect("Windows must have ProgramFiles"),
+        )
+        .join(r"Git\usr\bin\bash.exe");
+        #[cfg(unix)]
+        let executable_name = "warp-completion-fixture";
+        #[cfg(windows)]
+        let executable_name = "warp-completion-fixture.exe";
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let executable = command_dir.path().join(executable_name);
+            std::fs::write(&executable, "#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        #[cfg(windows)]
+        std::fs::copy(
+            std::path::PathBuf::from(
+                std::env::var_os("SystemRoot").expect("Windows must have a SystemRoot"),
+            )
+            .join(r"System32\where.exe"),
+            command_dir.path().join(executable_name),
+        )
+        .unwrap();
+        let session_info = SessionInfo::new_for_test()
+            .with_shell_type(ShellType::Bash)
+            .with_path(Some(command_dir.path().to_str().unwrap().to_owned()));
+        let executor = Arc::new(LocalCommandExecutor::new(Some(shell_path), ShellType::Bash));
+        let session = Arc::new(Session::new(session_info, executor));
 
         view.update(&mut app, |view, ctx| {
             view.warm_shell_completion_sources(session.clone(), ctx);
         });
 
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !session.has_loaded_external_commands() && Instant::now() < deadline {
-            Timer::after(Duration::from_millis(10)).await;
+        async {
+            while !session.has_attempted_to_load_external_commands() {
+                Timer::after(Duration::from_millis(10)).await;
+            }
         }
+        .with_timeout(Duration::from_secs(5))
+        .await
+        .expect("Completion warmup must start external command discovery");
 
-        assert!(session.has_attempted_to_load_external_commands());
+        session
+            .load_external_commands()
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("External command discovery must finish");
         assert!(session.has_loaded_external_commands());
-        assert!(session.executable_names().any(|command| command == "git"));
+        assert!(
+            session
+                .executable_names()
+                .any(|command| command == executable_name)
+        );
     });
 }
 
@@ -2470,7 +2520,8 @@ fn render_usage_footer_row(app: &mut App, totals: ConversationUsageTotals) -> Ve
     app.update(|ctx| {
         let builder = TuiUiBuilder::from_app(ctx);
         let mode = AISettings::as_ref(ctx).usage_display_mode;
-        let usage = UsageToggle::default().render_entry(mode, totals, ctx, |_, _| {});
+        let usage =
+            UsageToggle::default().render_entry(mode, totals, ChargeUnit::Credits, ctx, |_, _| {});
         let row = render_status_footer_row(
             FooterSegments {
                 ordered: vec![
@@ -2499,7 +2550,7 @@ fn response_summary_visibility_is_independent_from_the_footer_usage_mode() {
 
         let totals = ConversationUsageTotals {
             credits_spent: 2.5,
-            cost_in_cents: Some(3.2),
+            billed_cost_in_cents: Some(3.2),
             has_usage: true,
             charged_usage: None,
         };
@@ -4867,10 +4918,11 @@ fn footer_renders_agent_sections_left_aligned() {
                 TuiUsageDisplayMode::default(),
                 ConversationUsageTotals {
                     credits_spent: 2.5,
-                    cost_in_cents: Some(0.0),
+                    billed_cost_in_cents: Some(0.0),
                     has_usage: true,
                     charged_usage: None,
                 },
+                ChargeUnit::Credits,
                 ctx,
                 |_, _| {},
             );
@@ -4961,10 +5013,11 @@ fn footer_usage_entry_shows_unknown_cost_even_with_zero_credits() {
                 TuiUsageDisplayMode::Cost,
                 ConversationUsageTotals {
                     credits_spent: 0.0,
-                    cost_in_cents: None,
+                    billed_cost_in_cents: None,
                     has_usage: true,
                     charged_usage: None,
                 },
+                ChargeUnit::Credits,
                 ctx,
                 |_, _| {},
             );

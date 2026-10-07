@@ -1,5 +1,4 @@
 use asset_macro::bundled_or_fetched_asset;
-use itertools::Itertools;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
@@ -22,6 +21,7 @@ use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
+use crate::pricing::addon_pack::pack_menu_label;
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::terminal::general_settings::GeneralSettings;
 use crate::ui_components::blended_colors;
@@ -122,13 +122,8 @@ impl BuildPlanMigrationModal {
         let addon_credits_settings = &workspace.settings.addon_credits_settings;
         self.auto_reload_enabled = addon_credits_settings.auto_reload_enabled;
         self.selected_addon_credits_option = addon_credits_settings
-            .selected_auto_reload_credit_denomination
-            .and_then(|amount| {
-                self.addon_credits_options
-                    .iter()
-                    .find_position(|option| option.credits == amount)
-            })
-            .map_or(0, |pair| pair.0);
+            .selected_auto_reload_option_index(&self.addon_credits_options)
+            .unwrap_or(0);
         // Update dropdown to reflect the refreshed selection
         self.reload_denominations_dropdown
             .update(ctx, |dropdown, ctx| {
@@ -156,18 +151,10 @@ impl BuildPlanMigrationModal {
         // Sync the auto-reload enabled flag
         self.auto_reload_enabled = addon_credits_settings.auto_reload_enabled;
 
-        if let Some(selected_amount) =
-            addon_credits_settings.selected_auto_reload_credit_denomination
+        if let Some(index) =
+            addon_credits_settings.selected_auto_reload_option_index(&self.addon_credits_options)
         {
-            // Find the index of the option that matches the selected amount
-            if let Some((index, _)) = self
-                .addon_credits_options
-                .iter()
-                .enumerate()
-                .find(|(_, option)| option.credits == selected_amount)
-            {
-                self.selected_addon_credits_option = index;
-            }
+            self.selected_addon_credits_option = index;
         }
     }
 
@@ -215,6 +202,10 @@ impl BuildPlanMigrationModal {
     }
 
     fn populate_reload_denomination_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
+        let premium_bps = UserWorkspaces::as_ref(ctx)
+            .purchase_policy()
+            .map_or(0, |policy| policy.effective_premium_bps());
+        let unit = UserWorkspaces::as_ref(ctx).charge_unit();
         self.reload_denominations_dropdown
             .update(ctx, |dropdown, ctx| {
                 dropdown.set_items(
@@ -223,11 +214,7 @@ impl BuildPlanMigrationModal {
                         .enumerate()
                         .map(|(i, option)| {
                             DropdownItem::new(
-                                format!(
-                                    "${} / {} credits",
-                                    option.price_usd_cents / 100,
-                                    option.credits.separate_with_commas(),
-                                ),
+                                pack_menu_label(option, premium_bps, unit),
                                 BuildPlanMigrationModalViewAction::SelectReloadDenomination(i),
                             )
                         })

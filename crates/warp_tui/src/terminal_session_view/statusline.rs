@@ -573,9 +573,11 @@ impl TuiTerminalSessionView {
                     .flatten()
                     .map(|totals| {
                         let mode = AISettings::as_ref(ctx).usage_display_mode;
+                        let charge_unit = UserWorkspaces::as_ref(ctx).charge_unit();
                         FooterSegment::CreditUsage(self.usage_toggle.render_entry(
                             mode,
                             totals,
+                            charge_unit,
                             ctx,
                             |event_ctx, _| {
                                 event_ctx.dispatch_typed_action(

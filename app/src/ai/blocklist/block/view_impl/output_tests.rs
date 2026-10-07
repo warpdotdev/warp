@@ -5,6 +5,7 @@ use ai::skills::{ParsedSkill, SkillProvider, SkillReference, SkillScope};
 use computer_use::{Action, ScreenshotParams, Target, TargetedAction};
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::{DirectoryWatcher, RepoMetadataModel};
+use warp_core::features::FeatureFlag;
 use warp_util::host_id::HostId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
@@ -15,7 +16,7 @@ use watcher::HomeDirectoryWatcher;
 use super::{
     RecordingCardText, format_upload_artifact_text, parsed_skill_for_common_locations,
     read_skill_display_text, should_decorate_recorded_use_computer, start_recording_card_text,
-    stop_recording_card_text,
+    stop_recording_card_text, usage_pill_text,
 };
 use crate::ai::agent::{
     RecordingStarted, RecordingStopped, StartRecordingResult, StopRecordingResult,
@@ -23,7 +24,37 @@ use crate::ai::agent::{
 };
 use crate::ai::skills::SkillManager;
 use crate::settings::AISettings;
+use crate::test_util::billing_unit::set_charge_unit;
+use crate::test_util::terminal::initialize_app_for_terminal_view;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
+use crate::workspaces::workspace::ChargeUnit;
+
+/// The pill shows a cents-charged viewer's figure in dollars whenever a cents figure exists
+/// and falls back to credits otherwise, independent of the dogfood flag; a credits-charged
+/// viewer keeps today's prod display even when cents are present.
+#[test]
+fn usage_pill_text_follows_the_tier_charge_unit() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
+        initialize_app_for_terminal_view(&mut app);
+
+        app.read(|ctx| {
+            assert_eq!(
+                usage_pill_text(20.0, Some(12_345), Some(36.0), ctx),
+                "20 credits"
+            );
+        });
+
+        set_charge_unit(&mut app, ChargeUnit::Cents);
+        app.read(|ctx| {
+            assert_eq!(
+                usage_pill_text(20.0, Some(12_345), Some(36.0), ctx),
+                "$0.36"
+            );
+            assert_eq!(usage_pill_text(20.0, Some(12_345), None, ctx), "20 credits");
+        });
+    });
+}
 
 #[test]
 fn format_upload_artifact_text_includes_request_details() {

@@ -57,6 +57,8 @@ pub struct BonusGrant {
     pub user_facing_message: Option<String>,
     pub request_credits_granted: i32,
     pub request_credits_remaining: i32,
+    pub usage_cents_granted: Option<f64>,
+    pub usage_cents_remaining: Option<f64>,
 }
 
 #[derive(cynic::Enum, Clone, Copy, Debug)]
@@ -101,10 +103,20 @@ pub enum ServiceAgreementType {
     Other(String),
 }
 
+/// The unit a tier charges AI usage in.
+#[derive(cynic::Enum, Clone, Debug, PartialEq, Eq)]
+pub enum ChargeUnit {
+    Credits,
+    Cents,
+    #[cynic(fallback)]
+    Other(String),
+}
+
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct Tier {
     pub name: String,
     pub description: String,
+    pub charge_unit: ChargeUnit,
     pub warp_ai_policy: Option<WarpAiPolicy>,
     pub team_size_policy: Option<TeamSizePolicy>,
     pub shared_notebooks_policy: Option<SharedNotebooksPolicy>,
@@ -280,10 +292,11 @@ pub enum DelinquencyStatus {
     Other(String),
 }
 
-#[derive(cynic::QueryFragment, Debug, Clone)]
+#[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
 pub struct AddonCreditsOption {
     pub credits: i32,
     pub price_usd_cents: i32,
+    pub usage_cents: Option<i32>,
 }
 
 impl AddonCreditsOption {

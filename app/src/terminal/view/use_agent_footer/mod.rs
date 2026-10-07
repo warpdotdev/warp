@@ -51,9 +51,7 @@ use crate::ai::blocklist::block::cli_controller::CLISubagentEvent;
 use crate::cmd_or_ctrl_shift;
 use crate::code_review::diff_state::GitDeltaPreference;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
-use crate::server::telemetry::{
-    CLIAgentType, CLISubagentControlState, FileTreeSource, TelemetryEvent,
-};
+use crate::server::telemetry::{CLISubagentControlState, FileTreeSource, TelemetryEvent};
 use crate::settings::{
     AISettings, AISettingsChangedEvent, CompiledCommandsForCodingAgentToolbar, InputModeSettings,
 };
@@ -137,6 +135,7 @@ fn rich_input_submit_strategy(agent: CLIAgent) -> RichInputSubmitStrategy {
         CLIAgent::Amp
         | CLIAgent::Droid
         | CLIAgent::Pi
+        | CLIAgent::Kiro
         | CLIAgent::Goose
         | CLIAgent::Vibe
         | CLIAgent::Antigravity
@@ -248,7 +247,7 @@ impl TerminalView {
                     Some(_) => FileTreeSource::CLIAgentView,
                     None => FileTreeSource::AgentToolbelt,
                 };
-                self.toggle_file_tree(source, cli_agent.map(Into::into), ctx);
+                self.toggle_file_tree(source, *cli_agent, ctx);
             }
             UseAgentToolbarEvent::StartRemoteControl { scrollback_type } => {
                 self.auto_stop_sharing_on_cli_end =
@@ -547,10 +546,9 @@ impl TerminalView {
 
         // Send telemetry when showing CLI agent footer
         if let Some(session) = CLIAgentSessionsModel::as_ref(ctx).session(self.view_id) {
-            let cli_agent_type: CLIAgentType = session.agent.into();
             send_telemetry_from_ctx!(
                 TelemetryEvent::CLIAgentToolbarShown {
-                    cli_agent: cli_agent_type,
+                    cli_agent: session.agent,
                 },
                 ctx
             );
@@ -611,10 +609,10 @@ impl TerminalView {
             sessions_model.close_input(view_id, should_auto_toggle_input, ctx);
         });
 
-        let cli_agent_type: Option<CLIAgentType> = CLIAgentSessionsModel::as_ref(ctx)
+        let cli_agent = CLIAgentSessionsModel::as_ref(ctx)
             .session(self.view_id)
-            .map(|s| s.agent.into());
-        if let Some(cli_agent) = cli_agent_type {
+            .map(|s| s.agent);
+        if let Some(cli_agent) = cli_agent {
             send_telemetry_from_ctx!(
                 TelemetryEvent::CLIAgentRichInputClosed { cli_agent, reason },
                 ctx
@@ -664,9 +662,9 @@ impl TerminalView {
         }
 
         let prompt_length = text.chars().count();
-        let cli_agent: Option<CLIAgentType> = CLIAgentSessionsModel::as_ref(ctx)
+        let cli_agent = CLIAgentSessionsModel::as_ref(ctx)
             .session(self.view_id)
-            .map(|s| s.agent.into());
+            .map(|s| s.agent);
         if let Some(cli_agent) = cli_agent {
             send_telemetry_from_ctx!(
                 TelemetryEvent::CLIAgentRichInputSubmitted {
@@ -1104,7 +1102,7 @@ impl TerminalView {
 
         send_telemetry_from_ctx!(
             TelemetryEvent::CLIAgentRichInputOpened {
-                cli_agent: cli_agent.into(),
+                cli_agent,
                 entrypoint,
             },
             ctx

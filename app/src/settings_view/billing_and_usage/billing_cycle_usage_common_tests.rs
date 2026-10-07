@@ -397,6 +397,8 @@ fn workspace_member(uid: &str) -> WorkspaceMember {
             is_unlimited: false,
             request_limit: 0,
             requests_used_since_last_refresh: 0,
+            included_usage_cents: None,
+            usage_cents_used_since_last_refresh: None,
             is_request_limit_prorated: false,
         },
     }

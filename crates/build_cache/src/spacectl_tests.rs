@@ -62,7 +62,7 @@ fn mount_response_deserializes_spacectl_output() {
             "output": {
                 "add_envs": {"GOCACHE": "/cache/go"},
                 "mounts": [
-                    {"mode": "cargo", "cache_hit": true, "cache_path": "ignored", "mount_path": "ignored"},
+                    {"mode": "cargo", "cache_hit": true, "cache_path": "/cache/repos/key/target", "mount_path": "/work/repo/target"},
                     {"mode": "go", "cache_hit": false}
                 ],
                 "disk_usage": {"total": "20G", "used": "4G"},
@@ -75,7 +75,16 @@ fn mount_response_deserializes_spacectl_output() {
     assert_eq!(response.input.modes, ["cargo", "go"]);
     assert_eq!(response.output.add_envs["GOCACHE"], "/cache/go");
     assert!(response.output.mounts[0].cache_hit);
+    assert_eq!(
+        response.output.mounts[0].cache_path,
+        Path::new("/cache/repos/key/target")
+    );
+    assert_eq!(
+        response.output.mounts[0].mount_path,
+        Path::new("/work/repo/target")
+    );
     assert!(!response.output.mounts[1].cache_hit);
+    assert_eq!(response.output.mounts[1].cache_path, Path::new(""));
     let disk_usage = response.output.disk_usage.unwrap();
     assert_eq!(disk_usage.total, "20G");
     assert_eq!(disk_usage.used, "4G");
@@ -88,6 +97,7 @@ fn mount_response_deserializes_spacectl_output() {
 fn mount_error_diagnostic_prefers_spacectl_stderr() {
     let error = CacheSetupError::NonzeroExit {
         exit_code: Some(17),
+        stdout: String::new(),
         stderr: "mount failed: permission denied".to_owned(),
     };
     assert_eq!(
@@ -100,6 +110,7 @@ fn mount_error_diagnostic_prefers_spacectl_stderr() {
 fn mount_error_diagnostic_includes_exit_code_without_stderr() {
     let error = CacheSetupError::NonzeroExit {
         exit_code: Some(17),
+        stdout: String::new(),
         stderr: String::new(),
     };
 

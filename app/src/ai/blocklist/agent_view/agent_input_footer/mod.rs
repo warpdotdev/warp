@@ -58,7 +58,7 @@ use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHi
 use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::usage::icon_for_context_window_usage;
 use crate::ai::blocklist::usage::usage_popover_view::{
-    UsagePopoverEvent, UsagePopoverView, conversation_total_text,
+    UsagePopoverEvent, UsagePopoverView, conversation_total_text, conversation_usage_display_unit,
 };
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
@@ -119,7 +119,7 @@ use crate::workspace::ToastStack;
 #[cfg(not(target_family = "wasm"))]
 use crate::workspace::WorkspaceAction;
 use crate::workspace::view::TOGGLE_PROJECT_EXPLORER_BINDING_NAME;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 const ENABLE_NLD_TOOLTIP: &str = "Enable terminal command autodetection";
 const DISABLE_NLD_TOOLTIP: &str = "Disable terminal command autodetection";
@@ -801,7 +801,14 @@ impl AgentInputFooter {
         ctx.subscribe_to_model(&NetworkStatus::handle(ctx), |_, _, _, ctx| {
             ctx.notify();
         });
-        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |_, _, _, ctx| {
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            // The tier carries the unit the usage tooltip renders in.
+            if matches!(
+                event,
+                UserWorkspacesEvent::TeamsChanged | UserWorkspacesEvent::CurrentWorkspaceChanged
+            ) {
+                me.update_usage_button(ctx);
+            }
             ctx.notify();
         });
         ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |_, _, _, ctx| {
@@ -1458,7 +1465,7 @@ impl AgentInputFooter {
                 if result.is_ok() {
                     send_telemetry_from_ctx!(
                         TelemetryEvent::CLIAgentPluginOperationSucceeded {
-                            cli_agent: agent.into(),
+                            cli_agent: agent,
                             operation: operation_kind,
                         },
                         ctx
@@ -1467,7 +1474,7 @@ impl AgentInputFooter {
                 } else {
                     send_telemetry_from_ctx!(
                         TelemetryEvent::CLIAgentPluginOperationFailed {
-                            cli_agent: agent.into(),
+                            cli_agent: agent,
                             operation: operation_kind,
                         },
                         ctx
@@ -1931,9 +1938,7 @@ impl AgentInputFooter {
 
                         if let Some(agent) = self.cli_agent(ctx) {
                             send_telemetry_from_ctx!(
-                                TelemetryEvent::CLIAgentToolbarVoiceInputUsed {
-                                    cli_agent: agent.into(),
-                                },
+                                TelemetryEvent::CLIAgentToolbarVoiceInputUsed { cli_agent: agent },
                                 ctx
                             );
                         }
@@ -2241,7 +2246,7 @@ impl AgentInputFooter {
                     "Conversation usage: {}",
                     conversation_total_text(
                         conversation,
-                        AISettings::as_ref(ctx).usage_display_unit,
+                        conversation_usage_display_unit(conversation, ctx),
                     )
                 )
             })
@@ -2692,9 +2697,7 @@ impl TypedActionView for AgentInputFooter {
             AgentInputFooterAction::InsertFilePath(path) => {
                 if let Some(agent) = self.cli_agent(ctx) {
                     send_telemetry_from_ctx!(
-                        TelemetryEvent::CLIAgentToolbarImageAttached {
-                            cli_agent: agent.into(),
-                        },
+                        TelemetryEvent::CLIAgentToolbarImageAttached { cli_agent: agent },
                         ctx
                     );
                 }
@@ -2740,7 +2743,7 @@ impl TypedActionView for AgentInputFooter {
                     if let Some(agent) = self.cli_agent(ctx) {
                         send_telemetry_from_ctx!(
                             TelemetryEvent::CLIAgentPluginChipClicked {
-                                cli_agent: agent.into(),
+                                cli_agent: agent,
                                 action: PluginChipTelemetryAction::Install,
                             },
                             ctx
@@ -2757,7 +2760,7 @@ impl TypedActionView for AgentInputFooter {
                     if let Some(agent) = self.cli_agent(ctx) {
                         send_telemetry_from_ctx!(
                             TelemetryEvent::CLIAgentPluginChipClicked {
-                                cli_agent: agent.into(),
+                                cli_agent: agent,
                                 action: PluginChipTelemetryAction::Update,
                             },
                             ctx
@@ -2773,7 +2776,7 @@ impl TypedActionView for AgentInputFooter {
                 if let Some(agent) = self.cli_agent(ctx) {
                     send_telemetry_from_ctx!(
                         TelemetryEvent::CLIAgentPluginChipClicked {
-                            cli_agent: agent.into(),
+                            cli_agent: agent,
                             action: PluginChipTelemetryAction::InstallInstructions,
                         },
                         ctx
@@ -2789,7 +2792,7 @@ impl TypedActionView for AgentInputFooter {
                 if let Some(agent) = self.cli_agent(ctx) {
                     send_telemetry_from_ctx!(
                         TelemetryEvent::CLIAgentPluginChipClicked {
-                            cli_agent: agent.into(),
+                            cli_agent: agent,
                             action: PluginChipTelemetryAction::UpdateInstructions,
                         },
                         ctx
@@ -2808,7 +2811,7 @@ impl TypedActionView for AgentInputFooter {
                 {
                     send_telemetry_from_ctx!(
                         TelemetryEvent::CLIAgentPluginChipDismissed {
-                            cli_agent: agent.into(),
+                            cli_agent: agent,
                             chip_kind: kind.into(),
                         },
                         ctx

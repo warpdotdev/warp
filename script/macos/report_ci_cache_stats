@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+#
+# Prints the state of the Namespace cache volume and the runner machine during macOS CI
+# jobs, so that slow test compiles can be correlated with cache volume size, incremental
+# compilation state and memory pressure. Diagnostics only: this script never fails the job.
+
+set -uo pipefail
+
+CACHE_PATH="${NSC_CACHE_PATH:-}"
+
+echo "::group::Machine"
+sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize
+echo "::endgroup::"
+
+echo "::group::Cache volume"
+if [[ -n "$CACHE_PATH" && -d "$CACHE_PATH" ]]; then
+  echo "NSC_CACHE_PATH=$CACHE_PATH"
+  df -h "$CACHE_PATH"
+  ls -la "$CACHE_PATH"
+else
+  echo "NSC_CACHE_PATH is not set or does not point at a directory"
+fi
+echo "::endgroup::"
+
+echo "::group::Cargo home"
+du -sh "${CARGO_HOME:-$HOME/.cargo}"/registry "${CARGO_HOME:-$HOME/.cargo}"/git 2>/dev/null
+echo "::endgroup::"
+
+echo "::group::Cargo target directory"
+if [[ -d target ]]; then
+  ls -ld target
+  du -sh target/debug/* target/release 2>/dev/null | sort -h
+  if [[ -d target/debug/incremental ]]; then
+    echo "incremental sessions: $(find target/debug/incremental -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
+  fi
+else
+  echo "no target directory"
+fi
+echo "::endgroup::"
+
+echo "::group::Memory"
+vm_stat
+memory_pressure
+echo "::endgroup::"
+
+exit 0

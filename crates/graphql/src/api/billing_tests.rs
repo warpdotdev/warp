@@ -4,6 +4,7 @@ fn option(credits: i32, price_usd_cents: i32) -> AddonCreditsOption {
     AddonCreditsOption {
         credits,
         price_usd_cents,
+        usage_cents: None,
     }
 }
 

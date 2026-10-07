@@ -649,9 +649,9 @@ fn on_shell_determined<S: TerminalSurface>(
             executable_path: shell_starter.logical_shell_path().to_owned(),
             shell_type: shell_starter.shell_type(),
         },
-        ShellStarter::DockerSandbox(docker_starter) => ShellLaunchData::Executable {
-            executable_path: docker_starter.logical_shell_path().to_owned(),
-            shell_type: docker_starter.shell_type(),
+        ShellStarter::DockerSandbox(docker_starter) => ShellLaunchData::DockerSandbox {
+            sbx_path: docker_starter.logical_shell_path().to_owned(),
+            base_image: docker_starter.base_image().map(str::to_owned),
         },
         ShellStarter::Wsl(shell_starter) => ShellLaunchData::WSL {
             distro: shell_starter.distribution().to_owned(),
