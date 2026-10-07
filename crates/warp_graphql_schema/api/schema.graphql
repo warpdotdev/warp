@@ -716,6 +716,11 @@ type CategoryTokenBreakdown {
   tokens: Int!
 }
 
+enum ChargeUnit {
+  CREDITS
+  CENTS
+}
+
 type ChatGPTConnection {
   connectedAt: Time!
   email: String
@@ -4194,13 +4199,9 @@ type Tier {
   aiPermissionsPolicy: AiPermissionsPolicy
   ambientAgentsPolicy: AmbientAgentsPolicy
   anyoneWithLinkSharingPolicy: AnyoneWithLinkSharingPolicy
-
-  """
-  Whether AI usage on this tier is billed in dollars rather than credits.
-  """
-  billedInDollars: Boolean!
   byoApiKeyPolicy: ByoApiKeyPolicy
   byoEndpointPolicy: ByoEndpointPolicy
+  chargeUnit: ChargeUnit!
   cloudConversationStoragePolicy: CloudConversationStoragePolicy
   codebaseContextPolicy: CodebaseContextPolicy
   customLlmPolicy: CustomLlmPolicy

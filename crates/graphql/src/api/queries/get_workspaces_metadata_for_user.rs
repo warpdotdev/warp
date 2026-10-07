@@ -1,5 +1,5 @@
 use crate::ai::AICreditAvailability;
-use crate::billing::{PricingInfo, PurchaseAddOnCreditsPolicy};
+use crate::billing::{ChargeUnit, PricingInfo, PurchaseAddOnCreditsPolicy};
 use crate::experiment::Experiment;
 use crate::request_context::RequestContext;
 use crate::schema;
@@ -21,7 +21,7 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
         }
         billingMetadata {
           tier {
-            billedInDollars
+            chargeUnit
             purchaseAddOnCreditsPolicy {
               enabled
               premiumEnabled
@@ -265,7 +265,7 @@ pub struct User {
 /// Slim selection of the user-level `billingMetadata`: only the plan terms a
 /// user needs without a workspace (fresh free users have no team and their
 /// only workspace is the server's placeholder) — the add-on credits purchase
-/// policy and the billing unit. Do not widen it into the full
+/// policy and the charge unit. Do not widen it into the full
 /// `BillingMetadata` selection.
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "BillingMetadata")]
@@ -276,7 +276,7 @@ pub struct UserPurchasePolicyBillingMetadata {
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "Tier")]
 pub struct UserPurchasePolicyTier {
-    pub billed_in_dollars: bool,
+    pub charge_unit: ChargeUnit,
     pub purchase_add_on_credits_policy: Option<PurchaseAddOnCreditsPolicy>,
 }
 

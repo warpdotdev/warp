@@ -9,8 +9,8 @@ use warp_graphql::billing::{
     BillingCycleUsageHistory as GqlBillingCycleUsageHistory, BillingMetadata as GqlBillingMetadata,
     BonusGrant as GqlBonusGrant, BonusGrantScope as GqlBonusGrantScope,
     ByoApiKeyPolicy as GqlByoApiKeyPolicy, ByoEndpointPolicy as GqlByoEndpointPolicy,
-    CodebaseContextPolicy as GqlCodebaseContextPolicy, CustomerType as GqlCustomerType,
-    DelinquencyStatus as GqlDelinquencyStatus,
+    ChargeUnit as GqlChargeUnit, CodebaseContextPolicy as GqlCodebaseContextPolicy,
+    CustomerType as GqlCustomerType, DelinquencyStatus as GqlDelinquencyStatus,
     EnterpriseCreditsAutoReloadPolicy as GqlEnterpriseCreditsAutoReloadPolicy,
     EnterprisePayAsYouGoPolicy as GqlEnterprisePayAsYouGoPolicy, InstanceShape as GqlInstanceShape,
     ManagedByokByoePolicy as GqlManagedByokByoePolicy, MultiAdminPolicy as GqlMultiAdminPolicy,
@@ -708,12 +708,21 @@ fn convert_billing_cycle_usage(history: GqlBillingCycleUsageHistory) -> BillingC
     }
 }
 
+/// Whether a tier's charge unit means its usage is billed in dollars. A unit this client does
+/// not know stays on credits, the display every server supports.
+fn charges_in_dollars(charge_unit: GqlChargeUnit) -> bool {
+    match charge_unit {
+        GqlChargeUnit::Cents => true,
+        GqlChargeUnit::Credits | GqlChargeUnit::Other => false,
+    }
+}
+
 impl From<GqlTier> for Tier {
     fn from(gql_tier: GqlTier) -> Tier {
         Self {
             name: gql_tier.name,
             description: gql_tier.description,
-            billed_in_dollars: gql_tier.billed_in_dollars,
+            billed_in_dollars: charges_in_dollars(gql_tier.charge_unit),
             warp_ai_policy: gql_tier.warp_ai_policy.map(From::from),
             workspace_size_policy: gql_tier.team_size_policy.map(From::from),
             shared_notebooks_policy: gql_tier.shared_notebooks_policy.map(From::from),
@@ -1540,7 +1549,7 @@ pub fn workspaces_metadata_response_from_gql(
                 .tier
                 .purchase_add_on_credits_policy
                 .map(Into::into),
-            billed_in_dollars: billing_metadata.tier.billed_in_dollars,
+            billed_in_dollars: charges_in_dollars(billing_metadata.tier.charge_unit),
         })
         .unwrap_or_default();
 

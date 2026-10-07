@@ -103,11 +103,20 @@ pub enum ServiceAgreementType {
     Other(String),
 }
 
+/// The unit a tier charges AI usage in.
+#[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChargeUnit {
+    Credits,
+    Cents,
+    #[cynic(fallback)]
+    Other,
+}
+
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct Tier {
     pub name: String,
     pub description: String,
-    pub billed_in_dollars: bool,
+    pub charge_unit: ChargeUnit,
     pub warp_ai_policy: Option<WarpAiPolicy>,
     pub team_size_policy: Option<TeamSizePolicy>,
     pub shared_notebooks_policy: Option<SharedNotebooksPolicy>,
