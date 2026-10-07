@@ -61,15 +61,6 @@ fn conversation_data_with_usage_metadata(
     }
 }
 
-fn conversation_data_with_provider_cost(
-    total_provider_cost_in_cents: Option<f32>,
-) -> AgentConversationData {
-    conversation_data_with_usage_metadata(ConversationUsageMetadata {
-        total_provider_cost_in_cents,
-        ..Default::default()
-    })
-}
-
 fn conversation_data_with_billed_cost(
     total_billed_cost_in_cents: Option<f32>,
 ) -> AgentConversationData {
@@ -650,21 +641,6 @@ fn restored_conversation_seeds_known_billed_cost_baseline() {
     assert!(totals.has_usage);
 }
 
-/// A restored provider cost is kept for accounting but is not what the customer was billed,
-/// so it never surfaces as the conversation's dollar total.
-#[test]
-fn restored_provider_cost_baseline_stays_out_of_displayed_totals() {
-    let conversation = restored_conversation(Some(conversation_data_with_provider_cost(Some(3.2))));
-    let totals = conversation.usage_totals();
-
-    assert_eq!(
-        conversation.usage_metadata().total_provider_cost_in_cents,
-        Some(3.2)
-    );
-    assert_eq!(totals.total_cost_in_cents(), None);
-    assert!(totals.has_usage);
-}
-
 #[test]
 fn empty_task_restore_seeds_known_billed_cost_baseline() {
     let conversation = AIConversation::new_restored_synthesizing_on_empty(
@@ -678,75 +654,28 @@ fn empty_task_restore_seeds_known_billed_cost_baseline() {
     assert!(conversation.usage_totals().has_usage);
 }
 
-/// APP-4952 regression: the ticket's confirmed failing sequence. A restored
-/// conversation with a known 3.2¢ server baseline plus a 1.2¢ follow-up must
-/// account for 4.4¢ — never 0.0¢ (dropped baseline) or 1.2¢ (increment only).
-/// Covers both the strict and the lenient restore constructor.
-#[test]
-fn restored_usage_totals_preserve_server_provider_cost_and_add_follow_up() {
-    App::test((), |mut app| async move {
-        initialize_custom_endpoint_usage_test_app(&mut app);
-        app.add_singleton_model(LLMPreferences::new);
-
-        let strict_restore =
-            restored_conversation(Some(conversation_data_with_provider_cost(Some(3.2))));
-        let lenient_restore = AIConversation::new_restored_synthesizing_on_empty(
-            AIConversationId::new(),
-            vec![],
-            Some(conversation_data_with_provider_cost(Some(3.2))),
-        )
-        .expect("empty-task restore should synthesize a root");
-
-        for mut conversation in [strict_restore, lenient_restore] {
-            app.read(|ctx| {
-                conversation
-                    .update_cost_and_usage_for_request(
-                        None,
-                        None,
-                        vec![stream_token_usage("model-a", 10, 2, 1.2)],
-                        Some(credits_usage_metadata(1.0, 0.0)),
-                        false,
-                        ctx,
-                    )
-                    .expect("follow-up usage should update");
-            });
-
-            let cost = conversation
-                .usage_metadata()
-                .total_provider_cost_in_cents
-                .expect("a restored known baseline stays known");
-            assert!(
-                (cost - 4.4).abs() < 1e-6,
-                "3.2¢ baseline + 1.2¢ follow-up must total 4.4¢, got {cost}"
-            );
-            assert!(conversation.usage_totals().has_usage);
-        }
-    });
-}
-
 /// A restored conversation whose persisted metadata shows no usage evidence
 /// must keep the footer's usage entry hidden — local persistence always
 /// writes a metadata blob, so presence alone is not usage.
 #[test]
 fn restored_zero_usage_metadata_keeps_footer_usage_hidden() {
-    let conversation = restored_conversation(Some(conversation_data_with_provider_cost(None)));
+    let conversation = restored_conversation(Some(conversation_data_with_billed_cost(None)));
 
     let totals = conversation.usage_totals();
     assert!(!totals.has_usage);
     assert_eq!(totals.total_cost_in_cents(), None);
 }
 
-/// A present provider cost is affirmative evidence even at 0.0: the server
-/// only records a cost once a turn completed accounting, so a restored
-/// known-zero baseline must surface the footer rather than staying hidden.
-/// It is still not a billed figure, so the dollar total stays unknown.
+/// A present billed cost is affirmative evidence even at 0.0: the server only records a cost
+/// once a turn completed accounting, so a restored known-zero baseline must surface the footer
+/// (and read as $0.00) rather than staying hidden.
 #[test]
-fn restored_known_zero_provider_cost_marks_usage_without_a_billed_total() {
-    let conversation = restored_conversation(Some(conversation_data_with_provider_cost(Some(0.0))));
+fn restored_known_zero_billed_cost_marks_usage() {
+    let conversation = restored_conversation(Some(conversation_data_with_billed_cost(Some(0.0))));
 
     let totals = conversation.usage_totals();
     assert!(totals.has_usage);
-    assert_eq!(totals.total_cost_in_cents(), None);
+    assert_eq!(totals.total_cost_in_cents(), Some(0.0));
 }
 
 #[test]
@@ -771,7 +700,7 @@ fn restored_legacy_conversation_keeps_cost_unavailable_after_follow_up() {
         app.add_singleton_model(LLMPreferences::new);
 
         let mut conversation =
-            restored_conversation(Some(conversation_data_with_provider_cost(None)));
+            restored_conversation(Some(conversation_data_with_billed_cost(None)));
         app.read(|ctx| {
             conversation
                 .update_cost_and_usage_for_request(
@@ -917,7 +846,7 @@ fn credits_usage_metadata(
 }
 
 #[test]
-fn usage_totals_reads_gui_credits_and_accumulates_provider_cost() {
+fn usage_totals_reads_gui_credits_without_a_dollar_total() {
     App::test((), |mut app| async move {
         initialize_custom_endpoint_usage_test_app(&mut app);
         app.add_singleton_model(LLMPreferences::new);
@@ -946,7 +875,7 @@ fn usage_totals_reads_gui_credits_and_accumulates_provider_cost() {
                 .expect("usage should update");
             // The server's usage metadata is cumulative per conversation: the
             // newest snapshot replaces the previous credits rather than
-            // summing, while provider cost accumulates per request.
+            // summing.
             conversation
                 .update_cost_and_usage_for_request(
                     None,
@@ -961,14 +890,10 @@ fn usage_totals_reads_gui_credits_and_accumulates_provider_cost() {
 
         let totals = conversation.usage_totals();
         assert!((totals.credits_spent - 3.5).abs() < 1e-6);
-        let provider_cost = conversation
-            .usage_metadata()
-            .total_provider_cost_in_cents
-            .expect("new conversation provider cost is known");
-        assert!((provider_cost - 2.7).abs() < 1e-6);
-        // Without streamed charges or a billed snapshot, the provider cost is not shown as a
-        // dollar total.
+        // Without streamed charges or a billed snapshot there is no dollar total; the per-model
+        // token costs on the stream are never summed into one.
         assert_eq!(totals.total_cost_in_cents(), None);
+        assert!(totals.has_usage);
     });
 }
 

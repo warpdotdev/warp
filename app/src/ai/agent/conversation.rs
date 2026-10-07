@@ -257,12 +257,11 @@ impl ConversationUsageTotals {
 /// metadata blob, and a restored conversation that never ran a request must
 /// keep the footer's usage entry hidden.
 fn usage_metadata_indicates_usage(metadata: &ConversationUsageMetadata) -> bool {
-    // A present provider cost counts even at 0.0: the server only records a
+    // A present billed cost counts even at 0.0: the server only records a
     // cost once a turn has completed accounting, so `Some(0.0)` is a known
     // zero baseline (rendered as $0.00), unlike `None` (unknown).
     metadata.credits_spent != 0.0
         || metadata.platform_credits_spent != 0.0
-        || metadata.total_provider_cost_in_cents.is_some()
         || metadata.total_billed_cost_in_cents.is_some()
         || !metadata.token_usage.is_empty()
         || metadata.context_window_usage != 0.0
@@ -394,10 +393,6 @@ pub struct AIConversation {
 
     total_request_cost: RequestCost,
     total_token_usage_by_model: HashMap<String, TokenUsage>,
-    /// Server-authoritative cumulative provider cost in US cents. New
-    /// conversations start at a known zero; restored legacy conversations can
-    /// remain `None` until a server snapshot is available.
-    total_provider_cost_in_cents: Option<f32>,
     /// True once hydrated usage metadata shows evidence of usage (see
     /// [`usage_metadata_indicates_usage`]) or a live response reports usage
     /// (even when its numeric totals are zero).
@@ -500,7 +495,6 @@ impl AIConversation {
             dismissed_suggestion_ids: Default::default(),
             total_request_cost: RequestCost::new(0.),
             total_token_usage_by_model: Default::default(),
-            total_provider_cost_in_cents: Some(0.),
             has_usage_metadata: false,
             fallback_display_title: None,
             artifacts: Vec::new(),
@@ -729,7 +723,6 @@ impl AIConversation {
                 false,
             )
         };
-        let total_provider_cost_in_cents = conversation_usage_metadata.total_provider_cost_in_cents;
 
         Ok(Self {
             id,
@@ -756,7 +749,6 @@ impl AIConversation {
             dismissed_suggestion_ids: Default::default(),
             total_request_cost: RequestCost::new(0.),
             total_token_usage_by_model: Default::default(),
-            total_provider_cost_in_cents,
             has_usage_metadata,
             optimistic_cli_subagent_subtask_id: None,
             fallback_display_title: None,
@@ -1251,15 +1243,6 @@ impl AIConversation {
         // relative to live per-request cost accounting, so a snapshot may
         // only seed or advance the displayed total — never regress it or
         // re-add costs the client already counted.
-        if let Some(total_provider_cost_in_cents) = metadata.usage.total_provider_cost_in_cents
-            && self
-                .total_provider_cost_in_cents
-                .is_none_or(|current| total_provider_cost_in_cents >= current)
-        {
-            self.total_provider_cost_in_cents = Some(total_provider_cost_in_cents);
-            self.conversation_usage_metadata
-                .total_provider_cost_in_cents = Some(total_provider_cost_in_cents);
-        }
         if let Some(total_billed_cost_in_cents) = metadata.usage.total_billed_cost_in_cents
             && self
                 .conversation_usage_metadata
@@ -2358,9 +2341,6 @@ impl AIConversation {
         self.has_usage_metadata |=
             request_cost.is_some() || usage_metadata.is_some() || !token_usage.is_empty();
         for usage in token_usage.into_iter() {
-            if let Some(total_provider_cost_in_cents) = self.total_provider_cost_in_cents.as_mut() {
-                *total_provider_cost_in_cents += usage.cost_in_cents;
-            }
             let entry = self
                 .total_token_usage_by_model
                 .entry(usage.model_id.clone())
@@ -2452,8 +2432,6 @@ impl AIConversation {
                 self.conversation_usage_metadata.was_summarized = usage_metadata.summarized;
             }
         }
-        self.conversation_usage_metadata
-            .total_provider_cost_in_cents = self.total_provider_cost_in_cents;
         Ok(())
     }
 

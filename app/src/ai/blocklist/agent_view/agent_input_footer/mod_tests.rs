@@ -127,7 +127,6 @@ fn claude_conversation_metadata(task_id: AmbientAgentTaskId) -> ServerAIConversa
             context_window_usage: 0.0,
             credits_spent: 0.0,
             platform_credits_spent: 0.0,
-            total_provider_cost_in_cents: None,
             total_billed_cost_in_cents: None,
             credits_spent_for_last_block: None,
             charged_usage_for_last_block: None,
@@ -281,7 +280,7 @@ fn charged_usage_metadata()
 }
 
 /// The footer's usage tooltip must track real usage events: the
-/// server-seeded provider cost makes the conversation count as having usage
+/// server-seeded billed cost makes the conversation count as having usage
 /// (so the popover can open), and a later usage event carrying charged usage
 /// moves the tooltip's figure.
 #[test]
@@ -299,13 +298,13 @@ fn agent_footer_usage_tooltip_updates_on_usage_events() {
                     model.start_new_conversation(terminal.id(), false, false, false, ctx);
                 model.set_active_conversation_id(conversation_id, terminal.id(), ctx);
                 let mut metadata = claude_conversation_metadata(ambient_task_id(1));
-                metadata.usage.total_provider_cost_in_cents = Some(250.0);
+                metadata.usage.total_billed_cost_in_cents = Some(250.0);
                 model.set_server_metadata_for_conversation(conversation_id, metadata, ctx);
                 conversation_id
             })
         });
 
-        // Credits mode: a seeded provider cost alone is not a charged-usage
+        // Credits mode: a seeded billed cost alone is not a charged-usage
         // figure, so the total is unknown rather than zero.
         let tooltip = terminal.update(&mut app, |view, ctx| {
             let footer = view.input().as_ref(ctx).agent_input_footer().as_ref(ctx);
