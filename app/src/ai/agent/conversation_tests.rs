@@ -6,8 +6,8 @@ use warp_multi_agent_api as api;
 use warpui::{App, SingletonEntity};
 
 use super::{
-    AIConversation, AIConversationAutoexecuteMode, AIConversationId, ConversationStatus,
-    ConversationUsageTotals, RecordingSpanStatus, RestoreConversationError,
+    AIConversation, AIConversationAutoexecuteMode, AIConversationId, ConversationDriver,
+    ConversationStatus, ConversationUsageTotals, RecordingSpanStatus, RestoreConversationError,
     artifact_from_fork_proto, footer_model_token_usage,
 };
 use crate::ai::artifacts::Artifact;
@@ -591,6 +591,47 @@ fn restored_conversation_uses_persisted_remote_child_marker() {
     let conversation = restored_conversation(Some(conversation_data));
 
     assert!(conversation.is_remote_child());
+    assert_eq!(conversation.driver(), ConversationDriver::RemoteChild);
+}
+
+#[test]
+fn new_conversation_maps_constructor_flags_to_a_driver() {
+    assert_eq!(
+        AIConversation::new(false, false).driver(),
+        ConversationDriver::Native
+    );
+    assert_eq!(
+        AIConversation::new(true, false).driver(),
+        ConversationDriver::SharedSessionViewer
+    );
+    assert_eq!(
+        AIConversation::new(false, true).driver(),
+        ConversationDriver::CliAgentTranscript
+    );
+}
+
+#[test]
+fn legacy_flag_accessors_reflect_the_driver() {
+    let mut conversation = AIConversation::new(false, false);
+    assert!(!conversation.is_viewing_shared_session());
+    assert!(!conversation.is_cli_agent_transcript());
+    assert!(!conversation.is_remote_child());
+
+    conversation.set_is_viewing_shared_session(true);
+    assert!(conversation.is_viewing_shared_session());
+    assert_eq!(
+        conversation.driver(),
+        ConversationDriver::SharedSessionViewer
+    );
+
+    conversation.set_is_viewing_shared_session(false);
+    assert_eq!(conversation.driver(), ConversationDriver::Native);
+
+    conversation.mark_as_remote_child();
+    assert!(conversation.is_remote_child());
+    // Clearing the viewer flag on a non-viewer is a no-op, as it was with independent booleans.
+    conversation.set_is_viewing_shared_session(false);
+    assert_eq!(conversation.driver(), ConversationDriver::RemoteChild);
 }
 
 #[test]
