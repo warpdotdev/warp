@@ -423,12 +423,7 @@ impl BuyCreditsBanner {
             .enumerate()
             .map(|(index, option)| {
                 let primary_text = pack_menu_label(option, premium_bps, unit);
-                let discount_percent = if base_rate > 0.0 {
-                    let actual_rate = option.rate();
-                    ((base_rate - actual_rate) / base_rate * 100.0).round() as u32
-                } else {
-                    0
-                };
+                let discount_percent = option.discount_percent(base_rate);
                 if discount_percent > 0 {
                     MenuItemFields::new_with_custom_label(
                         Arc::new(enclose!((primary_text) move |is_selected, is_hovered, appearance, _| {

@@ -51,7 +51,7 @@ use crate::auth::auth_view_modal::AuthViewVariant;
 use crate::auth::{AuthManager, AuthStateProvider, UserUid};
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::modal::{Modal, ModalEvent, ModalViewState};
-use crate::pricing::addon_pack::PackAmount;
+use crate::pricing::addon_pack::{PackAmount, addon_credits_description};
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::server::ids::ServerId;
 use crate::server::telemetry::TelemetryEvent;
@@ -102,7 +102,6 @@ const ENTERPRISE_USAGE_CALLOUT_BODY_ADMIN_LINK: &str = "visit the admin panel";
 const ENTERPRISE_USAGE_CALLOUT_BODY_ADMIN_SUFFIX: &str = ".";
 const ENTERPRISE_USAGE_CALLOUT_BODY_NON_ADMIN: &str = "Enterprise credit usage isn't fully available in this view yet. Contact a team admin for detailed usage reporting.";
 
-const ADDON_CREDITS_DESCRIPTION: &str = "Add-on credits are purchased in prepaid packages that roll over each billing cycle and expire after one year. The more you purchase, the better the per-credit rate. Once your base plan credits are used, add-on credits will be consumed.";
 const ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM: &str =
     "Purchased add-on credits are shared across your team.";
 const ADDON_USAGE_DESCRIPTION: &str = "Usage rolls over each billing cycle and expires after one year. Once your base plan usage is depleted, any additional purchased usage will be consumed.";
@@ -1985,18 +1984,18 @@ impl BillingAndUsagePageView {
 
         let (description, team_description) = match unit {
             UsageDisplayUnit::Credits => (
-                ADDON_CREDITS_DESCRIPTION,
+                addon_credits_description(addon_credits_options),
                 ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM,
             ),
             UsageDisplayUnit::Dollars => (
-                ADDON_USAGE_DESCRIPTION,
+                ADDON_USAGE_DESCRIPTION.to_string(),
                 ADDITIONAL_ADDON_USAGE_DESCRIPTION_FOR_TEAM,
             ),
         };
         let paragraph_text = if team_member_count > 1 {
             format!("{description} {team_description}")
         } else {
-            description.to_string()
+            description
         };
         let paragraph = ui_builder
             .paragraph(paragraph_text)
@@ -2230,17 +2229,12 @@ impl BillingAndUsagePageView {
                 .with_margin_right(16.)
                 .finish();
 
-                let discount_percent = if base_rate > 0.0 {
-                    let actual_rate = option.rate();
-                    ((base_rate - actual_rate) / base_rate * 100.0).round() as u32
-                } else {
-                    0
-                };
-
-                let discount_badge =
-                    Container::new(create_discount_badge(discount_percent, appearance))
-                        .with_margin_right(8.)
-                        .finish();
+                let discount_badge = Container::new(create_discount_badge(
+                    option.discount_percent(base_rate),
+                    appearance,
+                ))
+                .with_margin_right(8.)
+                .finish();
                 (rendered_price, discount_badge)
             }
             None => (Empty::new().finish(), Empty::new().finish()),

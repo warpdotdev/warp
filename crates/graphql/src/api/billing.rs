@@ -304,6 +304,15 @@ impl AddonCreditsOption {
         self.price_usd_cents as f32 / self.credits as f32
     }
 
+    /// The whole-percent saving of this pack's per-credit rate over `base_rate` (the catalog's
+    /// smallest pack), or 0 when it is no cheaper.
+    pub fn discount_percent(&self, base_rate: f32) -> u32 {
+        if base_rate <= 0.0 {
+            return 0;
+        }
+        ((base_rate - self.rate()) / base_rate * 100.0).round() as u32
+    }
+
     /// Returns the purchase price in cents after applying a plan surcharge
     /// expressed in basis points (1000 bps = +10%). `price_usd_cents` always
     /// carries the list price; plans whose `PurchaseAddOnCreditsPolicy` has a

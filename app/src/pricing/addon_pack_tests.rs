@@ -1,6 +1,9 @@
 use warp_graphql::billing::AddonCreditsOption;
 
-use super::{PackAmount, format_price, pack_menu_label};
+use super::{
+    PackAmount, addon_credits_description, format_price, larger_packs_cost_less_per_credit,
+    pack_menu_label,
+};
 use crate::settings::UsageDisplayUnit;
 
 fn credits_pack(credits: i32, price_usd_cents: i32) -> AddonCreditsOption {
@@ -62,6 +65,42 @@ fn price_drops_cents_only_for_whole_dollars() {
     assert_eq!(format_price(1_000), "$10");
     assert_eq!(format_price(1_001), "$10.01");
     assert_eq!(format_price(5), "$0.05");
+}
+
+#[test]
+fn larger_packs_cost_less_per_credit_only_for_discounted_catalogs() {
+    assert!(larger_packs_cost_less_per_credit(&[
+        credits_pack(1_000, 1_000),
+        credits_pack(2_500, 2_000),
+    ]));
+    // Usage packs are sold at face value, so their credit equivalents are flat-rate.
+    assert!(!larger_packs_cost_less_per_credit(&[
+        usage_pack(555, 1_000),
+        usage_pack(1_111, 2_000),
+        usage_pack(2_777, 5_000),
+        usage_pack(5_555, 10_000),
+    ]));
+    assert!(!larger_packs_cost_less_per_credit(&[]));
+}
+
+#[test]
+fn description_promises_a_better_rate_only_when_the_catalog_offers_one() {
+    let discounted =
+        addon_credits_description(&[credits_pack(1_000, 1_000), credits_pack(2_500, 2_000)]);
+    assert_eq!(
+        discounted,
+        "Add-on credits are purchased in prepaid packages that roll over each billing cycle and \
+         expire after one year. The more you purchase, the better the per-credit rate. Once your \
+         base plan credits are used, add-on credits will be consumed."
+    );
+
+    let flat = addon_credits_description(&[usage_pack(555, 1_000), usage_pack(1_111, 2_000)]);
+    assert_eq!(
+        flat,
+        "Add-on credits are purchased in prepaid packages that roll over each billing cycle and \
+         expire after one year. Once your base plan credits are used, add-on credits will be \
+         consumed."
+    );
 }
 
 #[test]

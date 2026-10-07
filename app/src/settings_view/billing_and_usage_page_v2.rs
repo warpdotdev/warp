@@ -51,7 +51,7 @@ use crate::auth::auth_view_modal::AuthViewVariant;
 use crate::auth::{AuthManager, AuthStateProvider};
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::pricing::PricingInfoModel;
-use crate::pricing::addon_pack::PackAmount;
+use crate::pricing::addon_pack::{PackAmount, addon_credits_description};
 use crate::server::ids::ServerId;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::ai::{AISettings, AISettingsChangedEvent, UsageDisplayUnit};
@@ -66,7 +66,6 @@ use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::{CustomerType, Workspace, WorkspaceUid};
 use crate::{WorkspaceAction, send_telemetry_from_ctx};
 
-const ADDON_CREDITS_DESCRIPTION: &str = "Add-on credits are purchased in prepaid packages that roll over each billing cycle and expire after one year. The more you purchase, the better the per-credit rate. Once your base plan credits are used, add-on credits will be consumed.";
 const ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM: &str =
     "Purchased add-on credits are added to your team's shared credit pool.";
 const ADDON_USAGE_DESCRIPTION: &str = "Usage rolls over each billing cycle and expires after one year. Once your base plan usage is depleted, any additional purchased usage will be consumed.";
@@ -1255,18 +1254,18 @@ impl BillingAndUsagePageV2View {
             .unwrap_or(1);
         let (description, team_description) = match unit {
             UsageDisplayUnit::Credits => (
-                ADDON_CREDITS_DESCRIPTION,
+                addon_credits_description(&self.addon_credits.options),
                 ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM,
             ),
             UsageDisplayUnit::Dollars => (
-                ADDON_USAGE_DESCRIPTION,
+                ADDON_USAGE_DESCRIPTION.to_string(),
                 ADDITIONAL_ADDON_USAGE_DESCRIPTION_FOR_TEAM,
             ),
         };
         let description_text = if team_count > 1 {
             format!("{description} {team_description}")
         } else {
-            description.to_string()
+            description
         };
 
         let would_exceed = workspace
