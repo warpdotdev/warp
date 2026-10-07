@@ -4,8 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result, bail};
 use firebase::{FetchAccessTokenResponse, FirebaseError};
-use futures::FutureExt as _;
-use futures::future::Shared;
+use futures::lock::Mutex as AsyncMutex;
 use http::StatusCode;
 use http::header::RETRY_AFTER;
 use instant::{Duration, Instant};
@@ -13,7 +12,7 @@ use oauth2::TokenResponse as _;
 use parking_lot::Mutex;
 use url::Url;
 use warp_core::channel::ChannelState;
-use warp_errors::{AnyhowErrorExt as _, ErrorExt, register_error};
+use warp_errors::{ErrorExt, register_error};
 use warp_server_auth::auth_state::AuthState;
 use warp_server_auth::credentials::{
     AuthToken, Credentials, FirebaseToken, LoginToken, RefreshToken,
@@ -36,30 +35,6 @@ fn parse_retry_after(value: &str, now: chrono::DateTime<chrono::Utc>) -> Option<
         .with_timezone(&chrono::Utc);
     retry_at.signed_duration_since(now).to_std().ok()
 }
-#[derive(Clone, Debug)]
-struct SharedUnexpectedError(Arc<anyhow::Error>);
-
-impl SharedUnexpectedError {
-    fn new(error: anyhow::Error) -> Self {
-        Self(Arc::new(error))
-    }
-}
-
-impl fmt::Display for SharedUnexpectedError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:#}", self.0)
-    }
-}
-
-impl std::error::Error for SharedUnexpectedError {}
-
-impl ErrorExt for SharedUnexpectedError {
-    fn is_actionable(&self) -> bool {
-        self.0.is_actionable()
-    }
-}
-
-register_error!(SharedUnexpectedError);
 
 #[derive(Debug, thiserror::Error)]
 #[error("Firebase token proxy is temporarily unavailable")]
@@ -73,16 +48,16 @@ impl ErrorExt for ProxyTransientError {
 
 register_error!(ProxyTransientError);
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 enum TokenRefreshError {
     Firebase(FirebaseError),
     ProxyTransient { retry_after: Option<Duration> },
-    Unexpected(SharedUnexpectedError),
+    Unexpected(anyhow::Error),
 }
 
 impl TokenRefreshError {
     fn unexpected(error: anyhow::Error) -> Self {
-        Self::Unexpected(SharedUnexpectedError::new(error))
+        Self::Unexpected(error)
     }
     fn into_user_authentication_error(self) -> UserAuthenticationError {
         match self {
@@ -90,15 +65,11 @@ impl TokenRefreshError {
             Self::ProxyTransient { .. } => {
                 UserAuthenticationError::Unexpected(ProxyTransientError.into())
             }
-            Self::Unexpected(error) => UserAuthenticationError::Unexpected(error.into()),
+            Self::Unexpected(error) => UserAuthenticationError::Unexpected(error),
         }
     }
 }
 type TokenRefreshResult = StdResult<FirebaseAuthTokens, TokenRefreshError>;
-struct RefreshFlight {
-    refresh_token: String,
-    result: Shared<BoxFuture<'static, TokenRefreshResult>>,
-}
 
 #[derive(Default)]
 struct RefreshState {
@@ -106,7 +77,6 @@ struct RefreshState {
     terminal_error: Option<FirebaseError>,
     retry_at: Option<Instant>,
     consecutive_transient_failures: u32,
-    in_flight: Option<Arc<RefreshFlight>>,
     needs_reauth_pending: bool,
     reauth_delivery_in_flight: bool,
 }
@@ -230,6 +200,7 @@ pub struct AuthSession {
     auth_state: Arc<AuthState>,
     event_sender: async_channel::Sender<AuthEvent>,
     oauth_client: OAuth2Client,
+    refresh_lock: AsyncMutex<()>,
     refresh_state: Mutex<RefreshState>,
     #[cfg(test)]
     refresh_urls: Option<(String, String)>,
@@ -250,6 +221,7 @@ impl AuthSession {
             auth_state,
             event_sender,
             oauth_client: Self::create_oauth_client(),
+            refresh_lock: AsyncMutex::new(()),
             refresh_state: Mutex::new(RefreshState::default()),
             #[cfg(test)]
             refresh_urls: None,
@@ -299,6 +271,9 @@ impl AuthSession {
     }
 
     async fn refresh_firebase_access_token(&self) -> Result<AuthToken> {
+        // Waiting callers must re-read credentials and failure state after the active refresh
+        // finishes; storing its future would impose a Send bound that wasm cannot satisfy.
+        let refresh_guard = self.refresh_lock.lock().await;
         let Some(Credentials::Firebase(auth_tokens)) = self.auth_state.credentials() else {
             bail!("Firebase credentials changed while refreshing the access token");
         };
@@ -307,50 +282,33 @@ impl AuthSession {
         }
 
         let refresh_token = auth_tokens.refresh_token;
-        let acquisition = {
+        let terminal_error = {
             let mut state = self.refresh_state.lock();
             state.update_credentials(&refresh_token);
-            if let Some(flight) = &state.in_flight
-                && flight.refresh_token == refresh_token
-            {
-                Ok((flight.clone(), false))
-            } else if let Some(error) = state.terminal_error.clone() {
-                Err(error)
-            } else {
-                if state
+            if state.terminal_error.is_none()
+                && state
                     .retry_at
                     .is_some_and(|retry_at| Instant::now() < retry_at)
-                {
-                    bail!("Firebase token refresh is temporarily unavailable");
-                }
-
-                let firebase_token =
-                    FirebaseToken::Refresh(RefreshToken::new(refresh_token.clone()));
-                let flight = Arc::new(RefreshFlight {
-                    refresh_token,
-                    result: self.fetch_auth_tokens(firebase_token).shared(),
-                });
-                state.in_flight = Some(flight.clone());
-                Ok((flight, true))
+            {
+                return Err(TokenRefreshError::ProxyTransient { retry_after: None }
+                    .into_user_authentication_error()
+                    .into());
             }
+            state.terminal_error.clone()
         };
-        let (flight, is_leader) = match acquisition {
-            Ok(acquisition) => acquisition,
-            Err(error) => {
-                self.deliver_pending_needs_reauth().await;
-                return Err(UserAuthenticationError::from(error).into());
-            }
-        };
+        if let Some(error) = terminal_error {
+            drop(refresh_guard);
+            self.deliver_pending_needs_reauth().await;
+            return Err(UserAuthenticationError::from(error).into());
+        }
 
-        let result = flight.result.clone().await;
+        let firebase_token = FirebaseToken::Refresh(RefreshToken::new(refresh_token.clone()));
+        let result = self.fetch_auth_tokens(firebase_token).await;
         #[cfg(test)]
-        if is_leader && let Some((result_ready, allow_finalization)) = &self.refresh_result_barriers
-        {
+        if let Some((result_ready, allow_finalization)) = &self.refresh_result_barriers {
             result_ready.wait();
             allow_finalization.wait();
         }
-        #[cfg(not(test))]
-        let _ = is_leader;
 
         let current_refresh_token = match self.auth_state.credentials() {
             Some(Credentials::Firebase(tokens)) => Some(tokens.refresh_token),
@@ -361,52 +319,37 @@ impl AuthSession {
             #[cfg(any(feature = "integration_tests", feature = "skip_login"))]
             Some(Credentials::Test) => None,
         };
-        let (event, credentials_changed) = {
-            let mut state = self.refresh_state.lock();
-            let owns_flight = state
-                .in_flight
-                .as_ref()
-                .is_some_and(|active| Arc::ptr_eq(active, &flight));
-            if !owns_flight {
-                (
-                    None,
-                    state.refresh_token.as_deref() != Some(&flight.refresh_token),
-                )
-            } else if current_refresh_token.as_deref() != Some(&flight.refresh_token) {
-                state.in_flight = None;
-                (None, true)
-            } else {
-                state.in_flight = None;
-                let event = match &result {
-                    Ok(new_auth_tokens) => {
-                        state.clear_failure();
-                        self.auth_state
-                            .update_firebase_tokens(new_auth_tokens.clone());
-                        Some(AuthEvent::AccessTokenRefreshed {
-                            token: new_auth_tokens.id_token.clone(),
-                        })
-                    }
-                    Err(TokenRefreshError::Firebase(firebase_error))
-                        if matches!(
-                            UserAuthenticationError::from(firebase_error.clone()),
-                            UserAuthenticationError::DeniedAccessToken(_)
-                        ) =>
-                    {
-                        state.record_terminal_failure(firebase_error.clone());
-                        None
-                    }
-                    Err(TokenRefreshError::ProxyTransient { retry_after }) => {
-                        state.record_transient_failure(Instant::now(), *retry_after);
-                        None
-                    }
-                    Err(TokenRefreshError::Firebase(_) | TokenRefreshError::Unexpected(_)) => None,
-                };
-                (event, false)
-            }
-        };
-        if credentials_changed {
+        if current_refresh_token.as_deref() != Some(&refresh_token) {
             bail!("Firebase credentials changed while refreshing the access token");
         }
+        let event = {
+            let mut state = self.refresh_state.lock();
+            match &result {
+                Ok(new_auth_tokens) => {
+                    state.clear_failure();
+                    self.auth_state
+                        .update_firebase_tokens(new_auth_tokens.clone());
+                    Some(AuthEvent::AccessTokenRefreshed {
+                        token: new_auth_tokens.id_token.clone(),
+                    })
+                }
+                Err(TokenRefreshError::Firebase(firebase_error))
+                    if matches!(
+                        UserAuthenticationError::from(firebase_error.clone()),
+                        UserAuthenticationError::DeniedAccessToken(_)
+                    ) =>
+                {
+                    state.record_terminal_failure(firebase_error.clone());
+                    None
+                }
+                Err(TokenRefreshError::ProxyTransient { retry_after }) => {
+                    state.record_transient_failure(Instant::now(), *retry_after);
+                    None
+                }
+                Err(TokenRefreshError::Firebase(_) | TokenRefreshError::Unexpected(_)) => None,
+            }
+        };
+        drop(refresh_guard);
         if let Some(event) = event {
             let _ = self.event_sender.send(event).await;
         }
@@ -518,73 +461,66 @@ impl AuthSession {
         let (direct_url, proxy_url) = self.refresh_urls.clone().unwrap_or((direct_url, proxy_url));
         Box::pin(async move {
             let request_body = token.access_token_request_body();
-            let (response, used_proxy) = match client
-                .post(&direct_url)
-                .form(&request_body)
-                .timeout(FETCH_ACCESS_TOKEN_TIMEOUT)
-                .send()
-                .await
-            {
-                Ok(response) => (response, false),
-                Err(_) => {
-                    log::warn!("Firebase token request failed to send; retrying through proxy");
-                    (
-                        Self::fetch_access_token_via_proxy(client, &request_body, proxy_url)
-                            .await?,
-                        true,
-                    )
+            let direct_result = Self::fetch_access_token(
+                client
+                    .post(&direct_url)
+                    .form(&request_body)
+                    .timeout(FETCH_ACCESS_TOKEN_TIMEOUT),
+            )
+            .await;
+            match direct_result {
+                Ok(tokens) => return Ok(tokens),
+                Err(TokenRefreshError::Firebase(error))
+                    if matches!(
+                        UserAuthenticationError::from(error.clone()),
+                        UserAuthenticationError::DeniedAccessToken(_)
+                            | UserAuthenticationError::UserAccountDisabled(_)
+                    ) =>
+                {
+                    return Err(TokenRefreshError::Firebase(error));
                 }
-            };
-            let status = response.status();
-            let status_error = response.error_for_status_ref().err().map(|error| {
-                SharedUnexpectedError::new(
-                    anyhow::Error::new(error).context("Firebase token request returned an error"),
-                )
-            });
-
-            let response = response
-                .json::<FetchAccessTokenResponse>()
-                .await
-                .map_err(|error| {
-                    if used_proxy {
-                        TokenRefreshError::ProxyTransient { retry_after: None }
-                    } else if let Some(error) = status_error.clone() {
-                        TokenRefreshError::Unexpected(error)
-                    } else {
-                        TokenRefreshError::unexpected(
-                            anyhow::Error::new(error)
-                                .context("Failed to decode Firebase token response"),
-                        )
-                    }
-                })?;
-            match response {
-                FetchAccessTokenResponse::Success { .. } if !status.is_success() => {
-                    Err(TokenRefreshError::Unexpected(
-                        status_error.expect("non-success response must have a status error"),
-                    ))
-                }
-                FetchAccessTokenResponse::Success {
-                    id_token,
-                    expires_in,
-                    refresh_token,
-                } => FirebaseAuthTokens::from_response(id_token, refresh_token, expires_in)
-                    .map_err(|error| {
-                        if used_proxy {
-                            TokenRefreshError::ProxyTransient { retry_after: None }
-                        } else {
-                            TokenRefreshError::unexpected(error)
-                        }
-                    }),
-                FetchAccessTokenResponse::Error { .. } if status.is_server_error() => {
-                    Err(TokenRefreshError::Unexpected(
-                        status_error.expect("server error response must have a status error"),
-                    ))
-                }
-                FetchAccessTokenResponse::Error { error } => {
-                    Err(TokenRefreshError::Firebase(error))
+                Err(
+                    TokenRefreshError::Firebase(_)
+                    | TokenRefreshError::Unexpected(_)
+                    | TokenRefreshError::ProxyTransient { .. },
+                ) => {
+                    log::warn!("Failed to fetch access token from Firebase; falling back to proxy");
                 }
             }
+            let response =
+                Self::fetch_access_token_via_proxy(client, &request_body, proxy_url).await?;
+            match Self::decode_access_token_response(response).await {
+                Err(TokenRefreshError::Unexpected(_)) => {
+                    Err(TokenRefreshError::ProxyTransient { retry_after: None })
+                }
+                result => result,
+            }
         })
+    }
+    async fn fetch_access_token(request: http_client::RequestBuilder<'_>) -> TokenRefreshResult {
+        let response = request
+            .send()
+            .await
+            .map_err(|error| TokenRefreshError::unexpected(error.into()))?;
+        Self::decode_access_token_response(response).await
+    }
+
+    async fn decode_access_token_response(response: http_client::Response) -> TokenRefreshResult {
+        // Firebase carries credential verdicts in error bodies, but transient failures use the same
+        // envelope, so the payload's classification must take precedence over the HTTP status.
+        let response = response
+            .json::<FetchAccessTokenResponse>()
+            .await
+            .map_err(|error| TokenRefreshError::unexpected(error.into()))?;
+        match response {
+            FetchAccessTokenResponse::Success {
+                id_token,
+                expires_in,
+                refresh_token,
+            } => FirebaseAuthTokens::from_response(id_token, refresh_token, expires_in)
+                .map_err(TokenRefreshError::unexpected),
+            FetchAccessTokenResponse::Error { error } => Err(TokenRefreshError::Firebase(error)),
+        }
     }
 
     fn fetch_access_token_via_proxy<'a>(

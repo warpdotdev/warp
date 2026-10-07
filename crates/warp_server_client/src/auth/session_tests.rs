@@ -7,10 +7,12 @@ use mockito::Matcher;
 use warp_core::channel::ChannelState;
 use warp_errors::AnyhowErrorExt as _;
 use warp_server_auth::auth_state::AuthState;
-use warp_server_auth::credentials::{AuthToken, Credentials, LoginToken};
+use warp_server_auth::credentials::{
+    AuthToken, Credentials, FirebaseToken, LoginToken, RefreshToken,
+};
 use warp_server_auth::user::FirebaseAuthTokens;
 
-use super::{AuthEvent, AuthSession, parse_retry_after};
+use super::{AuthEvent, AuthSession, UserAuthenticationError, parse_retry_after};
 
 fn session_with_state(
     auth_state: Arc<AuthState>,
@@ -180,7 +182,7 @@ fn direct_firebase_400_does_not_use_proxy() {
 }
 
 #[test]
-fn direct_firebase_5xx_does_not_use_proxy_or_trigger_reauth() {
+fn terminal_firebase_verdict_takes_precedence_over_http_status() {
     let (direct_url, proxy_url, direct_request, proxy_request) = {
         let mut server = ChannelState::mock_server();
         let direct_path = "/firebase/direct-500";
@@ -208,29 +210,35 @@ fn direct_firebase_5xx_does_not_use_proxy_or_trigger_reauth() {
     let (session, event_receiver) = session_with_refresh_urls(auth_state, direct_url, proxy_url);
 
     let error = block_on(session.get_or_refresh_access_token()).unwrap_err();
-    assert!(!error.is_actionable());
-    assert!(error.to_string().contains("503 Service Unavailable"));
-    assert!(event_receiver.try_recv().is_err());
+    assert!(matches!(
+        error.downcast_ref::<UserAuthenticationError>(),
+        Some(UserAuthenticationError::DeniedAccessToken(_))
+    ));
+    assert!(matches!(
+        event_receiver.try_recv().unwrap(),
+        AuthEvent::NeedsReauth
+    ));
     direct_request.assert();
     proxy_request.assert();
 }
 
 #[test]
-fn direct_firebase_decode_failure_is_not_actionable() {
+fn middlebox_html_response_falls_back_to_proxy() {
     let (direct_url, proxy_url, direct_request, proxy_request) = {
         let mut server = ChannelState::mock_server();
         let direct_path = "/firebase/direct-invalid-json";
         let proxy_path = "/firebase/direct-invalid-json-proxy";
         let direct_request = server
             .mock("POST", direct_path)
-            .with_status(200)
-            .with_body("not-json")
+            .with_status(403)
+            .with_body("<html>Access blocked</html>")
             .expect(1)
             .create();
         let proxy_request = server
             .mock("POST", proxy_path)
             .with_status(200)
-            .expect(0)
+            .with_body(successful_refresh_response("proxy-id", "proxy-refresh"))
+            .expect(1)
             .create();
         (
             format!("{}{direct_path}", server.url()),
@@ -243,10 +251,13 @@ fn direct_firebase_decode_failure_is_not_actionable() {
     auth_state.set_credentials(Some(expired_firebase_credentials("refresh-token")));
     let (session, event_receiver) = session_with_refresh_urls(auth_state, direct_url, proxy_url);
 
-    let error = block_on(session.get_or_refresh_access_token()).unwrap_err();
+    let token = block_on(session.get_or_refresh_access_token()).unwrap();
 
-    assert!(!error.is_actionable());
-    assert!(event_receiver.try_recv().is_err());
+    assert!(matches!(token, AuthToken::Firebase(token) if token == "proxy-id"));
+    assert!(matches!(
+        event_receiver.try_recv().unwrap(),
+        AuthEvent::AccessTokenRefreshed { .. }
+    ));
     direct_request.assert();
     proxy_request.assert();
 }
@@ -277,7 +288,7 @@ fn proxy_429_starts_shared_cooldown() {
 }
 
 #[test]
-fn late_proxy_failure_caller_joins_completed_in_flight_result() {
+fn waiting_refresh_caller_observes_cooldown_after_failure() {
     let (proxy_url, proxy_request) = {
         let mut server = ChannelState::mock_server();
         let proxy_path = "/firebase/concurrent-proxy-429";
@@ -304,12 +315,13 @@ fn late_proxy_failure_caller_joins_completed_in_flight_result() {
         let session = session.clone();
         std::thread::spawn(move || block_on(session.get_or_refresh_access_token()))
     };
-    let late_error = late_caller.join().unwrap().unwrap_err();
     allow_finalization.wait();
     let leader_error = leader.join().unwrap().unwrap_err();
+    let late_error = late_caller.join().unwrap().unwrap_err();
 
     assert_eq!(late_error.to_string(), leader_error.to_string());
     assert!(!late_error.is_actionable());
+    assert!(!leader_error.is_actionable());
     proxy_request.assert();
 }
 
@@ -588,4 +600,205 @@ fn concurrent_refresh_demand_sends_one_request() {
         AuthEvent::AccessTokenRefreshed { .. }
     ));
     assert!(event_receiver.try_recv().is_err());
+}
+
+fn fetch_access_token_response(
+    status: usize,
+    body: &str,
+) -> Result<FirebaseAuthTokens, UserAuthenticationError> {
+    let mut server = mockito::Server::new();
+    let response = server
+        .mock("POST", "/token")
+        .with_status(status)
+        .with_body(body)
+        .create();
+    let client = http_client::Client::new();
+
+    let result = block_on(AuthSession::fetch_access_token(
+        client.post(format!("{}/token", server.url())),
+    ))
+    .map_err(super::TokenRefreshError::into_user_authentication_error);
+
+    response.assert();
+    result
+}
+
+#[test]
+fn rejected_refresh_token_is_classified_from_error_body() {
+    let result = fetch_access_token_response(
+        400,
+        r#"{"error":{"code":400,"message":"INVALID_REFRESH_TOKEN"}}"#,
+    );
+
+    assert!(matches!(
+        result,
+        Err(UserAuthenticationError::DeniedAccessToken(error))
+            if error.message == "INVALID_REFRESH_TOKEN"
+    ));
+}
+
+#[test]
+fn disabled_account_is_classified_from_error_body() {
+    let result =
+        fetch_access_token_response(400, r#"{"error":{"code":400,"message":"USER_DISABLED"}}"#);
+
+    assert!(matches!(
+        result,
+        Err(UserAuthenticationError::UserAccountDisabled(error))
+            if error.message == "USER_DISABLED"
+    ));
+}
+
+#[test]
+fn unavailable_firebase_response_is_not_a_terminal_verdict() {
+    let result =
+        fetch_access_token_response(503, r#"{"error":{"code":503,"message":"UNAVAILABLE"}}"#);
+
+    assert!(matches!(
+        result,
+        Err(UserAuthenticationError::Unexpected(_))
+    ));
+}
+
+#[test]
+fn firebase_quota_response_is_not_a_terminal_verdict() {
+    let result = fetch_access_token_response(
+        429,
+        r#"{"error":{"code":429,"message":"TOO_MANY_ATTEMPTS_TRY_LATER"}}"#,
+    );
+
+    assert!(matches!(
+        result,
+        Err(UserAuthenticationError::Unexpected(_))
+    ));
+}
+
+#[test]
+fn non_firebase_response_is_not_a_terminal_verdict() {
+    let result = fetch_access_token_response(429, "<html>Too many requests</html>");
+
+    assert!(matches!(
+        result,
+        Err(UserAuthenticationError::Unexpected(_))
+    ));
+}
+
+#[test]
+fn successful_firebase_response_returns_tokens() {
+    let tokens = fetch_access_token_response(
+        200,
+        r#"{"id_token":"new-id-token","refresh_token":"new-refresh-token","expires_in":"3600"}"#,
+    )
+    .unwrap();
+
+    assert_eq!(tokens.id_token, "new-id-token");
+    assert_eq!(tokens.refresh_token, "new-refresh-token");
+}
+
+fn exchange_refresh_response(
+    status: usize,
+    body: &str,
+    proxy_requests: usize,
+) -> Result<Credentials, UserAuthenticationError> {
+    let mut server = mockito::Server::new();
+    let direct_request = server
+        .mock("POST", "/direct")
+        .with_status(status)
+        .with_body(body)
+        .expect(1)
+        .create();
+    let proxy_request = server
+        .mock("POST", "/proxy")
+        .with_status(200)
+        .with_body(successful_refresh_response("proxy-id", "proxy-refresh"))
+        .expect(proxy_requests)
+        .create();
+    let (session, _) = session_with_refresh_urls(
+        Arc::new(AuthState::new_logged_out_for_test()),
+        format!("{}/direct", server.url()),
+        format!("{}/proxy", server.url()),
+    );
+
+    let result = block_on(session.exchange_credentials(LoginToken::Firebase(
+        FirebaseToken::Refresh(RefreshToken::new("refresh-token".to_string())),
+    )));
+
+    direct_request.assert();
+    proxy_request.assert();
+    result
+}
+
+#[test]
+fn unavailable_firebase_response_falls_back_to_proxy() {
+    let result =
+        exchange_refresh_response(503, r#"{"error":{"code":503,"message":"UNAVAILABLE"}}"#, 1);
+
+    assert!(matches!(result, Ok(Credentials::Firebase(tokens)) if tokens.id_token == "proxy-id"));
+}
+
+#[test]
+fn firebase_quota_response_falls_back_to_proxy() {
+    let result = exchange_refresh_response(
+        429,
+        r#"{"error":{"code":429,"message":"TOO_MANY_ATTEMPTS_TRY_LATER"}}"#,
+        1,
+    );
+
+    assert!(matches!(result, Ok(Credentials::Firebase(tokens)) if tokens.id_token == "proxy-id"));
+}
+
+#[test]
+fn disabled_account_verdict_does_not_use_proxy() {
+    let result = exchange_refresh_response(
+        400,
+        r#"{"error":{"code":400,"message":"USER_DISABLED"}}"#,
+        0,
+    );
+
+    assert!(matches!(
+        result,
+        Err(UserAuthenticationError::UserAccountDisabled(_))
+    ));
+}
+
+#[test]
+fn successful_http_response_without_firebase_payload_falls_back_to_proxy() {
+    let result = exchange_refresh_response(200, "not-json", 1);
+
+    assert!(matches!(result, Ok(Credentials::Firebase(tokens)) if tokens.id_token == "proxy-id"));
+}
+
+#[test]
+fn refresh_result_does_not_overwrite_replaced_credentials() {
+    let mut server = mockito::Server::new();
+    let direct_request = server
+        .mock("POST", "/direct")
+        .with_status(200)
+        .with_body(successful_refresh_response("stale-id", "stale-refresh"))
+        .expect(1)
+        .create();
+    let auth_state = Arc::new(AuthState::new_logged_out_for_test());
+    auth_state.set_credentials(Some(expired_firebase_credentials("old-refresh")));
+    let (mut session, event_receiver) = session_with_refresh_urls(
+        auth_state.clone(),
+        format!("{}/direct", server.url()),
+        format!("{}/proxy", server.url()),
+    );
+    let result_ready = Arc::new(Barrier::new(2));
+    let allow_finalization = Arc::new(Barrier::new(2));
+    session.refresh_result_barriers = Some((result_ready.clone(), allow_finalization.clone()));
+    let session = Arc::new(session);
+    let refresh = std::thread::spawn(move || block_on(session.get_or_refresh_access_token()));
+    result_ready.wait();
+
+    auth_state.set_credentials(Some(expired_firebase_credentials("replacement-refresh")));
+    allow_finalization.wait();
+
+    assert!(refresh.join().unwrap().is_err());
+    assert!(matches!(
+        auth_state.credentials(),
+        Some(Credentials::Firebase(tokens)) if tokens.refresh_token == "replacement-refresh"
+    ));
+    assert!(event_receiver.try_recv().is_err());
+    direct_request.assert();
 }
