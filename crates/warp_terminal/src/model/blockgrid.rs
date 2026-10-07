@@ -40,8 +40,6 @@ pub struct BlockGrid {
     finished: bool,
 
     start_time: Option<Instant>,
-    finish_time: Option<Instant>,
-    command_body_started: bool,
 
     /// [`Grid::rightmost_visible_nonempty_cell`] is inefficient to compute anew, especially if it
     /// happens every frame, as it loops through the visible cells in the Grid. As the Grid itself
@@ -107,8 +105,6 @@ impl BlockGrid {
             started: false,
             finished: false,
             start_time: None,
-            finish_time: None,
-            command_body_started: false,
             cached_rightmost_visible_nonempty_cell: Default::default(),
             cached_has_visible_chars: Default::default(),
             should_scan_for_secrets,
@@ -150,8 +146,6 @@ impl BlockGrid {
             started: self.started,
             finished: self.finished,
             start_time: self.start_time,
-            finish_time: self.finish_time,
-            command_body_started: self.command_body_started,
             cached_rightmost_visible_nonempty_cell: Default::default(),
             cached_has_visible_chars: Default::default(),
             should_scan_for_secrets: self.should_scan_for_secrets,
@@ -302,9 +296,6 @@ impl BlockGrid {
     /// block is considered immutable and new content is no longer fed to it from the PTY. Any
     /// unused rows are truncated from the grid.
     pub fn finish(&mut self) {
-        if self.finish_time.is_none() {
-            self.finish_time = Some(Instant::now());
-        }
         self.started = true;
         self.finished = true;
         self.trim_trailing_blank_rows = false;
@@ -392,13 +383,6 @@ impl BlockGrid {
     pub fn start(&mut self) {
         self.started = true;
         self.start_time = Some(Instant::now());
-        self.finish_time = None;
-        self.command_body_started = false;
-    }
-
-    pub fn start_command_body(&mut self) {
-        self.start();
-        self.command_body_started = true;
     }
 
     pub fn grid_storage(&self) -> &GridStorage {
@@ -658,14 +642,6 @@ impl BlockGrid {
 
     pub fn start_time(&self) -> Option<Instant> {
         self.start_time
-    }
-
-    /// Returns a completed command's monotonic preexec-to-precmd duration.
-    pub fn command_body_duration(&self) -> Option<std::time::Duration> {
-        if !self.command_body_started {
-            return None;
-        }
-        self.finish_time?.checked_duration_since(self.start_time?)
     }
 
     pub fn needs_bracketed_paste(&self) -> bool {

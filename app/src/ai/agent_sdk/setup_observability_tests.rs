@@ -10,7 +10,7 @@ use crate::server::server_api::ai::MockAIClient;
 
 #[test]
 fn agent_started_transports_known_zero_and_omits_unknown_setup() {
-    for duration in [Some(Duration::ZERO), None] {
+    for (duration, had_setup_commands) in [(Some(Duration::ZERO), false), (None, true)] {
         let mut client = MockAIClient::new();
         client
             .expect_post_agent_run_client_event()
@@ -32,13 +32,26 @@ fn agent_started_transports_known_zero_and_omits_unknown_setup() {
             Arc::new(client),
             Arc::new(Background::default()),
         );
-        reporter.set_user_setup(duration, false);
+        reporter.set_user_setup(duration, had_setup_commands);
         block_on(
             reporter
                 .clone()
                 .post_timeline_event(OzRunTimelineEvent::AgentStarted),
         );
     }
+}
+
+#[test]
+fn optional_oz_measurement_does_not_post_unknown_customer_setup() {
+    let mut client = MockAIClient::new();
+    client.expect_post_agent_run_client_event().never();
+    let reporter = SetupClientEventReporter::new(
+        "019e3c43-885b-70a7-9d3c-a38ca1e7681d".parse().unwrap(),
+        Arc::new(client),
+        Arc::new(Background::default()),
+    );
+    reporter.set_user_setup(None, true);
+    block_on(reporter.post_startup_setup_measurement());
 }
 
 #[test]

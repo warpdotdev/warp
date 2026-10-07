@@ -1,6 +1,3 @@
-use std::time::Duration;
-
-use instant::Instant;
 use warp_core::features::FeatureFlag;
 
 use crate::SizeInfo;
@@ -15,30 +12,6 @@ use crate::model::secrets::ObfuscateSecrets;
 use crate::test_util::{
     mock_blockgrid, test_kitty_image_metadata_map, test_kitty_store_and_display_action,
 };
-
-#[test]
-fn command_body_duration_requires_preexec_and_completion() {
-    let mut grid = mock_blockgrid("");
-    grid.start();
-    grid.finish();
-    assert_eq!(grid.command_body_duration(), None);
-    grid.start_command_body();
-    assert_eq!(grid.command_body_duration(), None);
-    let start = Instant::now();
-    grid.start_time = Some(start);
-    grid.finish_time = Some(start + Duration::from_micros(750));
-    assert_eq!(
-        grid.command_body_duration(),
-        Some(Duration::from_micros(750))
-    );
-    grid.finish();
-    assert_eq!(
-        grid.command_body_duration(),
-        Some(Duration::from_micros(750))
-    );
-    grid.start_command_body();
-    assert_eq!(grid.command_body_duration(), None);
-}
 
 #[test]
 pub fn test_finish_truncates_grid_basic() {

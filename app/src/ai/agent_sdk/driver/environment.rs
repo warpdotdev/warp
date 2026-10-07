@@ -635,7 +635,8 @@ async fn prepare_environment_impl(
 
     let has_setup_commands = !setup_commands.is_empty();
     let had_customer_commands = setup_commands.len() > usize::from(factory_clone_index.is_some());
-    let mut user_setup_duration = Some(Duration::ZERO);
+    // Terminal completion includes shell hooks, so it cannot establish customer body duration.
+    let user_setup_duration = (!had_customer_commands).then_some(Duration::ZERO);
     let setup_result = if has_setup_commands {
         setup_events
             .record_result(SetupStep::EnvironmentSetupCommands, async {
@@ -664,17 +665,6 @@ async fn prepare_environment_impl(
                         let output =
                             fetch_block_output_plaintext(&command_result.block_id, spawner).await;
                         return Err(setup_command_failure(command_for_error, output));
-                    }
-                    if Some(index) != factory_clone_index {
-                        let block_id = command_result.block_id.clone();
-                        let body_duration = spawner
-                            .spawn(move |driver, ctx| driver.command_body_duration(&block_id, ctx))
-                            .await
-                            .ok()
-                            .flatten();
-                        user_setup_duration = user_setup_duration
-                            .zip(body_duration)
-                            .and_then(|(total, body)| total.checked_add(body));
                     }
 
                     let working_dir_string = working_dir.to_string_lossy().to_string();
