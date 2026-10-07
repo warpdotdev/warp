@@ -59,19 +59,9 @@ pub struct ConversationUsageInfo {
     pub lines_added: i32,
     pub lines_removed: i32,
     pub commands_executed: i32,
-    /// Total token count across the whole conversation so far, shown only
-    /// behind `FeatureFlag::PricingTransparency` (checked inside
-    /// `format_usage`). `None` when the source doesn't provide it (flag off,
-    /// or a source that doesn't carry it yet — e.g. the settings
-    /// usage-history surface; documented gap, see `gql_convert.rs`).
-    pub total_tokens: Option<u32>,
     /// Total cost billed to the customer across the whole conversation so
     /// far, in US cents. `None` when the server has not established one.
     pub total_cost_in_cents: Option<f32>,
-    /// Total token count over the last block (see
-    /// `credits_spent_for_last_block`). `None` under the same conditions as
-    /// `total_tokens`.
-    pub tokens_for_last_block: Option<u32>,
     /// Total cost billed to the customer over the last block, in US cents.
     /// `None` when the server streamed no charges for it.
     pub cost_in_cents_for_last_block: Option<f32>,
@@ -353,10 +343,6 @@ impl ConversationUsageView {
             .map(|r| r.total_credits)
             .unwrap_or(self.usage_info.credits_spent + self.usage_info.platform_credits_spent);
 
-        let total_tokens_value = rollup
-            .as_ref()
-            .map(|r| r.total_tokens)
-            .unwrap_or(self.usage_info.total_tokens);
         let total_cost_in_cents_value = rollup
             .as_ref()
             .map(|r| r.total_cost_in_cents)
@@ -380,7 +366,6 @@ impl ConversationUsageView {
             values.push(render_value_text(
                 format_usage(
                     last_block_credits,
-                    self.usage_info.tokens_for_last_block,
                     self.usage_info.cost_in_cents_for_last_block,
                     last_block_usage_display_unit,
                 ),
@@ -397,7 +382,6 @@ impl ConversationUsageView {
             ));
             values.push(self.render_total_usage_value_row(
                 total_credits_value,
-                total_tokens_value,
                 total_cost_in_cents_value,
                 total_usage_display_unit,
                 rollup.as_ref(),
@@ -414,7 +398,6 @@ impl ConversationUsageView {
             ));
             values.push(self.render_total_usage_value_row(
                 total_credits_value,
-                total_tokens_value,
                 total_cost_in_cents_value,
                 total_usage_display_unit,
                 rollup.as_ref(),
@@ -754,18 +737,12 @@ impl ConversationUsageView {
     fn render_total_usage_value_row(
         &self,
         total_credits: f32,
-        total_tokens: Option<u32>,
         total_cost_in_cents: Option<f32>,
         usage_display_unit: UsageDisplayUnit,
         rollup: Option<&OrchestrationCreditRollup>,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let usage_text = format_usage(
-            total_credits,
-            total_tokens,
-            total_cost_in_cents,
-            usage_display_unit,
-        );
+        let usage_text = format_usage(total_credits, total_cost_in_cents, usage_display_unit);
         let value_text = render_value_text(usage_text, appearance);
         if rollup.is_none() {
             return value_text;

@@ -120,6 +120,7 @@ use crate::workspace::ToastStack;
 use crate::workspace::WorkspaceAction;
 use crate::workspace::view::TOGGLE_PROJECT_EXPLORER_BINDING_NAME;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::workspace::ChargeUnit;
 
 const ENABLE_NLD_TOOLTIP: &str = "Enable terminal command autodetection";
 const DISABLE_NLD_TOOLTIP: &str = "Disable terminal command autodetection";
@@ -2388,10 +2389,11 @@ impl AgentInputFooter {
             }
             AgentToolbarItemKind::UsageSummary => {
                 // A persisted custom toolbar layout is replayed verbatim at render time, so
-                // the flag has to be checked here rather than only in `default_right` /
-                // `all_available` / `is_available`, none of which the render path consults.
-                if !FeatureFlag::PricingTransparency.is_enabled() {
-                    return None;
+                // the tier has to be checked here rather than only in `is_available`, which
+                // the render path does not consult.
+                match UserWorkspaces::as_ref(app).charge_unit() {
+                    ChargeUnit::Cents => {}
+                    ChargeUnit::Credits => return None,
                 }
                 let conversation = BlocklistAIHistoryModel::as_ref(app)
                     .active_conversation(self.terminal_view_id)?;

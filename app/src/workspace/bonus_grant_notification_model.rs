@@ -4,13 +4,12 @@ use chrono::{Duration, Utc};
 use warp_core::settings::Setting;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
-use crate::ai::blocklist::view_util::format_dollars;
+use crate::ai::blocklist::view_util::{format_dollars, usage_display_unit};
 use crate::ai::request_usage_model::{
     AIRequestUsageModel, AIRequestUsageModelEvent, BonusGrant, BonusGrantScope,
 };
+use crate::settings::UsageDisplayUnit;
 use crate::terminal::general_settings::GeneralSettings;
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::ChargeUnit;
 
 pub struct BonusGrantNotificationModel {
     /// In-memory tracking of grants shown during this session. This prevents duplicate
@@ -46,7 +45,7 @@ impl BonusGrantNotificationModel {
     fn check_for_new_bonus_grants(&mut self, ctx: &mut ModelContext<Self>) {
         let usage_model = AIRequestUsageModel::as_ref(ctx);
         let bonus_grants = usage_model.bonus_grants();
-        let charge_unit = UserWorkspaces::as_ref(ctx).charge_unit();
+        let unit = usage_display_unit(ctx);
 
         let shown_grants = GeneralSettings::as_ref(ctx)
             .bonus_grants_shown
@@ -80,7 +79,7 @@ impl BonusGrantNotificationModel {
             let message = if let Some(user_facing_message) = &grant.user_facing_message {
                 user_facing_message.clone()
             } else {
-                Self::format_generic_grant_message(grant, charge_unit)
+                Self::format_generic_grant_message(grant, unit)
             };
 
             let grant_key = Self::create_grant_key(grant);
@@ -108,17 +107,17 @@ impl BonusGrantNotificationModel {
         }
     }
 
-    /// Describes a grant in dollars for a plan charged in cents when the grant carries a dollar
+    /// Describes a grant in dollars when displaying in dollars and the grant carries a dollar
     /// value, otherwise in credits.
-    fn format_generic_grant_message(grant: &BonusGrant, charge_unit: ChargeUnit) -> String {
+    fn format_generic_grant_message(grant: &BonusGrant, unit: UsageDisplayUnit) -> String {
         let scope_text = match grant.scope {
             BonusGrantScope::User => "account",
             BonusGrantScope::Team(_) => "team",
             BonusGrantScope::Workspace(_) => "workspace",
         };
-        let usage_cents_granted = match charge_unit {
-            ChargeUnit::Cents => grant.usage_cents_granted,
-            ChargeUnit::Credits => None,
+        let usage_cents_granted = match unit {
+            UsageDisplayUnit::Dollars => grant.usage_cents_granted,
+            UsageDisplayUnit::Credits => None,
         };
         match usage_cents_granted {
             Some(cents) => format!(

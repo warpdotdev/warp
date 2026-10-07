@@ -1,37 +1,37 @@
 use super::{AllowanceCents, allowance_cents, format_allowance_count};
-use crate::workspaces::workspace::ChargeUnit;
+use crate::settings::UsageDisplayUnit;
 
 #[test]
-fn allowance_cents_requires_a_tier_charged_in_cents_and_both_figures() {
+fn allowance_cents_requires_the_dollars_unit_and_both_figures() {
     assert_eq!(
-        allowance_cents(ChargeUnit::Cents, false, Some(70.2), Some(1800.0)),
+        allowance_cents(UsageDisplayUnit::Dollars, false, Some(70.2), Some(1800.0)),
         Some(AllowanceCents {
             used: 70.2,
             limit: 1800.0,
         })
     );
     assert_eq!(
-        allowance_cents(ChargeUnit::Cents, false, None, Some(1800.0)),
+        allowance_cents(UsageDisplayUnit::Dollars, false, None, Some(1800.0)),
         None
     );
     assert_eq!(
-        allowance_cents(ChargeUnit::Cents, false, Some(70.2), None),
+        allowance_cents(UsageDisplayUnit::Dollars, false, Some(70.2), None),
         None
     );
-    // Cents the server sends to a tier charged in credits are never shown.
+    // Cents the server sends are never shown when displaying in credits.
     assert_eq!(
-        allowance_cents(ChargeUnit::Credits, false, Some(70.2), Some(1800.0)),
+        allowance_cents(UsageDisplayUnit::Credits, false, Some(70.2), Some(1800.0)),
         None
     );
     // Unlimited subjects keep the credit display.
     assert_eq!(
-        allowance_cents(ChargeUnit::Cents, true, Some(70.2), Some(1800.0)),
+        allowance_cents(UsageDisplayUnit::Dollars, true, Some(70.2), Some(1800.0)),
         None
     );
 }
 
 #[test]
-fn allowance_count_shows_dollars_when_charged_in_cents() {
+fn allowance_count_shows_dollars_when_the_cents_are_known() {
     let cents = Some(AllowanceCents {
         used: 70.2,
         limit: 1800.0,

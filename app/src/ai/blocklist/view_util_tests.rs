@@ -1,26 +1,15 @@
-use settings::Setting as _;
-use warp_core::features::FeatureFlag;
 use warpui::App;
 
 use super::*;
 use crate::ai::agent::ChatGPTSubscriptionErrorActionKind;
 use crate::settings::UsageDisplayUnit;
-use crate::test_util::billing_unit::set_charge_unit;
+use crate::test_util::billing_unit::{set_charge_unit, set_usage_display_unit};
 use crate::test_util::settings::initialize_settings_for_tests;
 
 /// Registers the settings and workspaces the unit resolver reads.
 fn initialize_usage_unit_test_app(app: &mut App) {
     initialize_settings_for_tests(app);
     app.add_singleton_model(UserWorkspaces::default_mock);
-}
-
-fn set_usage_display_unit(app: &mut App, unit: UsageDisplayUnit) {
-    AISettings::handle(app).update(app, |settings, ctx| {
-        settings
-            .usage_display_unit
-            .set_value(unit, ctx)
-            .expect("usage display unit should be settable in tests");
-    });
 }
 
 fn chatgpt_subscription_error(actions: Vec<ChatGPTSubscriptionErrorAction>) -> RenderableAIError {
@@ -148,25 +137,30 @@ fn format_dollars_formats_one_cent_exactly() {
 
 #[test]
 fn format_usage_floors_positive_sub_cent_dollar_amounts() {
-    let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
-
     assert_eq!(
-        format_usage(20.0, None, Some(0.4), UsageDisplayUnit::Dollars),
+        format_usage(20.0, Some(0.4), UsageDisplayUnit::Dollars),
         "<$0.01"
     );
 }
 
-/// The tier's charge unit decides between dollars and credits, so a viewer charged in cents
-/// sees dollars whichever way the dogfood flag and preference point.
+/// A viewer charged in cents follows the display preference, which defaults to credits.
 #[test]
-fn effective_usage_unit_prefers_the_tier_charge_unit() {
+fn usage_display_unit_follows_the_preference_for_cents_charged_viewers() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
         initialize_usage_unit_test_app(&mut app);
         set_charge_unit(&mut app, ChargeUnit::Cents);
-        set_usage_display_unit(&mut app, UsageDisplayUnit::Credits);
 
         app.read(|ctx| {
+            assert_eq!(usage_display_unit(ctx), UsageDisplayUnit::Credits);
+            assert_eq!(
+                effective_usage_unit(Some(36.0), ctx),
+                UsageDisplayUnit::Credits
+            );
+        });
+
+        set_usage_display_unit(&mut app, UsageDisplayUnit::Dollars);
+        app.read(|ctx| {
+            assert_eq!(usage_display_unit(ctx), UsageDisplayUnit::Dollars);
             assert_eq!(
                 effective_usage_unit(Some(36.0), ctx),
                 UsageDisplayUnit::Dollars
@@ -175,12 +169,11 @@ fn effective_usage_unit_prefers_the_tier_charge_unit() {
     });
 }
 
-/// Without a cents figure there is nothing to show in dollars, so a viewer charged in cents
-/// falls back to the credits string on a flag-off client.
+/// Without a cents figure there is nothing to show in dollars, so a viewer who prefers dollars
+/// falls back to the credits string for that figure.
 #[test]
 fn effective_usage_unit_falls_back_to_credits_without_a_cents_figure() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
         initialize_usage_unit_test_app(&mut app);
         set_charge_unit(&mut app, ChargeUnit::Cents);
         set_usage_display_unit(&mut app, UsageDisplayUnit::Dollars);
@@ -191,51 +184,17 @@ fn effective_usage_unit_falls_back_to_credits_without_a_cents_figure() {
     });
 }
 
-/// A cents figure is not a regime signal: a viewer whose tier charges in credits keeps credits
-/// even when the server sent cents for the figure.
+/// A tier charged in credits is always displayed in credits: neither a cents figure nor a
+/// dollars preference changes that.
 #[test]
-fn effective_usage_unit_ignores_cents_presence_for_credit_charged_viewers() {
-    App::test((), |mut app| async move {
-        let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
-        initialize_usage_unit_test_app(&mut app);
-        set_charge_unit(&mut app, ChargeUnit::Credits);
-
-        app.read(|ctx| {
-            assert_eq!(
-                effective_usage_unit(Some(36.0), ctx),
-                UsageDisplayUnit::Credits
-            );
-        });
-    });
-}
-
-/// A viewer charged in credits keeps today's dogfood rule: the preference only applies while
-/// the client flag is on.
-#[test]
-fn effective_usage_unit_follows_the_flag_and_preference_for_credit_charged_viewers() {
+fn usage_display_unit_is_credits_for_credit_charged_viewers() {
     App::test((), |mut app| async move {
         initialize_usage_unit_test_app(&mut app);
         set_charge_unit(&mut app, ChargeUnit::Credits);
         set_usage_display_unit(&mut app, UsageDisplayUnit::Dollars);
 
         app.read(|ctx| {
-            let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
-            assert_eq!(
-                effective_usage_unit(Some(36.0), ctx),
-                UsageDisplayUnit::Credits
-            );
-        });
-        app.read(|ctx| {
-            let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
-            assert_eq!(
-                effective_usage_unit(Some(36.0), ctx),
-                UsageDisplayUnit::Dollars
-            );
-        });
-
-        set_usage_display_unit(&mut app, UsageDisplayUnit::Credits);
-        app.read(|ctx| {
-            let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
+            assert_eq!(usage_display_unit(ctx), UsageDisplayUnit::Credits);
             assert_eq!(
                 effective_usage_unit(Some(36.0), ctx),
                 UsageDisplayUnit::Credits
@@ -244,100 +203,32 @@ fn effective_usage_unit_follows_the_flag_and_preference_for_credit_charged_viewe
     });
 }
 
-/// The formatters render whichever unit they are handed; only the token detail stays behind
-/// the dogfood flag.
-#[test]
-fn format_usage_renders_dollars_without_tokens_when_flag_disabled() {
-    let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
-
-    assert_eq!(
-        format_usage(20.0, Some(12345), Some(36.0), UsageDisplayUnit::Dollars),
-        "$0.36"
-    );
-    assert_eq!(
-        format_usage(20.0, Some(12345), Some(36.0), UsageDisplayUnit::Credits),
-        format_credits(20.0)
-    );
-}
-
 #[test]
 fn format_usage_uses_credits_unit() {
-    let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
-
     assert_eq!(
-        format_usage(20.0, Some(12345), Some(36.0), UsageDisplayUnit::Credits),
-        "12,345 tokens / 20 credits"
+        format_usage(20.0, Some(36.0), UsageDisplayUnit::Credits),
+        "20 credits"
     );
 }
 
 #[test]
 fn format_usage_uses_dollars_unit() {
-    let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
-
     assert_eq!(
-        format_usage(20.0, Some(12345), Some(36.0), UsageDisplayUnit::Dollars),
-        "12,345 tokens / $0.36"
-    );
-}
-
-#[test]
-fn format_usage_formats_large_token_counts_with_thousands_separators() {
-    let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
-
-    assert_eq!(
-        format_usage(26.9, Some(719_124), Some(48.0), UsageDisplayUnit::Dollars),
-        "719,124 tokens / $0.48"
+        format_usage(20.0, Some(36.0), UsageDisplayUnit::Dollars),
+        "$0.36"
     );
 }
 
 #[test]
 fn format_usage_falls_back_to_credits_when_dollars_unavailable() {
-    let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
-
     assert_eq!(
-        format_usage(20.0, Some(12345), None, UsageDisplayUnit::Dollars),
+        format_usage(20.0, None, UsageDisplayUnit::Dollars),
         format_credits(20.0)
     );
 }
 
 #[test]
-fn format_usage_omits_tokens_when_tokens_is_unknown() {
-    let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
-
-    assert_eq!(
-        format_usage(20.0, None, Some(36.0), UsageDisplayUnit::Dollars),
-        "$0.36"
-    );
-    assert_eq!(
-        format_usage(20.0, None, Some(36.0), UsageDisplayUnit::Credits),
-        format_credits(20.0)
-    );
-}
-
-#[test]
-fn format_usage_omits_tokens_when_tokens_is_zero() {
-    let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
-
-    assert_eq!(
-        format_usage(20.0, Some(0), Some(36.0), UsageDisplayUnit::Dollars),
-        "$0.36"
-    );
-}
-
-#[test]
-fn format_usage_credits_unit_omits_tokens_when_tokens_is_zero() {
-    let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
-
-    assert_eq!(
-        format_usage(20.0, Some(0), None, UsageDisplayUnit::Credits),
-        format_credits(20.0)
-    );
-}
-
-#[test]
-fn usage_label_uses_dollars_wording_when_unit_is_dollars_and_flag_enabled() {
-    let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
-
+fn usage_label_uses_dollars_wording_when_unit_is_dollars() {
     assert_eq!(
         usage_label(UsageLabelKind::Plain, Some(36.0), UsageDisplayUnit::Dollars),
         "Usage charged"
@@ -366,8 +257,6 @@ fn usage_label_uses_dollars_wording_when_unit_is_dollars_and_flag_enabled() {
 
 #[test]
 fn usage_label_uses_credits_wording_when_unit_is_credits() {
-    let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
-
     assert_eq!(
         usage_label(UsageLabelKind::Plain, None, UsageDisplayUnit::Credits),
         "Credits spent"
@@ -395,19 +284,7 @@ fn usage_label_uses_credits_wording_when_unit_is_credits() {
 }
 
 #[test]
-fn usage_label_uses_dollars_wording_when_flag_disabled_and_unit_is_dollars() {
-    let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
-
-    assert_eq!(
-        usage_label(UsageLabelKind::Plain, Some(36.0), UsageDisplayUnit::Dollars),
-        "Usage charged"
-    );
-}
-
-#[test]
 fn usage_label_uses_credits_wording_when_dollars_requested_but_cost_unavailable() {
-    let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
-
     assert_eq!(
         usage_label(UsageLabelKind::Plain, None, UsageDisplayUnit::Dollars),
         "Credits spent"

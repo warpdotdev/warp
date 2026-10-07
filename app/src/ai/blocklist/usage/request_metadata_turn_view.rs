@@ -16,11 +16,12 @@ use crate::ai::agent::request_metadata::{
 };
 use crate::ai::blocklist::view_util::{effective_usage_unit, format_credits, format_dollars};
 use crate::appearance::Appearance;
-use crate::features::FeatureFlag;
 use crate::settings::UsageDisplayUnit;
 use crate::settings::ai::{AISettings, AISettingsChangedEvent};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::ChargeUnit;
 
 /// A single label/value pair rendered as a row in the panel's shared label/value columns.
 type LabelValueRow = (Box<dyn Element>, Box<dyn Element>);
@@ -590,10 +591,11 @@ impl View for RequestMetadataTurnView {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
-        // The panel is a pricing-transparency surface. If the flag turned off while the panel
-        // was open, render nothing until the owning view removes it.
-        if !FeatureFlag::PricingTransparency.is_enabled() {
-            return Empty::new().finish();
+        // The panel is only offered to tiers charged in cents. If the tier flipped to credits
+        // while the panel was open, render nothing until the owning view removes it.
+        match UserWorkspaces::as_ref(app).charge_unit() {
+            ChargeUnit::Cents => {}
+            ChargeUnit::Credits => return Empty::new().finish(),
         }
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();

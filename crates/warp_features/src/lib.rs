@@ -948,18 +948,6 @@ pub enum FeatureFlag {
     /// setup or API key required.
     FactoryMcp,
 
-    /// Gates client-side display of the real dollar cost (from `RequestCost.cost_in_cents`)
-    /// alongside credits in the GUI footer and TUI. Mirrors the server-side
-    /// `PricingTransparencyEnabled` flag in warp-server, but is a fully independent
-    /// flag — the two do not sync automatically. Consolidated from the former
-    /// `TuiCostTransparency` flag: when enabled (dogfood/staging and local/dev
-    /// builds), the TUI footer usage entry follows the persisted
-    /// `agents.usage_display_mode` setting and is click-to-toggleable between
-    /// credits and dollars; when disabled (prod/stable), it falls back to a
-    /// static, non-interactive credits total. Will also gate the GUI footer's
-    /// dollar display once that's built.
-    PricingTransparency,
-
     /// Enables periodic workspace-handoff checkpoints during a cloud agent run,
     /// rather than only uploading a workspace snapshot once at end-of-run.
     /// Requires `OzHandoff` to also be enabled; a no-op for local runs and when
@@ -1066,7 +1054,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::MultiLevelOrchestration,
     FeatureFlag::McpJsonTreeView,
     FeatureFlag::BoxDrawingGlyphs,
-    FeatureFlag::PricingTransparency,
     FeatureFlag::CtrlCCancelsThirdPartyHarness,
     FeatureFlag::WarpingModelName,
     FeatureFlag::LrcActivitySignal,

@@ -16,18 +16,17 @@ use warpui::fonts::{Properties, Weight};
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use crate::ai::ambient_agents::github_auth_url::{AuthSource, GithubAuthRedirectTarget};
-use crate::ai::blocklist::view_util::format_dollars;
+use crate::ai::blocklist::view_util::{format_dollars, usage_display_unit};
 use crate::ai::request_usage_model::AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD;
 use crate::ai::{AIRequestUsageModel, cloud_environments};
 use crate::appearance::Appearance;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::ClientId;
+use crate::settings::{AISettings, AISettingsChangedEvent, UsageDisplayUnit};
 use crate::settings_view::update_environment_form::{
     EnvironmentFormInitArgs, UpdateEnvironmentForm, UpdateEnvironmentFormEvent,
 };
 use crate::ui_components::blended_colors;
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::ChargeUnit;
 
 /// Max width for the content area (matches Figma: 592px)
 const CONTENT_MAX_WIDTH: f32 = 592.;
@@ -39,8 +38,8 @@ const HEADER_SPACING: f32 = 4.;
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct TrialCredits {
     credits: i32,
-    /// The dollar value of `credits`, in cents, for a plan charged in cents whose trial grants
-    /// all carry one.
+    /// The dollar value of `credits`, in cents, when displaying in dollars and every trial grant
+    /// carries one.
     usage_cents: Option<f64>,
 }
 
@@ -94,6 +93,11 @@ impl FirstTimeCloudAgentSetupView {
         // Subscribe to form events
         ctx.subscribe_to_view(&environment_form, |me, _, event, ctx| {
             me.handle_environment_form_event(event, ctx);
+        });
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
+            if matches!(event, AISettingsChangedEvent::UsageDisplayUnit { .. }) {
+                ctx.notify();
+            }
         });
 
         Self {
@@ -350,9 +354,11 @@ impl View for FirstTimeCloudAgentSetupView {
             .filter(|&credits| credits >= AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD)
             .map(|credits| TrialCredits {
                 credits,
-                usage_cents: match UserWorkspaces::as_ref(app).charge_unit() {
-                    ChargeUnit::Cents => request_usage_model.ambient_only_usage_cents_remaining(),
-                    ChargeUnit::Credits => None,
+                usage_cents: match usage_display_unit(app) {
+                    UsageDisplayUnit::Dollars => {
+                        request_usage_model.ambient_only_usage_cents_remaining()
+                    }
+                    UsageDisplayUnit::Credits => None,
                 },
             });
 

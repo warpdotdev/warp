@@ -16,13 +16,14 @@ use crate::ai::blocklist::{InputConfig, InputType};
 use crate::auth::user::TEST_USER_UID;
 use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerObjectGuest, ServerPermissions};
 use crate::server::ids::ServerId;
+use crate::settings::UsageDisplayUnit;
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext,
     CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
 use crate::terminal::shared_session::{SharedSessionSource, SharedSessionStatus};
 use crate::test_util::add_window_with_terminal;
-use crate::test_util::billing_unit::set_charge_unit;
+use crate::test_util::billing_unit::{set_charge_unit, set_usage_display_unit};
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::ChargeUnit;
@@ -287,7 +288,6 @@ fn charged_usage_metadata()
 #[test]
 fn agent_footer_usage_tooltip_updates_on_usage_events() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
         initialize_app_for_terminal_view(&mut app);
         let terminal = add_window_with_terminal(&mut app, None);
 
@@ -335,14 +335,13 @@ fn agent_footer_usage_tooltip_updates_on_usage_events() {
     });
 }
 
-/// A viewer whose tier charges in cents sees the tooltip's figure in dollars once the
-/// conversation has charged usage, even with the dogfood flag off, and the tooltip follows a
-/// workspaces-metadata refresh that flips the charge unit.
+/// A viewer who prefers dollars sees the tooltip's figure in dollars only once their tier charges
+/// in cents, and the tooltip follows a workspaces-metadata refresh that flips the charge unit.
 #[test]
 fn agent_footer_usage_tooltip_follows_the_tier_charge_unit() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
         initialize_app_for_terminal_view(&mut app);
+        set_usage_display_unit(&mut app, UsageDisplayUnit::Dollars);
         let terminal = add_window_with_terminal(&mut app, None);
 
         app.update(|ctx| {
@@ -387,8 +386,8 @@ fn agent_footer_usage_tooltip_follows_the_tier_charge_unit() {
 #[test]
 fn agent_footer_usage_popover_renders_with_terminal_positioning_provider() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
         initialize_app_for_terminal_view(&mut app);
+        set_charge_unit(&mut app, ChargeUnit::Cents);
         let terminal = add_window_with_terminal(&mut app, None);
 
         app.update(|ctx| {

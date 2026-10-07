@@ -116,7 +116,6 @@ impl UsageHistoryEntry {
         let credits_spent = Text::new_inline(
             format_usage(
                 total_credits,
-                None,
                 cost_in_cents,
                 effective_usage_unit(cost_in_cents, app),
             ),

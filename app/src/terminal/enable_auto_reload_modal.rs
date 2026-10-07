@@ -14,6 +14,7 @@ use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent as _, UiComponentStyles};
 use warpui::{AppContext, Element, Entity, SingletonEntity as _, View, ViewContext, ViewHandle};
 
+use crate::ai::blocklist::view_util::usage_display_unit;
 use crate::features::FeatureFlag;
 use crate::menu::MenuItemFields;
 use crate::modal::{MODAL_PADDING, MODAL_WIDTH, Modal, ModalEvent};
@@ -21,6 +22,7 @@ use crate::pricing::addon_pack::pack_menu_label;
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::{AutoReloadModalAction, TelemetryEvent};
+use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::settings_view::create_discount_badge;
 use crate::ui_components::blended_colors;
 use crate::view_components::{Dropdown, DropdownAction, ToastFlavor};
@@ -128,6 +130,13 @@ impl EnableAutoReloadModalBody {
             },
         );
 
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
+            if matches!(event, AISettingsChangedEvent::UsageDisplayUnit { .. }) {
+                me.update_addon_credits_options(ctx);
+                ctx.notify();
+            }
+        });
+
         let denomination_dropdown = ctx.add_typed_action_view(|ctx| {
             let mut dropdown = Dropdown::new(ctx);
             dropdown.set_top_bar_max_width(DENOMINATION_DROPDOWN_WIDTH);
@@ -152,11 +161,10 @@ impl EnableAutoReloadModalBody {
             .map(|opts| opts.to_vec())
             .unwrap_or_default();
 
-        let workspaces = UserWorkspaces::as_ref(ctx);
-        let premium_bps = workspaces
+        let premium_bps = UserWorkspaces::as_ref(ctx)
             .purchase_policy()
             .map_or(0, |policy| policy.effective_premium_bps());
-        let unit = UserWorkspaces::as_ref(ctx).charge_unit();
+        let unit = usage_display_unit(ctx);
         let base_rate = self
             .addon_credits_options
             .first()

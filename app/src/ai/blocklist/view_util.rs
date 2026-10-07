@@ -3,8 +3,6 @@ use std::sync::LazyLock;
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use thousands::Separable;
-use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
     ChildAnchor, ConstrainedBox, Container, CrossAxisAlignment, Flex, Hoverable, MainAxisAlignment,
@@ -376,45 +374,37 @@ pub fn format_dollars(cost_in_cents: f32) -> String {
     }
 }
 
-/// Resolves the unit a usage figure is displayed in. A viewer whose tier charges usage in cents
-/// (`Tier.chargeUnit`, via [`UserWorkspaces::charge_unit`]) sees dollars whenever the figure has
-/// a cents value, regardless of the client flag or preference; a tier charging in credits follows
-/// the dogfood `PricingTransparency` flag and the `usage_display_unit` setting. A cents value on
-/// its own never selects dollars.
+/// The unit the viewer's usage, balances and purchases display in. A tier that charges usage in
+/// cents (`Tier.chargeUnit`, via [`UserWorkspaces::charge_unit`]) follows the `usage_display_unit`
+/// setting; a tier that charges in credits is always credits, whatever the setting says.
+pub fn usage_display_unit(app: &AppContext) -> UsageDisplayUnit {
+    match UserWorkspaces::as_ref(app).charge_unit() {
+        ChargeUnit::Cents => AISettings::as_ref(app).usage_display_unit,
+        ChargeUnit::Credits => UsageDisplayUnit::Credits,
+    }
+}
+
+/// Resolves the unit one usage figure is displayed in: dollars only when [`usage_display_unit`]
+/// is dollars and the figure carries a cents value, so a figure without one still renders as
+/// credits rather than blank.
 pub fn effective_usage_unit(cost_in_cents: Option<f32>, app: &AppContext) -> UsageDisplayUnit {
-    match (UserWorkspaces::as_ref(app).charge_unit(), cost_in_cents) {
-        (ChargeUnit::Cents, Some(_)) => UsageDisplayUnit::Dollars,
-        (ChargeUnit::Cents, None) | (ChargeUnit::Credits, Some(_) | None) => {
-            if FeatureFlag::PricingTransparency.is_enabled() {
-                AISettings::as_ref(app).usage_display_unit
-            } else {
-                UsageDisplayUnit::Credits
-            }
+    match (usage_display_unit(app), cost_in_cents) {
+        (UsageDisplayUnit::Dollars, Some(_)) => UsageDisplayUnit::Dollars,
+        (UsageDisplayUnit::Dollars, None) | (UsageDisplayUnit::Credits, Some(_) | None) => {
+            UsageDisplayUnit::Credits
         }
     }
 }
 
-/// Formats a usage figure in `unit`, with the token count when it is known. Dollars fall back to
-/// the plain credits string when no cents figure exists.
-pub fn format_usage(
-    credits: f32,
-    tokens: Option<u32>,
-    cost_in_cents: Option<f32>,
-    unit: UsageDisplayUnit,
-) -> String {
-    let unit_text = match (unit, cost_in_cents) {
-        (UsageDisplayUnit::Dollars, None) => return format_credits(credits),
+/// Formats a usage figure in `unit`. Dollars fall back to the plain credits string when no cents
+/// figure exists.
+pub fn format_usage(credits: f32, cost_in_cents: Option<f32>, unit: UsageDisplayUnit) -> String {
+    match (unit, cost_in_cents) {
         (UsageDisplayUnit::Dollars, Some(cost_in_cents)) => format_dollars(cost_in_cents),
-        (UsageDisplayUnit::Credits, _) => format_credits(credits),
-    };
-    // Token counts remain a dogfood-only detail: the server's billing unit decides between
-    // dollars and credits, but not whether this extra breakdown is shown.
-    let Some(tokens) =
-        tokens.filter(|&tokens| tokens > 0 && FeatureFlag::PricingTransparency.is_enabled())
-    else {
-        return unit_text;
-    };
-    format!("{} tokens / {unit_text}", tokens.separate_with_commas())
+        (UsageDisplayUnit::Dollars, None) | (UsageDisplayUnit::Credits, _) => {
+            format_credits(credits)
+        }
+    }
 }
 
 #[derive(Clone, Copy)]

@@ -4,7 +4,8 @@ use warp_graphql::billing::BonusGrantType;
 use super::BonusGrantNotificationModel;
 use crate::ai::request_usage_model::{BonusGrant, BonusGrantScope};
 use crate::server::ids::ServerId;
-use crate::workspaces::workspace::{ChargeUnit, WorkspaceUid};
+use crate::settings::UsageDisplayUnit;
+use crate::workspaces::workspace::WorkspaceUid;
 
 fn grant(scope: BonusGrantScope, usage_cents_granted: Option<f64>) -> BonusGrant {
     BonusGrant {
@@ -23,12 +24,12 @@ fn grant(scope: BonusGrantScope, usage_cents_granted: Option<f64>) -> BonusGrant
 }
 
 #[test]
-fn generic_grant_message_shows_dollars_on_a_tier_charged_in_cents() {
+fn generic_grant_message_shows_dollars_when_shown_in_dollars() {
     let team = WorkspaceUid::from(ServerId::from(1_i64));
     assert_eq!(
         BonusGrantNotificationModel::format_generic_grant_message(
             &grant(BonusGrantScope::Team(team), Some(1800.0)),
-            ChargeUnit::Cents
+            UsageDisplayUnit::Dollars
         ),
         "$18.00 has been added to your team."
     );
@@ -39,15 +40,15 @@ fn generic_grant_message_falls_back_to_credits() {
     assert_eq!(
         BonusGrantNotificationModel::format_generic_grant_message(
             &grant(BonusGrantScope::User, None),
-            ChargeUnit::Cents
+            UsageDisplayUnit::Dollars
         ),
         "1000 Reload Credits have been added to your account."
     );
-    // Cents the server sends to a tier charged in credits are never shown.
+    // Cents the server sends are never shown when displaying in credits.
     assert_eq!(
         BonusGrantNotificationModel::format_generic_grant_message(
             &grant(BonusGrantScope::User, Some(1800.0)),
-            ChargeUnit::Credits
+            UsageDisplayUnit::Credits
         ),
         "1000 Reload Credits have been added to your account."
     );

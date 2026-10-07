@@ -45,7 +45,7 @@ use super::settings_page::{
 };
 use super::{SettingsAction, SettingsSection, ToggleSettingActionPair, flags};
 use crate::ai::blocklist::BlocklistAIPermissions;
-use crate::ai::blocklist::view_util::format_dollars;
+use crate::ai::blocklist::view_util::{format_dollars, usage_display_unit};
 use crate::ai::execution_profiles::model_menu_items::{
     CollapsedModelVariants, available_model_menu_items,
 };
@@ -72,7 +72,7 @@ use crate::server::telemetry::AutonomySettingToggleSource;
 use crate::settings::{
     AISettings, AISettingsChangedEvent, AgentModeCodingPermissionsType,
     AgentModeCommandExecutionDenylist, AgentModeCommandExecutionPredicate, CodeSettings,
-    CodebaseContextEnabled,
+    CodebaseContextEnabled, UsageDisplayUnit,
 };
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::ui_components::blended_colors;
@@ -85,7 +85,6 @@ use crate::view_components::{
     WarningBoxConfig, render_warning_box,
 };
 use crate::workspaces::user_workspaces::{ResolvedTeamScope, TeamContext, UserWorkspacesEvent};
-use crate::workspaces::workspace::ChargeUnit;
 use crate::{TelemetryEvent, UserWorkspaces, send_telemetry_from_ctx};
 
 const AI_SETTINGS_DROPDOWN_WIDTH: f32 = 250.;
@@ -1903,25 +1902,25 @@ fn render_ai_list(
         .finish()
 }
 
-/// The dollar values of the allowance's credit figures, for a plan charged in cents.
+/// The dollar values of the allowance's credit figures, when displaying in dollars.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct AllowanceCents {
     used: f64,
     limit: f64,
 }
 
-/// The current user's allowance in cents: for a plan charged in cents, when the server supplied
+/// The current user's allowance in cents: when displaying in dollars and the server supplied
 /// both figures. Unlimited subjects keep the credit display.
 fn allowance_cents(
-    charge_unit: ChargeUnit,
+    unit: UsageDisplayUnit,
     is_unlimited: bool,
     usage_cents_used: Option<f64>,
     included_usage_cents: Option<f64>,
 ) -> Option<AllowanceCents> {
-    match charge_unit {
-        ChargeUnit::Credits => None,
-        ChargeUnit::Cents if is_unlimited => None,
-        ChargeUnit::Cents => Some(AllowanceCents {
+    match unit {
+        UsageDisplayUnit::Credits => None,
+        UsageDisplayUnit::Dollars if is_unlimited => None,
+        UsageDisplayUnit::Dollars => Some(AllowanceCents {
             used: usage_cents_used?,
             limit: included_usage_cents?,
         }),
@@ -2158,7 +2157,7 @@ impl SettingsWidget for UsageWidget {
         .finish();
 
         let allowance_cents = allowance_cents(
-            workspaces.charge_unit(),
+            usage_display_unit(app),
             ai_request_usage_model.is_unlimited(),
             ai_request_usage_model.usage_cents_used(),
             ai_request_usage_model.included_usage_cents(),

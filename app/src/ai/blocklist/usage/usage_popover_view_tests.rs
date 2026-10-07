@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use chrono::Utc;
-use warp_core::features::FeatureFlag;
 use warpui::elements::ChildView;
 use warpui::platform::WindowStyle;
 use warpui::{App, SingletonEntity, ViewHandle};
@@ -17,7 +16,7 @@ use crate::persistence::model::{
 use crate::server::ids::ServerId;
 use crate::settings::UsageDisplayUnit;
 use crate::test_util::add_window_with_terminal;
-use crate::test_util::billing_unit::set_charge_unit;
+use crate::test_util::billing_unit::{set_charge_unit, set_usage_display_unit};
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 use crate::workspaces::workspace::ChargeUnit;
 
@@ -742,15 +741,14 @@ fn conversation_total_text_falls_back_to_the_billed_snapshot() {
     );
 }
 
-/// A viewer whose tier charges in cents sees the popover's figures in dollars whenever the
-/// conversation has a billed total, even on a client with the dogfood flag off; without one it
-/// falls back to credits.
+/// A cents-charged viewer who prefers dollars sees the popover's figures in dollars whenever the
+/// conversation has a billed total; without one it falls back to credits.
 #[test]
-fn popover_unit_follows_the_tier_charge_unit() {
+fn popover_unit_follows_the_display_unit() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
         initialize_app_for_terminal_view(&mut app);
         set_charge_unit(&mut app, ChargeUnit::Cents);
+        set_usage_display_unit(&mut app, UsageDisplayUnit::Dollars);
 
         let mut conversation = AIConversation::new(false, false);
         conversation.set_credits_spent_for_test(2.5);
@@ -773,14 +771,14 @@ fn popover_unit_follows_the_tier_charge_unit() {
     });
 }
 
-/// A viewer whose tier charges in credits keeps today's prod display: credits, even when the
-/// server streamed cents for the conversation.
+/// A viewer whose tier charges in credits always sees credits, even when the server streamed
+/// cents for the conversation and the dollars preference is set.
 #[test]
-fn popover_unit_stays_credits_for_credit_charged_viewers_when_flag_is_off() {
+fn popover_unit_stays_credits_for_credit_charged_viewers() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
         initialize_app_for_terminal_view(&mut app);
         set_charge_unit(&mut app, ChargeUnit::Credits);
+        set_usage_display_unit(&mut app, UsageDisplayUnit::Dollars);
 
         let mut conversation = AIConversation::new(false, false);
         conversation.set_charged_usage_for_test(Some(ChargedUsageTotals {

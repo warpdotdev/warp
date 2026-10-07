@@ -21,8 +21,10 @@ use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
+use crate::ai::blocklist::view_util::usage_display_unit;
 use crate::pricing::addon_pack::pack_menu_label;
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
+use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::terminal::general_settings::GeneralSettings;
 use crate::ui_components::blended_colors;
 use crate::view_components::{Dropdown, DropdownEvent, DropdownItem, ToastFlavor};
@@ -78,6 +80,11 @@ impl BuildPlanMigrationModal {
 
         ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _handle, event, ctx| {
             me.handle_workspaces_event(event, ctx);
+        });
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
+            if matches!(event, AISettingsChangedEvent::UsageDisplayUnit { .. }) {
+                me.populate_reload_denomination_dropdown(ctx);
+            }
         });
 
         let reload_denominations_dropdown = ctx.add_typed_action_view(|ctx| {
@@ -205,7 +212,7 @@ impl BuildPlanMigrationModal {
         let premium_bps = UserWorkspaces::as_ref(ctx)
             .purchase_policy()
             .map_or(0, |policy| policy.effective_premium_bps());
-        let unit = UserWorkspaces::as_ref(ctx).charge_unit();
+        let unit = usage_display_unit(ctx);
         self.reload_denominations_dropdown
             .update(ctx, |dropdown, ctx| {
                 dropdown.set_items(

@@ -1,4 +1,3 @@
-use warp_core::features::FeatureFlag;
 use warpui::App;
 
 use super::*;
@@ -6,7 +5,7 @@ use crate::ai::agent::request_metadata::{
     InferenceUsageType, RequestLlmGenerationSpan, RequestModelCharge, RequestPlatformCharge,
 };
 use crate::settings::UsageDisplayUnit;
-use crate::test_util::billing_unit::set_charge_unit;
+use crate::test_util::billing_unit::{set_charge_unit, set_usage_display_unit};
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::ChargeUnit;
@@ -130,16 +129,15 @@ fn tooltip_never_rounds_a_real_charge_to_zero() {
     );
 }
 
-/// A viewer whose tier charges in cents sees a turn's charge in dollars whenever its records
-/// carry cents, regardless of the dogfood flag; a turn without any cents figure stays in
-/// credits.
+/// A cents-charged viewer who prefers dollars sees a turn's charge in dollars whenever its
+/// records carry cents; a turn without any cents figure stays in credits.
 #[test]
-fn turn_panel_unit_follows_the_tier_charge_unit() {
+fn turn_panel_unit_follows_the_display_unit() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::PricingTransparency.override_enabled(false);
         initialize_settings_for_tests(&mut app);
         app.add_singleton_model(UserWorkspaces::default_mock);
         set_charge_unit(&mut app, ChargeUnit::Cents);
+        set_usage_display_unit(&mut app, UsageDisplayUnit::Dollars);
 
         let charged = TurnPanelData::from(vec![record(120.0, 30.0)]);
         let credits_only = TurnPanelData::Legacy {

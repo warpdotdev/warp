@@ -1,7 +1,7 @@
 use thousands::Separable;
 use warp_graphql::billing::AddonCreditsOption;
 
-use crate::workspaces::workspace::ChargeUnit;
+use crate::settings::UsageDisplayUnit;
 
 /// What an add-on pack buys, in the unit it is shown in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -12,12 +12,14 @@ pub enum PackAmount {
 }
 
 impl PackAmount {
-    /// What `option` buys for a plan charged in `charge_unit`. A plan charged in cents still
-    /// shows a pack's credit count when the catalog states no usage for it.
-    pub fn of(option: &AddonCreditsOption, charge_unit: ChargeUnit) -> Self {
-        match (charge_unit, option.usage_cents) {
-            (ChargeUnit::Cents, Some(cents)) => Self::UsageCents(cents),
-            (ChargeUnit::Cents, None) | (ChargeUnit::Credits, _) => Self::Credits(option.credits),
+    /// What `option` buys, shown in `unit`. A pack displayed in dollars still shows its credit
+    /// count when the catalog states no usage for it.
+    pub fn of(option: &AddonCreditsOption, unit: UsageDisplayUnit) -> Self {
+        match (unit, option.usage_cents) {
+            (UsageDisplayUnit::Dollars, Some(cents)) => Self::UsageCents(cents),
+            (UsageDisplayUnit::Dollars, None) | (UsageDisplayUnit::Credits, _) => {
+                Self::Credits(option.credits)
+            }
         }
     }
 
@@ -58,12 +60,12 @@ pub fn format_price(cents: i32) -> String {
 pub fn pack_menu_label(
     option: &AddonCreditsOption,
     premium_bps: i32,
-    charge_unit: ChargeUnit,
+    unit: UsageDisplayUnit,
 ) -> String {
     format!(
         "{} / {}",
         format_price(option.price_usd_cents_with_premium(premium_bps)),
-        PackAmount::of(option, charge_unit).label()
+        PackAmount::of(option, unit).label()
     )
 }
 

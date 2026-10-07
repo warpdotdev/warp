@@ -1,7 +1,6 @@
 use warp::appearance::Appearance;
 use warp::settings::TuiUsageDisplayMode;
 use warp::tui_export::{ChargeUnit, ChargedUsageTotals, ConversationUsageTotals};
-use warp_core::features::FeatureFlag;
 use warpui_core::App;
 use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
 use warpui_core::presenter::tui::TuiPresenter;
@@ -100,12 +99,11 @@ fn cost_mode_prefers_charged_usage_over_the_billed_snapshot() {
     );
 }
 
-/// The credits⇄dollars toggle is gated behind `PricingTransparency`: with the
-/// flag off (prod/stable) the footer renders a static credits total and never
-/// exposes the dollar cost even when the persisted mode is `Cost`; with the
-/// flag on (dogfood/staging + local/dev) the entry follows the persisted mode.
+/// The credits⇄dollars toggle is only offered to a viewer whose tier charges in cents, where the
+/// entry follows the persisted display mode. A tier charged in credits renders a static credits
+/// total and never exposes the dollar cost, even when the persisted mode is `Cost`.
 #[test]
-fn footer_usage_entry_gates_the_cost_toggle_behind_the_feature_flag() {
+fn footer_usage_entry_offers_the_cost_toggle_only_to_cents_charging_tiers() {
     App::test((), |mut app| async move {
         // `render_entry` resolves theme styles via `TuiUiBuilder`, which reads
         // the `Appearance` singleton.
@@ -114,73 +112,30 @@ fn footer_usage_entry_gates_the_cost_toggle_behind_the_feature_flag() {
         });
         let usage = totals(2.5, 3.2);
 
-        // Flag OFF: static credits; the persisted `Cost` mode is ignored so the
-        // dollar cost is never surfaced.
         app.read(|ctx| {
-            let _guard = FeatureFlag::PricingTransparency.override_enabled(false);
-            let line =
-                render_entry_line(TuiUsageDisplayMode::Cost, usage, ChargeUnit::Credits, ctx);
-            assert!(
-                line.contains("2.5 credits"),
-                "flag off must show static credits, got: {line:?}"
-            );
-            assert!(
-                !line.contains("$0.03"),
-                "flag off must not expose the dollar cost, got: {line:?}"
-            );
-        });
-
-        // Flag ON: the entry follows the persisted display mode, exposing the
-        // dollar cost the toggle switches to.
-        app.read(|ctx| {
-            let _guard = FeatureFlag::PricingTransparency.override_enabled(true);
-            let line =
-                render_entry_line(TuiUsageDisplayMode::Cost, usage, ChargeUnit::Credits, ctx);
-            assert!(
-                line.contains("$0.03"),
-                "flag on must follow the persisted cost mode, got: {line:?}"
-            );
-        });
-    });
-}
-
-/// A viewer whose tier charges in cents sees the billed total regardless of
-/// the flag or the persisted mode, and falls back to the usual credits entry
-/// when the conversation has no billed total yet.
-#[test]
-fn footer_usage_entry_shows_billed_dollars_for_cents_charging_tiers() {
-    App::test((), |mut app| async move {
-        app.update(|ctx| {
-            ctx.add_singleton_model(|_| Appearance::mock());
-        });
-        let usage = totals(2.5, 3.2);
-
-        app.read(|ctx| {
-            let _guard = FeatureFlag::PricingTransparency.override_enabled(false);
             let line =
                 render_entry_line(TuiUsageDisplayMode::Credits, usage, ChargeUnit::Cents, ctx);
             assert!(
+                line.contains("2.5 credits"),
+                "a cents-charging tier must follow the persisted credits mode, got: {line:?}"
+            );
+            let line = render_entry_line(TuiUsageDisplayMode::Cost, usage, ChargeUnit::Cents, ctx);
+            assert!(
                 line.contains("$0.03"),
-                "a cents-charging tier must see the billed total, got: {line:?}"
+                "a cents-charging tier must follow the persisted cost mode, got: {line:?}"
             );
         });
 
         app.read(|ctx| {
-            let _guard = FeatureFlag::PricingTransparency.override_enabled(false);
-            let line = render_entry_line(
-                TuiUsageDisplayMode::Cost,
-                ConversationUsageTotals {
-                    credits_spent: 2.5,
-                    billed_cost_in_cents: None,
-                    has_usage: true,
-                    charged_usage: None,
-                },
-                ChargeUnit::Cents,
-                ctx,
-            );
+            let line =
+                render_entry_line(TuiUsageDisplayMode::Cost, usage, ChargeUnit::Credits, ctx);
             assert!(
                 line.contains("2.5 credits"),
-                "without a billed total the entry falls back to credits, got: {line:?}"
+                "a credits-charging tier must show static credits, got: {line:?}"
+            );
+            assert!(
+                !line.contains("$0.03"),
+                "a credits-charging tier must not expose the dollar cost, got: {line:?}"
             );
         });
     });

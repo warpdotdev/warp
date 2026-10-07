@@ -110,7 +110,7 @@ fn format_request_usage(
         cost_in_cents,
         usage_display_unit,
     );
-    let value = format_usage(credits, None, cost_in_cents, usage_display_unit);
+    let value = format_usage(credits, cost_in_cents, usage_display_unit);
     format!("{label}: {value}")
 }
 

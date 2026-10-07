@@ -24,6 +24,7 @@ use warpui::{
     WeakViewHandle,
 };
 
+use crate::ai::blocklist::view_util::usage_display_unit;
 use crate::ai::request_usage_model::{
     AIRequestUsageModel, AIRequestUsageModelEvent, BuyCreditsBannerDisplayState,
 };
@@ -35,10 +36,10 @@ use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::send_telemetry_from_ctx;
 use crate::server::ids::ServerId;
 use crate::server::telemetry::{OutOfCreditsBannerAction, TelemetryEvent};
+use crate::settings::{AISettings, AISettingsChangedEvent, UsageDisplayUnit};
 use crate::settings_view::create_discount_badge;
 use crate::view_components::{Dropdown, DropdownAction};
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
-use crate::workspaces::workspace::ChargeUnit;
 
 #[derive(Default)]
 struct MouseStates {
@@ -112,6 +113,12 @@ impl BuyCreditsBanner {
 
         ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _handle, event, ctx| {
             me.handle_workspaces_event(event, ctx);
+        });
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
+            if matches!(event, AISettingsChangedEvent::UsageDisplayUnit { .. }) {
+                me.update_addon_credits_options(ctx);
+                ctx.notify();
+            }
         });
 
         let denomination_dropdown = ctx.add_typed_action_view(|ctx| {
@@ -303,7 +310,7 @@ impl BuyCreditsBanner {
 
     fn render_auto_reload_checkbox(
         &self,
-        charge_unit: ChargeUnit,
+        unit: UsageDisplayUnit,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -337,7 +344,7 @@ impl BuyCreditsBanner {
             .addon_credits_options
             .get(self.selected_denomination_index)
             .map_or(PackAmount::Credits(0), |option| {
-                PackAmount::of(option, charge_unit)
+                PackAmount::of(option, unit)
             });
         let tooltip_text = match selected_amount {
             PackAmount::UsageCents(_) => format!(
@@ -402,11 +409,10 @@ impl BuyCreditsBanner {
             .map(|opts| opts.to_vec())
             .unwrap_or_default();
 
-        let workspaces = UserWorkspaces::as_ref(ctx);
-        let premium_bps = workspaces
+        let premium_bps = UserWorkspaces::as_ref(ctx)
             .purchase_policy()
             .map_or(0, |policy| policy.effective_premium_bps());
-        let charge_unit = UserWorkspaces::as_ref(ctx).charge_unit();
+        let unit = usage_display_unit(ctx);
         let base_rate = self
             .addon_credits_options
             .first()
@@ -416,7 +422,7 @@ impl BuyCreditsBanner {
             .iter()
             .enumerate()
             .map(|(index, option)| {
-                let primary_text = pack_menu_label(option, premium_bps, charge_unit);
+                let primary_text = pack_menu_label(option, premium_bps, unit);
                 let discount_percent = if base_rate > 0.0 {
                     let actual_rate = option.rate();
                     ((base_rate - actual_rate) / base_rate * 100.0).round() as u32
@@ -595,13 +601,13 @@ impl BuyCreditsBanner {
     /// handed off to the browser for checkout.
     fn render_checkout_pending(
         &self,
-        charge_unit: ChargeUnit,
+        unit: UsageDisplayUnit,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let description = match charge_unit {
-            ChargeUnit::Credits => "Credits will be added to your account after checkout.",
-            ChargeUnit::Cents => "Usage will be added to your account after checkout.",
+        let description = match unit {
+            UsageDisplayUnit::Credits => "Credits will be added to your account after checkout.",
+            UsageDisplayUnit::Dollars => "Usage will be added to your account after checkout.",
         };
 
         let alert_icon = Container::new(
@@ -706,15 +712,15 @@ impl BuyCreditsBanner {
             .is_some_and(|billing| billing.is_delinquent_due_to_payment_issue());
         let auto_reload_banner_toggle_ff =
             FeatureFlag::BuildPlanAutoReloadBannerToggle.is_enabled();
-        let charge_unit = UserWorkspaces::as_ref(app).charge_unit();
-        let (title, exceeds_limit_text, admin_description, member_description) = match charge_unit {
-            ChargeUnit::Credits => (
+        let unit = usage_display_unit(app);
+        let (title, exceeds_limit_text, admin_description, member_description) = match unit {
+            UsageDisplayUnit::Credits => (
                 "Out of credits",
                 "Purchasing these credits would take you over your monthly spend limit. ",
                 "Add more credits to your account to continue using the Warp Agent.",
                 "Contact a team admin to purchase more credits to continue.",
             ),
-            ChargeUnit::Cents => (
+            UsageDisplayUnit::Dollars => (
                 "Out of usage",
                 "This purchase would take you over your monthly spend limit. ",
                 "Add more usage to your account to continue using the Warp Agent.",
@@ -897,7 +903,7 @@ impl BuyCreditsBanner {
 
             if auto_reload_banner_toggle_ff {
                 children.push(
-                    Container::new(self.render_auto_reload_checkbox(charge_unit, appearance))
+                    Container::new(self.render_auto_reload_checkbox(unit, appearance))
                         .with_margin_right(8.)
                         .finish(),
                 );
@@ -1020,10 +1026,7 @@ impl View for BuyCreditsBanner {
             }
             BuyCreditsBannerDisplayState::OutOfCredits => {
                 if self.checkout_pending {
-                    self.render_checkout_pending(
-                        UserWorkspaces::as_ref(app).charge_unit(),
-                        appearance,
-                    )
+                    self.render_checkout_pending(usage_display_unit(app), appearance)
                 } else {
                     self.render_out_of_credits(appearance, app)
                 }

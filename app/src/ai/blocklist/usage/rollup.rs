@@ -53,10 +53,6 @@ pub struct OrchestrationCreditRollup {
     /// reported usage yet) is skipped rather than treated as an unknown
     /// baseline, since it hasn't contributed anything to sum.
     pub total_cost_in_cents: Option<f32>,
-    /// Sum of `usage_totals().charged_usage`'s total token count across the
-    /// orchestrator and every locally-loaded descendant that has spent > 0
-    /// credits. `None` under the same conditions as `total_cost_in_cents`.
-    pub total_tokens: Option<u32>,
     /// One entry per agent that has spent > 0 credits, sorted by
     /// `credits_spent` descending. Ties are broken by spawn order (earlier
     /// spawn first; orchestrator always sorts before its descendants in a
@@ -69,16 +65,6 @@ pub struct OrchestrationCreditRollup {
 /// baseline (see `OrchestrationCreditRollup::total_cost_in_cents`).
 fn accumulate_cost(total: &mut Option<f32>, cost: Option<f32>) {
     *total = match (*total, cost) {
-        (Some(t), Some(c)) => Some(t + c),
-        _ => None,
-    };
-}
-
-/// Folds one more conversation's optional token count into a running total,
-/// propagating `None` permanently once any contributor lacks a known count
-/// (see `OrchestrationCreditRollup::total_tokens`).
-fn accumulate_tokens(total: &mut Option<u32>, tokens: Option<u32>) {
-    *total = match (*total, tokens) {
         (Some(t), Some(c)) => Some(t + c),
         _ => None,
     };
@@ -107,26 +93,18 @@ pub fn compute_orchestration_rollup(
 
     let mut total_credits: f32 = 0.0;
     let mut total_cost_in_cents: Option<f32> = Some(0.0);
-    let mut total_tokens: Option<u32> = Some(0);
     let mut entries: Vec<(usize, PerAgentCreditEntry)> = Vec::new();
 
     if let Some(orchestrator) = history.conversation(&parent_id) {
         let credits = orchestrator.credits_spent();
         total_credits += credits;
-        // Skip cost/token accumulation for a zero-credit contributor: it
-        // hasn't reported any usage yet, so its `None` charge metadata
-        // must not poison the running total for contributors that have.
+        // Skip cost accumulation for a zero-credit contributor: it hasn't
+        // reported any usage yet, so its `None` charge metadata must not
+        // poison the running total for contributors that have.
         if credits > 0.0 {
-            let orchestrator_usage_totals = orchestrator.usage_totals();
             accumulate_cost(
                 &mut total_cost_in_cents,
-                orchestrator_usage_totals.total_cost_in_cents(),
-            );
-            accumulate_tokens(
-                &mut total_tokens,
-                orchestrator_usage_totals
-                    .charged_usage
-                    .map(|usage| usage.total_tokens()),
+                orchestrator.usage_totals().total_cost_in_cents(),
             );
             entries.push((
                 0,
@@ -149,16 +127,9 @@ pub fn compute_orchestration_rollup(
         total_credits += credits;
         // See the matching comment in the orchestrator branch above.
         if credits > 0.0 {
-            let descendant_usage_totals = descendant.usage_totals();
             accumulate_cost(
                 &mut total_cost_in_cents,
-                descendant_usage_totals.total_cost_in_cents(),
-            );
-            accumulate_tokens(
-                &mut total_tokens,
-                descendant_usage_totals
-                    .charged_usage
-                    .map(|usage| usage.total_tokens()),
+                descendant.usage_totals().total_cost_in_cents(),
             );
             entries.push((
                 spawn_idx + 1,
@@ -188,7 +159,6 @@ pub fn compute_orchestration_rollup(
     Some(OrchestrationCreditRollup {
         total_credits,
         total_cost_in_cents,
-        total_tokens,
         per_agent: entries.into_iter().map(|(_, entry)| entry).collect(),
     })
 }

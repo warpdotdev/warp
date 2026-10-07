@@ -5000,12 +5000,10 @@ fn footer_usage_entry_is_hidden_until_the_conversation_reports_usage() {
 /// A conversation with usage but an unknown historical cost (legacy restore)
 /// still renders the usage entry — `Cost unavailable` in cost mode, never
 /// `$0.00` — even when credits happen to be zero. Cost mode is only reachable
-/// while the credits⇄dollars toggle is enabled, so this exercises the
-/// `PricingTransparency`-on path.
+/// on a tier that charges in cents, so this exercises that path.
 #[test]
 fn footer_usage_entry_shows_unknown_cost_even_with_zero_credits() {
     App::test((), |mut app| async move {
-        let _cost_transparency = FeatureFlag::PricingTransparency.override_enabled(true);
         app.update(|ctx| {
             ctx.add_singleton_model(|_| Appearance::mock());
             let builder = TuiUiBuilder::from_app(ctx);
@@ -5017,7 +5015,7 @@ fn footer_usage_entry_shows_unknown_cost_even_with_zero_credits() {
                     has_usage: true,
                     charged_usage: None,
                 },
-                ChargeUnit::Credits,
+                ChargeUnit::Cents,
                 ctx,
                 |_, _| {},
             );

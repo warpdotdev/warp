@@ -245,8 +245,6 @@ pub struct ConversationDetailsData {
     created_at: Option<DateTime<Local>>,
     /// Total credits spent on the conversation/task.
     credits: Option<f32>,
-    /// Total token count used, when the source provides it.
-    total_tokens: Option<u32>,
     /// Total cost billed to the customer in US cents, when the source provides it.
     cost_in_cents: Option<f32>,
     /// Total duration of the conversation.
@@ -355,12 +353,6 @@ impl ConversationDetailsData {
             .map(|m| Harness::from(m.harness))
             .or(Some(Harness::Oz));
 
-        let total_tokens: u32 = conversation
-            .token_usage()
-            .iter()
-            .map(|model| model.warp_tokens + model.byok_tokens + model.custom_endpoint_tokens)
-            .sum();
-
         ConversationDetailsData {
             mode: PanelMode::Conversation {
                 directory,
@@ -375,7 +367,6 @@ impl ConversationDetailsData {
             executor: None,
             created_at,
             credits: Some(conversation.credits_spent()),
-            total_tokens: (total_tokens > 0).then_some(total_tokens),
             cost_in_cents: conversation.usage_totals().total_cost_in_cents(),
             run_time,
             artifacts: conversation.artifacts().to_vec(),
@@ -442,7 +433,6 @@ impl ConversationDetailsData {
             created_at: Some(task.created_at.with_timezone(&Local)),
             artifacts: task.artifacts.clone(),
             credits,
-            total_tokens: None,
             cost_in_cents: task.cost_in_cents(),
             run_time: task.run_time(),
             open_action,
@@ -527,7 +517,6 @@ impl ConversationDetailsData {
                 executor,
                 created_at,
                 credits,
-                total_tokens: None,
                 cost_in_cents,
                 run_time: task.and_then(AmbientAgentTask::run_time),
                 artifacts: entry.display.artifacts.clone(),
@@ -556,7 +545,6 @@ impl ConversationDetailsData {
             executor: None,
             created_at,
             credits: entry.display.request_usage,
-            total_tokens: None,
             cost_in_cents: entry.display.cost_in_cents,
             run_time: None,
             artifacts: entry.display.artifacts.clone(),
@@ -590,7 +578,6 @@ impl ConversationDetailsData {
             executor: None,
             created_at: None,
             credits: None,
-            total_tokens: None,
             cost_in_cents: None,
             run_time: None,
             artifacts: vec![],
@@ -634,7 +621,6 @@ impl ConversationDetailsData {
             executor: None,
             created_at: Some(created_at),
             credits: credits_used,
-            total_tokens: None,
             cost_in_cents: None,
             run_time: None,
             open_action,
@@ -2306,12 +2292,7 @@ impl View for ConversationDetailsPanel {
         if let Some(credits) = self.data.credits {
             let cost_in_cents = self.data.cost_in_cents;
             let usage_display_unit = effective_usage_unit(cost_in_cents, app);
-            let formatted = format_usage(
-                credits,
-                self.data.total_tokens,
-                cost_in_cents,
-                usage_display_unit,
-            );
+            let formatted = format_usage(credits, cost_in_cents, usage_display_unit);
             let label = usage_label(
                 UsageLabelKind::DetailsPanel,
                 cost_in_cents,

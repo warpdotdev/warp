@@ -706,7 +706,6 @@ settings::macros::implement_setting_for_enum!(
     private: false,
     toml_path: "agents.warp_agent.other.usage_display_unit",
     description: "Which unit the GUI's usage/spend displays show: credits or dollars.",
-    feature_flag: FeatureFlag::PricingTransparency,
 );
 
 impl UsageDisplayUnit {

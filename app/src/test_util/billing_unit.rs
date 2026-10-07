@@ -1,7 +1,10 @@
-//! Helpers for driving the viewer's charge unit (`Tier.chargeUnit`) in tests.
+//! Helpers for driving the viewer's charge unit (`Tier.chargeUnit`) and usage display preference
+//! in tests.
 
+use settings::Setting as _;
 use warpui::{App, SingletonEntity};
 
+use crate::settings::{AISettings, UsageDisplayUnit};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{ChargeUnit, UserTier};
 
@@ -18,5 +21,15 @@ pub fn set_charge_unit(app: &mut App, charge_unit: ChargeUnit) {
                 ..Default::default()
             }),
         }
+    });
+}
+
+/// Sets the `usage_display_unit` preference. Requires the test settings to be initialized.
+pub fn set_usage_display_unit(app: &mut App, unit: UsageDisplayUnit) {
+    AISettings::handle(app).update(app, |settings, ctx| {
+        settings
+            .usage_display_unit
+            .set_value(unit, ctx)
+            .expect("usage display unit should be settable in tests");
     });
 }

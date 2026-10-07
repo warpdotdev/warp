@@ -411,12 +411,8 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
             lines_added: tool.apply_file_diff_stats.lines_added,
             lines_removed: tool.apply_file_diff_stats.lines_removed,
             commands_executed: tool.run_command_stats.commands_executed,
-            // GAP: the settings usage-history surface sources this view from
-            // a GraphQL query that does not yet expose a token count or
-            // per-block breakdown (Milestone 3 / vertical B).
-            total_tokens: None,
             total_cost_in_cents,
-            tokens_for_last_block: None,
+            // The settings usage-history query carries no per-block breakdown.
             cost_in_cents_for_last_block: None,
         }
     }
