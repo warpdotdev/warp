@@ -141,16 +141,16 @@ fn converted_read_recovered_command(
 }
 
 #[test]
-fn recovered_signal_and_unavailable_omit_wire_exit_code() {
-    for status in [
-        ObservedExitStatus::Signal(9),
-        ObservedExitStatus::Unavailable,
+fn recovered_signal_and_unavailable_never_report_success_on_the_wire() {
+    for (status, expected_exit_code) in [
+        (ObservedExitStatus::Signal(9), 137),
+        (ObservedExitStatus::Unavailable, 1),
     ] {
         for result in [
             converted_recovered_command(status, ""),
             converted_read_recovered_command(status, ""),
         ] {
-            assert!(!result.encode_to_vec().contains(&0x10));
+            assert_eq!(result.exit_code, expected_exit_code);
         }
     }
 }

@@ -936,16 +936,14 @@ fn handle_terminal_view_event(
                 else {
                     return;
                 };
-                let request = request.clone();
                 let accepted = terminal_manager.update(ctx, |manager, ctx| {
                     manager.recover_cloud_shell(request.clone(), ctx)
                 });
                 if !accepted {
                     terminal_view.update(ctx, |view, ctx| {
                         view.fail_cloud_shell_recovery(
-                            request,
-                            CloudAgentShellRecoveryFailureClass::ManagerUnsupported,
-                            anyhow::anyhow!("terminal manager does not support shell recovery"),
+                            CloudAgentShellRecoveryFailureClass::Unsupported,
+                            anyhow::anyhow!("this shell cannot be respawned"),
                             ctx,
                         );
                     });

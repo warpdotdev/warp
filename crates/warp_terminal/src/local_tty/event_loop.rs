@@ -325,7 +325,10 @@ where
         Ok(())
     }
 
-    pub fn spawn(mut self) -> JoinHandle<()> {
+    /// Runs the event loop on its own thread until the shell exits or a shutdown is requested.
+    /// The thread yields the loop's message receiver so the same channel can feed a replacement
+    /// event loop.
+    pub fn spawn(mut self) -> JoinHandle<Receiver<Message>> {
         #[cfg(test)]
         let feature_flag_overrides = warp_core::features::get_overrides();
 
@@ -498,6 +501,7 @@ where
                 if !child_exited {
                     self.terminal.lock().exit(ExitReason::PtyDisconnected);
                 }
+                self.rx
             })
             .expect("thread spawn works")
     }

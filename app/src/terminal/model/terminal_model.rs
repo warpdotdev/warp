@@ -1503,26 +1503,34 @@ impl TerminalModel {
         self.ignore_bootstrapping_messages = true;
     }
 
+    /// Reacts to the PTY going away. A shell process exit is only announced via
+    /// [`Event::ShellExitObserved`] so the owning surface can decide between recovering the shell
+    /// and calling [`Self::finalize_exit`]; every other reason finalizes immediately.
     pub fn exit(&mut self, reason: ExitReason) {
-        if let ExitReason::ShellProcessExited { .. } = reason {
-            if self.pending_shell_recovery_status.is_some() || self.handled_exit {
-                return;
-            }
-            self.shell_process_info = None;
-            self.event_proxy.send_app_event(Event::Exit { reason });
+        let ExitReason::ShellProcessExited { status } = reason else {
+            self.finalize_exit(reason);
+            return;
+        };
+        if self.handled_exit {
             return;
         }
-        self.finalize_exit(reason);
+        // The pty is going away, so its descriptor must not be read again: the
+        // OS is free to hand the same number to an unrelated file.
+        self.shell_process_info = None;
+        self.event_proxy
+            .send_app_event(Event::ShellExitObserved { status });
     }
 
+    /// Commits to replacing the exited shell: the interrupted block is finished with `status`
+    /// once the replacement shell initializes instead of the terminal becoming read-only.
     pub fn prepare_shell_recovery(&mut self, status: ObservedExitStatus) {
         self.pending_shell_recovery_status = Some(status);
         self.exit_alt_screen(true);
     }
 
+    /// Makes the terminal read-only and emits [`Event::Exit`]. Returns `false` if the exit was
+    /// already handled.
     pub fn finalize_exit(&mut self, reason: ExitReason) -> bool {
-        // If we've already responded to the shell/event loop exiting, there's
-        // nothing more to do.
         if self.handled_exit {
             return false;
         }

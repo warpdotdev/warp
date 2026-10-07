@@ -68,8 +68,10 @@ pub enum ShellStarter {
 }
 
 impl ShellStarter {
-    /// Creates a fresh shell session in the same execution environment.
-    pub fn replacement(&self) -> Self {
+    /// Creates a starter for a fresh shell session in the same execution environment, or `None`
+    /// when the environment cannot host a second shell (a Docker sandbox container exits with
+    /// its shell).
+    pub fn replacement(&self) -> Option<Self> {
         match self {
             Self::Direct(starter) => {
                 let mut starter = starter.clone();
@@ -79,7 +81,7 @@ impl ShellStarter {
                     starter.shell_type,
                     starter.session_id,
                 );
-                Self::Direct(starter)
+                Some(Self::Direct(starter))
             }
             Self::Wsl(starter) => {
                 let mut starter = starter.clone();
@@ -90,14 +92,14 @@ impl ShellStarter {
                     starter.shell_type,
                     starter.session_id,
                 );
-                Self::Wsl(starter)
+                Some(Self::Wsl(starter))
             }
             Self::MSYS2(starter) => {
                 let mut starter = starter.clone();
                 starter.session_id = generate_session_id();
-                Self::MSYS2(starter)
+                Some(Self::MSYS2(starter))
             }
-            Self::DockerSandbox(starter) => Self::DockerSandbox(starter.replacement()),
+            Self::DockerSandbox(_) => None,
         }
     }
 
@@ -135,24 +137,19 @@ impl ShellStarter {
         requested: Option<&str>,
         home_directory: Option<&str>,
     ) -> anyhow::Result<(String, bool)> {
-        match self {
-            Self::DockerSandbox(starter) => Ok(starter.recovery_working_directory(requested)),
-            Self::Direct(_) | Self::Wsl(_) | Self::MSYS2(_) => {
-                let launch_data = self.launch_data();
-                let is_directory = |path| {
-                    launch_data
-                        .maybe_convert_absolute_path(path)
-                        .is_some_and(|path| path.is_absolute() && path.is_dir())
-                };
-                if let Some(requested) = requested.filter(|path| is_directory(path)) {
-                    return Ok((requested.to_owned(), false));
-                }
-                let fallback = home_directory
-                    .filter(|path| is_directory(path))
-                    .context("no accessible home directory for shell recovery")?;
-                Ok((fallback.to_owned(), true))
-            }
+        let launch_data = self.launch_data();
+        let is_directory = |path| {
+            launch_data
+                .maybe_convert_absolute_path(path)
+                .is_some_and(|path| path.is_absolute() && path.is_dir())
+        };
+        if let Some(requested) = requested.filter(|path| is_directory(path)) {
+            return Ok((requested.to_owned(), false));
         }
+        let fallback = home_directory
+            .filter(|path| is_directory(path))
+            .context("no accessible home directory for shell recovery")?;
+        Ok((fallback.to_owned(), true))
     }
 
     /// Constructs a `ShellStarter` represent the shell binary (and corresponding arguments) to be
@@ -540,9 +537,6 @@ impl From<ShellStarterSource> for ShellStarterSourceOrWslName {
 }
 
 impl DirectShellStarter {
-    pub(crate) fn set_session_id(&mut self, session_id: SessionId) {
-        self.session_id = session_id;
-    }
     #[cfg(any(test, feature = "test-util"))]
     pub fn new_for_test(shell_type: ShellType, shell_path: PathBuf, args: Vec<OsString>) -> Self {
         Self {

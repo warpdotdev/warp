@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::mpsc::SyncSender;
+use std::sync::mpsc::{SendError, SyncSender};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -14,7 +14,7 @@ use anyhow::Context as _;
 use async_broadcast::InactiveReceiver;
 #[cfg(unix)]
 use nix::sys::termios::LocalFlags;
-use parking_lot::{FairMutex, Mutex};
+use parking_lot::FairMutex;
 use pathfinder_geometry::vector::Vector2F;
 use settings::Setting as _;
 use warp_core::SessionId;
@@ -60,7 +60,7 @@ use crate::terminal::session_settings::{SessionSettings, ToolbarChipSelection};
 use crate::terminal::shared_session::sharer::network::Network;
 use crate::terminal::shared_session::{IsSharedSessionCreator, SharedSessionStatus};
 use crate::terminal::shell::ShellName;
-use crate::terminal::shell_recovery::{CloudShellRecoveryRequest, sanitized_recovery_environment};
+use crate::terminal::shell_recovery::CloudShellRecoveryRequest;
 use crate::terminal::terminal_manager::BlockSpacing;
 use crate::terminal::warpify::settings::WarpifySettings;
 use crate::terminal::writeable_pty::pty_controller::{EventLoopSendError, EventLoopSender};
@@ -73,47 +73,9 @@ use crate::terminal::{
     TerminalManager as TerminalManagerTrait, TerminalModel, terminal_manager,
 };
 
-type PtyController = writeable_pty::PtyController<ReplaceableEventLoopSender>;
+type PtyController = writeable_pty::PtyController<mio_channel::Sender<Message>>;
 type RemoteServerController =
-    writeable_pty::remote_server_controller::RemoteServerController<ReplaceableEventLoopSender>;
-
-/// Sender for the PTY event loop that can be pointed at a replacement event loop when the shell
-/// is respawned, so controllers holding a clone keep working across the swap.
-#[derive(Clone)]
-pub(super) struct ReplaceableEventLoopSender {
-    sender: Arc<Mutex<Option<mio_channel::Sender<Message>>>>,
-}
-
-impl ReplaceableEventLoopSender {
-    fn new(sender: mio_channel::Sender<Message>) -> Self {
-        Self {
-            sender: Arc::new(Mutex::new(Some(sender))),
-        }
-    }
-
-    fn replace(&self, sender: mio_channel::Sender<Message>) {
-        *self.sender.lock() = Some(sender);
-    }
-
-    fn disconnect(&self) {
-        *self.sender.lock() = None;
-    }
-
-    #[cfg(windows)]
-    fn current(&self) -> Option<mio_channel::Sender<Message>> {
-        self.sender.lock().clone()
-    }
-}
-
-impl EventLoopSender for ReplaceableEventLoopSender {
-    fn send(&self, message: Message) -> Result<(), EventLoopSendError> {
-        let sender = self.sender.lock().clone();
-        sender
-            .ok_or(EventLoopSendError::Disconnected)?
-            .send(message)
-            .map_err(|_| EventLoopSendError::Disconnected)
-    }
-}
+    writeable_pty::remote_server_controller::RemoteServerController<mio_channel::Sender<Message>>;
 
 struct AppPtySpawnHooks {
     is_crash_reporting_enabled: bool,
@@ -148,10 +110,12 @@ impl PtySpawnHooks for AppPtySpawnHooks {
 /// Holds onto data that needs to live as long as the session does (e.g. the
 /// event loop join handle).
 pub struct TerminalManager<S> {
-    event_loop_tx: ReplaceableEventLoopSender,
+    /// Feeds the PTY event loop. The channel outlives any single event loop: when the shell is
+    /// respawned, the receiver handed back by the exited loop is given to the replacement.
+    event_loop_tx: mio_channel::Sender<Message>,
     /// This is an `Option` so that we can take ownership of the inner
     /// `JoinHandle` in `TerminalManager::drop`.
-    event_loop_handle: Option<JoinHandle<()>>,
+    event_loop_handle: Option<JoinHandle<mio_channel::Receiver<Message>>>,
     pub(super) model: Arc<FairMutex<TerminalModel>>,
     pub(super) view: ViewHandle<S>,
 
@@ -248,12 +212,14 @@ struct ShellRecoveryResources {
     model_events: ModelHandle<ModelEventDispatcher>,
 }
 
+/// A replacement shell that has been spawned but has not bootstrapped yet.
 struct PendingShellRecovery {
-    request: CloudShellRecoveryRequest,
     restored_working_directory: String,
     used_fallback_directory: bool,
     replacement_session_id: SessionId,
 }
+
+const REPLACEMENT_SHELL_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Handles created for a local terminal manager and its surface.
 pub struct TerminalManagerInit<S> {
@@ -394,7 +360,6 @@ impl<S> TerminalManager<S> {
         let (events_tx, events_rx) = async_channel::unbounded();
         let (executor_command_tx, executor_command_rx) = async_channel::unbounded();
         let (event_loop_tx, event_loop_rx) = mio_channel::channel();
-        let event_loop_tx = ReplaceableEventLoopSender::new(event_loop_tx);
 
         // Create the broadcast channel to receive data from the PTY, but deactivate it immediately.
         // We only want to create active receivers as necessary.
@@ -650,7 +615,6 @@ impl<S> TerminalManager<S> {
 
     fn fail_pending_shell_recovery(
         &mut self,
-        request: CloudShellRecoveryRequest,
         failure_class: CloudAgentShellRecoveryFailureClass,
         error: anyhow::Error,
         ctx: &mut ModelContext<Box<dyn TerminalManagerTrait>>,
@@ -659,12 +623,14 @@ impl<S> TerminalManager<S> {
         <S as Entity>::Event: PtyIntentEvent,
     {
         self.pending_shell_recovery = None;
-        self.event_loop_tx.disconnect();
         self.view.update(ctx, |surface, ctx| {
-            surface.on_cloud_shell_recovery_failed(request, failure_class, error, ctx);
+            surface.on_cloud_shell_recovery_failed(failure_class, error, ctx);
         });
     }
 
+    /// Spawns a replacement shell on the exited PTY's channel. Returns `false` if this shell
+    /// cannot be respawned at all; otherwise the outcome is reported through the surface's
+    /// recovery callbacks.
     pub(super) fn recover_cloud_shell(
         &mut self,
         request: CloudShellRecoveryRequest,
@@ -677,18 +643,31 @@ impl<S> TerminalManager<S> {
         let Some(resources) = self.recovery_resources.clone() else {
             return false;
         };
+        let Some(replacement_starter) = resources.starter.replacement() else {
+            return false;
+        };
 
-        if let Some(event_loop_handle) = self.event_loop_handle.take()
-            && let Err(error) = event_loop_handle.join()
-        {
-            self.fail_pending_shell_recovery(
-                request,
-                CloudAgentShellRecoveryFailureClass::EventLoopJoin,
-                anyhow::anyhow!("failed to join exited PTY event loop: {error:?}"),
-                ctx,
-            );
-            return true;
-        }
+        // The exited loop has already broken out of its poll, so this only waits for it to
+        // deregister and hand back the channel receiver.
+        let event_loop_rx = match self
+            .event_loop_handle
+            .take()
+            .context("no PTY event loop to recover")
+            .and_then(|handle| {
+                handle
+                    .join()
+                    .map_err(|error| anyhow::anyhow!("PTY event loop panicked: {error:?}"))
+            }) {
+            Ok(event_loop_rx) => event_loop_rx,
+            Err(error) => {
+                self.fail_pending_shell_recovery(
+                    CloudAgentShellRecoveryFailureClass::EventLoopJoin,
+                    error,
+                    ctx,
+                );
+                return true;
+            }
+        };
 
         let session = request
             .session_id
@@ -701,7 +680,6 @@ impl<S> TerminalManager<S> {
                 Ok(directory) => directory,
                 Err(error) => {
                     self.fail_pending_shell_recovery(
-                        request,
                         CloudAgentShellRecoveryFailureClass::PtySpawn,
                         error,
                         ctx,
@@ -709,15 +687,19 @@ impl<S> TerminalManager<S> {
                     return true;
                 }
             };
-        let dynamic_env = request.session_id.and_then(|session_id| {
+        let mut restored_env = resources.original_env;
+        if let Some(session_env) = request.session_id.and_then(|session_id| {
             self.sessions
                 .as_ref(ctx)
                 .get_env_vars_for_session(session_id)
-        });
-        let restored_env = sanitized_recovery_environment(&resources.original_env, dynamic_env);
-        let replacement_starter = resources.starter.replacement();
+        }) {
+            restored_env.extend(
+                session_env
+                    .into_iter()
+                    .map(|(key, value)| (key.into(), value.into())),
+            );
+        }
         let replacement_session_id = replacement_starter.session_id();
-        let (replacement_event_loop_tx, replacement_event_loop_rx) = mio_channel::channel();
         let model = self.model();
 
         model.lock().register_session_id(replacement_session_id);
@@ -726,8 +708,6 @@ impl<S> TerminalManager<S> {
             .lock()
             .set_pending_shell_launch_data(shell_launch_data.clone());
 
-        self.event_loop_tx
-            .replace(replacement_event_loop_tx.clone());
         let pty = match self
             .enqueue_init_script(&replacement_starter, replacement_session_id)
             .context("failed to initialize replacement shell")
@@ -741,14 +721,13 @@ impl<S> TerminalManager<S> {
                     restored_env,
                     model.clone(),
                     #[cfg(windows)]
-                    replacement_event_loop_tx,
+                    self.event_loop_tx.clone(),
                     ctx,
                 )
             }) {
             Ok(pty) => pty,
             Err(error) => {
                 self.fail_pending_shell_recovery(
-                    request,
                     CloudAgentShellRecoveryFailureClass::PtySpawn,
                     error,
                     ctx,
@@ -767,12 +746,11 @@ impl<S> TerminalManager<S> {
         });
         self.event_loop_handle = Some(Self::start_pty_event_loop(
             pty,
-            replacement_event_loop_rx,
+            event_loop_rx,
             model.clone(),
             resources.channel_event_proxy,
         ));
         self.pending_shell_recovery = Some(PendingShellRecovery {
-            request,
             restored_working_directory,
             used_fallback_directory,
             replacement_session_id,
@@ -797,23 +775,22 @@ impl<S> TerminalManager<S> {
 
         ctx.spawn(
             async {
-                Timer::after(Duration::from_secs(15)).await;
+                Timer::after(REPLACEMENT_SHELL_BOOTSTRAP_TIMEOUT).await;
             },
             move |manager, _, ctx| {
                 let Some(manager) = manager.as_any_mut().downcast_mut::<Self>() else {
                     return;
                 };
-                let Some(pending) = manager
+                if manager
                     .pending_shell_recovery
                     .take_if(|pending| pending.replacement_session_id == replacement_session_id)
-                else {
+                    .is_none()
+                {
                     return;
-                };
+                }
                 let _ = manager.event_loop_tx.send(Message::Shutdown);
-                manager.event_loop_tx.disconnect();
                 manager.view.update(ctx, |surface, ctx| {
                     surface.on_cloud_shell_recovery_failed(
-                        pending.request,
                         CloudAgentShellRecoveryFailureClass::BootstrapTimeout,
                         anyhow::anyhow!("replacement shell did not bootstrap before timeout"),
                         ctx,
@@ -840,7 +817,6 @@ impl<S> TerminalManager<S> {
         };
         self.view.update(ctx, |surface, ctx| {
             surface.on_cloud_shell_recovered(
-                pending.request,
                 pending.restored_working_directory,
                 pending.used_fallback_directory,
                 ctx,
@@ -952,10 +928,7 @@ fn on_shell_determined<S: TerminalSurface>(
     });
     let model = manager.model();
     #[cfg(windows)]
-    let event_loop_tx = manager
-        .event_loop_tx
-        .current()
-        .expect("initial PTY event loop sender should be available");
+    let event_loop_tx = manager.event_loop_tx.clone();
     let pty = match manager
         .enqueue_init_script(&shell_starter, generated_session_id)
         .context("Failed to write shell init script to the pty")
@@ -1049,7 +1022,7 @@ impl<S> TerminalManager<S> {
         &self,
         shell_starter: &ShellStarter,
         session_id: SessionId,
-    ) -> Result<(), EventLoopSendError> {
+    ) -> Result<(), SendError<Message>> {
         let shell_type = shell_starter.shell_type();
         if shell_type == crate::terminal::shell::ShellType::Zsh
             // For more on why this is necessary on Git Bash, see https://linear.app/warpdotdev/issue/CORE-3202.
@@ -1152,7 +1125,7 @@ impl<S> TerminalManager<S> {
         rx: mio_channel::Receiver<Message>,
         model: Arc<FairMutex<TerminalModel>>,
         channel_event_proxy: ChannelEventListener,
-    ) -> JoinHandle<()> {
+    ) -> JoinHandle<mio_channel::Receiver<Message>> {
         // Create the event loop and get a handle to the injector.
         let event_loop = EventLoop::new(model, channel_event_proxy, pty, rx);
 
@@ -1322,5 +1295,12 @@ fn get_shell_starter_internal(
 
             ShellStarter::Direct(starter)
         }
+    }
+}
+
+impl EventLoopSender for mio_channel::Sender<Message> {
+    fn send(&self, message: Message) -> Result<(), EventLoopSendError> {
+        self.send(message)
+            .map_err(|_| EventLoopSendError::Disconnected)
     }
 }

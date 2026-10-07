@@ -13,7 +13,6 @@ use crate::terminal::event::AfterBlockCompletedEvent;
 use crate::terminal::model::completions::ShellCompletion;
 #[cfg(unix)]
 use crate::terminal::model::terminal_model::BlockIndex;
-use crate::terminal::shell_recovery::CloudShellRecoveryRequest;
 use crate::terminal::view::ExecuteCommandEvent;
 use crate::terminal::{ShellLaunchData, SizeUpdate};
 
@@ -64,10 +63,10 @@ where
         false
     }
 
+    /// The replacement shell requested via `TerminalManager::recover_cloud_shell` bootstrapped.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     fn on_cloud_shell_recovered(
         &mut self,
-        _request: CloudShellRecoveryRequest,
         _restored_working_directory: String,
         _used_fallback_directory: bool,
         _ctx: &mut ViewContext<Self>,
@@ -77,7 +76,6 @@ where
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     fn on_cloud_shell_recovery_failed(
         &mut self,
-        _request: CloudShellRecoveryRequest,
         _failure_class: CloudAgentShellRecoveryFailureClass,
         _error: anyhow::Error,
         _ctx: &mut ViewContext<Self>,

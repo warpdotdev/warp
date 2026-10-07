@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use warp::features::FeatureFlag;
 use warp::integration_testing::cloud_shell_recovery::{
     add_shared_ambient_bash_tab, execute_agent_command, execute_agent_shell_exit,
@@ -7,10 +5,7 @@ use warp::integration_testing::cloud_shell_recovery::{
     wait_for_recovered_command_result, wait_for_recovery, wait_for_shared_ambient_session,
     wait_for_tab_count,
 };
-use warp::integration_testing::step::new_step_with_default_assertions;
 use warp::integration_testing::terminal::wait_until_bootstrapped_single_pane_for_tab;
-use warp::integration_testing::view_getters::workspace_view;
-use warpui_core::async_assert;
 
 use super::new_builder;
 use crate::Builder;
@@ -59,16 +54,6 @@ pub fn test_cloud_agent_shell_respawn() -> Builder {
         ))
         .with_step(execute_agent_shell_exit(1, "sleep 0.2; exit 0"))
         .with_step(wait_for_recovery(1))
-        .with_step(execute_agent_shell_exit(1, "sleep 0.2; exit 2"))
-        .with_step(wait_for_recovery(1))
         .with_step(execute_agent_shell_exit(1, "sleep 0.2; exec false"))
-        .with_step(
-            new_step_with_default_assertions("Fourth shell death exhausts recovery budget")
-                .set_timeout(Duration::from_secs(30))
-                .add_assertion(|app, window_id| {
-                    let tab_count = workspace_view(app, window_id)
-                        .read(app, |workspace, _| workspace.tab_count());
-                    async_assert!(tab_count == 1)
-                }),
-        )
+        .with_step(wait_for_recovery(1))
 }

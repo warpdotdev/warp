@@ -18,7 +18,7 @@ use crate::terminal::ClipboardType;
 use crate::terminal::event::{
     AfterBlockCompletedEvent, BlockCompletedEvent, BlockMetadataReceivedEvent,
     BlockWorkingDirectoryUpdatedEvent, Event, ExecutedExecutorCommandEvent, InitSubshellEvent,
-    SourcedRcFileInSubshellEvent, TerminalMode,
+    ObservedExitStatus, SourcedRcFileInSubshellEvent, TerminalMode,
 };
 use crate::terminal::model::session::Sessions;
 use crate::terminal::shell::ShellType;
@@ -243,6 +243,7 @@ impl ModelEventDispatcher {
                 ModelEvent::DetectedEndOfSshLogin(check_type)
             }
             Event::Bell => ModelEvent::Bell,
+            Event::ShellExitObserved { status } => ModelEvent::ShellExitObserved { status },
             Event::Exit { reason } => ModelEvent::Exit { reason },
             Event::PreInteractiveSSHSession => ModelEvent::PreInteractiveSSHSession,
             Event::SSH(ssh) => ModelEvent::SSH(ssh),
@@ -408,6 +409,11 @@ pub enum ModelEvent {
     CursorBlinkingChange(bool),
     TerminalClear,
     Bell,
+    /// The shell process exited but the terminal has not been finalized yet; the surface must
+    /// either recover the shell or call `TerminalModel::finalize_exit`.
+    ShellExitObserved {
+        status: ObservedExitStatus,
+    },
     Exit {
         reason: ExitReason,
     },

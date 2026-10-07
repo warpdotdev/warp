@@ -12,21 +12,12 @@
 
 use std::path::{Path, PathBuf};
 
-use command::blocking::Command;
 use serde::{Deserialize, Serialize};
 use warp_core::SessionId;
 use warp_util::path::resolve_executable;
 
 use super::shell::DirectShellStarter;
-use crate::bootstrap::generate_session_id;
 use crate::shell::ShellType;
-
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum DockerSandboxLaunchMode {
-    #[default]
-    Create,
-    Reattach,
-}
 
 /// Default home directory for the sandbox user inside the shell template.
 /// Lives inside the container image and is shared across all sandboxes, so it
@@ -81,8 +72,6 @@ pub struct DockerSandboxShellStarter {
     pub sandbox_id: String,
     /// The client-generated session ID injected into this sandbox's init script.
     pub session_id: SessionId,
-    #[serde(default)]
-    pub launch_mode: DockerSandboxLaunchMode,
 }
 
 impl DockerSandboxShellStarter {
@@ -97,28 +86,6 @@ impl DockerSandboxShellStarter {
             base_image,
             sandbox_id,
             session_id,
-            launch_mode: DockerSandboxLaunchMode::Create,
-        }
-    }
-
-    pub(super) fn replacement(&self) -> Self {
-        let mut replacement = self.clone();
-        replacement.session_id = generate_session_id();
-        replacement.direct.set_session_id(replacement.session_id);
-        replacement.launch_mode = DockerSandboxLaunchMode::Reattach;
-        replacement
-    }
-
-    pub(super) fn recovery_working_directory(&self, requested: Option<&str>) -> (String, bool) {
-        if let Some(requested) = requested.filter(|path| !path.is_empty())
-            && Command::new(self.logical_shell_path())
-                .args(["exec", &self.sandbox_name(), "test", "-d", requested])
-                .status()
-                .is_ok_and(|status| status.success())
-        {
-            (requested.to_owned(), false)
-        } else {
-            (DOCKER_SANDBOX_HOME_DIR.to_owned(), true)
         }
     }
 

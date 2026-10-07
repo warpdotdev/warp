@@ -182,7 +182,7 @@ impl TryFrom<RequestCommandOutputResult> for api::request::input::tool_call_resu
                             api::ShellCommandFinished {
                                 command_id: block_id.to_string(),
                                 output,
-                                exit_code: status.code().unwrap_or_default(),
+                                exit_code: status.exit_code(),
                                 start_ts: start_ts.map(local_datetime_to_timestamp),
                                 finish_ts: completed_ts.map(local_datetime_to_timestamp),
                             },
@@ -870,7 +870,7 @@ impl TryFrom<ReadShellCommandOutputResult> for api::request::input::tool_call_re
                                 api::ShellCommandFinished {
                                     command_id: block_id.to_string(),
                                     output,
-                                    exit_code: status.code().unwrap_or_default(),
+                                    exit_code: status.exit_code(),
                                     start_ts: start_ts.map(local_datetime_to_timestamp),
                                     finish_ts: completed_ts.map(local_datetime_to_timestamp),
                                 },

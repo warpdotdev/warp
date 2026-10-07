@@ -698,32 +698,27 @@ impl ShellCommandExecutor {
         let Some(ShellRecovery::InProgress {
             action_id,
             block_id,
-        }) = self.shell_recovery.take()
+        }) = &self.shell_recovery
         else {
             return;
         };
-        if block_id != result.block_id {
-            self.shell_recovery = Some(ShellRecovery::InProgress {
-                action_id,
-                block_id,
-            });
+        if *block_id != result.block_id {
             return;
         }
-        let mut delivered = false;
-        for selector in [
-            BlockSelector::RequestedCommandId(action_id),
-            BlockSelector::Id(block_id),
-        ] {
-            if let Some(sender) = self.shell_recovery_senders.remove(&selector)
-                && sender.send(result.clone()).is_ok()
-            {
-                delivered = true;
-                self.remove_poll_senders(&selector);
-            }
-        }
-        if !delivered {
-            self.shell_recovery = Some(ShellRecovery::Unread(result));
-        }
+        let selectors = [
+            BlockSelector::RequestedCommandId(action_id.clone()),
+            BlockSelector::Id(block_id.clone()),
+        ];
+        let delivered = selectors
+            .iter()
+            .filter(|selector| {
+                self.shell_recovery_senders
+                    .remove(selector)
+                    .is_some_and(|sender| sender.send(result.clone()).is_ok())
+            })
+            .count()
+            > 0;
+        self.shell_recovery = (!delivered).then_some(ShellRecovery::Unread(result));
     }
 
     fn remove_poll_senders(&mut self, block_selector: &BlockSelector) {
@@ -1050,9 +1045,17 @@ fn action_result_for_write_to_long_running_shell_command(
                 activity,
             },
         ),
-        ActionResult::ShellRecovered(_) => AIAgentActionResultType::WriteToLongRunningShellCommand(
-            WriteToLongRunningShellCommandResult::Error(ShellCommandError::BlockNotFound),
-        ),
+        ActionResult::ShellRecovered(result) => {
+            AIAgentActionResultType::WriteToLongRunningShellCommand(
+                WriteToLongRunningShellCommandResult::CommandFinished {
+                    block_id: result.block_id,
+                    output: result.output,
+                    exit_code: ExitCode::from(result.status.exit_code()),
+                    start_ts: result.start_ts,
+                    completed_ts: result.completed_ts,
+                },
+            )
+        }
         ActionResult::Cancelled => AIAgentActionResultType::WriteToLongRunningShellCommand(
             WriteToLongRunningShellCommandResult::Cancelled,
         ),
@@ -1158,9 +1161,15 @@ fn action_result_for_transfer_shell_command_control_to_user(
                 activity,
             },
         ),
-        ActionResult::ShellRecovered(_) => {
+        ActionResult::ShellRecovered(result) => {
             AIAgentActionResultType::TransferShellCommandControlToUser(
-                TransferShellCommandControlToUserResult::Error(ShellCommandError::BlockNotFound),
+                TransferShellCommandControlToUserResult::CommandFinished {
+                    block_id: result.block_id,
+                    output: result.output,
+                    exit_code: ExitCode::from(result.status.exit_code()),
+                    start_ts: result.start_ts,
+                    completed_ts: result.completed_ts,
+                },
             )
         }
         ActionResult::Cancelled => AIAgentActionResultType::TransferShellCommandControlToUser(

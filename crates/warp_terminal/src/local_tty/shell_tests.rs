@@ -1,7 +1,6 @@
 use tempfile::tempdir;
 
 use super::*;
-use crate::local_tty::docker_sandbox::DockerSandboxLaunchMode;
 
 #[test]
 fn direct_replacement_refreshes_embedded_bootstrap_session() {
@@ -12,7 +11,7 @@ fn direct_replacement_refreshes_embedded_bootstrap_session() {
         session_id: 123.into(),
     });
 
-    let replacement = starter.replacement();
+    let replacement = starter.replacement().unwrap();
 
     assert_ne!(replacement.session_id(), starter.session_id());
     assert_eq!(replacement.launch_data(), starter.launch_data());
@@ -43,7 +42,7 @@ fn wsl_replacement_preserves_distribution_and_refreshes_bootstrap_session() {
         session_id: 123.into(),
     });
 
-    let replacement = starter.replacement();
+    let replacement = starter.replacement().unwrap();
 
     assert_ne!(replacement.session_id(), starter.session_id());
     assert_eq!(replacement.launch_data(), starter.launch_data());
@@ -73,7 +72,7 @@ fn msys2_replacement_preserves_launch_mode_for_injected_bootstrap() {
         session_id: 123.into(),
     });
 
-    let replacement = starter.replacement();
+    let replacement = starter.replacement().unwrap();
 
     assert_ne!(replacement.session_id(), starter.session_id());
     assert_eq!(replacement.launch_data(), starter.launch_data());
@@ -81,27 +80,6 @@ fn msys2_replacement_preserves_launch_mode_for_injected_bootstrap() {
         panic!("replacement must retain MSYS2 bootstrap handling");
     };
     assert_eq!(replacement.args(), &["--noprofile", "--norc"]);
-}
-
-#[test]
-fn docker_replacement_reattaches_to_the_same_sandbox() {
-    let docker = DockerSandboxShellStarter::new(
-        DirectShellStarter::new_for_test(ShellType::Bash, "/usr/bin/sbx".into(), Vec::new()),
-        Some("agent-image".to_owned()),
-    );
-    let starter = ShellStarter::DockerSandbox(docker.clone());
-
-    let replacement = starter.replacement();
-
-    assert_ne!(replacement.session_id(), starter.session_id());
-    let ShellStarter::DockerSandbox(replacement) = replacement else {
-        panic!("replacement must remain in Docker");
-    };
-    assert_eq!(replacement.sandbox_name(), docker.sandbox_name());
-    assert_eq!(replacement.base_image(), Some("agent-image"));
-    assert_eq!(replacement.launch_mode, DockerSandboxLaunchMode::Reattach);
-    assert_eq!(replacement.direct.session_id(), replacement.session_id());
-    assert_eq!(docker.launch_mode, DockerSandboxLaunchMode::Create);
 }
 
 #[test]

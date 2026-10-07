@@ -1,6 +1,3 @@
-use std::collections::HashMap;
-use std::ffi::{OsStr, OsString};
-
 use chrono::{DateTime, Local};
 use instant::Instant;
 use warp_terminal::event::ObservedExitStatus;
@@ -9,7 +6,6 @@ use crate::ai::agent::AIAgentActionId;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::SessionId;
 
-pub(crate) const MAX_CLOUD_SHELL_RECOVERIES: u8 = 3;
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 const CLOUD_SHELL_RECOVERY_GUIDANCE: &str = "This command terminated the persistent cloud shell. Warp started a replacement shell and did not replay the command. Some shell state might be lost. Do not use `exit`, `logout`, `exec`, `kill $$`, or source a script that exits. Run risky exit logic in a subshell, and use the tool result to inspect its exit code. Check the reported restored state and partial side effects before retrying.";
 
@@ -22,50 +18,7 @@ pub struct CloudShellRecoveryRequest {
     pub requested_working_directory: Option<String>,
     pub session_id: Option<SessionId>,
     pub start_ts: Option<DateTime<Local>>,
-    pub attempt: u8,
     pub recovery_started_at: Instant,
-    pub dynamic_session_environment_available: bool,
-}
-
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
-pub(crate) fn sanitized_recovery_environment(
-    original: &HashMap<OsString, OsString>,
-    dynamic: Option<HashMap<String, String>>,
-) -> HashMap<OsString, OsString> {
-    let mut restored = original
-        .iter()
-        .filter(|(key, _)| is_recoverable_environment_key(key))
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect::<HashMap<_, _>>();
-    for (key, value) in dynamic.into_iter().flatten() {
-        let key = OsString::from(key);
-        if is_recoverable_environment_key(&key) {
-            restored.insert(key, OsString::from(value));
-        }
-    }
-    restored
-}
-
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
-fn is_recoverable_environment_key(key: &OsStr) -> bool {
-    let key = key.to_string_lossy();
-    !key.starts_with("WARP_")
-        && !key.starts_with("BASH_FUNC_")
-        && !matches!(
-            key.as_ref(),
-            "PWD"
-                | "OLDPWD"
-                | "SHLVL"
-                | "_"
-                | "HOME"
-                | "SHELL"
-                | "TERM"
-                | "TERM_PROGRAM"
-                | "TERM_PROGRAM_VERSION"
-                | "COLORTERM"
-                | "HISTFILESIZE"
-                | "HISTSIZE"
-        )
 }
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]

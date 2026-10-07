@@ -102,6 +102,16 @@ impl ObservedExitStatus {
             Self::Signal(_) | Self::Unavailable => None,
         }
     }
+
+    /// The exit code to report where one is mandatory. Signals follow the shell's `128 + signal`
+    /// convention and an unavailable status is a generic failure, so neither reads as success.
+    pub fn exit_code(self) -> i32 {
+        match self {
+            Self::Code(code) => code,
+            Self::Signal(signal) => 128 + signal,
+            Self::Unavailable => 1,
+        }
+    }
 }
 impl fmt::Display for ObservedExitStatus {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
