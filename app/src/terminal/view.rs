@@ -7877,13 +7877,9 @@ impl TerminalView {
                 };
 
                 let history_model = BlocklistAIHistoryModel::as_ref(ctx);
-                let conversation_id =
-                    history_model.conversation_id_for_action(action_id, ctx.view_id());
-                #[cfg(feature = "integration_tests")]
-                let conversation_id =
-                    conversation_id.or_else(|| history_model.active_conversation_id(ctx.view_id()));
-                let Some(conversation) =
-                    conversation_id.and_then(|id| history_model.conversation(&id))
+                let Some(conversation) = history_model
+                    .conversation_id_for_action(action_id, ctx.view_id())
+                    .and_then(|id| history_model.conversation(&id))
                 else {
                     safe_error!(
                         safe: ("No conversation ID found for command with ID: {:?}", action_id),

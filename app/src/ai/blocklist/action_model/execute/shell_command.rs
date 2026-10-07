@@ -44,11 +44,14 @@ use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 pub struct ShellCommandExecutor {
     active_session: ModelHandle<ActiveSession>,
-    block_finished_senders: HashMap<BlockSelector, async_channel::Sender<BlockWaitEvent>>,
+    block_finished_senders: HashMap<BlockSelector, oneshot::Sender<()>>,
     /// Senders used by the `Check now` affordance to force a long-running shell command's
     /// pending poll future to resolve immediately with a fresh snapshot, bypassing the
     /// agent-set timeout.
     force_refresh_senders: HashMap<BlockSelector, oneshot::Sender<()>>,
+    /// Senders that resolve a pending poll with the outcome of a cloud shell recovery when the
+    /// awaited command terminated the shell, instead of letting it complete as a normal block.
+    shell_recovery_senders: HashMap<BlockSelector, oneshot::Sender<ShellRecoveryResult>>,
     terminal_model: Arc<FairMutex<TerminalModel>>,
     terminal_view_id: EntityId,
     /// Sender to notify when user hands control back to agent after TransferShellCommandControlToUser.
@@ -56,13 +59,21 @@ pub struct ShellCommandExecutor {
     /// Liveness signals for the long-running commands this agent is monitoring.
     /// Shared with the snapshot futures, which have no `ModelContext`.
     activity_monitor: Arc<LrcActivityMonitor>,
-    shell_recoveries: HashMap<BlockId, ShellRecoveryState>,
+    /// The cloud shell recovery for this terminal, while it is in progress or its outcome has not
+    /// yet been read by the agent. At most one recovery exists at a time.
+    shell_recovery: Option<ShellRecovery>,
 }
-enum ShellRecoveryState {
-    Recovering(Option<async_channel::Sender<BlockWaitEvent>>),
-    /// Keep the entry after delivery: an unknown exit status leaves the old block unfinished.
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
-    Completed(Option<ShellRecoveryResult>),
+
+/// Only the local PTY manager reports a replacement shell, so a recovery never completes on wasm.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
+enum ShellRecovery {
+    InProgress {
+        action_id: AIAgentActionId,
+        block_id: BlockId,
+    },
+    /// The replacement shell is ready but no poll was waiting; the next read of the block
+    /// consumes this.
+    Unread(ShellRecoveryResult),
 }
 
 impl ShellCommandExecutor {
@@ -86,10 +97,11 @@ impl ShellCommandExecutor {
             terminal_model,
             block_finished_senders: HashMap::new(),
             force_refresh_senders: HashMap::new(),
+            shell_recovery_senders: HashMap::new(),
             terminal_view_id,
             control_handback_sender: None,
             activity_monitor: Arc::new(LrcActivityMonitor::new()),
-            shell_recoveries: HashMap::new(),
+            shell_recovery: None,
         }
     }
 
@@ -159,11 +171,17 @@ impl ShellCommandExecutor {
         // the shell relays current working directory to warp.
         if let ModelEvent::BlockMetadataReceived(BlockMetadataReceivedEvent { .. }) = event {
             let model = self.terminal_model.lock();
+            // The replacement shell's bootstrap precmd must not complete the command that killed
+            // the previous shell; its poll resolves with the recovery outcome instead.
+            let recovering_block_id = match &self.shell_recovery {
+                Some(ShellRecovery::InProgress { block_id, .. }) => Some(block_id),
+                Some(ShellRecovery::Unread(_)) | None => None,
+            };
             let block_finished_senders = self.block_finished_senders.drain().collect_vec();
             for (block_selector, block_finished_tx) in block_finished_senders.into_iter() {
                 if let Some(block) = block_selector.get_block(&model) {
-                    if block.is_command_finished() {
-                        if let Err(e) = block_finished_tx.try_send(BlockWaitEvent::Finished) {
+                    if block.is_command_finished() && recovering_block_id != Some(block.id()) {
+                        if let Err(e) = block_finished_tx.send(()) {
                             log::warn!(
                                 "Failed to notify block completion for running requested command: {e:?}"
                             )
@@ -360,10 +378,7 @@ impl ShellCommandExecutor {
                     move |result, ctx| {
                         // Remove the senders from the maps.
                         if let Some(handle) = handle.upgrade(ctx) {
-                            handle.update(ctx, |me, _| {
-                                me.block_finished_senders.remove(&block_selector);
-                                me.force_refresh_senders.remove(&block_selector);
-                            });
+                            handle.update(ctx, |me, _| me.remove_poll_senders(&block_selector));
                         }
 
                         if opened_recording_group {
@@ -444,12 +459,8 @@ impl ShellCommandExecutor {
                         ctx,
                     ),
                     move |result, ctx| {
-                        // Remove the senders from the maps.
                         if let Some(handle) = handle.upgrade(ctx) {
-                            handle.update(ctx, |me, _| {
-                                me.block_finished_senders.remove(&block_selector);
-                                me.force_refresh_senders.remove(&block_selector);
-                            });
+                            handle.update(ctx, |me, _| me.remove_poll_senders(&block_selector));
                         }
 
                         action_result_for_write_to_long_running_shell_command(result)
@@ -457,29 +468,32 @@ impl ShellCommandExecutor {
                 )
             }
             AIAgentActionType::ReadShellCommandOutput { block_id, delay } => {
-                let recovering = match self.shell_recoveries.get_mut(block_id) {
-                    Some(ShellRecoveryState::Completed(result)) => {
-                        let result = result
-                            .take()
-                            .map(ActionResult::ShellRecovered)
-                            .unwrap_or(ActionResult::BlockNotFound);
-                        let command = model
-                            .block_list()
-                            .block_with_id(block_id)
-                            .map(|block| block.command_with_secrets_unobfuscated(false))
-                            .unwrap_or_default();
-                        return ActionExecution::Sync(action_result_for_read_shell_command_output(
-                            command, result,
-                        ));
-                    }
-                    Some(ShellRecoveryState::Recovering(_)) => true,
-                    None => false,
-                };
+                let unread_recovery = self.shell_recovery.take_if(|recovery| {
+                    matches!(recovery, ShellRecovery::Unread(result) if result.block_id == *block_id)
+                });
+                if let Some(ShellRecovery::Unread(result)) = unread_recovery {
+                    let command = model
+                        .block_list()
+                        .block_with_id(block_id)
+                        .map(|block| block.command_with_secrets_unobfuscated(false))
+                        .unwrap_or_default();
+                    return ActionExecution::Sync(action_result_for_read_shell_command_output(
+                        command,
+                        ActionResult::ShellRecovered(result),
+                    ));
+                }
+                let recovering = matches!(
+                    &self.shell_recovery,
+                    Some(ShellRecovery::InProgress { block_id: recovering_block_id, .. })
+                        if recovering_block_id == block_id
+                );
                 let Some(block) = model.block_list().block_with_id(block_id) else {
                     return ActionExecution::Sync(AIAgentActionResultType::ReadShellCommandOutput(
                         ReadShellCommandOutputResult::Error(ShellCommandError::BlockNotFound),
                     ));
                 };
+                // While the shell is being recovered the interrupted block may already look
+                // finished, but its outcome is the recovery result.
                 if block.finished() && !recovering {
                     let command = block.command_with_secrets_unobfuscated(false);
                     let output: String = block.output_with_secrets_unobfuscated();
@@ -511,12 +525,8 @@ impl ShellCommandExecutor {
                 ActionExecution::new_async(
                     self.action_result_future(block_selector.clone(), delay.clone(), ctx),
                     move |result, ctx| {
-                        // Remove the senders from the maps.
                         if let Some(handle) = handle.upgrade(ctx) {
-                            handle.update(ctx, |me, _| {
-                                me.block_finished_senders.remove(&block_selector);
-                                me.force_refresh_senders.remove(&block_selector);
-                            });
+                            handle.update(ctx, |me, _| me.remove_poll_senders(&block_selector));
                         }
 
                         match &result {
@@ -563,7 +573,7 @@ impl ShellCommandExecutor {
                 let block_selector = BlockSelector::Id(block_id.clone());
 
                 // Set up a future to also wait for block completion.
-                let (block_finished_tx, block_finished_rx) = async_channel::bounded(1);
+                let (block_finished_tx, block_finished_rx) = oneshot::channel();
                 self.block_finished_senders
                     .insert(block_selector.clone(), block_finished_tx);
 
@@ -576,6 +586,7 @@ impl ShellCommandExecutor {
                     async move {
                         let _monitoring = monitoring;
                         pin!(handback_rx);
+                        pin!(block_finished_rx);
 
                         // Wait for either control handback or block completion.
                         let transfer_result = select! {
@@ -583,10 +594,8 @@ impl ShellCommandExecutor {
                                 Ok(_) => TransferControlResult::ControlHandedBack,
                                 Err(_) => TransferControlResult::Cancelled,
                             },
-                            val = block_finished_rx.recv().fuse() => match val {
-                                Ok(BlockWaitEvent::Finished) => TransferControlResult::BlockFinished,
-                                Ok(BlockWaitEvent::RecoveryStarted)
-                                | Ok(BlockWaitEvent::Recovered(_)) => TransferControlResult::Cancelled,
+                            val = block_finished_rx => match val {
+                                Ok(_) => TransferControlResult::BlockFinished,
                                 Err(_) => TransferControlResult::Cancelled,
                             },
                         };
@@ -673,35 +682,54 @@ impl ShellCommandExecutor {
         }
     }
 
+    /// Marks the command behind `action_id`/`block_id` as having terminated the cloud shell, so
+    /// its outcome is reported by [`Self::finish_shell_recovery`] rather than by the block.
     pub(crate) fn begin_shell_recovery(&mut self, action_id: &AIAgentActionId, block_id: &BlockId) {
-        let candidates = [
-            BlockSelector::RequestedCommandId(action_id.clone()),
-            BlockSelector::Id(block_id.clone()),
-        ];
-        // Bootstrap metadata must not resolve the interrupted command before recovery is complete.
-        let waiter = candidates.into_iter().find_map(|selector| {
-            self.block_finished_senders
-                .remove(&selector)
-                .filter(|sender| sender.try_send(BlockWaitEvent::RecoveryStarted).is_ok())
+        self.shell_recovery = Some(ShellRecovery::InProgress {
+            action_id: action_id.clone(),
+            block_id: block_id.clone(),
         });
-        self.shell_recoveries
-            .insert(block_id.clone(), ShellRecoveryState::Recovering(waiter));
     }
 
+    /// Delivers the recovery outcome to any poll waiting on the interrupted command, or holds it
+    /// for the agent's next read of that block.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub(crate) fn finish_shell_recovery(&mut self, result: ShellRecoveryResult) {
-        let Some(state) = self.shell_recoveries.get_mut(&result.block_id) else {
+        let Some(ShellRecovery::InProgress {
+            action_id,
+            block_id,
+        }) = self.shell_recovery.take()
+        else {
             return;
         };
-        let ShellRecoveryState::Recovering(waiter) = state else {
+        if block_id != result.block_id {
+            self.shell_recovery = Some(ShellRecovery::InProgress {
+                action_id,
+                block_id,
+            });
             return;
-        };
-        let delivered = waiter.as_ref().is_some_and(|sender| {
-            sender
-                .try_send(BlockWaitEvent::Recovered(result.clone()))
-                .is_ok()
-        });
-        *state = ShellRecoveryState::Completed((!delivered).then_some(result));
+        }
+        let mut delivered = false;
+        for selector in [
+            BlockSelector::RequestedCommandId(action_id),
+            BlockSelector::Id(block_id),
+        ] {
+            if let Some(sender) = self.shell_recovery_senders.remove(&selector)
+                && sender.send(result.clone()).is_ok()
+            {
+                delivered = true;
+                self.remove_poll_senders(&selector);
+            }
+        }
+        if !delivered {
+            self.shell_recovery = Some(ShellRecovery::Unread(result));
+        }
+    }
+
+    fn remove_poll_senders(&mut self, block_selector: &BlockSelector) {
+        self.block_finished_senders.remove(block_selector);
+        self.force_refresh_senders.remove(block_selector);
+        self.shell_recovery_senders.remove(block_selector);
     }
 
     /// Produces a future which resolves when the action is complete and
@@ -718,23 +746,19 @@ impl ShellCommandExecutor {
         let monitor = self.activity_monitor.clone();
 
         // Create a channel to notify us when we receive block metadata.
-        let (block_metadata_received_tx, block_metadata_received_rx) = async_channel::bounded(2);
-        if let BlockSelector::Id(block_id) = &block_selector
-            && let Some(ShellRecoveryState::Recovering(waiter)) =
-                self.shell_recoveries.get_mut(block_id)
-        {
-            let _ = block_metadata_received_tx.try_send(BlockWaitEvent::RecoveryStarted);
-            *waiter = Some(block_metadata_received_tx);
-        } else {
-            self.block_finished_senders
-                .insert(block_selector.clone(), block_metadata_received_tx);
-        }
+        let (block_metadata_received_tx, block_metadata_received_rx) = oneshot::channel();
+        self.block_finished_senders
+            .insert(block_selector.clone(), block_metadata_received_tx);
 
         // Create a channel so the `Check now` affordance can short-circuit the timeout
         // and deliver the agent a fresh snapshot immediately.
         let (force_refresh_tx, force_refresh_rx) = oneshot::channel();
         self.force_refresh_senders
             .insert(block_selector.clone(), force_refresh_tx);
+
+        let (shell_recovery_tx, shell_recovery_rx) = oneshot::channel();
+        self.shell_recovery_senders
+            .insert(block_selector.clone(), shell_recovery_tx);
 
         // Create a future that resolves when we should send a result to the agent.
         let terminal_model = self.terminal_model.clone();
@@ -769,25 +793,17 @@ impl ShellCommandExecutor {
             }
             .fuse();
 
+            pin!(block_metadata_received_rx);
             pin!(force_refresh_rx);
+            pin!(shell_recovery_rx);
 
             let wake_reason = select! {
-                val = block_metadata_received_rx.recv().fuse() => match val {
-                    Ok(BlockWaitEvent::Finished) => WakeReason::BlockFinished,
-                    Ok(BlockWaitEvent::Recovered(result)) => {
-                        return ActionResult::ShellRecovered(result);
-                    }
-                    Ok(BlockWaitEvent::RecoveryStarted) => {
-                        match block_metadata_received_rx.recv().await {
-                            Ok(BlockWaitEvent::Recovered(result)) => {
-                                return ActionResult::ShellRecovered(result);
-                            }
-                            Ok(BlockWaitEvent::Finished) => WakeReason::BlockFinished,
-                            Ok(BlockWaitEvent::RecoveryStarted) | Err(_) => {
-                                return ActionResult::Cancelled;
-                            }
-                        }
-                    }
+                val = block_metadata_received_rx => match val {
+                    Ok(_) => WakeReason::BlockFinished,
+                    Err(_) => return ActionResult::Cancelled,
+                },
+                val = shell_recovery_rx => match val {
+                    Ok(result) => return ActionResult::ShellRecovered(result),
                     Err(_) => return ActionResult::Cancelled,
                 },
                 val = force_refresh_rx => match val {
@@ -881,8 +897,8 @@ impl ShellCommandExecutor {
         } else {
             BlockSelector::Id(active_block.id().clone())
         };
-        self.block_finished_senders.remove(&selector);
-        self.force_refresh_senders.remove(&selector);
+        drop(terminal_model);
+        self.remove_poll_senders(&selector);
     }
 
     /// Force any in-flight poll for the given long-running command block to resolve
@@ -1224,14 +1240,6 @@ pub struct ShellRecoveryResult {
     pub used_fallback_directory: bool,
     pub start_ts: Option<DateTime<Local>>,
     pub completed_ts: Option<DateTime<Local>>,
-}
-
-#[derive(Debug, Clone)]
-enum BlockWaitEvent {
-    Finished,
-    RecoveryStarted,
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
-    Recovered(ShellRecoveryResult),
 }
 
 /// Whether liveness signals are trustworthy enough to collect on this platform.

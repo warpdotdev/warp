@@ -431,24 +431,6 @@ impl BlocklistAIActionModel {
         });
     }
 
-    #[cfg(feature = "integration_tests")]
-    pub fn execute_action_for_integration_test(
-        &mut self,
-        action: AIAgentAction,
-        conversation_id: AIConversationId,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let action_id = action.id.clone();
-        self.action_order
-            .insert(conversation_id, HashMap::from([(action_id.clone(), 0)]));
-        self.pending_actions
-            .entry(conversation_id)
-            .or_default()
-            .push_back(action);
-        ctx.emit(BlocklistAIActionEvent::QueuedAction(action_id.clone()));
-        self.execute_action(&action_id, conversation_id, ctx);
-    }
-
     fn blocked_action_for_conversation(
         &self,
         conversation_id: &AIConversationId,
@@ -983,7 +965,7 @@ impl BlocklistAIActionModel {
 
     /// Queues the `actions` in the given iterator for the given conversation,
     /// to be dispatched in the order in which they appear in the iterator.
-    pub(super) fn queue_actions(
+    pub(crate) fn queue_actions(
         &mut self,
         actions: Vec<AIAgentAction>,
         conversation_id: AIConversationId,

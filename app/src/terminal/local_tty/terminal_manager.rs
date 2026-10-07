@@ -77,122 +77,46 @@ type PtyController = writeable_pty::PtyController<ReplaceableEventLoopSender>;
 type RemoteServerController =
     writeable_pty::remote_server_controller::RemoteServerController<ReplaceableEventLoopSender>;
 
+/// Sender for the PTY event loop that can be pointed at a replacement event loop when the shell
+/// is respawned, so controllers holding a clone keep working across the swap.
 #[derive(Clone)]
 pub(super) struct ReplaceableEventLoopSender {
-    state: Arc<Mutex<EventLoopSenderState>>,
-}
-
-enum EventLoopSenderState {
-    Connected(mio_channel::Sender<Message>),
-    Suspended {
-        bootstrap_sender: Option<mio_channel::Sender<Message>>,
-        pending: Vec<Message>,
-    },
-    Disconnected,
+    sender: Arc<Mutex<Option<mio_channel::Sender<Message>>>>,
 }
 
 impl ReplaceableEventLoopSender {
     fn new(sender: mio_channel::Sender<Message>) -> Self {
         Self {
-            state: Arc::new(Mutex::new(EventLoopSenderState::Connected(sender))),
+            sender: Arc::new(Mutex::new(Some(sender))),
         }
     }
 
-    fn suspend(&self) {
-        *self.state.lock() = EventLoopSenderState::Suspended {
-            bootstrap_sender: None,
-            pending: Vec::new(),
-        };
-    }
-
-    fn set_bootstrap_sender(&self, sender: mio_channel::Sender<Message>) {
-        let mut state = self.state.lock();
-        if let EventLoopSenderState::Suspended {
-            bootstrap_sender, ..
-        } = &mut *state
-        {
-            *bootstrap_sender = Some(sender);
-        }
-    }
-
-    fn resume(&self) -> Result<(), EventLoopSendError> {
-        let mut state = self.state.lock();
-        let EventLoopSenderState::Suspended {
-            bootstrap_sender: Some(sender),
-            pending,
-        } = &mut *state
-        else {
-            return Err(EventLoopSendError::Disconnected);
-        };
-        let sender = sender.clone();
-        let pending = std::mem::take(pending);
-        for message in pending {
-            if sender.send(message).is_err() {
-                *state = EventLoopSenderState::Disconnected;
-                return Err(EventLoopSendError::Disconnected);
-            }
-        }
-        *state = EventLoopSenderState::Connected(sender);
-        Ok(())
+    fn replace(&self, sender: mio_channel::Sender<Message>) {
+        *self.sender.lock() = Some(sender);
     }
 
     fn disconnect(&self) {
-        *self.state.lock() = EventLoopSenderState::Disconnected;
-    }
-
-    fn shutdown_current(&self) -> Result<(), EventLoopSendError> {
-        self.send_bootstrap(Message::Shutdown)
+        *self.sender.lock() = None;
     }
 
     #[cfg(windows)]
     fn current(&self) -> Option<mio_channel::Sender<Message>> {
-        match &*self.state.lock() {
-            EventLoopSenderState::Connected(sender) => Some(sender.clone()),
-            EventLoopSenderState::Suspended {
-                bootstrap_sender, ..
-            } => bootstrap_sender.clone(),
-            EventLoopSenderState::Disconnected => None,
-        }
+        self.sender.lock().clone()
+    }
+}
+
+impl EventLoopSender for ReplaceableEventLoopSender {
+    fn send(&self, message: Message) -> Result<(), EventLoopSendError> {
+        let sender = self.sender.lock().clone();
+        sender
+            .ok_or(EventLoopSendError::Disconnected)?
+            .send(message)
+            .map_err(|_| EventLoopSendError::Disconnected)
     }
 }
 
 struct AppPtySpawnHooks {
     is_crash_reporting_enabled: bool,
-}
-
-impl EventLoopSender for ReplaceableEventLoopSender {
-    fn send(&self, message: Message) -> Result<(), EventLoopSendError> {
-        let sender = {
-            let mut state = self.state.lock();
-            match &mut *state {
-                EventLoopSenderState::Connected(sender) => sender.clone(),
-                EventLoopSenderState::Suspended { pending, .. } => {
-                    pending.push(message);
-                    return Ok(());
-                }
-                EventLoopSenderState::Disconnected => {
-                    return Err(EventLoopSendError::Disconnected);
-                }
-            }
-        };
-        sender
-            .send(message)
-            .map_err(|_| EventLoopSendError::Disconnected)
-    }
-
-    fn send_bootstrap(&self, message: Message) -> Result<(), EventLoopSendError> {
-        let sender = match &*self.state.lock() {
-            EventLoopSenderState::Connected(sender) => Some(sender.clone()),
-            EventLoopSenderState::Suspended {
-                bootstrap_sender, ..
-            } => bootstrap_sender.clone(),
-            EventLoopSenderState::Disconnected => None,
-        }
-        .ok_or(EventLoopSendError::Disconnected)?;
-        sender
-            .send(message)
-            .map_err(|_| EventLoopSendError::Disconnected)
-    }
 }
 
 impl PtySpawnHooks for AppPtySpawnHooks {
@@ -701,7 +625,7 @@ impl<S> TerminalManager<S> {
     /// Sends a shutdown message to the PTY event loop and waits for it to
     /// process that event.
     pub(super) fn shutdown_event_loop(&mut self) {
-        let shutdown_res = self.event_loop_tx.shutdown_current();
+        let shutdown_res = self.event_loop_tx.send(Message::Shutdown);
         // Happens normally if the event loop has already been terminated (so the channel is now gone).
         if let Err(e) = shutdown_res {
             log::info!("Failed to send Shutdown {e:?}");
@@ -754,7 +678,6 @@ impl<S> TerminalManager<S> {
             return false;
         };
 
-        self.event_loop_tx.suspend();
         if let Some(event_loop_handle) = self.event_loop_handle.take()
             && let Err(error) = event_loop_handle.join()
         {
@@ -804,7 +727,7 @@ impl<S> TerminalManager<S> {
             .set_pending_shell_launch_data(shell_launch_data.clone());
 
         self.event_loop_tx
-            .set_bootstrap_sender(replacement_event_loop_tx.clone());
+            .replace(replacement_event_loop_tx.clone());
         let pty = match self
             .enqueue_init_script(&replacement_starter, replacement_session_id)
             .context("failed to initialize replacement shell")
@@ -886,7 +809,7 @@ impl<S> TerminalManager<S> {
                 else {
                     return;
                 };
-                let _ = manager.event_loop_tx.shutdown_current();
+                let _ = manager.event_loop_tx.send(Message::Shutdown);
                 manager.event_loop_tx.disconnect();
                 manager.view.update(ctx, |surface, ctx| {
                     surface.on_cloud_shell_recovery_failed(
@@ -915,16 +838,6 @@ impl<S> TerminalManager<S> {
         else {
             return;
         };
-
-        if let Err(error) = self.event_loop_tx.resume() {
-            self.fail_pending_shell_recovery(
-                pending.request,
-                CloudAgentShellRecoveryFailureClass::SharedSessionRebind,
-                anyhow::anyhow!("failed to resume recovered PTY event loop: {error}"),
-                ctx,
-            );
-            return;
-        }
         self.view.update(ctx, |surface, ctx| {
             surface.on_cloud_shell_recovered(
                 pending.request,
@@ -1148,9 +1061,9 @@ impl<S> TerminalManager<S> {
                 session_id,
             );
             self.event_loop_tx
-                .send_bootstrap(Message::Input(init_shell_script.into_bytes().into()))?;
+                .send(Message::Input(init_shell_script.into_bytes().into()))?;
             self.event_loop_tx
-                .send_bootstrap(Message::Input(shell_type.execute_command_bytes().into()))
+                .send(Message::Input(shell_type.execute_command_bytes().into()))
         } else {
             Ok(())
         }
@@ -1411,14 +1324,3 @@ fn get_shell_starter_internal(
         }
     }
 }
-
-impl EventLoopSender for mio_channel::Sender<Message> {
-    fn send(&self, message: Message) -> Result<(), EventLoopSendError> {
-        self.send(message)
-            .map_err(|_| EventLoopSendError::Disconnected)
-    }
-}
-
-#[cfg(test)]
-#[path = "terminal_manager_tests.rs"]
-mod tests;

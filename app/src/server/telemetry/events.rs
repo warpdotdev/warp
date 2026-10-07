@@ -1242,6 +1242,7 @@ pub enum CloudAgentShellRecoveryFailureClass {
     ManagerUnsupported,
     SharedSessionRebind,
 }
+
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteCodebaseIndexStatusTelemetrySource {

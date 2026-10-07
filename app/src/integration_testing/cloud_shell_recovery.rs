@@ -1,17 +1,22 @@
+use std::collections::HashSet;
 use std::time::Duration;
 
+use chrono::Local;
 use warp_multi_agent_api::request::input::tool_call_result::Result as ToolCallResult;
+use warp_multi_agent_api::response_event::StreamInit;
 use warp_multi_agent_api::run_shell_command_result::Result as RunShellCommandResult;
 use warpui::integration::TestStep;
-use warpui::{AppContext, SingletonEntity, async_assert};
+use warpui::{App, AppContext, SingletonEntity, WindowId, async_assert};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType,
-    RequestCommandOutputResult,
+    AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType, AIAgentExchange,
+    AIAgentExchangeId, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType,
+    AIAgentOutputStatus, FinishedAIAgentOutput, MessageId, RequestCommandOutputResult, Shared,
 };
-use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::{BlocklistAIHistoryModel, ResponseStreamId};
+use crate::ai::llms::LLMId;
 use crate::integration_testing::step::new_step_with_default_assertions;
 use crate::integration_testing::view_getters::{single_terminal_view_for_tab, workspace_view};
 use crate::terminal::TerminalView;
@@ -36,6 +41,8 @@ pub fn wait_for_tab_count(expected_tab_count: usize) -> TestStep {
         })
 }
 
+/// Stands in for a server response: records a finished exchange whose output requests `command`
+/// in a new conversation, then queues the action exactly as a real response would.
 fn execute_agent_command_step(
     tab_index: usize,
     command: &'static str,
@@ -53,28 +60,87 @@ fn execute_agent_command_step(
         });
         let action_id = AIAgentActionId::from(format!("shell-recovery-{conversation_id}"));
         data.insert(result_key, (conversation_id, action_id.clone()));
+        let action = AIAgentAction {
+            id: action_id.clone(),
+            task_id: TaskId::new(format!("shell-recovery-{conversation_id}")),
+            action: AIAgentActionType::RequestCommandOutput {
+                command: command.to_owned(),
+                is_read_only: Some(false),
+                is_risky: Some(false),
+                wait_until_completion: true,
+                uses_pager: Some(false),
+                rationale: None,
+                citations: Vec::new(),
+            },
+            requires_result: true,
+        };
+
+        let output = AIAgentOutput {
+            messages: vec![AIAgentOutputMessage {
+                id: MessageId::new(format!("message-{action_id}")),
+                message: AIAgentOutputMessageType::Action(action.clone()),
+                citations: Vec::new(),
+            }],
+            ..Default::default()
+        };
+        let exchange = AIAgentExchange {
+            id: AIAgentExchangeId::new(),
+            input: Vec::new(),
+            output_status: AIAgentOutputStatus::Finished {
+                finished_output: FinishedAIAgentOutput::Success {
+                    output: Shared::new(output),
+                },
+            },
+            added_message_ids: HashSet::new(),
+            start_time: Local::now(),
+            finish_time: Some(Local::now()),
+            time_to_first_token_ms: None,
+            working_directory: None,
+            model_id: LLMId::from("integration-test"),
+            request_cost: None,
+            coding_model_id: LLMId::from("integration-test"),
+            cli_agent_model_id: LLMId::from("integration-test"),
+            computer_use_model_id: LLMId::from("integration-test"),
+            response_initiator: None,
+        };
+        let response_stream_id = ResponseStreamId::for_shared_session(&StreamInit {
+            request_id: format!("request-{action_id}"),
+            ..Default::default()
+        });
+        BlocklistAIHistoryModel::handle(app).update(app, |history, ctx| {
+            history
+                .conversation_mut(&conversation_id)
+                .expect("conversation was just created")
+                .append_reassigned_exchange(&response_stream_id, exchange, terminal_view_id, ctx)
+                .expect("exchange should append to the new conversation");
+        });
+
         let action_model = terminal.read(app, |terminal, _| terminal.ai_action_model().clone());
         action_model.update(app, |model, ctx| {
-            model.execute_action_for_integration_test(
-                AIAgentAction {
-                    id: action_id,
-                    task_id: TaskId::new(format!("shell-recovery-{conversation_id}")),
-                    action: AIAgentActionType::RequestCommandOutput {
-                        command: command.to_owned(),
-                        is_read_only: Some(false),
-                        is_risky: Some(false),
-                        wait_until_completion: true,
-                        uses_pager: Some(false),
-                        rationale: None,
-                        citations: Vec::new(),
-                    },
-                    requires_result: true,
-                },
-                conversation_id,
-                ctx,
-            );
+            model.queue_actions(vec![action], conversation_id, ctx);
         });
     })
+}
+
+/// Approves the queued command when the execution profile left it waiting on confirmation,
+/// mirroring the user accepting the permission card.
+fn approve_blocked_agent_command(
+    app: &mut App,
+    window_id: WindowId,
+    tab_index: usize,
+    conversation_id: AIConversationId,
+    action_id: &AIAgentActionId,
+) {
+    let action_model = single_terminal_view_for_tab(app, window_id, tab_index)
+        .read(app, |terminal, _| terminal.ai_action_model().clone());
+    action_model.update(app, |model, ctx| {
+        if model
+            .get_action_status(action_id)
+            .is_some_and(|status| status.is_blocked())
+        {
+            model.execute_action(action_id, conversation_id, ctx);
+        }
+    });
 }
 
 pub fn execute_agent_command(
@@ -104,9 +170,16 @@ pub fn wait_for_agent_command_result(
         .add_named_assertion_with_data_from_prior_step(
             "Agent command completes successfully",
             move |app, window_id, data| {
-                let (_, action_id) = data
+                let (conversation_id, action_id) = data
                     .get::<_, (AIConversationId, AIAgentActionId)>(result_key)
                     .expect("agent command was queued");
+                approve_blocked_agent_command(
+                    app,
+                    window_id,
+                    tab_index,
+                    *conversation_id,
+                    action_id,
+                );
                 single_terminal_view_for_tab(app, window_id, tab_index).read(app, |terminal, _| {
                     let model = terminal.model.lock();
                     let Some(block) = model.block_list().block_for_ai_action_id(action_id) else {
@@ -195,6 +268,13 @@ pub fn wait_for_recovery(tab_index: usize) -> TestStep {
                 let (conversation_id, action_id) = data
                     .get::<_, (AIConversationId, AIAgentActionId)>("recovery_action")
                     .expect("agent command was queued");
+                approve_blocked_agent_command(
+                    app,
+                    window_id,
+                    tab_index,
+                    *conversation_id,
+                    action_id,
+                );
                 single_terminal_view_for_tab(app, window_id, tab_index).read(
                     app,
                     |terminal, ctx| {
