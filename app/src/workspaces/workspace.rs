@@ -446,13 +446,24 @@ impl PurchaseAddOnCreditsPolicy {
     }
 }
 
+/// The unit a plan charges AI usage in, as the server states it on the tier. The rollout signal
+/// for dollars-first displays: while a plan charges in credits, the credit figures stay
+/// authoritative even when a response also carries cents.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChargeUnit {
+    #[default]
+    Credits,
+    /// US cents: usage is billed in dollars.
+    Cents,
+}
+
 /// Plan terms carried by the user's own tier rather than a workspace's. A teamless user's only
 /// workspace is the server's placeholder, which the client drops, so this is the only place
 /// their plan terms survive.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UserTier {
     pub purchase_policy: Option<PurchaseAddOnCreditsPolicy>,
-    pub billed_in_dollars: bool,
+    pub charge_unit: ChargeUnit,
 }
 
 #[derive(Clone, Debug, Copy, Serialize, Deserialize)]
@@ -542,10 +553,7 @@ pub enum HostEnablementSetting {
 pub struct Tier {
     pub name: String,
     pub description: String,
-    /// Whether the tier's `chargeUnit` is cents, i.e. the server bills its AI usage in dollars
-    /// rather than credits. The rollout signal for dollars-first displays; the credit figures
-    /// stay authoritative while it is false, even when a response also carries cents.
-    pub billed_in_dollars: bool,
+    pub charge_unit: ChargeUnit,
     pub warp_ai_policy: Option<WarpAiPolicy>,
     pub workspace_size_policy: Option<WorkspaceSizePolicy>,
     pub shared_notebooks_policy: Option<SharedNotebooksPolicy>,

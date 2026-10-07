@@ -104,12 +104,12 @@ pub enum ServiceAgreementType {
 }
 
 /// The unit a tier charges AI usage in.
-#[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(cynic::Enum, Clone, Debug, PartialEq, Eq)]
 pub enum ChargeUnit {
     Credits,
     Cents,
     #[cynic(fallback)]
-    Other,
+    Other(String),
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]

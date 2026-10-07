@@ -87,7 +87,7 @@ pub struct RequestLimitInfo {
     pub num_requests_used_since_refresh: usize,
     /// The server's `includedUsageCents`: the included monthly allowance in US cents, when it
     /// sends one. Whether to display usage in dollars is decided by the plan's
-    /// `Tier::billed_in_dollars`, not by this being `Some`.
+    /// `Tier::charge_unit`, not by this being `Some`.
     #[serde(default)]
     pub included_usage_cents: Option<f64>,
     /// The server's `usageCentsUsedSinceLastRefresh`: how much of the included allowance has

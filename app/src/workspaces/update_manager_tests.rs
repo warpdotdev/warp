@@ -24,7 +24,9 @@ use crate::workflows::workflow::Workflow;
 use crate::workflows::{CloudWorkflow, CloudWorkflowModel, WorkflowId};
 use crate::workspaces::team::Team;
 use crate::workspaces::user_profiles::UserProfiles;
-use crate::workspaces::workspace::{PurchaseAddOnCreditsPolicy, UserTier, Workspace, WorkspaceUid};
+use crate::workspaces::workspace::{
+    ChargeUnit, PurchaseAddOnCreditsPolicy, UserTier, Workspace, WorkspaceUid,
+};
 
 fn initialize_app(
     team_client: Arc<dyn TeamClient>,
@@ -282,7 +284,7 @@ fn test_poll_path_apply_refreshes_user_tier() {
                     premium_enabled: true,
                     price_premium_bps: 1000,
                 }),
-                billed_in_dollars: true,
+                charge_unit: ChargeUnit::Cents,
             },
         };
         team_update_manager.update(&mut app, |manager, ctx| {
@@ -296,9 +298,10 @@ fn test_poll_path_apply_refreshes_user_tier() {
                     .is_some_and(|policy| policy.allows_purchases()),
                 "a poll-path apply should store the user-level policy"
             );
-            assert!(
-                user_workspaces.is_billed_in_dollars(),
-                "a poll-path apply should store the user-level billing unit"
+            assert_eq!(
+                user_workspaces.charge_unit(),
+                ChargeUnit::Cents,
+                "a poll-path apply should store the user-level charge unit"
             );
         });
 
@@ -320,8 +323,9 @@ fn test_poll_path_apply_refreshes_user_tier() {
                 user_workspaces.purchase_policy().is_none(),
                 "a poll-path apply without the policy should clear the stored fallback"
             );
-            assert!(
-                !user_workspaces.is_billed_in_dollars(),
+            assert_eq!(
+                user_workspaces.charge_unit(),
+                ChargeUnit::Credits,
                 "a poll-path apply without the tier should fall back to credits"
             );
         });
