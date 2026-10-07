@@ -60,9 +60,11 @@ pub struct BonusGrant {
     pub user_facing_message: Option<String>,
     pub request_credits_granted: i32,
     pub request_credits_remaining: i32,
-    /// The dollar value of `request_credits_granted`, in cents, when the server supplied one.
+    /// The grant's `usageCentsGranted`: the usage it granted, in US cents, as recorded on the
+    /// grant ledger. `None` when the server does not send it.
     pub usage_cents_granted: Option<f64>,
-    /// The dollar value of `request_credits_remaining`, in cents, when the server supplied one.
+    /// The grant's `usageCentsRemaining`: the usage left on it, in US cents, as recorded on the
+    /// grant ledger. `None` when the server does not send it.
     pub usage_cents_remaining: Option<f64>,
     pub scope: BonusGrantScope,
 }
@@ -83,13 +85,13 @@ pub enum RequestLimitRefreshDuration {
 pub struct RequestLimitInfo {
     pub limit: usize,
     pub num_requests_used_since_refresh: usize,
-    /// The dollar value of `limit`, in cents, when the server supplied one. Whether to display
-    /// usage in dollars is decided by the plan's `Tier::billed_in_dollars`, not by this being
-    /// `Some`.
+    /// The server's `includedUsageCents`: the included monthly allowance in US cents, when it
+    /// sends one. Whether to display usage in dollars is decided by the plan's
+    /// `Tier::billed_in_dollars`, not by this being `Some`.
     #[serde(default)]
     pub included_usage_cents: Option<f64>,
-    /// The dollar value of `num_requests_used_since_refresh`, in cents, when the server
-    /// supplied one.
+    /// The server's `usageCentsUsedSinceLastRefresh`: how much of the included allowance has
+    /// been used, in US cents, when it sends one.
     #[serde(default)]
     pub usage_cents_used_since_last_refresh: Option<f64>,
     pub next_refresh_time: ServerTimestamp,
