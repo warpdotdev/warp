@@ -26,7 +26,7 @@ const CODEX_CONFIG_DIR: &str = ".codex";
 const CODEX_HOME_ENV: &str = "CODEX_HOME";
 
 // Keep in sync with the plugin version in warpdotdev/codex-warp.
-const MINIMUM_PLUGIN_VERSION: &str = "0.4.2";
+const MINIMUM_PLUGIN_VERSION: &str = "0.4.3";
 // Keep in sync with the orchestration plugin version in warpdotdev/codex-warp.
 const MINIMUM_PLATFORM_PLUGIN_VERSION: &str = "0.4.1";
 
