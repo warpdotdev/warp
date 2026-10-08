@@ -327,7 +327,7 @@ fn test_reconnect_send_timeout_is_retryable() {
 }
 
 #[test]
-fn test_fifth_reconnect_without_ordered_event_progress_finishes_session() {
+fn test_disconnect_after_fifth_reconnect_without_progress_finishes_session() {
     App::test((), |mut app| async move {
         let (network, _) = create_network(&mut app, true);
         let (limit_tx, limit_rx) = async_channel::bounded(1);
@@ -342,7 +342,7 @@ fn test_fifth_reconnect_without_ordered_event_progress_finishes_session() {
         network.read(&app, |network, _| {
             assert_eq!(network.no_progress_reconnects, 0);
         });
-        for expected_reconnects in 1..5 {
+        for expected_reconnects in 1..=5 {
             let outbound = confirm_reconnect(&network, &mut app, None);
             network.read(&app, |network, _| {
                 assert!(matches!(network.stage, Stage::StartedSuccessfully { .. }));
@@ -350,14 +350,16 @@ fn test_fifth_reconnect_without_ordered_event_progress_finishes_session() {
             });
             assert!(!outbound.is_empty());
         }
+        assert!(limit_rx.is_empty());
 
-        let outbound = confirm_reconnect(&network, &mut app, None);
+        network.update(&mut app, |network, ctx| {
+            network.reconnect_websocket(ctx);
+        });
         network.read(&app, |network, _| {
             assert!(matches!(network.stage, Stage::Finished));
             assert!(network.ws_proxy_tx.is_closed());
             assert_eq!(network.no_progress_reconnects, 5);
         });
-        assert!(outbound.is_empty());
         assert_eq!(
             limit_rx.recv().await.unwrap(),
             RECONNECT_LIMIT_REACHED_MESSAGE
@@ -397,13 +399,28 @@ fn test_confirmed_ordered_event_progress_resets_reconnect_limit() {
             assert_eq!(network.no_progress_reconnects, 0);
         });
 
-        for expected_reconnects in 1..5 {
+        for expected_reconnects in 1..=5 {
             confirm_reconnect(&network, &mut app, Some(1));
             network.read(&app, |network, _| {
                 assert!(matches!(network.stage, Stage::StartedSuccessfully { .. }));
                 assert_eq!(network.no_progress_reconnects, expected_reconnects);
             });
         }
+        network.update(&mut app, |network, ctx| {
+            network.process_websocket_message(
+                Message::new(
+                    DownstreamMessage::EventsProcessedAck {
+                        latest_processed_event_no: 2,
+                    }
+                    .to_json()
+                    .unwrap(),
+                ),
+                ctx,
+            );
+        });
+        network.read(&app, |network, _| {
+            assert_eq!(network.no_progress_reconnects, 0);
+        });
     });
 }
 #[test]

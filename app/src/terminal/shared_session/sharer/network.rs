@@ -1181,6 +1181,18 @@ impl Network {
         if matches!(self.stage, Stage::Finished | Stage::Reconnecting { .. }) {
             return;
         }
+        if self.no_progress_reconnects >= MAX_NO_PROGRESS_RECONNECTS {
+            sharer_warn!(
+                self,
+                "Ending shared session before reconnecting again without ordered event progress; reconnects={}",
+                self.no_progress_reconnects
+            );
+            self.close_without_reconnection();
+            ctx.emit(NetworkEvent::ReconnectLimitReached {
+                reason: RECONNECT_LIMIT_REACHED_MESSAGE,
+            });
+            return;
+        }
 
         let (Some(session_id), Some(reconnect_token)) =
             (self.session_id, self.reconnect_token.clone())
@@ -1580,18 +1592,6 @@ impl Network {
                     self.no_progress_reconnects = 0;
                 } else {
                     self.no_progress_reconnects += 1;
-                    if self.no_progress_reconnects >= MAX_NO_PROGRESS_RECONNECTS {
-                        sharer_warn!(
-                            self,
-                            "Ending shared session after reconnecting without ordered event progress; reconnects={}",
-                            self.no_progress_reconnects
-                        );
-                        self.close_without_reconnection();
-                        ctx.emit(NetworkEvent::ReconnectLimitReached {
-                            reason: RECONNECT_LIMIT_REACHED_MESSAGE,
-                        });
-                        return;
-                    }
                 }
                 sharer_info!(
                     self,
