@@ -852,8 +852,9 @@ fn needs_input_is_ignored_in_the_desktop_app() {
 
 #[test]
 fn stop_with_pending_background_work_keeps_session_in_progress() {
-    let body = r#"{"v":1,"agent":"claude","event":"stop","query":"build it","response":"Build started in the background.","background_task_count":1,"session_cron_count":0}"#;
+    let body = r#"{"v":1,"agent":"claude","event":"stop","query":"build it","response":"Build started in the background.","background_task_count":1,"session_cron_count":2}"#;
     let event = parse_event(Some("warp://cli-agent"), body).unwrap();
+    assert_eq!(event.payload.pending_background_work_count, Some(3));
     assert!(event.payload.has_pending_background_work());
     let mut session = cli_agent_session(CLIAgentSessionStatus::InProgress, true);
 
