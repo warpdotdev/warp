@@ -23,8 +23,6 @@ use super::{
     CachedCheckout, Git, attempt_cached_checkout, capture, mirror_key, optional_mirror_root, run,
 };
 
-const CANONICAL_URL: &str = "https://github.com/fixtures/source.git";
-
 #[test]
 fn cleanup_only_preserves_refs_and_reports_failures_without_cloning() {
     fixture_test(
@@ -94,6 +92,7 @@ fn cleanup_only_preserves_refs_and_reports_failures_without_cloning() {
         },
     );
 }
+
 #[test]
 fn checkout_io_failures_include_operation_and_underlying_error() {
     let directory = TempDir::new().unwrap();
@@ -341,38 +340,6 @@ fn distinct_sources_run_concurrently_with_a_bounded_active_count() {
     );
 }
 
-fn checkout_batch(
-    batch: &CheckoutBatch,
-    mirror_root: Option<&Path>,
-) -> anyhow::Result<Vec<CheckoutOutcome>> {
-    block_on(Compat::new(super::checkout_batch(
-        batch,
-        mirror_root,
-        false,
-    )))
-}
-
-fn assert_succeeded(outcomes: &[CheckoutOutcome]) {
-    assert!(
-        outcomes.iter().all(|outcome| outcome.failure.is_none()),
-        "{outcomes:?}"
-    );
-}
-
-fn git(cwd: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .current_dir(cwd)
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap().trim().to_owned()
-}
-
 #[test]
 fn absent_unwritable_and_non_namespace_roots_use_network_checkout() {
     if let Ok(expected) = std::env::var("WARP_TEST_MIRROR_ROOT_EXPECTED") {
@@ -465,18 +432,6 @@ fn direct_clone_failure_is_fatal_and_attributed_to_its_request() {
     );
 }
 
-struct Fixture {
-    root: PathBuf,
-}
-
-/// Whether the checkout at `target` is a partial (blobless) clone. The network path makes one and
-/// the mirror path does not, which tells the two apart.
-fn is_partial_clone(target: &Path) -> bool {
-    fs::read_to_string(target.join(".git/config"))
-        .unwrap()
-        .contains("promisor")
-}
-
 #[test]
 fn empty_remote_can_be_cloned_without_a_requested_head() {
     fixture_test(
@@ -486,189 +441,6 @@ fn empty_remote_can_be_cloned_without_a_requested_head() {
             fixture.prepare(fixture.request("empty", None), false);
             assert!(fixture.work().join("empty/.git").is_dir());
         },
-    );
-}
-
-impl Fixture {
-    fn origin(&self) -> PathBuf {
-        self.root.join("origin.git")
-    }
-    fn work(&self) -> PathBuf {
-        self.root.join("work")
-    }
-    fn seed(&self) -> PathBuf {
-        self.root.join("seed")
-    }
-    fn base(&self) -> String {
-        git(&self.origin(), &["rev-parse", "main"])
-    }
-    fn pinned(&self) -> String {
-        git(&self.origin(), &["rev-parse", "refs/pinned/base"])
-    }
-    fn request(&self, name: &str, head: Option<RepositoryHeadRef>) -> CheckoutRequest {
-        CheckoutRequest {
-            source: RepositoryIdentity {
-                code_forge: RepositoryForge::GitHub,
-                repo_owner: "fixtures".to_owned(),
-                repo_name: "source".to_owned(),
-            },
-            checkout_name: name.to_owned(),
-            head,
-            fetch_branch_only: false,
-        }
-    }
-    fn batch(&self, repositories: Vec<CheckoutRequest>) -> CheckoutBatch {
-        CheckoutBatch {
-            working_dir: self.work(),
-            repositories,
-        }
-    }
-    fn mirror(&self) -> PathBuf {
-        self.root
-            .join("cache/git-mirrors")
-            .join(mirror_key(&self.request("source", None)).as_str())
-    }
-    fn prepare(&self, request: CheckoutRequest, cached: bool) {
-        let root = cached.then(optional_mirror_root).flatten();
-        let results = checkout_batch(&self.batch(vec![request]), root.as_deref()).unwrap();
-        assert_succeeded(&results);
-    }
-    fn full_objects(&self, target: &Path) {
-        assert!(!target.join(".git/objects/info/alternates").exists());
-        for line in git(target, &["rev-list", "--objects", "--all"]).lines() {
-            let object = line.split(' ').next().unwrap();
-            let output = Command::new("git")
-                .current_dir(target)
-                .env("GIT_NO_LAZY_FETCH", "1")
-                .args([
-                    "-c",
-                    "remote.origin.promisor=false",
-                    "cat-file",
-                    "-e",
-                    object,
-                ])
-                .output()
-                .unwrap();
-            assert!(output.status.success(), "missing reachable object {object}");
-        }
-    }
-}
-
-/// Runs `test` against a fixture. The test body executes in a re-run of the test process that
-/// is isolated from the user's git configuration; the outer invocation only sets that up.
-fn fixture_test(name: &str, test: impl FnOnce(&Fixture)) {
-    if let Some(root) = std::env::var_os("WARP_TEST_CHECKOUT_ROOT") {
-        let _mirrors = FeatureFlag::GitMirrorCache.override_enabled(true);
-        test(&Fixture { root: root.into() });
-        return;
-    }
-    let tmp = TempDir::new().unwrap();
-    run_isolated(&create_fixture(tmp.path()), name);
-}
-
-/// Creates the origin repository, its seed history, and the git config that maps the canonical
-/// clone URL to the origin.
-fn create_fixture(root: &Path) -> Fixture {
-    for directory in ["origin.git", "seed", "work", "cache"] {
-        fs::create_dir(root.join(directory)).unwrap();
-    }
-    let fixture = Fixture {
-        root: root.to_owned(),
-    };
-    git(&fixture.origin(), &["init", "--bare", "-b", "main"]);
-    git(
-        &fixture.origin(),
-        &["config", "uploadpack.allowFilter", "true"],
-    );
-    git(
-        &fixture.origin(),
-        &["config", "uploadpack.allowAnySHA1InWant", "true"],
-    );
-    git(&fixture.seed(), &["init", "-b", "main"]);
-    git(
-        &fixture.seed(),
-        &["config", "user.name", "Checkout Fixture"],
-    );
-    git(
-        &fixture.seed(),
-        &["config", "user.email", "checkout@example.com"],
-    );
-    git(&fixture.seed(), &["config", "commit.gpgsign", "false"]);
-    for value in ["old blob\n", "current blob\n"] {
-        fs::write(fixture.seed().join("README"), value).unwrap();
-        git(&fixture.seed(), &["add", "."]);
-        git(&fixture.seed(), &["commit", "-m", "history"]);
-    }
-    git(
-        &fixture.seed(),
-        &[
-            "remote",
-            "add",
-            "origin",
-            fixture.origin().to_str().unwrap(),
-        ],
-    );
-    git(&fixture.seed(), &["push", "origin", "main"]);
-    fs::write(fixture.seed().join("PINNED"), "hidden object\n").unwrap();
-    git(&fixture.seed(), &["add", "."]);
-    git(&fixture.seed(), &["commit", "-m", "hidden"]);
-    git(
-        &fixture.seed(),
-        &["push", "origin", "HEAD:refs/pinned/base"],
-    );
-    let config = root.join("gitconfig");
-    let url = url::Url::from_file_path(fixture.origin())
-        .unwrap()
-        .to_string();
-    git(
-        root,
-        &[
-            "config",
-            "--file",
-            config.to_str().unwrap(),
-            &format!("url.{url}.insteadOf"),
-            CANONICAL_URL,
-        ],
-    );
-    fixture
-}
-
-/// Builds the command that reruns test `name` in a fresh process whose git configuration and
-/// mirror cache point at this fixture.
-fn isolated_test_command(fixture: &Fixture, name: &str) -> Command {
-    let mut command = Command::new(std::env::current_exe().unwrap());
-    #[cfg(windows)]
-    command.creation_flags(0);
-    command
-        .args([
-            "--exact",
-            &format!("ai::agent_sdk::driver::environment_checkout::tests::{name}"),
-            "--nocapture",
-        ])
-        .env("WARP_TEST_CHECKOUT_ROOT", &fixture.root)
-        .env("GIT_CONFIG_GLOBAL", fixture.root.join("gitconfig"))
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("WARP_ISOLATION_PLATFORM", "namespace")
-        .env("WARP_BUILD_CACHE_ROOT", fixture.root.join("cache"))
-        .env_remove("GIT_CONFIG_COUNT")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE");
-    command
-}
-
-fn run_isolated(fixture: &Fixture, name: &str) {
-    let output = isolated_test_command(fixture, name).output().unwrap();
-    assert!(
-        !String::from_utf8_lossy(&output.stdout).contains("fixture-only-secret-not-a-real-token")
-    );
-    assert!(
-        !String::from_utf8_lossy(&output.stderr).contains("fixture-only-secret-not-a-real-token")
-    );
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
     );
 }
 
@@ -771,6 +543,94 @@ fn mirror_tracks_all_refs_and_cached_checkout_survives_commit_graphs() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
+fn cached_checkout_keeps_branches_that_differ_only_by_case() {
+    fixture_test(
+        "cached_checkout_keeps_branches_that_differ_only_by_case",
+        |fixture| {
+            // Packed refs let the origin hold both names even on a case-insensitive filesystem.
+            let (base, pinned) = (fixture.base(), fixture.pinned());
+            fs::write(
+                fixture.origin().join("packed-refs"),
+                format!("{base} refs/heads/Casey\n{pinned} refs/heads/casey\n"),
+            )
+            .unwrap();
+            for name in ["cold", "warm"] {
+                fixture.prepare(fixture.request(name, None), true);
+                let target = fixture.work().join(name);
+                // A direct clone is partial, so this fails if the cache was silently bypassed.
+                assert!(!is_partial_clone(&target));
+                let refs = git(
+                    &target,
+                    &[
+                        "for-each-ref",
+                        "--format=%(objectname) %(refname)",
+                        "refs/remotes/origin",
+                    ],
+                );
+                assert!(refs.contains(&format!("{base} refs/remotes/origin/Casey")));
+                assert!(refs.contains(&format!("{pinned} refs/remotes/origin/casey")));
+            }
+        },
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn refresh_handles_moved_branches_that_differ_only_by_case() {
+    fixture_test(
+        "refresh_handles_moved_branches_that_differ_only_by_case",
+        |fixture| {
+            let (base, pinned) = (fixture.base(), fixture.pinned());
+            let write_refs = |casey: &str, lower: &str| {
+                fs::write(
+                    fixture.origin().join("packed-refs"),
+                    format!("{casey} refs/heads/Casey\n{lower} refs/heads/casey\n"),
+                )
+                .unwrap();
+            };
+            write_refs(&base, &pinned);
+            fixture.prepare(fixture.request("cold", None), true);
+            // Both refs move, so refreshing the mirror has to rewrite both of them.
+            write_refs(&pinned, &base);
+            fixture.prepare(fixture.request("warm", None), true);
+            let target = fixture.work().join("warm");
+            // A direct clone is partial, so this fails if the cache was silently bypassed.
+            assert!(!is_partial_clone(&target));
+            let refs = git(
+                &target,
+                &[
+                    "for-each-ref",
+                    "--format=%(objectname) %(refname)",
+                    "refs/remotes/origin",
+                ],
+            );
+            assert!(refs.contains(&format!("{pinned} refs/remotes/origin/Casey")));
+            assert!(refs.contains(&format!("{base} refs/remotes/origin/casey")));
+        },
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn leftover_staging_directory_does_not_block_a_new_mirror() {
+    fixture_test(
+        "leftover_staging_directory_does_not_block_a_new_mirror",
+        |fixture| {
+            let mut staging = fixture.mirror().into_os_string();
+            staging.push(".staging");
+            let staging = PathBuf::from(staging);
+            fs::create_dir_all(&staging).unwrap();
+            fs::write(staging.join("partial"), "interrupted clone").unwrap();
+            fixture.prepare(fixture.request("fresh", None), true);
+            // A direct clone is partial, so this fails if the cache was bypassed.
+            assert!(!is_partial_clone(&fixture.work().join("fresh")));
+            assert!(!staging.exists());
+        },
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
 fn partial_mirrors_are_rebuilt_and_full_mirror_config_is_normalized() {
     fixture_test(
         "partial_mirrors_are_rebuilt_and_full_mirror_config_is_normalized",
@@ -841,9 +701,9 @@ fn partial_mirrors_are_rebuilt_and_full_mirror_config_is_normalized() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-fn failed_refresh_falls_back_instead_of_serving_stale_history() {
+fn failed_refresh_rebuilds_the_mirror_instead_of_serving_stale_history() {
     fixture_test(
-        "failed_refresh_falls_back_instead_of_serving_stale_history",
+        "failed_refresh_rebuilds_the_mirror_instead_of_serving_stale_history",
         |fixture| {
             fixture.prepare(fixture.request("initial", None), true);
             let pinned = fixture.pinned();
@@ -851,14 +711,38 @@ fn failed_refresh_falls_back_instead_of_serving_stale_history() {
                 &fixture.origin(),
                 &["update-ref", "refs/heads/main", &pinned],
             );
-            fs::remove_file(fixture.mirror().join("FETCH_HEAD")).unwrap();
+            // A directory where git writes `FETCH_HEAD` makes the next fetch fail.
             fs::create_dir(fixture.mirror().join("FETCH_HEAD")).unwrap();
-            fixture.prepare(fixture.request("fallback", None), true);
-            let target = fixture.work().join("fallback");
+            fixture.prepare(fixture.request("rebuilt", None), true);
+            let target = fixture.work().join("rebuilt");
             assert_eq!(git(&target, &["rev-parse", "HEAD"]), pinned);
-            assert!(is_partial_clone(&target));
+            // A direct clone is partial, so this fails if the cache was bypassed.
+            assert!(!is_partial_clone(&target));
+            assert!(!fixture.mirror().join("FETCH_HEAD").is_dir());
         },
     );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn failed_rebuild_keeps_the_existing_mirror() {
+    fixture_test("failed_rebuild_keeps_the_existing_mirror", |fixture| {
+        fixture.prepare(fixture.request("initial", None), true);
+        let base = fixture.base();
+        // With the origin gone, the refresh, the rebuild and the direct fallback all fail.
+        fs::rename(fixture.origin(), fixture.root.join("origin-offline.git")).unwrap();
+        let root = optional_mirror_root();
+        let results = checkout_batch(
+            &fixture.batch(vec![fixture.request("offline", None)]),
+            root.as_deref(),
+        )
+        .unwrap();
+        assert_eq!(results[0].failure, Some(CheckoutFailureKind::Clone));
+        let mirror = fixture.mirror();
+        assert_eq!(git(&mirror, &["rev-parse", "refs/heads/main"]), base);
+        let entries = fs::read_dir(mirror.parent().unwrap()).unwrap().count();
+        assert_eq!(entries, 1, "no staging directory should be left behind");
+    });
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1186,6 +1070,325 @@ fn output_capture_retains_the_failure_tail_without_partial_secret_lines() {
     assert!(!git.diagnostics.contains("AKIAIOSFODNN7EXAMPLE"));
 }
 
+#[test]
+fn inherited_credentials_authenticate_without_leaking() {
+    fixture_test(
+        "inherited_credentials_authenticate_without_leaking",
+        |fixture| {
+            use base64::Engine as _;
+            let sentinel = "fixture-only-secret-not-a-real-token";
+            let auth = format!(
+                "Basic {}",
+                base64::engine::general_purpose::STANDARD.encode(format!("fixture:{sentinel}"))
+            );
+            let remote = HttpRemote::new(&fixture.root, auth);
+            let config = fixture.root.join("gitconfig");
+            let old_url = url::Url::from_file_path(fixture.origin())
+                .unwrap()
+                .to_string();
+            git(
+                &fixture.root,
+                &[
+                    "config",
+                    "--file",
+                    config.to_str().unwrap(),
+                    "--unset-all",
+                    &format!("url.{old_url}.insteadOf"),
+                ],
+            );
+            let url = format!("http://{}/origin.git", remote.address);
+            git(
+                &fixture.root,
+                &[
+                    "config",
+                    "--file",
+                    config.to_str().unwrap(),
+                    &format!("url.{url}.insteadOf"),
+                    CANONICAL_URL,
+                ],
+            );
+            let credentials = fixture.root.join("credentials");
+            fs::write(
+                &credentials,
+                format!("http://fixture:{sentinel}@{}\n", remote.address),
+            )
+            .unwrap();
+            let credential_path = credentials.to_str().unwrap().replace('\\', "/");
+            git(
+                &fixture.root,
+                &[
+                    "config",
+                    "--file",
+                    config.to_str().unwrap(),
+                    "credential.helper",
+                    &format!("store --file=\"{credential_path}\""),
+                ],
+            );
+            let batch = fixture.batch(vec![fixture.request("authenticated", None)]);
+            let cached = cfg!(any(target_os = "linux", target_os = "macos"));
+            let root = cached.then(optional_mirror_root).flatten();
+            let results = checkout_batch(&batch, root.as_deref()).unwrap();
+            assert_succeeded(&results);
+            assert!(remote.received.load(Ordering::SeqCst));
+            let target = fixture.work().join("authenticated");
+            for value in [
+                serde_json::to_string(&batch).unwrap(),
+                serde_json::to_string(&CheckoutReport::default()).unwrap(),
+                fs::read_to_string(target.join(".git/config")).unwrap(),
+            ] {
+                assert!(!value.contains(sentinel));
+            }
+            if cached {
+                assert!(
+                    !fs::read_to_string(fixture.mirror().join("config"))
+                        .unwrap()
+                        .contains(sentinel)
+                );
+                fixture.full_objects(&target);
+            }
+            fixture.prepare(fixture.request("blobless", None), false);
+            let blobless = fixture.work().join("blobless");
+            assert_eq!(
+                git(&blobless, &["config", "remote.origin.promisor"]),
+                "true"
+            );
+            let old_blob = git(&blobless, &["rev-parse", "HEAD~1:README"]);
+            assert_eq!(git(&blobless, &["cat-file", "-p", &old_blob]), "old blob");
+        },
+    );
+}
+
+// Fixtures and helpers shared by the tests above.
+
+const CANONICAL_URL: &str = "https://github.com/fixtures/source.git";
+
+struct Fixture {
+    root: PathBuf,
+}
+
+impl Fixture {
+    fn origin(&self) -> PathBuf {
+        self.root.join("origin.git")
+    }
+    fn work(&self) -> PathBuf {
+        self.root.join("work")
+    }
+    fn seed(&self) -> PathBuf {
+        self.root.join("seed")
+    }
+    fn base(&self) -> String {
+        git(&self.origin(), &["rev-parse", "main"])
+    }
+    fn pinned(&self) -> String {
+        git(&self.origin(), &["rev-parse", "refs/pinned/base"])
+    }
+    fn request(&self, name: &str, head: Option<RepositoryHeadRef>) -> CheckoutRequest {
+        CheckoutRequest {
+            source: RepositoryIdentity {
+                code_forge: RepositoryForge::GitHub,
+                repo_owner: "fixtures".to_owned(),
+                repo_name: "source".to_owned(),
+            },
+            checkout_name: name.to_owned(),
+            head,
+            fetch_branch_only: false,
+        }
+    }
+    fn batch(&self, repositories: Vec<CheckoutRequest>) -> CheckoutBatch {
+        CheckoutBatch {
+            working_dir: self.work(),
+            repositories,
+        }
+    }
+    fn mirror(&self) -> PathBuf {
+        self.root
+            .join("cache/git-mirrors")
+            .join(mirror_key(&self.request("source", None)).as_str())
+    }
+    fn prepare(&self, request: CheckoutRequest, cached: bool) {
+        let root = cached.then(optional_mirror_root).flatten();
+        let results = checkout_batch(&self.batch(vec![request]), root.as_deref()).unwrap();
+        assert_succeeded(&results);
+    }
+    fn full_objects(&self, target: &Path) {
+        assert!(!target.join(".git/objects/info/alternates").exists());
+        for line in git(target, &["rev-list", "--objects", "--all"]).lines() {
+            let object = line.split(' ').next().unwrap();
+            let output = Command::new("git")
+                .current_dir(target)
+                .env("GIT_NO_LAZY_FETCH", "1")
+                .args([
+                    "-c",
+                    "remote.origin.promisor=false",
+                    "cat-file",
+                    "-e",
+                    object,
+                ])
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "missing reachable object {object}");
+        }
+    }
+}
+
+/// Runs `test` against a fixture. The test body executes in a re-run of the test process that
+/// is isolated from the user's git configuration; the outer invocation only sets that up.
+fn fixture_test(name: &str, test: impl FnOnce(&Fixture)) {
+    if let Some(root) = std::env::var_os("WARP_TEST_CHECKOUT_ROOT") {
+        let _mirrors = FeatureFlag::GitMirrorCache.override_enabled(true);
+        test(&Fixture { root: root.into() });
+        return;
+    }
+    let tmp = TempDir::new().unwrap();
+    run_isolated(&create_fixture(tmp.path()), name);
+}
+
+/// Creates the origin repository, its seed history, and the git config that maps the canonical
+/// clone URL to the origin.
+fn create_fixture(root: &Path) -> Fixture {
+    for directory in ["origin.git", "seed", "work", "cache"] {
+        fs::create_dir(root.join(directory)).unwrap();
+    }
+    let fixture = Fixture {
+        root: root.to_owned(),
+    };
+    git(&fixture.origin(), &["init", "--bare", "-b", "main"]);
+    git(
+        &fixture.origin(),
+        &["config", "uploadpack.allowFilter", "true"],
+    );
+    git(
+        &fixture.origin(),
+        &["config", "uploadpack.allowAnySHA1InWant", "true"],
+    );
+    git(&fixture.seed(), &["init", "-b", "main"]);
+    git(
+        &fixture.seed(),
+        &["config", "user.name", "Checkout Fixture"],
+    );
+    git(
+        &fixture.seed(),
+        &["config", "user.email", "checkout@example.com"],
+    );
+    git(&fixture.seed(), &["config", "commit.gpgsign", "false"]);
+    for value in ["old blob\n", "current blob\n"] {
+        fs::write(fixture.seed().join("README"), value).unwrap();
+        git(&fixture.seed(), &["add", "."]);
+        git(&fixture.seed(), &["commit", "-m", "history"]);
+    }
+    git(
+        &fixture.seed(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            fixture.origin().to_str().unwrap(),
+        ],
+    );
+    git(&fixture.seed(), &["push", "origin", "main"]);
+    fs::write(fixture.seed().join("PINNED"), "hidden object\n").unwrap();
+    git(&fixture.seed(), &["add", "."]);
+    git(&fixture.seed(), &["commit", "-m", "hidden"]);
+    git(
+        &fixture.seed(),
+        &["push", "origin", "HEAD:refs/pinned/base"],
+    );
+    let config = root.join("gitconfig");
+    let url = url::Url::from_file_path(fixture.origin())
+        .unwrap()
+        .to_string();
+    git(
+        root,
+        &[
+            "config",
+            "--file",
+            config.to_str().unwrap(),
+            &format!("url.{url}.insteadOf"),
+            CANONICAL_URL,
+        ],
+    );
+    fixture
+}
+
+/// Builds the command that reruns test `name` in a fresh process whose git configuration and
+/// mirror cache point at this fixture.
+fn isolated_test_command(fixture: &Fixture, name: &str) -> Command {
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    #[cfg(windows)]
+    command.creation_flags(0);
+    command
+        .args([
+            "--exact",
+            &format!("ai::agent_sdk::driver::environment_checkout::tests::{name}"),
+            "--nocapture",
+        ])
+        .env("WARP_TEST_CHECKOUT_ROOT", &fixture.root)
+        .env("GIT_CONFIG_GLOBAL", fixture.root.join("gitconfig"))
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("WARP_ISOLATION_PLATFORM", "namespace")
+        .env("WARP_BUILD_CACHE_ROOT", fixture.root.join("cache"))
+        .env_remove("GIT_CONFIG_COUNT")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE");
+    command
+}
+
+fn run_isolated(fixture: &Fixture, name: &str) {
+    let output = isolated_test_command(fixture, name).output().unwrap();
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("fixture-only-secret-not-a-real-token")
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("fixture-only-secret-not-a-real-token")
+    );
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Whether the checkout at `target` is a partial (blobless) clone. The network path makes one and
+/// the mirror path does not, which tells the two apart.
+fn is_partial_clone(target: &Path) -> bool {
+    fs::read_to_string(target.join(".git/config"))
+        .unwrap()
+        .contains("promisor")
+}
+
+fn checkout_batch(
+    batch: &CheckoutBatch,
+    mirror_root: Option<&Path>,
+) -> anyhow::Result<Vec<CheckoutOutcome>> {
+    block_on(Compat::new(super::checkout_batch(
+        batch,
+        mirror_root,
+        false,
+    )))
+}
+
+fn assert_succeeded(outcomes: &[CheckoutOutcome]) {
+    assert!(
+        outcomes.iter().all(|outcome| outcome.failure.is_none()),
+        "{outcomes:?}"
+    );
+}
+
+fn git(cwd: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .current_dir(cwd)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
 struct HttpRemote {
     address: std::net::SocketAddr,
     stop: Arc<AtomicBool>,
@@ -1291,92 +1494,4 @@ fn serve_git_http(mut stream: TcpStream, root: &Path, authorization: &str, recei
         .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n")
         .unwrap();
     stream.write_all(&output.stdout).unwrap();
-}
-
-#[test]
-fn inherited_credentials_authenticate_without_leaking() {
-    fixture_test(
-        "inherited_credentials_authenticate_without_leaking",
-        |fixture| {
-            use base64::Engine as _;
-            let sentinel = "fixture-only-secret-not-a-real-token";
-            let auth = format!(
-                "Basic {}",
-                base64::engine::general_purpose::STANDARD.encode(format!("fixture:{sentinel}"))
-            );
-            let remote = HttpRemote::new(&fixture.root, auth);
-            let config = fixture.root.join("gitconfig");
-            let old_url = url::Url::from_file_path(fixture.origin())
-                .unwrap()
-                .to_string();
-            git(
-                &fixture.root,
-                &[
-                    "config",
-                    "--file",
-                    config.to_str().unwrap(),
-                    "--unset-all",
-                    &format!("url.{old_url}.insteadOf"),
-                ],
-            );
-            let url = format!("http://{}/origin.git", remote.address);
-            git(
-                &fixture.root,
-                &[
-                    "config",
-                    "--file",
-                    config.to_str().unwrap(),
-                    &format!("url.{url}.insteadOf"),
-                    CANONICAL_URL,
-                ],
-            );
-            let credentials = fixture.root.join("credentials");
-            fs::write(
-                &credentials,
-                format!("http://fixture:{sentinel}@{}\n", remote.address),
-            )
-            .unwrap();
-            let credential_path = credentials.to_str().unwrap().replace('\\', "/");
-            git(
-                &fixture.root,
-                &[
-                    "config",
-                    "--file",
-                    config.to_str().unwrap(),
-                    "credential.helper",
-                    &format!("store --file=\"{credential_path}\""),
-                ],
-            );
-            let batch = fixture.batch(vec![fixture.request("authenticated", None)]);
-            let cached = cfg!(any(target_os = "linux", target_os = "macos"));
-            let root = cached.then(optional_mirror_root).flatten();
-            let results = checkout_batch(&batch, root.as_deref()).unwrap();
-            assert_succeeded(&results);
-            assert!(remote.received.load(Ordering::SeqCst));
-            let target = fixture.work().join("authenticated");
-            for value in [
-                serde_json::to_string(&batch).unwrap(),
-                serde_json::to_string(&CheckoutReport::default()).unwrap(),
-                fs::read_to_string(target.join(".git/config")).unwrap(),
-            ] {
-                assert!(!value.contains(sentinel));
-            }
-            if cached {
-                assert!(
-                    !fs::read_to_string(fixture.mirror().join("config"))
-                        .unwrap()
-                        .contains(sentinel)
-                );
-                fixture.full_objects(&target);
-            }
-            fixture.prepare(fixture.request("blobless", None), false);
-            let blobless = fixture.work().join("blobless");
-            assert_eq!(
-                git(&blobless, &["config", "remote.origin.promisor"]),
-                "true"
-            );
-            let old_blob = git(&blobless, &["rev-parse", "HEAD~1:README"]);
-            assert_eq!(git(&blobless, &["cat-file", "-p", &old_blob]), "old blob");
-        },
-    );
 }

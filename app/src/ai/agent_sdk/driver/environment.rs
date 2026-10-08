@@ -869,6 +869,7 @@ async fn active_shell_type(spawner: &ModelSpawner<TerminalDriver>) -> ShellType 
         .unwrap_or(ShellType::Bash)
 }
 
+#[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
 async fn remove_repository_origins_from_repos(
     repos: &[RepositoryCloneRequest],
     working_dir: &Path,
@@ -1002,17 +1003,21 @@ fn log_checkout_timing(report: &CheckoutReport, batch: &CheckoutBatch) {
         let Some(request) = batch.repositories.get(outcome.request_index) else {
             continue;
         };
+        tracing::info!(
+            tags.cloud_agent = true,
+            repo = %request.checkout_name,
+            failure = ?outcome.failure,
+            duration_ms = outcome.duration_ms,
+            "environment checkout finished"
+        );
         let status = match outcome.failure {
             Some(kind) => format!("{kind:?} failure"),
             None => "succeeded".to_owned(),
         };
-        safe_info!(
-            safe: ("Environment checkout finished"),
-            full: (
-                "Environment checkout {}: {status} in {}ms",
-                request.checkout_name,
-                outcome.duration_ms
-            )
+        log::info!(
+            "Environment checkout {}: {status} in {}ms",
+            request.checkout_name,
+            outcome.duration_ms
         );
     }
 }
@@ -1059,6 +1064,10 @@ struct CheckoutHelperResult {
     report: Option<CheckoutReport>,
 }
 
+#[tracing::instrument(skip_all, err, fields(
+    tags.cloud_agent = true,
+    remove_origins_only = remove_origins_only,
+))]
 async fn execute_checkout_helper(
     batch: &CheckoutBatch,
     remove_origins_only: bool,
@@ -1099,6 +1108,7 @@ async fn execute_checkout_helper(
     })
 }
 
+#[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
 async fn clone_checkout_requests(
     repos: &[RepositoryCloneRequest],
     working_dir: &Path,

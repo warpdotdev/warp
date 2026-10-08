@@ -395,11 +395,6 @@ struct Git {
     diagnostics: String,
 }
 
-/// Borrows owned arguments as `&str` slices.
-fn as_args(args: &[String]) -> Vec<&str> {
-    args.iter().map(String::as_str).collect()
-}
-
 impl Git {
     /// Runs `git` in `cwd` and returns its stdout on success. What git reports, and any failure,
     /// is kept in the diagnostics for later reporting, described by `operation`.
@@ -605,8 +600,8 @@ async fn attempt_cached_checkout(
     Ok(CachedCheckout::Failed)
 }
 
-/// Ensures `mirror` is a valid, up-to-date bare copy of `url`, rebuilding it if it is not. Returns
-/// the remote's default branch, which the mirror's `HEAD` follows.
+/// Ensures `mirror` is a valid, up-to-date bare copy of `url`, rebuilding it if it is not or if it
+/// cannot be refreshed. Returns the remote's default branch, which the mirror's `HEAD` follows.
 ///
 /// The mirror holds every ref the remote advertises, including ones such as pull request refs
 /// that no branch reaches, so checkouts can resolve any commit the remote can serve from it. It is
@@ -623,9 +618,6 @@ async fn refresh_mirror(
         .parent()
         .ok_or_else(|| git.record("cache mirror has no parent directory"))?;
     let existing = fs::symlink_metadata(mirror).await;
-    let path = mirror
-        .to_str()
-        .ok_or_else(|| git.record("cache mirror path is not valid UTF-8"))?;
     let config_path = mirror.join("config");
     let config_path_str = config_path
         .to_str()
@@ -674,22 +666,12 @@ async fn refresh_mirror(
             .await
             .is_ok_and(|value| value.trim() == "true");
     }
+    let mut cloned = false;
     if valid {
         log::info!("Repository {label}: found valid cache");
     } else {
-        match existing {
-            Ok(metadata) => {
-                log::info!("Repository {label}: invalid cache; rebuilding");
-                if !metadata.is_dir() {
-                    fs::remove_file(mirror).await.map_err(|error| {
-                        git.record_error("could not remove invalid cache mirror file", error)
-                    })?;
-                } else {
-                    fs::remove_dir_all(mirror).await.map_err(|error| {
-                        git.record_error("could not remove invalid cache mirror directory", error)
-                    })?;
-                }
-            }
+        match &existing {
+            Ok(_) => log::info!("Repository {label}: invalid cache; rebuilding"),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 log::info!("Repository {label}: preparing cache");
             }
@@ -698,32 +680,37 @@ async fn refresh_mirror(
                 return Err(());
             }
         }
-        // `--mirror` makes a bare repository whose `+refs/*:refs/*` refspec lets later fetches
-        // update and prune every ref, not only branches.
-        git.run(
-            "cache mirror clone",
-            parent,
-            &["clone", "--mirror", "--quiet", "--", url, path],
-        )
-        .await?;
+        install_mirror(mirror, url, git).await?;
+        cloned = true;
     }
-    // `--prune` and `--prune-tags` drop refs deleted upstream so removed history is not served
-    // from the mirror. Protocol v2 keeps the ref advertisement small for repositories with many
-    // refs, and submodules are irrelevant to a bare mirror.
-    git.run(
-        "cache mirror fetch",
-        mirror,
-        &[
-            "-c",
-            "protocol.version=2",
-            "fetch",
-            "--no-recurse-submodules",
-            "--prune",
-            "--prune-tags",
-            "origin",
-        ],
-    )
-    .await?;
+    if !cloned {
+        // `--prune` and `--prune-tags` drop refs deleted upstream so removed history is not
+        // served from the mirror. Protocol v2 keeps the ref advertisement small for repositories
+        // with many refs, and submodules are irrelevant to a bare mirror.
+        let refreshed = git
+            .run(
+                "cache mirror fetch",
+                mirror,
+                &[
+                    "-c",
+                    "protocol.version=2",
+                    "fetch",
+                    "--no-recurse-submodules",
+                    "--prune",
+                    "--prune-tags",
+                    "origin",
+                ],
+            )
+            .await
+            .is_ok();
+        if !refreshed {
+            // A fetch can fail where a fresh clone succeeds, such as on stale lock files left by
+            // an interrupted run, or on branches that differ only in case on a case-insensitive
+            // filesystem.
+            log::info!("Repository {label}: cache refresh failed; rebuilding");
+            install_mirror(mirror, url, git).await?;
+        }
+    }
     // Fetching never moves the mirror's `HEAD`, so follow the remote's default branch explicitly.
     let head = remote_default_branch(mirror, git).await?;
     git.run(
@@ -733,6 +720,53 @@ async fn refresh_mirror(
     )
     .await?;
     Ok(head)
+}
+
+/// Puts a fresh `git clone --mirror` of `url` at `mirror`, replacing whatever is there. The clone
+/// is made beside the mirror and moved into place only once it is complete, so a failure or an
+/// interrupted run never leaves a partial mirror at `mirror`, and an existing mirror stays in
+/// place until the replacement is ready.
+///
+/// `--mirror` makes a bare repository whose `+refs/*:refs/*` refspec lets later fetches update
+/// and prune every ref, not only branches. A clone also records every ref in `packed-refs` in
+/// one step, so unlike a fetch it succeeds for branches that differ only in case on a
+/// case-insensitive filesystem.
+async fn install_mirror(mirror: &Path, url: &str, git: &mut Git) -> Result<(), ()> {
+    let parent = mirror
+        .parent()
+        .ok_or_else(|| git.record("cache mirror has no parent directory"))?;
+    let mut staging_name = mirror
+        .file_name()
+        .ok_or_else(|| git.record("cache mirror has no name"))?
+        .to_owned();
+    staging_name.push(".staging");
+    let staging = parent.join(staging_name);
+    let staging_path = staging
+        .to_str()
+        .ok_or_else(|| git.record("cache mirror staging path is not valid UTF-8"))?;
+    // Anything here is left over from an interrupted run.
+    let _ = fs::remove_dir_all(&staging).await;
+    let cloned = git
+        .run(
+            "cache mirror clone",
+            parent,
+            &["clone", "--mirror", "--quiet", "--", url, staging_path],
+        )
+        .await;
+    if cloned.is_err() {
+        let _ = fs::remove_dir_all(&staging).await;
+        return Err(());
+    }
+    match fs::symlink_metadata(mirror).await {
+        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(mirror).await,
+        Ok(_) => fs::remove_file(mirror).await,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+    .map_err(|error| git.record_error("could not remove stale cache mirror", error))?;
+    fs::rename(&staging, mirror)
+        .await
+        .map_err(|error| git.record_error("could not move cache mirror into place", error))
 }
 
 /// Returns the validated name of the branch that the `origin` remote's `HEAD` points to.
@@ -821,15 +855,124 @@ async fn checkout_direct(
 /// Creates a self-contained checkout of `request` that reuses the objects already in the local
 /// mirror instead of downloading them again. The result does not depend on the mirror afterwards.
 ///
-/// The repository is assembled with `init` and `fetch` so the refs it tracks and its checkout are
-/// controlled precisely. The mirror's objects are borrowed through
-/// `GIT_ALTERNATE_OBJECT_DIRECTORIES`, an environment variable so that no
-/// `objects/info/alternates` file is left behind, and `repack` then copies them into the
-/// checkout. Unpinned requests end on a local branch of the default branch; pinned requests are
-/// detached so `HEAD` is exactly the requested head. Branch-only requests fetch just that branch,
-/// stored under the default branch's tracking ref.
+/// A branch-only request fetches just that branch from the remote, and every other request is
+/// cloned from the mirror.
 async fn checkout_cached(
     request: &CheckoutRequest,
+    url: &str,
+    target: &Path,
+    mirror: &Path,
+    default: &str,
+    git: &mut Git,
+) -> Result<(), CheckoutFailureKind> {
+    match (&request.head, request.fetch_branch_only) {
+        (Some(RepositoryHeadRef::Branch(branch)), true) => {
+            fetch_branch_from_mirror(branch, url, target, mirror, default, git).await
+        }
+        (Some(RepositoryHeadRef::CommitSha(_)) | None, true) => {
+            git.record("branch-only checkout requires a branch");
+            Err(CheckoutFailureKind::Checkout)
+        }
+        (head, false) => clone_from_mirror(head.as_ref(), url, target, mirror, git).await,
+    }
+}
+
+/// Builds the checkout for a request that tracks every branch and tag by cloning the mirror and
+/// then pointing `origin` at the remote. Unpinned requests end on a local branch of the default
+/// branch, which is the mirror's `HEAD`; pinned requests are detached so `HEAD` is exactly the
+/// requested head.
+///
+/// A clone records the remote-tracking refs it creates in `packed-refs` in one step. Fetching
+/// the same refs writes a loose file for each, which fails for branches that differ only in case
+/// on a case-insensitive filesystem. The clone hardlinks the mirror's objects, or copies them
+/// when the mirror is on another filesystem, so the checkout does not depend on the mirror.
+async fn clone_from_mirror(
+    head: Option<&RepositoryHeadRef>,
+    url: &str,
+    target: &Path,
+    mirror: &Path,
+    git: &mut Git,
+) -> Result<(), CheckoutFailureKind> {
+    let clone_error = CheckoutFailureKind::Clone;
+    let checkout_error = CheckoutFailureKind::Checkout;
+    let parent = target.parent().ok_or_else(|| {
+        git.record("checkout target has no parent directory");
+        clone_error
+    })?;
+    let source = mirror.to_str().ok_or_else(|| {
+        git.record("cache mirror path is not valid UTF-8");
+        clone_error
+    })?;
+    let destination = target.to_str().ok_or_else(|| {
+        git.record("checkout target path is not valid UTF-8");
+        clone_error
+    })?;
+    let mut args = vec!["clone", "--quiet"];
+    if head.is_some() {
+        args.push("--no-checkout");
+    }
+    args.extend(["--", source, destination]);
+    git.run("cached clone", parent, &args)
+        .await
+        .map_err(|_| clone_error)?;
+    git.run(
+        "origin remote update",
+        target,
+        &["remote", "set-url", "origin", url],
+    )
+    .await
+    .map_err(|_| clone_error)?;
+    let result = match head {
+        Some(RepositoryHeadRef::Branch(branch)) => {
+            git.run(
+                "requested head checkout",
+                target,
+                &[
+                    "checkout",
+                    "--detach",
+                    &format!("refs/remotes/origin/{branch}"),
+                ],
+            )
+            .await
+        }
+        Some(RepositoryHeadRef::CommitSha(sha)) => {
+            // No branch or tag necessarily reaches a pinned commit, so the mirror may lack it.
+            if git
+                .run("requested head fetch", target, &["fetch", "origin", sha])
+                .await
+                .is_err()
+            {
+                return Err(checkout_error);
+            }
+            git.run(
+                "requested head checkout",
+                target,
+                &["checkout", "--detach", sha],
+            )
+            .await
+        }
+        // A clone of a mirror whose default branch is missing succeeds without checking anything
+        // out, which would otherwise go unnoticed.
+        None => {
+            git.run(
+                "cached HEAD verification",
+                target,
+                &["rev-parse", "--verify", "HEAD"],
+            )
+            .await
+        }
+    };
+    result.map(|_| ()).map_err(|_| checkout_error)
+}
+
+/// Builds the checkout for a branch-only request by fetching just that branch from the remote
+/// and storing it under the default branch's tracking ref.
+///
+/// The mirror's objects are borrowed through `GIT_ALTERNATE_OBJECT_DIRECTORIES`, an environment
+/// variable so that no `objects/info/alternates` file is left behind, and `repack` then copies
+/// them into the checkout.
+async fn fetch_branch_from_mirror(
+    branch: &str,
     url: &str,
     target: &Path,
     mirror: &Path,
@@ -854,59 +997,32 @@ async fn checkout_cached(
     .map_err(|_| clone_error)?;
 
     let default_ref = format!("refs/remotes/origin/{default}");
-    let owned = |args: &[&str]| args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
-    let (fetch, checkout) = match (&request.head, request.fetch_branch_only) {
-        (Some(RepositoryHeadRef::Branch(branch)), true) => {
-            let refspec = format!("+refs/heads/{branch}:{default_ref}");
-            git.run(
-                "branch refspec configuration",
-                target,
-                &["config", "--replace-all", "remote.origin.fetch", &refspec],
-            )
-            .await
-            .map_err(|_| checkout_error)?;
-            (
-                owned(&["fetch", "--no-tags", "origin"]),
-                owned(&["checkout", "--detach", &default_ref]),
-            )
-        }
-        (Some(RepositoryHeadRef::CommitSha(_)) | None, true) => {
-            git.record("branch-only checkout requires a branch");
-            return Err(checkout_error);
-        }
-        (head, false) => {
-            // Track every branch and tag, as a clone would.
-            let mut fetch = owned(&[
-                "fetch",
-                "origin",
-                "+refs/heads/*:refs/remotes/origin/*",
-                "+refs/tags/*:refs/tags/*",
-            ]);
-            let checkout = match head {
-                Some(RepositoryHeadRef::Branch(branch)) => owned(&[
-                    "checkout",
-                    "--detach",
-                    &format!("refs/remotes/origin/{branch}"),
-                ]),
-                Some(RepositoryHeadRef::CommitSha(sha)) => {
-                    // No branch or tag necessarily reaches a pinned commit, so fetch it by SHA.
-                    fetch.push(sha.clone());
-                    owned(&["checkout", "--detach", sha])
-                }
-                // A local branch tracking the default branch, so work starts from a normal branch.
-                None => owned(&["checkout", "-B", default, &default_ref]),
-            };
-            (fetch, checkout)
-        }
-    };
+    let refspec = format!("+refs/heads/{branch}:{default_ref}");
+    git.run(
+        "branch refspec configuration",
+        target,
+        &["config", "--replace-all", "remote.origin.fetch", &refspec],
+    )
+    .await
+    .map_err(|_| checkout_error)?;
     let objects = mirror.join("objects");
     let alternates = [("GIT_ALTERNATE_OBJECT_DIRECTORIES", objects.as_os_str())];
-    git.run_with_env("cached fetch", target, &as_args(&fetch), &alternates)
-        .await
-        .map_err(|_| checkout_error)?;
-    git.run_with_env("cached checkout", target, &as_args(&checkout), &alternates)
-        .await
-        .map_err(|_| checkout_error)?;
+    git.run_with_env(
+        "cached fetch",
+        target,
+        &["fetch", "--no-tags", "origin"],
+        &alternates,
+    )
+    .await
+    .map_err(|_| checkout_error)?;
+    git.run_with_env(
+        "cached checkout",
+        target,
+        &["checkout", "--detach", &default_ref],
+        &alternates,
+    )
+    .await
+    .map_err(|_| checkout_error)?;
     // Fetching never sets `origin/HEAD`, which tools use to find the default branch.
     git.run(
         "origin HEAD update",
@@ -915,8 +1031,6 @@ async fn checkout_cached(
     )
     .await
     .map_err(|_| checkout_error)?;
-    // Dissociate only after checkout so the checked-out HEAD keeps objects fetched by explicit
-    // SHA, which no ref reaches.
     git.run_with_env(
         "cached object repack",
         target,
