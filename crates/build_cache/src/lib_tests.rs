@@ -134,8 +134,8 @@ fn permission_denied_cache_directory_uses_noninteractive_sudo_mkdir_and_chown() 
             OsString::from("-n"),
             OsString::from("chown"),
             OsString::from("-h"),
-            OsString::from(current_owner()),
             OsString::from("--"),
+            OsString::from(current_owner()),
             locked.join("child").into_os_string()
         ]
     );
@@ -161,8 +161,8 @@ fn existing_cache_directory_repairs_ownership_and_rechecks_access() {
                 OsString::from("-n"),
                 OsString::from("chown"),
                 OsString::from("-h"),
-                OsString::from(current_owner()),
                 OsString::from("--"),
+                OsString::from(current_owner()),
                 temp.path().as_os_str().to_owned(),
             ]
         );

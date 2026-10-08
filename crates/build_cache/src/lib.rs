@@ -515,7 +515,7 @@ where
             }
             let mut chown = Command::new_with_process_group("sudo");
             chown
-                .args(["-n", "chown", "-h", &owner, "--"])
+                .args(["-n", "chown", "-h", "--", &owner])
                 .arg(directory);
             if let Err(error) = run_command(chown).await {
                 tracing::warn!(

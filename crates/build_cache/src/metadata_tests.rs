@@ -403,7 +403,8 @@ fn metadata_directory_escalates_when_cache_root_is_not_writable() {
             fs::set_permissions(&directory, fs::Permissions::from_mode(0o500)).unwrap();
         } else {
             assert_eq!(args[2], "-h");
-            assert_eq!(args[3], crate::current_owner().as_str());
+            assert_eq!(args[3], "--");
+            assert_eq!(args[4], crate::current_owner().as_str());
             fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
         }
         operations.lock().unwrap().push(args[1].to_owned());
