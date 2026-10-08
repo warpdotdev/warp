@@ -55,6 +55,8 @@ pub(super) fn parse(body: &str) -> Option<CLIAgentEvent> {
             tool_input_preview,
             plugin_version: raw.plugin_version,
             error_type: raw.error_type,
+            background_task_count: raw.background_task_count,
+            session_cron_count: raw.session_cron_count,
         },
         source: CLIAgentEventSource::RichPlugin,
     })

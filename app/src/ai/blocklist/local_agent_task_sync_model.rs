@@ -3,13 +3,11 @@ mod update_queue;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
-use std::time::Duration;
 
 use futures::channel::oneshot;
 use session_sharing_protocol::common::SessionId;
 use update_queue::LocalTaskUpdateQueue;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
-use warpui::r#async::Timer;
 use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
 
 use super::history_model::{
@@ -23,9 +21,6 @@ use crate::server::server_api::ai::{AIClient, TaskStatusUpdate};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
-
-/// A CLI turn boundary is not a task boundary; wait for the session to stay quiet.
-const CLI_SESSION_SUCCESS_REPORT_DELAY: Duration = Duration::from_secs(120);
 
 /// Syncs locally-owned conversation state to the server `ai_tasks` row via
 /// `AIClient::update_agent_task`. This includes task state, status message,
@@ -50,7 +45,6 @@ pub struct LocalAgentTaskSyncModel {
     /// live for the process-scoped `AgentDriver` run, which can span multiple
     /// pane-scoped CLI agent sessions.
     cli_session_task_ids: HashMap<EntityId, AmbientAgentTaskId>,
-    cli_success_report_debounce: CLISuccessReportDebounce,
     /// Serializes and coalesces model-owned updates independently per task.
     update_queue: LocalTaskUpdateQueue,
     /// Senders resolved when the corresponding task's update queue drains
@@ -60,12 +54,6 @@ pub struct LocalAgentTaskSyncModel {
     /// acknowledged. Used by the agent driver to decide whether a terminal
     /// state still needs to be reported before the process exits.
     confirmed_terminal_states: HashMap<AmbientAgentTaskId, AgentTaskState>,
-}
-
-struct CLISuccessReportDebounce {
-    delay: Duration,
-    generation: u64,
-    pending_reports: HashMap<EntityId, u64>,
 }
 
 pub enum LocalAgentTaskSyncModelEvent {}
@@ -117,11 +105,6 @@ impl LocalAgentTaskSyncModel {
         Self {
             ai_client,
             cli_session_task_ids: HashMap::new(),
-            cli_success_report_debounce: CLISuccessReportDebounce {
-                delay: CLI_SESSION_SUCCESS_REPORT_DELAY,
-                generation: 0,
-                pending_reports: HashMap::new(),
-            },
             update_queue: LocalTaskUpdateQueue::default(),
             idle_waiters: HashMap::new(),
             confirmed_terminal_states: HashMap::new(),
@@ -172,12 +155,9 @@ impl LocalAgentTaskSyncModel {
     #[cfg(test)]
     pub(super) fn new_with_ai_client_for_test(
         ai_client: Arc<dyn AIClient>,
-        cli_success_report_delay: Duration,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        let mut model = Self::new_with_ai_client(ai_client, ctx);
-        model.cli_success_report_debounce.delay = cli_success_report_delay;
-        model
+        Self::new_with_ai_client(ai_client, ctx)
     }
 
     /// Registers a terminal view as a tracked CLI agent session so that
@@ -241,9 +221,6 @@ impl LocalAgentTaskSyncModel {
     /// finishes.
     #[cfg_attr(target_family = "wasm", expect(dead_code))]
     pub fn unregister_cli_session(&mut self, terminal_view_id: EntityId) {
-        self.cli_success_report_debounce
-            .pending_reports
-            .remove(&terminal_view_id);
         if let Some(task_id) = self.cli_session_task_ids.remove(&terminal_view_id) {
             self.update_queue.remove_task(&task_id);
         }
@@ -401,49 +378,6 @@ impl LocalAgentTaskSyncModel {
         let Some(&task_id) = self.cli_session_task_ids.get(&terminal_view_id) else {
             return;
         };
-        match status {
-            CLIAgentSessionStatus::Success => {
-                let debounce = &mut self.cli_success_report_debounce;
-                debounce.generation += 1;
-                let generation = debounce.generation;
-                debounce
-                    .pending_reports
-                    .insert(terminal_view_id, generation);
-                let delay = debounce.delay;
-                ctx.spawn(
-                    async move { Timer::after(delay).await },
-                    move |me, _, ctx| {
-                        let debounce = &mut me.cli_success_report_debounce;
-                        if debounce.pending_reports.get(&terminal_view_id) != Some(&generation)
-                            || !me.cli_session_task_ids.contains_key(&terminal_view_id)
-                        {
-                            return;
-                        }
-                        debounce.pending_reports.remove(&terminal_view_id);
-                        let (task_state, status_message) =
-                            map_cli_session_status(&CLIAgentSessionStatus::Success);
-                        me.enqueue_update(
-                            task_id,
-                            LocalTaskUpdate {
-                                task_state: Some(task_state),
-                                status_message,
-                                ..LocalTaskUpdate::default()
-                            },
-                            ctx,
-                        );
-                    },
-                );
-                return;
-            }
-            CLIAgentSessionStatus::InProgress
-            | CLIAgentSessionStatus::Failed { .. }
-            | CLIAgentSessionStatus::Blocked { .. }
-            | CLIAgentSessionStatus::Cancelled => {
-                self.cli_success_report_debounce
-                    .pending_reports
-                    .remove(&terminal_view_id);
-            }
-        }
 
         let (task_state, status_message) = map_cli_session_status(status);
         self.enqueue_update(

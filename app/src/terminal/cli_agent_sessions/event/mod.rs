@@ -48,6 +48,20 @@ pub struct CLIAgentEventPayload {
     /// On Claude Code, this comes from the `StopFailure` hook (e.g. `"rate_limit"`).
     /// Not implemented for Codex.
     pub error_type: Option<String>,
+    /// Background tasks still running when a `Stop` fired. Claude Code wakes the agent again
+    /// when one finishes, so a stop with pending tasks is a pause, not the end of the session.
+    /// `None` when the plugin predates this field.
+    pub background_task_count: Option<u32>,
+    /// Scheduled wakeups pending when a `Stop` fired; same semantics as
+    /// `background_task_count`.
+    pub session_cron_count: Option<u32>,
+}
+
+impl CLIAgentEventPayload {
+    /// Whether the agent reported work that will wake it again without user input.
+    pub fn has_pending_background_work(&self) -> bool {
+        self.background_task_count.unwrap_or(0) > 0 || self.session_cron_count.unwrap_or(0) > 0
+    }
 }
 
 /// A parsed event from a CLI agent plugin.

@@ -850,6 +850,34 @@ fn needs_input_is_ignored_in_the_desktop_app() {
     assert_needs_input_blocks_session_in_mode(ExecutionMode::App, false);
 }
 
+#[test]
+fn stop_with_pending_background_work_keeps_session_in_progress() {
+    let body = r#"{"v":1,"agent":"claude","event":"stop","query":"build it","response":"Build started in the background.","background_task_count":1,"session_cron_count":0}"#;
+    let event = parse_event(Some("warp://cli-agent"), body).unwrap();
+    assert!(event.payload.has_pending_background_work());
+    let mut session = cli_agent_session(CLIAgentSessionStatus::InProgress, true);
+
+    assert_eq!(session.apply_event(&event), None);
+
+    assert_eq!(session.status, CLIAgentSessionStatus::InProgress);
+    assert_eq!(
+        session.session_context.response.as_deref(),
+        Some("Build started in the background.")
+    );
+}
+
+#[test]
+fn stop_without_pending_background_work_succeeds() {
+    let body = r#"{"v":1,"agent":"claude","event":"stop","background_task_count":0,"session_cron_count":0}"#;
+    let event = parse_event(Some("warp://cli-agent"), body).unwrap();
+    let mut session = cli_agent_session(CLIAgentSessionStatus::InProgress, true);
+
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::Success)
+    );
+}
+
 // --- Ctrl-C pending-cancel state machine ---
 
 /// Grace window used by the tests below. Long enough to comfortably
