@@ -10,11 +10,13 @@ use instant::Instant;
 use parking_lot::Mutex;
 use warp_errors::report_if_error;
 use warpui::r#async::executor::Background;
-use warpui::r#async::{BoxFuture, FutureExt as _};
+use warpui::r#async::{BoxFuture, FutureExt as _, Timer};
 
 use super::SavePoint;
 
-const FINAL_SAVE_TIMEOUT: Duration = Duration::from_secs(30);
+const SAVE_THROTTLE_INTERVAL: Duration = Duration::from_secs(30);
+// Shutdown must allow a full cooldown without consuming the final upload's timeout.
+const FINAL_SAVE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// An active runner worker's operation, which may service initial and coalesced save points.
 ///
@@ -26,9 +28,17 @@ pub(super) type SaveOperation =
 struct SaveState {
     pending: Option<SavePoint>,
     active: Option<ActiveSave>,
+    next_save_at: Option<Instant>,
     closing: bool,
     final_deadline: Option<Instant>,
     final_succeeded: Option<bool>,
+}
+impl SaveState {
+    fn save_delay(&self) -> Duration {
+        self.next_save_at.map_or(Duration::ZERO, |next| {
+            next.saturating_duration_since(Instant::now())
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -43,7 +53,7 @@ impl Drop for ActiveSave {
     }
 }
 
-/// Runs one save at a time, retaining at most one pending request with `PostTurn` precedence.
+/// Runs saves at least 30 seconds apart, retaining at most one pending request.
 ///
 /// Closing rejects new requests and retains the final deadline and outcome across calls.
 pub(crate) struct SaveCoordinator {
@@ -94,10 +104,23 @@ impl SaveCoordinator {
             .spawn(async move {
                 let worker = async {
                     loop {
+                        let delay = {
+                            let mut state = shared_state.lock();
+                            if state.closing || state.pending.is_none() {
+                                state.active = None;
+                                return;
+                            }
+                            state.save_delay()
+                        };
+                        Timer::after(delay).await;
                         let save_point = {
                             let mut state = shared_state.lock();
                             match state.pending.take().filter(|_| !state.closing) {
-                                Some(save_point) => save_point,
+                                Some(save_point) => {
+                                    state.next_save_at =
+                                        Some(Instant::now() + SAVE_THROTTLE_INTERVAL);
+                                    save_point
+                                }
                                 None => {
                                     state.active = None;
                                     return;
@@ -153,10 +176,20 @@ impl SaveCoordinator {
             }
         }
         self.state.lock().active = None;
+        let delay = self.state.lock().save_delay();
+        if delay >= deadline.saturating_duration_since(Instant::now()) {
+            self.state.lock().final_succeeded = Some(false);
+            return Err(anyhow!(
+                "Harness final save deadline cannot accommodate the throttle"
+            ));
+        }
+        Timer::after(delay).await;
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
+            self.state.lock().final_succeeded = Some(false);
             return Err(anyhow!("Harness final save deadline expired"));
         }
+        self.state.lock().next_save_at = Some(Instant::now() + SAVE_THROTTLE_INTERVAL);
         let result = final_save
             .with_timeout(remaining)
             .await

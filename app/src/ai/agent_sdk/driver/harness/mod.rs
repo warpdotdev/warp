@@ -501,7 +501,7 @@ pub(crate) enum SavePoint {
     Periodic,
     /// The closing save after graceful or forced harness termination.
     Final,
-    /// A save after session activity such as prompt submission or completed tool use.
+    /// A save after a completed, failed, or cancelled turn.
     PostTurn,
 }
 
@@ -705,3 +705,7 @@ pub(super) async fn upload_current_block_snapshot(
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "session_save_tests.rs"]
+mod session_save_tests;
