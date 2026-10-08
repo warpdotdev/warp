@@ -1,19 +1,26 @@
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use futures::FutureExt as _;
+use parking_lot::Mutex;
 use tracing::Instrument as _;
+use warpui::r#async::FutureExt as _;
 use warpui::r#async::executor::Background;
 
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::server::server_api::ai::{AIClient, AgentRunClientEventRequest};
+use crate::server::server_api::ai::{
+    AIClient, AgentRunClientEventPayload, AgentRunClientEventRequest, AgentRunClientStartupPayload,
+    UserSetupMeasurement,
+};
 
 #[derive(Clone)]
 pub(crate) struct SetupClientEventReporter {
     run_id: Option<AmbientAgentTaskId>,
     ai_client: Arc<dyn AIClient>,
     background: Arc<Background>,
+    user_setup: Arc<Mutex<Option<UserSetupMeasurement>>>,
 }
 
 impl SetupClientEventReporter {
@@ -27,6 +34,7 @@ impl SetupClientEventReporter {
             run_id: Some(run_id),
             ai_client,
             background,
+            user_setup: Arc::default(),
         }
     }
 
@@ -36,6 +44,7 @@ impl SetupClientEventReporter {
             run_id: None,
             ai_client,
             background,
+            user_setup: Arc::default(),
         }
     }
 
@@ -116,8 +125,49 @@ impl SetupClientEventReporter {
         };
         let timestamp = Utc::now();
         let event_name = event.as_event_name();
-        let request = AgentRunClientEventRequest::timeline_event(event_name, timestamp);
+        let mut request = AgentRunClientEventRequest::timeline_event(event_name, timestamp);
+        if matches!(event, OzRunTimelineEvent::AgentStarted) {
+            request.payload = self.user_setup.lock().clone().map(|user_setup| {
+                AgentRunClientEventPayload::Startup(AgentRunClientStartupPayload { user_setup })
+            });
+        }
         Self::post_client_event(run_id, self.ai_client.clone(), event_name, request).await;
+    }
+
+    pub(crate) fn set_user_setup(&self, duration: Option<Duration>, had_setup_commands: bool) {
+        *self.user_setup.lock() = duration
+            .and_then(|duration| i64::try_from(duration.as_micros()).ok())
+            .map(|duration_us| UserSetupMeasurement {
+                version: 1,
+                duration_us,
+                had_setup_commands,
+                sandbox_os: std::env::consts::OS,
+                sandbox_arch: std::env::consts::ARCH,
+            });
+    }
+
+    pub(crate) async fn post_startup_setup_measurement(&self) {
+        let Some(run_id) = self.run_id else {
+            return;
+        };
+        let Some(user_setup) = self.user_setup.lock().clone() else {
+            return;
+        };
+        let timestamp = Utc::now();
+        let event_name = "startup_setup_measurement";
+        // The setup envelope lets older servers accept this optional event without a new protocol.
+        let mut request =
+            AgentRunClientEventRequest::setup_metric_event(event_name, timestamp, timestamp, false);
+        if let Some(AgentRunClientEventPayload::SetupMetric(payload)) = &mut request.payload {
+            payload.user_setup = Some(user_setup);
+        }
+        if Self::post_client_event(run_id, self.ai_client.clone(), event_name, request)
+            .with_timeout(Duration::from_secs(2))
+            .await
+            .is_err()
+        {
+            log::warn!("Optional startup setup measurement delivery timed out for run {run_id}");
+        }
     }
 
     fn post_setup_metric_event_best_effort(
@@ -315,3 +365,7 @@ impl SetupStep {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "setup_observability_tests.rs"]
+mod tests;
