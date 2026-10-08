@@ -15,8 +15,8 @@ use warpui::platform::LineStyle;
 use warpui::text_layout::DEFAULT_TOP_BOTTOM_RATIO;
 
 use super::AttributedStringBuilder;
-use crate::terminal::model::char_or_str::CharOrStr;
 use crate::terminal::model::cell::Cell;
+use crate::terminal::model::char_or_str::CharOrStr;
 
 /// The right-to-left runs of a single grid row, collecting their styled text while the row's cells
 /// are rendered.
