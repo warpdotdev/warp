@@ -78,8 +78,7 @@ const AMBIENT_CREATE_SESSION_MAX_ATTEMPTS: usize = 3;
 const RECONNECT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
 const RECONNECT_CYCLE_TIMEOUT: Duration = Duration::from_secs(128);
 const MAX_NO_PROGRESS_RECONNECTS: usize = 5;
-const RECONNECT_LIMIT_REACHED_MESSAGE: &str =
-    "Session sharing stopped after reconnecting five times without ordered event progress.";
+const RECONNECT_LIMIT_REACHED_MESSAGE: &str = "Reached maximum number of session sharing reconnection attempts without making ordered event progress";
 const MAX_PRE_RECONNECT_MESSAGES: usize = 256;
 const MAX_PRE_RECONNECT_BYTES: usize = 1024 * 1024;
 #[cfg(not(test))]

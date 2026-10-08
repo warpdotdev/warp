@@ -237,6 +237,7 @@ fn test_reconnect_retries_socket_error_before_ack() {
             Duration::from_secs(2),
         );
         assert_eventually!(
+            400 =>
             network.read(&app, |network, _| network.is_connected()),
             "Socket error before acknowledgement should retry and reconnect"
         );

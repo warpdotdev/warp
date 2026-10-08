@@ -73,8 +73,7 @@ fn shared_session_failure_propagates_to_agent_driver_error() {
             driver.wait_for_session_share_failure()
         });
 
-        let reason =
-            "Session sharing stopped after reconnecting five times without ordered event progress.";
+        let reason = "Reached maximum number of session sharing reconnection attempts without making ordered event progress";
         terminal_view.update(&mut app, |_, ctx| {
             ctx.emit(Event::SharedSessionFailed {
                 reason: reason.to_string(),

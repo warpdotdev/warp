@@ -452,8 +452,7 @@ fn share_session_timeout_gets_internal_error() {
 
 #[test]
 fn share_session_failed_includes_reason() {
-    let reason =
-        "Session sharing stopped after reconnecting five times without ordered event progress.";
+    let reason = "Reached maximum number of session sharing reconnection attempts without making ordered event progress";
     let (state, update) = classify_driver_error(&AgentDriverError::ShareSessionFailed {
         error: ShareSessionError::Failed(reason.into()),
     });
