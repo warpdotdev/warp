@@ -4,7 +4,6 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 #[cfg(not(target_family = "wasm"))]
 use futures::future::Either;
-#[cfg(not(target_family = "wasm"))]
 use instant::Instant;
 #[cfg(not(target_family = "wasm"))]
 use reqwest::Error as ReqwestError;
@@ -79,7 +78,12 @@ impl MessageHydrator {
     }
 
     async fn read_message(&self, message_id: &str) -> Result<ReadAgentMessageResponse> {
-        match (self.task_scoped_server_api.as_ref(), self.task_id) {
+        let started = Instant::now();
+        log::debug!(
+            target: "agent_events",
+            "[Agent events] stage=message_read_start message_id={message_id}"
+        );
+        let result = match (self.task_scoped_server_api.as_ref(), self.task_id) {
             (Some(server_api), Some(task_id)) => {
                 server_api
                     .read_agent_message_for_task(&task_id, message_id)
@@ -87,7 +91,14 @@ impl MessageHydrator {
             }
             _ => self.ai_client.read_agent_message(message_id).await,
         }
-        .with_context(|| format!("Failed to read agent message {message_id}"))
+        .with_context(|| format!("Failed to read agent message {message_id}"));
+        log::debug!(
+            target: "agent_events",
+            "[Agent events] stage=message_read_complete message_id={message_id} elapsed_ms={} error={}",
+            started.elapsed().as_millis(),
+            result.is_err()
+        );
+        result
     }
 
     pub(crate) async fn hydrate_event_for_recipient(
@@ -161,6 +172,12 @@ impl MessageHydrator {
             match futures::future::select(read_message, timeout).await {
                 Either::Left((Ok(message), _)) => return Ok(message),
                 Either::Left((Err(err), _)) if should_retry_message_read_error(&err) => {
+                    log::debug!(
+                        target: "agent_events",
+                        "[Agent events] stage=message_read_retry message_id={message_id} http_status={} remaining_ms={}",
+                        message_read_error_status(&err).unwrap_or(0),
+                        deadline.saturating_duration_since(Instant::now()).as_millis()
+                    );
                     last_error = Some(err);
                     let sleep_duration = self
                         .retry_delay
@@ -188,10 +205,35 @@ impl MessageHydrator {
         &self,
         event: &AgentRunEvent,
     ) -> Result<ReadAgentMessageResponse> {
+        let started = Instant::now();
+        log::debug!(
+            target: "agent_events",
+            "[Agent events] stage=hydrate_start run_id={} sequence={} message_id={}",
+            event.run_id,
+            event.sequence,
+            event.ref_id.as_deref().unwrap_or("-")
+        );
         let Some(message_id) = event.ref_id.as_deref() else {
+            log::debug!(
+                target: "agent_events",
+                "[Agent events] stage=hydrate_complete run_id={} sequence={} outcome=missing_ref elapsed_ms={}",
+                event.run_id,
+                event.sequence,
+                started.elapsed().as_millis()
+            );
             return Err(anyhow!("Agent event is missing ref_id"));
         };
-        self.read_message_with_timeout(message_id).await
+        let result = self.read_message_with_timeout(message_id).await;
+        log::debug!(
+            target: "agent_events",
+            "[Agent events] stage=hydrate_complete run_id={} sequence={} message_id={message_id} elapsed_ms={} error={} already_delivered={}",
+            event.run_id,
+            event.sequence,
+            started.elapsed().as_millis(),
+            result.is_err(),
+            result.as_ref().is_ok_and(|message| message.delivered_at.is_some())
+        );
+        result
     }
 
     pub(crate) async fn mark_message_delivered(&self, message_id: &str) -> Result<()> {

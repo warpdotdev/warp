@@ -2156,6 +2156,7 @@ impl BlocklistAIController {
             })
         {
             has_piggybacked_events = true;
+            Self::log_orchestration_input_inclusion(conversation_id, &event_inputs, "piggyback");
             request_input
                 .input_messages
                 .entry(task_id)
@@ -2171,6 +2172,13 @@ impl BlocklistAIController {
             ctx,
         );
 
+        if has_piggybacked_events {
+            log::debug!(
+                target: "agent_events",
+                "[Agent events] stage=request_schedule conversation_id={conversation_id} route=piggyback error={}",
+                result.is_err()
+            );
+        }
         if has_piggybacked_events && result.is_err() {
             OrchestrationEventService::handle(ctx).update(ctx, |svc, ctx| {
                 svc.requeue_awaiting_events(conversation_id, ctx);
@@ -2426,6 +2434,7 @@ impl BlocklistAIController {
         else {
             return;
         };
+        Self::log_orchestration_input_inclusion(conversation_id, &inputs, "idle");
 
         // The resume request supersedes any in-flight wait_for_events.
         self.action_model.update(ctx, |action_model, ctx| {
@@ -2461,16 +2470,19 @@ impl BlocklistAIController {
                 .or_default()
                 .push(steered_input);
         }
-        if self
-            .send_request_input(
-                request_input,
-                None,
-                RecoveryBudget::fresh(),
-                is_queued_prompt,
-                ctx,
-            )
-            .is_err()
-        {
+        let result = self.send_request_input(
+            request_input,
+            None,
+            RecoveryBudget::fresh(),
+            is_queued_prompt,
+            ctx,
+        );
+        log::debug!(
+            target: "agent_events",
+            "[Agent events] stage=request_schedule conversation_id={conversation_id} route=idle error={}",
+            result.is_err()
+        );
+        if result.is_err() {
             // TODO: surface retry exhaustion. The existing requeue
             // re-emits `EventsReady` until `MAX_RETRY_ATTEMPTS` is hit,
             // after which events are dropped silently and the wait has
@@ -2482,6 +2494,28 @@ impl BlocklistAIController {
             OrchestrationEventService::handle(ctx).update(ctx, |svc, ctx| {
                 svc.requeue_awaiting_events(conversation_id, ctx);
             });
+        }
+    }
+
+    fn log_orchestration_input_inclusion(
+        conversation_id: AIConversationId,
+        inputs: &[AIAgentInput],
+        route: &str,
+    ) {
+        if !log::log_enabled!(target: "agent_events", log::Level::Debug) {
+            return;
+        }
+        for input in inputs {
+            if let AIAgentInput::MessagesReceivedFromAgents { messages } = input {
+                for message in messages {
+                    log::debug!(
+                        target: "agent_events",
+                        "[Agent events] stage=request_include conversation_id={conversation_id} route={route} message_id={} sender_run_id={}",
+                        message.message_id,
+                        message.sender_agent_id
+                    );
+                }
+            }
         }
     }
 
