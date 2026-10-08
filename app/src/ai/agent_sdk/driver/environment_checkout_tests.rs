@@ -19,9 +19,9 @@ use warp_core::features::FeatureFlag;
 use super::super::environment_checkout_protocol::{
     CheckoutBatch, CheckoutFailureKind, CheckoutOutcome, CheckoutReport, CheckoutRequest,
 };
-use super::{
-    CachedCheckout, Git, attempt_cached_checkout, capture, mirror_key, optional_mirror_root, run,
-};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use super::{CachedCheckout, attempt_cached_checkout};
+use super::{Git, capture, mirror_key, optional_mirror_root, run};
 
 #[test]
 fn cleanup_only_preserves_refs_and_reports_failures_without_cloning() {
@@ -1351,6 +1351,7 @@ fn run_isolated(fixture: &Fixture, name: &str) {
 
 /// Whether the checkout at `target` is a partial (blobless) clone. The network path makes one and
 /// the mirror path does not, which tells the two apart.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn is_partial_clone(target: &Path) -> bool {
     fs::read_to_string(target.join(".git/config"))
         .unwrap()
