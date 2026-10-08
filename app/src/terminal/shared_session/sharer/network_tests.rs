@@ -247,10 +247,23 @@ fn test_reconnect_send_timeout_is_retryable() {
             Duration::from_millis(20),
             Duration::from_secs(2),
         );
-        assert_eventually!(
-            network.read(&app, |network, _| network.is_connected()),
-            "A stalled reconnect send should time out and retry"
-        );
+        let (reconnected_tx, reconnected_rx) = async_channel::bounded(1);
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&network, move |_, event, _| {
+                if matches!(event, NetworkEvent::ReconnectedSuccessfully) {
+                    reconnected_tx.try_send(()).unwrap();
+                }
+            });
+        });
+        if !network.read(&app, |network, _| network.is_connected()) {
+            reconnected_rx
+                .recv()
+                .with_timeout(Duration::from_secs(5))
+                .await
+                .expect("A stalled reconnect send should time out and retry")
+                .unwrap();
+        }
+        network.read(&app, |network, _| assert!(network.is_connected()));
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
     });
 }
@@ -269,10 +282,25 @@ fn test_reconnect_attempt_budget_exhaustion_finishes_session() {
             Duration::from_secs(1),
             Duration::from_secs(2),
         );
-        assert_eventually!(
-            network.read(&app, |network, _| matches!(network.stage, Stage::Finished)),
-            "Exhausting reconnect retries should finish rather than strand the session"
-        );
+        let (failure_tx, failure_rx) = async_channel::bounded(1);
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&network, move |_, event, _| {
+                if matches!(event, NetworkEvent::FailedToReconnect) {
+                    failure_tx.try_send(()).unwrap();
+                }
+            });
+        });
+        if !network.read(&app, |network, _| matches!(network.stage, Stage::Finished)) {
+            failure_rx
+                .recv()
+                .with_timeout(Duration::from_secs(5))
+                .await
+                .expect("Exhausting reconnect retries should finish rather than strand the session")
+                .unwrap();
+        }
+        network.read(&app, |network, _| {
+            assert!(matches!(network.stage, Stage::Finished))
+        });
         assert_eq!(attempts.load(Ordering::SeqCst), 3);
         network.read(&app, |network, _| assert!(network.ws_proxy_tx.is_closed()));
     });
