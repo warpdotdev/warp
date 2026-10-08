@@ -245,6 +245,12 @@ pub struct AIExecutionProfilesModel {
     profile_id_to_sync_id: HashMap<ExecutionProfileId, SyncId>,
     /// Only contains entries for non-default profiles.
     active_profiles_per_session: HashMap<EntityId, ExecutionProfileId>,
+    session_computer_use: HashMap<EntityId, SessionComputerUse>,
+}
+
+#[cfg_attr(not(test), expect(dead_code))]
+pub(crate) struct SessionComputerUse {
+    pub enabled: bool,
 }
 
 impl AIExecutionProfilesModel {
@@ -505,6 +511,7 @@ impl AIExecutionProfilesModel {
             default_profile_state,
             profile_id_to_sync_id,
             active_profiles_per_session,
+            session_computer_use: HashMap::new(),
         };
 
         if !uses_file_backed_profiles {
@@ -962,6 +969,7 @@ impl AIExecutionProfilesModel {
 
     // On logout, we need to clear any existing profile state.
     pub fn reset(&mut self, settings_profiles_are_explicit: bool) {
+        self.session_computer_use.clear();
         if self.source.is_settings_collection() {
             if self.source.imports_legacy_profiles() {
                 self.settings_migration_state =
@@ -1085,6 +1093,43 @@ impl AIExecutionProfilesModel {
         self.active_profiles_per_session
             .insert(terminal_view_id, profile_id);
         ctx.emit(AIExecutionProfilesModelEvent::UpdatedActiveProfile { terminal_view_id });
+    }
+
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn session_computer_use(
+        &self,
+        terminal_view_id: EntityId,
+    ) -> Option<&SessionComputerUse> {
+        self.session_computer_use.get(&terminal_view_id)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn set_session_computer_use(
+        &mut self,
+        terminal_view_id: EntityId,
+        enabled: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.session_computer_use
+            .insert(terminal_view_id, SessionComputerUse { enabled });
+        ctx.emit(AIExecutionProfilesModelEvent::UpdatedActiveProfile { terminal_view_id });
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn clear_session_computer_use(
+        &mut self,
+        terminal_view_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self
+            .session_computer_use
+            .remove(&terminal_view_id)
+            .is_some()
+        {
+            ctx.emit(AIExecutionProfilesModelEvent::UpdatedActiveProfile { terminal_view_id });
+        }
     }
 
     /// Returns a profile by its client ID.

@@ -35,6 +35,7 @@ use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::OrchestrationPillBarModel;
 use crate::ai::chatgpt_subscription::ChatGPTSubscriptionModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::llms::LLMPreferences;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::ai::request_usage_model::AIRequestUsageModel;
@@ -329,6 +330,9 @@ pub fn log_out(app: &mut AppContext) {
         .is_value_explicitly_set();
     AIExecutionProfilesModel::handle(app).update(app, |profiles, _| {
         profiles.reset(settings_profiles_are_explicit);
+    });
+    LLMPreferences::handle(app).update(app, |preferences, _| {
+        preferences.reset_session_overrides();
     });
 
     NotebookManager::handle(app).update(app, |manager, _| manager.reset());
