@@ -130,43 +130,49 @@ fn sanitized_error(context: &str, error: impl fmt::Display) -> anyhow::Error {
     )
 }
 
-/// Records each checkout's `HEAD` commit in its outcome. Checkouts that cannot be resolved, and
-/// any left once resolution exceeds `HEAD_CAPTURE_TIMEOUT`, stay unresolved.
+/// Resolves missing checkout HEADs with bounded concurrency and a per-checkout timeout.
 async fn resolve_heads(batch: &CheckoutBatch, outcomes: &mut [CheckoutOutcome]) {
-    let capture = async {
-        for outcome in outcomes.iter_mut() {
-            let Some(request) = batch.repositories.get(outcome.request_index) else {
-                continue;
-            };
-            let mut git = Git::default();
-            outcome.resolved_head = git
-                .run(
-                    "HEAD resolution",
-                    &batch.working_dir.join(&request.checkout_name),
-                    &["rev-parse", "--verify", "HEAD"],
+    let mut capture = stream::iter(
+        outcomes
+            .iter_mut()
+            .filter(|outcome| outcome.resolved_head.is_none())
+            .map(|outcome| async move {
+                let Some(request) = batch.repositories.get(outcome.request_index) else {
+                    return;
+                };
+                let mut git = Git::default();
+                let head = tokio::time::timeout(
+                    HEAD_CAPTURE_TIMEOUT,
+                    git.run(
+                        "HEAD resolution",
+                        &batch.working_dir.join(&request.checkout_name),
+                        &["rev-parse", "--verify", "HEAD"],
+                    ),
                 )
-                .await
-                .ok()
-                .and_then(|head| parse_resolved_head_sha(&head));
-            match &outcome.resolved_head {
-                Some(head) => log::info!(
-                    "Repository {}: resolved HEAD {head}",
-                    repository_label(request)
-                ),
-                None => log::warn!(
-                    "Repository {}: could not resolve HEAD\n{}",
-                    repository_label(request),
-                    git.diagnostics
-                ),
-            }
-        }
-    };
-    if tokio::time::timeout(HEAD_CAPTURE_TIMEOUT, capture)
-        .await
-        .is_err()
-    {
-        log::warn!("Timed out capturing structured repository resolved HEADs");
-    }
+                .await;
+                let Ok(head) = head else {
+                    log::warn!(
+                        "Repository {}: timed out capturing resolved HEAD",
+                        repository_label(request)
+                    );
+                    return;
+                };
+                outcome.resolved_head = head.ok().and_then(|head| parse_resolved_head_sha(&head));
+                match &outcome.resolved_head {
+                    Some(head) => log::info!(
+                        "Repository {}: resolved HEAD {head}",
+                        repository_label(request)
+                    ),
+                    None => log::warn!(
+                        "Repository {}: could not resolve HEAD\n{}",
+                        repository_label(request),
+                        git.diagnostics
+                    ),
+                }
+            }),
+    )
+    .buffer_unordered(CHECKOUT_WORKERS);
+    while capture.next().await.is_some() {}
 }
 
 /// Runs `git` with an optional stdin `input` and returns its stdout, or `None` if it fails,

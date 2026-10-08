@@ -90,6 +90,123 @@ fn reported_heads_are_keyed_by_checkout_name_and_omit_unresolved_heads() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn head_probe_timeout_preserves_later_snapshot_repositories() {
+    use std::io::Write as _;
+
+    use nix::sys::stat::Mode;
+    use nix::unistd::mkfifo;
+    use warp_cli::environment_checkout::EnvironmentCheckoutArgs;
+    use warp_core::features::FeatureFlag;
+
+    let _mirrors = FeatureFlag::GitMirrorCache.override_enabled(false);
+    let directory = tempfile::tempdir().unwrap();
+    let git = |cwd: &Path, args: &[&str]| {
+        let output = Command::new("git")
+            .current_dir(cwd)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    for name in ["before", "slow-1", "slow-2", "slow-3", "slow-4", "later"] {
+        let target = directory.path().join(name);
+        fs::create_dir(&target).unwrap();
+        git(&target, &["init", "--quiet", "-b", "main"]);
+        fs::write(
+            target.join(".git/config"),
+            "[core]\nrepositoryformatversion = 0\nbare = false\nhooksPath = /dev/null\n\
+             [user]\nname = Checkout Fixture\nemail = checkout@example.com\n\
+             [commit]\ngpgsign = false\n",
+        )
+        .unwrap();
+        git(&target, &["commit", "--quiet", "--allow-empty", "-m", name]);
+    }
+    let before = git(
+        &directory.path().join("before"),
+        &["rev-parse", "--verify", "HEAD"],
+    );
+    let later = git(
+        &directory.path().join("later"),
+        &["rev-parse", "--verify", "HEAD"],
+    );
+    let fifo = directory.path().join("blocked-config");
+    mkfifo(&fifo, Mode::S_IRUSR | Mode::S_IWUSR).unwrap();
+    for name in ["slow-1", "slow-2", "slow-3", "slow-4"] {
+        writeln!(
+            fs::OpenOptions::new()
+                .append(true)
+                .open(directory.path().join(name).join(".git/config"))
+                .unwrap(),
+            "[include]\npath = \"{}\"",
+            fifo.display()
+        )
+        .unwrap();
+    }
+    let mut batch = checkout_batch(["before", "slow-1", "slow-2", "slow-3", "slow-4", "later"]);
+    batch.working_dir = directory.path().to_owned();
+    let args = EnvironmentCheckoutArgs {
+        requests_file: directory.path().join("requests.json"),
+        report_file: directory.path().join("report.json"),
+        remove_origins_only: false,
+    };
+    fs::write(&args.requests_file, serde_json::to_vec(&batch).unwrap()).unwrap();
+
+    super::super::environment_checkout::run(&args).unwrap();
+
+    let report = read_checkout_report(&args.report_file, 6).unwrap();
+    assert!(report.failures().next().is_none());
+    assert_eq!(
+        report
+            .outcomes
+            .iter()
+            .map(|outcome| (outcome.request_index, outcome.resolved_head.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![
+            (0, Some(before.as_str())),
+            (1, None),
+            (2, None),
+            (3, None),
+            (4, None),
+            (5, Some(later.as_str()))
+        ]
+    );
+    let requests = repository_clone_requests(
+        &[
+            repo(CodeForge::GitHub, "warpdotdev", "before"),
+            repo(CodeForge::GitHub, "warpdotdev", "slow-1"),
+            repo(CodeForge::GitHub, "warpdotdev", "slow-2"),
+            repo(CodeForge::GitHub, "warpdotdev", "slow-3"),
+            repo(CodeForge::GitHub, "warpdotdev", "slow-4"),
+            repo(CodeForge::GitHub, "warpdotdev", "later"),
+        ],
+        &[],
+        false,
+    )
+    .unwrap();
+    let snapshot = environment_snapshot(
+        &requests,
+        directory.path(),
+        &reported_resolved_heads(&report, &batch),
+    );
+    assert_eq!(
+        snapshot
+            .repositories
+            .iter()
+            .map(|revision| (
+                revision.checkout_path.as_str(),
+                revision.resolved_head_sha.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        vec![("before", before.as_str()), ("later", later.as_str())]
+    );
+}
 fn checkout_batch<const COUNT: usize>(checkout_names: [&str; COUNT]) -> CheckoutBatch {
     CheckoutBatch {
         working_dir: PathBuf::from("/workspace"),
