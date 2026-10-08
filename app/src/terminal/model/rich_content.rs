@@ -9,6 +9,7 @@ pub enum RichContentType {
     AgentViewZeroState,
     TerminalViewZeroState,
     PluginInstructionsBlock,
+    PowerShellTable,
 }
 
 impl RichContentType {

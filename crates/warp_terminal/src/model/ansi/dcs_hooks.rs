@@ -87,6 +87,15 @@ pub(super) enum DProtoHook {
     ExitShell {
         value: ExitShellValue,
     },
+    PowerShellTableBegin {
+        value: PowerShellTableBeginValue,
+    },
+    PowerShellTableRows {
+        value: PowerShellTableRowsValue,
+    },
+    PowerShellTableEnd {
+        value: PowerShellTableEndValue,
+    },
 }
 
 /// The variant names of [`DProtoHook`], used for unknown-variant errors.
@@ -105,6 +114,9 @@ const DPROTO_HOOK_VARIANTS: &[&str] = &[
     "SourcedRcFileForWarp",
     "FinishUpdate",
     "ExitShell",
+    "PowerShellTableBegin",
+    "PowerShellTableRows",
+    "PowerShellTableEnd",
 ];
 
 /// The envelope shape of a serialized hook: the `hook` tag plus the `value`
@@ -171,6 +183,15 @@ impl<'de> Deserialize<'de> for DProtoHook {
             "ExitShell" => DProtoHook::ExitShell {
                 value: parse_hook_value::<_, D::Error>(raw.value)?,
             },
+            "PowerShellTableBegin" => DProtoHook::PowerShellTableBegin {
+                value: parse_hook_value::<_, D::Error>(raw.value)?,
+            },
+            "PowerShellTableRows" => DProtoHook::PowerShellTableRows {
+                value: parse_hook_value::<_, D::Error>(raw.value)?,
+            },
+            "PowerShellTableEnd" => DProtoHook::PowerShellTableEnd {
+                value: parse_hook_value::<_, D::Error>(raw.value)?,
+            },
             unknown => {
                 return Err(serde::de::Error::unknown_variant(
                     unknown,
@@ -198,6 +219,9 @@ impl DProtoHook {
             DProtoHook::SourcedRcFileForWarp { .. } => "SourcedRcFileForWarp",
             DProtoHook::FinishUpdate { .. } => "FinishUpdate",
             DProtoHook::ExitShell { .. } => "ExitShell",
+            DProtoHook::PowerShellTableBegin { .. } => "PowerShellTableBegin",
+            DProtoHook::PowerShellTableRows { .. } => "PowerShellTableRows",
+            DProtoHook::PowerShellTableEnd { .. } => "PowerShellTableEnd",
         }
     }
 
@@ -221,6 +245,9 @@ impl DProtoHook {
             DProtoHook::SSH { value } => value.session_id.map(SessionId::from),
             DProtoHook::InitSubshell { value } => value.session_id.map(SessionId::from),
             DProtoHook::SourcedRcFileForWarp { .. } => None,
+            DProtoHook::PowerShellTableBegin { value } => value.session_id.map(SessionId::from),
+            DProtoHook::PowerShellTableRows { value } => value.session_id.map(SessionId::from),
+            DProtoHook::PowerShellTableEnd { value } => value.session_id.map(SessionId::from),
         }
     }
 
@@ -240,7 +267,10 @@ impl DProtoHook {
             | DProtoHook::Clear { .. }
             | DProtoHook::InitSubshell { .. }
             | DProtoHook::FinishUpdate { .. }
-            | DProtoHook::ExitShell { .. } => true,
+            | DProtoHook::ExitShell { .. }
+            | DProtoHook::PowerShellTableBegin { .. }
+            | DProtoHook::PowerShellTableRows { .. }
+            | DProtoHook::PowerShellTableEnd { .. } => true,
             DProtoHook::SourcedRcFileForWarp { .. } => false,
         }
     }
@@ -1041,6 +1071,36 @@ pub struct FinishUpdateValue {
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ExitShellValue {
     pub session_id: SessionId,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PowerShellTableColumn {
+    pub name: String,
+    pub property_name: String,
+    pub type_name: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PowerShellTableBeginValue {
+    #[serde(default)]
+    pub session_id: HookSessionId,
+    pub table_id: String,
+    pub columns: Vec<PowerShellTableColumn>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PowerShellTableRowsValue {
+    #[serde(default)]
+    pub session_id: HookSessionId,
+    pub table_id: String,
+    pub rows: Vec<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PowerShellTableEndValue {
+    #[serde(default)]
+    pub session_id: HookSessionId,
+    pub table_id: String,
 }
 
 /// Custom serde deserializer that trims trailing null bytes.
