@@ -31,7 +31,7 @@ use warp_cli::share::ShareRequest;
 use warp_cli::skill::SkillSpec;
 use warp_core::features::FeatureFlag;
 use warp_core::{safe_debug, safe_error, safe_info, safe_warn};
-use warp_errors::{ErrorExt, register_error, report_error, report_if_error};
+use warp_errors::{ErrorExt, ReportErrorLogMode, register_error, report_error, report_if_error};
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_managed_secrets::ManagedSecretValue;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -4392,7 +4392,8 @@ impl AgentDriver {
                                 runner
                                     .handle_session_update(&foreground)
                                     .await
-                                    .context("Failed to handle harness session update")
+                                    .context("Failed to handle harness session update"),
+                                ReportErrorLogMode::OncePerRun
                             );
                         },
                         |_, _, _| {},
