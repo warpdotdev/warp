@@ -18,3 +18,10 @@ fn local_child_harnesses_are_local_only_by_default() {
     assert!(!DEBUG_FLAGS.contains(&FeatureFlag::LocalClaudeCodexChildHarnesses));
     assert!(!DOGFOOD_FLAGS.contains(&FeatureFlag::LocalClaudeCodexChildHarnesses));
 }
+
+#[test]
+fn cloud_agent_execution_config_is_dogfood_only_by_default() {
+    assert!(DOGFOOD_FLAGS.contains(&FeatureFlag::CloudAgentExecutionConfig));
+    assert!(!PREVIEW_FLAGS.contains(&FeatureFlag::CloudAgentExecutionConfig));
+    assert!(!RELEASE_FLAGS.contains(&FeatureFlag::CloudAgentExecutionConfig));
+}

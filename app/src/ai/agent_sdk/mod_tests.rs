@@ -471,8 +471,9 @@ fn factory_experiment_bootstrap_subprocess() {
 }
 
 #[test]
-fn agent_run_setup_reports_terminal_team_metadata_refresh_failure() {
+fn legacy_execution_launch_skips_bootstrap_and_reports_team_metadata_refresh_failure() {
     App::test((), |mut app| async move {
+        let _execution_config = FeatureFlag::CloudAgentExecutionConfig.override_enabled(false);
         app.add_singleton_model(|_| NetworkStatus::new());
         app.add_singleton_model(TeamTesterStatus::new);
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());
@@ -517,7 +518,14 @@ fn agent_run_setup_reports_terminal_team_metadata_refresh_failure() {
 
         let runner = app.add_singleton_model(|_| AgentDriverRunner);
         let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
-        let args = parse_run_agent_args(&["agent", "run", "--task-id", TASK_ID]);
+        let args = parse_run_agent_args(&[
+            "agent",
+            "run",
+            "--task-id",
+            TASK_ID,
+            "--execution-id",
+            "123",
+        ]);
 
         let error = AgentDriverRunner::setup_and_run_driver(
             foreground,

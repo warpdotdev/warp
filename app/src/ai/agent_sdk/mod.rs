@@ -847,8 +847,9 @@ impl AgentDriverRunner {
             setup_events
                 .post_timeline_event(OzRunTimelineEvent::WorkerContainerReady)
                 .await;
-            let execution_data = if let (Some(task_id), Some(execution_id)) =
-                (args.task_id.as_deref(), args.execution_id.as_deref())
+            let execution_data = if FeatureFlag::CloudAgentExecutionConfig.is_enabled()
+                && let (Some(task_id), Some(execution_id)) =
+                    (args.task_id.as_deref(), args.execution_id.as_deref())
             {
                 Some(Self::fetch_execution_task_data(&foreground, task_id, execution_id).await?)
             } else {
