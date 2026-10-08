@@ -847,8 +847,9 @@ impl AgentDriverRunner {
             setup_events
                 .post_timeline_event(OzRunTimelineEvent::WorkerContainerReady)
                 .await;
-            let execution_data = if let Some(execution_id) = args.execution_id.as_deref() {
-                let task_id = args.task_id.as_deref().ok_or(AgentDriverError::InvalidRuntimeState)?;
+            let execution_data = if let (Some(task_id), Some(execution_id)) =
+                (args.task_id.as_deref(), args.execution_id.as_deref())
+            {
                 Some(Self::fetch_execution_task_data(&foreground, task_id, execution_id).await?)
             } else {
                 None
@@ -910,7 +911,11 @@ impl AgentDriverRunner {
                 None => args.bedrock_role_region.clone(),
             };
             let has_task_id = args.task_id.is_some();
-            let resume_conversation_id = args.conversation.clone();
+            let resume_conversation_id = if has_execution_config {
+                None
+            } else {
+                args.conversation.clone()
+            };
 
             // Build driver options and task, handling task creation or existing task setup.
             // For the `--task-id` path, `task_conversation_id` is the `conversation_id` read off

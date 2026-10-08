@@ -27,36 +27,52 @@ fn identifies_worker_subcommands() {
 }
 
 #[test]
-fn execution_config_launch_requires_task_id_and_rejects_semantic_overrides() {
+fn execution_config_launch_requires_task_id() {
     let missing_task =
         Args::try_parse_from(["warp", "agent", "run", "--execution-id", "execution"]);
     assert!(missing_task.is_err());
+}
 
-    for semantic in [
+#[test]
+fn execution_config_launch_accepts_legacy_settings() {
+    Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "task",
+        "--execution-id",
+        "execution",
         "--model",
+        "legacy-model",
         "--environment",
+        "legacy-environment",
         "--share",
+        "team:edit",
         "--no-snapshot",
         "--skill",
-    ] {
-        let mut args = vec![
-            "warp",
-            "agent",
-            "run",
-            "--task-id",
-            "task",
-            "--execution-id",
-            "execution",
-            semantic,
-        ];
-        if semantic != "--no-snapshot" {
-            args.push("value");
-        }
-        assert!(
-            Args::try_parse_from(args).is_err(),
-            "{semantic} must conflict with execution settings"
-        );
-    }
+        "legacy-skill",
+        "--mcp",
+        r#"{"legacy":{"command":"legacy-mcp"}}"#,
+        "--computer-use",
+        "--idle-on-complete",
+        "10m",
+        "--idle-on-fail",
+        "5m",
+        "--conversation",
+        "legacy-conversation",
+        "--profile",
+        "legacy-profile",
+        "--harness",
+        "claude",
+        "--bedrock-inference-role",
+        "legacy-role",
+        "--bedrock-role-region",
+        "us-west-2",
+        "--skip-initial-turn",
+        "--remove-repository-origins",
+    ])
+    .expect("legacy settings must remain compatible with execution bootstrap");
 }
 
 #[test]
@@ -90,6 +106,90 @@ fn execution_config_launch_accepts_operational_timeouts_without_restricting_lega
         "warp", "agent", "run", "--prompt", "hello", "--model", "auto",
     ])
     .unwrap();
+}
+
+#[test]
+#[serial_test::serial]
+fn execution_config_env_selects_bootstrap_with_legacy_settings() {
+    let previous = set_env_var("WARP_EXECUTION_ID", "execution-from-env");
+    let parsed = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "task",
+        "--model",
+        "legacy-model",
+        "--share",
+        "team:edit",
+        "--computer-use",
+        "--idle-on-complete",
+        "10m",
+    ])
+    .unwrap();
+    let Some(Command::CommandLine(command)) = parsed.command() else {
+        panic!("expected a CLI command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(args)) = command.as_ref() else {
+        panic!("expected agent run");
+    };
+    let execution_id = args.execution_id.clone();
+    restore_env_var("WARP_EXECUTION_ID", previous);
+
+    assert_eq!(execution_id.as_deref(), Some("execution-from-env"));
+}
+
+#[test]
+#[serial_test::serial]
+fn execution_config_flag_takes_precedence_over_environment() {
+    let previous = set_env_var("WARP_EXECUTION_ID", "execution-from-env");
+    let parsed = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "task",
+        "--execution-id",
+        "explicit-execution",
+    ])
+    .unwrap();
+    let Some(Command::CommandLine(command)) = parsed.command() else {
+        panic!("expected a CLI command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(args)) = command.as_ref() else {
+        panic!("expected agent run");
+    };
+    let execution_id = args.execution_id.clone();
+    restore_env_var("WARP_EXECUTION_ID", previous);
+
+    assert_eq!(execution_id.as_deref(), Some("explicit-execution"));
+}
+
+#[test]
+#[serial_test::serial]
+fn execution_config_env_requires_task_id() {
+    let previous = set_env_var("WARP_EXECUTION_ID", "parent-execution");
+    let parsed = Args::try_parse_from(["warp", "agent", "run"]);
+    restore_env_var("WARP_EXECUTION_ID", previous);
+    let error = parsed.expect_err("an environment-supplied execution ID requires a task ID");
+    assert!(error.to_string().contains("--task-id"));
+}
+
+#[test]
+#[serial_test::serial]
+fn local_run_accepts_inherited_execution_config_env() {
+    let previous = set_env_var("WARP_EXECUTION_ID", "parent-execution");
+    let parsed = Args::try_parse_from(["warp", "agent", "run", "--prompt", "hello"]);
+    restore_env_var("WARP_EXECUTION_ID", previous);
+    let parsed = parsed.unwrap();
+    let Some(Command::CommandLine(command)) = parsed.command() else {
+        panic!("expected a CLI command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(args)) = command.as_ref() else {
+        panic!("expected agent run");
+    };
+    assert_eq!(args.task_id, None);
+    assert_eq!(args.execution_id.as_deref(), Some("parent-execution"));
 }
 
 #[test]

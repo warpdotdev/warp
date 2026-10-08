@@ -462,18 +462,6 @@ impl AgentCommand {
             .required(true)
             .multiple(true)
             .args(["prompt", "saved_prompt", "task_id", "skill"])
-    ),
-    group(
-        clap::ArgGroup::new("execution_semantics")
-            .multiple(true)
-            .args([
-                "prompt", "saved_prompt", "skill", "name", "model", "file", "team",
-                "environment", "share", "mcp_specs", "mcp_servers", "idle_on_complete",
-                "idle_on_fail", "no_snapshot", "bedrock_inference_role",
-                "bedrock_role_region", "computer_use", "no_computer_use", "conversation",
-                "profile", "harness", "skip_initial_turn", "repository_preparation_overrides",
-                "remove_repository_origins",
-            ])
     )
 )]
 pub struct RunAgentArgs {
@@ -588,9 +576,9 @@ pub struct RunAgentArgs {
     /// Execution whose server-owned settings configure this task launch.
     #[arg(
         long = "execution-id",
+        env = "WARP_EXECUTION_ID",
         hide = true,
-        requires = "task_id",
-        conflicts_with = "execution_semantics"
+        requires = "task_id"
     )]
     pub execution_id: Option<String>,
 
@@ -672,6 +660,7 @@ impl RunAgentArgs {
     pub fn effective_idle_on_fail(&self) -> Option<humantime::Duration> {
         self.idle_on_fail.or(self.idle_on_fail_env)
     }
+
     /// Combine `mcp_specs` with legacy `mcp_servers` (UUIDs) into a single list.
     pub fn all_mcp_specs(&self) -> Vec<MCPSpec> {
         let mut specs = self.mcp_specs.clone();
