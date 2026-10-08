@@ -15477,6 +15477,7 @@ dependencies = [
  "typed-path 0.10.0",
  "ui_components",
  "unicase",
+ "unicode-bidi",
  "unicode-general-category",
  "unicode-width 0.1.14",
  "unindent 0.1.11",

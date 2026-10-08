@@ -338,6 +338,7 @@ arborium = { version = "2", default-features = false, features = [
   "lang-dockerfile",
   "lang-markdown",
 ] }
+unicode-bidi = "0.3.15"
 unicode-general-category = "1.1.0"
 unicode-linebreak = "0.1.5"
 unicode-segmentation = "1.11.0"

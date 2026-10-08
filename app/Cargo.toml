@@ -213,6 +213,7 @@ tracing.workspace = true
 tracing-futures = { workspace = true, features = ["futures-03"] }
 ui_components.workspace = true
 unicase = "2.7.0"
+unicode-bidi.workspace = true
 unicode-general-category.workspace = true
 unicode-width.workspace = true
 unindent = "0.1.7"
@@ -1031,6 +1032,7 @@ ctrl_c_cancels_third_party_harness = []
 shell_widget_handoff = []
 history_search_ranking_v2 = []
 stored_screenshots = []
+rtl_terminal_text = []
 
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"

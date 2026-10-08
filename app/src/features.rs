@@ -529,6 +529,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::HistorySearchRankingV2,
         #[cfg(feature = "stored_screenshots")]
         FeatureFlag::StoredScreenshots,
+        #[cfg(feature = "rtl_terminal_text")]
+        FeatureFlag::RtlTerminalText,
     ]);
 
     flags

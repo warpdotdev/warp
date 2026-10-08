@@ -982,6 +982,10 @@ pub enum FeatureFlag {
     /// replace inline computer-use screenshot bytes with references to
     /// Warp-managed object storage.
     StoredScreenshots,
+
+    /// Renders right-to-left scripts (e.g. Arabic, Hebrew) in terminal output in visual order with
+    /// contextual shaping, instead of drawing each cell's glyph in logical order.
+    RtlTerminalText,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1058,6 +1062,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::WarpingModelName,
     FeatureFlag::LrcActivitySignal,
     FeatureFlag::StoredScreenshots,
+    FeatureFlag::RtlTerminalText,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
