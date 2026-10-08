@@ -1,11 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::future::Future;
 use std::io::{self, ErrorKind, Write as _};
 use std::path::{Component, Path, PathBuf};
 
 use chrono::{SecondsFormat, Utc};
+use command::r#async::Command;
 use serde::Serialize;
 use tempfile::NamedTempFile;
+
+use crate::{CacheSetupError, create_cache_dir_all};
 
 const METADATA_FILE: &str = "cache-metadata.json";
 
@@ -16,6 +20,33 @@ pub struct CacheUsage {
     pub path: PathBuf,
     pub cache_framework: Option<String>,
     pub mount_target: Vec<String>,
+}
+/// Ensure the Namespace metadata directory is writable without following a symlinked directory.
+pub async fn prepare_cache_metadata_directory<F, Fut>(
+    cache_root: &Path,
+    run_command: F,
+) -> Result<(), CacheMetadataError>
+where
+    F: Fn(Command) -> Fut,
+    Fut: Future<Output = Result<Vec<u8>, CacheSetupError>>,
+{
+    let directory = normalized_cache_root(cache_root)?.join(".ns");
+    check_metadata_directory(&directory)?;
+    create_cache_dir_all(&directory, &run_command)
+        .await
+        .map_err(CacheMetadataError::DirectoryPreparation)
+}
+fn check_metadata_directory(directory: &Path) -> Result<(), CacheMetadataError> {
+    match fs::symlink_metadata(directory) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(CacheMetadataError::Symlink),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(CacheMetadataError::Io {
+            operation: "inspect directory",
+            path: directory.to_owned(),
+            source,
+        }),
+    }
 }
 
 #[derive(Serialize)]
@@ -54,6 +85,8 @@ pub enum CacheMetadataError {
     },
     #[error("cache metadata could not be serialized: {0}")]
     Serialize(#[source] serde_json::Error),
+    #[error("failed to prepare cache metadata directory: {0}")]
+    DirectoryPreparation(#[source] CacheSetupError),
 }
 
 /// Replace Namespace usage metadata with a complete snapshot for this instance.
@@ -70,20 +103,7 @@ pub fn write_cache_metadata(
     };
     let bytes = serde_json::to_vec_pretty(&document).map_err(CacheMetadataError::Serialize)?;
     let directory = normalized_cache_root(cache_root)?.join(".ns");
-    match fs::symlink_metadata(&directory) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            return Err(CacheMetadataError::Symlink);
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == ErrorKind::NotFound => {}
-        Err(source) => {
-            return Err(CacheMetadataError::Io {
-                operation: "inspect directory",
-                path: directory,
-                source,
-            });
-        }
-    }
+    check_metadata_directory(&directory)?;
     fs::create_dir_all(&directory).map_err(|source| CacheMetadataError::Io {
         operation: "create directory",
         path: directory.clone(),

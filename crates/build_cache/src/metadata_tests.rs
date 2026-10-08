@@ -5,7 +5,10 @@ use std::{fs, io};
 use chrono::DateTime;
 use serde_json::{Value, json};
 
-use super::{CacheMetadata, CacheMetadataError, CacheUsage, write_cache_metadata};
+use super::{
+    CacheMetadata, CacheMetadataError, CacheUsage, prepare_cache_metadata_directory,
+    write_cache_metadata,
+};
 
 fn usage(path: &str, mode: &str, targets: &[&str]) -> CacheUsage {
     CacheUsage {
@@ -362,10 +365,63 @@ fn symlinked_metadata_directory_is_rejected() {
     let root = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
     std::os::unix::fs::symlink(outside.path(), root.path().join(".ns")).unwrap();
+    assert!(matches!(
+        futures::executor::block_on(prepare_cache_metadata_directory(root.path(), |_| async {
+            panic!("symlinked metadata directory must not escalate")
+        })),
+        Err(CacheMetadataError::Symlink)
+    ));
 
     assert!(matches!(
         write_cache_metadata(root.path(), [usage("git-mirrors", "git", &[])]),
         Err(CacheMetadataError::Symlink)
     ));
     assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn metadata_directory_escalates_when_cache_root_is_not_writable() {
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::sync::Mutex;
+
+    if nix::unistd::geteuid().is_root() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join(".ns");
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o500)).unwrap();
+    let operations = Mutex::new(Vec::new());
+    futures::executor::block_on(prepare_cache_metadata_directory(root.path(), |command| {
+        let args = command.get_args().collect::<Vec<_>>();
+        assert_eq!(command.get_program(), "sudo");
+        assert_eq!(args[0], "-n");
+        assert_eq!(Path::new(args.last().unwrap()), directory);
+        if args[1] == "mkdir" {
+            fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+            fs::create_dir(&directory).unwrap();
+            fs::set_permissions(root.path(), fs::Permissions::from_mode(0o500)).unwrap();
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o500)).unwrap();
+        } else {
+            assert_eq!(args[2], "-h");
+            assert_eq!(args[3], crate::current_owner().as_str());
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        operations.lock().unwrap().push(args[1].to_owned());
+        futures::future::ready(Ok(Vec::new()))
+    }))
+    .unwrap();
+    write_cache_metadata(root.path(), [usage("git-mirrors", "git", &[])]).unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(
+        *operations.lock().unwrap(),
+        [
+            std::ffi::OsString::from("mkdir"),
+            std::ffi::OsString::from("chown")
+        ]
+    );
+    assert_eq!(
+        read_document(root.path())["userRequest"],
+        json!({"git-mirrors": {"source": "warp", "cacheFramework": "git", "mountTarget": []}})
+    );
 }
