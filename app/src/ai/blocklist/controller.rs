@@ -26,7 +26,7 @@ use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 pub use slash_command::*;
 use warp_core::assertions::safe_assert;
 use warp_errors::report_error;
-use warp_multi_agent_api::{AgentType, Task, ToolType, message};
+use warp_multi_agent_api::{AgentType, Task, ToolType, message, user_query_origin};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{
     AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WeakViewHandle,
@@ -1763,6 +1763,16 @@ impl BlocklistAIController {
         {
             return;
         }
+        let automation_followup = QueuedQueryModel::as_ref(ctx)
+            .ready_head(conversation_id)
+            .and_then(|row| row.base_user_query())
+            .is_some_and(|base| {
+                base.intended_agent().is_none()
+                    && matches!(
+                        base.to_proto().origin.and_then(|origin| origin.variant),
+                        Some(user_query_origin::Variant::Automation(_))
+                    )
+            });
         let block_id = {
             let model = self.terminal_model.lock();
             let block = model.block_list().active_block();
@@ -1772,6 +1782,7 @@ impl BlocklistAIController {
                 || block
                     .long_running_control_state()
                     .is_some_and(|state| state.is_user_in_control())
+                || automation_followup
             {
                 return;
             }
@@ -1830,11 +1841,23 @@ impl BlocklistAIController {
         task_id: &TaskId,
         ctx: &mut ModelContext<Self>,
     ) -> Option<AIAgentInput> {
-        self.maybe_interrupt_command_for_injection(conversation_id, ctx);
+        let routes_to_cli = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .and_then(|conversation| conversation.get_task(task_id))
+            .is_some_and(|task| task.is_cli_subagent())
+            && QueuedQueryModel::as_ref(ctx)
+                .ready_head(conversation_id)
+                .and_then(|row| row.base_user_query())
+                .is_none_or(|base| base.intended_agent() != Some(AgentType::Primary));
+        if !routes_to_cli {
+            self.maybe_interrupt_command_for_injection(conversation_id, ctx);
+        }
         let is_primary_injected_followup =
-            self.has_ready_primary_injected_followup(conversation_id, ctx);
+            !routes_to_cli && self.has_ready_primary_injected_followup(conversation_id, ctx);
         if (!QueuedQueryModel::as_ref(ctx).is_steering(conversation_id)
-            && !is_primary_injected_followup)
+            && QueuedQueryModel::as_ref(ctx)
+                .ready_head(conversation_id)
+                .is_none_or(|row| row.shared_session_prompt().is_none()))
             || QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(conversation_id)
         {
             return None;
@@ -2081,10 +2104,86 @@ impl BlocklistAIController {
         let finished_results = self.action_model.update(ctx, |action_model, _| {
             action_model.drain_finished_action_results(conversation_id)
         });
+        let will_trigger_server_subagent = finished_results
+            .iter()
+            .any(|r| r.result.triggers_server_subagent());
         let root_task_id = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
             .map(|conversation| conversation.get_root_task_id().clone());
-        let steered_input = root_task_id
+        let ready_row = QueuedQueryModel::as_ref(ctx).ready_head(conversation_id);
+        let can_route_to_cli = !QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(conversation_id)
+            && ready_row.is_some_and(|row| {
+                !row.is_command()
+                    && !row.base_user_query().is_some_and(|base| {
+                        base.is_agent_message_wake()
+                            || base.intended_agent() == Some(AgentType::Primary)
+                    })
+                    && (row.shared_session_prompt().is_some()
+                        || QueuedQueryModel::as_ref(ctx).is_steering(conversation_id))
+            });
+        let cli_block_id = can_route_to_cli
+            .then(|| {
+                finished_results
+                    .iter()
+                    .find_map(|result| match &result.result {
+                        AIAgentActionResultType::RequestCommandOutput(
+                            RequestCommandOutputResult::LongRunningCommandSnapshot {
+                                block_id, ..
+                            },
+                        ) => Some(block_id.clone()),
+                        _ => None,
+                    })
+                    .or_else(|| {
+                        let model = self.terminal_model.lock();
+                        let block = model.block_list().active_block();
+                        (block.ai_conversation_id() == Some(conversation_id)
+                            && block.cli_subagent_task_id().is_some()
+                            && (block.is_executing() || block.is_active_and_long_running())
+                            && !self
+                                .commands_interrupted_for_injection
+                                .contains_key(&conversation_id))
+                        .then(|| block.id().clone())
+                    })
+            })
+            .flatten();
+        let cli_task_id = cli_block_id.and_then(|block_id| {
+            let existing = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .and_then(|conversation| {
+                    conversation
+                        .all_tasks()
+                        .find(|task| {
+                            task.is_cli_subagent()
+                                && task.cli_subagent_block_id().as_ref() == Some(&block_id)
+                                && !matches!(
+                                    conversation.is_subagent_task_finished(task.id()),
+                                    Ok(true)
+                                )
+                        })
+                        .map(|task| task.id().clone())
+                });
+            existing.or_else(|| {
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    match history.create_cli_subagent_task_for_conversation(
+                        block_id,
+                        conversation_id,
+                        self.terminal_surface_id,
+                        ctx,
+                    ) {
+                        Ok(task_id) => Some(task_id),
+                        Err(error) => {
+                            report_error!(
+                                anyhow::Error::new(error)
+                                    .context("Could not create CLI task for queued follow-up")
+                            );
+                            None
+                        }
+                    }
+                })
+            })
+        });
+        let steering_task_id = cli_task_id.or(root_task_id);
+        let steered_input = steering_task_id
             .as_ref()
             .and_then(|task_id| self.steer_head_prompt_for_request(conversation_id, task_id, ctx));
         if finished_results.is_empty() && steered_input.is_none() {
@@ -2095,9 +2194,6 @@ impl BlocklistAIController {
         // subagent for LRC), or if one is already active. If so, we must not
         // piggyback orchestration events because the subagent cannot interpret
         // them and inserting events breaks tool_use/tool_result ordering.
-        let will_trigger_server_subagent = finished_results
-            .iter()
-            .any(|r| r.result.triggers_server_subagent());
         let has_active_subagent = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
             .is_some_and(|c| c.has_active_subagent());
@@ -2127,10 +2223,10 @@ impl BlocklistAIController {
         // below -- neither `finished_results` nor a piggybacked orchestration event ever
         // produces a `UserQuery`, so the steered input is the only possible source of one here.
         let is_queued_prompt = steered_input.is_some();
-        if let (Some(steered_input), Some(root_task_id)) = (steered_input, root_task_id) {
+        if let (Some(steered_input), Some(task_id)) = (steered_input, steering_task_id) {
             request_input
                 .input_messages
-                .entry(root_task_id)
+                .entry(task_id)
                 .or_default()
                 .push(steered_input);
         }

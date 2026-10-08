@@ -668,6 +668,195 @@ fn prepared_file() -> HashMap<String, AIAgentAttachment> {
 }
 
 #[test]
+fn automation_followup_routes_to_spawning_or_active_cli_with_attachments() {
+    for existing_cli in [false, true] {
+        App::test((), move |mut app| async move {
+            initialize_app_for_terminal_view(&mut app);
+            let terminal = add_window_with_terminal(&mut app, None);
+            let controller = terminal.read(&app, |view, _| view.ai_controller().clone());
+            let (id, root_task_id, block_id, action_id) =
+                controller.update(&mut app, start_injection_command);
+            let participant = ParticipantId::new();
+            let base = BaseUserQuery::from_proto(ApiUserQuery {
+                query: "review followup".into(),
+                origin: Some(UserQueryOrigin {
+                    variant: Some(UserQueryOriginVariant::Automation(
+                        warp_multi_agent_api::user_query_origin::Automation {
+                            automation_uid: "automation-1".into(),
+                            matched_event_kind: "github/pull_request_review_submitted".into(),
+                            ..Default::default()
+                        },
+                    )),
+                }),
+                ..Default::default()
+            });
+            let existing_task_id = if existing_cli {
+                Some(controller.update(&mut app, |controller, ctx| {
+                    controller.send_user_query_in_conversation("monitor".into(), id, None, ctx);
+                    BlocklistAIHistoryModel::as_ref(ctx)
+                        .conversation(&id)
+                        .unwrap()
+                        .all_tasks()
+                        .find(|task| task.is_cli_subagent())
+                        .unwrap()
+                        .id()
+                        .clone()
+                }))
+            } else {
+                None
+            };
+            let query_id = QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+                queue.append(
+                    id,
+                    file_prompt(participant.clone(), Some(base.clone())),
+                    ctx,
+                )
+            });
+            QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+                queue.complete_preparation(id, query_id, prepared_file(), ctx);
+            });
+            let actions = controller.update(&mut app, |controller, ctx| {
+                assert!(
+                    !controller
+                        .commands_interrupted_for_injection
+                        .contains_key(&id)
+                );
+                for stream in controller
+                    .in_flight_response_streams
+                    .stream_ids_for_conversation(id, ctx)
+                {
+                    controller
+                        .in_flight_response_streams
+                        .cleanup_stream(&stream);
+                }
+                if existing_cli {
+                    controller.send_follow_up_for_conversation(id, ctx);
+                }
+                controller.action_model.clone()
+            });
+            if !existing_cli {
+                actions.update(&mut app, |actions, ctx| {
+                    actions.apply_finished_action_result(
+                        id,
+                        AIAgentActionResult {
+                            id: action_id,
+                            task_id: root_task_id,
+                            result: AIAgentActionResultType::RequestCommandOutput(
+                                RequestCommandOutputResult::LongRunningCommandSnapshot {
+                                    block_id,
+                                    command: "lint".into(),
+                                    grid_contents: "working".into(),
+                                    cursor: String::new(),
+                                    is_alt_screen_active: false,
+                                    activity: None,
+                                },
+                            ),
+                        },
+                        ctx,
+                    );
+                });
+            }
+            BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+                let conversation = history.conversation(&id).unwrap();
+                assert_eq!(user_queries_in_order(history, id), vec!["initial"]);
+                let cli = conversation
+                    .all_tasks()
+                    .find(|task| task.is_cli_subagent())
+                    .unwrap();
+                if let Some(expected) = existing_task_id {
+                    assert_eq!(cli.id(), &expected);
+                }
+                let exchange = cli.exchanges().last().unwrap();
+                assert!(matches!(exchange.input.as_slice(),
+                    [AIAgentInput::UserQuery {
+                        query, intended_agent: Some(AgentType::Cli), base: Some(input_base),
+                        referenced_attachments, ..
+                    }] if query == "review followup"
+                        && input_base == &base
+                        && referenced_attachments == &prepared_file()
+                ));
+                if !existing_cli {
+                    assert!(
+                        conversation
+                            .root_task_exchanges()
+                            .last()
+                            .unwrap()
+                            .input
+                            .iter()
+                            .any(|input| matches!(input, AIAgentInput::ActionResult { .. }))
+                    );
+                }
+            });
+            controller.read(&app, |controller, ctx| {
+                assert_eq!(
+                    controller.get_current_response_initiator(),
+                    Some(participant)
+                );
+                assert!(
+                    !controller
+                        .commands_interrupted_for_injection
+                        .contains_key(&id)
+                );
+                assert!(!QueuedQueryModel::as_ref(ctx).has_queue(id));
+            });
+        });
+    }
+}
+
+#[test]
+fn automation_followup_with_explicit_primary_intent_still_interrupts_cli() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |view, _| view.ai_controller().clone());
+        let (id, _, block_id, _) = controller.update(&mut app, start_injection_command);
+        controller.update(&mut app, |controller, ctx| {
+            controller.send_user_query_in_conversation("monitor".into(), id, None, ctx);
+            let task_id = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&id)
+                .unwrap()
+                .all_tasks()
+                .find(|task| task.is_cli_subagent())
+                .unwrap()
+                .id()
+                .clone();
+            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+                queue.append(
+                    id,
+                    QueuedQuery::new_shared_session_prompt(
+                        "primary followup".into(),
+                        ParticipantId::new(),
+                        vec![],
+                        Some(BaseUserQuery::from_proto(ApiUserQuery {
+                            intended_agent: AgentType::Primary.into(),
+                            origin: Some(UserQueryOrigin {
+                                variant: Some(UserQueryOriginVariant::Automation(
+                                    Default::default(),
+                                )),
+                            }),
+                            ..Default::default()
+                        })),
+                    ),
+                    ctx,
+                );
+            });
+            assert!(
+                controller
+                    .steer_head_prompt_for_request(id, &task_id, ctx)
+                    .is_none()
+            );
+            assert_eq!(
+                controller.commands_interrupted_for_injection.get(&id),
+                Some(&block_id)
+            );
+            assert_eq!(
+                QueuedQueryModel::as_ref(ctx).ready_head(id).unwrap().text(),
+                "primary followup"
+            );
+        });
+    });
+}
+#[test]
 fn prepared_file_prompt_steers_without_interrupting_or_redownloading() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
