@@ -5,10 +5,9 @@ use std::{fs, io};
 use chrono::DateTime;
 use serde_json::{Value, json};
 
-use super::{
-    CacheMetadata, CacheMetadataError, CacheUsage, prepare_cache_metadata_directory,
-    write_cache_metadata,
-};
+#[cfg(unix)]
+use super::prepare_cache_metadata_directory;
+use super::{CacheMetadata, CacheMetadataError, CacheUsage, write_cache_metadata};
 
 fn usage(path: &str, mode: &str, targets: &[&str]) -> CacheUsage {
     CacheUsage {
