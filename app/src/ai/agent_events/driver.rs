@@ -359,7 +359,7 @@ where
         attempt += 1;
         let attempt_started = Instant::now();
         let mut last_receipt_at = attempt_started;
-        log::debug!(
+        log::info!(
             target: "agent_events",
             "[Agent events] stage=connect_start stream_id={stream_id} attempt={attempt} cursor={since_sequence} {}",
             config.filter.log_label()
@@ -372,7 +372,7 @@ where
         let mut stream = match source.open_stream(&config.filter, since_sequence).await {
             Ok(stream) => stream,
             Err(err) => {
-                log::debug!(
+                log::info!(
                     target: "agent_events",
                     "[Agent events] stage=connect_error stream_id={stream_id} attempt={attempt} cursor={since_sequence} elapsed_ms={} auth={} transient={}",
                     attempt_started.elapsed().as_millis(),
@@ -443,7 +443,7 @@ where
                 }
                 NextDriverItem::StreamItem(Some(Ok(AgentEventSourceItem::Event(event)))) => {
                     last_receipt_at = Instant::now();
-                    log::debug!(
+                    log::info!(
                         target: "agent_events",
                         "[Agent events] stage=parsed_receipt stream_id={stream_id} attempt={attempt} run_id={} message_id={} sequence={} cursor={since_sequence} duplicate_or_old={}",
                         event.run_id,
@@ -465,7 +465,7 @@ where
                     let event_sequence = event.sequence;
                     let started = Instant::now();
                     let result = consumer.on_event(event).await;
-                    log::debug!(
+                    log::info!(
                         target: "agent_events",
                         "[Agent events] stage=consumer_complete stream_id={stream_id} attempt={attempt} sequence={event_sequence} elapsed_ms={} error={}",
                         started.elapsed().as_millis(),
@@ -483,7 +483,7 @@ where
 
                     let started = Instant::now();
                     let result = consumer.persist_cursor(since_sequence).await;
-                    log::debug!(
+                    log::info!(
                         target: "agent_events",
                         "[Agent events] stage=cursor_commit stream_id={stream_id} attempt={attempt} cursor={since_sequence} persist_ms={} persist_error={}",
                         started.elapsed().as_millis(),
@@ -496,7 +496,7 @@ where
                     }
 
                     if matches!(control_flow, AgentEventConsumerControlFlow::Stop) {
-                        log::debug!(
+                        log::info!(
                             target: "agent_events",
                             "[Agent events] stage=stop stream_id={stream_id} attempt={attempt} reason=consumer cursor={since_sequence}"
                         );
@@ -504,7 +504,7 @@ where
                     }
                 }
                 NextDriverItem::StreamItem(Some(Err(err))) => {
-                    log::debug!(
+                    log::info!(
                         target: "agent_events",
                         "[Agent events] stage=stream_error stream_id={stream_id} attempt={attempt} cursor={since_sequence} lifetime_ms={} receipt_gap_ms={} auth={} transient={}",
                         attempt_started.elapsed().as_millis(),
@@ -529,7 +529,7 @@ where
                 // error) — always use the transient backoff schedule since
                 // there is no HTTP status to classify.
                 NextDriverItem::StreamItem(None) => {
-                    log::debug!(
+                    log::info!(
                         target: "agent_events",
                         "[Agent events] stage=stream_closed stream_id={stream_id} attempt={attempt} cursor={since_sequence} lifetime_ms={} receipt_gap_ms={}",
                         attempt_started.elapsed().as_millis(),
@@ -626,7 +626,7 @@ async fn handle_http_error<C: AgentEventConsumer>(
         config.permanent_error_backoff_steps
     };
     let backoff = agent_event_backoff(failures, backoff_steps);
-    log::debug!(
+    log::info!(
         target: "agent_events",
         "[Agent events] stage=retry reason=http_error failures={failures} backoff_ms={} initial={is_initial_connect} auth={} transient={} {}",
         backoff.as_millis(),

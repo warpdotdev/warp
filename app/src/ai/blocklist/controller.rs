@@ -2173,7 +2173,7 @@ impl BlocklistAIController {
         );
 
         if has_piggybacked_events {
-            log::debug!(
+            log::info!(
                 target: "agent_events",
                 "[Agent events] stage=request_schedule conversation_id={conversation_id} route=piggyback error={}",
                 result.is_err()
@@ -2477,7 +2477,7 @@ impl BlocklistAIController {
             is_queued_prompt,
             ctx,
         );
-        log::debug!(
+        log::info!(
             target: "agent_events",
             "[Agent events] stage=request_schedule conversation_id={conversation_id} route=idle error={}",
             result.is_err()
@@ -2502,13 +2502,13 @@ impl BlocklistAIController {
         inputs: &[AIAgentInput],
         route: &str,
     ) {
-        if !log::log_enabled!(target: "agent_events", log::Level::Debug) {
+        if !log::log_enabled!(target: "agent_events", log::Level::Info) {
             return;
         }
         for input in inputs {
             if let AIAgentInput::MessagesReceivedFromAgents { messages } = input {
                 for message in messages {
-                    log::debug!(
+                    log::info!(
                         target: "agent_events",
                         "[Agent events] stage=request_include conversation_id={conversation_id} route={route} message_id={} sender_run_id={}",
                         message.message_id,

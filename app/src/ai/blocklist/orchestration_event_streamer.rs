@@ -183,7 +183,7 @@ impl AgentEventConsumer for SseForwardingConsumer {
                 enqueued_at: Instant::now(),
             })
             .map_err(|_| anyhow!("SSE event receiver dropped"));
-        log::debug!(
+        log::info!(
             target: "agent_events",
             "[Agent events] stage=background_enqueue recipient_run_id={} sequence={sequence} hydrated={hydrated} error={}",
             self.self_run_id,
@@ -863,7 +863,7 @@ impl OrchestrationEventStreamer {
                 return;
             };
             while let Ok(Some(item)) = sse.event_receiver.try_next() {
-                log::debug!(
+                log::info!(
                     target: "agent_events",
                     "[Agent events] stage=background_drain conversation_id={conversation_id} generation={} run_id={} sequence={} cursor={cursor} queue_ms={} hydrated={} duplicate_or_old={}",
                     sse.generation,
@@ -2537,7 +2537,7 @@ impl OrchestrationEventStreamer {
 
             while let Ok(Some(item)) = sse.event_receiver.try_next() {
                 // Deduplicate: discard events at or below the cursor.
-                log::debug!(
+                log::info!(
                     target: "agent_events",
                     "[Agent events] stage=background_drain conversation_id={conversation_id} generation={} run_id={} sequence={} cursor={cursor} queue_ms={} hydrated={} duplicate_or_old={}",
                     sse.generation,
@@ -2630,10 +2630,10 @@ impl OrchestrationEventStreamer {
         }
 
         let pending = build_pending_events(messages, lifecycle_events);
-        if log::log_enabled!(target: "agent_events", log::Level::Debug) {
+        if log::log_enabled!(target: "agent_events", log::Level::Info) {
             for event in &pending {
                 if let PendingEventDetail::Message { message_id, .. } = &event.detail {
-                    log::debug!(
+                    log::info!(
                         target: "agent_events",
                         "[Agent events] stage=pending_enqueue conversation_id={conversation_id} recipient_run_id={self_run_id} message_id={message_id} sender_run_id={} cursor={max_seq}",
                         event.source_agent_id

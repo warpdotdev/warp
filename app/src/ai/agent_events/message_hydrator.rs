@@ -206,7 +206,7 @@ impl MessageHydrator {
         event: &AgentRunEvent,
     ) -> Result<ReadAgentMessageResponse> {
         let started = Instant::now();
-        log::debug!(
+        log::info!(
             target: "agent_events",
             "[Agent events] stage=hydrate_start run_id={} sequence={} message_id={}",
             event.run_id,
@@ -214,7 +214,7 @@ impl MessageHydrator {
             event.ref_id.as_deref().unwrap_or("-")
         );
         let Some(message_id) = event.ref_id.as_deref() else {
-            log::debug!(
+            log::info!(
                 target: "agent_events",
                 "[Agent events] stage=hydrate_complete run_id={} sequence={} outcome=missing_ref elapsed_ms={}",
                 event.run_id,
@@ -224,7 +224,7 @@ impl MessageHydrator {
             return Err(anyhow!("Agent event is missing ref_id"));
         };
         let result = self.read_message_with_timeout(message_id).await;
-        log::debug!(
+        log::info!(
             target: "agent_events",
             "[Agent events] stage=hydrate_complete run_id={} sequence={} message_id={message_id} elapsed_ms={} error={} already_delivered={}",
             event.run_id,
