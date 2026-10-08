@@ -23,7 +23,7 @@ use crate::auth::{AuthManager, AuthStateProvider};
 use crate::settings::{AISettings, AISettingsChangedEvent, UsageDisplayUnit};
 use crate::view_components::{Dropdown, DropdownItem};
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::Workspace;
+use crate::workspaces::workspace::{ChargeUnit, Workspace};
 
 pub struct BillingAndUsageDispatchView {
     page: PageType<Self>,
@@ -224,11 +224,7 @@ impl SettingsWidget for BillingAndUsageWidget {
     type View = BillingAndUsageDispatchView;
 
     fn search_terms(&self) -> &str {
-        if FeatureFlag::PricingTransparency.is_enabled() {
-            "plan billing a.i. ai usage limit credits dollars cost spend display unit pricing transparency balance overview"
-        } else {
-            "plan billing a.i. ai usage limit credits balance overview"
-        }
+        "plan billing a.i. ai usage limit credits dollars cost spend display unit balance overview"
     }
 
     fn render(
@@ -244,7 +240,13 @@ impl SettingsWidget for BillingAndUsageWidget {
         };
         let mut page = Flex::column();
 
-        if FeatureFlag::PricingTransparency.is_enabled() {
+        // The unit choice only means something for a tier charged in cents; credits tiers
+        // always display credits.
+        let offers_unit_choice = match UserWorkspaces::as_ref(app).charge_unit() {
+            ChargeUnit::Cents => true,
+            ChargeUnit::Credits => false,
+        };
+        if offers_unit_choice {
             page.add_child(
                 Container::new(render_dropdown_item(
                     appearance,

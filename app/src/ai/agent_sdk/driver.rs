@@ -25,7 +25,7 @@ use repo_metadata::{RepoMetadataModel, RepositoryIdentifier};
 use session_sharing_protocol::sharer::SessionRetentionReason;
 use tracing::Instrument as _;
 use uuid::Uuid;
-use warp_cli::agent::{Harness, OutputFormat, RepositoryPreparationOverride};
+use warp_cli::agent::{Harness, HarnessTransport, OutputFormat, RepositoryPreparationOverride};
 use warp_cli::mcp::MCPSpec;
 use warp_cli::share::ShareRequest;
 use warp_cli::skill::SkillSpec;
@@ -52,7 +52,8 @@ use crate::ai::agent_sdk::driver::harness::exit_escalation::{
 };
 use crate::ai::agent_sdk::driver::harness::{
     HarnessCleanupDisposition, HarnessKind, HarnessRunner, ResumePayload, SavePoint,
-    ThirdPartyHarness, ThirdPartyHarnessTelemetryEvent, harness_model_env_vars, task_env_vars,
+    ThirdPartyHarness, ThirdPartyHarnessTelemetryEvent, harness_model_env_vars, renders_natively,
+    task_env_vars,
 };
 use crate::ai::agent_sdk::environment_snapshot::{
     EnvironmentSnapshot, EnvironmentSnapshotReporter,
@@ -96,8 +97,9 @@ use crate::server::server_api::harness_support::{
     HarnessSupportClient, ResolvePromptAttachedSkill, ResolvePromptRequest,
 };
 use crate::server::team_scope::RequestTeamScope;
+use crate::terminal::ShellLaunchData;
 use crate::terminal::cli_agent_sessions::plugin_manager::{
-    CliAgentPluginManager, plugin_manager_for,
+    CliAgentPluginManager, PluginInstallError, plugin_manager_for_with_shell,
 };
 use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
@@ -634,6 +636,8 @@ pub struct AgentDriverOptions {
     pub remove_repository_origins: bool,
     /// Selected execution harness for this run.
     pub selected_harness: Harness,
+    /// How the selected harness is driven. Only used for non-Oz harnesses.
+    pub harness_transport: HarnessTransport,
     /// Model config for the selected harness. Only used for non-Oz harnesses.
     pub third_party_harness_model_config: Option<HarnessModelConfig>,
     /// Stable team scope assigned to this run and its headless window.
@@ -1100,6 +1104,7 @@ impl AgentDriver {
             repository_preparation_overrides,
             remove_repository_origins,
             selected_harness,
+            harness_transport,
             third_party_harness_model_config,
             team_scope,
             bedrock_oidc_credentials,
@@ -1192,11 +1197,12 @@ impl AgentDriver {
         )?;
 
         // Sharing starts asynchronously from terminal creation, before run_internal's setup waits.
+        let native_queue_enabled = renders_natively(selected_harness, harness_transport)
+            && (should_share || task_id.is_some());
         log::info!(
-            "event=driver_queue_configuration task_id={task_id:?} harness={selected_harness} sharing_requested={should_share} native_queue_enabled={}",
-            selected_harness == Harness::Oz && (should_share || task_id.is_some()),
+            "event=driver_queue_configuration task_id={task_id:?} harness={selected_harness} transport={harness_transport:?} sharing_requested={should_share} native_queue_enabled={native_queue_enabled}",
         );
-        if selected_harness == Harness::Oz && (should_share || task_id.is_some()) {
+        if native_queue_enabled {
             let terminal = terminal_driver.as_ref(ctx).terminal_view().clone();
             terminal.update(ctx, |terminal, ctx| {
                 terminal.ai_controller().update(ctx, |controller, ctx| {
@@ -2916,18 +2922,39 @@ impl AgentDriver {
             .await?;
 
         // Install plugins before running the harness command.
-        Self::setup_harness_plugins(harness, events).await?;
+        Self::setup_harness_plugins(harness, foreground, events).await?;
 
         Ok(exit_rx)
     }
 
     async fn setup_harness_plugins(
         harness: &dyn ThirdPartyHarness,
+        foreground: &ModelSpawner<Self>,
         events: &SetupClientEventReporter,
     ) -> Result<(), AgentDriverError> {
         let harness_name = harness.cli_agent().command_prefix();
         let requires_platform_plugin = harness.requires_verified_platform_plugin();
-        let Some(manager) = plugin_manager_for(harness.cli_agent()) else {
+        let shell_launch_data = foreground
+            .spawn(|me, ctx| me.terminal_driver.as_ref(ctx).active_shell_launch_data(ctx))
+            .await?;
+        // Without an explicit shell the plugin manager falls back to a bare `bash`, which on
+        // Windows resolves to the WSL launcher in System32 rather than a usable shell.
+        let (shell_path, shell_type) = match shell_launch_data {
+            Some(ShellLaunchData::Executable {
+                executable_path,
+                shell_type,
+            })
+            | Some(ShellLaunchData::MSYS2 {
+                executable_path,
+                shell_type,
+            }) => (Some(executable_path), Some(shell_type)),
+            Some(ShellLaunchData::WSL { .. })
+            | Some(ShellLaunchData::DockerSandbox { .. })
+            | None => (None, None),
+        };
+        let Some(manager) =
+            plugin_manager_for_with_shell(harness.cli_agent(), shell_path, shell_type, None)
+        else {
             if requires_platform_plugin {
                 return Err(Self::required_platform_plugin_error(
                     harness_name,
@@ -2993,7 +3020,7 @@ impl AgentDriver {
                 if required {
                     return Err(Self::required_platform_plugin_error(
                         harness_name,
-                        format!("Required platform plugin update failed: {e}"),
+                        Self::plugin_failure_reason("Required platform plugin update failed", &e),
                     ));
                 }
                 log::warn!("Platform plugin update failed (continuing): {e}");
@@ -3009,7 +3036,7 @@ impl AgentDriver {
             if required {
                 return Err(Self::required_platform_plugin_error(
                     harness_name,
-                    format!("Required platform plugin installation failed: {e}"),
+                    Self::plugin_failure_reason("Required platform plugin installation failed", &e),
                 ));
             }
             log::warn!("Platform plugin installation failed (continuing): {e}");
@@ -3038,6 +3065,15 @@ impl AgentDriver {
             ));
         }
         Ok(())
+    }
+
+    fn plugin_failure_reason(summary: &str, error: &PluginInstallError) -> String {
+        let log = error.log.trim();
+        if log.is_empty() {
+            format!("{summary}: {error}")
+        } else {
+            format!("{summary}: {error}\n{log}")
+        }
     }
 
     fn required_platform_plugin_error(
@@ -3240,10 +3276,13 @@ impl AgentDriver {
                         .context("Failed to enqueue periodic harness conversation save"));
                 }
                 _ = harness_exit_rx => {
+                    let start_event = ExitEscalationEvent::ShutdownRequested {
+                        awaiting_input: Self::session_blocked_on_needs_input(foreground).await,
+                    };
                     break Self::escalate_harness_exit(
                         runner.as_ref(),
                         &harness_name,
-                        ExitEscalationEvent::ShutdownRequested,
+                        start_event,
                         &mut command_handle,
                         foreground,
                     )
@@ -3399,8 +3438,10 @@ impl AgentDriver {
         let mut escalation = ExitEscalation::new();
         match escalation.on_event(start_event) {
             ExitEscalationAction::SendExit => {}
+            ExitEscalationAction::ForceKillAndFinish => {
+                return Self::force_kill_and_report_timeout(harness_name, 1, foreground).await;
+            }
             ExitEscalationAction::SendFollowup
-            | ExitEscalationAction::ForceKillAndFinish
             | ExitEscalationAction::Finish
             | ExitEscalationAction::Ignore => {
                 log::error!(
@@ -3474,15 +3515,36 @@ impl AgentDriver {
             }
         }
 
+        Self::force_kill_and_report_timeout(harness_name, 3, foreground).await
+    }
+
+    async fn force_kill_and_report_timeout(
+        harness_name: &str,
+        attempt: u8,
+        foreground: &ModelSpawner<Self>,
+    ) -> Result<warp_core::command::ExitCode, AgentDriverError> {
         log::warn!(
             "Ambient agent CLI lifecycle: event=harness_exit_attempt \
-             harness={harness_name} attempt=3 method=force_kill"
+             harness={harness_name} attempt={attempt} method=force_kill"
         );
         Self::send_harness_exit_telemetry(harness_name, "force_kill", foreground).await;
         Self::force_kill_harness(foreground).await;
         Err(AgentDriverError::HarnessExitTimedOut {
             harness: harness_name.to_owned(),
         })
+    }
+
+    async fn session_blocked_on_needs_input(foreground: &ModelSpawner<Self>) -> bool {
+        foreground
+            .spawn(|me, ctx| {
+                let view_id = me.terminal_driver.as_ref(ctx).terminal_view().id();
+                CLIAgentSessionsModel::handle(ctx)
+                    .as_ref(ctx)
+                    .session(view_id)
+                    .is_some_and(|session| session.is_blocked_on_needs_input())
+            })
+            .await
+            .unwrap_or(false)
     }
 
     /// Force-kills the harness and attempts a final conversation save after a sandbox-deadline

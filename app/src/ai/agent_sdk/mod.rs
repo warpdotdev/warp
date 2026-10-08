@@ -15,7 +15,8 @@ pub(crate) use driver::harness::{ClaudeHarness, task_env_vars, validate_cli_inst
 use telemetry::CliTelemetryEvent;
 use tracing::Instrument as _;
 use warp_cli::agent::{
-    AgentCommand, AgentProfileCommand, Harness, OutputFormat, Prompt, RunAgentArgs,
+    AgentCommand, AgentProfileCommand, Harness, HarnessTransport, OutputFormat, Prompt,
+    RunAgentArgs,
 };
 use warp_cli::api_key::ApiKeyCommand;
 use warp_cli::artifact::ArtifactCommand;
@@ -345,6 +346,11 @@ fn run_agent(
                     "The opencode harness is only supported for local child agent launches."
                 ));
             }
+            if args.harness_transport.is_some() && !FeatureFlag::AcpHarness.is_enabled() {
+                return Err(anyhow::anyhow!(
+                    "unexpected argument '--harness-transport' found"
+                ));
+            }
 
             let server_api = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
 
@@ -532,7 +538,7 @@ fn build_merged_config_and_task(
         model: model_override,
         profile: args.profile.clone(),
         mcp_specs: runtime_mcp_specs,
-        harness: harness_kind(args.harness)?,
+        harness: harness_kind(args.harness, args.harness_transport.unwrap_or_default())?,
     };
 
     Ok((merged_config, task))
@@ -605,7 +611,7 @@ fn build_server_side_task(
         model: model_override,
         profile,
         mcp_specs: runtime_mcp_specs,
-        harness: harness_kind(args.harness)?,
+        harness: harness_kind(args.harness, args.harness_transport.unwrap_or_default())?,
     };
 
     Ok((config, task))
@@ -615,6 +621,7 @@ fn reconcile_task_harness(
     task_id: &str,
     selected_harness: &mut Harness,
     task_harness: Harness,
+    transport: HarnessTransport,
 ) -> Result<HarnessKind, AgentDriverError> {
     if *selected_harness == Harness::Oz {
         *selected_harness = task_harness;
@@ -626,7 +633,7 @@ fn reconcile_task_harness(
         });
     }
 
-    harness_kind(*selected_harness)
+    harness_kind(*selected_harness, transport)
 }
 
 /// Resolve a `Prompt` to a plain string.
@@ -1209,6 +1216,7 @@ impl AgentDriverRunner {
                     repository_preparation_overrides: args.repository_preparation_overrides.clone(),
                     remove_repository_origins: args.remove_repository_origins,
                     selected_harness: args.harness,
+                    harness_transport: args.harness_transport.unwrap_or_default(),
                     third_party_harness_model_config,
                     team_scope: None,
                     bedrock_oidc_credentials: None,
@@ -1520,6 +1528,7 @@ impl AgentDriverRunner {
                 &task_id_str,
                 &mut driver_options.selected_harness,
                 task_harness,
+                driver_options.harness_transport,
             )?;
         }
 

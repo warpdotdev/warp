@@ -9,7 +9,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use tempfile::NamedTempFile;
-use warp_cli::agent::Harness;
+use warp_cli::agent::{Harness, HarnessTransport};
 use warp_cli::{
     OZ_CLI_ENV, OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV, SERVER_ROOT_URL_OVERRIDE_ENV,
     SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WARP_CLI_ENV, WARP_HARNESS_ENV,
@@ -38,6 +38,7 @@ use crate::terminal::cli_agent_sessions::{CLIAgentSessionStatus, CLIAgentSession
 use crate::terminal::model::block::{BlockId, SerializedBlock};
 use crate::util::path::resolve_executable;
 
+pub(crate) mod acp;
 pub(crate) mod claude_code;
 pub(crate) mod claude_transcript;
 mod codex;
@@ -52,6 +53,7 @@ mod skill_dirs_publish;
 mod telemetry;
 mod transcript_persistence;
 mod usage_reporting;
+pub(crate) use acp::AcpLaunchSpec;
 pub(crate) use claude_code::ClaudeHarness;
 use claude_transcript::ClaudeResumeInfo;
 use codex::CodexHarness;
@@ -263,19 +265,70 @@ impl fmt::Debug for HarnessKind {
     }
 }
 
-/// Build a [`HarnessKind`] for the given [`Harness`].
+/// Whether a run renders through a native `AIConversation` on the sharer rather than through
+/// a CLI agent block in the terminal.
+pub(crate) fn renders_natively(harness: Harness, transport: HarnessTransport) -> bool {
+    match (harness, transport) {
+        (Harness::Oz, _) => true,
+        (
+            Harness::Claude
+            | Harness::Codex
+            | Harness::Gemini
+            | Harness::OpenCode
+            | Harness::Unknown,
+            HarnessTransport::Acp,
+        ) => true,
+        (
+            Harness::Claude
+            | Harness::Codex
+            | Harness::Gemini
+            | Harness::OpenCode
+            | Harness::Unknown,
+            HarnessTransport::Pty,
+        ) => false,
+    }
+}
+
+/// Build a [`HarnessKind`] for the given [`Harness`] and transport.
 ///
 /// We shouldn't ever get a `--harness unknown` here because clap should handle
 /// it.
-pub(crate) fn harness_kind(harness: Harness) -> Result<HarnessKind, AgentDriverError> {
-    match harness {
-        Harness::Oz => Ok(HarnessKind::Oz),
-        Harness::Claude => Ok(HarnessKind::ThirdParty(Box::new(ClaudeHarness))),
-        Harness::Codex => Ok(HarnessKind::ThirdParty(Box::new(CodexHarness))),
-        Harness::OpenCode => Ok(HarnessKind::Unsupported(Harness::OpenCode)),
-        Harness::Gemini => Ok(HarnessKind::ThirdParty(Box::new(GeminiHarness))),
-        Harness::Unknown => Err(AgentDriverError::InvalidRuntimeState),
+pub(crate) fn harness_kind(
+    harness: Harness,
+    transport: HarnessTransport,
+) -> Result<HarnessKind, AgentDriverError> {
+    // The transport only selects how a third-party harness is driven; Oz is Warp's own loop.
+    if harness == Harness::Oz {
+        return Ok(HarnessKind::Oz);
     }
+    match transport {
+        HarnessTransport::Pty => match harness {
+            Harness::Oz => Ok(HarnessKind::Oz),
+            Harness::Claude => Ok(HarnessKind::ThirdParty(Box::new(ClaudeHarness))),
+            Harness::Codex => Ok(HarnessKind::ThirdParty(Box::new(CodexHarness))),
+            Harness::OpenCode => Ok(HarnessKind::Unsupported(Harness::OpenCode)),
+            Harness::Gemini => Ok(HarnessKind::ThirdParty(Box::new(GeminiHarness))),
+            Harness::Unknown => Err(AgentDriverError::InvalidRuntimeState),
+        },
+        HarnessTransport::Acp => acp_harness_kind(harness),
+    }
+}
+
+/// Resolves the ACP launch for `harness`, failing when the launch table has no entry for it.
+fn acp_harness_kind(harness: Harness) -> Result<HarnessKind, AgentDriverError> {
+    let Some(launch) = AcpLaunchSpec::for_harness(harness) else {
+        return Err(AgentDriverError::HarnessSetupFailed {
+            harness: harness.to_string(),
+            reason: format!("The {harness} harness cannot be driven over ACP."),
+        });
+    };
+    Err(AgentDriverError::HarnessSetupFailed {
+        harness: harness.to_string(),
+        reason: format!(
+            "The ACP transport is not available in this build (would launch `{}`).",
+            launch.program
+        ),
+    })
 }
 
 /// Returns the harness's auth-check preflight command, if any.
@@ -289,7 +342,8 @@ pub(crate) fn harness_kind(harness: Harness) -> Result<HarnessKind, AgentDriverE
 /// for any third-party harness whose `auth_check_command` returns `None`
 /// (e.g. Gemini today).
 pub(crate) fn auth_check_command_for(harness: Harness) -> Option<String> {
-    let HarnessKind::ThirdParty(third_party) = harness_kind(harness).ok()? else {
+    let HarnessKind::ThirdParty(third_party) = harness_kind(harness, HarnessTransport::Pty).ok()?
+    else {
         return None;
     };
     third_party.auth_check_command()

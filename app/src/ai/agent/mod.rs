@@ -1290,6 +1290,9 @@ impl<'a> std::fmt::Display for MarkdownActionResult<'a> {
                 RequestCommandOutputResult::CancelledBeforeExecution => {
                     write!(f, "\n_Command cancelled_")
                 }
+                RequestCommandOutputResult::TerminalBusy { .. } => {
+                    write!(f, "\n{result}")
+                }
                 RequestCommandOutputResult::Denylisted { command } => {
                     write!(
                         f,

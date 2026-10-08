@@ -4,7 +4,7 @@ use clap::Parser;
 
 use super::*;
 use crate::agent::{
-    AgentCommand, Harness, OutputFormat, RepositoryForge, RepositoryHeadRef,
+    AgentCommand, Harness, HarnessTransport, OutputFormat, RepositoryForge, RepositoryHeadRef,
     RepositoryPreparationOverride,
 };
 use crate::artifact::ArtifactCommand;
@@ -139,6 +139,53 @@ fn agent_run_rejects_malformed_sparse_repository_substitution_payloads() {
         ])
         .expect_err("invalid repository preparation payload must fail parsing");
     }
+}
+
+#[test]
+fn agent_run_parses_harness_transport() {
+    let parse = |extra: &[&str]| {
+        let args = Args::try_parse_from(
+            [
+                "warp",
+                "agent",
+                "run",
+                "--prompt",
+                "hi",
+                "--harness",
+                "claude",
+            ]
+            .into_iter()
+            .chain(extra.iter().copied()),
+        )
+        .unwrap();
+        let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+            panic!("Expected `warp agent run` command");
+        };
+        let CliCommand::Agent(AgentCommand::Run(run_args)) = *boxed_cmd else {
+            panic!("Expected `warp agent run` command");
+        };
+        run_args
+    };
+
+    let default = parse(&[]);
+    assert_eq!(default.harness_transport, None);
+
+    let acp = parse(&["--harness-transport", "acp"]);
+    assert_eq!(acp.harness_transport, Some(HarnessTransport::Acp));
+
+    let pty = parse(&["--harness-transport", "pty"]);
+    assert_eq!(pty.harness_transport, Some(HarnessTransport::Pty));
+
+    Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--prompt",
+        "hi",
+        "--harness-transport",
+        "telepathy",
+    ])
+    .expect_err("unknown transports must fail parsing");
 }
 
 #[test]
@@ -2769,6 +2816,7 @@ fn environment_update_accepts_description() {
         id,
         description,
         remove_description,
+        default_runner,
         ..
     }) = boxed_cmd.as_ref()
     else {
@@ -2778,6 +2826,61 @@ fn environment_update_accepts_description() {
     assert_eq!(id, "env-id");
     assert_eq!(description.as_deref(), Some("Updated description"));
     assert!(!remove_description);
+    assert!(default_runner.is_none());
+}
+
+#[test]
+fn environment_update_accepts_default_runner_uid() {
+    let args = Args::try_parse_from([
+        "warp",
+        "environment",
+        "update",
+        "env-id",
+        "--default-runner",
+        "runner-uid",
+        "--force",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp environment update` command");
+    };
+    let CliCommand::Environment(EnvironmentCommand::Update {
+        default_runner,
+        repo,
+        setup_command,
+        remove_repo,
+        remove_setup_command,
+        force,
+        ..
+    }) = boxed_cmd.as_ref()
+    else {
+        panic!("Expected `warp environment update` command");
+    };
+
+    assert_eq!(default_runner.as_deref(), Some("runner-uid"));
+    assert!(repo.is_empty());
+    assert!(setup_command.is_empty());
+    assert!(remove_repo.is_empty());
+    assert!(remove_setup_command.is_empty());
+    assert!(force);
+}
+
+#[test]
+fn environment_update_rejects_blank_default_runner() {
+    for uid in ["", " \t"] {
+        assert!(
+            Args::try_parse_from([
+                "warp",
+                "environment",
+                "update",
+                "env-id",
+                "--default-runner",
+                uid,
+            ])
+            .is_err()
+        );
+    }
 }
 
 #[test]

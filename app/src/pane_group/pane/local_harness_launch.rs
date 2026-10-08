@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use shell_words::quote as shell_quote;
 use uuid::Uuid;
-use warp_cli::agent::Harness;
+use warp_cli::agent::{Harness, HarnessTransport};
 
 use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::agent_sdk::driver::harness::claude_code::prepare_claude_environment_config;
@@ -199,7 +199,8 @@ pub(super) async fn prepare_local_harness_child_launch(
                     )
                 })?;
             let HarnessKind::ThirdParty(third_party_harness) =
-                harness_kind(harness).map_err(|error: AgentDriverError| error.to_string())?
+                harness_kind(harness, HarnessTransport::Pty)
+                    .map_err(|error: AgentDriverError| error.to_string())?
             else {
                 unreachable!("Claude resolves to a third-party harness")
             };
@@ -220,7 +221,8 @@ pub(super) async fn prepare_local_harness_child_launch(
         }
         Harness::Codex => {
             let HarnessKind::ThirdParty(third_party_harness) =
-                harness_kind(harness).map_err(|error: AgentDriverError| error.to_string())?
+                harness_kind(harness, HarnessTransport::Pty)
+                    .map_err(|error: AgentDriverError| error.to_string())?
             else {
                 unreachable!("Codex resolves to a third-party harness")
             };

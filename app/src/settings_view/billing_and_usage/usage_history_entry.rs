@@ -7,13 +7,13 @@ use warpui::elements::{
     MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
 };
 use warpui::platform::Cursor;
-use warpui::{AppContext, Element, SingletonEntity, View};
+use warpui::{AppContext, Element, View};
 
 use crate::ai::blocklist::usage::conversation_usage_view::{
     ConversationUsageInfo, ConversationUsageView, DisplayMode,
 };
-use crate::ai::blocklist::view_util::format_usage;
-use crate::settings::AISettings;
+use crate::ai::blocklist::view_util::{effective_usage_unit, format_usage};
+use crate::persistence::model::ConversationUsageMetadata;
 use crate::settings_view::billing_and_usage_page::BillingAndUsagePageAction;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
@@ -110,18 +110,14 @@ impl UsageHistoryEntry {
             ))
             .finish();
 
-        let total_credits =
-            entry.usage_metadata.credits_spent + entry.usage_metadata.platform_credits_spent;
-        let usage_display_unit = AISettings::as_ref(app).usage_display_unit;
+        let usage_metadata = ConversationUsageMetadata::from(&entry.usage_metadata);
+        let total_credits = usage_metadata.credits_spent + usage_metadata.platform_credits_spent;
+        let cost_in_cents = usage_metadata.billed_cost_in_cents();
         let credits_spent = Text::new_inline(
             format_usage(
-                total_credits as f32,
-                None,
-                entry
-                    .usage_metadata
-                    .total_provider_cost_in_cents
-                    .map(|cost_in_cents| cost_in_cents as f32),
-                usage_display_unit,
+                total_credits,
+                cost_in_cents,
+                effective_usage_unit(cost_in_cents, app),
             ),
             appearance.ui_font_family(),
             14.,

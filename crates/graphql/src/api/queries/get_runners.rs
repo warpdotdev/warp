@@ -26,6 +26,10 @@ pub enum RunnerOs {
     Macos,
     #[cynic(rename = "WINDOWS")]
     Windows,
+    /// Absorbs values added by newer servers so one unfamiliar runner doesn't fail the whole
+    /// response. cynic refuses to serialize it, so it can't be sent back.
+    #[cynic(fallback)]
+    Unknown,
 }
 
 #[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,6 +38,9 @@ pub enum RunnerArch {
     X8664,
     #[cynic(rename = "AARCH64")]
     Aarch64,
+    /// A value newer than this client.
+    #[cynic(fallback)]
+    Unknown,
 }
 
 #[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +54,9 @@ pub enum RunnerMacOsVersion {
     Macos26,
     #[cynic(rename = "MACOS_27")]
     Macos27,
+    /// A value newer than this client.
+    #[cynic(fallback)]
+    Unknown,
 }
 
 #[derive(cynic::QueryFragment, Debug)]

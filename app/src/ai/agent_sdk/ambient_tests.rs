@@ -339,7 +339,7 @@ fn run_list_scope_uses_team_loaded_by_workspace_refresh() {
                         joinable_teams: vec![],
                         experiments: None,
                         ai_credit_availability: None,
-                        user_purchase_policy: None,
+                        user_tier: Default::default(),
                     },
                     pricing_info: None,
                 })

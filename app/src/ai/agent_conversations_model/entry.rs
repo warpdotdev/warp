@@ -421,14 +421,12 @@ fn conversation_cost_in_cents(
 ) -> Option<f32> {
     history_model
         .conversation(&metadata.nav_data.id)
-        .and_then(|conversation| conversation.usage_totals().charged_usage)
-        .map(|usage| usage.total_cost_in_cents())
+        .and_then(|conversation| conversation.usage_totals().total_cost_in_cents())
         .or_else(|| {
             history_model
                 .get_conversation_metadata(&metadata.nav_data.id)
                 .and_then(|metadata| metadata.server_conversation_metadata.as_ref())
-                .and_then(|metadata| metadata.usage.total_charged_usage.as_ref())
-                .map(|usage| usage.total_cost_in_cents())
+                .and_then(|metadata| metadata.usage.billed_cost_in_cents())
         })
 }
 fn conversation_artifacts(

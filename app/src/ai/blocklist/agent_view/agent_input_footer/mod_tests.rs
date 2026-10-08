@@ -16,13 +16,17 @@ use crate::ai::blocklist::{InputConfig, InputType};
 use crate::auth::user::TEST_USER_UID;
 use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerObjectGuest, ServerPermissions};
 use crate::server::ids::ServerId;
+use crate::settings::UsageDisplayUnit;
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext,
     CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
 use crate::terminal::shared_session::{SharedSessionSource, SharedSessionStatus};
 use crate::test_util::add_window_with_terminal;
+use crate::test_util::billing_unit::{set_charge_unit, set_usage_display_unit};
 use crate::test_util::terminal::initialize_app_for_terminal_view;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::ChargeUnit;
 
 const CONVERSATION_TOKEN: &str = "server-conversation-token";
 
@@ -125,7 +129,7 @@ fn claude_conversation_metadata(task_id: AmbientAgentTaskId) -> ServerAIConversa
             context_window_usage: 0.0,
             credits_spent: 0.0,
             platform_credits_spent: 0.0,
-            total_provider_cost_in_cents: None,
+            total_billed_cost_in_cents: None,
             credits_spent_for_last_block: None,
             charged_usage_for_last_block: None,
             total_charged_usage: None,
@@ -278,13 +282,12 @@ fn charged_usage_metadata()
 }
 
 /// The footer's usage tooltip must track real usage events: the
-/// server-seeded provider cost makes the conversation count as having usage
+/// server-seeded billed cost makes the conversation count as having usage
 /// (so the popover can open), and a later usage event carrying charged usage
 /// moves the tooltip's figure.
 #[test]
 fn agent_footer_usage_tooltip_updates_on_usage_events() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
         initialize_app_for_terminal_view(&mut app);
         let terminal = add_window_with_terminal(&mut app, None);
 
@@ -296,13 +299,13 @@ fn agent_footer_usage_tooltip_updates_on_usage_events() {
                     model.start_new_conversation(terminal.id(), false, false, false, ctx);
                 model.set_active_conversation_id(conversation_id, terminal.id(), ctx);
                 let mut metadata = claude_conversation_metadata(ambient_task_id(1));
-                metadata.usage.total_provider_cost_in_cents = Some(250.0);
+                metadata.usage.total_billed_cost_in_cents = Some(250.0);
                 model.set_server_metadata_for_conversation(conversation_id, metadata, ctx);
                 conversation_id
             })
         });
 
-        // Credits mode: a seeded provider cost alone is not a charged-usage
+        // Credits mode: a seeded billed cost alone is not a charged-usage
         // figure, so the total is unknown rather than zero.
         let tooltip = terminal.update(&mut app, |view, ctx| {
             let footer = view.input().as_ref(ctx).agent_input_footer().as_ref(ctx);
@@ -332,13 +335,59 @@ fn agent_footer_usage_tooltip_updates_on_usage_events() {
     });
 }
 
+/// A viewer who prefers dollars sees the tooltip's figure in dollars only once their tier charges
+/// in cents, and the tooltip follows a workspaces-metadata refresh that flips the charge unit.
+#[test]
+fn agent_footer_usage_tooltip_follows_the_tier_charge_unit() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        set_usage_display_unit(&mut app, UsageDisplayUnit::Dollars);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        app.update(|ctx| {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
+                let conversation_id =
+                    model.start_new_conversation(terminal.id(), false, false, false, ctx);
+                model.set_active_conversation_id(conversation_id, terminal.id(), ctx);
+                model.update_conversation_cost_and_usage_for_request(
+                    conversation_id,
+                    None,
+                    None,
+                    vec![],
+                    Some(charged_usage_metadata()),
+                    false,
+                    ctx,
+                );
+            });
+        });
+        let tooltip = terminal.update(&mut app, |view, ctx| {
+            let footer = view.input().as_ref(ctx).agent_input_footer().as_ref(ctx);
+            footer.usage_tooltip_for_test(ctx)
+        });
+        assert_eq!(tooltip.as_deref(), Some("Conversation usage: 4.5 credits"));
+
+        set_charge_unit(&mut app, ChargeUnit::Cents);
+        // A metadata refresh re-applies the workspaces after updating the tier, which is what
+        // tells subscribers to re-read it.
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            let current = workspaces.workspaces().clone();
+            workspaces.update_workspaces(current, ctx);
+        });
+        let tooltip = terminal.update(&mut app, |view, ctx| {
+            let footer = view.input().as_ref(ctx).agent_input_footer().as_ref(ctx);
+            footer.usage_tooltip_for_test(ctx)
+        });
+        assert_eq!(tooltip.as_deref(), Some("Conversation usage: $0.45"));
+    });
+}
+
 /// Opening the popover makes the footer consult the terminal's menu positioning provider,
 /// which locks the terminal model. Rendering must not still be holding that lock.
 #[test]
 fn agent_footer_usage_popover_renders_with_terminal_positioning_provider() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
         initialize_app_for_terminal_view(&mut app);
+        set_charge_unit(&mut app, ChargeUnit::Cents);
         let terminal = add_window_with_terminal(&mut app, None);
 
         app.update(|ctx| {

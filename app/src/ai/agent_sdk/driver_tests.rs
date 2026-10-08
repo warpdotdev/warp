@@ -34,9 +34,9 @@ use super::{
     AgentDriver, AgentDriverError, AgentRunPrompt, CLIAgentSessionStatus, DebugWindowController,
     IdleTimeoutSender, LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
     LEGACY_OZ_PARENT_STATE_ROOT_ENV, OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
-    OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, PlatformErrorCode, SDKConversationOutputStatus,
-    WARP_MESSAGE_LISTENER_STATE_ROOT_ENV, build_secret_env_vars, debug_turn_task_state,
-    idle_window_for_cli_session_status, idle_window_for_terminal_status,
+    OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, PlatformErrorCode, PluginInstallError,
+    SDKConversationOutputStatus, WARP_MESSAGE_LISTENER_STATE_ROOT_ENV, build_secret_env_vars,
+    debug_turn_task_state, idle_window_for_cli_session_status, idle_window_for_terminal_status,
     setup_failure_status_update, terminal_status_log_outcome,
 };
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
@@ -2439,5 +2439,32 @@ fn openai_api_key_exports_only_api_key_not_base_url() {
     assert!(
         !env_vars.contains_key(&OsString::from("OPENAI_BASE_URL")),
         "OPENAI_BASE_URL should NOT be exported as an env var"
+    );
+}
+
+#[test]
+fn plugin_failure_reason_appends_cli_log_when_present() {
+    let error = PluginInstallError {
+        message: "'claude plugin marketplace add x' failed".to_owned(),
+        log: "$ claude plugin marketplace add x\nno distributions installed\n".to_owned(),
+    };
+
+    assert_eq!(
+        AgentDriver::plugin_failure_reason("Install failed", &error),
+        "Install failed: 'claude plugin marketplace add x' failed\n\
+         $ claude plugin marketplace add x\nno distributions installed"
+    );
+}
+
+#[test]
+fn plugin_failure_reason_omits_empty_cli_log() {
+    let error = PluginInstallError {
+        message: "No plugin manager available".to_owned(),
+        log: "  \n".to_owned(),
+    };
+
+    assert_eq!(
+        AgentDriver::plugin_failure_reason("Install failed", &error),
+        "Install failed: No plugin manager available"
     );
 }

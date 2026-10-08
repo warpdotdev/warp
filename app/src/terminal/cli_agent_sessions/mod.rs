@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use event::{CLIAgentEvent, CLIAgentEventSource, CLIAgentEventType};
+use warp_core::execution_mode::AppExecutionMode;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
@@ -19,6 +20,16 @@ use crate::ai::blocklist::InputConfig;
 /// interrupt silently cancelled the session. See `observe_ctrl_c_write`.
 pub const CTRL_C_CANCEL_WINDOW: Duration = Duration::from_secs(2);
 
+const NEEDS_INPUT_STATUS_MESSAGE: &str = "Agent requires user input";
+
+/// What caused a session to become [`CLIAgentSessionStatus::Blocked`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockedSource {
+    PermissionRequest,
+    QuestionAsked,
+    NeedsInput,
+}
+
 /// Status of a tracked CLI agent session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CLIAgentSessionStatus {
@@ -30,6 +41,7 @@ pub enum CLIAgentSessionStatus {
     },
     Blocked {
         message: Option<String>,
+        source: BlockedSource,
     },
     /// The user interrupted the session with Ctrl-C and no further plugin
     /// activity was observed within the grace window (see
@@ -45,7 +57,7 @@ impl CLIAgentSessionStatus {
             CLIAgentSessionStatus::InProgress => ConversationStatus::InProgress,
             CLIAgentSessionStatus::Success => ConversationStatus::Success,
             CLIAgentSessionStatus::Failed { .. } => ConversationStatus::Error,
-            CLIAgentSessionStatus::Blocked { message } => ConversationStatus::Blocked {
+            CLIAgentSessionStatus::Blocked { message, .. } => ConversationStatus::Blocked {
                 blocked_action: message.clone().unwrap_or_default(),
             },
             CLIAgentSessionStatus::Cancelled => ConversationStatus::Cancelled,
@@ -181,6 +193,19 @@ impl CLIAgentSession {
         self.received_rich_notification
     }
 
+    /// Whether the session is blocked on a `NeedsInput` notification, so nothing should be
+    /// typed into its terminal.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn is_blocked_on_needs_input(&self) -> bool {
+        matches!(
+            self.status,
+            CLIAgentSessionStatus::Blocked {
+                source: BlockedSource::NeedsInput,
+                ..
+            }
+        )
+    }
+
     /// Clears state populated by `PermissionRequest`. Called whenever the
     /// session leaves the permission flow (the user replied, a blocking tool
     /// completed, a new prompt is submitted, or the session ends successfully)
@@ -241,6 +266,7 @@ impl CLIAgentSession {
                 self.session_context.tool_input_preview = event.payload.tool_input_preview.clone();
                 CLIAgentSessionStatus::Blocked {
                     message: event.payload.summary.clone(),
+                    source: BlockedSource::PermissionRequest,
                 }
             }
             CLIAgentEventType::QuestionAsked => CLIAgentSessionStatus::Blocked {
@@ -249,6 +275,15 @@ impl CLIAgentSession {
                     .summary
                     .clone()
                     .or_else(|| Some("Waiting for your answer".to_owned())),
+                source: BlockedSource::QuestionAsked,
+            },
+            CLIAgentEventType::NeedsInput => CLIAgentSessionStatus::Blocked {
+                message: event
+                    .payload
+                    .summary
+                    .clone()
+                    .or_else(|| Some(NEEDS_INPUT_STATUS_MESSAGE.to_owned())),
+                source: BlockedSource::NeedsInput,
             },
             CLIAgentEventType::PermissionReplied => {
                 if !matches!(self.status, CLIAgentSessionStatus::Blocked { .. }) {
@@ -512,7 +547,16 @@ impl CLIAgentSessionsModel {
         }
 
         let event_type = &event.event;
-        if let Some(new_status) = session.apply_event(event) {
+        // Interactive clients keep ignoring this event: only an unattended run has no one to
+        // answer the prompt.
+        let new_status = if matches!(event.event, CLIAgentEventType::NeedsInput)
+            && !AppExecutionMode::as_ref(ctx).is_autonomous()
+        {
+            None
+        } else {
+            session.apply_event(event)
+        };
+        if let Some(new_status) = new_status {
             let agent = session.agent;
             ctx.emit(CLIAgentSessionsModelEvent::StatusChanged {
                 terminal_view_id,

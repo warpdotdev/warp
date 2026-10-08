@@ -82,10 +82,18 @@ pub(super) async fn setup_caches(
     )
     .await;
 
-    if let Err(error) = report.cache_usage(&cache_root).and_then(|mut usage| {
-        usage.extend(additional_usage);
-        build_cache::metadata::write_cache_metadata(&cache_root, usage)
-    }) {
+    let metadata_directory = build_cache::metadata::prepare_cache_metadata_directory(
+        &cache_root,
+        build_cache::default_run_command,
+    )
+    .await;
+    if let Err(error) = metadata_directory
+        .and_then(|()| report.cache_usage(&cache_root))
+        .and_then(|mut usage| {
+            usage.extend(additional_usage);
+            build_cache::metadata::write_cache_metadata(&cache_root, usage)
+        })
+    {
         log::warn!("Namespace cache usage metadata was not updated: {error}");
     }
     let mut degraded = report_degradations(&report);

@@ -30,7 +30,11 @@ use warpui::platform::WindowStyle;
 
 use super::*;
 use crate::persistence::model::{ModelTokenUsage, PRIMARY_AGENT_CATEGORY};
+use crate::settings::UsageDisplayUnit;
+use crate::test_util::billing_unit::{set_charge_unit, set_usage_display_unit};
 use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::ChargeUnit;
 
 fn placeholder_usage_info() -> ConversationUsageInfo {
     ConversationUsageInfo {
@@ -45,9 +49,7 @@ fn placeholder_usage_info() -> ConversationUsageInfo {
         lines_added: 0,
         lines_removed: 0,
         commands_executed: 0,
-        total_tokens: None,
         total_cost_in_cents: None,
-        tokens_for_last_block: None,
         cost_in_cents_for_last_block: None,
     }
 }
@@ -59,6 +61,7 @@ fn placeholder_usage_info() -> ConversationUsageInfo {
 fn initialize_test_app(app: &mut App) {
     initialize_settings_for_tests(app);
     app.add_singleton_model(|_| Appearance::mock());
+    app.add_singleton_model(UserWorkspaces::default_mock);
 }
 
 fn build_view(_ctx: &mut warpui::ViewContext<ConversationUsageView>) -> ConversationUsageView {
@@ -157,6 +160,44 @@ fn custom_endpoint_models_use_the_external_key_icon_bucket() {
             .get(PRIMARY_AGENT_CATEGORY),
         Some(&vec![("Friendly alias".to_string(), true)])
     );
+}
+
+/// A cents-charged viewer who prefers dollars sees each usage figure in dollars where a cents
+/// figure exists and in credits where none does.
+#[test]
+fn usage_summary_follows_the_display_unit_per_figure() {
+    App::test((), |mut app| async move {
+        initialize_test_app(&mut app);
+        set_charge_unit(&mut app, ChargeUnit::Cents);
+        set_usage_display_unit(&mut app, UsageDisplayUnit::Dollars);
+
+        let view = ConversationUsageView::new(
+            ConversationUsageInfo {
+                credits_spent: 20.0,
+                credits_spent_for_last_block: Some(5.0),
+                total_cost_in_cents: Some(36.0),
+                cost_in_cents_for_last_block: None,
+                ..placeholder_usage_info()
+            },
+            DisplayMode::Footer,
+            None,
+            MouseStateHandle::default(),
+        );
+
+        app.read(|ctx| {
+            let text = view
+                .render_unified_layout(ctx)
+                .debug_text_content()
+                .unwrap_or_default();
+            assert!(text.contains("Usage charged (total)"), "got {text:?}");
+            assert!(text.contains("$0.36"), "got {text:?}");
+            assert!(
+                text.contains("Credits spent (last response)"),
+                "got {text:?}"
+            );
+            assert!(text.contains("5 credits"), "got {text:?}");
+        });
+    });
 }
 
 #[test]

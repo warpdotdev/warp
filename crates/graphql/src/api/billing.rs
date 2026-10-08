@@ -57,6 +57,8 @@ pub struct BonusGrant {
     pub user_facing_message: Option<String>,
     pub request_credits_granted: i32,
     pub request_credits_remaining: i32,
+    pub usage_cents_granted: Option<f64>,
+    pub usage_cents_remaining: Option<f64>,
 }
 
 #[derive(cynic::Enum, Clone, Copy, Debug)]
@@ -101,10 +103,20 @@ pub enum ServiceAgreementType {
     Other(String),
 }
 
+/// The unit a tier charges AI usage in.
+#[derive(cynic::Enum, Clone, Debug, PartialEq, Eq)]
+pub enum ChargeUnit {
+    Credits,
+    Cents,
+    #[cynic(fallback)]
+    Other(String),
+}
+
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct Tier {
     pub name: String,
     pub description: String,
+    pub charge_unit: ChargeUnit,
     pub warp_ai_policy: Option<WarpAiPolicy>,
     pub team_size_policy: Option<TeamSizePolicy>,
     pub shared_notebooks_policy: Option<SharedNotebooksPolicy>,
@@ -280,15 +292,25 @@ pub enum DelinquencyStatus {
     Other(String),
 }
 
-#[derive(cynic::QueryFragment, Debug, Clone)]
+#[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
 pub struct AddonCreditsOption {
     pub credits: i32,
     pub price_usd_cents: i32,
+    pub usage_cents: Option<i32>,
 }
 
 impl AddonCreditsOption {
     pub fn rate(&self) -> f32 {
         self.price_usd_cents as f32 / self.credits as f32
+    }
+
+    /// The whole-percent saving of this pack's per-credit rate over `base_rate` (the catalog's
+    /// smallest pack), or 0 when it is no cheaper.
+    pub fn discount_percent(&self, base_rate: f32) -> u32 {
+        if base_rate <= 0.0 {
+            return 0;
+        }
+        ((base_rate - self.rate()) / base_rate * 100.0).round() as u32
     }
 
     /// Returns the purchase price in cents after applying a plan surcharge

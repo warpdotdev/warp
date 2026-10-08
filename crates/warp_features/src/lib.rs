@@ -765,6 +765,11 @@ pub enum FeatureFlag {
     /// CLIs (e.g. `claude`) to execute prompts instead of Warp's agent harness.
     AgentHarness,
 
+    /// Enables the `--harness-transport acp` flag for `oz agent run`, which drives a third-party
+    /// harness over the Agent Client Protocol instead of as an interactive CLI in the terminal
+    /// session.
+    AcpHarness,
+
     /// Enables workspace- and block-snapshot handoff between cloud agent runs
     /// and the local Warp client.
     /// When enabled:
@@ -948,18 +953,6 @@ pub enum FeatureFlag {
     /// setup or API key required.
     FactoryMcp,
 
-    /// Gates client-side display of the real dollar cost (from `RequestCost.cost_in_cents`)
-    /// alongside credits in the GUI footer and TUI. Mirrors the server-side
-    /// `PricingTransparencyEnabled` flag in warp-server, but is a fully independent
-    /// flag — the two do not sync automatically. Consolidated from the former
-    /// `TuiCostTransparency` flag: when enabled (dogfood/staging and local/dev
-    /// builds), the TUI footer usage entry follows the persisted
-    /// `agents.usage_display_mode` setting and is click-to-toggleable between
-    /// credits and dollars; when disabled (prod/stable), it falls back to a
-    /// static, non-interactive credits total. Will also gate the GUI footer's
-    /// dollar display once that's built.
-    PricingTransparency,
-
     /// Enables periodic workspace-handoff checkpoints during a cloud agent run,
     /// rather than only uploading a workspace snapshot once at end-of-run.
     /// Requires `OzHandoff` to also be enabled; a no-op for local runs and when
@@ -1018,7 +1011,10 @@ static FEATURES_INITIALIZED: AtomicBool = AtomicBool::new(false);
 /// Features used in debugging.
 pub const DEBUG_FLAGS: &[FeatureFlag] = &[FeatureFlag::DebugMode, FeatureFlag::RuntimeFeatureFlags];
 /// Features enabled only for the WarpLocal developer build.
-pub const LOCAL_FLAGS: &[FeatureFlag] = &[FeatureFlag::LocalClaudeCodexChildHarnesses];
+pub const LOCAL_FLAGS: &[FeatureFlag] = &[
+    FeatureFlag::LocalClaudeCodexChildHarnesses,
+    FeatureFlag::AcpHarness,
+];
 
 /// Features enabled for the development team.  The expectation is that, over
 /// time, these will move on to PREVIEW_FLAGS before being launched.
@@ -1071,7 +1067,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::MultiLevelOrchestration,
     FeatureFlag::McpJsonTreeView,
     FeatureFlag::BoxDrawingGlyphs,
-    FeatureFlag::PricingTransparency,
     FeatureFlag::CtrlCCancelsThirdPartyHarness,
     FeatureFlag::WarpingModelName,
     FeatureFlag::LrcActivitySignal,

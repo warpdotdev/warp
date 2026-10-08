@@ -552,7 +552,7 @@ use crate::workspace::{
     WorkspaceRegistry,
 };
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
-use crate::workspaces::workspace::CustomerType;
+use crate::workspaces::workspace::{ChargeUnit, CustomerType};
 use crate::{
     AIAgentActionResultType, AIRequestUsageModel, ActiveSession as WindowActiveSession, safe_error,
     safe_warn, send_telemetry_from_ctx, send_telemetry_sync_from_ctx,
@@ -7245,8 +7245,6 @@ impl TerminalView {
             conversation.total_agent_response_time_since_last_user_query_ms();
         let wall_to_wall_response_time_ms =
             conversation.wall_to_wall_response_time_since_last_query();
-        let usage_totals = conversation.usage_totals();
-        let charged_usage_for_last_block = conversation.charged_usage_for_last_block();
 
         let conversation_usage_info = ConversationUsageInfo {
             credits_spent: conversation.inference_credits_spent(),
@@ -7260,10 +7258,9 @@ impl TerminalView {
             lines_added: tool_usage.apply_file_diff_stats.lines_added,
             lines_removed: tool_usage.apply_file_diff_stats.lines_removed,
             commands_executed: tool_usage.run_command_stats.commands_executed,
-            total_tokens: usage_totals.charged_usage.map(|usage| usage.total_tokens()),
-            total_cost_in_cents: usage_totals.total_cost_in_cents(),
-            tokens_for_last_block: charged_usage_for_last_block.map(|usage| usage.total_tokens()),
-            cost_in_cents_for_last_block: charged_usage_for_last_block
+            total_cost_in_cents: conversation.usage_totals().total_cost_in_cents(),
+            cost_in_cents_for_last_block: conversation
+                .charged_usage_for_last_block()
                 .map(|usage| usage.total_cost_in_cents()),
         };
 
@@ -7356,9 +7353,12 @@ impl TerminalView {
             return;
         }
 
-        if !FeatureFlag::PricingTransparency.is_enabled() {
-            ctx.notify();
-            return;
+        match UserWorkspaces::as_ref(ctx).charge_unit() {
+            ChargeUnit::Cents => {}
+            ChargeUnit::Credits => {
+                ctx.notify();
+                return;
+            }
         }
 
         let Some(conversation) =
@@ -8004,6 +8004,24 @@ impl TerminalView {
                 // We need to manually invoke ctrl-c to terminate the running command because the
                 // user's ctrl-c was directed to the AIBlock instead of the command's shell block.
                 self.ctrl_c(ctx);
+            }
+            ShellCommandExecutorEvent::InterruptForInjectedFollowup {
+                conversation_id,
+                block_id,
+            } => {
+                let should_interrupt = {
+                    let model = self.model.lock();
+                    let block = model.block_list().active_block();
+                    block.id() == block_id
+                        && block.ai_conversation_id() == Some(*conversation_id)
+                        && block.is_executing()
+                        && !block
+                            .long_running_control_state()
+                            .is_some_and(|state| state.is_user_in_control())
+                };
+                if should_interrupt {
+                    self.write_to_pty(vec![escape_sequences::C0::ETX], ctx);
+                }
             }
             ShellCommandExecutorEvent::TransferControlToUser { reason, .. } => {
                 // Transfer control of the long-running command to the user.
@@ -14118,7 +14136,7 @@ impl TerminalView {
             .or(session_context.summary.as_deref().filter(|s| !s.is_empty()))
             .unwrap_or(agent.command_prefix())
             .to_owned();
-        let description = if let CLIAgentSessionStatus::Blocked { message } = status {
+        let description = if let CLIAgentSessionStatus::Blocked { message, .. } = status {
             message.clone().unwrap_or_default()
         } else {
             session_context.response.clone().unwrap_or_default()

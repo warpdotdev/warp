@@ -122,6 +122,8 @@ pub struct WorkspaceMemberUsageInfo {
     pub is_unlimited: bool,
     pub request_limit: i32,
     pub requests_used_since_last_refresh: i32,
+    pub included_usage_cents: Option<f64>,
+    pub usage_cents_used_since_last_refresh: Option<f64>,
     pub is_request_limit_prorated: bool,
 }
 
@@ -506,4 +508,5 @@ pub struct AddonCreditsSettings {
     pub auto_reload_enabled: bool,
     pub max_monthly_spend_cents: Option<i32>,
     pub selected_auto_reload_credit_denomination: Option<i32>,
+    pub selected_auto_reload_usage_cents: Option<i32>,
 }

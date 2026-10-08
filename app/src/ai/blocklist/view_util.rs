@@ -3,8 +3,6 @@ use std::sync::LazyLock;
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use thousands::Separable;
-use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
     ChildAnchor, ConstrainedBox, Container, CrossAxisAlignment, Flex, Hoverable, MainAxisAlignment,
@@ -21,10 +19,11 @@ use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::{
     ChatGPTSubscriptionErrorAction, ChatGPTSubscriptionErrorActionKind, RenderableAIError,
 };
-use crate::settings::UsageDisplayUnit;
+use crate::settings::{AISettings, UsageDisplayUnit};
 use crate::themes::theme::{AnsiColorIdentifier, Fill, WarpTheme};
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::ChargeUnit;
 
 const PROVIDER_BUTTON_ICON_SIZE: f32 = 14.;
 const PROVIDER_BUTTON_ICON_TEXT_GAP: f32 = 8.;
@@ -375,46 +374,37 @@ pub fn format_dollars(cost_in_cents: f32) -> String {
     }
 }
 
-fn effective_usage_unit(unit: UsageDisplayUnit, cost_in_cents: Option<f32>) -> UsageDisplayUnit {
-    if !FeatureFlag::PricingTransparency.is_enabled() {
-        return UsageDisplayUnit::Credits;
-    }
-    match unit {
-        UsageDisplayUnit::Credits => UsageDisplayUnit::Credits,
-        UsageDisplayUnit::Dollars if cost_in_cents.is_some() => UsageDisplayUnit::Dollars,
-        UsageDisplayUnit::Dollars => UsageDisplayUnit::Credits,
-    }
-}
-
-fn format_usage_unit_value(
-    credits: f32,
-    cost_in_cents: Option<f32>,
-    unit: UsageDisplayUnit,
-) -> String {
-    match unit {
-        UsageDisplayUnit::Credits => format_credits(credits),
-        UsageDisplayUnit::Dollars => cost_in_cents
-            .map(format_dollars)
-            .unwrap_or_else(|| format_credits(credits)),
+/// The unit the viewer's usage, balances and purchases display in. A tier that charges usage in
+/// cents (`Tier.chargeUnit`, via [`UserWorkspaces::charge_unit`]) follows the `usage_display_unit`
+/// setting; a tier that charges in credits is always credits, whatever the setting says.
+pub fn usage_display_unit(app: &AppContext) -> UsageDisplayUnit {
+    match UserWorkspaces::as_ref(app).charge_unit() {
+        ChargeUnit::Cents => AISettings::as_ref(app).usage_display_unit,
+        ChargeUnit::Credits => UsageDisplayUnit::Credits,
     }
 }
 
-/// Formats tokens with the selected unit, falling back to credits when dollars are unavailable.
-pub fn format_usage(
-    credits: f32,
-    tokens: Option<u32>,
-    cost_in_cents: Option<f32>,
-    unit: UsageDisplayUnit,
-) -> String {
-    let resolved_unit = effective_usage_unit(unit, cost_in_cents);
-    if !FeatureFlag::PricingTransparency.is_enabled() || resolved_unit != unit {
-        return format_credits(credits);
+/// Resolves the unit one usage figure is displayed in: dollars only when [`usage_display_unit`]
+/// is dollars and the figure carries a cents value, so a figure without one still renders as
+/// credits rather than blank.
+pub fn effective_usage_unit(cost_in_cents: Option<f32>, app: &AppContext) -> UsageDisplayUnit {
+    match (usage_display_unit(app), cost_in_cents) {
+        (UsageDisplayUnit::Dollars, Some(_)) => UsageDisplayUnit::Dollars,
+        (UsageDisplayUnit::Dollars, None) | (UsageDisplayUnit::Credits, Some(_) | None) => {
+            UsageDisplayUnit::Credits
+        }
     }
-    let unit_text = format_usage_unit_value(credits, cost_in_cents, resolved_unit);
-    let Some(tokens) = tokens.filter(|&tokens| tokens > 0) else {
-        return unit_text;
-    };
-    format!("{} tokens / {unit_text}", tokens.separate_with_commas())
+}
+
+/// Formats a usage figure in `unit`. Dollars fall back to the plain credits string when no cents
+/// figure exists.
+pub fn format_usage(credits: f32, cost_in_cents: Option<f32>, unit: UsageDisplayUnit) -> String {
+    match (unit, cost_in_cents) {
+        (UsageDisplayUnit::Dollars, Some(cost_in_cents)) => format_dollars(cost_in_cents),
+        (UsageDisplayUnit::Dollars, None) | (UsageDisplayUnit::Credits, _) => {
+            format_credits(credits)
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -431,7 +421,12 @@ pub fn usage_label(
     cost_in_cents: Option<f32>,
     unit: UsageDisplayUnit,
 ) -> String {
-    let unit = effective_usage_unit(unit, cost_in_cents);
+    let unit = match (unit, cost_in_cents) {
+        (UsageDisplayUnit::Dollars, Some(_)) => UsageDisplayUnit::Dollars,
+        (UsageDisplayUnit::Dollars, None) | (UsageDisplayUnit::Credits, _) => {
+            UsageDisplayUnit::Credits
+        }
+    };
     let base = match (kind, unit) {
         (UsageLabelKind::DetailsPanel, UsageDisplayUnit::Credits) => "Credits used",
         (UsageLabelKind::DetailsPanel, UsageDisplayUnit::Dollars) => "Usage",
