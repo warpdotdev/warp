@@ -351,7 +351,8 @@ pub struct BlocklistAIController {
     native_prompt_conversation_id: Option<AIConversationId>,
     /// When set, prompts injected into the bound native conversation are handed to an external
     /// harness driving it instead of being sent to Warp's agent.
-    external_harness_prompt_sink: Option<async_channel::Sender<String>>,
+    external_harness_prompt_sink:
+        Option<async_channel::Sender<external_harness::ExternalHarnessPrompt>>,
 
     /// Ambient agent task ID attached to this controller. This is a property of the controller, and not an individual
     /// conversation, because the ambient agent task driver owns the entire Warp window working on a task, and any

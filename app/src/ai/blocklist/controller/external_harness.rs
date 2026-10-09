@@ -2,6 +2,7 @@
 // conversation: the harness translates its own protocol into MAA response events, which flow
 // through the same controller path as events from the MAA server. The conversation stays owned
 // by this client (so task status syncing keeps working); only the turn itself is the harness's.
+use session_sharing_protocol::common::AgentAttachment;
 use uuid::Uuid;
 use warp_multi_agent_api::response_event::StreamInit;
 use warp_multi_agent_api::{ResponseEvent, response_event};
@@ -15,14 +16,26 @@ use crate::workspaces::user_workspaces::ResolvedTeamScope;
 
 /// Identifiers for one harness-driven turn.
 #[derive(Clone, Debug)]
-pub(crate) struct ExternalHarnessTurn {
+pub(in crate::ai) struct ExternalHarnessTurn {
     pub stream_id: ResponseStreamId,
     pub request_id: String,
 }
 
+/// A prompt relayed to the external harness driving a native conversation.
+#[derive(Clone, Debug)]
+pub(in crate::ai) struct ExternalHarnessPrompt {
+    pub text: String,
+    /// Context the prompt's author attached, kept in its shared-session wire shape so the
+    /// harness can decide how to present each kind to its agent.
+    pub attachments: Vec<AgentAttachment>,
+}
+
 impl BlocklistAIController {
     /// Diverts prompts injected into the bound native conversation to an external harness.
-    pub(crate) fn set_external_harness_prompt_sink(&mut self, sink: async_channel::Sender<String>) {
+    pub(in crate::ai) fn set_external_harness_prompt_sink(
+        &mut self,
+        sink: async_channel::Sender<ExternalHarnessPrompt>,
+    ) {
         self.external_harness_prompt_sink = Some(sink);
     }
 
@@ -30,7 +43,7 @@ impl BlocklistAIController {
     /// for a fresh response stream, marks the conversation in progress, and applies the locally
     /// minted `StreamInit`. The harness must add the user query and task messages through
     /// [`Self::apply_external_harness_event`], as the MAA server does.
-    pub(crate) fn begin_external_harness_turn(
+    pub(in crate::ai) fn begin_external_harness_turn(
         &mut self,
         conversation_id: AIConversationId,
         run_id: Option<String>,
@@ -106,7 +119,7 @@ impl BlocklistAIController {
     }
 
     /// Applies a harness-authored response event to the turn open on `stream_id`.
-    pub(crate) fn apply_external_harness_event(
+    pub(in crate::ai) fn apply_external_harness_event(
         &mut self,
         stream_id: &ResponseStreamId,
         event: ResponseEvent,

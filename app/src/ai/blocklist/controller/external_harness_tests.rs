@@ -1,5 +1,6 @@
 use std::time::SystemTime;
 
+use session_sharing_protocol::common::AgentAttachment;
 use uuid::Uuid;
 use warp_multi_agent_api::client_action::{AddMessagesToTask, CreateTask};
 use warp_multi_agent_api::message::tool_call::{RunShellCommand, Tool};
@@ -143,12 +144,23 @@ fn shared_session_injections_go_to_the_prompt_sink_instead_of_the_queue() {
                 controller.execute_warp_agent_prompt_from_shared_session_injection(
                     "follow-up".into(),
                     None,
-                    vec![],
+                    vec![AgentAttachment::PlainText {
+                        content: "selected text".into(),
+                    }],
                     ParticipantId::new(),
                     None,
                     ctx,
                 );
-                assert_eq!(prompts.try_recv().unwrap(), "follow-up");
+                let relayed = prompts.try_recv().unwrap();
+                assert_eq!(relayed.text, "follow-up");
+                assert!(
+                    matches!(
+                        relayed.attachments.as_slice(),
+                        [AgentAttachment::PlainText { content }] if content == "selected text"
+                    ),
+                    "attachments must reach the harness alongside the prompt: {:?}",
+                    relayed.attachments
+                );
                 assert!(!QueuedQueryModel::as_ref(ctx).has_queue(id));
                 assert_eq!(
                     BlocklistAIHistoryModel::as_ref(ctx)
