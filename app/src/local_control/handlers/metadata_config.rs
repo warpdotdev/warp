@@ -74,7 +74,7 @@ pub(crate) fn tab_color_set(
 ) -> Result<serde_json::Value, ControlError> {
     let color = color_value(action)?;
     let entry = select_single_tab_entry(target, ActionKind::TabColorSet, ctx)?;
-    set_tab_color(entry.clone(), SelectedTabColor::Color(color), ctx)?;
+    set_tab_color(entry.clone(), SelectedTabColor::Color(color.into()), ctx)?;
     Ok(tab_mutation_result(
         instance_id,
         ActionKind::TabColorSet,

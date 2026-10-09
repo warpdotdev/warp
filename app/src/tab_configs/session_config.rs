@@ -10,8 +10,8 @@ use super::tab_config::{
 };
 use crate::app_state::{BranchSnapshot, LeafContents, LeafSnapshot, PaneNodeSnapshot};
 use crate::launch_configs::launch_config::SplitDirection;
+use crate::tab::TabColor;
 use crate::terminal::cli_agent::CLIAgent;
-use crate::themes::theme::AnsiColorIdentifier;
 use crate::ui_components::icons::Icon;
 
 /// The type of session the user wants to start.
@@ -208,7 +208,7 @@ pub fn is_git_repo(path: &Path) -> bool {
 pub fn tab_config_from_pane_snapshot(
     snapshot: &PaneNodeSnapshot,
     custom_title: Option<String>,
-    color: Option<AnsiColorIdentifier>,
+    color: Option<TabColor>,
 ) -> TabConfig {
     let mut panes = Vec::new();
     let mut counter: usize = 0;

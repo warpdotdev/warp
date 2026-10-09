@@ -3,7 +3,8 @@ use std::path::Path;
 
 use settings::macros::define_settings_group;
 use settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
-use warp_core::ui::theme::AnsiColorIdentifier;
+
+use crate::tab::TabColor;
 
 #[derive(
     Default,
@@ -155,11 +156,11 @@ pub enum DirectoryTabColor {
     Unassigned,
     /// Directory is tracked with a specific color.
     #[schemars(description = "The directory is assigned a specific color.")]
-    Color(AnsiColorIdentifier),
+    Color(TabColor),
 }
 
 impl DirectoryTabColor {
-    pub(crate) fn ansi_color(self) -> Option<AnsiColorIdentifier> {
+    pub(crate) fn ansi_color(self) -> Option<TabColor> {
         match self {
             DirectoryTabColor::Color(c) => Some(c),
             DirectoryTabColor::Suppressed | DirectoryTabColor::Unassigned => None,

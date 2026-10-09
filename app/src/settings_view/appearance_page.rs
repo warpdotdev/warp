@@ -5309,7 +5309,7 @@ impl SettingsWidget for DirectoryTabColorsWidget {
             for (ansi_id, mouse_state) in color_options.zip(dot_mouse_states.iter().cloned()) {
                 let tab_color = match ansi_id {
                     None => DirectoryTabColor::Unassigned,
-                    Some(id) => DirectoryTabColor::Color(id),
+                    Some(id) => DirectoryTabColor::Color(id.into()),
                 };
                 let dot_color = match ansi_id {
                     None => pathfinder_color::ColorU::transparent_black(),

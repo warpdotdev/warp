@@ -6,7 +6,7 @@ use crate::app_state::{
     AppState, LeafContents, PaneNodeSnapshot, SplitDirection as StateSplitDirection,
     TabGroupSnapshot, TabSnapshot, WindowSnapshot,
 };
-use crate::themes::theme::AnsiColorIdentifier;
+use crate::tab::TabColor;
 
 #[cfg(test)]
 #[path = "launch_config_tests.rs"]
@@ -52,7 +52,7 @@ pub struct TabGroupTemplate {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub color: Option<AnsiColorIdentifier>,
+    pub color: Option<TabColor>,
     #[serde(skip_serializing_if = "is_false", default)]
     pub collapsed: bool,
     #[serde(skip_serializing_if = "is_false", default)]
@@ -283,7 +283,7 @@ pub struct TabTemplate {
     #[serde(skip_serializing, default)]
     pub commands: Vec<CommandTemplate>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub color: Option<AnsiColorIdentifier>,
+    pub color: Option<TabColor>,
     /// Index into [`WindowTemplate::tab_groups`], when this tab is grouped.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub group: Option<usize>,

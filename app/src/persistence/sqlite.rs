@@ -103,10 +103,9 @@ use crate::server::ids::{ClientId, HashableId, ServerId, SyncId};
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings_view::SettingsSection;
 use crate::suggestions::ignored_suggestions_model::SuggestionType;
-use crate::tab::SelectedTabColor;
+use crate::tab::{SelectedTabColor, TabColor};
 use crate::terminal::ShellLaunchData;
 use crate::terminal::history::PersistedCommand;
-use crate::themes::theme::AnsiColorIdentifier;
 use crate::workflows::WorkflowId;
 use crate::workspace::tab_group::TabGroupId;
 use crate::workspaces::team::Team as TeamMetadata;
@@ -2598,8 +2597,8 @@ fn read_sqlite_data(
                                     .and_then(|s| {
                                         serde_yaml::from_str::<SelectedTabColor>(s).ok().or_else(
                                             || {
-                                                // Fall back to the old format which stored a bare AnsiColorIdentifier
-                                                serde_yaml::from_str::<AnsiColorIdentifier>(s)
+                                                // Fall back to the old format which stored a bare color name
+                                                serde_yaml::from_str::<TabColor>(s)
                                                     .ok()
                                                     .map(SelectedTabColor::Color)
                                             },
