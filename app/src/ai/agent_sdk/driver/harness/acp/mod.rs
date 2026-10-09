@@ -63,7 +63,9 @@ use super::{
 use crate::ai::agent_sdk::setup_observability::{OzRunTimelineEvent, SetupClientEventReporter};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
-use crate::ai::blocklist::{BlocklistAIController, ExternalHarnessTurn, ResponseStreamId};
+use crate::ai::blocklist::{
+    BlocklistAIController, ExternalHarnessPrompt, ExternalHarnessTurn, ResponseStreamId,
+};
 use crate::ai::mcp::JSONTransportType;
 use crate::server::server_api::ServerApi;
 use crate::terminal::CLIAgent;
@@ -432,7 +434,7 @@ impl HarnessRunner for AcpHarnessRunner {
 
         let run_id = self.task_id.map(|id| id.to_string());
         let turn = begin_turn(foreground, &self.terminal_driver, run_id.clone()).await?;
-        let (follow_up_tx, follow_up_rx) = async_channel::unbounded::<String>();
+        let (follow_up_tx, follow_up_rx) = async_channel::unbounded::<ExternalHarnessPrompt>();
         with_ai_controller(foreground, &self.terminal_driver, move |controller, _| {
             controller.set_external_harness_prompt_sink(follow_up_tx);
         })
@@ -524,7 +526,7 @@ struct TurnDriver {
     connection: Arc<AcpConnection>,
     notifications: async_channel::Receiver<InboundNotification>,
     /// Follow-up prompts injected into the conversation (e.g. by shared-session viewers).
-    follow_ups: async_channel::Receiver<String>,
+    follow_ups: async_channel::Receiver<ExternalHarnessPrompt>,
     foreground: ModelSpawner<AgentDriver>,
     terminal_driver: ModelHandle<TerminalDriver>,
     run_id: Option<String>,
@@ -574,17 +576,23 @@ impl TurnDriver {
     async fn run_follow_up(
         &self,
         mapper: &mut AcpTurnMapper,
-        prompt: String,
+        prompt: ExternalHarnessPrompt,
     ) -> Result<StopReason> {
+        if !prompt.attachments.is_empty() {
+            log::warn!(
+                "Ignoring {} attachment(s) on an ACP follow-up; only the prompt text is sent",
+                prompt.attachments.len()
+            );
+        }
         let next = begin_turn(&self.foreground, &self.terminal_driver, self.run_id.clone())
             .await
             .map_err(|error| anyhow!("{error}"))?;
         mapper.start_segment(next.request_id.clone());
         *self.turn.lock() = next;
-        let echo = vec![mapper.user_query_action(&prompt)];
+        let echo = vec![mapper.user_query_action(&prompt.text)];
         self.apply_events(mapper, vec![TurnEvent::Actions(echo)])
             .await?;
-        self.run_turn(mapper, prompt).await
+        self.run_turn(mapper, prompt.text).await
     }
 
     /// Runs one prompt turn to completion and finishes its last request stream.

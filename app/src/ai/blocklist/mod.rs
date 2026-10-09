@@ -95,7 +95,7 @@ pub use context_model::{
     PendingFile,
 };
 pub use controller::BlocklistAIController;
-pub(crate) use controller::external_harness::ExternalHarnessTurn;
+pub(in crate::ai) use controller::external_harness::{ExternalHarnessPrompt, ExternalHarnessTurn};
 pub use controller::input_context::{
     BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,
 };
