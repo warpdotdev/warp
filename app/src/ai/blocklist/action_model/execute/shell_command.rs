@@ -9,7 +9,7 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, select};
 use futures_lite::pin;
 use itertools::Itertools;
-use parking_lot::FairMutex;
+use parking_lot::{FairMutex, Mutex};
 use warp_core::command::ExitCode;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
@@ -62,6 +62,10 @@ pub struct ShellCommandExecutor {
     /// The cloud shell recovery for this terminal, while it is in progress or its outcome has not
     /// yet been read by the agent. At most one recovery exists at a time.
     shell_recovery: Option<ShellRecovery>,
+    /// The block whose recovery is in progress, shared with the poll futures (which have no
+    /// `ModelContext`) so a timeout or forced refresh does not report the interrupted command
+    /// as a normal completion while its shell is still being replaced.
+    recovering_block_id: Arc<Mutex<Option<BlockId>>>,
 }
 
 /// Only the local PTY manager reports a replacement shell, so a recovery never completes on wasm.
@@ -102,6 +106,7 @@ impl ShellCommandExecutor {
             control_handback_sender: None,
             activity_monitor: Arc::new(LrcActivityMonitor::new()),
             shell_recovery: None,
+            recovering_block_id: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -689,6 +694,16 @@ impl ShellCommandExecutor {
             action_id: action_id.clone(),
             block_id: block_id.clone(),
         });
+        *self.recovering_block_id.lock() = Some(block_id.clone());
+    }
+
+    /// Drops an in-progress recovery whose replacement shell never became ready, so the
+    /// interrupted block reports its outcome like any other block again.
+    pub(crate) fn abort_shell_recovery(&mut self) {
+        if matches!(self.shell_recovery, Some(ShellRecovery::InProgress { .. })) {
+            self.shell_recovery = None;
+            *self.recovering_block_id.lock() = None;
+        }
     }
 
     /// Delivers the recovery outcome to any poll waiting on the interrupted command, or holds it
@@ -705,6 +720,7 @@ impl ShellCommandExecutor {
         if *block_id != result.block_id {
             return;
         }
+        *self.recovering_block_id.lock() = None;
         let selectors = [
             BlockSelector::RequestedCommandId(action_id.clone()),
             BlockSelector::Id(block_id.clone()),
@@ -757,6 +773,7 @@ impl ShellCommandExecutor {
 
         // Create a future that resolves when we should send a result to the agent.
         let terminal_model = self.terminal_model.clone();
+        let recovering_block_id = self.recovering_block_id.clone();
 
         #[derive(Debug, Clone, Copy)]
         enum WakeReason {
@@ -826,7 +843,10 @@ impl ShellCommandExecutor {
 
             match block_selector.get_block(&model) {
                 Some(block) => {
-                    if block.finished() {
+                    // The replacement shell's bootstrap finishes the interrupted block before the
+                    // recovery outcome is known, so it must keep reading as still running.
+                    let is_recovering = recovering_block_id.lock().as_ref() == Some(block.id());
+                    if block.finished() && !is_recovering {
                         monitor.forget(block.id());
                         ActionResult::CommandFinished {
                             block_id: block.id().clone(),

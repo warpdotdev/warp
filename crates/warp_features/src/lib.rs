@@ -1019,7 +1019,6 @@ pub const DEBUG_FLAGS: &[FeatureFlag] = &[FeatureFlag::DebugMode, FeatureFlag::R
 pub const LOCAL_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::LocalClaudeCodexChildHarnesses,
     FeatureFlag::AcpHarness,
-    FeatureFlag::CloudAgentShellRespawn,
 ];
 
 /// Features enabled for the development team.  The expectation is that, over
@@ -1068,7 +1067,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::WarpControlCli,
     FeatureFlag::TerminalLifecycleRecovery,
-    FeatureFlag::CloudAgentShellRespawn,
     FeatureFlag::PromptCacheExpiryWarning,
     FeatureFlag::JupyterNotebookRendering,
     FeatureFlag::MultiLevelOrchestration,

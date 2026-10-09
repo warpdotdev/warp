@@ -3035,13 +3035,7 @@ impl BlockList {
 
     pub fn reinit_shell(&mut self, interrupted_status: Option<ObservedExitStatus>) {
         let active_block = self.active_block_mut();
-        match interrupted_status {
-            Some(ObservedExitStatus::Code(code)) => active_block.finish(code),
-            Some(ObservedExitStatus::Signal(_) | ObservedExitStatus::Unavailable) => {
-                active_block.hide();
-            }
-            None => active_block.finish(0),
-        }
+        active_block.finish(interrupted_status.map_or(0, ObservedExitStatus::exit_code));
         self.update_active_block_height();
 
         self.create_warp_input_block();

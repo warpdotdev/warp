@@ -24,7 +24,7 @@ use crate::terminal::model::image_map::StoredImageMetadata;
 use crate::terminal::model::index::Side;
 use crate::terminal::model::selection::ExpandedSelectionRange;
 use crate::terminal::model::test_utils::block_size;
-use crate::terminal::shared_session::SharedSessionStatus;
+use crate::terminal::shared_session::{SharedSessionSource, SharedSessionStatus};
 
 /// Helper function to create a SerializedBlock with default values,
 /// including the new is_local field.
@@ -1996,12 +1996,19 @@ fn terminal_exit_absorbs_later_lifecycle_inputs() {
 }
 #[test]
 fn observed_shell_exit_is_finalized_once_after_recovery_decision() {
+    let _respawn_enabled = FeatureFlag::CloudAgentShellRespawn.override_enabled(true);
     let mut terminal = TerminalModel::mock(None, None);
     terminal.simulate_long_running_block("exit 42", "");
     let reason = ExitReason::ShellProcessExited {
         status: ObservedExitStatus::Code(42),
     };
 
+    terminal.exit(reason);
+    assert!(terminal.is_read_only());
+
+    let mut terminal = TerminalModel::mock(None, None);
+    terminal.set_shared_session_source(SharedSessionSource::ambient_agent(None));
+    terminal.simulate_long_running_block("exit 42", "");
     terminal.exit(reason);
 
     assert!(!terminal.is_read_only());
@@ -2039,7 +2046,7 @@ fn shell_recovery_finishes_interrupted_block_and_starts_fresh_input() {
 }
 
 #[test]
-fn shell_recovery_without_exit_code_does_not_fabricate_success() {
+fn shell_recovery_without_exit_code_reports_failure() {
     let mut terminal = TerminalModel::mock(None, None);
     terminal.simulate_long_running_block("kill $$", "");
     let interrupted_block_id = terminal.active_block_id().clone();
@@ -2058,8 +2065,8 @@ fn shell_recovery_without_exit_code_does_not_fabricate_success() {
         .block_list()
         .block_with_id(&interrupted_block_id)
         .expect("interrupted block should remain addressable");
-    assert!(!interrupted_block.finished());
-    assert!(interrupted_block.is_hidden());
+    assert!(interrupted_block.finished());
+    assert_eq!(interrupted_block.exit_code(), ExitCode::from(137));
     assert_ne!(terminal.active_block_id(), &interrupted_block_id);
 }
 #[test]

@@ -529,6 +529,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::HistorySearchRankingV2,
         #[cfg(feature = "stored_screenshots")]
         FeatureFlag::StoredScreenshots,
+        #[cfg(feature = "cloud_agent_shell_respawn")]
+        FeatureFlag::CloudAgentShellRespawn,
     ]);
 
     flags

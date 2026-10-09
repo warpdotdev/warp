@@ -1503,15 +1503,22 @@ impl TerminalModel {
         self.ignore_bootstrapping_messages = true;
     }
 
-    /// Reacts to the PTY going away. A shell process exit is only announced via
-    /// [`Event::ShellExitObserved`] so the owning surface can decide between recovering the shell
-    /// and calling [`Self::finalize_exit`]; every other reason finalizes immediately.
+    /// Reacts to the PTY going away. For a shared ambient agent session with shell respawn
+    /// enabled, a shell process exit is only announced via [`Event::ShellExitObserved`] so the
+    /// owning surface can decide between recovering the shell and calling
+    /// [`Self::finalize_exit`]; every other terminal and reason finalizes immediately.
     pub fn exit(&mut self, reason: ExitReason) {
         let ExitReason::ShellProcessExited { status } = reason else {
             self.finalize_exit(reason);
             return;
         };
         if self.handled_exit {
+            return;
+        }
+        if !FeatureFlag::CloudAgentShellRespawn.is_enabled()
+            || !self.is_shared_ambient_agent_session()
+        {
+            self.finalize_exit(reason);
             return;
         }
         // The pty is going away, so its descriptor must not be read again: the

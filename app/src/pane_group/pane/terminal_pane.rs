@@ -11,7 +11,8 @@ use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_errors::report_error;
 use warpui::{
-    AppContext, EntityId, ModelHandle, SingletonEntity, ViewContext, ViewHandle, WindowId,
+    AppContext, EntityId, ModelHandle, SingletonEntity, ViewContext, ViewHandle, WeakViewHandle,
+    WindowId,
 };
 
 #[cfg(not(target_family = "wasm"))]
@@ -874,11 +875,11 @@ fn attach_terminal_view(
     terminal_pane_id: TerminalPaneId,
     ctx: &mut ViewContext<PaneGroup>,
 ) {
-    let terminal_view_id = terminal_view.id();
+    let weak_terminal_view = terminal_view.downgrade();
     ctx.subscribe_to_view(
         terminal_view,
         move |group: &mut PaneGroup, _, event, ctx| {
-            handle_terminal_view_event(group, terminal_pane_id, terminal_view_id, event, ctx);
+            handle_terminal_view_event(group, terminal_pane_id, &weak_terminal_view, event, ctx);
         },
     );
 }
@@ -909,7 +910,7 @@ fn handle_pane_stack_event(
 fn handle_terminal_view_event(
     group: &mut PaneGroup,
     terminal_pane_id: TerminalPaneId,
-    terminal_view_id: EntityId,
+    terminal_view: &WeakViewHandle<TerminalView>,
     event: &Event,
     ctx: &mut ViewContext<PaneGroup>,
 ) {
@@ -922,24 +923,24 @@ fn handle_terminal_view_event(
                 ctx.emit(pane_group::Event::ExecuteCommand(event.clone()));
             }
             Event::RecoverCloudShell(request) => {
-                let Some((terminal_manager, terminal_view)) =
-                    group.terminal_session_by_id(pane_id).and_then(|pane| {
-                        pane.view
-                            .as_ref(ctx)
-                            .pane_stack()
-                            .as_ref(ctx)
-                            .entries()
-                            .iter()
-                            .find(|(_, view)| view.id() == terminal_view_id)
-                            .cloned()
-                    })
-                else {
-                    return;
-                };
-                let accepted = terminal_manager.update(ctx, |manager, ctx| {
-                    manager.recover_cloud_shell(request.clone(), ctx)
+                let terminal_manager = group.terminal_session_by_id(pane_id).and_then(|pane| {
+                    pane.view
+                        .as_ref(ctx)
+                        .pane_stack()
+                        .as_ref(ctx)
+                        .entries()
+                        .iter()
+                        .find(|(_, view)| view.id() == terminal_view.id())
+                        .map(|(manager, _)| manager.clone())
                 });
-                if !accepted {
+                let accepted = terminal_manager.is_some_and(|manager| {
+                    manager.update(ctx, |manager, ctx| {
+                        manager.recover_cloud_shell(request.clone(), ctx)
+                    })
+                });
+                // The view is waiting on this event; it must always learn the outcome, or the
+                // deferred exit would never be finalized.
+                if !accepted && let Some(terminal_view) = terminal_view.upgrade(ctx) {
                     terminal_view.update(ctx, |view, ctx| {
                         view.fail_cloud_shell_recovery(
                             CloudAgentShellRecoveryFailureClass::Unsupported,

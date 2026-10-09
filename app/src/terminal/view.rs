@@ -12029,6 +12029,10 @@ impl TerminalView {
             return;
         };
         log::warn!("Cloud shell recovery failed: {error:#}");
+        self.ai_action_model
+            .as_ref(ctx)
+            .shell_command_executor(ctx)
+            .update(ctx, |executor, _| executor.abort_shell_recovery());
         Self::send_cloud_shell_recovery_telemetry(
             CloudAgentShellRecoveryOutcome::Failed,
             &request,
