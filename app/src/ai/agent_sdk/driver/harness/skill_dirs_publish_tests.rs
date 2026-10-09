@@ -18,6 +18,29 @@ fn write_skill(dir: &Path, name: &str) -> PathBuf {
     skill_dir
 }
 
+#[test]
+fn empty_configured_skill_dirs_suppress_ambient_sources() {
+    let workspace = TempDir::new().unwrap();
+
+    let published_root = workspace.path().join("harness/skills");
+    assert!(publish_skills_for_harness(&published_root, workspace.path(), false, &[],).is_empty());
+    assert!(!published_root.exists());
+}
+
+#[test]
+fn resolved_skill_dirs_are_published_relative_to_workspace_root() {
+    let workspace = TempDir::new().unwrap();
+    let source_dir = workspace.path().join("repo/skills");
+    let skill = write_skill(&source_dir, "factory-skill");
+    let published_root = workspace.path().join("harness/skills");
+    let source_dirs = vec![PathBuf::from("repo/skills")];
+    let published =
+        publish_skills_for_harness(&published_root, workspace.path(), false, &source_dirs);
+    let link = published_root.join("factory-skill");
+    assert!(published.contains(&link));
+    assert_eq!(fs::read_link(&link).unwrap(), skill);
+}
+
 fn publish_source_dirs(
     skill_root: &Path,
     source_dirs: &[PathBuf],

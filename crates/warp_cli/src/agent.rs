@@ -566,12 +566,13 @@ pub struct RunAgentArgs {
     #[arg(
         long = "idle-on-fail",
         value_name = "DURATION",
-        env = "OZ_IDLE_ON_FAIL",
         num_args = 0..=1,
         default_missing_value = "15m",
         hide = true
     )]
     pub idle_on_fail: Option<humantime::Duration>,
+    #[arg(long = "legacy-idle-on-fail-env", env = "OZ_IDLE_ON_FAIL", hide = true)]
+    pub idle_on_fail_env: Option<humantime::Duration>,
 
     #[command(flatten)]
     pub snapshot: SnapshotArgs,
@@ -582,6 +583,14 @@ pub struct RunAgentArgs {
     /// accepting the compatibility shape until all producers have been updated.
     #[arg(long = "task-id", hide = true, conflicts_with_all = ["prompt", "saved_prompt", "file"])]
     pub task_id: Option<String>,
+    /// Execution whose server-owned settings configure this task launch.
+    #[arg(
+        long = "execution-id",
+        env = "WARP_EXECUTION_ID",
+        hide = true,
+        requires = "task_id"
+    )]
+    pub execution_id: Option<String>,
 
     /// Whether we are running the agent in a sandboxed environment.
     #[arg(long = "sandboxed", hide = true)]
@@ -672,6 +681,10 @@ pub struct RunAgentArgs {
 }
 
 impl RunAgentArgs {
+    pub fn effective_idle_on_fail(&self) -> Option<humantime::Duration> {
+        self.idle_on_fail.or(self.idle_on_fail_env)
+    }
+
     /// Combine `mcp_specs` with legacy `mcp_servers` (UUIDs) into a single list.
     pub fn all_mcp_specs(&self) -> Vec<MCPSpec> {
         let mut specs = self.mcp_specs.clone();

@@ -17,15 +17,62 @@ use super::super::environment_checkout_protocol::{
 };
 use super::{
     CloneFailureIdentityDiagnostics, PrepareEnvironmentError, RepositoryCloneRequest,
-    SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER, SetupCommandPhase, await_setup_phase,
-    build_checkout_helper_command, environment_snapshot, merge_repos_deduped,
-    parse_resolved_head_sha, read_checkout_report, reported_resolved_heads,
+    ResolvedRepository, SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER, SetupCommandPhase,
+    WorkspaceConfiguration, await_setup_phase, build_checkout_helper_command, environment_snapshot,
+    merge_repos_deduped, parse_resolved_head_sha, read_checkout_report, reported_resolved_heads,
     repository_clone_requests, setup_command_failure, single_repo_name,
     validate_repository_preparation_overrides,
 };
 use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::terminal::shell::ShellType;
+
+#[test]
+fn resolved_repositories_apply_origin_policy_per_checkout() {
+    let first = SourceRepo::new(CodeForge::GitHub, "owner".into(), "first".into());
+    let second = SourceRepo::new(CodeForge::GitLab, "owner".into(), "second".into());
+    let workspace = WorkspaceConfiguration::from_resolved(
+        vec![
+            ResolvedRepository {
+                source: first,
+                checkout: None,
+                clone_from: None,
+                preserve_origin: true,
+            },
+            ResolvedRepository {
+                source: second,
+                checkout: Some(RepositoryHeadRef::Branch("feature".into())),
+                clone_from: Some(SourceRepo::new(
+                    CodeForge::GitLab,
+                    "source".into(),
+                    "second".into(),
+                )),
+                preserve_origin: false,
+            },
+        ],
+        vec!["make setup".into()],
+    )
+    .unwrap();
+    assert_eq!(workspace.setup_commands, vec!["make setup"]);
+    let requests = workspace.clone_requests;
+    assert!(!requests[0].remove_origin);
+    assert!(requests[1].remove_origin);
+    assert!(requests[1].fetch_branch_only);
+    assert_eq!(requests[1].remote.owner, "source");
+}
+
+#[test]
+fn duplicate_resolved_repositories_fail_before_clone() {
+    let repositories = (0..2)
+        .map(|_| ResolvedRepository {
+            source: SourceRepo::new(CodeForge::GitHub, "owner".into(), "repo".into()),
+            checkout: None,
+            clone_from: None,
+            preserve_origin: true,
+        })
+        .collect::<Vec<_>>();
+    assert!(WorkspaceConfiguration::from_resolved(repositories, Vec::new()).is_err());
+}
 
 #[test]
 fn setup_timeout_covers_command_start_and_exit_without_resetting_deadline() {

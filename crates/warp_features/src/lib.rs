@@ -864,6 +864,8 @@ pub enum FeatureFlag {
     /// selector is replaced with "Agent" and users can pick which agent
     /// identity the key authenticates as.
     NamedAgents,
+    /// Loads server-owned execution settings for paired cloud agent launches.
+    CloudAgentExecutionConfig,
     /// Gates the driver behavior that writes GitHub credentials to disk
     /// (`~/.git-credentials`, `~/.config/gh/hosts.yaml`) and runs the
     /// background refresh loop that keeps them fresh during a task run.
@@ -1072,6 +1074,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::LrcActivitySignal,
     FeatureFlag::StoredScreenshots,
     FeatureFlag::GitMirrorCache,
+    FeatureFlag::CloudAgentExecutionConfig,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

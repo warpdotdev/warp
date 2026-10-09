@@ -36,7 +36,7 @@ use crate::ai::agent_sdk::environment_snapshot::{
     EnvironmentSnapshot, EnvironmentSnapshotReporter, RepositoryRevision,
 };
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
-use crate::ai::cloud_environments::SourceRepo;
+use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::server::telemetry::secret_redaction::redact_secrets_in_string;
 use crate::terminal::model::BlockId;
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
@@ -237,28 +237,65 @@ fn environment_snapshot(
     }
 }
 
-/// Server-owned repository settings for environment preparation.
+/// Workspace inputs used to prepare a run's repositories, commands, and skills.
 #[derive(Default)]
-pub(crate) struct RepositoryPreparationOptions {
-    source_repos: Vec<SourceRepo>,
-    setup_commands: Vec<String>,
-    preparation_overrides: Vec<RepositoryPreparationOverride>,
-    remove_origins: bool,
+pub(crate) struct WorkspaceConfiguration {
+    pub source_repos: Vec<SourceRepo>,
+    pub setup_commands: Vec<String>,
+    pub factory_skill_dirs: Option<Vec<PathBuf>>,
+    pub has_environment: bool,
+    clone_requests: Vec<RepositoryCloneRequest>,
 }
 
-impl RepositoryPreparationOptions {
-    pub fn new(
-        source_repos: Vec<SourceRepo>,
-        setup_commands: Vec<String>,
+#[derive(Clone, Debug)]
+pub(crate) struct ResolvedRepository {
+    pub source: SourceRepo,
+    pub checkout: Option<RepositoryHeadRef>,
+    pub clone_from: Option<SourceRepo>,
+    pub preserve_origin: bool,
+}
+impl WorkspaceConfiguration {
+    pub fn from_legacy(
+        environment: Option<&AmbientAgentEnvironment>,
+        additional_source_repos: Vec<SourceRepo>,
         preparation_overrides: Vec<RepositoryPreparationOverride>,
         remove_origins: bool,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, PrepareEnvironmentError> {
+        let setup_commands = environment
+            .map(|environment| environment.setup_commands.clone())
+            .unwrap_or_default();
+        let source_repos = merge_repos_deduped(
+            environment
+                .map(AmbientAgentEnvironment::effective_repos)
+                .unwrap_or_default(),
+            additional_source_repos,
+        )?;
+        let clone_requests =
+            repository_clone_requests(&source_repos, &preparation_overrides, remove_origins)?;
+        Ok(Self {
             source_repos,
             setup_commands,
-            preparation_overrides,
-            remove_origins,
-        }
+            factory_skill_dirs: None,
+            has_environment: environment.is_some(),
+            clone_requests,
+        })
+    }
+
+    pub fn from_resolved(
+        repositories: Vec<ResolvedRepository>,
+        setup_commands: Vec<String>,
+    ) -> Result<Self, PrepareEnvironmentError> {
+        let clone_requests = resolved_repository_clone_requests(&repositories)?;
+        Ok(Self {
+            source_repos: repositories
+                .iter()
+                .map(|repo| repo.source.clone())
+                .collect(),
+            setup_commands,
+            factory_skill_dirs: None,
+            has_environment: false,
+            clone_requests,
+        })
     }
 }
 
@@ -330,23 +367,20 @@ pub(crate) fn prepare_environment(
     working_dir: PathBuf,
     is_sandbox: bool,
     harness: Harness,
-    repository_options: RepositoryPreparationOptions,
+    workspace: WorkspaceConfiguration,
     setup_events: SetupClientEventReporter,
     environment_snapshot_reporter: EnvironmentSnapshotReporter,
     ctx: &mut ModelContext<TerminalDriver>,
 ) -> impl Future<Output = Result<PathBuf, PrepareEnvironmentError>> + use<> {
     let spawner = ctx.spawner();
     async move {
-        let RepositoryPreparationOptions {
+        let WorkspaceConfiguration {
             source_repos,
             setup_commands,
-            preparation_overrides: repository_preparation_overrides,
-            remove_origins: remove_repository_origins,
-        } = repository_options;
-        validate_repository_preparation_overrides(
-            &source_repos,
-            &repository_preparation_overrides,
-        )?;
+            factory_skill_dirs: _,
+            clone_requests,
+            has_environment: _,
+        } = workspace;
         // Only index the codebase for the Oz harness; third-party harnesses (e.g. Claude)
         // have their own methods for navigating a codebase.
         let should_index_codebase = harness == Harness::Oz;
@@ -362,8 +396,7 @@ pub(crate) fn prepare_environment(
             working_dir.as_path(),
             is_sandbox,
             &source_repos,
-            &repository_preparation_overrides,
-            remove_repository_origins,
+            clone_requests,
             setup_commands,
             should_index_codebase,
             Arc::clone(&repo_channels),
@@ -491,8 +524,7 @@ async fn prepare_environment_impl(
     working_dir: &Path,
     is_sandbox: bool,
     source_repos: &[SourceRepo],
-    repository_preparation_overrides: &[RepositoryPreparationOverride],
-    remove_repository_origins: bool,
+    repository_clone_requests: Vec<RepositoryCloneRequest>,
     setup_commands: Vec<String>,
     should_index_codebase: bool,
     repo_channels: Arc<Mutex<HashMap<PathBuf, oneshot::Sender<()>>>>,
@@ -512,11 +544,6 @@ async fn prepare_environment_impl(
         });
     }
     let mut codebase_context_receivers = Vec::new();
-    let repository_clone_requests = repository_clone_requests(
-        source_repos,
-        repository_preparation_overrides,
-        remove_repository_origins,
-    )?;
 
     // Snapshot the process-wide identity bootstrap set, before anything below
     // (cloning, setup commands) has a chance to change it for a given repo.
@@ -858,6 +885,37 @@ fn repository_clone_requests(
         .collect()
 }
 
+fn resolved_repository_clone_requests(
+    repositories: &[ResolvedRepository],
+) -> Result<Vec<RepositoryCloneRequest>, PrepareEnvironmentError> {
+    let source_repos: Vec<_> = repositories
+        .iter()
+        .map(|repo| repo.source.clone())
+        .collect();
+    if merge_repos_deduped(source_repos, Vec::new())?.len() != repositories.len() {
+        return Err(
+            PrepareEnvironmentError::InvalidRepositoryPreparationOverrides {
+                reason: "duplicate resolved repository identity".to_owned(),
+            },
+        );
+    }
+    repositories
+        .iter()
+        .map(|repo| {
+            source_repo_identity(&repo.source)?;
+            let remote = repo.clone_from.as_ref().unwrap_or(&repo.source).clone();
+            source_repo_identity(&remote)?;
+            Ok(RepositoryCloneRequest {
+                remote,
+                checkout_name: repo.source.repo.clone(),
+                checkout: repo.checkout.clone(),
+                remove_origin: !repo.preserve_origin,
+                fetch_branch_only: repo.clone_from.is_some()
+                    && matches!(repo.checkout, Some(RepositoryHeadRef::Branch(_))),
+            })
+        })
+        .collect()
+}
 async fn active_shell_type(spawner: &ModelSpawner<TerminalDriver>) -> ShellType {
     spawner
         .spawn(|driver, ctx| {

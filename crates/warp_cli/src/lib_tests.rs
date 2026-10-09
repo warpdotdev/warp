@@ -27,6 +27,192 @@ fn identifies_worker_subcommands() {
 }
 
 #[test]
+fn execution_config_launch_requires_task_id() {
+    let missing_task =
+        Args::try_parse_from(["warp", "agent", "run", "--execution-id", "execution"]);
+    assert!(missing_task.is_err());
+}
+
+#[test]
+fn execution_config_launch_accepts_legacy_settings() {
+    Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "task",
+        "--execution-id",
+        "execution",
+        "--model",
+        "legacy-model",
+        "--environment",
+        "legacy-environment",
+        "--share",
+        "team:edit",
+        "--no-snapshot",
+        "--skill",
+        "legacy-skill",
+        "--mcp",
+        r#"{"legacy":{"command":"legacy-mcp"}}"#,
+        "--computer-use",
+        "--idle-on-complete",
+        "10m",
+        "--idle-on-fail",
+        "5m",
+        "--conversation",
+        "legacy-conversation",
+        "--profile",
+        "legacy-profile",
+        "--harness",
+        "claude",
+        "--bedrock-inference-role",
+        "legacy-role",
+        "--bedrock-role-region",
+        "us-west-2",
+        "--skip-initial-turn",
+        "--remove-repository-origins",
+    ])
+    .expect("legacy settings must remain compatible with execution bootstrap");
+}
+
+#[test]
+fn execution_config_launch_accepts_operational_timeouts_without_restricting_legacy() {
+    Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "task",
+        "--execution-id",
+        "execution",
+        "--snapshot-upload-timeout",
+        "2m",
+        "--snapshot-script-timeout",
+        "30s",
+    ])
+    .unwrap();
+    Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "task",
+        "--model",
+        "auto",
+        "--no-snapshot",
+    ])
+    .unwrap();
+    Args::try_parse_from([
+        "warp", "agent", "run", "--prompt", "hello", "--model", "auto",
+    ])
+    .unwrap();
+}
+
+#[test]
+#[serial_test::serial]
+fn execution_config_env_selects_bootstrap_with_legacy_settings() {
+    let previous = set_env_var("WARP_EXECUTION_ID", "execution-from-env");
+    let parsed = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "task",
+        "--model",
+        "legacy-model",
+        "--share",
+        "team:edit",
+        "--computer-use",
+        "--idle-on-complete",
+        "10m",
+    ])
+    .unwrap();
+    let Some(Command::CommandLine(command)) = parsed.command() else {
+        panic!("expected a CLI command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(args)) = command.as_ref() else {
+        panic!("expected agent run");
+    };
+    let execution_id = args.execution_id.clone();
+    restore_env_var("WARP_EXECUTION_ID", previous);
+
+    assert_eq!(execution_id.as_deref(), Some("execution-from-env"));
+}
+
+#[test]
+#[serial_test::serial]
+fn execution_config_flag_takes_precedence_over_environment() {
+    let previous = set_env_var("WARP_EXECUTION_ID", "execution-from-env");
+    let parsed = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "task",
+        "--execution-id",
+        "explicit-execution",
+    ])
+    .unwrap();
+    let Some(Command::CommandLine(command)) = parsed.command() else {
+        panic!("expected a CLI command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(args)) = command.as_ref() else {
+        panic!("expected agent run");
+    };
+    let execution_id = args.execution_id.clone();
+    restore_env_var("WARP_EXECUTION_ID", previous);
+
+    assert_eq!(execution_id.as_deref(), Some("explicit-execution"));
+}
+
+#[test]
+#[serial_test::serial]
+fn execution_config_env_requires_task_id() {
+    let previous = set_env_var("WARP_EXECUTION_ID", "parent-execution");
+    let parsed = Args::try_parse_from(["warp", "agent", "run"]);
+    restore_env_var("WARP_EXECUTION_ID", previous);
+    let error = parsed.expect_err("an environment-supplied execution ID requires a task ID");
+    assert!(error.to_string().contains("--task-id"));
+}
+
+#[test]
+#[serial_test::serial]
+fn local_run_accepts_inherited_execution_config_env() {
+    let previous = set_env_var("WARP_EXECUTION_ID", "parent-execution");
+    let parsed = Args::try_parse_from(["warp", "agent", "run", "--prompt", "hello"]);
+    restore_env_var("WARP_EXECUTION_ID", previous);
+    let parsed = parsed.unwrap();
+    let Some(Command::CommandLine(command)) = parsed.command() else {
+        panic!("expected a CLI command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(args)) = command.as_ref() else {
+        panic!("expected agent run");
+    };
+    assert_eq!(args.task_id, None);
+    assert_eq!(args.execution_id.as_deref(), Some("parent-execution"));
+}
+
+#[test]
+#[serial_test::serial]
+fn execution_config_launch_ignores_legacy_failure_retention_env() {
+    let previous = set_env_var("OZ_IDLE_ON_FAIL", "20m");
+    let parsed = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "task",
+        "--execution-id",
+        "execution",
+    ]);
+    restore_env_var("OZ_IDLE_ON_FAIL", previous);
+    assert!(
+        parsed.is_ok(),
+        "legacy worker environment must not block the new launch"
+    );
+}
+
+#[test]
 fn agent_run_accepts_git_valid_substituted_branch_override() {
     let base = r#"{"code_forge":"GITHUB","repo_owner":"source","repo_name":"warp","head":{"type":"BRANCH","value":"frozen/prepare"},"clone_from":{"code_forge":"GITHUB","owner":"target","repo":"warp"},"preserve_origin":true}"#;
     let valid = base.replace("frozen/prepare", "release+candidate");
@@ -1257,7 +1443,7 @@ fn agent_run_accepts_idle_on_fail_flag() {
     };
 
     assert_eq!(
-        run_args.idle_on_fail,
+        run_args.effective_idle_on_fail(),
         Some(humantime::Duration::from(std::time::Duration::from_secs(
             15 * 60
         )))
@@ -1312,7 +1498,7 @@ fn agent_run_reads_idle_on_fail_from_env() {
     };
 
     assert_eq!(
-        run_args.idle_on_fail,
+        run_args.effective_idle_on_fail(),
         Some(humantime::Duration::from(std::time::Duration::from_secs(
             20 * 60
         )))
@@ -1345,7 +1531,7 @@ fn agent_run_idle_on_fail_flag_overrides_env() {
     };
 
     assert_eq!(
-        run_args.idle_on_fail,
+        run_args.effective_idle_on_fail(),
         Some(humantime::Duration::from(std::time::Duration::from_secs(
             3 * 60
         )))
@@ -1370,7 +1556,7 @@ fn agent_run_leaves_idle_on_fail_unset_without_flag_or_env() {
         panic!("Expected `warp agent run` command");
     };
 
-    assert!(run_args.idle_on_fail.is_none());
+    assert!(run_args.effective_idle_on_fail().is_none());
 }
 
 #[test]
@@ -1396,7 +1582,7 @@ fn agent_run_idle_on_fail_is_independent_of_idle_on_complete() {
         panic!("Expected `warp agent run` command");
     };
 
-    assert!(run_args.idle_on_fail.is_some());
+    assert!(run_args.effective_idle_on_fail().is_some());
     assert!(run_args.idle_on_complete.is_none());
 }
 

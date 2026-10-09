@@ -1,9 +1,11 @@
+use std::fs;
 use std::sync::Arc;
 
 use chrono::Utc;
 use clap::Parser;
 use cloud_object_models::CodeForge;
 use command::blocking::Command as ProcessCommand;
+use mockito::Server;
 use serde_json::json;
 use warp_cli::agent::{
     AgentCommand, Harness, HarnessTransport, OutputFormat, RepositoryForge, RepositoryHeadRef,
@@ -22,12 +24,16 @@ use warpui::{App, SingletonEntity, WindowId};
 use super::{
     AgentDriverRunner, CommandAuthentication, command_authentication, command_requires_auth,
     command_to_telemetry_event, reconcile_task_harness, resolve_agent_driver_team_scope,
-    validated_driver_repositories_for_preparation,
+    selected_execution_skills,
 };
+use crate::ai::agent_sdk::driver::environment::WorkspaceConfiguration;
 use crate::ai::agent_sdk::driver::harness::HarnessKind;
 use crate::ai::agent_sdk::driver::{AgentDriverError, AgentDriverOptions, AgentRunPrompt, Task};
-use crate::ai::ambient_agents::task::{AmbientAgentTask, AmbientAgentTaskState, TaskScope};
+use crate::ai::ambient_agents::task::{
+    AmbientAgentTask, AmbientAgentTaskState, TaskAttachment, TaskScope,
+};
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
+use crate::ai::skills::ResolvedSkill;
 use crate::auth::AuthStateProvider;
 use crate::auth::user::{PrincipalType, User};
 use crate::network::NetworkStatus;
@@ -46,6 +52,122 @@ use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
 
+#[test]
+fn paired_task_data_downloads_listed_attachment_without_refetching_it() {
+    let _images = FeatureFlag::AmbientAgentsImageUpload.override_enabled(true);
+    let _handoff = FeatureFlag::OzHandoff.override_enabled(false);
+    let working_dir = tempfile::TempDir::new().unwrap();
+    let mut server = Server::new();
+    let download = server
+        .mock("GET", "/attachment")
+        .with_status(200)
+        .with_body("attachment body")
+        .expect(1)
+        .create();
+    let attachment = TaskAttachment {
+        file_id: "file-id".to_owned(),
+        filename: "file-id_report.txt".to_owned(),
+        download_url: format!("{}/attachment", server.url()),
+        mime_type: "text/plain".to_owned(),
+    };
+    App::test((), |app| async move {
+        let provider = app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        let server_api = provider.read(&app, |provider, _| provider.get());
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _enter = runtime.enter();
+        let mut ai_client = MockAIClient::new();
+        ai_client.expect_get_task_attachments().times(0);
+        let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
+        let mut options = agent_driver_options();
+        options.working_dir = working_dir.path().to_path_buf();
+        let mut task = Task {
+            prompt: AgentRunPrompt::ServerSide {
+                skill: None,
+                attachments_dir: None,
+            },
+            model: None,
+            profile: None,
+            mcp_specs: vec![],
+            harness: HarnessKind::Oz,
+        };
+        AgentDriverRunner::prepare_execution_task_data(
+            server_api,
+            &ai_client,
+            TASK_ID.parse().unwrap(),
+            std::collections::HashMap::from([(
+                "API_KEY".to_owned(),
+                warp_managed_secrets::ManagedSecretValue::raw_value("secret"),
+            )]),
+            Ok(vec![attachment]),
+            &mut options,
+            &mut task,
+        )
+        .await
+        .unwrap();
+        assert!(options.secrets.contains_key("API_KEY"));
+        let AgentRunPrompt::ServerSide {
+            attachments_dir: Some(dir),
+            ..
+        } = task.prompt
+        else {
+            panic!("expected downloaded attachments directory");
+        };
+        assert_eq!(
+            fs::read(std::path::Path::new(&dir).join("file-id_report.txt")).unwrap(),
+            b"attachment body"
+        );
+    });
+    download.assert();
+}
+
+#[test]
+fn ordered_execution_skills_attach_only_first_and_expose_all_for_discovery() {
+    let root = tempfile::TempDir::new().unwrap();
+    let (none, empty_dirs) = selected_execution_skills(Vec::new()).unwrap();
+    assert!(none.is_none());
+    assert!(empty_dirs.is_empty());
+    let skill_paths = ["first", "second"]
+        .into_iter()
+        .map(|name| {
+            let skill_path = root
+                .path()
+                .join(name)
+                .join("skills")
+                .join(name)
+                .join("SKILL.md");
+            fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+            fs::write(
+                &skill_path,
+                format!("---\nname: {name}\ndescription: example\n---\nInstructions for {name}"),
+            )
+            .unwrap();
+            let parsed_skill = ai::skills::parse_skill(&skill_path).unwrap();
+            ResolvedSkill {
+                skill_path,
+                name: name.to_owned(),
+                instructions: format!("Instructions for {name}"),
+                parsed_skill,
+            }
+        })
+        .collect::<Vec<_>>();
+    let (only, only_dirs) = selected_execution_skills(vec![skill_paths[0].clone()]).unwrap();
+    assert_eq!(only.unwrap().name, "first");
+    assert_eq!(only_dirs, vec![root.path().join("first").join("skills")]);
+
+    let (first, dirs) = selected_execution_skills(skill_paths).unwrap();
+    assert_eq!(first.unwrap().name, "first");
+    assert_eq!(
+        dirs,
+        ["first", "second"]
+            .into_iter()
+            .map(|name| root.path().join(name).join("skills"))
+            .collect::<Vec<_>>()
+    );
+}
+
 fn parse_run_agent_args(args: &[&str]) -> RunAgentArgs {
     let parsed = Args::try_parse_from(std::iter::once("warp").chain(args.iter().copied()))
         .expect("agent run args should parse");
@@ -60,7 +182,6 @@ fn parse_run_agent_args(args: &[&str]) -> RunAgentArgs {
 
 #[test]
 fn driver_validation_uses_live_repository_membership() {
-    let mut options = agent_driver_options();
     let mut environment =
         AmbientAgentEnvironment::new(String::new(), None, vec![], String::new(), vec![]);
     environment.source_repos = Some(vec![SourceRepo::new(
@@ -68,13 +189,12 @@ fn driver_validation_uses_live_repository_membership() {
         "warpdotdev".to_string(),
         "warp".to_string(),
     )]);
-    options.additional_source_repos = vec![SourceRepo::new(
+    let additional_source_repos = vec![SourceRepo::new(
         CodeForge::GitHub,
         "warpdotdev".to_string(),
         "added-after-dispatch".to_string(),
     )];
-    options.environment = Some(environment);
-    options.repository_preparation_overrides = vec![RepositoryPreparationOverride {
+    let repository_preparation_overrides = vec![RepositoryPreparationOverride {
         code_forge: RepositoryForge::GitHub,
         repo_owner: "WarpDotDev".to_string(),
         repo_name: "Warp".to_string(),
@@ -87,10 +207,16 @@ fn driver_validation_uses_live_repository_membership() {
         preserve_origin: true,
     }];
 
-    let repositories = validated_driver_repositories_for_preparation(&options).unwrap();
+    let workspace = WorkspaceConfiguration::from_legacy(
+        Some(&environment),
+        additional_source_repos,
+        repository_preparation_overrides,
+        false,
+    )
+    .unwrap();
 
     assert_eq!(
-        repositories,
+        workspace.source_repos,
         vec![
             SourceRepo::new(
                 CodeForge::GitHub,
@@ -155,10 +281,8 @@ pub(crate) fn agent_driver_options() -> AgentDriverOptions {
         secrets: Default::default(),
         resume: None,
         cloud_providers: vec![],
-        environment: None,
-        additional_source_repos: vec![],
-        repository_preparation_overrides: vec![],
-        remove_repository_origins: false,
+        workspace: WorkspaceConfiguration::default(),
+        computer_use_config: None,
         selected_harness: Harness::Oz,
         harness_transport: HarnessTransport::Pty,
         third_party_harness_model_config: None,
@@ -348,8 +472,9 @@ fn factory_experiment_bootstrap_subprocess() {
 }
 
 #[test]
-fn agent_run_setup_reports_terminal_team_metadata_refresh_failure() {
+fn legacy_execution_launch_skips_bootstrap_and_reports_team_metadata_refresh_failure() {
     App::test((), |mut app| async move {
+        let _execution_config = FeatureFlag::CloudAgentExecutionConfig.override_enabled(false);
         app.add_singleton_model(|_| NetworkStatus::new());
         app.add_singleton_model(TeamTesterStatus::new);
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());
@@ -394,7 +519,14 @@ fn agent_run_setup_reports_terminal_team_metadata_refresh_failure() {
 
         let runner = app.add_singleton_model(|_| AgentDriverRunner);
         let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
-        let args = parse_run_agent_args(&["agent", "run", "--task-id", TASK_ID]);
+        let args = parse_run_agent_args(&[
+            "agent",
+            "run",
+            "--task-id",
+            TASK_ID,
+            "--execution-id",
+            "123",
+        ]);
 
         let error = AgentDriverRunner::setup_and_run_driver(
             foreground,

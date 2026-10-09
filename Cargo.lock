@@ -15834,6 +15834,7 @@ dependencies = [
  "persistence",
  "reqwest",
  "serde",
+ "serde_json",
  "thiserror 2.0.17",
  "warp_core",
  "warp_errors",
