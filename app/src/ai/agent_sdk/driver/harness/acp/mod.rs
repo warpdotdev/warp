@@ -10,6 +10,7 @@
 //! Local testing: `oz agent run --harness codex --harness-transport acp --share team:view
 //! --idle-on-complete 15m --prompt "..."`. For a scripted agent, put a `codex-acp` shim on
 //! `PATH` that runs `node app/src/ai/agent_sdk/driver/harness/acp/testdata/fake_agent.mjs`.
+mod attachments;
 mod bridge;
 mod connection;
 mod launch;
@@ -41,6 +42,7 @@ use warpui::r#async::Timer;
 use warpui::r#async::executor::Background;
 use warpui::{ModelContext, ModelHandle, ModelSpawner};
 
+use self::attachments::AttachmentResolver;
 use self::bridge::{BridgeListener, bridge_command};
 use self::connection::{AcpConnection, InboundNotification, RpcError};
 use self::mapping::{AcpTurnMapper, TurnEvent};
@@ -64,6 +66,7 @@ use super::{
 use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
+use crate::ai::attachment_utils::attachments_download_dir;
 use crate::ai::blocklist::{
     BlocklistAIController, ExternalHarnessPrompt, ExternalHarnessTurn, ResponseStreamId,
 };
@@ -188,7 +191,7 @@ impl ThirdPartyHarness for AcpHarness {
         workspace_root: &Path,
         harness_working_dir: &Path,
         task_id: Option<AmbientAgentTaskId>,
-        _server_api: Arc<ServerApi>,
+        server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
         _resume: Option<ResumePayload>,
         resolved_env_vars: &HashMap<OsString, OsString>,
@@ -229,6 +232,12 @@ impl ThirdPartyHarness for AcpHarness {
         .filter(|part| !part.trim().is_empty())
         .collect::<Vec<_>>()
         .join("\n\n");
+        let attachments = AttachmentResolver::new(
+            server_api.clone(),
+            server_api.owned_http_client(),
+            task_id,
+            attachments_download_dir(harness_working_dir),
+        );
         Ok(Box::new(AcpHarnessRunner {
             harness: self.harness,
             launch: self.launch.clone(),
@@ -237,6 +246,7 @@ impl ThirdPartyHarness for AcpHarness {
             harness_working_dir: harness_working_dir.to_path_buf(),
             task_id,
             terminal_driver,
+            attachments: Arc::new(attachments),
             mcp_servers: resolved_mcp_servers
                 .iter()
                 .map(|(name, server)| mcp_server_for_acp(name, server))
@@ -263,6 +273,7 @@ pub(crate) struct AcpHarnessRunner {
     harness_working_dir: PathBuf,
     task_id: Option<AmbientAgentTaskId>,
     terminal_driver: ModelHandle<TerminalDriver>,
+    attachments: Arc<AttachmentResolver>,
     mcp_servers: Vec<McpServer>,
     persistence: HarnessPersistence,
     agent: Mutex<Option<RunningAgent>>,
@@ -462,6 +473,7 @@ impl HarnessRunner for AcpHarnessRunner {
             turn: Mutex::new(turn),
             session_id,
             prompt_text: self.prompt_text.clone(),
+            attachments: self.attachments.clone(),
             idle_on_complete,
         };
         background
@@ -533,6 +545,7 @@ struct TurnDriver {
     turn: Mutex<ExternalHarnessTurn>,
     session_id: String,
     prompt_text: String,
+    attachments: Arc<AttachmentResolver>,
     /// How long to keep the agent (and with it the shared session) alive after the turn ends.
     idle_on_complete: Option<Duration>,
 }
@@ -542,7 +555,10 @@ impl TurnDriver {
     /// an internal error), which is what the task status follows; the block's exit code remains
     /// the agent's own.
     async fn run(self, mapper: &mut AcpTurnMapper) {
-        let mut turn_result = self.run_turn(mapper, self.prompt_text.clone()).await;
+        let initial = vec![ContentBlock::Text {
+            text: self.prompt_text.clone(),
+        }];
+        let mut turn_result = self.run_turn(mapper, initial).await;
 
         if let Some(idle) = self.idle_on_complete {
             log::info!("ACP turn finished; accepting follow-ups for {idle:?} of idle time");
@@ -571,18 +587,14 @@ impl TurnDriver {
         }
     }
 
-    /// Opens a new request stream for a follow-up prompt, echoes it, and runs the turn.
+    /// Opens a new request stream for a follow-up prompt, echoes it, and runs the turn. The
+    /// echo shows the text only; attachments reach the agent but are not yet rendered on the
+    /// user-query entry.
     async fn run_follow_up(
         &self,
         mapper: &mut AcpTurnMapper,
         prompt: ExternalHarnessPrompt,
     ) -> Result<StopReason> {
-        if !prompt.attachments.is_empty() {
-            log::warn!(
-                "Ignoring {} attachment(s) on an ACP follow-up; only the prompt text is sent",
-                prompt.attachments.len()
-            );
-        }
         let next = begin_turn(&self.foreground, &self.terminal_driver, self.run_id.clone())
             .await
             .map_err(|error| anyhow!("{error}"))?;
@@ -591,11 +603,19 @@ impl TurnDriver {
         let echo = vec![mapper.user_query_action(&prompt.text)];
         self.apply_events(mapper, vec![TurnEvent::Actions(echo)])
             .await?;
-        self.run_turn(mapper, prompt.text).await
+        let content = self
+            .attachments
+            .prompt_content(prompt.text, prompt.attachments)
+            .await;
+        self.run_turn(mapper, content).await
     }
 
     /// Runs one prompt turn to completion and finishes its last request stream.
-    async fn run_turn(&self, mapper: &mut AcpTurnMapper, prompt: String) -> Result<StopReason> {
+    async fn run_turn(
+        &self,
+        mapper: &mut AcpTurnMapper,
+        prompt: Vec<ContentBlock>,
+    ) -> Result<StopReason> {
         let turn_result = self.prompt(mapper, prompt).await;
         let finished = match &turn_result {
             Ok(stop_reason) => stream_finished_for(*stop_reason),
@@ -626,14 +646,18 @@ impl TurnDriver {
     }
 
     /// Sends the prompt and applies every update the agent streams before responding.
-    async fn prompt(&self, mapper: &mut AcpTurnMapper, prompt: String) -> Result<StopReason> {
+    async fn prompt(
+        &self,
+        mapper: &mut AcpTurnMapper,
+        prompt: Vec<ContentBlock>,
+    ) -> Result<StopReason> {
         let prompt_fut = self
             .connection
             .request::<_, PromptResponse>(
                 protocol::METHOD_SESSION_PROMPT,
                 PromptParams {
                     session_id: self.session_id.clone(),
-                    prompt: vec![ContentBlock::Text { text: prompt }],
+                    prompt,
                 },
             )
             .fuse();
