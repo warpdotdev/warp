@@ -29,7 +29,7 @@ impl<T> From<anyhow::Result<T>> for Result<T> {
 pub(super) enum Message {
     /// A message sent from client -> server requesting that the server spawns
     /// a new pty using the provided options.
-    SpawnShellRequest { options: PtyOptions },
+    SpawnShellRequest { options: Box<PtyOptions> },
     /// The response for a `SpawnShellRequest`, with the result of the spawn
     /// operation.  Should only be sent from server -> client.
     SpawnShellResponse {

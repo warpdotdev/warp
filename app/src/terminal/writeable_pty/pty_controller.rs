@@ -38,6 +38,10 @@ const SWITCH_TO_PS1_ESCAPE_SEQUENCE: &[u8] = &[escape_sequences::C0::ESC, b'p'];
 /// Used to let the shell know we are switching to the Warp prompt via a bindkey \ew. This will
 /// unset the PS1 to ensure we don't have a double prompt (PS1 and Warp prompt).
 const SWITCH_TO_WARP_PROMPT_ESCAPE_SEQUENCE: &[u8] = &[escape_sequences::C0::ESC, b'w'];
+/// Delay after a non-command `PtyWrite` (e.g. the input-reporting probe below, or a bindkey
+/// sequence) before any further write is allowed to go out, so a relay slow enough to separate
+/// the write() calls from the shell consuming the first one doesn't land the two in the same read.
+const PENDING_WRITE_SETTLE_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// Represents a single call to write bytes to the PTY asynchronously.
 enum PtyWrite {
@@ -79,8 +83,18 @@ pub struct PtyController<T: EventLoopSender> {
     sessions: ModelHandle<Sessions>,
     model_event_dispatcher: ModelHandle<ModelEventDispatcher>,
     pending_writes: VecDeque<PtyWrite>,
+    /// Writes from [`Self::write_bytes`]/[`Self::write_agent_bytes`] received while
+    /// [`Self::is_settling_after_non_command_write`] was set, held here (in request order) until
+    /// the settle window clears. These bypass `pending_writes` entirely in the common case, since
+    /// unlike queued command writes they must still reach a foreground command that's already
+    /// running -- which is precisely when the line editor `execute_next_queued_write` waits on is
+    /// inactive.
+    deferred_direct_writes: VecDeque<PtyWrite>,
     is_user_command_executing: bool,
     is_bracketed_paste_enabled: bool,
+    /// Set for [`PENDING_WRITE_SETTLE_DELAY`] after a non-command write, blocking every other
+    /// write (not just ones already queued) from going out until it clears.
+    is_settling_after_non_command_write: bool,
     /// If we're bootstrapping the shell by sourcing a file with the bootstrap
     /// script, this will hold the handle to the file.  Once bootstrapping is
     /// complete, it will be dropped to clean up the temporary file.
@@ -181,8 +195,10 @@ impl<T: EventLoopSender> PtyController<T> {
             sessions,
             model_event_dispatcher,
             pending_writes: VecDeque::new(),
+            deferred_direct_writes: VecDeque::new(),
             is_user_command_executing: false,
             is_bracketed_paste_enabled: false,
+            is_settling_after_non_command_write: false,
             #[cfg(not(target_family = "wasm"))]
             bootstrap_file: None,
             in_flight_native_completions_results_tx: None,
@@ -297,6 +313,7 @@ impl<T: EventLoopSender> PtyController<T> {
     /// enqueue writes for later.
     fn can_write_to_pty(&self, ctx: &mut ModelContext<Self>) -> bool {
         self.line_editor_status.as_ref(ctx).is_line_editor_active()
+            && !self.is_settling_after_non_command_write
     }
 
     /// Executes the next queued `PtyWrite`, if able.
@@ -315,8 +332,24 @@ impl<T: EventLoopSender> PtyController<T> {
                 PtyWrite::Command { .. } | PtyWrite::RunNativeShellCompletions { .. }
             );
             let did_write = self.send_write_to_event_loop(write, ctx);
-            if !is_command || !did_write {
+            if !did_write {
                 self.execute_next_queued_write(ctx);
+            } else if !is_command {
+                // A bound escape sequence (like the input-reporting probe below) can be echoed
+                // instead of consumed if the shell sees more input before it's done handling it.
+                // Block every write, not just ones already queued, until this settles: one queued
+                // during the delay (e.g. real typeahead) would otherwise go out just as adjacent.
+                self.is_settling_after_non_command_write = true;
+                ctx.spawn(
+                    warpui::r#async::Timer::after(PENDING_WRITE_SETTLE_DELAY),
+                    |me, _, ctx| {
+                        me.is_settling_after_non_command_write = false;
+                        while let Some(write) = me.deferred_direct_writes.pop_front() {
+                            me.send_write_to_event_loop(write, ctx);
+                        }
+                        me.execute_next_queued_write(ctx);
+                    },
+                );
             }
         }
     }
@@ -327,6 +360,23 @@ impl<T: EventLoopSender> PtyController<T> {
         pending_session_info: &SessionInfo,
         ctx: &mut ModelContext<Self>,
     ) {
+        // Dev Container sessions never reach here needing a write: the small
+        // init script `local_tty::unix::prepare_dev_container` stages into
+        // the container (and passes to `bash --rcfile`) already `source`s
+        // the full bootstrap script staged alongside it, so the container
+        // bootstraps itself entirely from files by the time this `InitShell`
+        // hook is even received. Typing the bootstrap script here as well
+        // would be redundant (bash_body.sh's own `WARP_BOOTSTRAPPED` guard
+        // makes it a no-op) but would still retype ~35KB into a live,
+        // already-interactive prompt — reintroducing the readline-echoed
+        // heredoc noise this staging exists to avoid.
+        if matches!(
+            pending_session_info.launch_data,
+            Some(crate::terminal::ShellLaunchData::DevContainer { .. })
+        ) {
+            return;
+        }
+
         let shell_type = pending_session_info.shell.shell_type();
 
         #[cfg(feature = "local_fs")]
@@ -375,6 +425,7 @@ impl<T: EventLoopSender> PtyController<T> {
                     Some(ShellLaunchData::Executable { .. })
                     | Some(ShellLaunchData::MSYS2 { .. })
                     | Some(ShellLaunchData::DockerSandbox { .. })
+                    | Some(ShellLaunchData::DevContainer { .. })
                     | None,
                     _,
                 ) => None,
@@ -403,10 +454,11 @@ impl<T: EventLoopSender> PtyController<T> {
                     self.write_terminating_bootstrap_bytes(ctx);
                 }
             }
-        } else if bootstrap::is_container_subshell(pending_session_info) {
+        } else if bootstrap::is_container_exec_relayed_session(pending_session_info) {
             // Write in 4KB chunks with 50ms delays to avoid overwhelming
-            // PTY buffers in container exec sessions (podman/docker exec -it),
-            // where the double-PTY proxy drops data for large writes.
+            // PTY buffers in container exec sessions (podman/docker exec
+            // subshells, and top-level Dev Container sessions), where the
+            // double-relay proxy drops or mangles data for large writes.
             const CHUNK_SIZE: usize = 4096;
             let bytes: Vec<u8> = bootstrap.into_owned();
             let chunks: Vec<Vec<u8>> = bytes.chunks(CHUNK_SIZE).map(|c| c.to_vec()).collect();
@@ -578,7 +630,7 @@ impl<T: EventLoopSender> PtyController<T> {
         mode: &AIAgentPtyWriteMode,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.send_write_to_event_loop(
+        self.send_write_respecting_settle_window(
             PtyWrite::AgentInput {
                 bytes: bytes.into(),
                 mode: *mode,
@@ -596,12 +648,34 @@ impl<T: EventLoopSender> PtyController<T> {
         bytes: B,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.send_write_to_event_loop(
+        self.send_write_respecting_settle_window(
             PtyWrite::Bytes {
                 bytes: bytes.into(),
             },
             ctx,
         );
+    }
+
+    /// Sends `write` immediately unless we're in the post-non-command-write settle window (see
+    /// `is_settling_after_non_command_write`), in which case it's appended to
+    /// `deferred_direct_writes` and sent, in request order, once the window clears.
+    ///
+    /// This is the entry point for the write classes that bypass `pending_writes` entirely --
+    /// Ctrl-C/Ctrl-D, other raw terminal input, and agent input all reach the pty through
+    /// `write_bytes`/`write_agent_bytes` rather than `execute_next_queued_write`. Deliberately
+    /// does not also require the line editor to be active: unlike queued command writes, this
+    /// input must still reach a foreground command that's already running, which is precisely
+    /// when the line editor is inactive.
+    fn send_write_respecting_settle_window(
+        &mut self,
+        write: PtyWrite,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.is_settling_after_non_command_write {
+            self.deferred_direct_writes.push_back(write);
+        } else {
+            self.send_write_to_event_loop(write, ctx);
+        }
     }
 
     /// Shuts down the pty and event loop.
