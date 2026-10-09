@@ -32,6 +32,7 @@ use parking_lot::Mutex;
 use serde_json::Value;
 use uuid::Uuid;
 use warp_cli::agent::{Harness, HarnessTransport};
+use warp_core::channel::ChannelState;
 use warp_managed_secrets::ManagedSecretValue;
 use warp_multi_agent_api::response_event::{StreamFinished, stream_finished};
 use warp_multi_agent_api::{ClientAction, ResponseEvent, response_event};
@@ -60,7 +61,7 @@ use super::{
     HarnessCleanupDisposition, HarnessKind, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint,
     ThirdPartyHarness, harness_kind, validate_cli_installed,
 };
-use crate::ai::agent_sdk::setup_observability::{OzRunTimelineEvent, SetupClientEventReporter};
+use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::blocklist::{
@@ -308,7 +309,7 @@ impl HarnessRunner for AcpHarnessRunner {
     async fn start(
         &self,
         foreground: &ModelSpawner<AgentDriver>,
-        setup_events: &SetupClientEventReporter,
+        _setup_events: &SetupClientEventReporter,
     ) -> Result<CommandHandle, AgentDriverError> {
         let (background, idle_on_complete, shell_family): (
             Arc<Background>,
@@ -374,7 +375,9 @@ impl HarnessRunner for AcpHarnessRunner {
                         client_info: ClientInfo {
                             name: "warp".to_owned(),
                             title: "Warp".to_owned(),
-                            version: env!("CARGO_PKG_VERSION").to_owned(),
+                            version: ChannelState::app_version()
+                                .unwrap_or(env!("CARGO_PKG_VERSION"))
+                                .to_owned(),
                         },
                     },
                 )
@@ -448,10 +451,6 @@ impl HarnessRunner for AcpHarnessRunner {
             mapper.initial_actions(&self.user_prompt),
         )
         .await?;
-
-        setup_events
-            .post_timeline_event(OzRunTimelineEvent::AgentStarted)
-            .await;
 
         let turn_driver = TurnDriver {
             connection,
