@@ -15,6 +15,7 @@ use futures::{AsyncWriteExt as _, StreamExt as _, stream};
 use instant::Instant;
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncReadExt as _};
+use tracing::Instrument as _;
 use warp_cli::agent::{RepositoryForge, RepositoryHeadRef};
 use warp_cli::environment_checkout::EnvironmentCheckoutArgs;
 use warp_core::features::FeatureFlag;
@@ -37,11 +38,19 @@ const HEAD_CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Runs the environment checkout command to completion.
 pub(crate) fn run(args: &EnvironmentCheckoutArgs) -> anyhow::Result<()> {
-    tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|error| sanitized_error("could not start checkout runtime", error))?
-        .block_on(run_async(args))
+        .map_err(|error| sanitized_error("could not start checkout runtime", error))?;
+    let span = tracing::info_span!(
+        "environment_checkout",
+        tags.cloud_agent = true,
+        remove_origins_only = args.remove_origins_only,
+        result_ok = tracing::field::Empty,
+    );
+    let result = runtime.block_on(run_async(args).instrument(span.clone()));
+    span.record("result_ok", result.is_ok());
+    result
 }
 
 /// Returns a redacted label naming the request's repository and checkout directory for logs.
@@ -177,10 +186,12 @@ async fn resolve_heads(batch: &CheckoutBatch, outcomes: &mut [CheckoutOutcome]) 
 
 /// Runs `git` with an optional stdin `input` and returns its stdout, or `None` if it fails,
 /// produces truncated output, or exceeds `IDENTITY_QUERY_TIMEOUT`.
+#[tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
 async fn identity_query(cwd: &Path, args: &[&str], input: Option<&str>) -> Option<String> {
     tokio::time::timeout(IDENTITY_QUERY_TIMEOUT, async {
         let mut child = Command::new("git")
             .current_dir(cwd)
+            .env_remove("WARP_CLOUD_AGENT_OTLP_TOKEN")
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GCM_INTERACTIVE", "never")
             .args(args)
@@ -328,6 +339,12 @@ fn mirror_key(request: &CheckoutRequest) -> RepoCacheKey {
 
 /// Runs every request in the batch, returning one outcome per request in order. Requests that
 /// share a mirror run one after another, and at most `CHECKOUT_WORKERS` groups run concurrently.
+#[tracing::instrument(skip_all, fields(
+    tags.cloud_agent = true,
+    repository_count = batch.repositories.len(),
+    cache_enabled = mirror_root.is_some(),
+    remove_origins_only,
+))]
 async fn checkout_batch(
     batch: &CheckoutBatch,
     mirror_root: Option<&Path>,
@@ -349,13 +366,30 @@ async fn checkout_batch(
             log::info!("Repository {label}: starting checkout");
             let started = Instant::now();
             let mut git = Git::default();
-            let result = if remove_origins_only {
-                remove_origin(&batch.working_dir.join(&request.checkout_name), &mut git)
-                    .await
-                    .map_err(|_| CheckoutFailureKind::RemoveOrigin)
-            } else {
-                checkout(request, &batch.working_dir, mirror_root, &mut git).await
-            };
+            let span = tracing::info_span!(
+                "repository_checkout",
+                tags.cloud_agent = true,
+                request_index = index,
+                fetch_branch_only = request.fetch_branch_only,
+                result_ok = tracing::field::Empty,
+                failure = tracing::field::Empty,
+            );
+            let result = async {
+                if remove_origins_only {
+                    remove_origin(&batch.working_dir.join(&request.checkout_name), &mut git)
+                        .await
+                        .map_err(|_| CheckoutFailureKind::RemoveOrigin)
+                } else {
+                    checkout(request, &batch.working_dir, mirror_root, &mut git).await
+                }
+            }
+            .instrument(span.clone())
+            .await;
+            span.record("result_ok", result.is_ok());
+            if let Err(failure) = &result {
+                span.record("failure", tracing::field::debug(failure));
+            }
+            drop(span);
             let duration = started.elapsed();
             log::info!(
                 "Repository {label}: {} after {duration:.1?}",
@@ -409,6 +443,11 @@ impl Git {
     }
 
     /// Like [`Git::run`], with additional environment variables set for the process.
+    #[tracing::instrument(skip_all, fields(
+        tags.cloud_agent = true,
+        operation,
+        result_ok = false,
+    ))]
     async fn run_with_env(
         &mut self,
         operation: &str,
@@ -421,6 +460,7 @@ impl Git {
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GCM_INTERACTIVE", "never")
             .envs(env.iter().copied())
+            .env_remove("WARP_CLOUD_AGENT_OTLP_TOKEN")
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -456,6 +496,7 @@ impl Git {
             return Err(());
         };
         if status.success() && !truncated {
+            tracing::Span::current().record("result_ok", true);
             Ok(stdout)
         } else {
             self.record(&stdout);

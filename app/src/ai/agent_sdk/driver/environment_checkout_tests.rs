@@ -1158,6 +1158,170 @@ fn inherited_credentials_authenticate_without_leaking() {
     );
 }
 
+#[test]
+fn helper_flushes_success_and_failure_spans_without_inheriting_otlp_credentials() {
+    fixture_test(
+        "helper_flushes_success_and_failure_spans_without_inheriting_otlp_credentials",
+        |fixture| {
+            use chrono::{TimeDelta, Utc};
+            use mockito::Matcher;
+            unsafe {
+                std::env::set_var("WARP_CLOUD_AGENT_OTLP_TOKEN", "inherited-test-token");
+                std::env::set_var("OTEL_BSP_SCHEDULE_DELAY", "600000");
+            }
+
+            let mut collector = mockito::Server::new();
+            let export = collector
+                .mock("POST", "/v1/traces")
+                .match_header("authorization", "Bearer checkout-test-token")
+                .match_body(Matcher::AllOf(vec![
+                    Matcher::Regex("(?s)environment_checkout.*environment_checkout".to_owned()),
+                    Matcher::Regex("repository_checkout".to_owned()),
+                    Matcher::Regex("run_with_env".to_owned()),
+                    Matcher::Regex("result_ok".to_owned()),
+                    Matcher::Regex("Checkout".to_owned()),
+                ]))
+                .with_status(200)
+                .create();
+            let directory = TempDir::new().unwrap();
+            let args = EnvironmentCheckoutArgs {
+                requests_file: directory.path().join("requests.json"),
+                report_file: directory.path().join("report.json"),
+                remove_origins_only: false,
+            };
+            let batch = fixture.batch(vec![fixture.request("traced", None)]);
+            fs::write(&args.requests_file, serde_json::to_vec(&batch).unwrap()).unwrap();
+            let mut handoff = tempfile::NamedTempFile::new_in(directory.path()).unwrap();
+            serde_json::to_writer(
+                &mut handoff,
+                &serde_json::json!({
+                    "endpoint": collector.url(),
+                    "credential": {
+                        "token": "checkout-test-token",
+                        "expires_at": Utc::now() + TimeDelta::minutes(17),
+                    },
+                }),
+            )
+            .unwrap();
+            let handoff_path = directory.path().join("requests.json.otlp");
+            handoff
+                .into_temp_path()
+                .persist_noclobber(&handoff_path)
+                .unwrap();
+            let handoff = tempfile::TempPath::from_path(handoff_path);
+            let initialization = crate::tracing::init_checkout(&args.requests_file).unwrap();
+            assert!(!handoff.exists());
+            git(
+                &fixture.root,
+                &[
+                    "config",
+                    "--file",
+                    fixture.root.join("gitconfig").to_str().unwrap(),
+                    "alias.check-otlp",
+                    "!test -z \"$WARP_CLOUD_AGENT_OTLP_TOKEN\"",
+                ],
+            );
+            let mut child_git = Git::default();
+            block_on(Compat::new(child_git.run(
+                "credential isolation",
+                &fixture.work(),
+                &["check-otlp"],
+            )))
+            .unwrap();
+            assert_eq!(
+                block_on(Compat::new(super::identity_query(
+                    &fixture.work(),
+                    &["check-otlp"],
+                    None,
+                ))),
+                Some(String::new()),
+            );
+            run(&args).unwrap();
+            fs::write(
+                &args.requests_file,
+                serde_json::to_vec(&fixture.batch(vec![fixture.request(
+                    "traced",
+                    Some(RepositoryHeadRef::Branch("missing".to_owned())),
+                )]))
+                .unwrap(),
+            )
+            .unwrap();
+            assert!(run(&args).is_err());
+            drop(initialization);
+            export.assert();
+            assert!(
+                !fs::read_to_string(&args.report_file)
+                    .unwrap()
+                    .contains("checkout-test-token")
+            );
+        },
+    );
+}
+
+#[test]
+fn helper_without_handoff_keeps_checkout_working() {
+    fixture_test("helper_without_handoff_keeps_checkout_working", |fixture| {
+        let directory = TempDir::new().unwrap();
+        let args = EnvironmentCheckoutArgs {
+            requests_file: directory.path().join("requests.json"),
+            report_file: directory.path().join("report.json"),
+            remove_origins_only: false,
+        };
+        fs::write(
+            &args.requests_file,
+            serde_json::to_vec(&fixture.batch(vec![fixture.request("untraced", None)])).unwrap(),
+        )
+        .unwrap();
+        let _initialization = crate::tracing::init_checkout(&args.requests_file).unwrap();
+        run(&args).unwrap();
+        assert!(fixture.work().join("untraced/.git").is_dir());
+    });
+}
+
+#[test]
+fn helper_with_expired_handoff_keeps_checkout_working() {
+    fixture_test(
+        "helper_with_expired_handoff_keeps_checkout_working",
+        |fixture| {
+            use chrono::{TimeDelta, Utc};
+
+            let directory = TempDir::new().unwrap();
+            let args = EnvironmentCheckoutArgs {
+                requests_file: directory.path().join("requests.json"),
+                report_file: directory.path().join("report.json"),
+                remove_origins_only: false,
+            };
+            fs::write(
+                &args.requests_file,
+                serde_json::to_vec(&fixture.batch(vec![fixture.request("untraced", None)]))
+                    .unwrap(),
+            )
+            .unwrap();
+            let mut file = tempfile::NamedTempFile::new_in(directory.path()).unwrap();
+            serde_json::to_writer(
+                &mut file,
+                &serde_json::json!({
+                    "endpoint": "http://127.0.0.1:1",
+                    "credential": {
+                        "token": "expired-test-token",
+                        "expires_at": Utc::now() - TimeDelta::minutes(1),
+                    },
+                }),
+            )
+            .unwrap();
+            let handoff_path = directory.path().join("requests.json.otlp");
+            file.into_temp_path()
+                .persist_noclobber(&handoff_path)
+                .unwrap();
+            let handoff = tempfile::TempPath::from_path(handoff_path);
+            let _initialization = crate::tracing::init_checkout(&args.requests_file).unwrap();
+            assert!(!handoff.exists());
+            run(&args).unwrap();
+            assert!(fixture.work().join("untraced/.git").is_dir());
+        },
+    );
+}
+
 // Fixtures and helpers shared by the tests above.
 
 const CANONICAL_URL: &str = "https://github.com/fixtures/source.git";
