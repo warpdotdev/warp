@@ -129,6 +129,7 @@ pub(crate) use passive_suggestions::{
 #[cfg(test)]
 pub(crate) use permissions::is_agent_mode_autonomy_allowed;
 pub use permissions::{BlocklistAIPermissions, CommandExecutionPermissionAllowedReason};
+#[cfg_attr(target_family = "wasm", allow(unused_imports))]
 pub(crate) use permissions::{
     CommandExecutionPermission, CommandExecutionPermissionDeniedReason, FileWritePermission,
     FileWritePermissionDeniedReason,
