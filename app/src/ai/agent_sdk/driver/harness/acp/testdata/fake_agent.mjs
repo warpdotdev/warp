@@ -80,7 +80,12 @@ async function runTurn(prompt) {
 
   const permission = await request("session/request_permission", {
     sessionId,
-    toolCall: { toolCallId },
+    toolCall: {
+      toolCallId,
+      title: "List files",
+      kind: "execute",
+      rawInput: { command: "ls -1 | head -5" },
+    },
     options: [
       { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
       { optionId: "allow-always", name: "Always allow", kind: "allow_always" },
