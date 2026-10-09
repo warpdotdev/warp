@@ -1169,48 +1169,6 @@ fn helper_flushes_success_and_failure_spans_without_inheriting_otlp_credentials(
                 std::env::set_var("WARP_CLOUD_AGENT_OTLP_TOKEN", "inherited-test-token");
                 std::env::set_var("OTEL_BSP_SCHEDULE_DELAY", "600000");
             }
-
-            let mut collector = mockito::Server::new();
-            let export = collector
-                .mock("POST", "/v1/traces")
-                .match_header("authorization", "Bearer checkout-test-token")
-                .match_body(Matcher::AllOf(vec![
-                    Matcher::Regex("(?s)environment_checkout.*environment_checkout".to_owned()),
-                    Matcher::Regex("repository_checkout".to_owned()),
-                    Matcher::Regex("run_with_env".to_owned()),
-                    Matcher::Regex("result_ok".to_owned()),
-                    Matcher::Regex("Checkout".to_owned()),
-                ]))
-                .with_status(200)
-                .create();
-            let directory = TempDir::new().unwrap();
-            let args = EnvironmentCheckoutArgs {
-                requests_file: directory.path().join("requests.json"),
-                report_file: directory.path().join("report.json"),
-                remove_origins_only: false,
-            };
-            let batch = fixture.batch(vec![fixture.request("traced", None)]);
-            fs::write(&args.requests_file, serde_json::to_vec(&batch).unwrap()).unwrap();
-            let mut handoff = tempfile::NamedTempFile::new_in(directory.path()).unwrap();
-            serde_json::to_writer(
-                &mut handoff,
-                &serde_json::json!({
-                    "endpoint": collector.url(),
-                    "credential": {
-                        "token": "checkout-test-token",
-                        "expires_at": Utc::now() + TimeDelta::minutes(17),
-                    },
-                }),
-            )
-            .unwrap();
-            let handoff_path = directory.path().join("requests.json.otlp");
-            handoff
-                .into_temp_path()
-                .persist_noclobber(&handoff_path)
-                .unwrap();
-            let handoff = tempfile::TempPath::from_path(handoff_path);
-            let initialization = crate::tracing::init_checkout(&args.requests_file).unwrap();
-            assert!(!handoff.exists());
             git(
                 &fixture.root,
                 &[
@@ -1236,7 +1194,85 @@ fn helper_flushes_success_and_failure_spans_without_inheriting_otlp_credentials(
                 ))),
                 Some(String::new()),
             );
-            run(&args).unwrap();
+
+            let mut collector = mockito::Server::new();
+            unsafe {
+                std::env::set_var("WARP_CLOUD_AGENT_OTLP_ENDPOINT", collector.url());
+                std::env::set_var("WARP_CLOUD_AGENT_OTLP_TOKEN", "checkout-test-token");
+                std::env::set_var(
+                    "WARP_CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT",
+                    (Utc::now() + TimeDelta::minutes(17)).to_rfc3339(),
+                );
+            }
+            let _parent_initialization = crate::tracing::init().unwrap();
+            assert!(std::env::var_os("WARP_CLOUD_AGENT_OTLP_TOKEN").is_none());
+            let directory = TempDir::new().unwrap();
+            let args = EnvironmentCheckoutArgs {
+                requests_file: directory.path().join("requests.json"),
+                report_file: directory.path().join("report.json"),
+                remove_origins_only: false,
+            };
+            let checkout_command = || {
+                let mut command = match std::env::var_os("WARP_TEST_CHECKOUT_EXECUTABLE") {
+                    Some(executable) => Command::new(executable),
+                    None => {
+                        let mut command = Command::new(env!("CARGO"));
+                        command.current_dir(env!("CARGO_MANIFEST_DIR")).args([
+                            "run",
+                            "--quiet",
+                            "--offline",
+                            "-p",
+                            "warp",
+                            "--bin",
+                            "warp-oss",
+                            "--",
+                        ]);
+                        command
+                    }
+                };
+                #[cfg(windows)]
+                command.creation_flags(0);
+                command
+                    .arg("environment-checkout")
+                    .arg("--requests-file")
+                    .arg(&args.requests_file)
+                    .arg("--report-file")
+                    .arg(&args.report_file)
+                    .env_remove("WARP_CLOUD_AGENT_OTLP_ENDPOINT")
+                    .env_remove("WARP_CLOUD_AGENT_OTLP_TOKEN")
+                    .env_remove("WARP_CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT");
+                command
+            };
+
+            fs::write(
+                &args.requests_file,
+                serde_json::to_vec(&fixture.batch(vec![fixture.request("traced", None)])).unwrap(),
+            )
+            .unwrap();
+            let handoff = crate::tracing::create_checkout_handoff(&args.requests_file).unwrap();
+            assert!(handoff.exists());
+            let success_export = collector
+                .mock("POST", "/v1/traces")
+                .match_header("authorization", "Bearer checkout-test-token")
+                .match_body(Matcher::AllOf(vec![
+                    Matcher::Regex("environment_checkout".to_owned()),
+                    Matcher::Regex("repository_checkout".to_owned()),
+                    Matcher::Regex("run_with_env".to_owned()),
+                    Matcher::Regex("result_ok".to_owned()),
+                ]))
+                .with_status(200)
+                .create();
+            let output = checkout_command().output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            success_export.assert();
+            assert!(!handoff.exists());
+            assert!(fixture.work().join("traced/.git").is_dir());
+            success_export.remove();
             fs::write(
                 &args.requests_file,
                 serde_json::to_vec(&fixture.batch(vec![fixture.request(
@@ -1246,9 +1282,30 @@ fn helper_flushes_success_and_failure_spans_without_inheriting_otlp_credentials(
                 .unwrap(),
             )
             .unwrap();
-            assert!(run(&args).is_err());
-            drop(initialization);
-            export.assert();
+            let handoff = crate::tracing::create_checkout_handoff(&args.requests_file).unwrap();
+            assert!(handoff.exists());
+            let failure_export = collector
+                .mock("POST", "/v1/traces")
+                .match_header("authorization", "Bearer checkout-test-token")
+                .match_body(Matcher::AllOf(vec![
+                    Matcher::Regex("environment_checkout".to_owned()),
+                    Matcher::Regex("repository_checkout".to_owned()),
+                    Matcher::Regex("run_with_env".to_owned()),
+                    Matcher::Regex("result_ok".to_owned()),
+                    Matcher::Regex("Checkout".to_owned()),
+                ]))
+                .with_status(200)
+                .create();
+            let output = checkout_command().output().unwrap();
+            assert!(!output.status.success());
+            failure_export.assert();
+            assert!(!handoff.exists());
+            let report: CheckoutReport =
+                serde_json::from_slice(&fs::read(&args.report_file).unwrap()).unwrap();
+            assert_eq!(
+                report.outcomes[0].failure,
+                Some(CheckoutFailureKind::Checkout)
+            );
             assert!(
                 !fs::read_to_string(&args.report_file)
                     .unwrap()
