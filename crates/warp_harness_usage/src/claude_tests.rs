@@ -121,6 +121,65 @@ fn conflicting_tool_names_do_not_invalidate_valid_tokens() {
     assert_eq!(snapshot.payload.tool_calls.unwrap().total, 1);
 }
 #[test]
+fn tool_name_limit_preserves_complete_tokens_and_cost() {
+    let mut entry = response("a", 50, 5);
+    entry["message"]["content"] = (0..=crate::MAX_TOOL_NAMES)
+        .map(|index| json!({"type":"tool_use","id":format!("tool-{index}"),"name":format!("name-{index}")}))
+        .collect();
+
+    let snapshot = capture(&[entry, response("b", 50, 2)]);
+
+    assert_eq!(snapshot.coverage.cost_status, CostStatus::Known);
+    assert_eq!(snapshot.coverage.output_token_status, CoverageStatus::Known);
+    assert_eq!(snapshot.payload.output_tokens, Some(7));
+    let groups = snapshot.payload.cost_metadata.unwrap().groups;
+    assert_eq!(
+        groups[0].pre_threshold.as_ref().unwrap().input_tokens,
+        Some(100)
+    );
+    assert_eq!(
+        groups[0].pre_threshold.as_ref().unwrap().output_tokens,
+        Some(7)
+    );
+    assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Unavailable);
+    assert_eq!(snapshot.payload.tool_calls, None);
+}
+
+#[test]
+fn oversized_tool_identifiers_preserve_tokens_across_captured_scopes() {
+    let mut root = response("a", 50, 5);
+    root["message"]["content"] = json!([
+        {"type":"tool_use","id":"x".repeat(crate::MAX_SCOPE_LENGTH + 1),"name":"Read"},
+        {"type":"tool_use","id":"other","name":"x".repeat(crate::MAX_SCOPE_LENGTH + 1)}
+    ]);
+    let mut child = response("b", 50, 2);
+    child["message"]["content"] = json!([{"type":"tool_use","id":"valid","name":"Read"}]);
+    let mut diagnostics = diagnostics();
+    diagnostics
+        .subagents
+        .insert("child".into(), diagnostics.root.clone());
+
+    let ExtractionOutcome::Usable(result) = extract_claude(
+        "root",
+        &[root],
+        [("child", [child].as_slice())],
+        &diagnostics,
+        Some(&policy()),
+    ) else {
+        panic!("unavailable")
+    };
+    let HarnessUsageSnapshot::ClaudeCode(snapshot) = result.snapshot else {
+        panic!("wrong provider")
+    };
+
+    assert_eq!(snapshot.coverage.cost_status, CostStatus::Known);
+    assert_eq!(snapshot.coverage.output_token_status, CoverageStatus::Known);
+    assert_eq!(snapshot.payload.output_tokens, Some(7));
+    assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Partial);
+    assert_eq!(snapshot.payload.tool_calls.unwrap().total, 1);
+}
+
+#[test]
 fn session_limit_retains_partial_reporting() {
     let entries: Vec<_> = (0..=MAX_SCOPE_ENTRIES)
         .map(|index| {
