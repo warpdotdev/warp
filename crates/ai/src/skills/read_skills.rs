@@ -24,6 +24,10 @@ pub fn parse_skills_dirs_env() -> Vec<PathBuf> {
     let Ok(val) = std::env::var(WARP_SKILL_DIRS_ENV) else {
         return Vec::new();
     };
+    parse_skills_dirs_value(&val)
+}
+
+pub fn parse_skills_dirs_value(val: &str) -> Vec<PathBuf> {
     val.split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())

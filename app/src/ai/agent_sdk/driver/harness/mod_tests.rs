@@ -5,14 +5,14 @@ use anyhow::Result;
 use async_trait::async_trait;
 use futures::channel::oneshot;
 use tempfile::TempDir;
-use warp_cli::agent::Harness;
+use warp_cli::agent::{Harness, HarnessTransport};
 use warpui::r#async::FutureExt as _;
 use warpui::{App, ModelSpawner, SingletonEntity as _};
 
 use super::{
-    HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER, HarnessPersistence, HarnessRunner,
-    PersistenceOutcome, SavePoint, auth_check_command_for, prepare_harness_failure_output,
-    validate_cli_installed,
+    HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER, HarnessKind, HarnessPersistence, HarnessRunner,
+    PersistenceOutcome, SavePoint, auth_check_command_for, harness_kind,
+    prepare_harness_failure_output, validate_cli_installed,
 };
 use crate::ai::agent_sdk::driver::terminal::{CommandHandle, TerminalDriver};
 use crate::ai::agent_sdk::driver::{AgentDriver, AgentDriverError, IdleTimeoutSender};
@@ -92,6 +92,14 @@ fn gemini_runtime_error_patterns_is_empty_by_default() {
 #[test]
 fn auth_check_command_for_gemini_is_none() {
     assert!(auth_check_command_for(Harness::Gemini).is_none());
+}
+
+#[test]
+fn acp_transport_does_not_affect_the_oz_harness() {
+    assert!(matches!(
+        harness_kind(Harness::Oz, HarnessTransport::Acp),
+        Ok(HarnessKind::Oz)
+    ));
 }
 
 #[test]

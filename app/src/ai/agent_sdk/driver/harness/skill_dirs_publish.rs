@@ -5,7 +5,7 @@
 //! Oz reads `WARP_SKILL_DIRS` directly (see
 //! `crate::ai::agent_sdk::driver::AgentDriver::load_skills_dirs`). Third-party
 //! harnesses discover skills from their own skill roots instead, so this
-//! module reads the same `WARP_SKILL_DIRS` directories and symlinks each
+//! module receives the same skill directories and symlinks each
 //! skill folder into the harness's skill root, under the skill's own name.
 //! The published name must match the real skill name (rather than some
 //! namespaced alias) because an agent prompt, or another skill, may
@@ -46,7 +46,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use ai::skills::{parse_skills_dirs_env, resolve_skills_dirs};
+use ai::skills::resolve_skills_dirs;
 use anyhow::{Context, Result};
 use warp_core::features::FeatureFlag;
 use warp_core::safe_warn;
@@ -60,19 +60,21 @@ const SANDBOX_BACKUP_SUFFIX: &str = ".backup";
 /// when a real, non-symlink entry already occupies its real name.
 const NON_SANDBOX_ALTERNATE_NAME_PREFIX: &str = "warp-";
 
-/// Resolve the `WARP_SKILL_DIRS` source directories, most specific first —
-/// the same directories and precedence order Oz uses (see
-/// `ai::skills::read_skills_for_skills_dirs`).
-pub(super) fn warp_skill_source_dirs(working_dir: &Path) -> Vec<PathBuf> {
-    resolve_skills_dirs(working_dir, parse_skills_dirs_env())
-}
-
 pub(super) fn publish_skills_for_harness(
     skill_root: &Path,
     working_dir: &Path,
     is_sandbox: bool,
+    configured_source_dirs: &[PathBuf],
 ) -> Vec<PathBuf> {
-    let source_dirs = warp_skill_source_dirs(working_dir);
+    let source_dirs = resolve_skills_dirs(working_dir, configured_source_dirs.to_vec());
+    publish_skills_for_harness_from_source_dirs(skill_root, source_dirs, is_sandbox)
+}
+
+fn publish_skills_for_harness_from_source_dirs(
+    skill_root: &Path,
+    source_dirs: Vec<PathBuf>,
+    is_sandbox: bool,
+) -> Vec<PathBuf> {
     let bundled_skill_dirs =
         bundled_factory_mcp_skill_dirs(warp_core::paths::bundled_resources_dir());
     let configured_skill_dirs = skill_dirs_from_source_dirs(&source_dirs);

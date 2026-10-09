@@ -803,6 +803,15 @@ pub fn run() -> Result<()> {
                 return warp_cli::completions::generate_to_stdout(*shell);
             }
             warp_cli::Command::CommandLine(cmd) => {
+                #[cfg(not(target_family = "wasm"))]
+                if let CliCommand::EnvironmentCheckout(args) = cmd.as_ref() {
+                    warp_logging::init(warp_logging::LogConfig {
+                        frontend: warp_logging::LogFrontend::Cli,
+                        log_destination: Some(warp_logging::LogDestination::Stderr),
+                        ..Default::default()
+                    })?;
+                    return ai::agent_sdk::run_environment_checkout(args);
+                }
                 let (is_sandboxed, computer_use_override) = match cmd.as_ref() {
                     warp_cli::CliCommand::Agent(warp_cli::agent::AgentCommand::Run(run_args)) => (
                         run_args.sandboxed,
@@ -892,6 +901,12 @@ fn run_worker_command(worker: &warp_cli::WorkerCommand) -> Result<()> {
             // Daemon handles its own full initialization (including
             // initialize_app and crash reporting) inside run_daemon_app.
             crate::remote_server::run_daemon(args.identity_key.clone())
+        }
+        #[cfg(not(target_family = "wasm"))]
+        warp_cli::WorkerCommand::AcpBridge { launch_file } => {
+            // Stdout belongs to the agent's protocol stream, so there is no logging and no
+            // initialize_app.
+            crate::ai::agent_sdk::driver::harness::acp::run_bridge(launch_file)
         }
         #[cfg(not(target_family = "wasm"))]
         warp_cli::WorkerCommand::RipgrepSearch {

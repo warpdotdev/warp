@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::Path;
 
+use build_cache::metadata::write_cache_metadata;
 use cloud_object_models::{CodeForge, SourceRepo};
 use warp_isolation_platform::IsolationPlatformType;
 
@@ -80,4 +81,52 @@ fn export_commands_use_active_shell_syntax_and_escaping() {
         build_export_command(&environment, ShellType::PowerShell),
         "$env:A_VAR = 'a value'; $env:QUOTE = 'it''s quoted'"
     );
+}
+
+#[test]
+fn final_snapshot_includes_caller_usage_with_or_without_build_mounts() {
+    let root = tempfile::tempdir().unwrap();
+    let usage = || {
+        vec![build_cache::metadata::CacheUsage {
+            path: "git-mirrors".into(),
+            cache_framework: Some("git".to_owned()),
+            mount_target: Vec::new(),
+        }]
+    };
+    write_cache_metadata(root.path(), usage()).unwrap();
+    let path = root.path().join(".ns/cache-metadata.json");
+    let document: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(document["version"], 1);
+    assert!(document["updated_at"].as_str().unwrap().ends_with('Z'));
+    assert_eq!(
+        document["user_request"],
+        serde_json::json!({
+            "git-mirrors": {"source": "warp", "cache_framework": "git", "mount_target": []}
+        })
+    );
+    write_cache_metadata(
+        root.path(),
+        [
+            vec![build_cache::metadata::CacheUsage {
+                path: "repos/key/target".into(),
+                cache_framework: Some("rust".to_owned()),
+                mount_target: vec!["/work/target".to_owned()],
+            }],
+            usage(),
+        ]
+        .concat(),
+    )
+    .unwrap();
+    let document: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(document["user_request"].as_object().unwrap().len(), 2);
+    assert_eq!(
+        document["user_request"]["repos/key/target"]["mount_target"],
+        serde_json::json!(["/work/target"])
+    );
+    write_cache_metadata(root.path(), Vec::new()).unwrap();
+    let document: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(document["user_request"], serde_json::json!({}));
 }

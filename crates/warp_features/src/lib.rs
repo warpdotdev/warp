@@ -765,6 +765,11 @@ pub enum FeatureFlag {
     /// CLIs (e.g. `claude`) to execute prompts instead of Warp's agent harness.
     AgentHarness,
 
+    /// Enables the `--harness-transport acp` flag for `oz agent run`, which drives a third-party
+    /// harness over the Agent Client Protocol instead of as an interactive CLI in the terminal
+    /// session.
+    AcpHarness,
+
     /// Enables workspace- and block-snapshot handoff between cloud agent runs
     /// and the local Warp client.
     /// When enabled:
@@ -859,6 +864,8 @@ pub enum FeatureFlag {
     /// selector is replaced with "Agent" and users can pick which agent
     /// identity the key authenticates as.
     NamedAgents,
+    /// Loads server-owned execution settings for paired cloud agent launches.
+    CloudAgentExecutionConfig,
     /// Gates the driver behavior that writes GitHub credentials to disk
     /// (`~/.git-credentials`, `~/.config/gh/hosts.yaml`) and runs the
     /// background refresh loop that keeps them fresh during a task run.
@@ -982,6 +989,11 @@ pub enum FeatureFlag {
     /// replace inline computer-use screenshot bytes with references to
     /// Warp-managed object storage.
     StoredScreenshots,
+
+    /// Lets cloud agent environment checkouts build repositories from bare git
+    /// mirrors kept in the persistent build cache instead of cloning each one
+    /// from the remote. Disabling it restores direct, network-only checkouts.
+    GitMirrorCache,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1001,7 +1013,10 @@ static FEATURES_INITIALIZED: AtomicBool = AtomicBool::new(false);
 /// Features used in debugging.
 pub const DEBUG_FLAGS: &[FeatureFlag] = &[FeatureFlag::DebugMode, FeatureFlag::RuntimeFeatureFlags];
 /// Features enabled only for the WarpLocal developer build.
-pub const LOCAL_FLAGS: &[FeatureFlag] = &[FeatureFlag::LocalClaudeCodexChildHarnesses];
+pub const LOCAL_FLAGS: &[FeatureFlag] = &[
+    FeatureFlag::LocalClaudeCodexChildHarnesses,
+    FeatureFlag::AcpHarness,
+];
 
 /// Features enabled for the development team.  The expectation is that, over
 /// time, these will move on to PREVIEW_FLAGS before being launched.
@@ -1058,6 +1073,8 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::WarpingModelName,
     FeatureFlag::LrcActivitySignal,
     FeatureFlag::StoredScreenshots,
+    FeatureFlag::GitMirrorCache,
+    FeatureFlag::CloudAgentExecutionConfig,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
