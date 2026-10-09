@@ -3,6 +3,8 @@
 //!
 //! The `BlocklistAIController` orchestrates state updates and service calls to power the
 //! Agent Mode UI.
+// Driven by the ACP harness runner in `agent_sdk`, which is not built for wasm.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) mod external_harness;
 pub mod input_context;
 mod pending_response_streams;
