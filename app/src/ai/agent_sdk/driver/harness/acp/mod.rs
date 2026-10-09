@@ -7,6 +7,11 @@
 //! driver's native conversation, so viewers and the task status model see an ordinary Warp agent
 //! turn.
 //!
+//! The agent is launched in the driver's own terminal session and bridged over a local socket,
+//! so this transport is local-only: the `fs/*` methods act on the driver's file system, which
+//! is the agent's. If the bridge ever spans a remote session they must go through the same
+//! session-aware file I/O as the native `ReadFiles` / `RequestFileEdits` executors.
+//!
 //! Local testing: `oz agent run --harness codex --harness-transport acp --share team:view
 //! --idle-on-complete 15m --prompt "..."`. For a scripted agent, put a `codex-acp` shim on
 //! `PATH` that runs `node app/src/ai/agent_sdk/driver/harness/acp/testdata/fake_agent.mjs`.
@@ -15,6 +20,7 @@ mod bridge;
 mod connection;
 mod launch;
 mod mapping;
+mod policy;
 mod protocol;
 
 use std::collections::HashMap;
@@ -26,7 +32,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, anyhow};
 use async_trait::async_trait;
 pub(crate) use bridge::run_bridge;
-use futures::future::{self, BoxFuture};
+use futures::future;
 use futures::{FutureExt, pin_mut, select};
 pub(crate) use launch::AcpLaunchSpec;
 use parking_lot::Mutex;
@@ -37,7 +43,7 @@ use warp_core::channel::ChannelState;
 use warp_managed_secrets::ManagedSecretValue;
 use warp_multi_agent_api::response_event::{StreamFinished, stream_finished};
 use warp_multi_agent_api::{ClientAction, ResponseEvent, response_event};
-use warp_util::path::ShellFamily;
+use warp_util::path::{EscapeChar, ShellFamily};
 use warpui::r#async::Timer;
 use warpui::r#async::executor::Background;
 use warpui::{ModelContext, ModelHandle, ModelSpawner};
@@ -46,6 +52,7 @@ use self::attachments::AttachmentResolver;
 use self::bridge::{BridgeListener, bridge_command};
 use self::connection::{AcpConnection, InboundNotification, RpcError};
 use self::mapping::{AcpTurnMapper, TurnEvent};
+use self::policy::{PolicyDecision, PolicyRequest};
 use self::protocol::{
     CancelParams, ClientCapabilities, ClientInfo, ContentBlock, FsCapabilities, InitializeParams,
     InitializeResponse, McpServer, NewSessionParams, NewSessionResponse, PROTOCOL_VERSION,
@@ -356,8 +363,17 @@ impl HarnessRunner for AcpHarnessRunner {
             }
         };
         drop(listener);
-        let (connection, notifications) =
-            AcpConnection::new(reader, writer, Arc::new(handle_agent_request), &background);
+        let request_context = Arc::new(AgentRequestContext {
+            foreground: foreground.clone(),
+            terminal_driver: self.terminal_driver.clone(),
+            escape_char: shell_family.escape_char(),
+        });
+        let (connection, notifications) = AcpConnection::new(
+            reader,
+            writer,
+            agent_request_handler(request_context),
+            &background,
+        );
         let connection = Arc::new(connection);
         *self.agent.lock() = Some(RunningAgent {
             connection: connection.clone(),
@@ -840,21 +856,47 @@ fn stream_finished_for(stop_reason: StopReason) -> StreamFinished {
     }
 }
 
+/// What answering the agent's requests needs from the driver: a way onto the foreground thread
+/// to consult the permission model, and the shell whose quoting rules the policy parses
+/// commands with.
+struct AgentRequestContext {
+    foreground: ModelSpawner<AgentDriver>,
+    terminal_driver: ModelHandle<TerminalDriver>,
+    escape_char: EscapeChar,
+}
+
+impl AgentRequestContext {
+    async fn evaluate(&self, request: PolicyRequest) -> Result<PolicyDecision, RpcError> {
+        let terminal_driver = self.terminal_driver.clone();
+        let escape_char = self.escape_char;
+        self.foreground
+            .spawn(move |_, ctx| {
+                let terminal = terminal_driver.as_ref(ctx).terminal_view().clone();
+                let controller = terminal.as_ref(ctx).ai_controller().clone();
+                request.evaluate(controller.as_ref(ctx), terminal.id(), escape_char, ctx)
+            })
+            .await
+            .map_err(|_| RpcError::internal("the agent driver is no longer running"))
+    }
+}
+
 /// Answers the requests an ACP agent may make of its client. Runs on the connection's read
 /// loop (a background runtime thread), so file system work is moved to blocking threads to keep
 /// protocol reads flowing.
-fn handle_agent_request(
-    method: &str,
-    params: Value,
-) -> BoxFuture<'static, Result<Value, RpcError>> {
-    match method {
-        protocol::METHOD_REQUEST_PERMISSION => {
-            future::ready(answer_permission_request(params)).boxed()
+fn agent_request_handler(context: Arc<AgentRequestContext>) -> connection::AgentRequestHandler {
+    Arc::new(move |method, params| {
+        let context = context.clone();
+        match method {
+            protocol::METHOD_REQUEST_PERMISSION => {
+                async move { answer_permission_request(&context, params).await }.boxed()
+            }
+            protocol::METHOD_FS_READ_TEXT_FILE => blocking(move || read_text_file(params)).boxed(),
+            protocol::METHOD_FS_WRITE_TEXT_FILE => {
+                async move { write_text_file(&context, params).await }.boxed()
+            }
+            other => future::ready(Err(RpcError::method_not_found(other))).boxed(),
         }
-        protocol::METHOD_FS_READ_TEXT_FILE => blocking(move || read_text_file(params)).boxed(),
-        protocol::METHOD_FS_WRITE_TEXT_FILE => blocking(move || write_text_file(params)).boxed(),
-        other => future::ready(Err(RpcError::method_not_found(other))).boxed(),
-    }
+    })
 }
 
 async fn blocking(
@@ -865,24 +907,33 @@ async fn blocking(
         .map_err(RpcError::internal)?
 }
 
-/// Cloud runs are unattended, so permission prompts are granted with the broadest "allow"
-/// option offered.
-fn answer_permission_request(params: Value) -> Result<Value, RpcError> {
+/// Grants the request with the broadest "allow" option unless Warp's permission policy refuses
+/// it outright (see [`policy`]), in which case the narrowest "reject" option is chosen.
+async fn answer_permission_request(
+    context: &AgentRequestContext,
+    params: Value,
+) -> Result<Value, RpcError> {
     let params: RequestPermissionParams =
         serde_json::from_value(params).map_err(RpcError::internal)?;
-    let chosen = params
-        .options
+    let decision = match PolicyRequest::for_tool_call(&params.tool_call) {
+        Some(request) => context.evaluate(request).await?,
+        None => PolicyDecision::Allow,
+    };
+    let preferred_kinds: &[PermissionOptionKind] = match &decision {
+        PolicyDecision::Allow => &[
+            PermissionOptionKind::AllowAlways,
+            PermissionOptionKind::AllowOnce,
+        ],
+        PolicyDecision::Deny { .. } => &[
+            PermissionOptionKind::RejectOnce,
+            PermissionOptionKind::RejectAlways,
+        ],
+    };
+    let chosen = preferred_kinds
         .iter()
-        .find(|option| option.kind == PermissionOptionKind::AllowAlways)
-        .or_else(|| {
-            params
-                .options
-                .iter()
-                .find(|option| option.kind == PermissionOptionKind::AllowOnce)
-        })
-        .or_else(|| params.options.first());
-    let outcome = match chosen {
-        Some(option) => {
+        .find_map(|kind| params.options.iter().find(|option| option.kind == *kind));
+    let outcome = match (&decision, chosen) {
+        (PolicyDecision::Allow, Some(option)) => {
             log::info!(
                 "Auto-approving ACP permission request with `{}`",
                 option.name
@@ -891,7 +942,26 @@ fn answer_permission_request(params: Value) -> Result<Value, RpcError> {
                 option_id: option.option_id.clone(),
             }
         }
-        None => PermissionOutcome::Cancelled,
+        // Agents that offer no allow option are answered with whatever they did offer, as
+        // before; anything else would wedge an unattended run.
+        (PolicyDecision::Allow, None) => match params.options.first() {
+            Some(option) => PermissionOutcome::Selected {
+                option_id: option.option_id.clone(),
+            },
+            None => PermissionOutcome::Cancelled,
+        },
+        (PolicyDecision::Deny { reason }, chosen) => {
+            log::warn!(
+                "Refusing ACP permission request for `{}`: {reason}",
+                params.tool_call.title.as_deref().unwrap_or("tool call")
+            );
+            match chosen {
+                Some(option) => PermissionOutcome::Selected {
+                    option_id: option.option_id.clone(),
+                },
+                None => PermissionOutcome::Cancelled,
+            }
+        }
     };
     serde_json::to_value(RequestPermissionResponse { outcome }).map_err(RpcError::internal)
 }
@@ -915,15 +985,27 @@ fn read_text_file(params: Value) -> Result<Value, RpcError> {
     serde_json::to_value(ReadTextFileResponse { content }).map_err(RpcError::internal)
 }
 
-fn write_text_file(params: Value) -> Result<Value, RpcError> {
+async fn write_text_file(context: &AgentRequestContext, params: Value) -> Result<Value, RpcError> {
     let params: WriteTextFileParams = serde_json::from_value(params).map_err(RpcError::internal)?;
-    if let Some(parent) = Path::new(&params.path).parent() {
-        std::fs::create_dir_all(parent).map_err(RpcError::internal)?;
+    if let PolicyDecision::Deny { reason } =
+        context.evaluate(PolicyRequest::write(&params.path)).await?
+    {
+        log::warn!("Refusing ACP fs/write_text_file: {reason}");
+        return Err(RpcError::internal(format!(
+            "writing {} is not permitted: {reason}",
+            params.path
+        )));
     }
-    std::fs::write(&params.path, params.content)
-        .with_context(|| format!("writing {}", params.path))
-        .map_err(RpcError::internal)?;
-    Ok(Value::Null)
+    blocking(move || {
+        if let Some(parent) = Path::new(&params.path).parent() {
+            std::fs::create_dir_all(parent).map_err(RpcError::internal)?;
+        }
+        std::fs::write(&params.path, params.content)
+            .with_context(|| format!("writing {}", params.path))
+            .map_err(RpcError::internal)?;
+        Ok(Value::Null)
+    })
+    .await
 }
 
 fn mcp_server_for_acp(name: &str, server: &JSONMCPServer) -> McpServer {

@@ -717,7 +717,7 @@ fn actions(actions: Vec<ClientAction>) -> Vec<TurnEvent> {
 
 /// Extracts the shell command an `execute` tool call runs, trying the common `rawInput` shapes
 /// before falling back to the title.
-fn command_from_raw_input(
+pub(super) fn command_from_raw_input(
     raw_input: Option<&Value>,
     kind: Option<ToolKind>,
     title: &str,
@@ -746,8 +746,9 @@ fn command_from_raw_input(
         .or_else(|| (!title.is_empty()).then(|| title.to_owned()))
 }
 
-/// The file a `read` tool call targets, under the key each agent's read tool uses.
-fn path_from_raw_input(raw_input: Option<&Value>) -> Option<String> {
+/// The file a `read`, `edit`, `delete`, or `move` tool call targets, under the key each agent's
+/// file tools use.
+pub(super) fn path_from_raw_input(raw_input: Option<&Value>) -> Option<String> {
     ["file_path", "path", "absolute_path", "filePath"]
         .iter()
         .find_map(|key| raw_input?.get(key)?.as_str())
@@ -768,7 +769,9 @@ fn line_range_from_raw_input(raw_input: Option<&Value>) -> Option<FileContentLin
     Some(FileContentLineRange { start, end })
 }
 
-fn first_diff(content: Option<&[ToolCallContent]>) -> Option<(String, Option<String>, String)> {
+pub(super) fn first_diff(
+    content: Option<&[ToolCallContent]>,
+) -> Option<(String, Option<String>, String)> {
     content?.iter().find_map(|item| match item {
         ToolCallContent::Diff {
             path,

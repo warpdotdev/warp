@@ -222,8 +222,16 @@ pub(super) struct ToolCallFields {
     pub kind: Option<ToolKind>,
     pub status: Option<ToolCallStatus>,
     pub content: Option<Vec<ToolCallContent>>,
+    pub locations: Option<Vec<ToolCallLocation>>,
     pub raw_input: Option<Value>,
     pub raw_output: Option<Value>,
+}
+
+/// A file the tool call touches, as reported by the agent for "follow along" UIs.
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+pub(super) struct ToolCallLocation {
+    pub path: String,
 }
 
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -287,6 +295,9 @@ pub(super) struct PlanEntry {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct RequestPermissionParams {
+    /// The call the agent wants permission for; only the fields it chose to include.
+    #[serde(default)]
+    pub tool_call: ToolCallFields,
     pub options: Vec<PermissionOption>,
 }
 

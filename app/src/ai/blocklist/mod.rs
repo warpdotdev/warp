@@ -129,6 +129,10 @@ pub(crate) use passive_suggestions::{
 #[cfg(test)]
 pub(crate) use permissions::is_agent_mode_autonomy_allowed;
 pub use permissions::{BlocklistAIPermissions, CommandExecutionPermissionAllowedReason};
+pub(crate) use permissions::{
+    CommandExecutionPermission, CommandExecutionPermissionDeniedReason, FileWritePermission,
+    FileWritePermissionDeniedReason,
+};
 #[cfg_attr(target_family = "wasm", allow(unused))]
 pub(crate) use persistence::PersistedAIInputType;
 #[cfg_attr(target_family = "wasm", allow(unused))]
