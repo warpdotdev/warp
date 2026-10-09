@@ -1142,7 +1142,7 @@ impl AgentDriver {
                     _ => None,
                 });
 
-        let mut env_vars = build_secret_env_vars(&secrets);
+        let mut env_vars = build_secret_env_vars(&secrets)?;
 
         // Inject cloud provider env vars.
         cloud_provider::collect_env_vars(&cloud_providers, &mut env_vars)?;
@@ -4748,9 +4748,21 @@ impl AgentDriver {
 ///    if any one env var for a typed secret is already worker-injected, the entire
 ///    secret is skipped.
 /// 3. Generic `RawValue` secrets. Skipped on collision with either of the above.
+/// Metadata environment collisions are errors, including empty injected values.
 fn build_secret_env_vars(
     secrets: &HashMap<String, ManagedSecretValue>,
-) -> HashMap<OsString, OsString> {
+) -> Result<HashMap<OsString, OsString>, AgentDriverError> {
+    for (name, secret) in secrets {
+        let normalized_name = name.to_ascii_uppercase();
+        if matches!(secret, ManagedSecretValue::RawValue { .. })
+            && normalized_name.starts_with("WARP_METADATA_")
+            && std::env::var_os(&normalized_name).is_some()
+        {
+            return Err(AgentDriverError::EnvironmentSetupFailed(format!(
+                "Metadata environment variable {normalized_name} conflicts with managed secret {name:?}"
+            )));
+        }
+    }
     let mut env_vars = HashMap::with_capacity(secrets.len() + 1);
 
     // Phase 1: Record which env-var names are claimed by typed auth secrets.
@@ -4800,7 +4812,7 @@ fn build_secret_env_vars(
         env_vars.insert(OsString::from(env_name), OsString::from(value.as_str()));
     }
 
-    env_vars
+    Ok(env_vars)
 }
 
 /// The env-var names that any typed auth secret in `secrets` will populate.

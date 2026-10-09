@@ -76,6 +76,7 @@ fn local_dispatch_fails_after_window_team_change() {
                 model.dispatch_create_agent(
                     parent_session_id,
                     StartAgentRequest {
+                        metadata: Default::default(),
                         id: Default::default(),
                         name: "local-child".to_string(),
                         prompt: "work".to_string(),
@@ -115,6 +116,7 @@ fn local_dispatch_fails_after_window_team_change() {
 }
 fn remote_request(parent_conversation_id: AIConversationId) -> StartAgentRequest {
     StartAgentRequest {
+        metadata: Default::default(),
         id: Default::default(),
         name: "cloud-researcher".to_string(),
         prompt: "research the codebase".to_string(),
@@ -316,6 +318,7 @@ fn dispatch_and_recv(
             "researcher".to_string(),
             "research the codebase".to_string(),
             execution_mode,
+            Default::default(),
             None,
             parent_conversation_id,
             Some("parent-run-1".to_string()),
@@ -461,6 +464,7 @@ fn local_oz_child_session_indexes_run_id_immediately() {
 
         let task_id: AmbientAgentTaskId = "44444444-4444-4444-4444-444444444444".parse().unwrap();
         let request = StartAgentRequest {
+            metadata: Default::default(),
             id: Default::default(),
             name: "verify-child".to_string(),
             prompt: "echo hello".to_string(),

@@ -568,6 +568,7 @@ impl AmbientAgentRunner {
                 None => (None, UserQueryMode::Normal),
             };
             let request = SpawnAgentRequest {
+                metadata: Default::default(),
                 prompt,
                 mode,
                 config,

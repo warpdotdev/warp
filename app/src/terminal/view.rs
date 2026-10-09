@@ -24025,6 +24025,7 @@ impl TerminalView {
         };
 
         let request = RunAgentsRequest {
+            metadata: Default::default(),
             summary: summary.clone(),
             base_prompt: "Shared instructions for every child agent.".to_owned(),
             skills: vec![],
@@ -24034,6 +24035,7 @@ impl TerminalView {
             agent_run_configs: agent_names
                 .into_iter()
                 .map(|name| RunAgentsAgentRunConfig {
+                    metadata: Default::default(),
                     name,
                     prompt: "Do the work.".to_owned(),
                     title: String::new(),

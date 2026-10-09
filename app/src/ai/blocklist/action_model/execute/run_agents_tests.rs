@@ -294,12 +294,80 @@ fn subscribe_to_start_agent_requests(
     captured
 }
 
+#[test]
+fn dispatch_merges_batch_metadata_with_independent_child_overrides() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::Sdk);
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+            history.assign_run_id_for_conversation(
+                state.conversation_id,
+                "00000000-0000-0000-0000-000000000001".to_string(),
+                None,
+                EntityId::new(),
+                ctx,
+            );
+        });
+        let captured = subscribe_to_start_agent_requests(&mut app, &state.start_agent_executor);
+        let mut action = remote_run_agents_action("oz");
+        let AIAgentActionType::RunAgents(request) = &mut action.action else {
+            panic!("expected run_agents action");
+        };
+        request.metadata = [
+            ("ticket_id".to_string(), "ENG-42".to_string()),
+            ("stage".to_string(), "batch".to_string()),
+        ]
+        .into();
+        let mut sibling = request.agent_run_configs[0].clone();
+        sibling.name = "sibling".to_string();
+        request.agent_run_configs[0].metadata = [
+            ("stage".to_string(), String::new()),
+            ("child_only".to_string(), "yes".to_string()),
+        ]
+        .into();
+        request.agent_run_configs.push(sibling);
+        let request = request.clone();
+        let (sender, _receiver) = async_channel::bounded(1);
+
+        state.executor.update(&mut app, |executor, ctx| {
+            executor.dispatch_children_for_prepared_request(
+                action.id,
+                request,
+                state.conversation_id,
+                RequestTeamScope::from_scope(&TeamlessScopeForTest),
+                sender,
+                ctx,
+            );
+        });
+        captured.read(&app, |captured, _| {
+            assert_eq!(captured.0.len(), 2);
+            assert_eq!(
+                captured.0[0].metadata,
+                [
+                    ("ticket_id".to_string(), "ENG-42".to_string()),
+                    ("stage".to_string(), String::new()),
+                    ("child_only".to_string(), "yes".to_string()),
+                ]
+                .into()
+            );
+            assert_eq!(
+                captured.0[1].metadata,
+                [
+                    ("ticket_id".to_string(), "ENG-42".to_string()),
+                    ("stage".to_string(), "batch".to_string()),
+                ]
+                .into()
+            );
+        });
+    });
+}
+
 fn remote_run_agents_action(harness_type: &str) -> AIAgentAction {
     AIAgentAction {
         id: AIAgentActionId::from("run-agents-action".to_string()),
         task_id: TaskId::new("run-agents-task".to_string()),
         requires_result: true,
         action: AIAgentActionType::RunAgents(RunAgentsRequest {
+            metadata: Default::default(),
             summary: "Run child agent".to_string(),
             base_prompt: "Help".to_string(),
             skills: vec![],
@@ -312,6 +380,7 @@ fn remote_run_agents_action(harness_type: &str) -> AIAgentAction {
                 runner_id: String::new(),
             },
             agent_run_configs: vec![RunAgentsAgentRunConfig {
+                metadata: Default::default(),
                 name: "child".to_string(),
                 prompt: "Help".to_string(),
                 title: String::new(),
@@ -336,6 +405,7 @@ fn with_agent_name(mut action: AIAgentAction, name: &str) -> AIAgentAction {
 fn local_codex_run_agents_maps_to_local_harness_mode_when_flag_enabled() {
     let _local_codex = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
     let cfg = RunAgentsAgentRunConfig {
+        metadata: Default::default(),
         name: "child".to_string(),
         prompt: "Investigate the failure".to_string(),
         title: String::new(),

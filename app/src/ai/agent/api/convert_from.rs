@@ -116,6 +116,7 @@ fn convert_run_agents(
     skill_path_origin: &SkillPathOrigin,
 ) -> AIAgentActionType {
     let api::RunAgents {
+        metadata,
         summary,
         base_prompt,
         skills,
@@ -126,6 +127,7 @@ fn convert_run_agents(
         plan_id,
     } = run_agents;
     AIAgentActionType::RunAgents(RunAgentsRequest {
+        metadata,
         summary,
         base_prompt,
         skills: skills
@@ -138,6 +140,7 @@ fn convert_run_agents(
         agent_run_configs: agent_run_configs
             .into_iter()
             .map(|config| RunAgentsAgentRunConfig {
+                metadata: config.metadata,
                 name: config.name,
                 prompt: config.prompt,
                 title: config.title,

@@ -982,6 +982,9 @@ input CreateAgentTaskInput {
   """Optional environment UID to run the task in."""
   environmentUid: ID
 
+  """Optional JSON-serialized string-to-string run metadata."""
+  metadata: String
+
   """Optional run ID of the parent that spawned this local task."""
   parentRunId: ID
 

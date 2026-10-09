@@ -1,6 +1,7 @@
 mod convert;
 mod review_comments;
 
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::ops::Range;
 use std::path::PathBuf;
@@ -221,6 +222,7 @@ pub enum AIAgentActionType {
 /// fully-resolved instance only.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct RunAgentsRequest {
+    pub metadata: HashMap<String, String>,
     pub summary: String,
     pub base_prompt: String,
     pub skills: Vec<SkillReference>,
@@ -256,6 +258,7 @@ impl RunAgentsExecutionMode {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct RunAgentsAgentRunConfig {
+    pub metadata: HashMap<String, String>,
     pub name: String,
     pub prompt: String,
     pub title: String,

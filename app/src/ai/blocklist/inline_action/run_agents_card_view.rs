@@ -3,6 +3,7 @@
 //! Each card is a `View` keyed by `AIAgentActionId`, embedded by
 //! `AIBlock` via `ChildView`. Keybindings and Accept dispatch live on
 //! the view; only `RejectRequested` flows back to the parent.
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest};
@@ -105,6 +106,7 @@ pub fn init(app: &mut AppContext) {
 /// [`OrchestrationEditState`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunAgentsCardFields {
+    pub metadata: HashMap<String, String>,
     pub agent_run_configs: Vec<RunAgentsAgentRunConfig>,
     pub base_prompt: String,
     pub summary: String,
@@ -139,6 +141,7 @@ impl RunAgentsEditState {
         Self {
             orchestration_config_state,
             card: RunAgentsCardFields {
+                metadata: req.metadata.clone(),
                 agent_run_configs: req.agent_run_configs.clone(),
                 base_prompt: req.base_prompt.clone(),
                 summary: req.summary.clone(),
@@ -150,6 +153,7 @@ impl RunAgentsEditState {
 
     pub fn to_request(&self) -> RunAgentsRequest {
         RunAgentsRequest {
+            metadata: self.card.metadata.clone(),
             summary: self.card.summary.clone(),
             base_prompt: self.card.base_prompt.clone(),
             skills: self.card.skills.clone(),

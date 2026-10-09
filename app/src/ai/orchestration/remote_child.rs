@@ -281,6 +281,7 @@ pub fn prepare_remote_child_launch(
             Harness::Oz | Harness::OpenCode | Harness::Gemini | Harness::Unknown => None,
         });
     let spawn_request = SpawnAgentRequest {
+        metadata: request.metadata.clone(),
         prompt: Some(request.prompt.clone()),
         mode: UserQueryMode::Normal,
         config: Some(AgentConfigSnapshot {

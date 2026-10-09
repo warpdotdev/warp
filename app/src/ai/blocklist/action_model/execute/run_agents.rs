@@ -251,6 +251,7 @@ impl RunAgentsExecutor {
             .and_then(|c| c.run_id());
 
         let RunAgentsRequest {
+            metadata,
             execution_mode: run_execution_mode,
             harness_type,
             model_id,
@@ -287,10 +288,13 @@ impl RunAgentsExecutor {
                 continue;
             }
             let recv = self.start_agent_executor.update(ctx, |executor, exec_ctx| {
+                let mut child_metadata = metadata.clone();
+                child_metadata.extend(cfg.metadata.clone());
                 executor.dispatch(
                     cfg.name.clone(),
                     prompt,
                     mode,
+                    child_metadata,
                     None, /* lifecycle_subscription */
                     parent_conversation_id,
                     parent_run_id.clone(),

@@ -256,6 +256,7 @@ fn list_agent_runs_omits_team_header_for_teamless_scope() {
 #[test]
 fn spawn_agent_request_serializes_explicit_personal_ownership() {
     let request = SpawnAgentRequest {
+        metadata: Default::default(),
         prompt: Some("hello".to_string()),
         mode: UserQueryMode::Normal,
         config: None,
@@ -283,6 +284,7 @@ fn spawn_agent_request_serializes_explicit_personal_ownership() {
 #[test]
 fn spawn_agent_request_serializes_agent_uid_as_agent_identity_uid() {
     let request = SpawnAgentRequest {
+        metadata: Default::default(),
         prompt: Some("hello".to_string()),
         mode: UserQueryMode::Normal,
         config: None,
@@ -382,6 +384,7 @@ fn deserialize_connected_self_hosted_workers_response() {
 #[test]
 fn spawn_agent_request_omits_prompt_when_none() {
     let request = SpawnAgentRequest {
+        metadata: Default::default(),
         prompt: None,
         mode: UserQueryMode::Normal,
         config: None,

@@ -308,6 +308,7 @@ fn serializes_mcp_servers_as_object_not_string() {
         .unwrap();
 
     let request = SpawnAgentRequest {
+        metadata: Default::default(),
         prompt: Some("hello".to_string()),
         mode: UserQueryMode::Normal,
         config: Some(AgentConfigSnapshot {

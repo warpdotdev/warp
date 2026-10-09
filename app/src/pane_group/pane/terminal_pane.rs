@@ -1692,6 +1692,7 @@ fn launch_local_no_harness_child(
         &request.name,
         &request.prompt,
         request.parent_run_id.as_deref(),
+        &request.metadata,
         request_team_scope,
         ctx,
     );
@@ -1829,6 +1830,7 @@ fn launch_local_harness_child(
     let model_id_for_harness_env = model_id.clone();
     let agent_name_for_task = agent_name.clone();
     let request_team_scope = request.request_team_scope;
+    let metadata = request.metadata.clone();
     let _ = ctx.spawn(
         async move {
             prepare_local_harness_child_launch(
@@ -1837,6 +1839,7 @@ fn launch_local_harness_child(
                 model_id_for_harness_env,
                 parent_run_id,
                 agent_name_for_task,
+                metadata,
                 shell_type,
                 startup_directory,
                 ai_client,

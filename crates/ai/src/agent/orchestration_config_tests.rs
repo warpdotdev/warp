@@ -19,6 +19,7 @@ fn make_config(model: &str, harness: &str, remote: bool) -> OrchestrationConfig 
 
 fn make_request(model: &str, harness: &str, remote: bool) -> RunAgentsRequest {
     RunAgentsRequest {
+        metadata: Default::default(),
         summary: "test".to_string(),
         base_prompt: "prompt".to_string(),
         skills: vec![],
@@ -35,6 +36,7 @@ fn make_request(model: &str, harness: &str, remote: bool) -> RunAgentsRequest {
             RunAgentsExecutionMode::Local
         },
         agent_run_configs: vec![RunAgentsAgentRunConfig {
+            metadata: Default::default(),
             name: "a".to_string(),
             prompt: String::new(),
             title: String::new(),

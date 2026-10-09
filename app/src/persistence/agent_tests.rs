@@ -142,6 +142,7 @@ fn request_metadata_round_trips_through_conversation_and_persistence() {
                             web_search_count: 2,
                             web_search_cost_in_cents: 5.0,
                             web_search_cost_in_credits: 5.5,
+                            ..Default::default()
                         },
                     )]),
                     byok_inference_usage: HashMap::new(),

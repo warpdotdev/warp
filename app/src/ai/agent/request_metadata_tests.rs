@@ -59,6 +59,7 @@ fn record_message(request_id: &str, with_charges: bool) -> api::Message {
                         web_search_count: 1,
                         web_search_cost_in_cents: 0.5,
                         web_search_cost_in_credits: 0.5,
+                        ..Default::default()
                     },
                 )]),
                 byok_inference_usage: HashMap::new(),

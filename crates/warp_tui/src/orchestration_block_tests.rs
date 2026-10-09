@@ -30,6 +30,7 @@ use crate::test_fixtures::{TestHostView, add_test_action_model};
 /// Builds a request with the given harness and execution mode.
 fn request(harness: &str, execution_mode: RunAgentsExecutionMode) -> RunAgentsRequest {
     RunAgentsRequest {
+        metadata: Default::default(),
         summary: "Parallelize the task.".to_string(),
         base_prompt: "base".to_string(),
         skills: Vec::new(),
@@ -37,6 +38,7 @@ fn request(harness: &str, execution_mode: RunAgentsExecutionMode) -> RunAgentsRe
         harness_type: harness.to_string(),
         execution_mode,
         agent_run_configs: vec![RunAgentsAgentRunConfig {
+            metadata: Default::default(),
             name: "researcher".to_string(),
             prompt: "research".to_string(),
             title: "Researcher".to_string(),
@@ -46,6 +48,22 @@ fn request(harness: &str, execution_mode: RunAgentsExecutionMode) -> RunAgentsRe
         plan_id: "plan-1".to_string(),
         harness_auth_secret_name: None,
     }
+}
+
+#[test]
+fn build_request_preserves_metadata() {
+    let mut fields = request("oz", remote("env-1", "warp"));
+    fields.metadata = [("ticket_id".to_string(), "ENG-42".to_string())].into();
+    fields.agent_run_configs[0].metadata = [("stage".to_string(), String::new())].into();
+    let state = TuiOrchestrationBlock::config_state_from_request(&fields, None);
+
+    let confirmed = build_request(&fields, &state);
+
+    assert_eq!(confirmed.metadata, fields.metadata);
+    assert_eq!(
+        confirmed.agent_run_configs[0].metadata,
+        fields.agent_run_configs[0].metadata
+    );
 }
 
 #[test]

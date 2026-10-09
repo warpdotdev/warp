@@ -415,6 +415,7 @@ fn local_child_dispatch_fails_after_window_team_change() {
             terminal_view.update(ctx, |_, ctx| {
                 ctx.emit(TerminalViewEvent::StartAgentConversation(
                     StartAgentRequest {
+                        metadata: Default::default(),
                         id: Default::default(),
                         name: "local-child".to_string(),
                         prompt: "work".to_string(),
