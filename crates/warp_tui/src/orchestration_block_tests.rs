@@ -51,22 +51,6 @@ fn request(harness: &str, execution_mode: RunAgentsExecutionMode) -> RunAgentsRe
 }
 
 #[test]
-fn build_request_preserves_metadata() {
-    let mut fields = request("oz", remote("env-1", "warp"));
-    fields.metadata = [("ticket_id".to_string(), "ENG-42".to_string())].into();
-    fields.agent_run_configs[0].metadata = [("stage".to_string(), String::new())].into();
-    let state = TuiOrchestrationBlock::config_state_from_request(&fields, None);
-
-    let confirmed = build_request(&fields, &state);
-
-    assert_eq!(confirmed.metadata, fields.metadata);
-    assert_eq!(
-        confirmed.agent_run_configs[0].metadata,
-        fields.agent_run_configs[0].metadata
-    );
-}
-
-#[test]
 fn environment_selector_is_searchable() {
     App::test((), |mut app| async move {
         let (block, _) = test_block(&mut app, &request("oz", remote("env-1", "warp")));
@@ -946,7 +930,9 @@ fn background_page_invalidation_does_not_take_focus() {
 #[test]
 fn accepting_dispatches_once_and_releases_focus() {
     App::test((), |mut app| async move {
-        let request = request("oz", RunAgentsExecutionMode::Local);
+        let mut request = request("oz", RunAgentsExecutionMode::Local);
+        request.metadata = [("ticket_id".to_string(), "ENG-42".to_string())].into();
+        request.agent_run_configs[0].metadata = [("stage".to_string(), String::new())].into();
         let (block, controller) = test_block(&mut app, &request);
         assert!(app.read(|ctx| block.as_ref(ctx).is_awaiting_confirmation(ctx)));
 
