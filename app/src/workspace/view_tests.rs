@@ -48,6 +48,7 @@ use crate::cloud_object::model::view::CloudViewModel;
 use crate::context_chips::prompt::Prompt;
 use crate::editor::Event;
 use crate::gpu_state::GPUState;
+use crate::menu::MenuAction;
 use crate::network::NetworkStatus;
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::notebook::NotebookView;
@@ -2470,25 +2471,21 @@ fn test_closing_tab_context_menu_restores_active_tab_focus() {
         initialize_app(&mut app);
 
         let workspace = mock_workspace(&mut app);
-        let (window_id, menu_id) = workspace.update(&mut app, |workspace, ctx| {
-            workspace.show_tab_right_click_menu =
-                Some((0, TabContextMenuAnchor::Pointer(Vector2F::zero())));
-            ctx.focus(&workspace.tab_right_click_menu);
-            (ctx.window_id(), workspace.tab_right_click_menu.id())
-        });
-        assert_eq!(app.focused_view_id(window_id), Some(menu_id));
-
-        workspace.update(&mut app, |workspace, ctx| {
-            workspace.handle_tab_right_click_menu_event(
-                &MenuEvent::Close {
-                    via_select_item: true,
-                },
+        let (window_id, menu) = workspace.update(&mut app, |workspace, ctx| {
+            workspace.toggle_tab_right_click_menu(
+                0,
+                TabContextMenuAnchor::Pointer(Vector2F::zero()),
                 ctx,
             );
+            (ctx.window_id(), workspace.tab_right_click_menu.clone())
         });
+        assert_eq!(app.focused_view_id(window_id), Some(menu.id()));
 
-        assert_ne!(app.focused_view_id(window_id), Some(menu_id));
+        menu.update(&mut app, |menu, ctx| {
+            menu.handle_action(&MenuAction::Close(false), ctx);
+        });
         workspace.update(&mut app, |workspace, ctx| {
+            assert!(workspace.show_tab_right_click_menu.is_none());
             assert!(
                 workspace
                     .active_tab_pane_group()
@@ -2497,6 +2494,115 @@ fn test_closing_tab_context_menu_restores_active_tab_focus() {
         });
     });
 }
+
+#[test]
+fn test_selecting_rename_from_tab_context_menu_preserves_editor_focus() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let menu = workspace.update(&mut app, |workspace, ctx| {
+            workspace.toggle_tab_right_click_menu(
+                0,
+                TabContextMenuAnchor::Pointer(Vector2F::zero()),
+                ctx,
+            );
+            workspace.tab_right_click_menu.clone()
+        });
+
+        menu.update(&mut app, |menu, ctx| {
+            assert!(menu.set_selected_by_name("Rename tab", ctx));
+            menu.handle_action(&MenuAction::Enter, ctx);
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            assert!(workspace.show_tab_right_click_menu.is_none());
+            assert_eq!(
+                workspace.current_workspace_state.tab_being_renamed(),
+                Some(0)
+            );
+            assert!(workspace.tab_rename_editor.is_focused(ctx));
+        });
+    });
+}
+
+#[test]
+fn test_selecting_rename_from_pane_context_menu_preserves_editor_focus() {
+    let _vertical_tabs_guard = FeatureFlag::VerticalTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let (menu, locator) = workspace.update(&mut app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group();
+            let locator = PaneViewLocator {
+                pane_group_id: pane_group.id(),
+                pane_id: pane_group.as_ref(ctx).pane_id_from_index(0).unwrap(),
+            };
+            workspace.toggle_vertical_tabs_pane_context_menu(
+                0,
+                VerticalTabsPaneContextMenuTarget::ClickedPane(locator),
+                Vector2F::zero(),
+                ctx,
+            );
+            (workspace.tab_right_click_menu.clone(), locator)
+        });
+
+        menu.update(&mut app, |menu, ctx| {
+            assert!(menu.set_selected_by_name("Rename pane", ctx));
+            menu.handle_action(&MenuAction::Enter, ctx);
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            assert!(workspace.show_tab_right_click_menu.is_none());
+            assert_eq!(
+                workspace.current_workspace_state.pane_being_renamed(),
+                Some(locator)
+            );
+            assert!(workspace.pane_rename_editor.is_focused(ctx));
+        });
+    });
+}
+
+#[test]
+fn test_selecting_rename_from_tab_group_context_menu_preserves_editor_focus() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let menu = workspace.update(&mut app, |workspace, ctx| {
+            let group = TabGroup::new();
+            let group_id = group.id;
+            workspace.tab_groups.insert(group_id, group);
+            workspace.tabs[0].group_id = Some(group_id);
+            workspace.toggle_tab_group_right_click_menu(
+                group_id,
+                TabContextMenuAnchor::Pointer(Vector2F::zero()),
+                ctx,
+            );
+            workspace.tab_right_click_menu.clone()
+        });
+
+        menu.update(&mut app, |menu, ctx| {
+            assert!(menu.set_selected_by_name("Rename", ctx));
+            menu.handle_action(&MenuAction::Enter, ctx);
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            assert!(workspace.show_tab_group_right_click_menu.is_none());
+            assert!(
+                workspace
+                    .current_workspace_state
+                    .is_any_tab_group_being_renamed()
+            );
+            assert!(workspace.tab_group_rename_editor.is_focused(ctx));
+        });
+    });
+}
+
 #[test]
 fn test_close_tabs_right_confirmation_dialog() {
     let _guard = FeatureFlag::CreatingSharedSessions.override_enabled(true);
@@ -5391,7 +5497,6 @@ mod simplified_wasm_tab_bar {
                 context_window_usage: 0.0,
                 credits_spent: 0.0,
                 platform_credits_spent: 0.0,
-                total_provider_cost_in_cents: None,
                 credits_spent_for_last_block: None,
                 charged_usage_for_last_block: None,
                 total_charged_usage: None,

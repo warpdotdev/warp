@@ -9,8 +9,10 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use futures::channel::oneshot;
+use instant::Instant;
 use session_sharing_protocol::common::{Role, SessionId};
 use session_sharing_protocol::sharer::SessionRetentionReason;
+use uuid::Uuid;
 use warp_cli::share::{ShareAccessLevel, ShareRequest, ShareSubject};
 use warp_completer::completer::CommandOutput;
 use warp_core::command::ExitCode;
@@ -27,9 +29,8 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::attachment_utils::attachments_download_dir;
 use crate::pane_group::NewTerminalOptions;
 use crate::root_view::{NewWorkspaceSource, open_new_with_workspace_source};
-use crate::terminal::TerminalView;
 use crate::terminal::model::RespectObfuscatedSecrets;
-use crate::terminal::model::block::{BlockId, SerializedBlock};
+use crate::terminal::model::block::{BlockId, BlockState, SerializedBlock};
 use crate::terminal::model::find::RegexDFAs;
 use crate::terminal::model::grid::RespectDisplayedOutput;
 use crate::terminal::model::index::Point;
@@ -38,6 +39,7 @@ use crate::terminal::model::terminal_model::ShellProcessInfo;
 use crate::terminal::shared_session::{self, IsSharedSessionCreator, SharedSessionSource};
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::{ConversationRestorationInNewPaneType, Event};
+use crate::terminal::{ShellLaunchData, TerminalView};
 use crate::workspaces::user_workspaces::{HeadlessTeamScope, TeamScope, UserWorkspaces};
 
 /// Describes why a terminal session bootstrap failed.
@@ -152,6 +154,7 @@ pub(crate) struct TerminalDriver {
     /// Receiver for the session sharing result. Present when sharing is expected
     /// and `wait_for_session_shared` has not yet been called.
     session_share_rx: Option<oneshot::Receiver<Result<(), ShareSessionError>>>,
+    session_share_failure_rx: Option<oneshot::Receiver<ShareSessionError>>,
     pending_share_requests: Vec<ShareRequest>,
     /// Resolves the in-flight command's exit status. Sent `Ok` when the
     /// command's block completes, or
@@ -303,8 +306,15 @@ impl TerminalDriver {
             });
         }
 
+        let (session_share_failure_tx, session_share_failure_rx) = oneshot::channel();
+        let mut session_share_failure_tx = Some(session_share_failure_tx);
         ctx.subscribe_to_view(&terminal_view, move |me, _, event, ctx| {
-            me.handle_terminal_view_event(event, &mut session_share_tx, ctx);
+            me.handle_terminal_view_event(
+                event,
+                &mut session_share_tx,
+                &mut session_share_failure_tx,
+                ctx,
+            );
         });
 
         let (bootstrap_tx_inner, bootstrap_rx) = oneshot::channel::<Result<(), BootstrapError>>();
@@ -331,6 +341,7 @@ impl TerminalDriver {
             bootstrap_rx: Some(bootstrap_rx),
             shared_session_id: None,
             session_share_rx,
+            session_share_failure_rx: Some(session_share_failure_rx),
             pending_share_requests: Vec::new(),
             waiting_command: None,
             pending_command_start: None,
@@ -442,6 +453,19 @@ impl TerminalDriver {
         });
     }
 
+    /// Sends a raw Ctrl-C (`\x03`) to the PTY, interrupting the foreground process group. Unlike
+    /// [`Self::send_bare_enter_to_cli`] this does not require a CLI agent session, so it also
+    /// reaches harnesses that run as plain commands in the session.
+    #[expect(
+        dead_code,
+        reason = "the ACP harness runner that interrupts its agent lands in a follow-up"
+    )]
+    pub(super) fn send_interrupt_to_pty(&self, ctx: &mut ModelContext<Self>) {
+        self.terminal_view.update(ctx, |terminal, ctx| {
+            terminal.write_to_pty(b"\x03".to_vec(), ctx);
+        });
+    }
+
     /// The pty's shell process info for this terminal, if the shell has been
     /// spawned and hasn't exited. Used to locate the actual foreground
     /// process group when force-killing a harness that didn't exit
@@ -449,6 +473,12 @@ impl TerminalDriver {
     pub(super) fn shell_process_info(&self, ctx: &AppContext) -> Option<ShellProcessInfo> {
         let terminal = self.terminal_view.as_ref(ctx);
         terminal.model.lock().shell_process_info().copied()
+    }
+
+    /// How this terminal's shell was launched, once the session has resolved it.
+    pub(super) fn active_shell_launch_data(&self, ctx: &AppContext) -> Option<ShellLaunchData> {
+        let terminal = self.terminal_view.as_ref(ctx);
+        terminal.model.lock().active_shell_launch_data().cloned()
     }
 
     /// Return a snapshot of the block with the given ID.
@@ -461,11 +491,17 @@ impl TerminalDriver {
             .map(SerializedBlock::from)
     }
 
-    /// Full visible plaintext of `block_id`'s output grid (no ANSI escape
+    /// Full visible plaintext of `block_id`'s active grid (no ANSI escape
     /// sequences; secrets obfuscated). Used by the harness output monitor
     /// to detect whether the block has stalled — two byte-identical
     /// snapshots taken N seconds apart imply the harness has produced no
     /// new output and no spinner activity.
+    ///
+    /// When the block is in [`BlockState::BeforeExecution`] (preexec has not
+    /// fired yet), terminal output — including shell continuation prompts such
+    /// as `dquote>` from unbalanced quotes — is routed to the command/header
+    /// grid rather than the output grid. We read from there in that state so
+    /// stall detection can observe a stuck continuation prompt.
     ///
     /// We intentionally pass `None` for `max_rows` so we compare the entire
     /// visible output; capping the row count could falsely report "stalled"
@@ -474,7 +510,12 @@ impl TerminalDriver {
         let terminal = self.terminal_view.as_ref(ctx);
         let model = terminal.model.lock();
         let block = model.block_list().block_with_id(block_id)?;
-        Some(block.output_grid().contents_to_string(
+        let grid = if block.state() == BlockState::BeforeExecution {
+            block.prompt_and_command_grid()
+        } else {
+            block.output_grid()
+        };
+        Some(grid.contents_to_string(
             false, // include_escape_sequences
             None,  // max_rows: full visible output
         ))
@@ -556,6 +597,12 @@ impl TerminalDriver {
         }
 
         let command_string = command.to_string();
+        let command_id = Uuid::new_v4();
+        let submitted_at = Instant::now();
+        let session_id = self.shared_session_id;
+        log::info!(
+            "Terminal command lifecycle: event=submitted command_id={command_id} session_id={session_id:?}"
+        );
         // Store a secret-redacted copy for shell-exit attribution: the text
         // flows into error reports (server task status, Sentry) if the shell
         // dies, so never retain the raw command here.
@@ -572,9 +619,16 @@ impl TerminalDriver {
             let block_id = start_rx
                 .await
                 .map_err(|_| AgentDriverError::InvalidRuntimeState)??;
+            log::info!(
+                "Terminal command lifecycle: event=started command_id={command_id} session_id={session_id:?} block_id={block_id:?} elapsed_ms={}",
+                submitted_at.elapsed().as_millis()
+            );
             Ok(CommandHandle {
                 exit_status_rx: exit_rx,
                 block_id,
+                command_id,
+                submitted_at,
+                session_id,
             })
         })
     }
@@ -724,6 +778,22 @@ impl TerminalDriver {
         }
     }
 
+    pub fn wait_for_session_share_failure(
+        &mut self,
+    ) -> impl Future<Output = AgentDriverError> + use<> {
+        let rx = self.session_share_failure_rx.take();
+
+        async move {
+            let error = match rx {
+                Some(rx) => match rx.await {
+                    Ok(error) => error,
+                    Err(_) => std::future::pending().await,
+                },
+                None => std::future::pending().await,
+            };
+            AgentDriverError::ShareSessionFailed { error }
+        }
+    }
     pub fn extend_shared_session_retention(
         &mut self,
         reason: SessionRetentionReason,
@@ -773,6 +843,9 @@ pub(crate) struct BlockOutputMatch {
 pub(crate) struct CommandHandle {
     exit_status_rx: oneshot::Receiver<Result<ExitCode, AgentDriverError>>,
     block_id: BlockId,
+    command_id: Uuid,
+    submitted_at: Instant,
+    session_id: Option<SessionId>,
 }
 
 impl CommandHandle {
@@ -786,12 +859,24 @@ impl Future for CommandHandle {
     type Output = Result<ExitCode, AgentDriverError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.exit_status_rx)
+        let result = Pin::new(&mut self.exit_status_rx)
             .poll(cx)
             .map(|result| match result {
                 Ok(exit_status) => exit_status,
                 Err(_) => Err(AgentDriverError::InvalidRuntimeState),
-            })
+            });
+        if let Poll::Ready(status) = &result {
+            log::info!(
+                "Terminal command lifecycle: event=finished command_id={} session_id={:?} block_id={:?} elapsed_ms={} exit_code={:?} exit_status_received={}",
+                self.command_id,
+                self.session_id,
+                self.block_id,
+                self.submitted_at.elapsed().as_millis(),
+                status.as_ref().ok().map(|code| code.value()),
+                status.is_ok()
+            );
+        }
+        result
     }
 }
 
@@ -801,6 +886,7 @@ impl TerminalDriver {
         &mut self,
         event: &crate::terminal::view::Event,
         session_share_tx: &mut Option<oneshot::Sender<Result<(), ShareSessionError>>>,
+        session_share_failure_tx: &mut Option<oneshot::Sender<ShareSessionError>>,
         ctx: &mut ModelContext<Self>,
     ) {
         match event {
@@ -823,6 +909,12 @@ impl TerminalDriver {
                 }
             }
             crate::terminal::view::Event::Exited => {
+                log::warn!(
+                    "Terminal command lifecycle: event=shell_exited session_id={:?} pending_start={} waiting_exit={}",
+                    self.shared_session_id,
+                    self.pending_command_start.is_some(),
+                    self.waiting_command.is_some()
+                );
                 // The shell process exited before bootstrap completed —
                 // cancel the wait immediately rather than sitting out the
                 // full 60 s timeout. No specific reason is known at this
@@ -867,6 +959,11 @@ impl TerminalDriver {
                         None => ShareSessionError::Failed(reason.clone()),
                     };
                     let _ = tx.send(Err(error));
+                }
+            }
+            crate::terminal::view::Event::SharedSessionFailed { reason } => {
+                if let Some(tx) = session_share_failure_tx.take() {
+                    let _ = tx.send(ShareSessionError::Failed(reason.clone()));
                 }
             }
             crate::terminal::view::Event::ExecuteCommand(event) => {

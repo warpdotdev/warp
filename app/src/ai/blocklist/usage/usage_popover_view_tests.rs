@@ -16,7 +16,9 @@ use crate::persistence::model::{
 use crate::server::ids::ServerId;
 use crate::settings::UsageDisplayUnit;
 use crate::test_util::add_window_with_terminal;
+use crate::test_util::billing_unit::{set_charge_unit, set_usage_display_unit};
 use crate::test_util::terminal::initialize_app_for_terminal_view;
+use crate::workspaces::workspace::ChargeUnit;
 
 fn identity_labels(config_key: &str) -> String {
     config_key.to_string()
@@ -656,14 +658,6 @@ fn format_tokens_and_cost_shows_em_dash_when_both_are_unknown() {
 }
 
 #[test]
-fn format_dollars_renders_sub_cent_amounts_as_less_than_a_cent() {
-    assert_eq!(format_dollars(0.0), "$0.00");
-    assert_eq!(format_dollars(0.5), "<$0.01");
-    assert_eq!(format_dollars(1.0), "$0.01");
-    assert_eq!(format_dollars(36.0), "$0.36");
-}
-
-#[test]
 fn format_searches_and_cost_appends_credits_suffix() {
     assert_eq!(
         format_searches_and_cost(3, CostValue::new(2.0, 2.0), UsageDisplayUnit::Credits,),
@@ -719,8 +713,8 @@ fn format_tool_call_count_uses_plural_for_zero_calls() {
 }
 
 /// A conversation whose usage metadata carries no cost figures at all renders
-/// an em dash rather than a fabricated zero in credits mode; a fresh
-/// conversation's provider cost starts at a known zero in dollars mode.
+/// an em dash rather than a fabricated zero in either unit: a fresh
+/// conversation has no billed total until the server reports one.
 #[test]
 fn conversation_total_text_shows_em_dash_without_usage_data() {
     let conversation = AIConversation::new(false, false);
@@ -730,8 +724,74 @@ fn conversation_total_text_shows_em_dash_without_usage_data() {
     );
     assert_eq!(
         conversation_total_text(&conversation, UsageDisplayUnit::Dollars),
-        "$0.00"
+        EM_DASH
     );
+}
+
+/// A restored conversation with only the server's billed snapshot (no per-request charges)
+/// still shows that snapshot as its dollar total; the provider cost is never shown.
+#[test]
+fn conversation_total_text_falls_back_to_the_billed_snapshot() {
+    let mut conversation = AIConversation::new(false, false);
+    conversation.set_billed_cost_in_cents_for_test(Some(250.0));
+
+    assert_eq!(
+        conversation_total_text(&conversation, UsageDisplayUnit::Dollars),
+        "$2.50"
+    );
+}
+
+/// A cents-charged viewer who prefers dollars sees the popover's figures in dollars whenever the
+/// conversation has a billed total; without one it falls back to credits.
+#[test]
+fn popover_unit_follows_the_display_unit() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        set_charge_unit(&mut app, ChargeUnit::Cents);
+        set_usage_display_unit(&mut app, UsageDisplayUnit::Dollars);
+
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_credits_spent_for_test(2.5);
+        app.read(|ctx| {
+            let unit = conversation_usage_display_unit(&conversation, ctx);
+            assert_eq!(unit, UsageDisplayUnit::Credits);
+            assert_eq!(conversation_total_text(&conversation, unit), "2.5 credits");
+        });
+
+        conversation.set_charged_usage_for_test(Some(ChargedUsageTotals {
+            input_cost_in_cents: 25.0,
+            input_cost_in_credits: 2.5,
+            ..Default::default()
+        }));
+        app.read(|ctx| {
+            let unit = conversation_usage_display_unit(&conversation, ctx);
+            assert_eq!(unit, UsageDisplayUnit::Dollars);
+            assert_eq!(conversation_total_text(&conversation, unit), "$0.25");
+        });
+    });
+}
+
+/// A viewer whose tier charges in credits always sees credits, even when the server streamed
+/// cents for the conversation and the dollars preference is set.
+#[test]
+fn popover_unit_stays_credits_for_credit_charged_viewers() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        set_charge_unit(&mut app, ChargeUnit::Credits);
+        set_usage_display_unit(&mut app, UsageDisplayUnit::Dollars);
+
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_charged_usage_for_test(Some(ChargedUsageTotals {
+            input_cost_in_cents: 25.0,
+            input_cost_in_credits: 2.5,
+            ..Default::default()
+        }));
+        app.read(|ctx| {
+            let unit = conversation_usage_display_unit(&conversation, ctx);
+            assert_eq!(unit, UsageDisplayUnit::Credits);
+            assert_eq!(conversation_total_text(&conversation, unit), "2.5 credits");
+        });
+    });
 }
 
 /// Restored conversations can carry token counts without any cost figures.
@@ -1001,7 +1061,7 @@ fn usage_popover_reacts_to_its_conversations_usage_events() {
         app.update(|ctx| {
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
                 let mut metadata = server_conversation_metadata();
-                metadata.usage.total_provider_cost_in_cents = Some(250.0);
+                metadata.usage.total_billed_cost_in_cents = Some(250.0);
                 model.set_server_metadata_for_conversation(conversation_id, metadata, ctx);
             });
         });
@@ -1015,7 +1075,7 @@ fn usage_popover_reacts_to_its_conversations_usage_events() {
         app.update(|ctx| {
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
                 let mut metadata = server_conversation_metadata();
-                metadata.usage.total_provider_cost_in_cents = Some(999.0);
+                metadata.usage.total_billed_cost_in_cents = Some(999.0);
                 model.set_server_metadata_for_conversation(other_conversation_id, metadata, ctx);
             });
         });

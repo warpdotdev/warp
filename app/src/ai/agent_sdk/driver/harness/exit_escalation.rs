@@ -1,6 +1,7 @@
 //! Bounded shutdown ladder for a third-party harness: `/exit`, a follow-up
 //! Enter, then a best-effort force-kill. Completes without waiting to prove
-//! the process exited.
+//! the process exited. A harness waiting on user input skips straight to the
+//! force-kill, since typed text would answer whatever prompt is open.
 
 use super::super::AgentDriverError;
 
@@ -18,7 +19,10 @@ pub(crate) enum ExitEscalationPhase {
 pub(crate) enum ExitEscalationEvent {
     CommandExited,
     /// CLI session reached a terminal state and asked the driver to stop the harness.
-    ShutdownRequested,
+    ShutdownRequested {
+        /// The session is blocked on user input, so typed text would answer the open prompt.
+        awaiting_input: bool,
+    },
     /// Runtime-failure scanner confirmed a hang/auth failure and asked the driver to stop.
     ScannerDetected,
     FollowupDeadlineElapsed,
@@ -66,10 +70,22 @@ impl ExitEscalation {
             }
             (
                 ExitEscalationPhase::Running,
-                ExitEscalationEvent::ShutdownRequested | ExitEscalationEvent::ScannerDetected,
+                ExitEscalationEvent::ShutdownRequested {
+                    awaiting_input: false,
+                }
+                | ExitEscalationEvent::ScannerDetected,
             ) => {
                 self.phase = ExitEscalationPhase::AwaitingGracefulExit;
                 ExitEscalationAction::SendExit
+            }
+            (
+                ExitEscalationPhase::Running,
+                ExitEscalationEvent::ShutdownRequested {
+                    awaiting_input: true,
+                },
+            ) => {
+                self.phase = ExitEscalationPhase::Done;
+                ExitEscalationAction::ForceKillAndFinish
             }
             (
                 ExitEscalationPhase::AwaitingGracefulExit,
@@ -88,14 +104,15 @@ impl ExitEscalation {
             (
                 ExitEscalationPhase::Done,
                 ExitEscalationEvent::CommandExited
-                | ExitEscalationEvent::ShutdownRequested
+                | ExitEscalationEvent::ShutdownRequested { .. }
                 | ExitEscalationEvent::ScannerDetected
                 | ExitEscalationEvent::FollowupDeadlineElapsed
                 | ExitEscalationEvent::ForceKillDeadlineElapsed,
             )
             | (
                 ExitEscalationPhase::AwaitingGracefulExit | ExitEscalationPhase::AwaitingFollowup,
-                ExitEscalationEvent::ShutdownRequested | ExitEscalationEvent::ScannerDetected,
+                ExitEscalationEvent::ShutdownRequested { .. }
+                | ExitEscalationEvent::ScannerDetected,
             )
             | (
                 ExitEscalationPhase::Running,

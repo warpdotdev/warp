@@ -725,7 +725,7 @@ fn map_cli_session_status(
             };
             (task_state, message.as_ref().map(TaskStatusUpdate::message))
         }
-        CLIAgentSessionStatus::Blocked { message } => (
+        CLIAgentSessionStatus::Blocked { message, .. } => (
             AgentTaskState::Blocked,
             message.as_ref().map(TaskStatusUpdate::message),
         ),

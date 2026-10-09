@@ -3,6 +3,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use build_cache::metadata::CacheUsage;
 use build_cache::{CacheSetupError, CacheSetupReport, RepoIdentity, RepositoryCacheSource};
 use cloud_object_models::SourceRepo;
 use warp_completer::completer::CommandExitStatus;
@@ -63,6 +64,7 @@ pub(crate) fn repository_cache_source(
 pub(super) async fn setup_caches(
     cache_root: PathBuf,
     source_repos: &[RepositoryCloneRequest],
+    additional_usage: Vec<CacheUsage>,
     working_dir: &Path,
     spawner: &ModelSpawner<TerminalDriver>,
 ) -> Result<(), CacheSetupDegraded> {
@@ -73,13 +75,27 @@ pub(super) async fn setup_caches(
         })
         .collect();
     let report = build_cache::setup_cache(
-        cache_root,
+        cache_root.clone(),
         repositories,
         build_cache::global_cache_modes(),
         build_cache::default_run_command,
     )
     .await;
 
+    let metadata_directory = build_cache::metadata::prepare_cache_metadata_directory(
+        &cache_root,
+        build_cache::default_run_command,
+    )
+    .await;
+    if let Err(error) = metadata_directory
+        .and_then(|()| report.cache_usage(&cache_root))
+        .and_then(|mut usage| {
+            usage.extend(additional_usage);
+            build_cache::metadata::write_cache_metadata(&cache_root, usage)
+        })
+    {
+        log::warn!("Namespace cache usage metadata was not updated: {error}");
+    }
     let mut degraded = report_degradations(&report);
 
     if !report.add_envs.is_empty() {

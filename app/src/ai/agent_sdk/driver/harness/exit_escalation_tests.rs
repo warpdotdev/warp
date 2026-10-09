@@ -4,6 +4,13 @@ use super::{
 };
 use crate::ai::agent_sdk::driver::AgentDriverError;
 
+const SHUTDOWN: ExitEscalationEvent = ExitEscalationEvent::ShutdownRequested {
+    awaiting_input: false,
+};
+const SHUTDOWN_AWAITING_INPUT: ExitEscalationEvent = ExitEscalationEvent::ShutdownRequested {
+    awaiting_input: true,
+};
+
 fn actions_for(events: &[ExitEscalationEvent]) -> (ExitEscalation, Vec<ExitEscalationAction>) {
     let mut escalation = ExitEscalation::new();
     let actions = events
@@ -16,10 +23,7 @@ fn actions_for(events: &[ExitEscalationEvent]) -> (ExitEscalation, Vec<ExitEscal
 
 #[test]
 fn clean_exit_after_exit_request_finishes_before_followup() {
-    let (escalation, actions) = actions_for(&[
-        ExitEscalationEvent::ShutdownRequested,
-        ExitEscalationEvent::CommandExited,
-    ]);
+    let (escalation, actions) = actions_for(&[SHUTDOWN, ExitEscalationEvent::CommandExited]);
 
     assert_eq!(
         actions,
@@ -31,7 +35,7 @@ fn clean_exit_after_exit_request_finishes_before_followup() {
 #[test]
 fn followup_enter_is_sent_after_the_first_deadline() {
     let (escalation, actions) = actions_for(&[
-        ExitEscalationEvent::ShutdownRequested,
+        SHUTDOWN,
         ExitEscalationEvent::FollowupDeadlineElapsed,
         ExitEscalationEvent::CommandExited,
     ]);
@@ -50,7 +54,7 @@ fn followup_enter_is_sent_after_the_first_deadline() {
 #[test]
 fn force_kill_completes_the_ladder_after_the_second_deadline() {
     let (escalation, actions) = actions_for(&[
-        ExitEscalationEvent::ShutdownRequested,
+        SHUTDOWN,
         ExitEscalationEvent::FollowupDeadlineElapsed,
         ExitEscalationEvent::ForceKillDeadlineElapsed,
     ]);
@@ -74,7 +78,7 @@ fn scanner_detection_starts_the_same_ladder_as_an_exit_request() {
         ExitEscalationEvent::ForceKillDeadlineElapsed,
     ]);
     let (from_shutdown, shutdown_actions) = actions_for(&[
-        ExitEscalationEvent::ShutdownRequested,
+        SHUTDOWN,
         ExitEscalationEvent::FollowupDeadlineElapsed,
         ExitEscalationEvent::ForceKillDeadlineElapsed,
     ]);
@@ -87,11 +91,36 @@ fn scanner_detection_starts_the_same_ladder_as_an_exit_request() {
 fn scanner_detection_during_an_in_flight_ladder_does_not_restart_it() {
     let mut escalation = ExitEscalation::new();
     assert_eq!(
-        escalation.on_event(ExitEscalationEvent::ShutdownRequested),
+        escalation.on_event(SHUTDOWN),
         ExitEscalationAction::SendExit
     );
     assert_eq!(
         escalation.on_event(ExitEscalationEvent::ScannerDetected),
+        ExitEscalationAction::Ignore
+    );
+    assert_eq!(
+        escalation.phase(),
+        ExitEscalationPhase::AwaitingGracefulExit
+    );
+}
+
+#[test]
+fn shutdown_while_awaiting_input_force_kills_without_sending_any_input() {
+    let (escalation, actions) = actions_for(&[SHUTDOWN_AWAITING_INPUT]);
+
+    assert_eq!(actions, vec![ExitEscalationAction::ForceKillAndFinish]);
+    assert_eq!(escalation.phase(), ExitEscalationPhase::Done);
+}
+
+#[test]
+fn shutdown_while_awaiting_input_does_not_restart_an_in_flight_ladder() {
+    let mut escalation = ExitEscalation::new();
+    assert_eq!(
+        escalation.on_event(SHUTDOWN),
+        ExitEscalationAction::SendExit
+    );
+    assert_eq!(
+        escalation.on_event(SHUTDOWN_AWAITING_INPUT),
         ExitEscalationAction::Ignore
     );
     assert_eq!(

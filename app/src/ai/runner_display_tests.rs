@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use warp_graphql::queries::get_runners::{RunnerArch, RunnerMacOsVersion, RunnerOs};
+use warp_graphql::queries::get_runners::{RunnerArch, RunnerConfig, RunnerMacOsVersion, RunnerOs};
 
 use super::{RunPlatform, RunnerPlatform, resolve_run_platform};
 use crate::ui_components::icons::Icon;
@@ -32,6 +32,31 @@ fn platforms() -> HashMap<String, RunnerPlatform> {
         ("runner-linux".to_string(), linux_runner()),
         ("runner-macos".to_string(), macos_runner()),
     ])
+}
+
+// Without fallback variants, one runner with a value from a newer server fails the whole
+// runner list, not just that runner.
+#[test]
+fn deserializes_a_runner_config_with_values_this_client_does_not_know() {
+    let config: RunnerConfig = serde_json::from_value(serde_json::json!({
+        "name": "future-runner",
+        "description": null,
+        "setupCommands": null,
+        "instanceShape": null,
+        "os": "FREEBSD",
+        "arch": "RISCV64",
+        "mac": { "version": "MACOS_99" },
+        "linux": null,
+    }))
+    .unwrap();
+
+    assert_eq!(config.name, "future-runner");
+    assert_eq!(config.os, RunnerOs::Unknown);
+    assert_eq!(config.arch, RunnerArch::Unknown);
+    assert_eq!(
+        config.mac.and_then(|mac| mac.version),
+        Some(RunnerMacOsVersion::Unknown)
+    );
 }
 
 #[test]

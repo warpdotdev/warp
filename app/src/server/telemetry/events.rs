@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Value, json};
 use session_sharing_protocol::common::{ParticipantId, Role, SessionId as SharedSessionId};
 use session_sharing_protocol::sharer::{SessionEndedReason, SessionSourceType};
@@ -58,7 +58,6 @@ use crate::settings::import::config::ParsedTerminalSetting;
 use crate::settings::import::model::TerminalType;
 use crate::settings_view::TeamsInviteOption;
 use crate::tab::TabTelemetryAction;
-use crate::terminal::ShareBlockType;
 use crate::terminal::block_list_viewport::InputMode;
 use crate::terminal::cli_agent_sessions::{CLIAgentInputEntrypoint, CLIAgentRichInputCloseReason};
 use crate::terminal::input::TelemetryInputSuggestionsMode;
@@ -75,6 +74,7 @@ use crate::terminal::view::{
     BlockEntity, BlockSelectionDetails, NotificationsDiscoveryBannerAction,
     NotificationsErrorBannerAction, NotificationsTrigger, PromptPart,
 };
+use crate::terminal::{CLIAgent, ShareBlockType};
 use crate::tips::WelcomeTipFeature;
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::settings::EditorLayout;
@@ -451,30 +451,6 @@ pub enum CodePanelsFileOpenEntrypoint {
     GlobalSearch,
 }
 
-/// The CLI agent being used (for telemetry purposes).
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-pub enum CLIAgentType {
-    Claude,
-    Gemini,
-    Codex,
-    Amp,
-    Droid,
-    OpenCode,
-    Copilot,
-    Pi,
-    OhMyPi,
-    Auggie,
-    Cursor,
-    Goose,
-    Hermes,
-    Vibe,
-    Antigravity,
-    Grok,
-    /// Warp's own headless TUI, targeted by the code review panel as a CLI-agent-equivalent destination.
-    WarpTui,
-    Unknown,
-}
-
 /// The kind of plugin chip shown or dismissed (for telemetry purposes).
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -484,22 +460,29 @@ pub enum PluginChipTelemetryKind {
 }
 
 /// Identifies the agent variant that triggered a notification (for telemetry purposes).
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NotificationAgentVariant {
     /// Warp's built-in agent (Oz).
     Oz,
     /// A CLI agent (e.g., Claude Code, Gemini CLI, etc.).
-    CLIAgent(CLIAgentType),
+    CLIAgent(#[serde(serialize_with = "serialize_cli_agent_telemetry_name")] CLIAgent),
 }
 
 impl From<NotificationSourceAgent> for NotificationAgentVariant {
     fn from(agent: NotificationSourceAgent) -> Self {
         match agent {
             NotificationSourceAgent::Oz { .. } => Self::Oz,
-            NotificationSourceAgent::CLI { agent, .. } => Self::CLIAgent(agent.into()),
+            NotificationSourceAgent::CLI { agent, .. } => Self::CLIAgent(agent),
         }
     }
+}
+
+fn serialize_cli_agent_telemetry_name<S: Serializer>(
+    agent: &CLIAgent,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(agent.telemetry_name())
 }
 
 /// The action taken on a plugin chip (for telemetry purposes).
@@ -1230,6 +1213,35 @@ pub enum CLISubagentControlState {
     AgentTaggedIn,
     AgentTaggedOut,
 }
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudAgentShellRecoveryOutcome {
+    Started,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudAgentShellExitDetection {
+    ExitCode,
+    Signal,
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudAgentShellRecoveryFailureClass {
+    EventLoopJoin,
+    PtySpawn,
+    BootstrapTimeout,
+    ReplacementShellExit,
+    /// The terminal's shell starter (e.g. a Docker sandbox) cannot produce a replacement shell.
+    Unsupported,
+    SharedSessionRebind,
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteCodebaseIndexStatusTelemetrySource {
@@ -1829,7 +1841,7 @@ pub enum TelemetryEvent {
         source: FileTreeSource,
         is_code_mode_v2: bool,
         /// The CLI agent type if opened from a CLI agent footer (e.g., Claude Code).
-        cli_agent: Option<CLIAgentType>,
+        cli_agent: Option<CLIAgent>,
     },
     /// User attached a file or directory as context from the file tree
     FileTreeItemAttachedAsContext {
@@ -2628,74 +2640,84 @@ pub enum TelemetryEvent {
         command: String,
         server_output_id: Option<ServerOutputId>,
     },
+    CloudAgentShellRecovery {
+        outcome: CloudAgentShellRecoveryOutcome,
+        detection: CloudAgentShellExitDetection,
+        status_available: bool,
+        exit_code: Option<i32>,
+        signal: Option<i32>,
+        duration_ms: Option<u32>,
+        used_fallback_directory: Option<bool>,
+        failure_class: Option<CloudAgentShellRecoveryFailureClass>,
+    },
     /// Emitted when the user uses voice input from the CLI agent footer.
     CLIAgentToolbarVoiceInputUsed {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: CLIAgent,
     },
     /// Emitted when the user attaches an image from the CLI agent footer.
     CLIAgentToolbarImageAttached {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: CLIAgent,
     },
     /// Emitted when the CLI agent footer is shown.
     CLIAgentToolbarShown {
         /// The CLI agent being shown.
-        cli_agent: CLIAgentType,
+        cli_agent: CLIAgent,
     },
     /// Emitted when the user opens the CLI agent rich input editor.
     CLIAgentRichInputOpened {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: CLIAgent,
         /// How the editor was opened (Ctrl-G or footer button).
         entrypoint: CLIAgentInputEntrypoint,
     },
     /// Emitted when the CLI agent rich input editor is closed.
     CLIAgentRichInputClosed {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: CLIAgent,
         /// Why the editor was closed.
         reason: CLIAgentRichInputCloseReason,
     },
     /// Emitted when the user submits a prompt via the CLI agent rich input editor.
     CLIAgentRichInputSubmitted {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: CLIAgent,
         /// Length of the submitted prompt in characters.
         prompt_length: usize,
     },
     /// Emitted when the user clicks a plugin chip (install, update, or instructions).
     CLIAgentPluginChipClicked {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: CLIAgent,
         /// The specific action taken.
         action: PluginChipTelemetryAction,
     },
     /// Emitted when the user dismisses the plugin chip.
     CLIAgentPluginChipDismissed {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: CLIAgent,
         /// Whether this was the install or update chip.
         chip_kind: PluginChipTelemetryKind,
     },
     /// Emitted when auto plugin install or update succeeds.
     CLIAgentPluginOperationSucceeded {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: CLIAgent,
         /// Whether this was an install or update operation.
         operation: PluginChipTelemetryKind,
     },
     /// Emitted when auto plugin install or update fails.
     CLIAgentPluginOperationFailed {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: CLIAgent,
         /// Whether this was an install or update operation.
         operation: PluginChipTelemetryKind,
     },
     /// Emitted when a CLI agent plugin is first recognized (SessionStart event received).
     CLIAgentPluginDetected {
         /// The CLI agent whose plugin was detected.
-        cli_agent: CLIAgentType,
+        cli_agent: CLIAgent,
     },
     /// Emitted when an agent notification is shown (toast or mailbox notification).
     AgentNotificationShown {
@@ -3068,9 +3090,11 @@ impl TelemetryEvent {
                 source,
                 is_code_mode_v2,
                 cli_agent,
-            } => Some(
-                json!({"source": source, "is_code_mode_v2": is_code_mode_v2, "cli_agent": cli_agent}),
-            ),
+            } => Some(json!({
+                "source": source,
+                "is_code_mode_v2": is_code_mode_v2,
+                "cli_agent": cli_agent.map(|agent| agent.telemetry_name()),
+            })),
             TelemetryEvent::FileTreeItemAttachedAsContext { is_directory } => {
                 Some(json!({"is_directory": is_directory}))
             }
@@ -4555,60 +4579,79 @@ impl TelemetryEvent {
                 "command": command,
                 "server_output_id": server_output_id,
             })),
+            TelemetryEvent::CloudAgentShellRecovery {
+                outcome,
+                detection,
+                status_available,
+                exit_code,
+                signal,
+                duration_ms,
+                used_fallback_directory,
+                failure_class,
+            } => Some(json!({
+                "outcome": outcome,
+                "detection": detection,
+                "status_available": status_available,
+                "exit_code": exit_code,
+                "signal": signal,
+                "duration_ms": duration_ms,
+                "used_fallback_directory": used_fallback_directory,
+                "failure_class": failure_class,
+            })),
             TelemetryEvent::CLIAgentToolbarVoiceInputUsed { cli_agent } => Some(json!({
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.telemetry_name(),
             })),
             TelemetryEvent::CLIAgentToolbarImageAttached { cli_agent } => Some(json!({
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.telemetry_name(),
             })),
             TelemetryEvent::CLIAgentToolbarShown { cli_agent } => Some(json!({
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.telemetry_name(),
             })),
             TelemetryEvent::CLIAgentRichInputOpened {
                 cli_agent,
                 entrypoint,
             } => Some(json!({
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.telemetry_name(),
                 "entrypoint": entrypoint,
             })),
             TelemetryEvent::CLIAgentRichInputClosed { cli_agent, reason } => Some(json!({
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.telemetry_name(),
                 "reason": reason,
             })),
             TelemetryEvent::CLIAgentRichInputSubmitted {
                 cli_agent,
                 prompt_length,
             } => Some(json!({
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.telemetry_name(),
                 "prompt_length": prompt_length,
             })),
             TelemetryEvent::CLIAgentPluginChipClicked { cli_agent, action } => Some(json!({
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.telemetry_name(),
                 "action": action,
             })),
             TelemetryEvent::CLIAgentPluginChipDismissed {
                 cli_agent,
                 chip_kind,
             } => Some(json!({
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.telemetry_name(),
                 "chip_kind": chip_kind,
             })),
             TelemetryEvent::CLIAgentPluginOperationSucceeded {
                 cli_agent,
                 operation,
             } => Some(json!({
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.telemetry_name(),
                 "operation": operation,
             })),
             TelemetryEvent::CLIAgentPluginOperationFailed {
                 cli_agent,
                 operation,
             } => Some(json!({
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.telemetry_name(),
                 "operation": operation,
             })),
             TelemetryEvent::CLIAgentPluginDetected { cli_agent } => Some(json!({
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.telemetry_name(),
             })),
             TelemetryEvent::AgentNotificationShown { agent_variant } => Some(json!({
                 "agent_variant": agent_variant,
@@ -5119,6 +5162,7 @@ impl TelemetryEvent {
             | TelemetryEvent::AgentTipShown { .. }
             | TelemetryEvent::AgentTipClicked { .. }
             | TelemetryEvent::ToggleShowAgentTips { .. }
+            | TelemetryEvent::CloudAgentShellRecovery { .. }
             | TelemetryEvent::CLIAgentToolbarVoiceInputUsed { .. }
             | TelemetryEvent::CLIAgentToolbarImageAttached { .. }
             | TelemetryEvent::CLIAgentToolbarShown { .. }
@@ -5658,6 +5702,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::DetectedIsolationPlatform { .. } => EnablementState::Always,
             Self::AgentExitedShellProcess { .. } => EnablementState::Always,
+            Self::CloudAgentShellRecovery { .. } => {
+                EnablementState::Flag(FeatureFlag::CloudAgentShellRespawn)
+            }
             Self::CLIAgentToolbarVoiceInputUsed { .. } => EnablementState::Always,
             Self::CLIAgentToolbarImageAttached { .. } => EnablementState::Always,
             Self::CLIAgentToolbarShown { .. } => EnablementState::Always,
@@ -6215,6 +6262,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::AgentTipClicked => "AgentTip Clicked",
             Self::ToggleShowAgentTips => "Toggle Show Agent Tips",
             Self::AgentExitedShellProcess => "AgentMode.ExitedShellProcess",
+            Self::CloudAgentShellRecovery { .. } => "AgentMode.CloudShellRecovery",
             Self::CLIAgentToolbarVoiceInputUsed { .. } => "CLIAgentFooter.VoiceInputUsed",
             Self::CLIAgentToolbarImageAttached { .. } => "CLIAgentFooter.ImageAttached",
             Self::CLIAgentToolbarShown { .. } => "CLIAgentFooter.Shown",
@@ -7017,6 +7065,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::AgentTipClicked => "User clicked a link or action in an Agent Tip",
             Self::AgentExitedShellProcess => {
                 "An agent-requested command caused the shell process to exit"
+            }
+            Self::CloudAgentShellRecovery { .. } => {
+                "A cloud agent persistent shell recovery changed state"
             }
             Self::CLIAgentToolbarVoiceInputUsed { .. } => {
                 "User used voice input from the CLI agent footer"

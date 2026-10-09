@@ -14,10 +14,10 @@ use instant::Instant;
 use warp_errors::ErrorExt as _;
 
 use super::{
-    CacheConfiguration, CacheScope, CacheSetupError, CacheSetupPlan, CandidateKey,
-    DetectedCacheModes, RepoCacheKey, RepoIdentity, RepositoryCacheSource, aggregate_mode_stats,
-    construct_plan, create_retained_scratch_directory, is_valid_env_name, produce_candidates,
-    run_command_with_timeout, setup_cache,
+    CacheConfiguration, CacheScope, CacheSetupError, CacheSetupPlan, CacheSetupReport,
+    CandidateKey, DetectedCacheModes, RepoCacheKey, RepoIdentity, RepositoryCacheSource,
+    aggregate_mode_stats, construct_plan, create_retained_scratch_directory, is_valid_env_name,
+    produce_candidates, run_command_with_timeout, setup_cache,
 };
 #[cfg(unix)]
 use super::{create_cache_dir_all, current_owner};
@@ -87,8 +87,7 @@ fn block_on<F: Future>(future: F) -> F::Output {
 #[test]
 fn permission_denied_cache_directory_uses_noninteractive_sudo_mkdir_and_chown() {
     use std::os::unix::fs::PermissionsExt as _;
-
-    if !super::has_command("sudo") {
+    if nix::unistd::geteuid().is_root() {
         return;
     }
 
@@ -97,25 +96,35 @@ fn permission_denied_cache_directory_uses_noninteractive_sudo_mkdir_and_chown() 
     fs::create_dir(&locked).unwrap();
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o500)).unwrap();
     let target = locked.join("child").join("grandchild");
-    let commands = Arc::new(Mutex::new(Vec::new()));
-    let result = block_on(create_cache_dir_all(&target, &{
-        let commands = Arc::clone(&commands);
-        move |command| {
-            commands.lock().unwrap().push(command_args(&command));
-            futures::future::ready(Ok(Vec::new()))
+    let commands = Mutex::new(Vec::new());
+    let result = block_on(create_cache_dir_all(&target, &|command| {
+        let args = command_args(&command);
+        let directory = Path::new(args.last().unwrap());
+        if args[1] == "mkdir" {
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+            fs::create_dir_all(directory).unwrap();
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o500)).unwrap();
+            for created in directory.ancestors().take_while(|path| *path != locked) {
+                fs::set_permissions(created, fs::Permissions::from_mode(0o500)).unwrap();
+            }
+        } else {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
         }
+        commands.lock().unwrap().push(args);
+        futures::future::ready(Ok(Vec::new()))
     }));
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
 
     assert_eq!(result, Ok(()));
     let commands = commands.lock().unwrap();
-    assert_eq!(commands.len(), 2);
+    assert_eq!(commands.len(), 3);
     assert_eq!(
         commands[0],
         [
             OsString::from("-n"),
             OsString::from("mkdir"),
             OsString::from("-p"),
+            OsString::from("--"),
             target.clone().into_os_string()
         ]
     );
@@ -124,10 +133,99 @@ fn permission_denied_cache_directory_uses_noninteractive_sudo_mkdir_and_chown() 
         [
             OsString::from("-n"),
             OsString::from("chown"),
+            OsString::from("-h"),
+            OsString::from("--"),
             OsString::from(current_owner()),
-            target.into_os_string()
+            locked.join("child").into_os_string()
         ]
     );
+    assert_eq!(commands[2].last(), Some(&target.clone().into_os_string()));
+    fs::create_dir(target.join("home")).unwrap();
+    fs::create_dir(locked.join("child/sibling")).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn existing_cache_directory_repairs_ownership_and_rechecks_access() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let temp = tempfile::tempdir().unwrap();
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o500)).unwrap();
+    let commands = Mutex::new(Vec::new());
+    let result = block_on(create_cache_dir_all(temp.path(), &|command| {
+        assert_eq!(command.get_program(), "sudo");
+        let args = command_args(&command);
+        assert_eq!(
+            args,
+            [
+                OsString::from("-n"),
+                OsString::from("chown"),
+                OsString::from("-h"),
+                OsString::from("--"),
+                OsString::from(current_owner()),
+                temp.path().as_os_str().to_owned(),
+            ]
+        );
+        commands.lock().unwrap().push(args);
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        futures::future::ready(Ok(Vec::new()))
+    }));
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(result, Ok(()));
+    assert_eq!(
+        commands.lock().unwrap().len(),
+        usize::from(!nix::unistd::geteuid().is_root())
+    );
+    fs::create_dir(temp.path().join("home")).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn unsuccessful_ownership_repair_degrades_without_claiming_writability() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    if nix::unistd::geteuid().is_root() {
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o500)).unwrap();
+    for result in [
+        Err(CacheSetupError::SpawnFailed),
+        Err(CacheSetupError::NonzeroExit {
+            exit_code: Some(1),
+            stdout: String::new(),
+            stderr: "sudo denied".to_owned(),
+        }),
+        Ok(Vec::new()),
+    ] {
+        assert_eq!(
+            block_on(create_cache_dir_all(temp.path(), &|_| {
+                futures::future::ready(result.clone())
+            })),
+            Err(CacheSetupError::RootCreationFailed)
+        );
+    }
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_sudo_creation_degrades_without_attempting_chown() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    if nix::unistd::geteuid().is_root() {
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o500)).unwrap();
+    let target = temp.path().join("child");
+    let result = block_on(create_cache_dir_all(&target, &|command| {
+        assert_eq!(command_args(&command)[1], "mkdir");
+        futures::future::ready(Err(CacheSetupError::SpawnFailed))
+    }));
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(result, Err(CacheSetupError::RootCreationFailed));
+    assert!(!target.exists());
 }
 
 fn is_detect(command: &Command) -> bool {
@@ -395,6 +493,7 @@ fn repo_failure_continues_and_global_still_executes() {
                 if *calls == 1 {
                     futures::future::ready(Err(CacheSetupError::NonzeroExit {
                         exit_code: Some(1),
+                        stdout: String::new(),
                         stderr: "repository mount failed".to_owned(),
                     }))
                 } else {
@@ -663,6 +762,143 @@ fn shared_failure_keeps_canonical_repo_env_overlay() {
 }
 
 #[test]
+fn only_successful_real_mounts_contribute_usage_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let cache_root = temp.path().join("cache");
+    let mounted_path = cache_root.join("repos/real/target");
+    let mounted_path_json = serde_json::to_value(&mounted_path).unwrap();
+    let report = block_on(setup_cache(
+        cache_root.clone(),
+        vec![source(temp.path(), "github.com", "warp", "client")],
+        Vec::new(),
+        move |command| {
+            futures::future::ready(if is_detect(&command) {
+                Ok(br#"{"input":{"modes":["rust"]},"output":{"mounts":[{"cache_hit":true,"cache_path":"/dry-run","mount_path":"/work/dry-run","mode":"rust"}]}}"#.to_vec())
+            } else if is_global(&command) {
+                Err(CacheSetupError::Timeout)
+            } else {
+                Ok(serde_json::to_vec(&serde_json::json!({
+                    "output": {"mounts": [{
+                        "cache_hit": false,
+                        "cache_path": mounted_path_json,
+                        "mount_path": "/work/target",
+                        "mode": "rust"
+                    }]}
+                }))
+                .unwrap())
+            })
+        },
+    ));
+
+    assert_eq!(report.degradations().count(), 1);
+    assert_eq!(
+        report.mounted_paths,
+        [Mount {
+            mode: "rust".to_owned(),
+            cache_path: mounted_path,
+            mount_path: PathBuf::from("/work/target"),
+            cache_hit: false,
+        }]
+    );
+    let usage = report.cache_usage(&cache_root.join("child/..")).unwrap();
+    assert_eq!(
+        usage,
+        [crate::metadata::CacheUsage {
+            path: PathBuf::from("repos/real/target"),
+            cache_framework: Some("rust".to_owned()),
+            mount_target: vec!["/work/target".to_owned()],
+        }]
+    );
+    crate::metadata::write_cache_metadata(&cache_root, usage).unwrap();
+    let document: serde_json::Value =
+        serde_json::from_slice(&fs::read(cache_root.join(".ns/cache-metadata.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        document["user_request"],
+        serde_json::json!({"repos/real/target": {"source": "warp", "cache_framework": "rust", "mount_target": ["/work/target"]}})
+    );
+}
+
+#[test]
+fn no_detected_modes_still_allows_additional_usage_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    let cache_root = temp.path().join("cache");
+    let report = block_on(setup_cache(
+        cache_root.clone(),
+        vec![source(temp.path(), "github.com", "warp", "client")],
+        Vec::new(),
+        |_command| futures::future::ready(Ok(response(&[], &[], &[]))),
+    ));
+    assert!(report.plan.is_none());
+    assert!(report.mounted_paths.is_empty());
+
+    crate::metadata::write_cache_metadata(
+        &cache_root,
+        report
+            .cache_usage(&cache_root)
+            .unwrap()
+            .into_iter()
+            .chain([crate::metadata::CacheUsage {
+                path: PathBuf::from("git-mirrors"),
+                cache_framework: Some("git".to_owned()),
+                mount_target: Vec::new(),
+            }]),
+    )
+    .unwrap();
+
+    let document: serde_json::Value =
+        serde_json::from_slice(&fs::read(cache_root.join(".ns/cache-metadata.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        document["user_request"],
+        serde_json::json!({"git-mirrors": {"source": "warp", "cache_framework": "git", "mount_target": []}})
+    );
+}
+
+#[test]
+fn usage_ignores_mounts_without_complete_paths() {
+    let root = tempfile::tempdir().unwrap();
+    let report = CacheSetupReport {
+        mounted_paths: vec![
+            Mount {
+                mode: "rust".to_owned(),
+                cache_path: PathBuf::new(),
+                mount_path: PathBuf::from("/work/target"),
+                cache_hit: false,
+            },
+            Mount {
+                mode: "go".to_owned(),
+                cache_path: root.path().join("cache"),
+                mount_path: PathBuf::new(),
+                cache_hit: false,
+            },
+        ],
+        ..CacheSetupReport::default()
+    };
+
+    assert!(report.cache_usage(root.path()).unwrap().is_empty());
+}
+
+#[test]
+fn usage_rejects_mounts_outside_cache_volume() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let report = CacheSetupReport {
+        mounted_paths: vec![Mount {
+            mode: "rust".to_owned(),
+            cache_path: outside.path().join("target"),
+            mount_path: PathBuf::from("/work/target"),
+            cache_hit: false,
+        }],
+        ..CacheSetupReport::default()
+    };
+
+    assert!(matches!(
+        report.cache_usage(root.path()),
+        Err(crate::metadata::CacheMetadataError::InvalidPath)
+    ));
+}
+#[test]
 fn repo_env_conflict_resolves_by_key_order() {
     let temp = tempfile::tempdir().unwrap();
     let repositories = vec![
@@ -737,14 +973,20 @@ fn hit_miss_aggregation_retains_zero_mount_modes() {
             mounts: vec![
                 Mount {
                     mode: "cargo".to_owned(),
+                    cache_path: PathBuf::new(),
+                    mount_path: PathBuf::new(),
                     cache_hit: true,
                 },
                 Mount {
                     mode: "cargo".to_owned(),
+                    cache_path: PathBuf::new(),
+                    mount_path: PathBuf::new(),
                     cache_hit: false,
                 },
                 Mount {
                     mode: "unknown".to_owned(),
+                    cache_path: PathBuf::new(),
+                    mount_path: PathBuf::new(),
                     cache_hit: true,
                 },
             ],
@@ -805,13 +1047,43 @@ fn process_runner_classifies_spawn_failed() {
 #[test]
 fn process_runner_classifies_nonzero_exit() {
     let mut nonzero = Command::new_with_process_group("sh");
-    nonzero.args(["-c", "printf 'mount failed' >&2; exit 17"]);
+    nonzero.args([
+        "-c",
+        "printf '\\377mount output\\n'; printf 'mount failed\\n' >&2; exit 17",
+    ]);
+    let error = block_on(run_command_with_timeout(nonzero, UNREACHABLE_TIMEOUT)).unwrap_err();
+
     assert_eq!(
-        block_on(run_command_with_timeout(nonzero, UNREACHABLE_TIMEOUT)),
-        Err(CacheSetupError::NonzeroExit {
+        error,
+        CacheSetupError::NonzeroExit {
             exit_code: Some(17),
+            stdout: "\u{fffd}mount output".to_owned(),
             stderr: "mount failed".to_owned(),
-        })
+        }
+    );
+    assert_eq!(
+        error.to_string(),
+        "spacectl exited unsuccessfully (exit code Some(17)): stdout: \u{fffd}mount output; stderr: mount failed"
+    );
+}
+
+#[test]
+fn process_runner_bounds_failure_output() {
+    let mut nonzero = Command::new_with_process_group("sh");
+    nonzero.args([
+        "-c",
+        "printf 'out%4097s' ''; printf 'err%4097s' '' >&2; exit 17",
+    ]);
+
+    let error = block_on(run_command_with_timeout(nonzero, UNREACHABLE_TIMEOUT)).unwrap_err();
+
+    assert_eq!(
+        error,
+        CacheSetupError::NonzeroExit {
+            exit_code: Some(17),
+            stdout: "out\n[stdout truncated]".to_owned(),
+            stderr: "err\n[stderr truncated]".to_owned(),
+        }
     );
 }
 
@@ -853,6 +1125,7 @@ fn cache_setup_error_variants_have_expected_is_actionable_classification() {
     assert!(
         !CacheSetupError::NonzeroExit {
             exit_code: Some(1),
+            stdout: String::new(),
             stderr: String::new(),
         }
         .is_actionable()
@@ -870,6 +1143,7 @@ fn failure_categories_are_preserved() {
         CacheSetupError::SpawnFailed,
         CacheSetupError::NonzeroExit {
             exit_code: Some(17),
+            stdout: "mount output".to_owned(),
             stderr: "mount failed".to_owned(),
         },
         CacheSetupError::Timeout,

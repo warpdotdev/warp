@@ -1,7 +1,7 @@
-use warp_cli::agent::Harness;
+use warp_cli::agent::{Harness, HarnessTransport};
 
 use super::{
-    HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER, auth_check_command_for,
+    HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER, HarnessKind, auth_check_command_for, harness_kind,
     prepare_harness_failure_output, validate_cli_installed,
 };
 use crate::ai::agent_sdk::driver::AgentDriverError;
@@ -73,6 +73,14 @@ fn gemini_runtime_error_patterns_is_empty_by_default() {
 #[test]
 fn auth_check_command_for_gemini_is_none() {
     assert!(auth_check_command_for(Harness::Gemini).is_none());
+}
+
+#[test]
+fn acp_transport_does_not_affect_the_oz_harness() {
+    assert!(matches!(
+        harness_kind(Harness::Oz, HarnessTransport::Acp),
+        Ok(HarnessKind::Oz)
+    ));
 }
 
 #[test]

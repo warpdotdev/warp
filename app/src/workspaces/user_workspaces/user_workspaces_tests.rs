@@ -7,7 +7,8 @@ use regex::Regex;
 use settings::{PrivatePreferences, PublicPreferences};
 use warp_graphql::billing::{
     BillingMetadata as GqlBillingMetadata, BonusGrantsInfo as GqlBonusGrantsInfo,
-    CustomerType as GqlCustomerType, DelinquencyStatus as GqlDelinquencyStatus,
+    ChargeUnit as GqlChargeUnit, CustomerType as GqlCustomerType,
+    DelinquencyStatus as GqlDelinquencyStatus,
     PurchaseAddOnCreditsPolicy as GqlPurchaseAddOnCreditsPolicy, Tier as GqlTier,
 };
 use warp_graphql::queries::get_workspaces_metadata_for_user::{
@@ -85,10 +86,10 @@ use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
-    AdminEnablementSetting, ByoFirstPartyKey, EnforceableSetting, HostEnablementSetting,
-    LinkSharingSettings, LlmHostSettings, ManagedByokByoePolicy, MultiAdminPolicy,
-    PurchaseAddOnCreditsPolicy, SandboxedAgentSettings, SplitListSetting, TeamByoSettings,
-    TeamLinkSharingSettings, Workspace, WorkspaceMember, WorkspaceMemberUsageInfo,
+    AdminEnablementSetting, ByoFirstPartyKey, ChargeUnit, EnforceableSetting,
+    HostEnablementSetting, LinkSharingSettings, LlmHostSettings, ManagedByokByoePolicy,
+    MultiAdminPolicy, PurchaseAddOnCreditsPolicy, SandboxedAgentSettings, SplitListSetting,
+    TeamByoSettings, TeamLinkSharingSettings, Workspace, WorkspaceMember, WorkspaceMemberUsageInfo,
 };
 
 #[derive(Default)]
@@ -239,7 +240,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
                         joinable_teams: vec![],
                         experiments: None,
                         ai_credit_availability: None,
-                        user_purchase_policy: None,
+                        user_tier: Default::default(),
                     },
                     pricing_info: None,
                 })
@@ -257,7 +258,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
                         joinable_teams: vec![],
                         experiments: None,
                         ai_credit_availability: None,
-                        user_purchase_policy: None,
+                        user_tier: Default::default(),
                     },
                     pricing_info: None,
                 })
@@ -417,7 +418,7 @@ fn test_aws_bedrock_credentials_respect_user_setting() {
                 joinable_teams: vec![],
                 experiments: None,
                 ai_credit_availability: None,
-                user_purchase_policy: None,
+                user_tier: Default::default(),
             },
             pricing_info: None,
         })
@@ -468,7 +469,7 @@ fn test_aws_bedrock_credentials_enforced_by_admin() {
                 joinable_teams: vec![],
                 experiments: None,
                 ai_credit_availability: None,
-                user_purchase_policy: None,
+                user_tier: Default::default(),
             },
             pricing_info: None,
         })
@@ -1909,7 +1910,7 @@ fn joining_a_workspace_team_retains_memberships_and_preserves_the_current_window
                         joinable_teams: vec![],
                         experiments: None,
                         ai_credit_availability: None,
-                        user_purchase_policy: None,
+                        user_tier: Default::default(),
                     },
                     pricing_info: None,
                 }),
@@ -3860,6 +3861,8 @@ fn test_remove_user_from_workspace_refreshes_state_only_on_success() {
                 is_unlimited: true,
                 request_limit: 0,
                 requests_used_since_last_refresh: 0,
+                included_usage_cents: None,
+                usage_cents_used_since_last_refresh: None,
                 is_request_limit_prorated: false,
             },
         });
@@ -3886,7 +3889,7 @@ fn test_remove_user_from_workspace_refreshes_state_only_on_success() {
                                 joinable_teams: vec![],
                                 experiments: None,
                                 ai_credit_availability: None,
-                                user_purchase_policy: None,
+                                user_tier: Default::default(),
                             },
                             pricing_info: None,
                         })
@@ -4065,7 +4068,7 @@ fn test_remove_user_from_team_success_emits_success_event_and_refreshes_members(
                         joinable_teams: vec![],
                         experiments: None,
                         ai_credit_availability: None,
-                        user_purchase_policy: None,
+                        user_tier: Default::default(),
                     },
                     pricing_info: None,
                 })
@@ -4128,6 +4131,7 @@ fn gql_tier(purchase_policy: Option<GqlPurchaseAddOnCreditsPolicy>) -> GqlTier {
     GqlTier {
         name: "Free".to_string(),
         description: "Free tier".to_string(),
+        charge_unit: GqlChargeUnit::Credits,
         warp_ai_policy: None,
         team_size_policy: None,
         shared_notebooks_policy: None,
@@ -4227,6 +4231,7 @@ fn gql_workspace(
                 auto_reload_enabled: false,
                 max_monthly_spend_cents: None,
                 selected_auto_reload_credit_denomination: None,
+                selected_auto_reload_usage_cents: None,
             },
             codebase_context_settings: GqlCodebaseContextSettings {
                 enabled: true,
@@ -4340,6 +4345,7 @@ fn gql_team_settings() -> GqlTeamSettings {
             auto_reload_enabled: false,
             max_monthly_spend_cents: None,
             selected_auto_reload_credit_denomination: None,
+            selected_auto_reload_usage_cents: None,
         },
         ambient_agent_settings: None,
         team_byo: None,
@@ -4539,6 +4545,19 @@ fn gql_user(
     user_purchase_policy: Option<GqlPurchaseAddOnCreditsPolicy>,
     workspaces: Vec<GqlWorkspace>,
 ) -> GqlUser {
+    gql_user_with_tier(
+        user_purchase_policy.map(|policy| UserPurchasePolicyTier {
+            charge_unit: GqlChargeUnit::Credits,
+            purchase_add_on_credits_policy: Some(policy),
+        }),
+        workspaces,
+    )
+}
+
+fn gql_user_with_tier(
+    user_tier: Option<UserPurchasePolicyTier>,
+    workspaces: Vec<GqlWorkspace>,
+) -> GqlUser {
     GqlUser {
         profile: GqlUserProfile {
             uid: "test-user".to_string(),
@@ -4548,11 +4567,7 @@ fn gql_user(
             denial_reason: warp_graphql::ai::AICreditAvailabilityDenialReason::None,
             credit_source: None,
         },
-        billing_metadata: user_purchase_policy.map(|policy| UserPurchasePolicyBillingMetadata {
-            tier: UserPurchasePolicyTier {
-                purchase_add_on_credits_policy: Some(policy),
-            },
-        }),
+        billing_metadata: user_tier.map(|tier| UserPurchasePolicyBillingMetadata { tier }),
         workspaces,
         experiments: None,
         discoverable_teams: vec![],
@@ -4650,7 +4665,7 @@ fn test_join_workspace_from_discovery_with_team_forwards_target_and_updates_work
                         joinable_teams: vec![],
                         experiments: None,
                         ai_credit_availability: None,
-                        user_purchase_policy: None,
+                        user_tier: Default::default(),
                     },
                     pricing_info: None,
                 })
@@ -4732,7 +4747,7 @@ fn test_user_level_policy_survives_placeholder_filtering_for_teamless_users() {
             "the placeholder workspace must stay filtered out"
         );
         assert_eq!(
-            response.user_purchase_policy,
+            response.user_tier.purchase_policy,
             Some(PurchaseAddOnCreditsPolicy {
                 enabled: false,
                 premium_enabled: true,
@@ -4764,6 +4779,83 @@ fn test_user_level_policy_survives_placeholder_filtering_for_teamless_users() {
             assert_eq!(
                 policy.map_or(0, |policy| policy.effective_premium_bps()),
                 1000
+            );
+        });
+    })
+}
+
+#[test]
+fn test_billing_unit_falls_back_to_the_user_level_tier_for_teamless_users() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![]);
+        register_ai_usage_model(&mut app);
+
+        let response = workspaces_metadata_response_from_gql(
+            gql_user_with_tier(
+                Some(UserPurchasePolicyTier {
+                    charge_unit: GqlChargeUnit::Cents,
+                    purchase_add_on_credits_policy: None,
+                }),
+                vec![gql_workspace(PLACEHOLDER_WORKSPACE_UID, None)],
+            ),
+            false,
+        );
+        assert_eq!(response.user_tier.charge_unit, ChargeUnit::Cents);
+        apply_workspaces_metadata(&mut app, response);
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(user_workspaces.current_workspace().is_none());
+            assert_eq!(
+                user_workspaces.charge_unit(),
+                ChargeUnit::Cents,
+                "the user-level tier should decide the charge unit without a workspace"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_workspace_tier_decides_the_billing_unit_over_the_user_level_tier() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![]);
+        register_ai_usage_model(&mut app);
+
+        let mut dollars_workspace = gql_workspace("workspace_uid123456789", None);
+        dollars_workspace.billing_metadata.tier.charge_unit = GqlChargeUnit::Cents;
+        apply_workspaces_metadata(
+            &mut app,
+            workspaces_metadata_response_from_gql(
+                gql_user_with_tier(None, vec![dollars_workspace]),
+                false,
+            ),
+        );
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).charge_unit(),
+                ChargeUnit::Cents,
+                "a cents-charged workspace tier should win without any user-level tier"
+            );
+        });
+
+        apply_workspaces_metadata(
+            &mut app,
+            workspaces_metadata_response_from_gql(
+                gql_user_with_tier(
+                    Some(UserPurchasePolicyTier {
+                        charge_unit: GqlChargeUnit::Cents,
+                        purchase_add_on_credits_policy: None,
+                    }),
+                    vec![gql_workspace("workspace_uid123456789", None)],
+                ),
+                false,
+            ),
+        );
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).charge_unit(),
+                ChargeUnit::Credits,
+                "a credits-charged workspace tier should win over the user-level fallback"
             );
         });
     })

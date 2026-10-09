@@ -23,6 +23,48 @@ pub struct ManagedSecretManager<RequestScope> {
     actor_provider: Arc<dyn ActorProvider>,
 }
 
+/// Converts task-scoped GraphQL secret values to managed secrets used by the agent.
+pub fn convert_task_secrets(
+    gql_secrets: HashMap<String, GqlManagedSecretValue>,
+) -> anyhow::Result<HashMap<String, ManagedSecretValue>> {
+    let mut secrets = HashMap::new();
+    for (name, gql_value) in gql_secrets {
+        let value = match gql_value {
+            GqlManagedSecretValue::ManagedSecretRawValue(raw) => {
+                ManagedSecretValue::raw_value(raw.value)
+            }
+            GqlManagedSecretValue::ManagedSecretAnthropicApiKeyValue(v) => {
+                ManagedSecretValue::anthropic_api_key(v.api_key)
+            }
+            GqlManagedSecretValue::ManagedSecretAnthropicBedrockAccessKeyValue(v) => {
+                ManagedSecretValue::anthropic_bedrock_access_key(
+                    v.aws_access_key_id,
+                    v.aws_secret_access_key,
+                    v.aws_session_token,
+                    v.aws_region,
+                )
+            }
+            GqlManagedSecretValue::ManagedSecretAnthropicBedrockApiKeyValue(v) => {
+                ManagedSecretValue::anthropic_bedrock_api_key(
+                    v.aws_bearer_token_bedrock,
+                    v.aws_region,
+                )
+            }
+            GqlManagedSecretValue::ManagedSecretOpenAiApiKeyValue(v) => {
+                ManagedSecretValue::openai_api_key(v.api_key, v.base_url)
+            }
+            GqlManagedSecretValue::Unknown => {
+                return Err(anyhow::anyhow!(
+                    "Unknown secret value type for secret: {}",
+                    name
+                ));
+            }
+        };
+        secrets.insert(name, value);
+    }
+    Ok(secrets)
+}
+
 pub trait ActorProvider: Send + Sync + 'static {
     fn actor_uid(&self) -> Option<String>;
 }
@@ -210,45 +252,7 @@ where
             let gql_secrets = client
                 .get_task_secrets(task_id, workload_token.token)
                 .await?;
-
-            // Convert GQL ManagedSecretValue to our ManagedSecretValue
-            let mut secrets = HashMap::new();
-            for (name, gql_value) in gql_secrets {
-                let value = match gql_value {
-                    GqlManagedSecretValue::ManagedSecretRawValue(raw) => {
-                        ManagedSecretValue::raw_value(raw.value)
-                    }
-                    GqlManagedSecretValue::ManagedSecretAnthropicApiKeyValue(v) => {
-                        ManagedSecretValue::anthropic_api_key(v.api_key)
-                    }
-                    GqlManagedSecretValue::ManagedSecretAnthropicBedrockAccessKeyValue(v) => {
-                        ManagedSecretValue::anthropic_bedrock_access_key(
-                            v.aws_access_key_id,
-                            v.aws_secret_access_key,
-                            // aws_session_token is now optional on the server.
-                            v.aws_session_token,
-                            v.aws_region,
-                        )
-                    }
-                    GqlManagedSecretValue::ManagedSecretAnthropicBedrockApiKeyValue(v) => {
-                        ManagedSecretValue::anthropic_bedrock_api_key(
-                            v.aws_bearer_token_bedrock,
-                            v.aws_region,
-                        )
-                    }
-                    GqlManagedSecretValue::ManagedSecretOpenAiApiKeyValue(v) => {
-                        ManagedSecretValue::openai_api_key(v.api_key, v.base_url)
-                    }
-                    GqlManagedSecretValue::Unknown => {
-                        return Err(anyhow::anyhow!(
-                            "Unknown secret value type for secret: {}",
-                            name
-                        ));
-                    }
-                };
-                secrets.insert(name, value);
-            }
-            Ok(secrets)
+            convert_task_secrets(gql_secrets)
         }
 
         inner(self.client.clone(), task_id)

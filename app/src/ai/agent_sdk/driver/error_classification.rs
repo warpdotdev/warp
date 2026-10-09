@@ -193,6 +193,13 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
             AgentTaskState::Failed,
             setup_command_status_update(error, command, output.as_deref()),
         ),
+        AgentDriverError::SetupCommandTimedOut { .. } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::with_error_code(
+                error.to_string(),
+                PlatformErrorCode::EnvironmentSetupFailed,
+            ),
+        ),
         // The shell died while an environment setup command was running
         // (e.g. the command ran `exit`). This is a user-side environment
         // configuration problem, so classify as FAILED.

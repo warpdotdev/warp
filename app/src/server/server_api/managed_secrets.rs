@@ -306,19 +306,7 @@ impl ManagedSecretsClient for ServerApi {
         let operation = TaskSecrets::build(variables);
         let response = self.send_graphql_request(operation, None).await?;
 
-        match response.task_secrets {
-            TaskSecretsResult::TaskSecretsOutput(output) => {
-                let mut secrets = HashMap::new();
-                for entry in output.secrets {
-                    secrets.insert(entry.name, entry.value);
-                }
-                Ok(secrets)
-            }
-            TaskSecretsResult::UserFacingError(error) => {
-                Err(anyhow!(get_user_facing_error_message(error)))
-            }
-            TaskSecretsResult::Unknown => Err(anyhow!("Unknown error while getting task secrets")),
-        }
+        task_secrets_from_result(response.task_secrets)
     }
 
     async fn issue_task_identity_token(
@@ -363,6 +351,22 @@ impl ManagedSecretsClient for ServerApi {
                 Err(anyhow!("Unknown error while issuing task identity token"))
             }
         }
+    }
+}
+
+pub(super) fn task_secrets_from_result(
+    result: TaskSecretsResult,
+) -> Result<HashMap<String, ManagedSecretValue>> {
+    match result {
+        TaskSecretsResult::TaskSecretsOutput(output) => Ok(output
+            .secrets
+            .into_iter()
+            .map(|entry| (entry.name, entry.value))
+            .collect()),
+        TaskSecretsResult::UserFacingError(error) => {
+            Err(anyhow!(get_user_facing_error_message(error)))
+        }
+        TaskSecretsResult::Unknown => Err(anyhow!("Unknown error while getting task secrets")),
     }
 }
 

@@ -64,7 +64,9 @@ async fn loopback_callback_accepts_matching_state() {
         .await
         .expect("matching callback should succeed");
     match result {
-        CallbackResult::Success { code, csrf_token } => {
+        CallbackResult::Success {
+            code, csrf_token, ..
+        } => {
             assert_eq!(code, "test-code");
             assert_eq!(csrf_token, "test-state");
         }

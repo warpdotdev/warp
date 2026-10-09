@@ -14,13 +14,14 @@ use super::render_context_window_usage_icon;
 use crate::ai::agent::request_metadata::{
     LegacyCharges, RequestMetadataRecord, TurnPanelData, TurnSummary, summarize_turn,
 };
-use crate::ai::blocklist::view_util::format_credits;
+use crate::ai::blocklist::view_util::{effective_usage_unit, format_credits, format_dollars};
 use crate::appearance::Appearance;
-use crate::features::FeatureFlag;
 use crate::settings::UsageDisplayUnit;
 use crate::settings::ai::{AISettings, AISettingsChangedEvent};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::ChargeUnit;
 
 /// A single label/value pair rendered as a row in the panel's shared label/value columns.
 type LabelValueRow = (Box<dyn Element>, Box<dyn Element>);
@@ -590,14 +591,16 @@ impl View for RequestMetadataTurnView {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
-        // The panel is a pricing-transparency surface. If the flag turned off while the panel
-        // was open, render nothing until the owning view removes it.
-        if !FeatureFlag::PricingTransparency.is_enabled() {
-            return Empty::new().finish();
+        // The panel is only offered to tiers charged in cents. If the tier flipped to credits
+        // while the panel was open, render nothing until the owning view removes it.
+        match UserWorkspaces::as_ref(app).charge_unit() {
+            ChargeUnit::Cents => {}
+            ChargeUnit::Credits => return Empty::new().finish(),
         }
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
-        let usage_display_unit = AISettings::as_ref(app).usage_display_unit;
+        let usage_display_unit =
+            effective_usage_unit(turn_cost_in_cents(&self.summary.records), app);
 
         let (labels, values) = self.build_label_value_columns(appearance, usage_display_unit);
 
@@ -652,6 +655,23 @@ impl TypedActionView for RequestMetadataTurnView {
     }
 }
 
+/// The turn's total charge in US cents, when its records carry one.
+fn turn_cost_in_cents(records: &[RequestMetadataRecord]) -> Option<f32> {
+    let total_cost_in_cents: f32 = records
+        .iter()
+        .map(|record| record.total_cost_in_cents())
+        .sum();
+    (total_cost_in_cents > 0.0).then_some(total_cost_in_cents)
+}
+
+/// The unit the turn's charges display in (see [`effective_usage_unit`]).
+pub(crate) fn turn_panel_usage_display_unit(
+    data: &TurnPanelData,
+    app: &AppContext,
+) -> UsageDisplayUnit {
+    effective_usage_unit(turn_cost_in_cents(data.records()), app)
+}
+
 pub(crate) fn turn_panel_tooltip_text_for_data(
     data: &TurnPanelData,
     usage_display_unit: UsageDisplayUnit,
@@ -665,22 +685,17 @@ pub(crate) fn turn_panel_tooltip_text_for_data(
     }
 }
 
-/// The trigger icon's hover tooltip: the turn's charge, honoring the user's credits/dollars
-/// display-unit setting. Stays quiet ("Turn") rather than fabricating a total when neither
-/// figure is known.
+/// The trigger icon's hover tooltip: the turn's charge in `usage_display_unit`. Stays quiet
+/// ("Turn") rather than fabricating a total when neither figure is known.
 pub(crate) fn turn_panel_tooltip_text(
     records: &[RequestMetadataRecord],
     usage_display_unit: UsageDisplayUnit,
 ) -> String {
-    let total_cost_in_cents: f32 = records
-        .iter()
-        .map(|record| record.total_cost_in_cents())
-        .sum();
     let total_credits: f32 = records
         .iter()
         .map(|record| record.total_cost_in_credits())
         .sum();
-    let turn_cost = Some(total_cost_in_cents).filter(|&cost| cost > 0.0);
+    let turn_cost = turn_cost_in_cents(records);
     let credits = Some(total_credits).filter(|&credits| credits > 0.0);
     let value = match (usage_display_unit, turn_cost, credits) {
         (UsageDisplayUnit::Dollars, Some(cost), _) => format_dollars(cost),
@@ -782,23 +797,6 @@ fn format_credits_amount(credits: f32) -> String {
 
 pub(crate) fn format_web_searches(count: u32) -> String {
     format!("{count} search{}", if count == 1 { "" } else { "es" })
-}
-
-/// Formats a US-cent amount as dollars. A non-zero amount that would round to `$0.00` is shown
-/// as `<$0.01`, since rounding it to zero would misleadingly suggest no cost was incurred.
-pub(crate) fn format_dollars(cost_in_cents: f32) -> String {
-    // Summing an empty charge list yields `-0.0`, which would print as `$-0.00`.
-    let cost_in_cents = if cost_in_cents == 0.0 {
-        0.0
-    } else {
-        cost_in_cents
-    };
-    let dollars = cost_in_cents / 100.0;
-    if cost_in_cents > 0.0 && dollars < 0.01 {
-        "<$0.01".to_string()
-    } else {
-        format!("${dollars:.2}")
-    }
 }
 
 fn format_seconds(ms: i64) -> String {

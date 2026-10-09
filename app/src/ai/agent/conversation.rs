@@ -23,6 +23,7 @@ use warpui::color::ColorU;
 use warpui::{AppContext, EntityId, ModelContext, SingletonEntity};
 
 use super::api::ServerConversationToken;
+pub use super::conversation_driver::ConversationDriver;
 use super::task::helper::*;
 use super::task::transaction::{SavedTask, Transaction};
 use super::task::{
@@ -222,10 +223,10 @@ pub struct ConversationUsageTotals {
     /// shows as "Credits spent (total)" and the conversation details panel
     /// shows as "Credits used".
     pub credits_spent: f32,
-    /// Total provider cost across all models, in US cents. `None` means the
-    /// server did not provide a historical baseline; it must not be rendered
-    /// as `$0.00` or as an incremental-only total.
-    pub cost_in_cents: Option<f32>,
+    /// The server's cumulative snapshot of what the customer was billed, in US
+    /// cents. `None` means the server did not establish one; it must not be
+    /// rendered as `$0.00`.
+    pub billed_cost_in_cents: Option<f32>,
     /// Whether the conversation has reported any usage. Derived from the
     /// contents of the usage metadata (not its mere presence), so a restored
     /// conversation that never ran a request keeps the footer entry hidden,
@@ -241,12 +242,13 @@ pub struct ConversationUsageTotals {
 }
 
 impl ConversationUsageTotals {
-    /// Returns the summed total of the tracked usage
-    /// if not available, falls back to the legacy provider total
+    /// Cost billed to the customer so far, in US cents: the summed per-turn charges when the
+    /// server streamed them, otherwise the GraphQL billed total. `None` when neither is known;
+    /// the provider cost is never a substitute.
     pub fn total_cost_in_cents(&self) -> Option<f32> {
         self.charged_usage
             .map(|usage| usage.total_cost_in_cents())
-            .or(self.cost_in_cents)
+            .or(self.billed_cost_in_cents)
     }
 }
 
@@ -256,12 +258,12 @@ impl ConversationUsageTotals {
 /// metadata blob, and a restored conversation that never ran a request must
 /// keep the footer's usage entry hidden.
 fn usage_metadata_indicates_usage(metadata: &ConversationUsageMetadata) -> bool {
-    // A present provider cost counts even at 0.0: the server only records a
+    // A present billed cost counts even at 0.0: the server only records a
     // cost once a turn has completed accounting, so `Some(0.0)` is a known
     // zero baseline (rendered as $0.00), unlike `None` (unknown).
     metadata.credits_spent != 0.0
         || metadata.platform_credits_spent != 0.0
-        || metadata.total_provider_cost_in_cents.is_some()
+        || metadata.total_billed_cost_in_cents.is_some()
         || !metadata.token_usage.is_empty()
         || metadata.context_window_usage != 0.0
         || metadata.was_summarized
@@ -309,9 +311,7 @@ pub struct AIConversation {
     /// Unique ID for this conversation.
     id: AIConversationId,
 
-    /// Whether this conversation is being shared from a different warp instance
-    /// (i.e. is not a local conversation).
-    is_viewing_shared_session: bool,
+    driver: ConversationDriver,
     task_store: TaskStore,
     optimistic_cli_subagent_subtask_id: Option<TaskId>,
 
@@ -392,10 +392,6 @@ pub struct AIConversation {
 
     total_request_cost: RequestCost,
     total_token_usage_by_model: HashMap<String, TokenUsage>,
-    /// Server-authoritative cumulative provider cost in US cents. New
-    /// conversations start at a known zero; restored legacy conversations can
-    /// remain `None` until a server snapshot is available.
-    total_provider_cost_in_cents: Option<f32>,
     /// True once hydrated usage metadata shows evidence of usage (see
     /// [`usage_metadata_indicates_usage`]) or a live response reports usage
     /// (even when its numeric totals are zero).
@@ -407,15 +403,9 @@ pub struct AIConversation {
     /// Artifacts created during this conversation (plans, PRs, etc.).
     artifacts: Vec<Artifact>,
 
-    /// Whether the AIConversation is being used as a vehicle for a CLI conversation, that
-    /// doesn't have a full internal representation but uses an AIConversationId to render
-    /// in the agent view.
-    is_cli_agent_transcript: bool,
-
     // TODO(advait): Group child-agent-only fields (parent_agent_id,
     // agent_name, orchestration_harness_type, parent_conversation_id,
-    // is_remote_child, pinned) into a ChildAgentState sub-struct. See
-    // PR #10777 review.
+    // pinned) into a ChildAgentState sub-struct. See PR #10777 review.
     /// Server-side identifier of the parent agent that spawned this child, if any.
     /// For current orchestration, this holds the parent's `run_id`. Persisted as
     /// `parent_agent_id` for serde compatibility with older conversation data.
@@ -426,11 +416,6 @@ pub struct AIConversation {
     orchestration_harness_type: Option<String>,
     /// The local conversation ID of the parent that spawned this child, if any.
     parent_conversation_id: Option<AIConversationId>,
-    /// True when this conversation is a placeholder for a child agent executing
-    /// on a remote worker. The parent's client does not drive execution for
-    /// these conversations — the remote worker's own client handles status
-    /// reporting.
-    is_remote_child: bool,
 
     /// The last event sequence number observed from the v2 orchestration
     /// event log. Used on restore to resume event delivery without
@@ -472,14 +457,22 @@ pub(crate) fn artifact_from_fork_proto(
 
 impl AIConversation {
     pub fn new(is_viewing_shared_session: bool, is_cli_agent_transcript: bool) -> Self {
+        let driver = match (is_viewing_shared_session, is_cli_agent_transcript) {
+            (true, _) => ConversationDriver::SharedSessionViewer,
+            (false, true) => ConversationDriver::CliAgentTranscript,
+            (false, false) => ConversationDriver::Native,
+        };
+        Self::with_driver(driver)
+    }
+
+    pub fn with_driver(driver: ConversationDriver) -> Self {
         let root_task = Task::new_optimistic_root();
         Self {
             id: AIConversationId::new(),
             task_store: TaskStore::with_root_task(root_task),
             optimistic_cli_subagent_subtask_id: None,
             code_review: None,
-            is_viewing_shared_session,
-            is_cli_agent_transcript,
+            driver,
             todo_lists: vec![],
             status: ConversationStatus::InProgress,
             status_error: None,
@@ -498,7 +491,6 @@ impl AIConversation {
             dismissed_suggestion_ids: Default::default(),
             total_request_cost: RequestCost::new(0.),
             total_token_usage_by_model: Default::default(),
-            total_provider_cost_in_cents: Some(0.),
             has_usage_metadata: false,
             fallback_display_title: None,
             artifacts: Vec::new(),
@@ -506,7 +498,6 @@ impl AIConversation {
             agent_name: None,
             orchestration_harness_type: None,
             parent_conversation_id: None,
-            is_remote_child: false,
             last_event_sequence: None,
             orchestration_configs: HashMap::new(),
             pinned: false,
@@ -727,12 +718,15 @@ impl AIConversation {
                 false,
             )
         };
-        let total_provider_cost_in_cents = conversation_usage_metadata.total_provider_cost_in_cents;
+        let driver = if is_remote_child {
+            ConversationDriver::RemoteChild
+        } else {
+            ConversationDriver::Native
+        };
 
         Ok(Self {
             id,
-            is_viewing_shared_session: false,
-            is_cli_agent_transcript: false,
+            driver,
             task_store,
             status,
             status_error: None,
@@ -754,7 +748,6 @@ impl AIConversation {
             dismissed_suggestion_ids: Default::default(),
             total_request_cost: RequestCost::new(0.),
             total_token_usage_by_model: Default::default(),
-            total_provider_cost_in_cents,
             has_usage_metadata,
             optimistic_cli_subagent_subtask_id: None,
             fallback_display_title: None,
@@ -763,7 +756,6 @@ impl AIConversation {
             agent_name,
             orchestration_harness_type,
             parent_conversation_id,
-            is_remote_child,
             last_event_sequence,
             orchestration_configs: HashMap::new(),
             pinned,
@@ -788,16 +780,36 @@ impl AIConversation {
         self.task_store.rebuild_exchange_index();
     }
 
+    pub fn driver(&self) -> ConversationDriver {
+        self.driver
+    }
+
+    pub fn set_driver(&mut self, driver: ConversationDriver) {
+        self.driver = driver;
+    }
+
+    /// Whether the conversation is a [`ConversationDriver::SharedSessionViewer`]. Prefer asking
+    /// [`ConversationDriver`] the behavioural question at hand (`owns_turn_lifecycle`,
+    /// `reconstructs_inputs_from_messages`, `is_read_only_ui`, ...) instead.
     pub fn is_viewing_shared_session(&self) -> bool {
-        self.is_viewing_shared_session
+        matches!(self.driver, ConversationDriver::SharedSessionViewer)
     }
 
+    /// Switches the driver to [`ConversationDriver::SharedSessionViewer`], or back to
+    /// [`ConversationDriver::Native`] when `false` and the conversation was a viewer. Prefer
+    /// [`Self::set_driver`].
     pub fn set_is_viewing_shared_session(&mut self, is_viewing_shared_session: bool) {
-        self.is_viewing_shared_session = is_viewing_shared_session;
+        if is_viewing_shared_session {
+            self.driver = ConversationDriver::SharedSessionViewer;
+        } else if self.is_viewing_shared_session() {
+            self.driver = ConversationDriver::Native;
+        }
     }
 
+    /// Whether the conversation is a [`ConversationDriver::CliAgentTranscript`]. Prefer
+    /// [`ConversationDriver::is_read_only_ui`] where that is the question being asked.
     pub fn is_cli_agent_transcript(&self) -> bool {
-        self.is_cli_agent_transcript
+        matches!(self.driver, ConversationDriver::CliAgentTranscript)
     }
 
     pub fn was_summarized(&self) -> bool {
@@ -859,14 +871,12 @@ impl AIConversation {
         self.conversation_usage_metadata.platform_credits_spent = 0.0;
     }
 
-    /// Test-only helper that sets (or clears) the conversation's dollar-cost
+    /// Test-only helper that sets (or clears) the conversation's billed-cost
     /// baseline directly, mirroring what `set_server_metadata` would derive
     /// from a real snapshot, without wiring up a full snapshot.
     #[cfg(test)]
-    pub(crate) fn set_cost_in_cents_for_test(&mut self, cost_in_cents: Option<f32>) {
-        self.total_provider_cost_in_cents = cost_in_cents;
-        self.conversation_usage_metadata
-            .total_provider_cost_in_cents = cost_in_cents;
+    pub(crate) fn set_billed_cost_in_cents_for_test(&mut self, cost_in_cents: Option<f32>) {
+        self.conversation_usage_metadata.total_billed_cost_in_cents = cost_in_cents;
     }
 
     /// Test-only helper that sets (or clears) the conversation's cumulative
@@ -1251,14 +1261,14 @@ impl AIConversation {
         // relative to live per-request cost accounting, so a snapshot may
         // only seed or advance the displayed total — never regress it or
         // re-add costs the client already counted.
-        if let Some(total_provider_cost_in_cents) = metadata.usage.total_provider_cost_in_cents
+        if let Some(total_billed_cost_in_cents) = metadata.usage.total_billed_cost_in_cents
             && self
-                .total_provider_cost_in_cents
-                .is_none_or(|current| total_provider_cost_in_cents >= current)
+                .conversation_usage_metadata
+                .total_billed_cost_in_cents
+                .is_none_or(|current| total_billed_cost_in_cents >= current)
         {
-            self.total_provider_cost_in_cents = Some(total_provider_cost_in_cents);
-            self.conversation_usage_metadata
-                .total_provider_cost_in_cents = Some(total_provider_cost_in_cents);
+            self.conversation_usage_metadata.total_billed_cost_in_cents =
+                Some(total_billed_cost_in_cents);
         }
         // Usage evidence is derived from the metadata's contents (not its
         // presence) so a zero-usage conversation keeps the footer entry
@@ -1357,16 +1367,16 @@ impl AIConversation {
         self.parent_conversation_id.is_some() || self.parent_agent_id.is_some()
     }
 
-    /// Returns true if this is a placeholder for a child agent executing on a
-    /// remote worker. The parent's client should not report task status for
-    /// these — the remote worker handles it.
+    /// Whether the conversation is a [`ConversationDriver::RemoteChild`]. Prefer asking
+    /// [`ConversationDriver`] the behavioural question at hand (`owns_turn_lifecycle`,
+    /// `reports_task_status`, `is_persisted_locally`, ...) instead.
     pub fn is_remote_child(&self) -> bool {
-        self.is_remote_child
+        matches!(self.driver, ConversationDriver::RemoteChild)
     }
 
-    /// Marks this conversation as a remote child placeholder.
+    /// Switches the driver to [`ConversationDriver::RemoteChild`]. Prefer [`Self::set_driver`].
     pub fn mark_as_remote_child(&mut self) {
-        self.is_remote_child = true;
+        self.driver = ConversationDriver::RemoteChild;
     }
 
     /// Returns how this conversation's status synchronizes to the server task row.
@@ -2349,9 +2359,6 @@ impl AIConversation {
         self.has_usage_metadata |=
             request_cost.is_some() || usage_metadata.is_some() || !token_usage.is_empty();
         for usage in token_usage.into_iter() {
-            if let Some(total_provider_cost_in_cents) = self.total_provider_cost_in_cents.as_mut() {
-                *total_provider_cost_in_cents += usage.cost_in_cents;
-            }
             let entry = self
                 .total_token_usage_by_model
                 .entry(usage.model_id.clone())
@@ -2443,8 +2450,6 @@ impl AIConversation {
                 self.conversation_usage_metadata.was_summarized = usage_metadata.summarized;
             }
         }
-        self.conversation_usage_metadata
-            .total_provider_cost_in_cents = self.total_provider_cost_in_cents;
         Ok(())
     }
 
@@ -2572,7 +2577,7 @@ impl AIConversation {
             task_id,
         } in added_exchanges.into_iter()
         {
-            let is_viewing_shared_session = self.is_viewing_shared_session;
+            let is_viewing_shared_session = self.is_viewing_shared_session();
             let task = self
                 .task_store
                 .get(&task_id)
@@ -2703,7 +2708,7 @@ impl AIConversation {
             task_id,
         } in added_exchanges.into_iter()
         {
-            let is_viewing_shared_session = self.is_viewing_shared_session;
+            let is_viewing_shared_session = self.is_viewing_shared_session();
             let task = self
                 .task_store
                 .get(&task_id)
@@ -2770,7 +2775,7 @@ impl AIConversation {
             .get(task_id)
             .ok_or(UpdateConversationError::TaskNotFound)?
             .clone();
-        let is_viewing_shared_session = self.is_viewing_shared_session;
+        let is_viewing_shared_session = self.is_viewing_shared_session();
         let exchange = self.get_exchange_to_update(exchange_id)?;
         let AIAgentOutputStatus::Streaming {
             output: Some(output),
@@ -2939,7 +2944,7 @@ impl AIConversation {
                             // sent on this client). Once we reconstruct these inputs, we will insert them
                             // to mimic the normal conversation flow. (If this is not a shared session, the
                             // exchange inputs will already be populated).
-                            self.is_viewing_shared_session,
+                            self.driver.reconstructs_inputs_from_messages(),
                         );
 
                         // Subtasks can come pre-populated with messages (for example: an advice subagent
@@ -2961,7 +2966,7 @@ impl AIConversation {
                             Vec::new()
                         };
 
-                        if self.is_viewing_shared_session {
+                        if self.is_viewing_shared_session() {
                             // shared session viewers should move the current stream's new exchange from the root to the
                             // newly created subtask so there's exactly one "new" exchange and it
                             // belongs to the subtask (mirrors sharer semantics after optimistic upgrade).
@@ -3170,7 +3175,7 @@ impl AIConversation {
                         Some(api::message::Message::ToolCallResult(tcr)) => {
                             // Shared-session viewers do not own temp directories created by
                             // conversation search subagents.
-                            if !self.is_viewing_shared_session
+                            if !self.is_viewing_shared_session()
                                 && matches!(
                                     &tcr.result,
                                     Some(api::message::tool_call_result::Result::Subagent(_))
@@ -3275,7 +3280,7 @@ impl AIConversation {
                     // sent on this client). Once we reconstruct these inputs, we will insert them
                     // to mimic the normal conversation flow. (If this is not a shared session, the
                     // exchange inputs will already be populated).
-                    self.is_viewing_shared_session,
+                    self.driver.reconstructs_inputs_from_messages(),
                 )?;
 
                 self.task_store.insert(task);
@@ -3362,7 +3367,8 @@ impl AIConversation {
 
                 let current_todo_list = self.todo_lists.last().cloned();
                 let current_comment_state = self.code_review.as_ref().cloned();
-                let is_viewing_shared_session = self.is_viewing_shared_session;
+                let reconstructs_inputs_from_messages =
+                    self.driver.reconstructs_inputs_from_messages();
                 // In shared-session viewers, we have to reconstruct what the original user input
                 // was using subsequent conversation messages (as the original input was not
                 // sent on this client). Once we reconstruct these inputs, we will insert them
@@ -3380,7 +3386,7 @@ impl AIConversation {
                                 skill_path_origin,
                             },
                             mask,
-                            is_viewing_shared_session,
+                            reconstructs_inputs_from_messages,
                         )
                         .map(|(exchange_id, msg)| (exchange_id, msg.todos_op().cloned()))
                     })
@@ -3937,10 +3943,9 @@ impl AIConversation {
         &mut self,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) {
-        // Don't persist viewer conversations (e.g. shared sessions).
         // Remote child placeholder conversations are rediscovered on restore via the
         // ancestor-list seed, so a persisted row would only risk going stale.
-        if self.is_viewing_shared_session || self.is_remote_child {
+        if !self.driver.is_persisted_locally() {
             return;
         }
 
@@ -4008,7 +4013,7 @@ impl AIConversation {
                 agent_name: self.agent_name.clone(),
                 orchestration_harness_type: self.orchestration_harness_type.clone(),
                 parent_conversation_id: self.parent_conversation_id.map(|id| id.to_string()),
-                is_remote_child: self.is_remote_child,
+                is_remote_child: self.is_remote_child(),
                 // Legacy field; retained for backward-compatible
                 // deserialization but no longer written. The optimistic-root
                 // case is now handled by `Task::source_for_persistence`
@@ -4144,12 +4149,12 @@ impl AIConversation {
     }
 
     /// Compact usage totals for lightweight displays (e.g. the TUI footer's
-    /// usage entry): the GUI-consistent credits total plus the server-seeded
-    /// provider cost and any permitted live per-request deltas.
+    /// usage entry): the GUI-consistent credits total plus the billed cost the
+    /// server streamed or snapshotted.
     pub fn usage_totals(&self) -> ConversationUsageTotals {
         ConversationUsageTotals {
             credits_spent: self.inference_credits_spent() + self.platform_credits_spent(),
-            cost_in_cents: self.total_provider_cost_in_cents,
+            billed_cost_in_cents: self.conversation_usage_metadata.total_billed_cost_in_cents,
             has_usage: self.has_usage_metadata,
             charged_usage: self.conversation_usage_metadata.total_charged_usage,
         }

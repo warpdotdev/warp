@@ -1,4 +1,5 @@
 pub mod ai_agent_tasks;
+pub mod billing_unit;
 pub mod settings;
 pub mod terminal;
 mod virtual_fs;

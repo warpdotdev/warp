@@ -21,6 +21,7 @@ pub(super) fn parse(body: &str) -> Option<CLIAgentEvent> {
         "permission_request" => CLIAgentEventType::PermissionRequest,
         "permission_replied" => CLIAgentEventType::PermissionReplied,
         "question_asked" => CLIAgentEventType::QuestionAsked,
+        "agent_needs_input" => CLIAgentEventType::NeedsInput,
         "idle_prompt" => CLIAgentEventType::IdlePrompt,
         other => CLIAgentEventType::Unknown(other.to_string()),
     };
@@ -38,6 +39,11 @@ pub(super) fn parse(body: &str) -> Option<CLIAgentEvent> {
         .and_then(resolve_agent)
         .unwrap_or(CLIAgent::Unknown);
 
+    let pending_background_work_count = match (raw.background_task_count, raw.session_cron_count) {
+        (None, None) => None,
+        (tasks, crons) => Some(tasks.unwrap_or(0).saturating_add(crons.unwrap_or(0))),
+    };
+
     Some(CLIAgentEvent {
         v: raw.v.unwrap_or(1),
         agent,
@@ -54,6 +60,7 @@ pub(super) fn parse(body: &str) -> Option<CLIAgentEvent> {
             tool_input_preview,
             plugin_version: raw.plugin_version,
             error_type: raw.error_type,
+            pending_background_work_count,
         },
         source: CLIAgentEventSource::RichPlugin,
     })

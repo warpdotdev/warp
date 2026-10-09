@@ -10,6 +10,7 @@ use chrono::Local;
 use cloud_object_models::CodeForge;
 use futures::channel::oneshot;
 use futures::executor::block_on;
+use futures::poll;
 use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use serde_json::json;
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
@@ -33,9 +34,9 @@ use super::{
     AgentDriver, AgentDriverError, AgentRunPrompt, CLIAgentSessionStatus, DebugWindowController,
     IdleTimeoutSender, LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
     LEGACY_OZ_PARENT_STATE_ROOT_ENV, OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
-    OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, PlatformErrorCode, SDKConversationOutputStatus,
-    WARP_MESSAGE_LISTENER_STATE_ROOT_ENV, build_secret_env_vars, debug_turn_task_state,
-    idle_window_for_cli_session_status, idle_window_for_terminal_status,
+    OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, PlatformErrorCode, PluginInstallError,
+    SDKConversationOutputStatus, WARP_MESSAGE_LISTENER_STATE_ROOT_ENV, build_secret_env_vars,
+    debug_turn_task_state, idle_window_for_cli_session_status, idle_window_for_terminal_status,
     setup_failure_status_update, terminal_status_log_outcome,
 };
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
@@ -63,6 +64,37 @@ use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_te
 use crate::workspace::view::tests::initialize_app as initialize_workspace_test_app;
 
 // ── IdleTimeoutSender tests ──────────────────────────────────────────────────────
+
+#[test]
+fn setup_timeout_does_not_retain_a_potentially_running_command() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal, ctx);
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.idle_on_fail = Some(Duration::from_secs(30 * 60));
+            driver
+        });
+        let spawner = driver.update(&mut app, |_, ctx| ctx.spawner());
+        let error = AgentDriverError::SetupCommandTimedOut {
+            message: "Setup command #1 timed out after 1800s: ./setup.sh".to_string(),
+        };
+        let mut linger = Box::pin(AgentDriver::linger_after_failure(
+            &spawner,
+            "environment_setup",
+            &error,
+        ));
+        assert!(poll!(linger.as_mut()).is_ready());
+        assert_eq!(
+            setup_failure_status_update(&error).error_code,
+            Some(PlatformErrorCode::EnvironmentSetupFailed)
+        );
+    });
+}
 
 #[test]
 fn driver_keeps_uninterpreted_factory_experiments() {
@@ -2407,5 +2439,32 @@ fn openai_api_key_exports_only_api_key_not_base_url() {
     assert!(
         !env_vars.contains_key(&OsString::from("OPENAI_BASE_URL")),
         "OPENAI_BASE_URL should NOT be exported as an env var"
+    );
+}
+
+#[test]
+fn plugin_failure_reason_appends_cli_log_when_present() {
+    let error = PluginInstallError {
+        message: "'claude plugin marketplace add x' failed".to_owned(),
+        log: "$ claude plugin marketplace add x\nno distributions installed\n".to_owned(),
+    };
+
+    assert_eq!(
+        AgentDriver::plugin_failure_reason("Install failed", &error),
+        "Install failed: 'claude plugin marketplace add x' failed\n\
+         $ claude plugin marketplace add x\nno distributions installed"
+    );
+}
+
+#[test]
+fn plugin_failure_reason_omits_empty_cli_log() {
+    let error = PluginInstallError {
+        message: "No plugin manager available".to_owned(),
+        log: "  \n".to_owned(),
+    };
+
+    assert_eq!(
+        AgentDriver::plugin_failure_reason("Install failed", &error),
+        "Install failed: No plugin manager available"
     );
 }

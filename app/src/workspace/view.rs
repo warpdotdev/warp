@@ -419,7 +419,9 @@ use crate::terminal::session_settings::{
     SessionSettingsChangedEvent, WorkingDirectoryMode,
 };
 use crate::terminal::settings::{SpacingMode, TerminalSettings};
-use crate::terminal::shared_session::SharedSessionActionSource;
+#[cfg(feature = "integration_tests")]
+use crate::terminal::shared_session::SharedSessionSource;
+use crate::terminal::shared_session::{IsSharedSessionCreator, SharedSessionActionSource};
 use crate::terminal::shell::ShellType;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::terminal::view::ambient_agent::AmbientAgentViewModel as HandoffAmbientAgentViewModel;
@@ -2838,13 +2840,12 @@ impl Workspace {
         });
     }
 
-    /// Pushes the current settings-file error + banner-dismissal state into
-    /// the settings pane so its nav-rail footer ("Open settings file" button
-    /// or inline error alert) stays in sync with the workspace banner.
+    /// Mirrors the current settings-file error and banner-dismissal state into the settings pane's
+    /// nav-rail footer when the pane is available.
     fn sync_settings_error_state_into_settings_pane(&mut self, ctx: &mut ViewContext<Self>) {
         let error = self.settings_file_error.clone();
         let dismissed = self.settings_error_banner_dismissed;
-        self.settings_pane.update(ctx, |view, ctx| {
+        let _ = self.settings_pane.try_update(ctx, |view, ctx| {
             view.set_settings_error_state(error, dismissed, ctx);
         });
     }
@@ -9862,7 +9863,7 @@ impl Workspace {
                             .map(LocalOrRemotePath::is_local),
                         entrypoint: panel_update_params.entrypoint.unwrap_or_default(),
                         is_code_mode_v2: true,
-                        cli_agent: panel_update_params.cli_agent.map(Into::into),
+                        cli_agent: panel_update_params.cli_agent,
                     },
                     ctx
                 );
@@ -10229,7 +10230,14 @@ impl Workspace {
                 self.show_tab_group_right_click_menu = None;
                 self.show_tab_selection_right_click_menu = None;
                 self.hide_move_to_group_sidecar(ctx);
-                self.focus_active_tab(ctx);
+                if !self.current_workspace_state.is_tab_being_renamed()
+                    && !self.current_workspace_state.is_any_pane_being_renamed()
+                    && !self
+                        .current_workspace_state
+                        .is_any_tab_group_being_renamed()
+                {
+                    self.focus_active_tab(ctx);
+                }
                 ctx.notify();
             }
             MenuEvent::ItemHovered | MenuEvent::ItemSelected => {
@@ -12781,6 +12789,53 @@ impl Workspace {
     }
 
     fn add_docker_sandbox_tab(&mut self, ctx: &mut ViewContext<Self>) {
+        self.add_docker_sandbox_tab_with_shared_session_creator(IsSharedSessionCreator::No, ctx);
+    }
+
+    #[cfg(feature = "integration_tests")]
+    pub fn add_shared_ambient_bash_tab_for_integration_test(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        #[cfg(feature = "local_tty")]
+        {
+            let shell =
+                AvailableShell::try_from("/bin/bash").expect("bash is required for this test");
+            let startup_directory = self.get_new_tab_startup_directory(
+                NewSessionSource::Tab,
+                Some(ctx.window_id()),
+                Some(&shell),
+                ctx,
+            );
+            self.add_tab_with_pane_layout(
+                PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                    shell: Some(shell),
+                    initial_directory: startup_directory,
+                    hide_homepage: true,
+                    is_shared_session_creator: IsSharedSessionCreator::Yes {
+                        source: SharedSessionSource::ambient_agent(Some(
+                            "123e4567-e89b-12d3-a456-426614174000".to_owned(),
+                        )),
+                    },
+                    ..Default::default()
+                })),
+                Arc::new(HashMap::new()),
+                None,
+                ctx,
+            );
+            ctx.notify();
+        }
+        #[cfg(not(feature = "local_tty"))]
+        {
+            let _ = ctx;
+        }
+    }
+
+    fn add_docker_sandbox_tab_with_shared_session_creator(
+        &mut self,
+        is_shared_session_creator: IsSharedSessionCreator,
+        ctx: &mut ViewContext<Self>,
+    ) {
         if !FeatureFlag::LocalDockerSandbox.is_enabled() {
             log::warn!("Local docker sandbox feature flag is disabled");
             return;
@@ -12806,21 +12861,41 @@ impl Workspace {
                     sbx_path,
                     DEFAULT_DOCKER_SANDBOX_BASE_IMAGE.map(str::to_owned),
                 );
-                me.add_new_session_tab_internal_with_default_session_mode_behavior(
+                let startup_directory = me.get_new_tab_startup_directory(
                     NewSessionSource::Tab,
                     Some(window_id),
-                    Some(shell),
-                    None,
-                    true, /* hide_homepage */
-                    DefaultSessionModeBehavior::Ignore,
+                    Some(&shell),
                     ctx,
                 );
+                me.add_tab_with_pane_layout(
+                    PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                        shell: Some(shell),
+                        initial_directory: startup_directory,
+                        hide_homepage: true,
+                        is_shared_session_creator,
+                        ..Default::default()
+                    })),
+                    Arc::new(HashMap::new()),
+                    None,
+                    ctx,
+                );
+                if let Some(terminal_view) = me
+                    .active_tab_pane_group()
+                    .as_ref(ctx)
+                    .active_session_view(ctx)
+                {
+                    TerminalView::initialize_docker_sandbox_environment(&terminal_view, ctx);
+                } else {
+                    log::warn!(
+                        "Could not find docker sandbox terminal view after creating new tab"
+                    );
+                }
                 ctx.notify();
             });
         }
         #[cfg(not(feature = "local_tty"))]
         {
-            let _ = ctx;
+            let _ = (is_shared_session_creator, ctx);
             log::warn!("Docker sandbox requires the `local_tty` feature; ignoring request");
         }
     }

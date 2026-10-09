@@ -139,6 +139,7 @@ impl TemplatableMCPServerManager {
                 // Pass the state value through as the CSRF token; rmcp will validate it
                 // against the token it stored when generating the authorization URL.
                 csrf_token: state.to_string(),
+                issuer: query_params.get("iss").map(|issuer| issuer.to_string()),
             },
             None => CallbackResult::Error {
                 error: error.map(|e| e.to_string()),

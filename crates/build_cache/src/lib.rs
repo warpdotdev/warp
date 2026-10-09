@@ -38,15 +38,17 @@ use warp_core::safe_info;
 use warp_errors::{ErrorExt, register_error};
 
 mod discovery;
+pub mod metadata;
 pub mod spacectl;
 
 #[cfg(test)]
 use discovery::produce_candidates;
 use discovery::{CacheCandidate, CandidateKey, DETECTION_CONCURRENCY, candidate_receiver};
+use metadata::{CacheMetadataError, CacheUsage, normalized_cache_root};
 use spacectl::{MountContext, MountResponse, run_spacectl_mount};
 
 const SPACECTL_TIMEOUT: Duration = Duration::from_secs(60);
-const MAX_CAPTURED_STDERR_BYTES: usize = 4 * 1024;
+const MAX_CAPTURED_OUTPUT_BYTES: usize = 4 * 1024;
 
 /// Identifiers for a code repository.
 ///
@@ -251,9 +253,12 @@ pub enum CacheSetupError {
     RootCreationFailed,
     #[error("failed to spawn spacectl")]
     SpawnFailed,
-    #[error("spacectl exited unsuccessfully")]
+    #[error(
+        "spacectl exited unsuccessfully (exit code {exit_code:?}): stdout: {stdout}; stderr: {stderr}"
+    )]
     NonzeroExit {
         exit_code: Option<i32>,
+        stdout: String,
         stderr: String,
     },
     #[error("failed to parse spacectl JSON output")]
@@ -337,9 +342,38 @@ pub struct CacheSetupReport {
     pub plan: Option<CacheSetupPlan>,
     pub invocations: Vec<CachePreparationReport>,
     pub add_envs: BTreeMap<String, String>,
+    pub mounted_paths: Vec<spacectl::Mount>,
 }
 
 impl CacheSetupReport {
+    /// Convert successful mounts to volume-relative usage records.
+    pub fn cache_usage(&self, cache_root: &Path) -> Result<Vec<CacheUsage>, CacheMetadataError> {
+        let cache_root = normalized_cache_root(cache_root)?;
+        self.mounted_paths
+            .iter()
+            // Older spacectl responses may omit paths; they cannot be attributed to a volume entry.
+            .filter(|mount| {
+                !mount.cache_path.as_os_str().is_empty() && !mount.mount_path.as_os_str().is_empty()
+            })
+            .map(|mount| {
+                Ok(CacheUsage {
+                    path: mount
+                        .cache_path
+                        .strip_prefix(&cache_root)
+                        .map_err(|_| CacheMetadataError::InvalidPath)?
+                        .to_owned(),
+                    cache_framework: Some(mount.mode.clone()),
+                    mount_target: vec![
+                        mount
+                            .mount_path
+                            .to_str()
+                            .ok_or(CacheMetadataError::InvalidPath)?
+                            .to_owned(),
+                    ],
+                })
+            })
+            .collect()
+    }
     /// List scoped cache setups which could not be mounted successfully.
     pub fn degradations(&self) -> impl Iterator<Item = &CachePreparationReport> {
         self.invocations
@@ -382,24 +416,53 @@ fn has_command(command: &str) -> bool {
         std::env::split_paths(&path).any(|directory| directory.join(command).is_executable())
     })
 }
-/// Create a cache directory, escalating to `sudo` when ordinary creation is denied.
+/// Ensure a writable cache directory, escalating to non-interactive `sudo` on Unix if needed.
 ///
-/// Cache roots may be located on a mounted volume whose parent directories are owned by root.
-/// After a permission-denied error, Unix hosts try one non-interactive `sudo mkdir -p` for the
-/// target and then transfer ownership of that target directory to the current effective user.
-/// Intermediate directories are not chowned, and any unavailable or unsuccessful fallback
-/// operation degrades to [`CacheSetupError::RootCreationFailed`].
+/// Cache volumes can retain root-owned directories across runs. Ownership repairs are
+/// non-recursive and limited to the target and newly created ancestors; pre-existing parents are
+/// left alone. Unavailable or unsuccessful escalation degrades to
+/// [`CacheSetupError::RootCreationFailed`].
 async fn create_cache_dir_all<F, Fut>(path: &Path, run_command: &F) -> Result<(), CacheSetupError>
 where
     F: Fn(Command) -> Fut,
     Fut: Future<Output = Result<Vec<u8>, CacheSetupError>>,
 {
+    let mut missing_directories = Vec::new();
+    for directory in path.ancestors() {
+        match std::fs::symlink_metadata(directory) {
+            Ok(metadata) => {
+                if directory == path && metadata.file_type().is_symlink() {
+                    return Err(CacheSetupError::RootCreationFailed);
+                }
+                break;
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                missing_directories.push(directory);
+            }
+            Err(_) => return Err(CacheSetupError::RootCreationFailed),
+        }
+    }
+    #[cfg(unix)]
+    if path.is_dir() && cache_directory_is_writable(path) {
+        return Ok(());
+    }
+    #[cfg(not(unix))]
     if path.is_dir() {
         return Ok(());
     }
+    let needs_mkdir = match std::fs::create_dir_all(path) {
+        Ok(()) => {
+            #[cfg(not(unix))]
+            return Ok(());
+            #[cfg(unix)]
+            {
+                if cache_directory_is_writable(path) {
+                    return Ok(());
+                }
+                false
+            }
+        }
 
-    match std::fs::create_dir_all(path) {
-        Ok(()) => return Ok(()),
         Err(error) if error.kind() != ErrorKind::PermissionDenied => {
             tracing::warn!(
                 target: "build_cache",
@@ -414,51 +477,81 @@ where
                 error = ?error,
                 "cache directory creation was denied; trying sudo fallback"
             );
+            true
         }
-    }
+    };
 
     #[cfg(not(unix))]
     {
-        let _ = run_command;
+        let _ = (run_command, needs_mkdir);
         Err(CacheSetupError::RootCreationFailed)
     }
 
     #[cfg(unix)]
     {
-        if !has_command("sudo") {
-            tracing::warn!(
-                target: "build_cache",
-                "sudo is unavailable; cannot create cache directory"
-            );
-            return Err(CacheSetupError::RootCreationFailed);
-        }
-
         let owner = current_owner();
-        let mut mkdir = Command::new_with_process_group("sudo");
-        mkdir.args(["-n", "mkdir", "-p"]).arg(path);
-        if let Err(error) = run_command(mkdir).await {
-            tracing::warn!(
-                target: "build_cache",
-                operation = "sudo mkdir",
-                error = ?error,
-                "sudo cache directory creation failed"
-            );
-            return Err(CacheSetupError::RootCreationFailed);
+        if needs_mkdir {
+            let mut mkdir = Command::new_with_process_group("sudo");
+            mkdir.args(["-n", "mkdir", "-p", "--"]).arg(path);
+            if let Err(error) = run_command(mkdir).await {
+                tracing::warn!(
+                    target: "build_cache",
+                    operation = "sudo mkdir",
+                    error = ?error,
+                    "sudo cache directory creation failed"
+                );
+                return Err(CacheSetupError::RootCreationFailed);
+            }
         }
 
-        let mut chown = Command::new_with_process_group("sudo");
-        chown.args(["-n", "chown", &owner]).arg(path);
-        if let Err(error) = run_command(chown).await {
-            tracing::warn!(
+        if missing_directories.is_empty() {
+            missing_directories.push(path);
+        }
+        for directory in missing_directories.into_iter().rev() {
+            if !std::fs::symlink_metadata(directory)
+                .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+            {
+                return Err(CacheSetupError::RootCreationFailed);
+            }
+            let mut chown = Command::new_with_process_group("sudo");
+            chown
+                .args(["-n", "chown", "-h", "--", &owner])
+                .arg(directory);
+            if let Err(error) = run_command(chown).await {
+                tracing::warn!(
+                    target: "build_cache",
+                    operation = "sudo chown",
+                    error = ?error,
+                    "sudo cache directory ownership update failed"
+                );
+                return Err(CacheSetupError::RootCreationFailed);
+            }
+            if !cache_directory_is_writable(directory) {
+                return Err(CacheSetupError::RootCreationFailed);
+            }
+            tracing::info!(
                 target: "build_cache",
-                operation = "sudo chown",
-                error = ?error,
-                "sudo cache directory ownership update failed"
+                directory = ?directory,
+                "repaired cache directory ownership"
             );
-            return Err(CacheSetupError::RootCreationFailed);
         }
         Ok(())
     }
+}
+
+#[cfg(unix)]
+fn cache_directory_is_writable(path: &Path) -> bool {
+    use nix::{NixPath, libc};
+
+    path.with_nix_path(|path| unsafe {
+        libc::faccessat(
+            libc::AT_FDCWD,
+            path.as_ptr(),
+            libc::W_OK | libc::X_OK,
+            libc::AT_EACCESS,
+        )
+    })
+    .is_ok_and(|result| result == 0)
 }
 
 #[cfg(unix)]
@@ -497,20 +590,21 @@ async fn run_command_with_timeout(
     if !output.status.success() {
         return Err(CacheSetupError::NonzeroExit {
             exit_code: output.status.code(),
-            stderr: bounded_stderr(&output.stderr),
+            stdout: bounded_output(&output.stdout, "stdout"),
+            stderr: bounded_output(&output.stderr, "stderr"),
         });
     }
     Ok(output.stdout)
 }
 
-fn bounded_stderr(stderr: &[u8]) -> String {
-    let truncated = stderr.len() > MAX_CAPTURED_STDERR_BYTES;
-    let stderr = &stderr[..stderr.len().min(MAX_CAPTURED_STDERR_BYTES)];
-    let mut stderr = String::from_utf8_lossy(stderr).trim_end().to_owned();
+fn bounded_output(output: &[u8], stream: &str) -> String {
+    let truncated = output.len() > MAX_CAPTURED_OUTPUT_BYTES;
+    let output = &output[..output.len().min(MAX_CAPTURED_OUTPUT_BYTES)];
+    let mut output = String::from_utf8_lossy(output).trim_end().to_owned();
     if truncated {
-        stderr.push_str("\n[stderr truncated]");
+        output.push_str(&format!("\n[{stream} truncated]"));
     }
-    stderr
+    output
 }
 
 /// Set up build caching on the current host. See the crate-level documentation for a description
@@ -646,6 +740,7 @@ where
         };
 
         if let Some(response) = &invocation.response {
+            report.mounted_paths.extend(response.output.mounts.clone());
             tracing::info!(cache_result = ?response.output, modes = ?response.input.modes, scope = ?configuration.scope, "Mounted cache paths");
 
             match &configuration.scope {

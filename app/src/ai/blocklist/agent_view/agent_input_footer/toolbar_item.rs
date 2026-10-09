@@ -7,6 +7,8 @@ use crate::features::FeatureFlag;
 use crate::settings::{AISettings, CodeSettings};
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::ui_components::icons::Icon;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::ChargeUnit;
 
 /// Declares which footer(s) a toolbar item is available in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,9 +54,8 @@ pub enum AgentToolbarItemKind {
     ModelSelector,
     NLDToggle,
     ContextWindowUsage,
-    /// Trigger for the "Conversation" usage popover. Gated on
-    /// [`FeatureFlag::PricingTransparency`], since the popover's content is
-    /// entirely usage figures.
+    /// Trigger for the "Conversation" usage popover. Only offered to viewers whose tier
+    /// charges usage in cents, since the popover's content is entirely usage figures.
     UsageSummary,
 
     // CLI agent only
@@ -185,9 +186,12 @@ impl AgentToolbarItemKind {
     pub fn is_available(&self, app: &warpui::AppContext) -> bool {
         match self {
             Self::HandoffToCloud => AISettings::as_ref(app).is_cloud_handoff_enabled(app),
-            // Drops the item from the toolbar editor once the flag goes off. The render
+            // Drops the item from the toolbar editor for tiers charged in credits. The render
             // path does not consult this method, so it repeats the check itself.
-            Self::UsageSummary => FeatureFlag::PricingTransparency.is_enabled(),
+            Self::UsageSummary => match UserWorkspaces::as_ref(app).charge_unit() {
+                ChargeUnit::Cents => true,
+                ChargeUnit::Credits => false,
+            },
             // Matches the gating on every other project explorer entry point, so the chip
             // cannot open a tool view the rest of the app hides. See
             // `Workspace::compute_left_panel_views` and the `SHOW_PROJECT_EXPLORER`
@@ -227,14 +231,14 @@ impl AgentToolbarItemKind {
 
     /// Default right-side items for the agent view footer.
     pub fn default_right() -> Vec<Self> {
+        // `UsageSummary` is listed unconditionally: `is_available` and the render path hide
+        // it for tiers charged in credits, and this layout has no app context to consult.
         let mut items = vec![
             Self::ContextChip(ContextChipKind::AgentPlanAndTodoList),
             Self::ContextWindowUsage,
+            Self::UsageSummary,
+            Self::ModelSelector,
         ];
-        if FeatureFlag::PricingTransparency.is_enabled() {
-            items.push(Self::UsageSummary);
-        }
-        items.push(Self::ModelSelector);
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && FeatureFlag::HOARemoteControl.is_enabled()
         {
@@ -263,12 +267,10 @@ impl AgentToolbarItemKind {
             Self::VoiceInput,
             Self::FileAttach,
             Self::ContextWindowUsage,
+            Self::UsageSummary,
             // Opt-in only: deliberately absent from `default_left`/`default_right`.
             Self::FileExplorer,
         ]);
-        if FeatureFlag::PricingTransparency.is_enabled() {
-            items.push(Self::UsageSummary);
-        }
         if FeatureFlag::FastForwardAutoexecuteButton.is_enabled() {
             items.push(Self::FastForwardToggle);
         }

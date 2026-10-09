@@ -35,6 +35,7 @@ ws_stream_wasm = "0.7"
 
 [dev-dependencies]
 http_client = { workspace = true, features = ["test-util"] }
+serde_json.workspace = true
 
 [build-dependencies]
 anyhow.workspace = true

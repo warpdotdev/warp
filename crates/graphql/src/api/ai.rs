@@ -2,7 +2,9 @@ use std::str::FromStr;
 
 use crate::object::ObjectMetadata;
 use crate::object_permissions::ObjectPermissions;
-use crate::queries::get_conversation_usage::{TokenUsage, ToolUsageMetadata, convert_token_usage};
+use crate::queries::get_conversation_usage::{
+    TokenUsage, ToolUsageMetadata, convert_token_usage, total_billed_cost_in_cents,
+};
 use crate::scalars::Time;
 use crate::schema;
 use crate::user::PublicUserProfile;
@@ -51,6 +53,8 @@ pub struct RequestLimitInfo {
     pub next_refresh_time: Time,
     pub request_limit: i32,
     pub requests_used_since_last_refresh: i32,
+    pub included_usage_cents: Option<f64>,
+    pub usage_cents_used_since_last_refresh: Option<f64>,
     pub request_limit_refresh_duration: RequestLimitRefreshDuration,
     pub is_unlimited_voice: bool,
     pub voice_request_limit: i32,
@@ -232,7 +236,8 @@ pub struct ConversationUsageMetadata {
     pub context_window_segments: Vec<ContextWindowSegment>,
     pub credits_spent: f64,
     pub platform_credits_spent: f64,
-    pub total_provider_cost_in_cents: Option<f64>,
+    pub total_billed_cost_in_cents: Option<f64>,
+    pub total_platform_cost_in_cents: Option<f64>,
     pub summarized: bool,
     pub warp_token_usage: Vec<TokenUsage>,
     pub byok_token_usage: Vec<TokenUsage>,
@@ -246,7 +251,10 @@ impl From<&ConversationUsageMetadata> for persistence::model::ConversationUsageM
             context_window_usage: gql.context_window_usage as f32,
             credits_spent: gql.credits_spent as f32,
             platform_credits_spent: gql.platform_credits_spent as f32,
-            total_provider_cost_in_cents: gql.total_provider_cost_in_cents.map(|cost| cost as f32),
+            total_billed_cost_in_cents: total_billed_cost_in_cents(
+                gql.total_billed_cost_in_cents,
+                gql.total_platform_cost_in_cents,
+            ),
             credits_spent_for_last_block: None,
             // Not yet fetched by this GraphQL query (persisted-history
             // vertical, milestone 3) -- left `None` rather than fabricated.

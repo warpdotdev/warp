@@ -11,7 +11,7 @@ use crate::auth::AuthStateProvider;
 use crate::channel::ChannelState;
 use crate::workspaces::team::Team;
 use crate::workspaces::workspace::{
-    BillingMetadata, CustomerType, PurchaseAddOnCreditsPolicy, Workspace,
+    BillingMetadata, ChargeUnit, CustomerType, PurchaseAddOnCreditsPolicy, Workspace,
 };
 
 impl UserWorkspaces {
@@ -50,7 +50,18 @@ impl UserWorkspaces {
     pub fn purchase_policy(&self) -> Option<PurchaseAddOnCreditsPolicy> {
         self.current_workspace_billing_metadata()
             .and_then(|billing| billing.tier.purchase_add_on_credits_policy)
-            .or(self.user_purchase_policy)
+            .or(self.user_tier.purchase_policy)
+    }
+
+    /// The unit the viewer's plan charges AI usage in: the current workspace's tier when one
+    /// exists, else the user-level tier (the teamless fallback, as for [`Self::purchase_policy`]).
+    /// A surface showing dollars still falls back to credits for any figure whose cents the
+    /// response leaves out.
+    pub fn charge_unit(&self) -> ChargeUnit {
+        self.current_workspace_billing_metadata()
+            .map_or(self.user_tier.charge_unit, |billing| {
+                billing.tier.charge_unit
+            })
     }
 
     /// Returns `true` if active AI is allowed for the current workspace, based on billing config.

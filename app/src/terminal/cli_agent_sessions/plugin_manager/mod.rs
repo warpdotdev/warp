@@ -297,6 +297,7 @@ pub(crate) fn plugin_manager_for_with_shell(
         | CLIAgent::Auggie
         | CLIAgent::CursorCli
         | CLIAgent::Hermes
+        | CLIAgent::Kiro
         | CLIAgent::Goose
         | CLIAgent::Vibe
         | CLIAgent::Antigravity

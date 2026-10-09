@@ -88,10 +88,45 @@ pub enum ParseGeneratorOutputError {
     Utf8DecodingFailure(FromUtf8Error),
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ObservedExitStatus {
+    Code(i32),
+    Signal(i32),
+    Unavailable,
+}
+
+impl ObservedExitStatus {
+    pub fn code(self) -> Option<i32> {
+        match self {
+            Self::Code(code) => Some(code),
+            Self::Signal(_) | Self::Unavailable => None,
+        }
+    }
+
+    /// The exit code to report where one is mandatory. Signals follow the shell's `128 + signal`
+    /// convention and an unavailable status is a generic failure, so neither reads as success.
+    pub fn exit_code(self) -> i32 {
+        match self {
+            Self::Code(code) => code,
+            Self::Signal(signal) => 128 + signal,
+            Self::Unavailable => 1,
+        }
+    }
+}
+impl fmt::Display for ObservedExitStatus {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Code(code) => write!(f, "exit code {code}"),
+            Self::Signal(signal) => write!(f, "signal {signal}"),
+            Self::Unavailable => write!(f, "exit status unavailable"),
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 pub enum ExitReason {
     /// The shell process exited naturally
-    ShellProcessExited,
+    ShellProcessExited { status: ObservedExitStatus },
     /// PTY spawn failed
     PtySpawnFailed,
     /// PTY connection was lost/disconnected

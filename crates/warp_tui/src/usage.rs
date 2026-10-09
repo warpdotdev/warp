@@ -3,13 +3,14 @@
 //! [`UsageToggle`] owns the hover state behind the footer's clickable usage
 //! entry; the credits⇄cost display mode itself is the file-backed, TUI-only
 //! `agents.usage_display_mode` setting ([`TuiUsageDisplayMode`]), so the
-//! choice persists across TUI sessions. The helpers are shared by every
-//! surface that renders usage (the footer entry today, the
-//! transcript/loading-indicator usage row next — CODE-1832).
+//! choice persists across TUI sessions. The toggle is only offered to a viewer
+//! whose tier charges usage in cents; a tier charged in credits always sees the
+//! credits total. The helpers are shared by every surface that renders usage
+//! (the footer entry today, the transcript/loading-indicator usage row next —
+//! CODE-1832).
 
 use warp::settings::TuiUsageDisplayMode;
-use warp::tui_export::{ConversationUsageTotals, format_credits, format_dollars};
-use warp_core::features::FeatureFlag;
+use warp::tui_export::{ChargeUnit, ConversationUsageTotals, format_credits, format_dollars};
 use warpui_core::AppContext;
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{TuiElement, TuiEventContext, TuiHoverable, TuiText};
@@ -34,26 +35,27 @@ impl UsageToggle {
     /// dispatch the typed action that flips the persisted display-mode
     /// setting (the element pass only has an immutable [`AppContext`]).
     ///
-    /// The credits⇄dollars toggle is gated behind
-    /// [`FeatureFlag::PricingTransparency`]. When the flag is disabled
-    /// (prod/stable), this falls back to the pre-CODE-1831 behavior: a static,
-    /// non-interactive credits total. The usage entry is still shown — only the
-    /// click-to-toggle affordance is removed, and the persisted display mode is
-    /// ignored so the dollar cost is never surfaced (`mode` and `on_click` are
-    /// unused in that case).
+    /// When the tier's `charge_unit` is credits, the entry is a static,
+    /// non-interactive credits total: the persisted display mode is ignored so
+    /// the dollar cost is never surfaced (`mode` and `on_click` are unused in
+    /// that case).
     pub(crate) fn render_entry(
         &self,
         mode: TuiUsageDisplayMode,
         totals: ConversationUsageTotals,
+        charge_unit: ChargeUnit,
         app: &AppContext,
         on_click: impl FnMut(&mut TuiEventContext, &AppContext) + 'static,
     ) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(app);
-        if !FeatureFlag::PricingTransparency.is_enabled() {
-            return TuiText::new(entry_text(TuiUsageDisplayMode::Credits, totals))
-                .with_style(builder.muted_text_style())
-                .truncate()
-                .finish();
+        match charge_unit {
+            ChargeUnit::Cents => {}
+            ChargeUnit::Credits => {
+                return TuiText::new(entry_text(TuiUsageDisplayMode::Credits, totals))
+                    .with_style(builder.muted_text_style())
+                    .truncate()
+                    .finish();
+            }
         }
         let is_hovered = self
             .hover_state
@@ -77,12 +79,12 @@ impl UsageToggle {
 }
 
 /// The entry's text for `mode`: the GUI-consistent credits total (formatted
-/// with the GUI's own `format_credits`) or the provider dollar cost.
+/// with the GUI's own `format_credits`) or the billed dollar cost.
 fn entry_text(mode: TuiUsageDisplayMode, totals: ConversationUsageTotals) -> String {
     match mode {
         TuiUsageDisplayMode::Credits => format_credits(totals.credits_spent),
         TuiUsageDisplayMode::Cost => totals
-            .cost_in_cents
+            .total_cost_in_cents()
             .map(format_dollars)
             .unwrap_or_else(|| "Cost unavailable".to_owned()),
     }

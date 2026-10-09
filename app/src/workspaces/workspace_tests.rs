@@ -167,6 +167,88 @@ fn purchase_policy_fully_disabled_plan_remains_disabled() {
     assert_eq!(billing_metadata.addon_credits_price_premium_bps(), 0);
 }
 
+fn pack(credits: i32, price_usd_cents: i32, usage_cents: Option<i32>) -> AddonCreditsOption {
+    AddonCreditsOption {
+        credits,
+        price_usd_cents,
+        usage_cents,
+    }
+}
+
+fn auto_reload_settings(
+    selected_auto_reload_credit_denomination: Option<i32>,
+    selected_auto_reload_usage_cents: Option<i32>,
+) -> AddonCreditsSettings {
+    AddonCreditsSettings {
+        auto_reload_enabled: true,
+        max_monthly_spend_cents: None,
+        selected_auto_reload_credit_denomination,
+        selected_auto_reload_usage_cents,
+    }
+}
+
+#[test]
+fn auto_reload_pack_matches_by_credit_denomination_for_credit_catalogs() {
+    let options = [pack(1_000, 1_000, None), pack(2_000, 1_800, None)];
+
+    let settings = auto_reload_settings(Some(2_000), None);
+    assert_eq!(
+        settings.selected_auto_reload_option_index(&options),
+        Some(1)
+    );
+
+    let unlisted = auto_reload_settings(Some(5_000), None);
+    assert_eq!(unlisted.selected_auto_reload_option_index(&options), None);
+
+    let unconfigured = auto_reload_settings(None, None);
+    assert_eq!(
+        unconfigured.selected_auto_reload_option_index(&options),
+        None
+    );
+}
+
+#[test]
+fn auto_reload_pack_matches_by_list_price_for_dollar_catalogs() {
+    // The credit counts the packs are listed under have changed since auto-reload was
+    // configured; the list price still identifies the pack.
+    let options = [
+        pack(1_200, 1_000, Some(1_000)),
+        pack(2_400, 2_000, Some(2_000)),
+    ];
+
+    let settings = auto_reload_settings(Some(2_000), Some(2_000));
+    assert_eq!(
+        settings.selected_auto_reload_option_index(&options),
+        Some(1)
+    );
+
+    // Settings from before the catalog switched to dollars fall back to the credit count.
+    let credits_only = auto_reload_settings(Some(1_200), None);
+    assert_eq!(
+        credits_only.selected_auto_reload_option_index(&options),
+        Some(0)
+    );
+}
+
+#[test]
+fn auto_reload_price_follows_the_matched_pack_with_premium() {
+    let mut workspace = make_workspace(None);
+    workspace.billing_metadata =
+        billing_metadata_with_purchase_policy(Some(PurchaseAddOnCreditsPolicy {
+            enabled: false,
+            premium_enabled: true,
+            price_premium_bps: 1_000,
+        }));
+    workspace.settings.addon_credits_settings = auto_reload_settings(Some(1_000), Some(2_000));
+    let options = [
+        pack(1_000, 1_000, Some(1_000)),
+        pack(2_000, 2_000, Some(2_000)),
+    ];
+
+    assert_eq!(workspace.get_auto_reload_price_cents(&options), Some(2_200));
+    assert_eq!(workspace.get_auto_reload_price_cents(&[]), None);
+}
+
 #[test]
 fn purchase_policy_standard_purchasing_wins_over_premium() {
     // Standard (list price) purchasing takes precedence if the server ever

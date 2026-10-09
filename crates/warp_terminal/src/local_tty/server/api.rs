@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::event::ObservedExitStatus;
 use crate::local_tty::{PtyOptions, PtySpawnResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,7 +30,7 @@ impl<T> From<anyhow::Result<T>> for Result<T> {
 pub(super) enum Message {
     /// A message sent from client -> server requesting that the server spawns
     /// a new pty using the provided options.
-    SpawnShellRequest { options: PtyOptions },
+    SpawnShellRequest { options: Box<PtyOptions> },
     /// The response for a `SpawnShellRequest`, with the result of the spawn
     /// operation.  Should only be sent from server -> client.
     SpawnShellResponse {
@@ -55,5 +56,7 @@ pub(super) enum Message {
     /// more child processes have terminated.  This has no matching response
     /// message - these requests are fire-and-forget from the server to the
     /// host application.
-    ChildrenTerminatedRequest { pids: Vec<u32> },
+    ChildrenTerminatedRequest {
+        children: Vec<(u32, ObservedExitStatus)>,
+    },
 }

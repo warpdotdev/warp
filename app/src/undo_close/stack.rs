@@ -141,7 +141,10 @@ impl ClosedItem {
     fn clean_up_pane_group(pane_group: &ViewHandle<PaneGroup>, ctx: &mut AppContext) {
         let window_id = pane_group.window_id(ctx);
 
-        if !ctx.is_window_open(window_id) {
+        if ctx
+            .view_with_id::<PaneGroup>(window_id, pane_group.id())
+            .is_none()
+        {
             return;
         }
 

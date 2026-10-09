@@ -20,6 +20,8 @@ fn create_test_request_limit_info(
     RequestLimitInfo {
         limit,
         num_requests_used_since_refresh: used,
+        included_usage_cents: None,
+        usage_cents_used_since_last_refresh: None,
         next_refresh_time: ServerTimestamp::new(next_refresh),
         is_unlimited,
         request_limit_refresh_duration: refresh_duration,

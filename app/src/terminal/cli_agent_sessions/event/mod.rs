@@ -20,6 +20,7 @@ pub enum CLIAgentEventType {
     PermissionRequest,
     PermissionReplied,
     QuestionAsked,
+    NeedsInput,
     IdlePrompt,
     Unknown(String),
 }
@@ -47,6 +48,18 @@ pub struct CLIAgentEventPayload {
     /// On Claude Code, this comes from the `StopFailure` hook (e.g. `"rate_limit"`).
     /// Not implemented for Codex.
     pub error_type: Option<String>,
+    /// Background tasks and scheduled wakeups still pending when a `Stop` fired. Claude Code
+    /// wakes the agent again when any of them completes or fires, so a stop with pending work is
+    /// a pause, not the end of the session. `None` when the plugin predates this field.
+    pub pending_background_work_count: Option<u32>,
+}
+
+impl CLIAgentEventPayload {
+    /// Whether the agent reported work that will wake it again without user input.
+    pub fn has_pending_background_work(&self) -> bool {
+        self.pending_background_work_count
+            .is_some_and(|count| count > 0)
+    }
 }
 
 /// A parsed event from a CLI agent plugin.

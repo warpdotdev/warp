@@ -4,6 +4,7 @@ fn option(credits: i32, price_usd_cents: i32) -> AddonCreditsOption {
     AddonCreditsOption {
         credits,
         price_usd_cents,
+        usage_cents: None,
     }
 }
 
@@ -57,4 +58,19 @@ fn premium_price_ignores_negative_bps() {
         option(1_000, 1_000).price_usd_cents_with_premium(-500),
         1_000
     );
+}
+
+#[test]
+fn discount_percent_is_the_rounded_saving_over_the_base_rate() {
+    let base_rate = option(1_000, 1_000).rate();
+    assert_eq!(option(1_000, 1_000).discount_percent(base_rate), 0);
+    assert_eq!(option(2_500, 2_000).discount_percent(base_rate), 20);
+    // Rounding noise between flat-rate packs is not a discount.
+    assert_eq!(
+        option(1_111, 2_000).discount_percent(option(555, 1_000).rate()),
+        0
+    );
+    // A pack that is more expensive per credit is not a negative discount.
+    assert_eq!(option(500, 1_000).discount_percent(base_rate), 0);
+    assert_eq!(option(1_000, 1_000).discount_percent(0.0), 0);
 }

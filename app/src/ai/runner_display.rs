@@ -18,6 +18,7 @@ pub fn os_display(os: RunnerOs) -> &'static str {
         RunnerOs::Linux => "Linux",
         RunnerOs::Macos => "macOS",
         RunnerOs::Windows => "Windows",
+        RunnerOs::Unknown => "Unknown",
     }
 }
 
@@ -26,6 +27,7 @@ pub fn arch_display(arch: RunnerArch) -> &'static str {
     match arch {
         RunnerArch::X8664 => "x86-64",
         RunnerArch::Aarch64 => "aarch64",
+        RunnerArch::Unknown => "unknown",
     }
 }
 
@@ -36,6 +38,7 @@ pub fn macos_version_display(version: RunnerMacOsVersion) -> &'static str {
         RunnerMacOsVersion::Macos15 => "macOS 15",
         RunnerMacOsVersion::Macos26 => "macOS 26",
         RunnerMacOsVersion::Macos27 => "macOS 27",
+        RunnerMacOsVersion::Unknown => "macOS",
     }
 }
 
@@ -45,6 +48,7 @@ pub fn icon_for(os: RunnerOs) -> Icon {
         RunnerOs::Linux => Icon::Linux,
         RunnerOs::Macos => Icon::Apple,
         RunnerOs::Windows => Icon::Powershell,
+        RunnerOs::Unknown => Icon::Cloud,
     }
 }
 

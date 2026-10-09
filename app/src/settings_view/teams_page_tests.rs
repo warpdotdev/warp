@@ -152,6 +152,8 @@ fn workspace_with_member(
             is_unlimited: true,
             request_limit: 0,
             requests_used_since_last_refresh: 0,
+            included_usage_cents: None,
+            usage_cents_used_since_last_refresh: None,
             is_request_limit_prorated: false,
         },
     });
@@ -585,6 +587,8 @@ fn workspace_admin_without_team_role_can_promote_demote_and_remove() {
             is_unlimited: true,
             request_limit: 0,
             requests_used_since_last_refresh: 0,
+            included_usage_cents: None,
+            usage_cents_used_since_last_refresh: None,
             is_request_limit_prorated: false,
         },
     });
