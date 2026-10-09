@@ -18,26 +18,6 @@ const PATHS: [&str; 6] = [
     "/cache_creation/ephemeral_5m_input_tokens",
     "/cache_creation/ephemeral_1h_input_tokens",
 ];
-impl From<&ClaudeUsage> for Counters {
-    fn from(usage: &ClaudeUsage) -> Self {
-        Self {
-            values: [
-                usage.input_tokens,
-                usage.output_tokens,
-                usage.cache_read_input_tokens,
-                usage.cache_creation_input_tokens,
-                usage
-                    .cache_creation
-                    .as_ref()
-                    .and_then(|cache| cache.ephemeral_5m_input_tokens),
-                usage
-                    .cache_creation
-                    .as_ref()
-                    .and_then(|cache| cache.ephemeral_1h_input_tokens),
-            ],
-        }
-    }
-}
 
 impl From<Counters> for ClaudeUsage {
     fn from(counts: Counters) -> Self {

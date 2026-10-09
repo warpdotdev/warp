@@ -66,7 +66,7 @@
         },
         "payload": {
           "format": "cost_inputs_v3",
-          "cost_estimation": {
+          "cost_metadata": {
             "groups": [
               {
                 "model": "gpt-6.1-sol",
@@ -138,7 +138,7 @@
         },
         "payload": {
           "format": "cost_inputs_v3",
-          "cost_estimation": {
+          "cost_metadata": {
             "groups": [
               {
                 "model": "claude-sonnet-5",
@@ -293,7 +293,7 @@
         },
         "payload": {
           "format": "cost_inputs_v3",
-          "cost_estimation": {
+          "cost_metadata": {
             "groups": []
           },
           "output_tokens": 0,
@@ -335,7 +335,7 @@
         },
         "payload": {
           "format": "cost_inputs_v3",
-          "cost_estimation": {
+          "cost_metadata": {
             "groups": []
           },
           "output_tokens": 0,

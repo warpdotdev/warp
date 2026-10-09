@@ -57,7 +57,7 @@ fn native_responses_use_individual_input_and_deduplicate_checkpoint_copies() {
         second,
         json!({"type":"compacted","payload":{"latest_token_usage_record":first["payload"]}}),
     ]);
-    let group = &snapshot.payload.cost_estimation.unwrap().groups[0];
+    let group = &snapshot.payload.cost_metadata.unwrap().groups[0];
     assert_eq!(group.pre_threshold.as_ref().unwrap().input_tokens, Some(20));
     assert_eq!(group.post_threshold, None);
     assert_eq!(snapshot.payload.output_tokens, Some(4));
@@ -74,7 +74,7 @@ fn configured_tier_and_model_are_joined_to_their_turn_not_the_last_model() {
         context("t2", "gpt-b"),
         record("b", "t2", 20, 2, 31, 3),
     ]);
-    let groups = snapshot.payload.cost_estimation.unwrap().groups;
+    let groups = snapshot.payload.cost_metadata.unwrap().groups;
     assert_eq!(groups.len(), 2);
     assert_eq!(groups[0].attribution.service_tier.as_deref(), Some("flex"));
     assert!(groups[0].post_threshold.is_some());
@@ -89,7 +89,7 @@ fn configured_tier_and_model_are_joined_to_their_turn_not_the_last_model() {
 #[test]
 fn uncovered_cumulative_history_disables_cost_without_discarding_observed_output() {
     let snapshot = capture(&[context("t1", "gpt-a"), record("a", "t1", 10, 2, 110, 20)]);
-    assert_eq!(snapshot.payload.cost_estimation, None);
+    assert_eq!(snapshot.payload.cost_metadata, None);
     assert_eq!(snapshot.payload.output_tokens, Some(2));
     assert_eq!(
         snapshot.coverage.output_token_status,
@@ -103,7 +103,7 @@ fn conflicting_response_identity_cannot_recover_from_a_later_duplicate() {
     let mut conflict = first.clone();
     conflict["payload"]["session_id"] = json!("other-owner");
     let snapshot = capture(&[context("t1", "gpt-a"), first.clone(), conflict, first]);
-    assert_eq!(snapshot.payload.cost_estimation, None);
+    assert_eq!(snapshot.payload.cost_metadata, None);
     assert_eq!(snapshot.payload.output_tokens, None);
 }
 
@@ -137,7 +137,7 @@ fn real_summarization_is_counted_once_and_synthetic_compaction_is_free() {
         json!({"type":"event_msg","payload":{"type":"token_count","info":null}}),
     ]);
     assert_eq!(snapshot.payload.output_tokens, Some(5));
-    let group = &snapshot.payload.cost_estimation.unwrap().groups[0];
+    let group = &snapshot.payload.cost_metadata.unwrap().groups[0];
     assert_eq!(
         group.post_threshold.as_ref().unwrap().output_tokens,
         Some(3)
@@ -147,7 +147,7 @@ fn real_summarization_is_counted_once_and_synthetic_compaction_is_free() {
 #[test]
 fn missing_context_disables_cost_only() {
     let snapshot = capture(&[record("a", "t1", 10, 2, 10, 2)]);
-    assert_eq!(snapshot.payload.cost_estimation, None);
+    assert_eq!(snapshot.payload.cost_metadata, None);
     assert_eq!(snapshot.payload.output_tokens, Some(2));
 }
 
@@ -160,7 +160,7 @@ fn missing_required_native_counter_disables_cost_only() {
         .remove("cache_write_input_tokens");
 
     let snapshot = capture(&[context("t1", "gpt-a"), event]);
-    assert_eq!(snapshot.payload.cost_estimation, None);
+    assert_eq!(snapshot.payload.cost_metadata, None);
     assert_eq!(snapshot.payload.output_tokens, Some(2));
 }
 
@@ -176,7 +176,7 @@ fn optional_counters_are_omitted_when_any_response_lacks_them() {
         context("t2", "gpt-a"),
         record("b", "t2", 5, 1, 10, 2),
     ]);
-    let group = &snapshot.payload.cost_estimation.unwrap().groups[0];
+    let group = &snapshot.payload.cost_metadata.unwrap().groups[0];
     assert_eq!(
         group
             .pre_threshold
@@ -197,7 +197,7 @@ fn copied_foreign_settings_do_not_change_root_pricing_tier() {
         record("a", "t1", 10, 2, 10, 2),
     ]);
     assert_eq!(
-        snapshot.payload.cost_estimation.unwrap().groups[0]
+        snapshot.payload.cost_metadata.unwrap().groups[0]
             .attribution
             .service_tier
             .as_deref(),
@@ -212,7 +212,7 @@ fn trailing_uncovered_checkpoint_disables_cost_but_keeps_native_output() {
         record("a", "t1", 10, 2, 10, 2),
         json!({"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":20,"output_tokens":4}}}}),
     ]);
-    assert_eq!(snapshot.payload.cost_estimation, None);
+    assert_eq!(snapshot.payload.cost_metadata, None);
     assert_eq!(snapshot.payload.output_tokens, Some(2));
     assert_eq!(
         snapshot.coverage.output_token_status,
@@ -237,7 +237,7 @@ fn synthetic_full_context_checkpoint_does_not_reset_billable_history() {
     ]);
     assert_eq!(snapshot.coverage.cost_status, CostStatus::Known);
     assert_eq!(snapshot.payload.output_tokens, Some(5));
-    let group = &snapshot.payload.cost_estimation.unwrap().groups[0];
+    let group = &snapshot.payload.cost_metadata.unwrap().groups[0];
     assert_eq!(group.pre_threshold.as_ref().unwrap().input_tokens, Some(10));
     assert_eq!(
         group.post_threshold.as_ref().unwrap().input_tokens,

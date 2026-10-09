@@ -90,6 +90,8 @@ impl Findings {
 
     fn limit(&mut self, reason: ReasonCode) {
         self.limit_exceeded = true;
+        self.tokens_partial = true;
+        self.tools_partial = true;
         self.reason(reason);
     }
 

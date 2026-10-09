@@ -15,7 +15,7 @@ pub struct HarnessUsageRequest {
     #[serde(flatten)]
     pub snapshot: HarnessUsageSnapshot,
 }
-/// Frozen conversation rules supplied by the server, without dollar rates.
+/// Classification rules for one capture, supplied by the server without dollar rates.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ThresholdPolicy {
@@ -101,11 +101,11 @@ impl HarnessUsageRequest {
         }
         match &mut self.snapshot {
             HarnessUsageSnapshot::ClaudeCode(snapshot) => {
-                snapshot.payload.cost_estimation = None;
+                snapshot.payload.cost_metadata = None;
                 snapshot.coverage.cost_status = CostStatus::Unavailable;
             }
             HarnessUsageSnapshot::Codex(snapshot) => {
-                snapshot.payload.cost_estimation = None;
+                snapshot.payload.cost_metadata = None;
                 snapshot.coverage.cost_status = CostStatus::Unavailable;
             }
         }
@@ -165,7 +165,7 @@ pub enum CoverageStatus {
 pub struct UsagePayload<T> {
     pub format: PayloadFormat,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cost_estimation: Option<CostEstimation<T>>,
+    pub cost_metadata: Option<CostMetadata<T>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<i64>,
     #[serde(rename = "toolCalls", skip_serializing_if = "Option::is_none")]
@@ -174,13 +174,13 @@ pub struct UsagePayload<T> {
 
 impl<T> UsagePayload<T> {
     pub fn new(
-        cost_estimation: Option<CostEstimation<T>>,
+        cost_metadata: Option<CostMetadata<T>>,
         output_tokens: Option<i64>,
         tool_calls: Option<ToolCalls>,
     ) -> Self {
         Self {
             format: PayloadFormat::CostInputsV3,
-            cost_estimation,
+            cost_metadata,
             output_tokens,
             tool_calls,
         }
@@ -194,7 +194,7 @@ pub enum PayloadFormat {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct CostEstimation<T> {
+pub struct CostMetadata<T> {
     pub groups: Vec<UsageGroup<T>>,
 }
 

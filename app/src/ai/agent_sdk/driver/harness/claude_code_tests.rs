@@ -100,7 +100,7 @@ async fn transcript_capture_reads_and_timestamps_after_metadata_response() {
         panic!("wrong provider")
     };
     assert_eq!(snapshot.payload.output_tokens, Some(5));
-    assert!(snapshot.payload.cost_estimation.is_some());
+    assert!(snapshot.payload.cost_metadata.is_some());
     upload.assert_async().await;
 }
 

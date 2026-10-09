@@ -36,18 +36,78 @@ fn capture(entries: &[Value]) -> crate::api::UsageSnapshot<ClaudeUsage> {
 }
 #[test]
 fn streaming_revisions_replace_usage_but_distinct_responses_add() {
-    let snapshot = capture(&[
-        response("a", 50, 0),
-        response("a", 50, 5),
-        response("b", 50, 5),
+    let mut first = response("a", 50, 0);
+    first["message"]["content"] = json!([{"type":"tool_use","id":"read","name":"Read"}]);
+    let mut revision = response("a", 50, 5);
+    revision["message"]["content"] = json!([
+        {"type":"tool_use","id":"read","name":"Read"},
+        {"type":"tool_use","id":"write","name":"Write"}
     ]);
+    let snapshot = capture(&[first, revision, response("b", 50, 5)]);
     assert_eq!(snapshot.payload.output_tokens, Some(10));
-    let group = &snapshot.payload.cost_estimation.unwrap().groups[0];
+    assert_eq!(snapshot.payload.tool_calls.unwrap().total, 2);
+    let group = &snapshot.payload.cost_metadata.unwrap().groups[0];
     assert_eq!(
         group.pre_threshold.as_ref().unwrap().input_tokens,
         Some(100)
     );
     assert_eq!(snapshot.coverage.cost_status, CostStatus::Known);
+}
+#[test]
+fn overlapping_incomplete_vectors_do_not_invent_usage() {
+    let mut first = response("a", 50, 5);
+    first["message"]["usage"]
+        .as_object_mut()
+        .unwrap()
+        .remove("input_tokens");
+    let mut revision = response("a", 50, 5);
+    revision["message"]["usage"]
+        .as_object_mut()
+        .unwrap()
+        .remove("output_tokens");
+    let snapshot = capture(&[first, revision, response("b", 1, 2)]);
+    assert_eq!(snapshot.payload.cost_metadata, None);
+    assert_eq!(snapshot.payload.output_tokens, Some(2));
+    assert_eq!(
+        snapshot.coverage.output_token_status,
+        CoverageStatus::Partial
+    );
+}
+#[test]
+fn conflicting_tool_names_do_not_invalidate_valid_tokens() {
+    let mut first = response("a", 50, 5);
+    first["message"]["content"] = json!([{"type":"tool_use","id":"tool","name":"Read"}]);
+    let mut revision = response("a", 50, 6);
+    revision["message"]["content"] = json!([
+        {"type":"tool_use","id":"tool","name":"Write"},
+        {"type":"tool_use","id":"other","name":"Read"}
+    ]);
+    let snapshot = capture(&[first, revision]);
+    assert_eq!(snapshot.payload.output_tokens, Some(6));
+    assert_eq!(snapshot.coverage.cost_status, CostStatus::Known);
+    assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Partial);
+    assert_eq!(snapshot.payload.tool_calls.unwrap().total, 1);
+}
+#[test]
+fn session_limit_retains_partial_reporting() {
+    let entries: Vec<_> = (0..=MAX_SCOPE_ENTRIES)
+        .map(|index| {
+            let mut entry = response("a", 1, 2);
+            entry["sessionId"] = json!(format!("session-{index}"));
+            entry["message"]["content"] = json!([{"type":"tool_use","id":"tool","name":"Read"}]);
+            entry
+        })
+        .collect();
+    let snapshot = capture(&entries);
+    let retained = (MAX_SCOPE_ENTRIES - 1) as i64;
+    assert_eq!(snapshot.payload.cost_metadata, None);
+    assert_eq!(snapshot.payload.output_tokens, Some(retained * 2));
+    assert_eq!(snapshot.payload.tool_calls.unwrap().total, retained);
+    assert_eq!(
+        snapshot.coverage.output_token_status,
+        CoverageStatus::Partial
+    );
+    assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Partial);
 }
 #[test]
 fn threshold_is_strict_and_includes_cache_reads_and_creation() {
@@ -57,7 +117,7 @@ fn threshold_is_strict_and_includes_cache_reads_and_creation() {
     cached["message"]["usage"]["cache_creation"] =
         json!({"ephemeral_5m_input_tokens":1,"ephemeral_1h_input_tokens":20});
     let snapshot = capture(&[response("a", 99, 1), response("b", 100, 2), cached]);
-    let group = &snapshot.payload.cost_estimation.unwrap().groups[0];
+    let group = &snapshot.payload.cost_metadata.unwrap().groups[0];
     assert_eq!(
         group.pre_threshold.as_ref().unwrap().input_tokens,
         Some(199)
@@ -84,7 +144,7 @@ fn missing_ttl_split_disables_cost_not_known_output_or_tools() {
     entry["message"]["usage"]["cache_creation_input_tokens"] = json!(10);
     entry["message"]["content"] = json!([{"type":"tool_use","id":"tool","name":"Read"}]);
     let snapshot = capture(&[entry]);
-    assert_eq!(snapshot.payload.cost_estimation, None);
+    assert_eq!(snapshot.payload.cost_metadata, None);
     assert_eq!(snapshot.payload.output_tokens, Some(5));
     assert_eq!(snapshot.coverage.output_token_status, CoverageStatus::Known);
     assert_eq!(snapshot.payload.tool_calls.unwrap().total, 1);
@@ -97,7 +157,7 @@ fn contradictory_cache_partitions_do_not_discard_observed_output() {
     entry["message"]["usage"]["cache_creation"] =
         json!({"ephemeral_5m_input_tokens":1,"ephemeral_1h_input_tokens":2});
     let snapshot = capture(&[entry]);
-    assert_eq!(snapshot.payload.cost_estimation, None);
+    assert_eq!(snapshot.payload.cost_metadata, None);
     assert_eq!(snapshot.payload.output_tokens, Some(5));
     assert_eq!(
         snapshot.coverage.output_token_status,
@@ -109,7 +169,7 @@ fn conflicting_identity_keeps_independent_tool_counts() {
     let mut entry = response("a", 50, 5);
     entry["message"]["content"] = json!([{"type":"tool_use","id":"tool","name":"Read"}]);
     let snapshot = capture(&[entry, response("a", 49, 6), response("b", 2, 0)]);
-    assert_eq!(snapshot.payload.cost_estimation, None);
+    assert_eq!(snapshot.payload.cost_metadata, None);
     assert_eq!(snapshot.payload.output_tokens, Some(0));
     assert_eq!(
         snapshot.coverage.output_token_status,
@@ -152,7 +212,7 @@ fn subagents_are_included_and_capture_holes_disable_cost() {
     let HarnessUsageSnapshot::ClaudeCode(snapshot) = result.snapshot else {
         panic!("wrong provider")
     };
-    assert_eq!(snapshot.payload.cost_estimation, None);
+    assert_eq!(snapshot.payload.cost_metadata, None);
     assert_eq!(snapshot.payload.output_tokens, Some(3));
 }
 #[test]
@@ -170,17 +230,17 @@ fn missing_policy_or_unknown_model_is_not_a_local_threshold_guess() {
     let HarnessUsageSnapshot::ClaudeCode(snapshot) = result.snapshot else {
         panic!("wrong provider")
     };
-    assert_eq!(snapshot.payload.cost_estimation, None);
+    assert_eq!(snapshot.payload.cost_metadata, None);
     assert_eq!(snapshot.payload.output_tokens, Some(5));
     let mut unknown = entry;
     unknown["message"]["model"] = json!("unknown");
-    assert_eq!(capture(&[unknown]).payload.cost_estimation, None);
+    assert_eq!(capture(&[unknown]).payload.cost_metadata, None);
 }
 #[test]
 fn readable_empty_is_measured_zero_but_missing_is_unavailable() {
     let snapshot = capture(&[]);
     assert_eq!(snapshot.payload.output_tokens, Some(0));
-    assert_eq!(snapshot.payload.cost_estimation.unwrap().groups.len(), 0);
+    assert_eq!(snapshot.payload.cost_metadata.unwrap().groups.len(), 0);
     let ExtractionOutcome::Usable(result) = extract_claude(
         "root",
         &[],
@@ -194,7 +254,7 @@ fn readable_empty_is_measured_zero_but_missing_is_unavailable() {
         panic!("wrong provider")
     };
     assert_eq!(snapshot.payload.output_tokens, None);
-    assert_eq!(snapshot.payload.cost_estimation, None);
+    assert_eq!(snapshot.payload.cost_metadata, None);
 }
 #[test]
 fn synthetic_compaction_and_api_errors_do_not_add_usage() {
@@ -219,5 +279,5 @@ fn output_overflow_never_recovers_but_large_integer_is_exact() {
         response("c", 1, 0),
     ]);
     assert_eq!(snapshot.payload.output_tokens, None);
-    assert_eq!(snapshot.payload.cost_estimation, None);
+    assert_eq!(snapshot.payload.cost_metadata, None);
 }

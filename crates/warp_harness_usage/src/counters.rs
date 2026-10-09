@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 
 use crate::api::{
-    Attribution, CostEstimation, CostStatus, Coverage, ThresholdPolicy, ThresholdRule, ToolCalls,
+    Attribution, CostMetadata, CostStatus, Coverage, ThresholdPolicy, ThresholdRule, ToolCalls,
     UsageGroup, UsagePayload, UsageSnapshot, normalize_model,
 };
 use crate::{Findings, MAX_GROUPS, ReasonCode};
@@ -218,7 +218,7 @@ impl<'a> Accounting<'a> {
         if findings.tokens_partial || findings.limit_exceeded {
             self.invalidate_cost();
         }
-        let cost_estimation = self.groups.map(|groups| CostEstimation {
+        let cost_metadata = self.groups.map(|groups| CostMetadata {
             groups: groups
                 .into_iter()
                 .map(|(attribution, group)| UsageGroup {
@@ -238,7 +238,7 @@ impl<'a> Accounting<'a> {
         };
         UsageSnapshot {
             coverage: Coverage {
-                cost_status: if cost_estimation.is_some() {
+                cost_status: if cost_metadata.is_some() {
                     CostStatus::Known
                 } else {
                     CostStatus::Unavailable
@@ -249,7 +249,7 @@ impl<'a> Accounting<'a> {
                 ),
                 tool_status: Findings::status(tool_calls.is_some(), findings.tools_partial),
             },
-            payload: UsagePayload::new(cost_estimation, output, tool_calls),
+            payload: UsagePayload::new(cost_metadata, output, tool_calls),
         }
     }
 }

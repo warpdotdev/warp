@@ -93,7 +93,7 @@ fn ten_thousand_responses_in_one_key_do_not_consume_wire_capacity() {
     let HarnessUsageSnapshot::ClaudeCode(snapshot) = result.snapshot else {
         panic!("wrong provider")
     };
-    let group = &snapshot.payload.cost_estimation.unwrap().groups[0];
+    let group = &snapshot.payload.cost_metadata.unwrap().groups[0];
     assert_eq!(
         group.pre_threshold.as_ref().unwrap().input_tokens,
         Some(1_000_000_000)
@@ -126,7 +126,7 @@ fn group_limit_drops_all_cost_but_continues_output() {
     let HarnessUsageSnapshot::ClaudeCode(snapshot) = result.snapshot else {
         panic!("wrong provider")
     };
-    assert_eq!(snapshot.payload.cost_estimation.unwrap().groups.len(), 128);
+    assert_eq!(snapshot.payload.cost_metadata.unwrap().groups.len(), 128);
     entries.push(json!({
         "type":"assistant","message":{"id":"overflow","model":"model","content":[{"type":"tool_use","id":"tool","name":"Read"}],
         "usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1,"service_tier":"overflow"}}
@@ -139,7 +139,7 @@ fn group_limit_drops_all_cost_but_continues_output() {
     let HarnessUsageSnapshot::ClaudeCode(snapshot) = result.snapshot else {
         panic!("wrong provider")
     };
-    assert_eq!(snapshot.payload.cost_estimation, None);
+    assert_eq!(snapshot.payload.cost_metadata, None);
     assert_eq!(snapshot.payload.output_tokens, Some(129));
     assert_eq!(snapshot.coverage.output_token_status, CoverageStatus::Known);
     assert_eq!(snapshot.payload.tool_calls.unwrap().total, 1);
@@ -158,7 +158,7 @@ fn oversized_cost_is_removed_before_retry_bytes_are_frozen() {
                 tool_status: CoverageStatus::Unavailable,
             },
             payload: UsagePayload::new(
-                Some(CostEstimation {
+                Some(CostMetadata {
                     groups: vec![UsageGroup {
                         attribution: Attribution {
                             model: Some("x".repeat(MAX_BODY_BYTES)),
@@ -185,7 +185,7 @@ fn oversized_cost_is_removed_before_retry_bytes_are_frozen() {
     let wire = serde_json::to_value(&request).unwrap();
     assert_eq!(wire["snapshot"]["coverage"]["cost_status"], "unavailable");
     assert_eq!(wire["snapshot"]["payload"]["output_tokens"], 0);
-    assert!(wire["snapshot"]["payload"].get("cost_estimation").is_none());
+    assert!(wire["snapshot"]["payload"].get("cost_metadata").is_none());
     let bytes = serde_json::to_vec(&request).unwrap();
     assert!(!request.bound_to_body().unwrap());
     assert_eq!(serde_json::to_vec(&request).unwrap(), bytes);

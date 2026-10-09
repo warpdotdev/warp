@@ -46,7 +46,7 @@ fn captured_metrics_and_raw_bytes_share_records_before_late_append() {
         CoverageStatus::Partial
     );
     assert_eq!(snapshot.payload.output_tokens, Some(10));
-    assert!(snapshot.payload.cost_estimation.is_none());
+    assert!(snapshot.payload.cost_metadata.is_none());
     let uploaded: ClaudeTranscriptEnvelope = serde_json::from_slice(&raw).unwrap();
     assert_eq!(uploaded.entries, envelope.entries);
     assert!(diagnostics.root.incomplete_trailing_record);
