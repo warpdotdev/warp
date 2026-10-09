@@ -174,23 +174,32 @@ impl ToolProjection {
                     )),
                 })
             }
-            Self::FileEdits { path, new_text, .. } => {
+            Self::FileEdits {
+                path,
+                old_text,
+                new_text,
+            } => {
                 let result = if failed {
                     apply_file_diffs_result::Result::Error(apply_file_diffs_result::Error {
                         message: output,
                     })
                 } else {
+                    // `updated_files_v2` carries whole files. A new file's text is exactly
+                    // that; a hunk edit only tells us the replaced span, so the result names no
+                    // files rather than passing the span off as the file.
+                    let updated_files_v2 = match old_text {
+                        None => vec![apply_file_diffs_result::success::UpdatedFileContent {
+                            file: Some(FileContent {
+                                file_path: path.clone(),
+                                content: new_text.clone(),
+                                line_range: None,
+                            }),
+                            was_edited_by_user: false,
+                        }],
+                        Some(_) => Vec::new(),
+                    };
                     apply_file_diffs_result::Result::Success(apply_file_diffs_result::Success {
-                        updated_files_v2: vec![
-                            apply_file_diffs_result::success::UpdatedFileContent {
-                                file: Some(FileContent {
-                                    file_path: path.clone(),
-                                    content: new_text.clone(),
-                                    line_range: None,
-                                }),
-                                was_edited_by_user: false,
-                            },
-                        ],
+                        updated_files_v2,
                         ..Default::default()
                     })
                 };
@@ -765,7 +774,7 @@ fn line_range_from_raw_input(raw_input: Option<&Value>) -> Option<FileContentLin
         .find_map(|key| input.get(key)?.as_u64())?;
     let limit = input.get("limit")?.as_u64()?;
     let start = u32::try_from(start.max(1)).ok()?;
-    let end = u32::try_from(u64::from(start) + limit.saturating_sub(1)).ok()?;
+    let end = u32::try_from(u64::from(start).checked_add(limit.saturating_sub(1))?).ok()?;
     Some(FileContentLineRange { start, end })
 }
 

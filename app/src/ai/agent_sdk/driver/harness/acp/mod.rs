@@ -40,6 +40,7 @@ use serde_json::Value;
 use uuid::Uuid;
 use warp_cli::agent::{Harness, HarnessTransport};
 use warp_core::channel::ChannelState;
+use warp_core::safe_warn;
 use warp_managed_secrets::ManagedSecretValue;
 use warp_multi_agent_api::response_event::{StreamFinished, stream_finished};
 use warp_multi_agent_api::{ClientAction, ResponseEvent, response_event};
@@ -951,9 +952,14 @@ async fn answer_permission_request(
             None => PermissionOutcome::Cancelled,
         },
         (PolicyDecision::Deny { reason }, chosen) => {
-            log::warn!(
-                "Refusing ACP permission request for `{}`: {reason}",
-                params.tool_call.title.as_deref().unwrap_or("tool call")
+            // The title is agent-authored and can quote commands or paths; keep it out of the
+            // reported breadcrumb.
+            safe_warn!(
+                safe: ("Refusing ACP permission request: {reason}"),
+                full: (
+                    "Refusing ACP permission request for `{}`: {reason}",
+                    params.tool_call.title.as_deref().unwrap_or("tool call")
+                )
             );
             match chosen {
                 Some(option) => PermissionOutcome::Selected {

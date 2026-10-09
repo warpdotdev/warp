@@ -375,14 +375,52 @@ fn edit_tool_calls_with_a_diff_project_to_apply_file_diffs() {
         panic!("expected ApplyFileDiffs result, got {result:?}");
     };
     match applied.result {
+        Some(apply_file_diffs_result::Result::Success(success)) => assert!(
+            success.updated_files_v2.is_empty(),
+            "a hunk is not the file's content, so no updated file is reported"
+        ),
+        other => panic!("expected Success, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_created_file_reports_its_full_content() {
+    let mut mapper = mapper();
+    let call = mapper.map_update(update(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "edit-new",
+        "kind": "edit",
+        "status": "completed",
+        "content": [{ "type": "diff", "path": "NEW.md", "newText": "# New" }]
+    })));
+    let ToolResult::ApplyFileDiffs(applied) = reported_result(&call[2]).1 else {
+        panic!("expected ApplyFileDiffs result");
+    };
+    match applied.result {
         Some(apply_file_diffs_result::Result::Success(success)) => {
             assert_eq!(success.updated_files_v2.len(), 1);
             let file = success.updated_files_v2[0].file.as_ref().unwrap();
-            assert_eq!(file.file_path, "src/main.rs");
-            assert_eq!(file.content, "fn main() { run(); }");
+            assert_eq!(file.file_path, "NEW.md");
+            assert_eq!(file.content, "# New");
         }
         other => panic!("expected Success, got {other:?}"),
     }
+}
+
+#[test]
+fn absurd_read_limits_do_not_produce_a_line_range() {
+    let mut mapper = mapper();
+    let call = mapper.map_update(update(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "read-huge",
+        "kind": "read",
+        "status": "pending",
+        "rawInput": { "path": "/tmp/a", "offset": 1, "limit": u64::MAX }
+    })));
+    let Tool::ReadFiles(read) = announced_tool(&call[0]).1 else {
+        panic!("expected ReadFiles");
+    };
+    assert!(read.files[0].line_ranges.is_empty());
 }
 
 #[test]
