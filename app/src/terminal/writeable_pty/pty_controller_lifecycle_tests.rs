@@ -5,9 +5,11 @@ use warpui::App;
 
 use super::*;
 use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::input::CommandExecutionSource;
 use crate::terminal::model::StartCommandOutcome;
-use crate::terminal::model::ansi::{Handler, PreexecValue};
+use crate::terminal::model::ansi::{Handler, PreexecValue, PromptMetadata};
 use crate::terminal::model::session::{SessionId, SessionInfo, Sessions};
+use crate::terminal::shell::ShellType;
 
 #[derive(Clone, Default)]
 struct TestEventLoopSender {
@@ -200,6 +202,63 @@ fn native_shell_completions_reports_no_matches_without_an_active_session() {
             assert!(controller.pending_writes.is_empty());
         });
         assert!(sender.messages.lock().is_empty());
+
+        drop(model_events_tx);
+    });
+}
+
+#[test]
+fn write_command_sends_immediately_when_block_has_precmd_despite_inactive_line_editor() {
+    App::test((), |mut app| async move {
+        let model = terminal_model();
+        model.lock().prompt_only_precmd(PromptMetadata::default());
+        assert!(
+            model
+                .lock()
+                .block_list()
+                .active_block()
+                .has_received_precmd()
+        );
+        assert!(!model.lock().block_list().active_block().started());
+
+        let (model_events_tx, model_events_rx) = async_channel::unbounded();
+        let (_executor_command_tx, executor_command_rx) = async_channel::unbounded();
+        let sessions = app.add_model(|_| Sessions::new_for_test());
+        let model_events =
+            app.add_model(|ctx| ModelEventDispatcher::new(model_events_rx, sessions.clone(), ctx));
+        let line_editor_status =
+            app.add_model(|ctx| LineEditorStatus::new(model_events.clone(), sessions.clone(), ctx));
+        let sender = TestEventLoopSender::default();
+        let controller = app.add_model(|ctx| {
+            PtyController::new(
+                sender.clone(),
+                model_events,
+                line_editor_status.clone(),
+                sessions,
+                executor_command_rx,
+                model,
+                ctx,
+            )
+        });
+
+        line_editor_status.read(&app, |status, _| {
+            assert!(!status.is_line_editor_active());
+        });
+
+        let outcome = controller.update(&mut app, |controller, ctx| {
+            controller.write_command("ls", ShellType::Bash, CommandExecutionSource::User, ctx)
+        });
+        assert_eq!(outcome, StartCommandOutcome::Accepted);
+        controller.read(&app, |controller, _| {
+            assert!(
+                controller.pending_writes.is_empty(),
+                "command must not stay queued when the active block is already at a prompt"
+            );
+        });
+        assert!(
+            !sender.messages.lock().is_empty(),
+            "command bytes must be written immediately despite inactive LineEditorStatus"
+        );
 
         drop(model_events_tx);
     });
