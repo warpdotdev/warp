@@ -40,8 +40,9 @@ impl PersistenceOutcome {
         }
     }
 
-    pub(super) fn block_only(result: Result<()>) -> Self {
-        // Harnesses without transcript persistence can still report their block-save result.
+    pub(super) fn without_transcript(result: Result<()>) -> Self {
+        // Harnesses without transcript persistence still report the result of their other
+        // artifact (a block snapshot or native conversation data).
         Self {
             result,
             uploaded_usage: None,

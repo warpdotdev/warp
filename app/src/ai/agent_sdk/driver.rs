@@ -529,6 +529,17 @@ fn debug_turn_task_state(status: &ConversationStatus) -> Option<AgentTaskState> 
     }
 }
 
+/// The next save point a harness runner raised, or `None` once its channel closes. Never
+/// resolves for runners that raise none.
+async fn next_save_request(
+    save_requests: Option<async_channel::Receiver<SavePoint>>,
+) -> Option<SavePoint> {
+    match save_requests {
+        Some(save_requests) => save_requests.recv().await.ok(),
+        None => future::pending().await,
+    }
+}
+
 /// How long the driver should stay alive after the conversation reaches `status`. `None` exits
 /// immediately.
 ///
@@ -632,11 +643,12 @@ fn cli_session_status_log_outcome(status: &CLIAgentSessionStatus) -> &'static st
 
 /// How to resume an existing conversation when starting an agent run.
 ///
-/// The Oz harness restores the full conversation transcript into the terminal pane and treats
-/// any new prompt as a follow-up; third-party harnesses round-trip a harness-specific payload
-/// (see [`ResumePayload`]) instead.
+/// Harnesses that render through a native conversation (Oz, and third-party harnesses driven
+/// over ACP) restore the full conversation into the terminal pane and treat any new prompt as a
+/// follow-up; terminal-driven third-party harnesses round-trip a harness-specific payload (see
+/// [`ResumePayload`]) instead.
 pub enum ResumeOptions {
-    Oz(Box<ConversationRestorationInNewPaneType>),
+    Native(Box<ConversationRestorationInNewPaneType>),
     ThirdParty(Box<ResumePayload>),
 }
 
@@ -1147,10 +1159,10 @@ impl AgentDriver {
         } = options;
 
         // Split the unified resume option into the two internal slots that the rest of
-        // the driver consumes: terminal-driven Oz transcript restoration vs. third-party
+        // the driver consumes: native conversation restoration vs. third-party
         // harness payload rehydration.
         let (conversation_restoration, resume_payload) = match resume {
-            Some(ResumeOptions::Oz(restoration)) => (Some(*restoration), None),
+            Some(ResumeOptions::Native(restoration)) => (Some(*restoration), None),
             Some(ResumeOptions::ThirdParty(payload)) => (None, Some(*payload)),
             None => (None, None),
         };
@@ -3324,6 +3336,8 @@ impl AgentDriver {
         let mut detected_runtime_failure: Option<harness_output_monitor::DetectedHarnessError> =
             None;
 
+        let mut save_requests = runner.save_requests();
+
         // Periodically save the conversation while the command is running and handle
         // exiting gracefully once the idle timeout elapses.
         let command_result = loop {
@@ -3337,6 +3351,16 @@ impl AgentDriver {
                         .await
                         .context("Failed to enqueue periodic harness conversation save"));
                 }
+                save_point = next_save_request(save_requests.clone()).fuse() => match save_point {
+                    Some(save_point) => {
+                        report_if_error!(runner
+                            .clone()
+                            .enqueue_save(save_point, foreground)
+                            .await
+                            .context("Failed to enqueue harness conversation save"));
+                    }
+                    None => save_requests = None,
+                },
                 _ = harness_exit_rx => {
                     let start_event = ExitEscalationEvent::ShutdownRequested {
                         awaiting_input: Self::session_blocked_on_needs_input(foreground).await,

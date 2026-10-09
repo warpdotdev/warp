@@ -3939,6 +3939,24 @@ impl AIConversation {
         }
     }
 
+    /// The conversation's server-shaped tasks as the `ConversationData` the server stores for
+    /// native history.
+    // Only the ACP harness runner in `agent_sdk` uploads it, and that is not built for wasm.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub(crate) fn to_conversation_data(&self) -> api::ConversationData {
+        api::ConversationData {
+            tasks: self.persisted_tasks(),
+            ..Default::default()
+        }
+    }
+
+    /// Tasks with a server-shaped source; optimistic placeholders have none to persist.
+    fn persisted_tasks(&self) -> Vec<api::Task> {
+        self.all_tasks()
+            .filter_map(|task| task.source_for_persistence())
+            .collect()
+    }
+
     pub(crate) fn write_updated_conversation_state(
         &mut self,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
@@ -3990,10 +4008,7 @@ impl AIConversation {
             }
         };
 
-        let updated_tasks: Vec<_> = self
-            .all_tasks()
-            .filter_map(|task| task.source_for_persistence())
-            .collect();
+        let updated_tasks = self.persisted_tasks();
         let event = ModelEvent::UpdateMultiAgentConversation {
             conversation_id: self.id.to_string(),
             updated_tasks,

@@ -79,6 +79,8 @@ pub(crate) enum ResumePayload {
     Claude(ClaudeResumeInfo),
     /// Codex session state fetched from the server's transcript endpoint.
     Codex(CodexResumeInfo),
+    /// The server conversation an ACP-driven run continues.
+    Acp(ServerConversationToken),
 }
 
 impl TryFrom<ResumePayload> for ClaudeResumeInfo {
@@ -608,6 +610,12 @@ pub(crate) trait HarnessRunner: Send + Sync + 'static {
         foreground: &ModelSpawner<AgentDriver>,
     ) -> PersistenceOutcome;
     fn persistence(&self) -> &HarnessPersistence;
+
+    /// Save points the runner raises on its own while the harness is running, which the driver
+    /// forwards to [`Self::enqueue_save`].
+    fn save_requests(&self) -> Option<async_channel::Receiver<SavePoint>> {
+        None
+    }
 
     /// Queues a save without waiting for persistence; overlapping requests are coalesced.
     async fn enqueue_save(
