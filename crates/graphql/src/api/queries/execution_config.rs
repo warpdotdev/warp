@@ -44,7 +44,7 @@ pub struct BootstrapTaskOutput {
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "Task", variables = "ExecutionBootstrapVariables")]
 pub struct BootstrapTask {
-    #[arguments(executionId: $execution_id)]
+    #[arguments(executionId: $execution_id, supportsDeferredRepositories: true)]
     pub execution_config: ExecutionConfiguration,
     pub attachments: Vec<TaskAttachment>,
 }
@@ -67,6 +67,7 @@ pub struct ExecutionConfiguration {
     pub computer_use_model_id: Option<String>,
     pub inference_providers: Option<InferenceProviderClientConfigs>,
     pub repositories: Vec<ExecutionRepository>,
+    pub deferred_repositories: Vec<SourceRepo>,
     pub setup_commands: Vec<String>,
     pub providers: Option<CloudProviderClientConfigs>,
     pub session_sharing_acls: Vec<SessionSharingAclSpec>,

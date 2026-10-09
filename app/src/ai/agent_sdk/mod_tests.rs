@@ -53,6 +53,72 @@ use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
 
 #[test]
+fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
+    App::test((), |mut app| async move {
+        let root = tempfile::TempDir::new().unwrap();
+        let args =
+            parse_run_agent_args(&["agent", "run", "--task-id", TASK_ID, "--execution-id", "42"]);
+        for eager in [
+            json!([]),
+            json!([{
+                "forge": "GITHUB", "owner": "acme", "name": "api",
+                "ref": {"type": "BRANCH", "value": "feature"},
+                "cloneFrom": null, "preserveOrigin": true,
+            }]),
+        ] {
+            let expected_eager_count = eager.as_array().unwrap().len();
+            let config = serde_json::from_value(json!({
+                "taskId": TASK_ID, "executionId": "42", "harness": "OZ",
+                "conversationId": null, "parentRunId": null, "teamId": null, "modelId": null,
+                "reasoningLevel": null, "profileId": null, "computerUseModelId": null,
+                "inferenceProviders": null, "providers": null,
+                "idleOnCompleteSeconds": null, "idleOnFailSeconds": null,
+                "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
+                "computerUseEnabled": false, "repositories": eager,
+                "deferredRepositories": [{
+                    "codeForge": "GITLAB", "owner": "platform/backend", "repo": "api",
+                }],
+                "setupCommands": [], "sessionSharingAcls": [],
+                "skipInitialTurn": false, "snapshotDisabled": false,
+            }))
+            .unwrap();
+            let (options, _, _, _) = app.update(|ctx| {
+                super::build_execution_task_and_options(
+                    &args,
+                    config,
+                    root.path().to_path_buf(),
+                    None,
+                    Vec::new(),
+                    ctx,
+                )
+                .unwrap()
+            });
+            assert_eq!(options.workspace.source_repos.len(), expected_eager_count);
+            assert!(options.use_factory_repositories);
+            if expected_eager_count != 0 {
+                assert_eq!(
+                    options.workspace.source_repos,
+                    vec![SourceRepo::new(
+                        CodeForge::GitHub,
+                        "acme".into(),
+                        "api".into(),
+                    )]
+                );
+            }
+            assert_eq!(
+                options.workspace.deferred_repos,
+                vec![SourceRepo::new(
+                    CodeForge::GitLab,
+                    "platform/backend".into(),
+                    "api".into(),
+                )]
+            );
+            assert_eq!(options.workspace.factory_skill_dirs, Some(Vec::new()));
+        }
+    });
+}
+
+#[test]
 fn paired_task_data_downloads_listed_attachment_without_refetching_it() {
     let _images = FeatureFlag::AmbientAgentsImageUpload.override_enabled(true);
     let _handoff = FeatureFlag::OzHandoff.override_enabled(false);
@@ -273,6 +339,7 @@ pub(crate) fn agent_driver_options() -> AgentDriverOptions {
     AgentDriverOptions {
         working_dir: std::env::current_dir().unwrap(),
         task_id: None,
+        use_factory_repositories: false,
         experimental: None,
         parent_run_id: None,
         should_share: false,

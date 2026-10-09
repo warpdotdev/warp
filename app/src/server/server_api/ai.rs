@@ -1592,6 +1592,7 @@ pub trait AIClient: 'static + Send + Sync {
         task_id: String,
         workload_token: String,
         accepts_partial_refresh: bool,
+        use_factory_repositories: bool,
     ) -> Result<TaskGitCredentialsResponse, TaskGitCredentialsError>;
 
     /// Authorizes a REMOTE-2661 debug agent prompt against a retained environment-setup-failure
@@ -1875,12 +1876,14 @@ impl ServerApi {
         task_id: String,
         workload_token: String,
         accepts_partial_refresh: bool,
+        use_factory_repositories: bool,
     ) -> Result<TaskGitCredentialsResponse, TaskGitCredentialsError> {
         let variables = TaskGitCredentialsVariables {
             input: TaskGitCredentialsInput {
                 task_id: cynic::Id::new(task_id),
                 workload_token,
                 accepts_partial_refresh: Some(accepts_partial_refresh),
+                use_factory_repositories: use_factory_repositories.then_some(true),
             },
             request_context: get_request_context(),
         };
@@ -3099,17 +3102,21 @@ impl AIClient for ServerApi {
         task_id: String,
         workload_token: String,
         accepts_partial_refresh: bool,
+        use_factory_repositories: bool,
     ) -> Result<TaskGitCredentialsResponse, TaskGitCredentialsError> {
         match self
             .get_task_git_credentials_current(
                 task_id.clone(),
                 workload_token.clone(),
                 accepts_partial_refresh,
+                use_factory_repositories,
             )
             .await
         {
             Ok(response) => Ok(response),
-            Err(error) if is_unknown_git_credential_schema_error(&error) => {
+            Err(error)
+                if !use_factory_repositories && is_unknown_git_credential_schema_error(&error) =>
+            {
                 log::info!(
                     "taskGitCredentials partial-refresh fields are unavailable; falling back to the pre-deploy schema"
                 );

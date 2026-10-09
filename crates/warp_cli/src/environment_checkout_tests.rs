@@ -2,6 +2,32 @@ use clap::Parser as _;
 
 use super::*;
 use crate::{Args, CliCommand, Command};
+#[test]
+fn strict_checkout_parses_and_conflicts_with_origin_cleanup() {
+    let command = [
+        "oz",
+        "environment-checkout",
+        "--requests-file",
+        "request.json",
+        "--report-file",
+        "report.json",
+        "--fail-if-target-exists",
+    ];
+    let args = Args::try_parse_from(command).unwrap();
+    let Some(Command::CommandLine(parsed)) = args.command() else {
+        panic!("CLI command")
+    };
+    let CliCommand::EnvironmentCheckout(args) = parsed.as_ref() else {
+        panic!("checkout command")
+    };
+    assert!(args.fail_if_target_exists);
+    assert_eq!(
+        Args::try_parse_from(command.into_iter().chain(["--remove-origins-only"]))
+            .unwrap_err()
+            .kind(),
+        clap::error::ErrorKind::ArgumentConflict
+    );
+}
 
 #[test]
 fn hidden_command_parses_paths_and_traces_without_payload() {

@@ -94,8 +94,13 @@ async fn run_async(args: &EnvironmentCheckoutArgs) -> anyhow::Result<()> {
     let mirror_root = (!args.remove_origins_only)
         .then(optional_mirror_root)
         .flatten();
-    let mut outcomes =
-        checkout_batch(&batch, mirror_root.as_deref(), args.remove_origins_only).await?;
+    let mut outcomes = checkout_batch(
+        &batch,
+        mirror_root.as_deref(),
+        args.remove_origins_only,
+        args.fail_if_target_exists,
+    )
+    .await?;
     let failed = outcomes.iter().any(|outcome| outcome.failure.is_some());
     let identity_diagnostics = if failed && !args.remove_origins_only {
         Some(collect_failure_identity(&batch, &outcomes).await)
@@ -332,6 +337,7 @@ async fn checkout_batch(
     batch: &CheckoutBatch,
     mirror_root: Option<&Path>,
     remove_origins_only: bool,
+    fail_if_target_exists: bool,
 ) -> anyhow::Result<Vec<CheckoutOutcome>> {
     batch.validate().map_err(|error| anyhow!(error))?;
     let mut groups = HashMap::<_, Vec<_>>::new();
@@ -354,7 +360,14 @@ async fn checkout_batch(
                     .await
                     .map_err(|_| CheckoutFailureKind::RemoveOrigin)
             } else {
-                checkout(request, &batch.working_dir, mirror_root, &mut git).await
+                checkout(
+                    request,
+                    &batch.working_dir,
+                    mirror_root,
+                    fail_if_target_exists,
+                    &mut git,
+                )
+                .await
             };
             let duration = started.elapsed();
             log::info!(
@@ -518,16 +531,21 @@ async fn capture(mut reader: impl AsyncRead + Unpin) -> io::Result<(String, bool
     ))
 }
 
-/// Checks out one request into `working_dir`. Existing checkouts are updated in place; new ones
-/// are built from the mirror when `mirror_root` is set, falling back to the network if that fails.
+/// Checks out one request into `working_dir`, refusing existing targets when requested.
+/// New checkouts use the mirror when available, falling back to the network if that fails.
 async fn checkout(
     request: &CheckoutRequest,
     working_dir: &Path,
     mirror_root: Option<&Path>,
+    fail_if_target_exists: bool,
     git: &mut Git,
 ) -> Result<(), CheckoutFailureKind> {
     let target = working_dir.join(&request.checkout_name);
     let existing = match fs::symlink_metadata(&target).await {
+        Ok(_) if fail_if_target_exists => {
+            git.record("checkout target already exists; choose an unused checkout name");
+            return Err(CheckoutFailureKind::Clone);
+        }
         Ok(metadata) if metadata.is_dir() => true,
         Ok(_) => {
             git.record("checkout target is not a repository directory");

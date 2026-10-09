@@ -9,6 +9,8 @@ pub struct EnvironmentCheckoutArgs {
     pub report_file: PathBuf,
     #[arg(long)]
     pub remove_origins_only: bool,
+    #[arg(long, conflicts_with = "remove_origins_only")]
+    pub fail_if_target_exists: bool,
 }
 
 #[cfg(test)]

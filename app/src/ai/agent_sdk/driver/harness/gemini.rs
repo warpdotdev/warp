@@ -61,14 +61,14 @@ impl ThirdPartyHarness for GeminiHarness {
         system_prompt: Option<&str>,
         _resumption_prompt: Option<&str>,
         context: Option<&str>,
-        _workspace_root: &Path,
+        workspace_root: &Path,
         harness_working_dir: &Path,
         _task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
         _resume: Option<ResumePayload>,
-        _resolved_env_vars: &HashMap<OsString, OsString>,
-        _skill_dirs: &[PathBuf],
+        resolved_env_vars: &HashMap<OsString, OsString>,
+        skill_dirs: &[PathBuf],
         _resolved_secrets: &HashMap<String, ManagedSecretValue>,
         _resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
         _third_party_harness_model_config: Option<&HarnessModelConfig>,
@@ -80,6 +80,26 @@ impl ThirdPartyHarness for GeminiHarness {
                 error,
             }
         })?;
+        if resolved_env_vars.contains_key(std::ffi::OsStr::new(
+            super::super::DEFERRED_REPOSITORIES_SKILL_ENV,
+        )) {
+            let skill_root = harness_working_dir.join(".gemini").join("skills");
+            let published = super::skill_dirs_publish::publish_skills_for_harness(
+                &skill_root,
+                workspace_root,
+                warp_isolation_platform::detect().is_some(),
+                skill_dirs,
+                true,
+            )
+            .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
+                harness: self.cli_agent().command_prefix().to_owned(),
+                error,
+            })?;
+            super::skill_dirs_publish::exclude_published_skill_paths_from_git(
+                harness_working_dir,
+                &published,
+            );
+        }
 
         // Gemini does not support conversation resume yet. When it does, it will add its
         // own `ResumePayload::Gemini(..)` variant and override `fetch_resume_payload`,

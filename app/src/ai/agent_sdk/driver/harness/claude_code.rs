@@ -737,7 +737,12 @@ pub(crate) fn prepare_claude_environment_config(
         api_key_suffix.as_deref(),
     )?;
     prepare_claude_settings(&claude_settings_path)?;
-    publish_skills_for_claude(workspace_root, harness_working_dir, skill_dirs);
+    publish_skills_for_claude(
+        workspace_root,
+        harness_working_dir,
+        skill_dirs,
+        resolved_env_vars.contains_key(OsStr::new(super::super::DEFERRED_REPOSITORIES_SKILL_ENV)),
+    )?;
     Ok(())
 }
 
@@ -758,7 +763,8 @@ fn publish_skills_for_claude(
     workspace_root: &Path,
     harness_working_dir: &Path,
     skill_dirs: &[PathBuf],
-) {
+    has_deferred_repositories: bool,
+) -> Result<()> {
     let skill_root = harness_working_dir.join(".claude").join("skills");
     let is_sandbox = warp_isolation_platform::detect().is_some();
     let published = super::skill_dirs_publish::publish_skills_for_harness(
@@ -766,7 +772,8 @@ fn publish_skills_for_claude(
         workspace_root,
         is_sandbox,
         skill_dirs,
-    );
+        has_deferred_repositories,
+    )?;
     super::skill_dirs_publish::exclude_published_skill_paths_from_git(
         harness_working_dir,
         &published,
@@ -781,6 +788,7 @@ fn publish_skills_for_claude(
             )
         );
     }
+    Ok(())
 }
 
 // This function is used specifically for determining where to land `.claude.json`.

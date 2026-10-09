@@ -911,6 +911,7 @@ fn apply_refreshed_credentials(response: TaskGitCredentialsResponse) -> Result<b
 async fn try_refresh(
     task_id: &str,
     ai_client: &Arc<dyn AIClient>,
+    use_factory_repositories: bool,
 ) -> Result<(), TaskGitCredentialsError> {
     ensure_workload_token_available()?;
     let workload_token =
@@ -920,7 +921,12 @@ async fn try_refresh(
             .token;
 
     let response = ai_client
-        .get_task_git_credentials(task_id.to_string(), workload_token, true)
+        .get_task_git_credentials(
+            task_id.to_string(),
+            workload_token,
+            true,
+            use_factory_repositories,
+        )
         .await?;
 
     if apply_refreshed_credentials(response).map_err(TaskGitCredentialsError::Request)? {
@@ -950,7 +956,11 @@ async fn try_refresh(
 /// This future never resolves — it is designed to be raced with the harness
 /// execution future via `futures::select!` and dropped when the harness
 /// completes.
-pub(crate) async fn refresh_loop(task_id: String, ai_client: Arc<dyn AIClient>) {
+pub(crate) async fn refresh_loop(
+    task_id: String,
+    ai_client: Arc<dyn AIClient>,
+    use_factory_repositories: bool,
+) {
     loop {
         warpui::r#async::Timer::after(GIT_CREDENTIALS_REFRESH_INTERVAL).await;
 
@@ -958,7 +968,7 @@ pub(crate) async fn refresh_loop(task_id: String, ai_client: Arc<dyn AIClient>) 
 
         if with_retry(
             "Git credentials refresh",
-            || try_refresh(&task_id, &ai_client),
+            || try_refresh(&task_id, &ai_client, use_factory_repositories),
             is_retryable,
             |delay| async move {
                 warpui::r#async::Timer::after(delay).await;

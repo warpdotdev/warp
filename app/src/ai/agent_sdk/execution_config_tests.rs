@@ -74,6 +74,18 @@ fn execution_repositories_keep_individual_origin_policy_and_refs() {
 }
 
 #[test]
+fn execution_deferred_repositories_reject_unknown_forges() {
+    assert!(
+        deferred_repositories(vec![ConfigSourceRepo {
+            code_forge: CodeForge::Unknown,
+            owner: "owner".into(),
+            repo: "repo".into(),
+        }])
+        .is_err()
+    );
+}
+
+#[test]
 fn execution_acls_reject_missing_email_and_unknown_access() {
     assert!(
         sharing_acls(vec![SessionSharingAclSpec {

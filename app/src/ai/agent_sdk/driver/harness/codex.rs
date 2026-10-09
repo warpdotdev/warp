@@ -156,7 +156,17 @@ impl ThirdPartyHarness for CodexHarness {
             harness: self.cli_agent().command_prefix().to_owned(),
             error,
         })?;
-        publish_skills_for_codex(workspace_root, harness_working_dir, skill_dirs);
+        publish_skills_for_codex(
+            workspace_root,
+            harness_working_dir,
+            skill_dirs,
+            resolved_env_vars
+                .contains_key(OsStr::new(super::super::DEFERRED_REPOSITORIES_SKILL_ENV)),
+        )
+        .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
+            harness: self.cli_agent().command_prefix().to_owned(),
+            error,
+        })?;
 
         // The ResumePayload shouldn't contain non-Codex information, error if it does.
         let codex_resume = resume.map(CodexResumeInfo::try_from).transpose()?;
@@ -640,7 +650,8 @@ fn publish_skills_for_codex(
     workspace_root: &Path,
     harness_working_dir: &Path,
     skill_dirs: &[PathBuf],
-) {
+    has_deferred_repositories: bool,
+) -> Result<()> {
     let skill_root = harness_working_dir.join(".agents").join("skills");
     let is_sandbox = warp_isolation_platform::detect().is_some();
     let published = super::skill_dirs_publish::publish_skills_for_harness(
@@ -648,7 +659,8 @@ fn publish_skills_for_codex(
         workspace_root,
         is_sandbox,
         skill_dirs,
-    );
+        has_deferred_repositories,
+    )?;
     super::skill_dirs_publish::exclude_published_skill_paths_from_git(
         harness_working_dir,
         &published,
@@ -663,6 +675,7 @@ fn publish_skills_for_codex(
             )
         );
     }
+    Ok(())
 }
 
 fn codex_config_dir() -> Result<PathBuf> {

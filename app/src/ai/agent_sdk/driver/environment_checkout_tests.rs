@@ -22,6 +22,84 @@ use super::super::environment_checkout_protocol::{
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::{CachedCheckout, attempt_cached_checkout};
 use super::{Git, capture, mirror_key, optional_mirror_root, run};
+#[test]
+fn strict_checkout_preserves_existing_work_and_reports_partial_success() {
+    fixture_test(
+        "strict_checkout_preserves_existing_work_and_reports_partial_success",
+        |fixture| {
+            fixture.prepare(fixture.request("existing", None), false);
+            let target = fixture.work().join("existing");
+            fs::write(target.join("README"), "uncommitted work\n").unwrap();
+            let original_config = fs::read(target.join(".git/config")).unwrap();
+            let original_refs = git(&target, &["show-ref"]);
+            let directory = TempDir::new().unwrap();
+            let args = EnvironmentCheckoutArgs {
+                requests_file: directory.path().join("requests.json"),
+                report_file: directory.path().join("report.json"),
+                remove_origins_only: false,
+                fail_if_target_exists: true,
+            };
+            let batch = fixture.batch(vec![
+                fixture.request(
+                    "existing",
+                    Some(RepositoryHeadRef::CommitSha(fixture.pinned())),
+                ),
+                fixture.request("fresh", None),
+            ]);
+            fs::write(&args.requests_file, serde_json::to_vec(&batch).unwrap()).unwrap();
+            assert!(run(&args).is_err());
+            let report: CheckoutReport =
+                serde_json::from_slice(&fs::read(&args.report_file).unwrap()).unwrap();
+            assert_eq!(report.outcomes.len(), 2);
+            assert_eq!(report.outcomes[0].request_index, 0);
+            assert_eq!(report.outcomes[0].failure, Some(CheckoutFailureKind::Clone));
+            assert!(
+                report.outcomes[0]
+                    .diagnostics
+                    .contains("target already exists")
+            );
+            assert_eq!(report.outcomes[1].request_index, 1);
+            assert_eq!(report.outcomes[1].failure, None);
+            assert_eq!(
+                git(&fixture.work().join("fresh"), &["rev-parse", "HEAD"]),
+                fixture.base()
+            );
+            assert_eq!(git(&target, &["show-ref"]), original_refs);
+            assert_eq!(
+                fs::read(target.join(".git/config")).unwrap(),
+                original_config
+            );
+            assert_eq!(
+                fs::read_to_string(target.join("README")).unwrap(),
+                "uncommitted work\n"
+            );
+        },
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn strict_checkout_rejects_dangling_symlinks_without_removing_them() {
+    fixture_test(
+        "strict_checkout_rejects_dangling_symlinks_without_removing_them",
+        |fixture| {
+            let target = fixture.work().join("linked");
+            let destination = fixture.root.join("absent");
+            std::os::unix::fs::symlink(&destination, &target).unwrap();
+            let outcomes = block_on(Compat::new(super::checkout_batch(
+                &fixture.batch(vec![fixture.request("linked", None)]),
+                None,
+                false,
+                true,
+            )))
+            .unwrap();
+            assert_eq!(outcomes[0].failure, Some(CheckoutFailureKind::Clone));
+            assert!(outcomes[0].diagnostics.contains("target already exists"));
+            assert_eq!(fs::read_link(target).unwrap(), destination);
+            assert!(!destination.exists());
+        },
+    );
+}
 
 #[test]
 fn cleanup_only_preserves_refs_and_reports_failures_without_cloning() {
@@ -43,6 +121,7 @@ fn cleanup_only_preserves_refs_and_reports_failures_without_cloning() {
                 requests_file: directory.path().join("requests.json"),
                 report_file: directory.path().join("report.json"),
                 remove_origins_only: true,
+                fail_if_target_exists: false,
             };
             let batch = fixture.batch(vec![
                 fixture.request(
@@ -119,6 +198,7 @@ fn checkout_io_failures_include_operation_and_underlying_error() {
             &batch,
             None,
             remove_origins_only,
+            false,
         )))
         .unwrap();
         assert_eq!(results[0].failure, Some(expected_kind));
@@ -170,6 +250,7 @@ fn helper_report_times_every_checkout_and_omits_unresolved_heads() {
                 requests_file: directory.path().join("requests.json"),
                 report_file: directory.path().join("report.json"),
                 remove_origins_only: false,
+                fail_if_target_exists: false,
             };
             let batch = fixture.batch(vec![
                 fixture.request("empty", None),
@@ -965,6 +1046,7 @@ fn helper_writes_typed_failures_and_rejects_invalid_requests_before_work() {
                 requests_file: directory.path().join("requests.json"),
                 report_file: directory.path().join("report.json"),
                 remove_origins_only: false,
+                fail_if_target_exists: false,
             };
             let batch = fixture.batch(vec![
                 fixture.request("good", None),
@@ -1365,6 +1447,7 @@ fn checkout_batch(
     block_on(Compat::new(super::checkout_batch(
         batch,
         mirror_root,
+        false,
         false,
     )))
 }

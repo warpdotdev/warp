@@ -97,6 +97,12 @@ pub(super) fn repositories(
         .collect()
 }
 
+pub(super) fn deferred_repositories(
+    repositories: Vec<ConfigSourceRepo>,
+) -> anyhow::Result<Vec<SourceRepo>> {
+    repositories.into_iter().map(source_repo).collect()
+}
+
 pub(super) fn sharing_acls(acls: Vec<SessionSharingAclSpec>) -> anyhow::Result<Vec<ShareRequest>> {
     acls.into_iter()
         .map(|acl| {
