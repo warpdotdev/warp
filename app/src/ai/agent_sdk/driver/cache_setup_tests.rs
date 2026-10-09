@@ -98,11 +98,11 @@ fn final_snapshot_includes_caller_usage_with_or_without_build_mounts() {
     let document: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(document["version"], 1);
-    assert!(document["updatedAt"].as_str().unwrap().ends_with('Z'));
+    assert!(document["updated_at"].as_str().unwrap().ends_with('Z'));
     assert_eq!(
-        document["userRequest"],
+        document["user_request"],
         serde_json::json!({
-            "git-mirrors": {"source": "warp", "cacheFramework": "git", "mountTarget": []}
+            "git-mirrors": {"source": "warp", "cache_framework": "git", "mount_target": []}
         })
     );
     write_cache_metadata(
@@ -120,13 +120,13 @@ fn final_snapshot_includes_caller_usage_with_or_without_build_mounts() {
     .unwrap();
     let document: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    assert_eq!(document["userRequest"].as_object().unwrap().len(), 2);
+    assert_eq!(document["user_request"].as_object().unwrap().len(), 2);
     assert_eq!(
-        document["userRequest"]["repos/key/target"]["mountTarget"],
+        document["user_request"]["repos/key/target"]["mount_target"],
         serde_json::json!(["/work/target"])
     );
     write_cache_metadata(root.path(), Vec::new()).unwrap();
     let document: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    assert_eq!(document["userRequest"], serde_json::json!({}));
+    assert_eq!(document["user_request"], serde_json::json!({}));
 }
