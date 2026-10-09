@@ -45,7 +45,6 @@ use warp_isolation_platform::IsolationPlatformError;
 #[cfg(not(target_family = "wasm"))]
 use warp_logging::log_file_path;
 use warp_managed_secrets::{ManagedSecretValue, convert_task_secrets};
-use warp_multi_agent_api::ConversationData;
 use warp_server_client::iap::{IapManager, IapManagerEvent};
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelSpawner, SingletonEntity};
@@ -54,7 +53,7 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::api::convert_conversation::{
     RestorationMode, convert_conversation_data_to_ai_conversation,
 };
-use crate::ai::agent::conversation::{AIConversationId, ServerAIConversationMetadata};
+use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::driver::harness::{HarnessKind, harness_kind};
 use crate::ai::agent_sdk::driver::{AgentDriverOptions, AgentRunPrompt, Task};
 use crate::ai::agent_sdk::mcp_config::build_mcp_servers_from_specs;
@@ -81,7 +80,7 @@ use crate::send_telemetry_sync_from_app_ctx;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::retry_strategies::with_retry;
 use crate::server::server_api::ai::{
-    AIClient, AgentConfigSnapshot, ConversationNotFound, GitCredential, TaskGitCredentialsError,
+    AIClient, AgentConfigSnapshot, GitCredential, TaskGitCredentialsError,
 };
 use crate::server::server_api::managed_secrets::AppManagedSecretManager as ManagedSecretManager;
 use crate::server::server_api::{ServerApi, ServerApiProvider};
@@ -1931,12 +1930,12 @@ impl AgentDriverRunner {
     /// `harness` is the resolved harness from the task config (already validated against the
     /// conversation's metadata up-front by [`common::fetch_and_validate_conversation_harness`]).
     ///
-    /// For the Oz harness, and for third-party harnesses that drive a native conversation,
-    /// fetches the full conversation and returns a [`driver::ResumeOptions::Native`] restoration.
-    /// Otherwise, delegates to [`ThirdPartyHarness::fetch_resume_payload`] and wraps the returned
-    /// payload (if any) in [`driver::ResumeOptions::ThirdParty`]; each harness owns its server
-    /// call and error mapping. Returns `None` if a third-party harness has no resume payload to
-    /// surface.
+    /// For harnesses that render through a native conversation (Oz, and third-party harnesses
+    /// driven over ACP), fetches the full conversation and returns a
+    /// [`driver::ResumeOptions::Native`] restoration. Otherwise, delegates to
+    /// [`ThirdPartyHarness::fetch_resume_payload`] and wraps the returned payload (if any) in
+    /// [`driver::ResumeOptions::ThirdParty`]; each harness owns its server call and error
+    /// mapping. Returns `None` if a third-party harness has no resume payload to surface.
     #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, conversation_id = conversation_id))]
     async fn load_conversation_information(
         foreground: &ModelSpawner<Self>,
@@ -1944,56 +1943,27 @@ impl AgentDriverRunner {
         harness: &HarnessKind,
     ) -> Result<Option<driver::ResumeOptions>, AgentDriverError> {
         match harness {
-            HarnessKind::Oz => {
-                let (conversation_data, metadata) =
-                    Self::fetch_server_conversation(foreground, &conversation_id)
-                        .await
-                        .map_err(conversation_load_failed)?;
-                Self::native_resume_options(&conversation_data, metadata).map(Some)
+            HarnessKind::Unsupported(harness) => {
+                return Err(AgentDriverError::HarnessSetupFailed {
+                    harness: harness.to_string(),
+                    reason: format!(
+                        "The {harness} harness is only supported for local child agent launches."
+                    ),
+                });
             }
-            HarnessKind::ThirdParty(h) => {
-                if !h.drives_cli_agent_session() {
-                    // A run that ended before its first save left no history, and the server
-                    // does not list a conversation until it has some; the run then continues the
-                    // same server conversation from an empty native one.
-                    match Self::fetch_server_conversation(foreground, &conversation_id).await {
-                        Ok((conversation_data, metadata))
-                            if !conversation_data.tasks.is_empty() =>
-                        {
-                            return Self::native_resume_options(&conversation_data, metadata)
-                                .map(Some);
-                        }
-                        Ok(_) => {}
-                        Err(error) if error.downcast_ref::<ConversationNotFound>().is_some() => {}
-                        Err(error) => return Err(conversation_load_failed(error)),
-                    }
-                    log::info!(
-                        "Conversation {conversation_id} has no stored native history; resuming it empty"
-                    );
-                }
+            HarnessKind::ThirdParty(h) if h.drives_cli_agent_session() => {
                 let harness_support_client = foreground
                     .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_harness_support_client())
                     .await?;
                 let resume_conversation_id = ServerConversationToken::new(conversation_id.clone());
-                Ok(
-                    h.fetch_resume_payload(&resume_conversation_id, harness_support_client)
-                        .await?
-                        .map(|payload| driver::ResumeOptions::ThirdParty(Box::new(payload))),
-                )
+                return Ok(h
+                    .fetch_resume_payload(&resume_conversation_id, harness_support_client)
+                    .await?
+                    .map(|payload| driver::ResumeOptions::ThirdParty(Box::new(payload))));
             }
-            HarnessKind::Unsupported(harness) => Err(AgentDriverError::HarnessSetupFailed {
-                harness: harness.to_string(),
-                reason: format!(
-                    "The {harness} harness is only supported for local child agent launches."
-                ),
-            }),
+            HarnessKind::Oz | HarnessKind::ThirdParty(_) => {}
         }
-    }
 
-    async fn fetch_server_conversation(
-        foreground: &ModelSpawner<Self>,
-        conversation_id: &str,
-    ) -> anyhow::Result<(ConversationData, ServerAIConversationMetadata)> {
         let server_api = foreground
             .spawn(|_, ctx| {
                 ServerApiProvider::handle(ctx)
@@ -2002,19 +1972,14 @@ impl AgentDriverRunner {
                     .clone()
             })
             .await?;
-        server_api
-            .get_ai_conversation(ServerConversationToken::new(conversation_id.to_owned()))
+        let token = ServerConversationToken::new(conversation_id.clone());
+        let (conversation_data, metadata) = server_api
+            .get_ai_conversation(token)
             .await
-    }
-
-    /// Restores the conversation into the run's terminal so the run continues it.
-    fn native_resume_options(
-        conversation_data: &ConversationData,
-        metadata: ServerAIConversationMetadata,
-    ) -> Result<driver::ResumeOptions, AgentDriverError> {
+            .map_err(|err| AgentDriverError::ConversationLoadFailed(format!("{err}")))?;
         let conversation = convert_conversation_data_to_ai_conversation(
             AIConversationId::default(),
-            conversation_data,
+            &conversation_data,
             metadata,
             RestorationMode::Continue,
         )
@@ -2023,13 +1988,13 @@ impl AgentDriverRunner {
                 "Failed to convert conversation data to AIConversation".into(),
             )
         })?;
-        Ok(driver::ResumeOptions::Native(Box::new(
+        Ok(Some(driver::ResumeOptions::Native(Box::new(
             ConversationRestorationInNewPaneType::Historical {
                 conversation,
                 should_use_live_appearance: false,
                 ambient_agent_task_id: None,
             },
-        )))
+        ))))
     }
 
     /// Resolve the environment and store into `driver_options`.
@@ -2119,10 +2084,6 @@ impl AgentDriverRunner {
             });
         });
     }
-}
-
-fn conversation_load_failed(error: anyhow::Error) -> AgentDriverError {
-    AgentDriverError::ConversationLoadFailed(format!("{error}"))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

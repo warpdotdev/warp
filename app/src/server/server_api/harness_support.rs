@@ -214,8 +214,7 @@ pub struct SnapshotUploadResponse {
 #[derive(serde::Serialize)]
 struct CreateExternalConversationRequest {
     format: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    harness: Option<&'static str>,
+    harness: &'static str,
 }
 
 #[derive(serde::Deserialize)]
@@ -332,12 +331,10 @@ impl ReportShutdownRequest {
 pub trait HarnessSupportClient: 'static + Send + Sync {
     /// Create a new external conversation for a third-party harness. Returns a
     /// server-issued [`ServerConversationToken`], not a client-local `AIConversationId`.
-    ///
-    /// `harness` names the underlying harness for formats that are shared across harnesses.
     async fn create_external_conversation(
         &self,
         format: &str,
-        harness: Option<Harness>,
+        harness: Harness,
     ) -> Result<ServerConversationToken>;
 
     /// Replace the stored native conversation data for an external conversation whose format
@@ -538,14 +535,14 @@ impl HarnessSupportClient for ServerApi {
     async fn create_external_conversation(
         &self,
         format: &str,
-        harness: Option<Harness>,
+        harness: Harness,
     ) -> Result<ServerConversationToken> {
         let response: CreateExternalConversationResponse = self
             .post_public_api(
                 "harness-support/external-conversation",
                 &CreateExternalConversationRequest {
                     format: format.to_string(),
-                    harness: harness.map(Harness::config_name),
+                    harness: harness.config_name(),
                 },
             )
             .await?;

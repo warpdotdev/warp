@@ -86,9 +86,8 @@ use crate::server::server_api::ServerApi;
 use crate::server::server_api::harness_support::HarnessSupportClient;
 use crate::terminal::CLIAgent;
 
-/// Format slug for the server conversation backing an ACP-driven run. The server stores its
-/// history as client-reduced native conversation data rather than reducing a harness transcript.
-const ACP_CONVERSATION_FORMAT: &str = "acp_v0";
+/// Format slug sent to the server when creating the conversation for an ACP-driven run.
+const ACP_FORMAT: &str = "acp";
 
 /// Bound on the agent connecting back through the bridge plus its `initialize` and
 /// `session/new` handshakes.
@@ -198,17 +197,6 @@ impl ThirdPartyHarness for AcpHarness {
         false
     }
 
-    /// Only reached when the conversation has no stored native history to restore; the run then
-    /// continues the same server conversation from an empty native one. The agent's own session
-    /// is never resumed.
-    async fn fetch_resume_payload(
-        &self,
-        conversation_id: &ServerConversationToken,
-        _harness_support_client: Arc<dyn HarnessSupportClient>,
-    ) -> Result<Option<ResumePayload>, AgentDriverError> {
-        Ok(Some(ResumePayload::Acp(conversation_id.clone())))
-    }
-
     fn build_runner(
         &self,
         prompt: &str,
@@ -265,14 +253,11 @@ impl ThirdPartyHarness for AcpHarness {
             task_id,
             attachments_download_dir(harness_working_dir),
         );
-        let preexisting_conversation_id = match resume {
-            Some(ResumePayload::Acp(conversation_id)) => Some(conversation_id),
-            Some(ResumePayload::Claude(_) | ResumePayload::Codex(_)) => {
-                log::error!("ACP harness given a resume payload for a terminal-driven harness");
-                return Err(AgentDriverError::InvalidRuntimeState);
-            }
-            None => None,
-        };
+        // ACP runs resume by restoring the native conversation, never through a harness payload.
+        if resume.is_some() {
+            log::error!("ACP harness given a resume payload for a terminal-driven harness");
+            return Err(AgentDriverError::InvalidRuntimeState);
+        }
         let (save_request_tx, save_request_rx) = async_channel::unbounded();
         Ok(Box::new(AcpHarnessRunner {
             harness: self.harness,
@@ -288,7 +273,6 @@ impl ThirdPartyHarness for AcpHarness {
                 .iter()
                 .map(|(name, server)| mcp_server_for_acp(name, server))
                 .collect(),
-            preexisting_conversation_id,
             conversation: OnceLock::new(),
             persistence: HarnessPersistence::default(),
             save_request_tx,
@@ -304,20 +288,13 @@ struct RunningAgent {
     session_id: Option<String>,
 }
 
-/// The native conversation the run drives and the server conversation that persists it.
+/// The conversation for this run.
 #[derive(Clone)]
 struct RunConversation {
+    local_id: AIConversationId,
     server_id: ServerConversationToken,
-    local_id: AIConversationId,
-    /// The root task of a conversation restored from the server, which the run continues
-    /// instead of creating a new root.
-    restored_root_task_id: Option<String>,
-}
-
-/// What the bound native conversation already carries before the run's first turn.
-struct BoundConversation {
-    local_id: AIConversationId,
-    server_id: Option<ServerConversationToken>,
+    /// Set when the conversation was restored from the server; the run then continues this
+    /// root task instead of creating one.
     restored_root_task_id: Option<String>,
 }
 
@@ -334,10 +311,7 @@ pub(crate) struct AcpHarnessRunner {
     terminal_driver: ModelHandle<TerminalDriver>,
     attachments: Arc<AttachmentResolver>,
     mcp_servers: Vec<McpServer>,
-    /// The server conversation a resumed run continues when it had no stored history to
-    /// restore.
-    preexisting_conversation_id: Option<ServerConversationToken>,
-    /// Set once the server conversation is bound to the native conversation, before any turn.
+    /// Set before the first turn.
     conversation: OnceLock<RunConversation>,
     persistence: HarnessPersistence,
     /// Save points raised by the turn driver at request-stream and turn boundaries.
@@ -374,71 +348,51 @@ impl AcpHarnessRunner {
 
     /// Binds the native conversation the run drives and gives it a server identity before the
     /// first turn, so every request stream carries the server-known id. A conversation restored
-    /// from the server keeps its own; otherwise the resumed run's id is reused or a new server
-    /// conversation is created.
+    /// from the server already has one; otherwise a new server conversation is created.
     async fn bind_server_conversation(
         &self,
         restored_conversation_id: Option<AIConversationId>,
         foreground: &ModelSpawner<AgentDriver>,
         setup_events: &SetupClientEventReporter,
     ) -> Result<RunConversation, AgentDriverError> {
-        let bound =
+        let (local_id, restored) =
             with_ai_controller(foreground, &self.terminal_driver, move |controller, ctx| {
                 let local_id = controller
                     .native_prompt_conversation_id()
                     .unwrap_or_else(|| {
                         controller.bind_native_prompt_conversation(restored_conversation_id, ctx)
                     });
-                let conversation = BlocklistAIHistoryModel::as_ref(ctx).conversation(&local_id);
-                BoundConversation {
-                    local_id,
-                    server_id: conversation
-                        .and_then(|conversation| conversation.server_conversation_token().cloned()),
-                    restored_root_task_id: conversation
-                        .filter(|conversation| {
-                            conversation
-                                .get_root_task()
-                                .is_some_and(|task| task.source().is_some())
-                        })
-                        .map(|conversation| conversation.get_root_task_id().to_string()),
-                }
+                let restored = BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&local_id)
+                    .and_then(|conversation| {
+                        let server_id = conversation.server_conversation_token()?.clone();
+                        Some((server_id, conversation.get_root_task_id().to_string()))
+                    });
+                (local_id, restored)
             })
             .await?;
-        if let Some(server_id) = bound.server_id {
+        if let Some((server_id, root_task_id)) = restored {
             log::info!("Continuing restored ACP conversation {server_id}");
             return Ok(RunConversation {
+                local_id,
                 server_id,
-                local_id: bound.local_id,
-                restored_root_task_id: bound.restored_root_task_id,
+                restored_root_task_id: Some(root_task_id),
             });
         }
 
-        let server_id = match &self.preexisting_conversation_id {
-            Some(id) => {
-                log::info!("Resuming ACP conversation {id} without stored history");
-                id.clone()
-            }
-            None => {
-                let id = setup_events
-                    .record_result(SetupStep::ThirdPartyHarnessExternalConversation, async {
-                        self.client
-                            .create_external_conversation(
-                                ACP_CONVERSATION_FORMAT,
-                                Some(self.harness),
-                            )
-                            .await
-                            .map_err(|error| {
-                                report_error!(&error);
-                                AgentDriverError::ConfigBuildFailed(error)
-                            })
+        let server_id = setup_events
+            .record_result(SetupStep::ThirdPartyHarnessExternalConversation, async {
+                self.client
+                    .create_external_conversation(ACP_FORMAT, self.harness)
+                    .await
+                    .map_err(|error| {
+                        report_error!(&error);
+                        AgentDriverError::ConfigBuildFailed(error)
                     })
-                    .await?;
-                log::info!("Created ACP conversation {id}");
-                id
-            }
-        };
+            })
+            .await?;
+        log::info!("Created ACP conversation {server_id}");
         let token = server_id.as_str().to_owned();
-        let local_id = bound.local_id;
         foreground
             .spawn(move |_, ctx| {
                 BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
@@ -450,8 +404,8 @@ impl AcpHarnessRunner {
             .await
             .map_err(|_| AgentDriverError::InvalidRuntimeState)?;
         Ok(RunConversation {
-            server_id,
             local_id,
+            server_id,
             restored_root_task_id: None,
         })
     }
@@ -680,15 +634,14 @@ impl HarnessRunner for AcpHarnessRunner {
         Ok(command_handle)
     }
 
-    /// Uploads the native conversation at the boundaries the turn driver raises and at the end
-    /// of the run. Periodic saves are skipped: between boundaries the conversation only gains
-    /// streamed text, which the next boundary or the final save captures.
     async fn save_conversation(
         &self,
         save_point: SavePoint,
         foreground: &ModelSpawner<AgentDriver>,
     ) -> PersistenceOutcome {
         match save_point {
+            // Between the boundaries the turn driver raises, the conversation only gains streamed
+            // text, which the next boundary or the final save captures.
             SavePoint::Periodic => return PersistenceOutcome::skipped(),
             SavePoint::PostTurn | SavePoint::Final => {}
         }
@@ -974,18 +927,9 @@ async fn with_ai_controller<T: Send + 'static>(
         .map_err(|_| AgentDriverError::InvalidRuntimeState)
 }
 
-/// The native conversation the driver's terminal is bound to, binding a fresh one if needed.
-fn bound_conversation_id(
-    controller: &mut BlocklistAIController,
-    ctx: &mut ModelContext<BlocklistAIController>,
-) -> AIConversationId {
-    controller
-        .native_prompt_conversation_id()
-        .unwrap_or_else(|| controller.bind_native_prompt_conversation(None, ctx))
-}
-
 /// Captures the native conversation on the foreground thread and replaces the server's copy
-/// with it.
+/// with it. A conversation whose only task was torn down by a failed turn has nothing to
+/// upload, and the server rejects an empty snapshot.
 async fn upload_conversation_snapshot(
     client: &dyn HarnessSupportClient,
     conversation: &RunConversation,
@@ -1001,6 +945,13 @@ async fn upload_conversation_snapshot(
         .await
         .map_err(|_| anyhow!("Agent driver dropped before the ACP conversation was captured"))?
         .ok_or_else(|| anyhow!("ACP conversation {local_id:?} is no longer loaded"))?;
+    if snapshot.tasks.is_empty() {
+        log::info!(
+            "Skipping ACP conversation data upload to {}: conversation has no tasks",
+            conversation.server_id
+        );
+        return Ok(());
+    }
     client
         .upload_conversation_data(&conversation.server_id, &snapshot)
         .await
@@ -1019,7 +970,9 @@ async fn begin_turn(
     run_id: Option<String>,
 ) -> Result<ExternalHarnessTurn, AgentDriverError> {
     with_ai_controller(foreground, terminal_driver, move |controller, ctx| {
-        let conversation_id = bound_conversation_id(controller, ctx);
+        let conversation_id = controller
+            .native_prompt_conversation_id()
+            .unwrap_or_else(|| controller.bind_native_prompt_conversation(None, ctx));
         controller.begin_external_harness_turn(conversation_id, run_id, ctx)
     })
     .await?

@@ -529,17 +529,6 @@ fn debug_turn_task_state(status: &ConversationStatus) -> Option<AgentTaskState> 
     }
 }
 
-/// The next save point a harness runner raised, or `None` once its channel closes. Never
-/// resolves for runners that raise none.
-async fn next_save_request(
-    save_requests: Option<async_channel::Receiver<SavePoint>>,
-) -> Option<SavePoint> {
-    match save_requests {
-        Some(save_requests) => save_requests.recv().await.ok(),
-        None => future::pending().await,
-    }
-}
-
 /// How long the driver should stay alive after the conversation reaches `status`. `None` exits
 /// immediately.
 ///
@@ -3351,7 +3340,15 @@ impl AgentDriver {
                         .await
                         .context("Failed to enqueue periodic harness conversation save"));
                 }
-                save_point = next_save_request(save_requests.clone()).fuse() => match save_point {
+                save_point = {
+                    let save_requests = save_requests.clone();
+                    async move {
+                        match save_requests {
+                            Some(save_requests) => save_requests.recv().await.ok(),
+                            None => future::pending().await,
+                        }
+                    }
+                }.fuse() => match save_point {
                     Some(save_point) => {
                         report_if_error!(runner
                             .clone()
@@ -3359,6 +3356,7 @@ impl AgentDriver {
                             .await
                             .context("Failed to enqueue harness conversation save"));
                     }
+                    // The runner closed its channel; stop polling it.
                     None => save_requests = None,
                 },
                 _ = harness_exit_rx => {

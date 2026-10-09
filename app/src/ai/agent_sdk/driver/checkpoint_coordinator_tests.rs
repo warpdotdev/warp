@@ -96,7 +96,7 @@ impl HarnessSupportClient for FailingUploadTargetsClient {
     async fn create_external_conversation(
         &self,
         _format: &str,
-        _harness: Option<Harness>,
+        _harness: Harness,
     ) -> Result<ServerConversationToken> {
         unimplemented!("not used by the coordinator")
     }
@@ -209,7 +209,7 @@ impl HarnessSupportClient for RecordingClient {
     async fn create_external_conversation(
         &self,
         _format: &str,
-        _harness: Option<Harness>,
+        _harness: Harness,
     ) -> Result<ServerConversationToken> {
         unimplemented!("not used by the coordinator")
     }

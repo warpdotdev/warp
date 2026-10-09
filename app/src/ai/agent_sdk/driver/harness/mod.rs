@@ -79,8 +79,6 @@ pub(crate) enum ResumePayload {
     Claude(ClaudeResumeInfo),
     /// Codex session state fetched from the server's transcript endpoint.
     Codex(CodexResumeInfo),
-    /// The server conversation an ACP-driven run continues.
-    Acp(ServerConversationToken),
 }
 
 impl TryFrom<ResumePayload> for ClaudeResumeInfo {

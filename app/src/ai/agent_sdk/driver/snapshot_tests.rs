@@ -123,7 +123,7 @@ impl HarnessSupportClient for TestClient {
     async fn create_external_conversation(
         &self,
         _format: &str,
-        _harness: Option<Harness>,
+        _harness: Harness,
     ) -> Result<ServerConversationToken> {
         unimplemented!("not used by upload_snapshot_from_declarations_file")
     }

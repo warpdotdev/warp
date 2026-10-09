@@ -377,7 +377,7 @@ impl HarnessRunner for CodexHarnessRunner {
                 let id = setup_events
                     .record_result(SetupStep::ThirdPartyHarnessExternalConversation, async {
                         self.client
-                            .create_external_conversation(CODEX_CLI_FORMAT, None)
+                            .create_external_conversation(CODEX_CLI_FORMAT, Harness::Codex)
                             .await
                             .map_err(|e| {
                                 report_error!(&e);

@@ -168,7 +168,7 @@ impl HarnessRunner for GeminiHarnessRunner {
         let conversation_id = setup_events
             .record_result(SetupStep::ThirdPartyHarnessExternalConversation, async {
                 self.client
-                    .create_external_conversation(GEMINI_CLI_FORMAT, None)
+                    .create_external_conversation(GEMINI_CLI_FORMAT, Harness::Gemini)
                     .await
                     .map_err(|e| {
                         report_error!(&e);

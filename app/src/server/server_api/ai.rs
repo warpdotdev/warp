@@ -202,11 +202,6 @@ pub struct TaskStatusUpdate {
     pub platform_error: Option<Box<PlatformErrorInfo>>,
 }
 
-/// The server has no conversation visible to the caller under the requested id.
-#[derive(Debug, thiserror::Error)]
-#[error("Conversation not found")]
-pub(crate) struct ConversationNotFound;
-
 /// Error fetching git credentials for a task, either a structured platform error
 /// (potentially retryable) or a request-layer failure (workload-token issuance,
 /// network transport).
@@ -2763,7 +2758,7 @@ impl AIClient for ServerApi {
                 .conversations
                 .into_iter()
                 .next()
-                .ok_or(ConversationNotFound)?,
+                .ok_or_else(|| anyhow!("Conversation not found"))?,
             ListAIConversationsResult::UserFacingError(e) => {
                 return Err(anyhow!(get_user_facing_error_message(e)));
             }
