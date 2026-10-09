@@ -14,10 +14,12 @@ use super::{SaveCoordinator, SaveOperation, remaining_final_save_budget};
 use crate::ai::agent_sdk::driver::harness::SavePoint;
 use crate::ai::agent_sdk::driver::harness::harness_persistence::save_transcript_and_block;
 use crate::ai::agent_sdk::driver::harness::transcript_persistence::UploadedTranscriptUsage;
+
 #[tokio::test]
-async fn fast_saves_share_a_throttle_and_capture_latest_pending_state() {
+async fn save_burst_debounces_to_the_latest_post_turn_state() {
     let background = Background::default();
-    let coordinator = SaveCoordinator::default();
+    let interval = Duration::from_millis(100);
+    let coordinator = SaveCoordinator::new(interval);
     let current = Arc::new(Mutex::new(0));
     let (saved, saves) = async_channel::unbounded();
     let captured = current.clone();
@@ -31,29 +33,41 @@ async fn fast_saves_share_a_throttle_and_capture_latest_pending_state() {
         })
     }));
 
-    let first = Instant::now();
     coordinator.enqueue(SavePoint::Periodic, &background);
-    let (point, snapshot, _) = saves.recv().await.unwrap();
-    assert_eq!((point, snapshot), (SavePoint::Periodic, 0));
+    assert!(
+        saves
+            .recv()
+            .with_timeout(Duration::from_millis(60))
+            .await
+            .is_err()
+    );
     coordinator.enqueue(SavePoint::PostTurn, &background);
     coordinator.enqueue(SavePoint::Periodic, &background);
     coordinator.enqueue(SavePoint::PostTurn, &background);
+    let last_request = Instant::now();
+    coordinator.enqueue(SavePoint::Periodic, &background);
     *current.lock() = 3;
-    let (point, snapshot, second) = saves
+    let (point, snapshot, saved_at) = saves
         .recv()
-        .with_timeout(Duration::from_secs(35))
+        .with_timeout(Duration::from_secs(2))
         .await
         .unwrap()
         .unwrap();
-    assert!(second.duration_since(first) >= Duration::from_secs(30));
+    assert!(saved_at.duration_since(last_request) >= interval);
     assert_eq!((point, snapshot), (SavePoint::PostTurn, 3));
-    assert!(saves.is_empty());
+    assert!(
+        saves
+            .recv()
+            .with_timeout(Duration::from_millis(150))
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
-async fn final_save_waits_for_throttle_and_supersedes_pending_capture() {
+async fn final_save_bypasses_debounce_and_supersedes_pending_capture() {
     let background = Background::default();
-    let coordinator = SaveCoordinator::default();
+    let coordinator = SaveCoordinator::new(Duration::from_millis(100));
     let (saved, saves) = async_channel::unbounded();
     coordinator.set_worker_operation(Arc::new(move |point| {
         let saved = saved.clone();
@@ -62,68 +76,32 @@ async fn final_save_waits_for_throttle_and_supersedes_pending_capture() {
             Ok(())
         })
     }));
-    let started = Instant::now();
     coordinator.enqueue(SavePoint::PostTurn, &background);
     assert_eq!(saves.recv().await.unwrap(), SavePoint::PostTurn);
     coordinator.enqueue(SavePoint::Periodic, &background);
+    let captured = AtomicBool::new(false);
 
     coordinator
         .finalize(
             async {
-                assert!(started.elapsed() >= Duration::from_secs(30));
+                captured.store(true, Ordering::SeqCst);
                 Ok(())
             },
             future::ready(()),
-            Duration::from_secs(60),
+            Duration::from_millis(50),
         )
         .await
         .unwrap();
-    assert!(saves.is_empty());
+    assert!(captured.load(Ordering::SeqCst));
     coordinator.enqueue(SavePoint::PostTurn, &background);
-    assert!(saves.is_empty());
-}
-
-#[tokio::test]
-async fn insufficient_final_budget_does_not_bypass_throttle_or_rearm() {
-    let background = Background::default();
-    let coordinator = SaveCoordinator::default();
-    let (saved, saves) = async_channel::unbounded();
-    coordinator.set_worker_operation(Arc::new(move |_| {
-        let saved = saved.clone();
-        Box::pin(async move {
-            saved.send(()).await?;
-            Ok(())
-        })
-    }));
-    coordinator.enqueue(SavePoint::Periodic, &background);
-    saves.recv().await.unwrap();
-    let captured = AtomicBool::new(false);
 
     assert!(
-        coordinator
-            .finalize(
-                async {
-                    captured.store(true, Ordering::SeqCst);
-                    Ok(())
-                },
-                future::ready(()),
-                Duration::from_secs(1),
-            )
+        saves
+            .recv()
+            .with_timeout(Duration::from_millis(150))
             .await
             .is_err()
     );
-    assert!(
-        coordinator
-            .finalize(
-                future::pending::<Result<()>>(),
-                future::ready(()),
-                Duration::from_secs(60),
-            )
-            .now_or_never()
-            .unwrap()
-            .is_err()
-    );
-    assert!(!captured.load(Ordering::SeqCst));
 }
 
 #[tokio::test]
@@ -157,7 +135,7 @@ async fn metrics_timeout_preserves_completed_persistence_and_drops_publication()
 #[tokio::test]
 async fn coalesces_saves_without_blocking_other_work() {
     let background = Background::default();
-    let coordinator = SaveCoordinator::default();
+    let coordinator = SaveCoordinator::new(Duration::from_millis(10));
     let saved = Arc::new(Mutex::new(Vec::new()));
     let (started, starts) = async_channel::unbounded();
     let (completed, completions) = async_channel::unbounded();
@@ -180,7 +158,7 @@ async fn coalesces_saves_without_blocking_other_work() {
     coordinator.set_worker_operation(operation);
     coordinator.enqueue(SavePoint::Periodic, &background);
     assert_eq!(starts.recv().await.unwrap(), SavePoint::Periodic);
-    coordinator.enqueue(SavePoint::PostTurn, &background);
+    coordinator.enqueue(SavePoint::Final, &background);
     coordinator.enqueue(SavePoint::Periodic, &background);
     coordinator.enqueue(SavePoint::PostTurn, &background);
     let (ping, pong) = oneshot::channel();
@@ -195,10 +173,10 @@ async fn coalesces_saves_without_blocking_other_work() {
 
     release.send(()).await.unwrap();
     completions.recv().await.unwrap();
-    assert_eq!(starts.recv().await.unwrap(), SavePoint::PostTurn);
+    assert_eq!(starts.recv().await.unwrap(), SavePoint::Final);
     release.send(()).await.unwrap();
     completions.recv().await.unwrap();
-    assert_eq!(*saved.lock(), [SavePoint::Periodic, SavePoint::PostTurn]);
+    assert_eq!(*saved.lock(), [SavePoint::Periodic, SavePoint::Final]);
     assert!(starts.is_empty());
 }
 
@@ -263,7 +241,7 @@ async fn simultaneous_failures_preserve_both_errors() {
 #[tokio::test]
 async fn cancelled_blocking_capture_cannot_upload_after_final_save() {
     let background = Background::default();
-    let coordinator = SaveCoordinator::default();
+    let coordinator = SaveCoordinator::new(Duration::from_millis(10));
     let uploaded = Arc::new(Mutex::new(Vec::new()));
     let captured_uploads = uploaded.clone();
     let (started, start) = oneshot::channel();
@@ -296,7 +274,7 @@ async fn cancelled_blocking_capture_cannot_upload_after_final_save() {
                 Ok(())
             },
             future::ready(()),
-            Duration::from_secs(60),
+            Duration::from_millis(100),
         )
         .await
         .unwrap();
@@ -366,7 +344,7 @@ async fn final_timeout_cancels_future_before_returning() {
 #[tokio::test]
 async fn interrupted_finalizer_still_joins_the_cancelled_worker() {
     let background = Background::default();
-    let coordinator = SaveCoordinator::default();
+    let coordinator = SaveCoordinator::new(Duration::from_millis(10));
     let (started, start) = oneshot::channel();
     let (release, released) = oneshot::channel::<()>();
     let current = Mutex::new(Some((started, released)));
@@ -434,7 +412,7 @@ fn final_budget_respects_earlier_sandbox_deadline() {
     let now = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
     assert_eq!(
         remaining_final_save_budget(now, None),
-        Duration::from_secs(60)
+        Duration::from_secs(30)
     );
     assert_eq!(
         remaining_final_save_budget(now, Some(now + Duration::from_secs(10))),
@@ -442,7 +420,7 @@ fn final_budget_respects_earlier_sandbox_deadline() {
     );
     assert_eq!(
         remaining_final_save_budget(now, Some(now + Duration::from_secs(90))),
-        Duration::from_secs(60)
+        Duration::from_secs(30)
     );
     assert_eq!(
         remaining_final_save_budget(now, Some(now - Duration::from_secs(1))),

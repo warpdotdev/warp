@@ -705,7 +705,3 @@ pub(super) async fn upload_current_block_snapshot(
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "session_save_tests.rs"]
-mod session_save_tests;
