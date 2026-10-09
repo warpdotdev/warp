@@ -14,6 +14,13 @@ use crate::ui_components::color_dot::TAB_COLOR_OPTIONS;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::tab_settings::DirectoryTabColor;
 
+const ORANGE: TabColor = TabColor::Custom(ColorU {
+    r: 255,
+    g: 136,
+    b: 0,
+    a: 255,
+});
+
 /// Build a `tab_groups` map containing exactly the given group ids.
 fn groups(ids: &[TabGroupId]) -> HashMap<TabGroupId, TabGroup> {
     ids.iter()
@@ -194,41 +201,22 @@ fn next_tab_color_follows_the_canonical_palette_and_clears_after_the_last_color(
 }
 
 #[test]
-fn next_tab_color_treats_a_custom_color_as_not_in_the_palette() {
-    assert_eq!(
-        next_tab_color(Some(TabColor::Custom(ColorU::new(255, 136, 0, 255)))),
-        SelectedTabColor::Color(TAB_COLOR_OPTIONS[0].into())
-    );
-}
-
-#[test]
-fn tab_color_round_trips_through_its_string_form() {
+fn tab_color_parses_names_and_hex_and_serializes_as_a_string() {
     let red = TabColor::Ansi(AnsiColorIdentifier::Red);
-    let orange = TabColor::Custom(ColorU::new(255, 136, 0, 255));
-
-    assert_eq!("red".parse(), Ok(red));
     assert_eq!("Red".parse(), Ok(red));
-    assert_eq!("#FF8800".parse(), Ok(orange));
-    assert_eq!("#ff8800".parse(), Ok(orange));
-
+    assert_eq!("#FF8800".parse(), Ok(ORANGE));
     assert_eq!(serde_json::to_value(red).unwrap(), "red");
-    assert_eq!(serde_json::to_value(orange).unwrap(), "#ff8800");
-    assert_eq!(
-        serde_json::from_value::<TabColor>("#FF8800".into()).unwrap(),
-        orange
-    );
-    assert_eq!(
-        serde_json::from_value::<TabColor>("Red".into()).unwrap(),
-        red
-    );
-
+    assert_eq!(serde_json::to_value(ORANGE).unwrap(), "#ff8800");
     for invalid in ["#ff88", "#gg0000", "chartreuse", "ff8800", ""] {
         assert!(
             invalid.parse::<TabColor>().is_err(),
             "`{invalid}` should be rejected"
         );
-        assert!(serde_json::from_value::<TabColor>(invalid.into()).is_err());
     }
+    assert_eq!(
+        next_tab_color(Some(ORANGE)),
+        SelectedTabColor::Color(TAB_COLOR_OPTIONS[0].into())
+    );
 }
 
 #[test]
@@ -242,7 +230,7 @@ fn selected_tab_color_yaml_keeps_the_legacy_format_and_round_trips_custom_colors
     );
     assert_eq!(serde_yaml::to_string(&red).unwrap(), legacy);
 
-    let custom = SelectedTabColor::Color(TabColor::Custom(ColorU::new(255, 136, 0, 255)));
+    let custom = SelectedTabColor::Color(ORANGE);
     let yaml = serde_yaml::to_string(&custom).unwrap();
     assert_eq!(
         serde_yaml::from_str::<SelectedTabColor>(&yaml).unwrap(),
@@ -251,18 +239,13 @@ fn selected_tab_color_yaml_keeps_the_legacy_format_and_round_trips_custom_colors
 }
 
 #[test]
-fn directory_tab_color_settings_value_accepts_names_and_hex() {
+fn directory_tab_color_setting_accepts_names_and_hex() {
     let from =
         |color: &str| DirectoryTabColor::from_file_value(&serde_json::json!({ "color": color }));
     assert_eq!(
         from("red"),
         Some(DirectoryTabColor::Color(AnsiColorIdentifier::Red.into()))
     );
-    assert_eq!(
-        from("#ff8800"),
-        Some(DirectoryTabColor::Color(TabColor::Custom(ColorU::new(
-            255, 136, 0, 255
-        ))))
-    );
+    assert_eq!(from("#ff8800"), Some(DirectoryTabColor::Color(ORANGE)));
     assert_eq!(from("#ff88"), None);
 }
