@@ -4,6 +4,7 @@ use warp_multi_agent_api::message::Message as MessageKind;
 use warp_multi_agent_api::message::tool_call::Tool;
 use warp_multi_agent_api::message::tool_call_result::Result as ToolResult;
 use warp_multi_agent_api::message::update_todos::Operation;
+use warp_multi_agent_api::{apply_file_diffs_result, read_files_result};
 
 use super::super::protocol::SessionUpdate;
 use super::{AcpTurnMapper, TurnEvent};
@@ -28,6 +29,27 @@ fn only_actions(event: &TurnEvent) -> &[warp_multi_agent_api::ClientAction] {
     match event {
         TurnEvent::Actions(actions) => actions,
         TurnEvent::SegmentBoundary => panic!("expected actions, got a segment boundary"),
+    }
+}
+
+/// The single `ToolCall` announced by `event`, as `(action id, tool)`.
+fn announced_tool(event: &TurnEvent) -> (String, Tool) {
+    match &added_messages(&only_actions(event)[0])[0].message {
+        Some(MessageKind::ToolCall(call)) => {
+            (call.tool_call_id.clone(), call.tool.clone().expect("tool"))
+        }
+        other => panic!("expected ToolCall, got {other:?}"),
+    }
+}
+
+/// The single `ToolCallResult` in `event`, as `(action id, result)`.
+fn reported_result(event: &TurnEvent) -> (String, ToolResult) {
+    match &added_messages(&only_actions(event)[0])[0].message {
+        Some(MessageKind::ToolCallResult(result)) => (
+            result.tool_call_id.clone(),
+            result.result.clone().expect("result"),
+        ),
+        other => panic!("expected ToolCallResult, got {other:?}"),
     }
 }
 
@@ -248,32 +270,234 @@ fn results_for_several_tool_calls_share_one_boundary() {
 }
 
 #[test]
-fn non_execute_tool_calls_use_the_generic_mcp_shape_and_report_failures() {
+fn unprojectable_tool_calls_use_the_generic_mcp_shape_and_report_failures() {
     let mut mapper = mapper();
     let call = mapper.map_update(update(json!({
         "sessionUpdate": "tool_call",
         "toolCallId": "call-2",
-        "title": "Read config",
-        "kind": "read",
+        "title": "Find usages",
+        "kind": "search",
         "status": "failed",
-        "rawInput": { "path": "/tmp/config.json" }
+        "rawInput": { "pattern": "foo" }
     })));
     assert_eq!(call.len(), 3, "tool call, boundary, failure result");
-    let messages = added_messages(&only_actions(&call[0])[0]);
-    match &messages[0].message {
-        Some(MessageKind::ToolCall(tool_call)) => match &tool_call.tool {
-            Some(Tool::CallMcpTool(mcp)) => {
-                assert_eq!(mcp.name, "read: Read config");
-                assert!(mcp.args.as_ref().unwrap().fields.contains_key("path"));
-            }
-            other => panic!("expected CallMcpTool, got {other:?}"),
-        },
-        other => panic!("expected ToolCall, got {other:?}"),
+    match announced_tool(&call[0]).1 {
+        Tool::CallMcpTool(mcp) => {
+            assert_eq!(mcp.name, "search: Find usages");
+            assert!(mcp.args.as_ref().unwrap().fields.contains_key("pattern"));
+        }
+        other => panic!("expected CallMcpTool, got {other:?}"),
     }
     assert!(matches!(call[1], TurnEvent::SegmentBoundary));
     assert!(matches!(
-        &added_messages(&only_actions(&call[2])[0])[0].message,
-        Some(MessageKind::ToolCallResult(result)) if matches!(result.result, Some(ToolResult::CallMcpTool(_)))
+        reported_result(&call[2]).1,
+        ToolResult::CallMcpTool(_)
+    ));
+}
+
+#[test]
+fn read_tool_calls_with_a_path_project_to_read_files() {
+    let mut mapper = mapper();
+    let call = mapper.map_update(update(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "read-1",
+        "title": "Read config",
+        "kind": "read",
+        "status": "pending",
+        "rawInput": { "file_path": "/tmp/config.json", "offset": 10, "limit": 5 }
+    })));
+    let (action_id, tool) = announced_tool(&call[0]);
+    let Tool::ReadFiles(read) = tool else {
+        panic!("expected ReadFiles, got {tool:?}");
+    };
+    assert_eq!(read.files.len(), 1);
+    assert_eq!(read.files[0].name, "/tmp/config.json");
+    assert_eq!(read.files[0].line_ranges.len(), 1);
+    assert_eq!(read.files[0].line_ranges[0].start, 10);
+    assert_eq!(read.files[0].line_ranges[0].end, 14);
+
+    let done = mapper.map_update(update(json!({
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "read-1",
+        "status": "completed",
+        "content": [{ "type": "content", "content": { "type": "text", "text": "{}" } }]
+    })));
+    let (result_id, result) = reported_result(&done[1]);
+    assert_eq!(result_id, action_id);
+    let ToolResult::ReadFiles(read) = result else {
+        panic!("expected ReadFiles result, got {result:?}");
+    };
+    match read.result {
+        Some(read_files_result::Result::TextFilesSuccess(success)) => {
+            assert_eq!(success.files.len(), 1);
+            assert_eq!(success.files[0].file_path, "/tmp/config.json");
+            assert_eq!(success.files[0].content, "{}");
+            assert_eq!(
+                success.files[0].line_range.as_ref().map(|r| r.start),
+                Some(10)
+            );
+        }
+        other => panic!("expected TextFilesSuccess, got {other:?}"),
+    }
+}
+
+#[test]
+fn edit_tool_calls_with_a_diff_project_to_apply_file_diffs() {
+    let mut mapper = mapper();
+    let call = mapper.map_update(update(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "edit-1",
+        "title": "Edit main.rs",
+        "kind": "edit",
+        "status": "completed",
+        "content": [{
+            "type": "diff",
+            "path": "src/main.rs",
+            "oldText": "fn main() {}",
+            "newText": "fn main() { run(); }"
+        }]
+    })));
+    assert_eq!(call.len(), 3, "tool call, boundary, result");
+    let (action_id, tool) = announced_tool(&call[0]);
+    let Tool::ApplyFileDiffs(edits) = tool else {
+        panic!("expected ApplyFileDiffs, got {tool:?}");
+    };
+    assert_eq!(edits.summary, "Edit main.rs");
+    assert_eq!(edits.diffs.len(), 1);
+    assert_eq!(edits.diffs[0].file_path, "src/main.rs");
+    assert_eq!(edits.diffs[0].search, "fn main() {}");
+    assert_eq!(edits.diffs[0].replace, "fn main() { run(); }");
+    assert!(edits.new_files.is_empty());
+
+    let (result_id, result) = reported_result(&call[2]);
+    assert_eq!(result_id, action_id);
+    let ToolResult::ApplyFileDiffs(applied) = result else {
+        panic!("expected ApplyFileDiffs result, got {result:?}");
+    };
+    match applied.result {
+        Some(apply_file_diffs_result::Result::Success(success)) => {
+            assert_eq!(success.updated_files_v2.len(), 1);
+            let file = success.updated_files_v2[0].file.as_ref().unwrap();
+            assert_eq!(file.file_path, "src/main.rs");
+            assert_eq!(file.content, "fn main() { run(); }");
+        }
+        other => panic!("expected Success, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_new_file_edit_projects_to_new_files_and_a_failure_to_an_error() {
+    let mut mapper = mapper();
+    let call = mapper.map_update(update(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "edit-2",
+        "kind": "edit",
+        "status": "failed",
+        "content": [{ "type": "diff", "path": "NEW.md", "newText": "# New" }]
+    })));
+    let Tool::ApplyFileDiffs(edits) = announced_tool(&call[0]).1 else {
+        panic!("expected ApplyFileDiffs");
+    };
+    assert!(edits.diffs.is_empty());
+    assert_eq!(edits.new_files.len(), 1);
+    assert_eq!(edits.new_files[0].file_path, "NEW.md");
+    assert_eq!(edits.new_files[0].content, "# New");
+    let ToolResult::ApplyFileDiffs(applied) = reported_result(&call[2]).1 else {
+        panic!("expected ApplyFileDiffs result");
+    };
+    assert!(matches!(
+        applied.result,
+        Some(apply_file_diffs_result::Result::Error(_))
+    ));
+}
+
+#[test]
+fn an_edit_whose_diff_arrives_late_is_reannounced_as_a_file_edit() {
+    let mut mapper = mapper();
+    let announced = mapper.map_update(update(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "edit-3",
+        "title": "Edit lib.rs",
+        "kind": "edit",
+        "status": "pending"
+    })));
+    let (generic_id, generic_tool) = announced_tool(&announced[0]);
+    assert!(matches!(generic_tool, Tool::CallMcpTool(_)));
+
+    let updated = mapper.map_update(update(json!({
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "edit-3",
+        "status": "completed",
+        "content": [{ "type": "diff", "path": "src/lib.rs", "oldText": "a", "newText": "b" }]
+    })));
+    // Boundary, cancel of the generic call, the file-edit call, boundary, its result.
+    assert_eq!(updated.len(), 5, "{updated:?}");
+    assert!(matches!(updated[0], TurnEvent::SegmentBoundary));
+    mapper.start_segment("req-2".to_owned());
+    let (cancelled_id, cancelled) = reported_result(&updated[1]);
+    assert_eq!(cancelled_id, generic_id);
+    assert!(matches!(cancelled, ToolResult::Cancel(())));
+    let (edit_id, edit_tool) = announced_tool(&updated[2]);
+    assert_ne!(edit_id, generic_id);
+    let Tool::ApplyFileDiffs(edits) = edit_tool else {
+        panic!("expected ApplyFileDiffs, got {edit_tool:?}");
+    };
+    assert_eq!(edits.summary, "Edit lib.rs", "title carries over");
+    assert_eq!(edits.diffs[0].file_path, "src/lib.rs");
+    assert!(matches!(updated[3], TurnEvent::SegmentBoundary));
+    let (result_id, result) = reported_result(&updated[4]);
+    assert_eq!(result_id, edit_id);
+    assert!(matches!(result, ToolResult::ApplyFileDiffs(_)));
+    assert!(mapper.finish_events().is_empty(), "nothing left pending");
+}
+
+#[test]
+fn think_tool_calls_stream_as_reasoning_instead_of_a_tool() {
+    let mut mapper = mapper();
+    let first = mapper.map_update(update(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "think-1",
+        "title": "Thinking",
+        "kind": "think",
+        "status": "in_progress",
+        "rawInput": { "thought": "Let me check" }
+    })));
+    assert_eq!(first.len(), 1);
+    let messages = added_messages(&only_actions(&first[0])[0]);
+    let message_id = messages[0].id.clone();
+    assert!(matches!(
+        &messages[0].message,
+        Some(MessageKind::AgentReasoning(reasoning)) if reasoning.reasoning == "Let me check"
+    ));
+
+    // The agent resends the whole thought; only the new tail is appended.
+    let second = mapper.map_update(update(json!({
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "think-1",
+        "status": "completed",
+        "rawInput": { "thought": "Let me check the tests." }
+    })));
+    let Some(Action::AppendToMessageContent(append)) = &only_actions(&second[0])[0].action else {
+        panic!("expected AppendToMessageContent, got {second:?}");
+    };
+    assert_eq!(append.message.as_ref().unwrap().id, message_id);
+    assert!(matches!(
+        &append.message.as_ref().unwrap().message,
+        Some(MessageKind::AgentReasoning(reasoning)) if reasoning.reasoning == " the tests."
+    ));
+    assert!(
+        mapper.finish_events().is_empty(),
+        "a thought is never a pending tool call"
+    );
+
+    // Output after a finished thought starts a fresh message.
+    let text = mapper.map_update(update(json!({
+        "sessionUpdate": "agent_message_chunk",
+        "content": { "type": "text", "text": "Done." }
+    })));
+    assert!(matches!(
+        &only_actions(&text[0])[0].action,
+        Some(Action::AddMessagesToTask(_))
     ));
 }
 

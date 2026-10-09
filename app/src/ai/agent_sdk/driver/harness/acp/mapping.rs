@@ -7,7 +7,11 @@ use prost_types::FieldMask;
 use serde_json::Value;
 use uuid::Uuid;
 use warp_multi_agent_api::client_action::{AddMessagesToTask, AppendToMessageContent, CreateTask};
-use warp_multi_agent_api::message::tool_call::{CallMcpTool, RunShellCommand, Tool};
+use warp_multi_agent_api::message::tool_call::apply_file_diffs::{FileDiff, NewFile};
+use warp_multi_agent_api::message::tool_call::read_files::File as ReadFilesFile;
+use warp_multi_agent_api::message::tool_call::{
+    ApplyFileDiffs, CallMcpTool, ReadFiles, RunShellCommand, Tool,
+};
 use warp_multi_agent_api::message::tool_call_result::Result as ToolResult;
 use warp_multi_agent_api::message::update_todos::Operation as TodoOperation;
 use warp_multi_agent_api::message::{
@@ -15,9 +19,10 @@ use warp_multi_agent_api::message::{
     UserQuery,
 };
 use warp_multi_agent_api::{
-    CallMcpToolResult, ClientAction, CreateTodoList, MarkTodosCompleted, Message,
-    RunShellCommandResult, ShellCommandFinished, Task, TodoItem, call_mcp_tool_result,
-    client_action, run_shell_command_result,
+    ApplyFileDiffsResult, CallMcpToolResult, ClientAction, CreateTodoList, FileContent,
+    FileContentLineRange, MarkTodosCompleted, Message, ReadFilesResult, RunShellCommandResult,
+    ShellCommandFinished, Task, TodoItem, apply_file_diffs_result, call_mcp_tool_result,
+    client_action, read_files_result, run_shell_command_result,
 };
 
 use super::protocol::{
@@ -40,6 +45,198 @@ struct OpenMessage {
     message_id: String,
 }
 
+/// The MAA tool an ACP tool call is presented as. Decided once when the call is announced, so
+/// the call and its result always agree; see [`ToolProjection::for_call`].
+#[derive(Clone, Debug, PartialEq)]
+enum ToolProjection {
+    Shell {
+        command: String,
+    },
+    /// One file edit, rendered through the conversation's file-edit UI. `old_text` is `None`
+    /// for a newly created file.
+    FileEdits {
+        path: String,
+        old_text: Option<String>,
+        new_text: String,
+    },
+    ReadFiles {
+        path: String,
+        line_range: Option<FileContentLineRange>,
+    },
+    /// Everything else is shown as an opaque tool call with the agent's raw input as its
+    /// arguments. `search` deliberately lands here: `GrepResult` needs structured per-line
+    /// matches, and ACP search output is free text whose shape differs per agent.
+    Generic {
+        name: String,
+        args: Option<prost_types::Struct>,
+    },
+}
+
+impl ToolProjection {
+    fn for_call(
+        kind: Option<ToolKind>,
+        title: &str,
+        raw_input: Option<&Value>,
+        content: Option<&[ToolCallContent]>,
+    ) -> Self {
+        if let Some(command) = command_from_raw_input(raw_input, kind, title) {
+            return Self::Shell { command };
+        }
+        if kind == Some(ToolKind::Edit)
+            && let Some((path, old_text, new_text)) = first_diff(content)
+        {
+            return Self::FileEdits {
+                path,
+                old_text,
+                new_text,
+            };
+        }
+        if kind == Some(ToolKind::Read)
+            && let Some(path) = path_from_raw_input(raw_input)
+        {
+            return Self::ReadFiles {
+                path,
+                line_range: line_range_from_raw_input(raw_input),
+            };
+        }
+        Self::Generic {
+            name: mcp_tool_name(kind, title),
+            args: raw_input
+                .cloned()
+                .and_then(|input| serde_json_to_prost(input).ok())
+                .and_then(|value| match value.kind {
+                    Some(prost_types::value::Kind::StructValue(fields)) => Some(fields),
+                    _ => None,
+                }),
+        }
+    }
+
+    fn tool(&self, title: &str) -> Tool {
+        match self {
+            Self::Shell { command } => Tool::RunShellCommand(RunShellCommand {
+                command: command.clone(),
+                ..Default::default()
+            }),
+            Self::FileEdits {
+                path,
+                old_text,
+                new_text,
+            } => {
+                let mut diffs = ApplyFileDiffs {
+                    summary: title.to_owned(),
+                    ..Default::default()
+                };
+                match old_text {
+                    Some(old_text) => diffs.diffs.push(FileDiff {
+                        file_path: path.clone(),
+                        search: old_text.clone(),
+                        replace: new_text.clone(),
+                    }),
+                    None => diffs.new_files.push(NewFile {
+                        file_path: path.clone(),
+                        content: new_text.clone(),
+                        allow_overwrite: true,
+                    }),
+                }
+                Tool::ApplyFileDiffs(diffs)
+            }
+            Self::ReadFiles { path, line_range } => Tool::ReadFiles(ReadFiles {
+                files: vec![ReadFilesFile {
+                    name: path.clone(),
+                    line_ranges: line_range.iter().copied().collect(),
+                }],
+            }),
+            Self::Generic { name, args } => Tool::CallMcpTool(CallMcpTool {
+                name: name.clone(),
+                args: args.clone(),
+                ..Default::default()
+            }),
+        }
+    }
+
+    fn result(&self, action_id: &str, output: String, failed: bool) -> ToolResult {
+        match self {
+            Self::Shell { command } => {
+                let exit_code = i32::from(failed);
+                #[allow(deprecated)]
+                ToolResult::RunShellCommand(RunShellCommandResult {
+                    command: command.clone(),
+                    output: output.clone(),
+                    exit_code,
+                    result: Some(run_shell_command_result::Result::CommandFinished(
+                        ShellCommandFinished {
+                            output,
+                            exit_code,
+                            command_id: action_id.to_owned(),
+                            start_ts: None,
+                            finish_ts: None,
+                        },
+                    )),
+                })
+            }
+            Self::FileEdits { path, new_text, .. } => {
+                let result = if failed {
+                    apply_file_diffs_result::Result::Error(apply_file_diffs_result::Error {
+                        message: output,
+                    })
+                } else {
+                    apply_file_diffs_result::Result::Success(apply_file_diffs_result::Success {
+                        updated_files_v2: vec![
+                            apply_file_diffs_result::success::UpdatedFileContent {
+                                file: Some(FileContent {
+                                    file_path: path.clone(),
+                                    content: new_text.clone(),
+                                    line_range: None,
+                                }),
+                                was_edited_by_user: false,
+                            },
+                        ],
+                        ..Default::default()
+                    })
+                };
+                ToolResult::ApplyFileDiffs(ApplyFileDiffsResult {
+                    result: Some(result),
+                })
+            }
+            Self::ReadFiles { path, line_range } => {
+                let result = if failed {
+                    read_files_result::Result::Error(read_files_result::Error { message: output })
+                } else {
+                    read_files_result::Result::TextFilesSuccess(
+                        read_files_result::TextFilesSuccess {
+                            files: vec![FileContent {
+                                file_path: path.clone(),
+                                content: output,
+                                line_range: *line_range,
+                            }],
+                            failed_reads: Vec::new(),
+                        },
+                    )
+                };
+                ToolResult::ReadFiles(ReadFilesResult {
+                    result: Some(result),
+                })
+            }
+            Self::Generic { .. } if failed => ToolResult::CallMcpTool(CallMcpToolResult {
+                result: Some(call_mcp_tool_result::Result::Error(
+                    call_mcp_tool_result::Error { message: output },
+                )),
+            }),
+            Self::Generic { .. } => ToolResult::CallMcpTool(CallMcpToolResult {
+                result: Some(call_mcp_tool_result::Result::Success(
+                    call_mcp_tool_result::Success {
+                        results: vec![call_mcp_tool_result::success::Result {
+                            result: Some(call_mcp_tool_result::success::result::Result::Text(
+                                call_mcp_tool_result::success::result::Text { text: output },
+                            )),
+                        }],
+                    },
+                )),
+            }),
+        }
+    }
+}
+
 struct ToolCallState {
     /// The id the conversation sees. Minted here rather than reusing the agent's `toolCallId`:
     /// the action model indexes results by id across conversations, and agents are free to
@@ -47,9 +244,17 @@ struct ToolCallState {
     action_id: String,
     kind: Option<ToolKind>,
     title: String,
-    command: Option<String>,
+    projection: ToolProjection,
     output: String,
     has_result: bool,
+}
+
+/// A `think` tool call streamed as reasoning rather than shown as a tool. Agents tend to resend
+/// the whole thought on each update, so the text already emitted is kept to append only what is
+/// new.
+struct ThoughtState {
+    emitted: String,
+    finished: bool,
 }
 
 /// Output of the mapper for one ACP update, in order.
@@ -67,6 +272,7 @@ pub(super) struct AcpTurnMapper {
     request_id: String,
     open_message: Option<OpenMessage>,
     tool_calls: HashMap<String, ToolCallState>,
+    thoughts: HashMap<String, ThoughtState>,
     todo_list_created: bool,
     /// Whether a tool call was announced in the current request stream, so the next result
     /// must be preceded by a segment boundary.
@@ -80,6 +286,7 @@ impl AcpTurnMapper {
             request_id,
             open_message: None,
             tool_calls: HashMap::new(),
+            thoughts: HashMap::new(),
             todo_list_created: false,
             tool_call_announced_in_segment: false,
         }
@@ -154,17 +361,19 @@ impl AcpTurnMapper {
                 let state = self.tool_calls.get_mut(&tool_call_id)?;
                 state.has_result = true;
                 let action_id = state.action_id.clone();
-                Some(
-                    self.new_message(MessageKind::ToolCallResult(ToolCallResult {
-                        tool_call_id: action_id,
-                        context: None,
-                        result: Some(ToolResult::Cancel(())),
-                    })),
-                )
+                Some(self.cancel_message(&action_id))
             })
             .collect();
         events.push(TurnEvent::Actions(vec![self.add_messages(messages)]));
         events
+    }
+
+    fn cancel_message(&self, action_id: &str) -> Message {
+        self.new_message(MessageKind::ToolCallResult(ToolCallResult {
+            tool_call_id: action_id.to_owned(),
+            context: None,
+            result: Some(ToolResult::Cancel(())),
+        }))
     }
 
     /// A boundary is required when results would otherwise land in the same stream as the tool
@@ -234,42 +443,37 @@ impl AcpTurnMapper {
     }
 
     fn tool_call(&mut self, call: ToolCallFields) -> Vec<TurnEvent> {
-        self.open_message = None;
         // A finished call's id may be reused by the agent in a later turn; only an unfinished
         // one is the same call.
         if self
             .tool_calls
             .get(&call.tool_call_id)
             .is_some_and(|state| !state.has_result)
+            || self
+                .thoughts
+                .get(&call.tool_call_id)
+                .is_some_and(|thought| !thought.finished)
         {
             return self.tool_call_update(call);
         }
+        if call.kind == Some(ToolKind::Think) {
+            return self.thought_call(call);
+        }
+        self.open_message = None;
         let title = call.title.clone().unwrap_or_else(|| "Tool call".to_owned());
-        let command = command_from_raw_input(call.raw_input.as_ref(), call.kind, &title);
-        let tool = match (call.kind, &command) {
-            (Some(ToolKind::Execute), Some(command)) => Tool::RunShellCommand(RunShellCommand {
-                command: command.clone(),
-                ..Default::default()
-            }),
-            _ => Tool::CallMcpTool(CallMcpTool {
-                name: mcp_tool_name(call.kind, &title),
-                args: call
-                    .raw_input
-                    .clone()
-                    .and_then(|input| serde_json_to_prost(input).ok())
-                    .and_then(|value| match value.kind {
-                        Some(prost_types::value::Kind::StructValue(fields)) => Some(fields),
-                        _ => None,
-                    }),
-                ..Default::default()
-            }),
-        };
+        let projection = ToolProjection::for_call(
+            call.kind,
+            &title,
+            call.raw_input.as_ref(),
+            call.content.as_deref(),
+        );
         let action_id = Uuid::new_v4().to_string();
+        let tool = projection.tool(&title);
         let state = ToolCallState {
             action_id: action_id.clone(),
             kind: call.kind,
             title,
-            command,
+            projection,
             output: tool_output_text(call.content.as_deref(), call.raw_output.as_ref()),
             has_result: false,
         };
@@ -290,10 +494,16 @@ impl AcpTurnMapper {
     }
 
     fn tool_call_update(&mut self, call: ToolCallFields) -> Vec<TurnEvent> {
-        self.open_message = None;
+        if self.thoughts.contains_key(&call.tool_call_id) {
+            return self.thought_call(call);
+        }
         if !self.tool_calls.contains_key(&call.tool_call_id) {
             return self.tool_call(call);
         }
+        if let Some(events) = self.reproject_as_file_edits(&call) {
+            return events;
+        }
+        self.open_message = None;
         let Some(state) = self.tool_calls.get_mut(&call.tool_call_id) else {
             return Vec::new();
         };
@@ -303,10 +513,28 @@ impl AcpTurnMapper {
         if call.kind.is_some() {
             state.kind = call.kind;
         }
-        if call.raw_input.is_some()
-            && let Some(command) = command_from_raw_input(call.raw_input.as_ref(), state.kind, "")
-        {
-            state.command = Some(command);
+        match &mut state.projection {
+            ToolProjection::Shell { command } => {
+                if call.raw_input.is_some()
+                    && let Some(updated) =
+                        command_from_raw_input(call.raw_input.as_ref(), state.kind, "")
+                {
+                    *command = updated;
+                }
+            }
+            // The announced call already carries the diff; a later one (e.g. the applied
+            // result) is the authoritative final content.
+            ToolProjection::FileEdits {
+                old_text, new_text, ..
+            } => {
+                if let Some((_, updated_old, updated_new)) = first_diff(call.content.as_deref()) {
+                    if updated_old.is_some() {
+                        *old_text = updated_old;
+                    }
+                    *new_text = updated_new;
+                }
+            }
+            ToolProjection::ReadFiles { .. } | ToolProjection::Generic { .. } => {}
         }
         let output = tool_output_text(call.content.as_deref(), call.raw_output.as_ref());
         if !output.is_empty() {
@@ -320,6 +548,63 @@ impl AcpTurnMapper {
             }
             None => Vec::new(),
         }
+    }
+
+    /// Some agents announce an edit before they know what it changes and attach the diff only
+    /// on a later update. The announced generic call cannot be rewritten in place, so it is
+    /// cancelled and the edit is re-announced as a file edit under a fresh action id.
+    fn reproject_as_file_edits(&mut self, call: &ToolCallFields) -> Option<Vec<TurnEvent>> {
+        let state = self.tool_calls.get(&call.tool_call_id)?;
+        let kind = call.kind.or(state.kind);
+        if state.has_result
+            || kind != Some(ToolKind::Edit)
+            || !matches!(state.projection, ToolProjection::Generic { .. })
+            || first_diff(call.content.as_deref()).is_none()
+        {
+            return None;
+        }
+        let previous = self.tool_calls.remove(&call.tool_call_id)?;
+        let mut events = self.boundary_before_results();
+        events.push(TurnEvent::Actions(vec![
+            self.add_messages(vec![self.cancel_message(&previous.action_id)]),
+        ]));
+        let mut merged = call.clone();
+        merged.title = call.title.clone().or(Some(previous.title));
+        merged.kind = kind;
+        events.extend(self.tool_call(merged));
+        Some(events)
+    }
+
+    /// Streams a `think` tool call as reasoning. The thought's text may arrive on the
+    /// announcement, on updates, or both.
+    fn thought_call(&mut self, call: ToolCallFields) -> Vec<TurnEvent> {
+        let text = thought_text(&call);
+        let finished = matches!(
+            call.status,
+            Some(ToolCallStatus::Completed | ToolCallStatus::Failed)
+        );
+        let new_text = {
+            let thought = self
+                .thoughts
+                .entry(call.tool_call_id.clone())
+                .or_insert_with(|| ThoughtState {
+                    emitted: String::new(),
+                    finished: false,
+                });
+            let new_text = match text.strip_prefix(thought.emitted.as_str()) {
+                Some(suffix) => suffix.to_owned(),
+                None => text,
+            };
+            thought.emitted.push_str(&new_text);
+            thought.finished |= finished;
+            new_text
+        };
+        let acp_message_id = Some(format!("think:{}", call.tool_call_id));
+        let events = actions(self.chunk(StreamKind::Thought, new_text, acp_message_id));
+        if finished {
+            self.open_message = None;
+        }
+        events
     }
 
     fn result_if_finished(
@@ -346,42 +631,7 @@ impl AcpTurnMapper {
         } else {
             state.output.clone()
         };
-        let result = match (state.kind, &state.command) {
-            (Some(ToolKind::Execute), Some(command)) => {
-                let exit_code = i32::from(failed);
-                #[allow(deprecated)]
-                ToolResult::RunShellCommand(RunShellCommandResult {
-                    command: command.clone(),
-                    output: output.clone(),
-                    exit_code,
-                    result: Some(run_shell_command_result::Result::CommandFinished(
-                        ShellCommandFinished {
-                            output,
-                            exit_code,
-                            command_id: action_id.clone(),
-                            start_ts: None,
-                            finish_ts: None,
-                        },
-                    )),
-                })
-            }
-            _ if failed => ToolResult::CallMcpTool(CallMcpToolResult {
-                result: Some(call_mcp_tool_result::Result::Error(
-                    call_mcp_tool_result::Error { message: output },
-                )),
-            }),
-            _ => ToolResult::CallMcpTool(CallMcpToolResult {
-                result: Some(call_mcp_tool_result::Result::Success(
-                    call_mcp_tool_result::Success {
-                        results: vec![call_mcp_tool_result::success::Result {
-                            result: Some(call_mcp_tool_result::success::result::Result::Text(
-                                call_mcp_tool_result::success::result::Text { text: output },
-                            )),
-                        }],
-                    },
-                )),
-            }),
-        };
+        let result = state.projection.result(&action_id, output, failed);
         Some(
             self.new_message(MessageKind::ToolCallResult(ToolCallResult {
                 tool_call_id: action_id,
@@ -494,6 +744,60 @@ fn command_from_raw_input(
     from_input
         .filter(|command| !command.is_empty())
         .or_else(|| (!title.is_empty()).then(|| title.to_owned()))
+}
+
+/// The file a `read` tool call targets, under the key each agent's read tool uses.
+fn path_from_raw_input(raw_input: Option<&Value>) -> Option<String> {
+    ["file_path", "path", "absolute_path", "filePath"]
+        .iter()
+        .find_map(|key| raw_input?.get(key)?.as_str())
+        .filter(|path| !path.is_empty())
+        .map(str::to_owned)
+}
+
+/// Read tools express a window as a 1-based start line (`offset` / `line`) and a `limit`; both
+/// are needed for a closed range.
+fn line_range_from_raw_input(raw_input: Option<&Value>) -> Option<FileContentLineRange> {
+    let input = raw_input?;
+    let start = ["offset", "line"]
+        .iter()
+        .find_map(|key| input.get(key)?.as_u64())?;
+    let limit = input.get("limit")?.as_u64()?;
+    let start = u32::try_from(start.max(1)).ok()?;
+    let end = u32::try_from(u64::from(start) + limit.saturating_sub(1)).ok()?;
+    Some(FileContentLineRange { start, end })
+}
+
+fn first_diff(content: Option<&[ToolCallContent]>) -> Option<(String, Option<String>, String)> {
+    content?.iter().find_map(|item| match item {
+        ToolCallContent::Diff {
+            path,
+            old_text,
+            new_text,
+        } => Some((path.clone(), old_text.clone(), new_text.clone())),
+        ToolCallContent::Content { .. }
+        | ToolCallContent::Terminal { .. }
+        | ToolCallContent::Unsupported => None,
+    })
+}
+
+/// The text of a `think` call: its content blocks, else the thought carried in its input, else
+/// its title.
+fn thought_text(call: &ToolCallFields) -> String {
+    let from_content = tool_output_text(call.content.as_deref(), None);
+    if !from_content.is_empty() {
+        return from_content;
+    }
+    let from_input = call.raw_input.as_ref().and_then(|input| {
+        ["thought", "thinking", "text", "content"]
+            .iter()
+            .find_map(|key| input.get(key)?.as_str())
+            .map(str::to_owned)
+    });
+    from_input
+        .filter(|text| !text.is_empty())
+        .or_else(|| call.title.clone())
+        .unwrap_or_default()
 }
 
 fn mcp_tool_name(kind: Option<ToolKind>, title: &str) -> String {

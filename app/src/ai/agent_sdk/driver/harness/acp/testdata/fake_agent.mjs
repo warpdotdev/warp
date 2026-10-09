@@ -2,7 +2,8 @@
 // A minimal Agent Client Protocol agent for exercising Warp's ACP harness without a model.
 // Speaks newline-delimited JSON-RPC 2.0 over stdio and replays a scripted turn:
 // thought chunk -> message chunks -> execute tool call (with a permission request) -> plan ->
-// client fs write + read round trip -> final message -> `end_turn`.
+// client fs write + read round trip -> think tool call -> edit tool call with a diff -> final
+// message -> `end_turn`.
 //
 // Usage: node fake_agent.mjs [--delay-ms N] [--fail]
 import { createInterface } from "node:readline";
@@ -116,6 +117,43 @@ async function runTurn(prompt) {
   await request("fs/write_text_file", { sessionId, path: scratchPath, content: "line 1\nline 2\nline 3\n" });
   const read = await request("fs/read_text_file", { sessionId, path: scratchPath, line: 2, limit: 1 });
   process.stderr.write(`fs round trip read back: ${JSON.stringify(read.content)}\n`);
+
+  // A `think` call is shown as reasoning; agents usually resend the whole thought on update.
+  update({
+    sessionUpdate: "tool_call",
+    toolCallId: "think-1",
+    title: "Thinking",
+    kind: "think",
+    status: "in_progress",
+    rawInput: { thought: "The scratch file is in place;" },
+  });
+  await sleep(delayMs);
+  update({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "think-1",
+    status: "completed",
+    rawInput: { thought: "The scratch file is in place; I'll record what changed." },
+  });
+
+  // An `edit` call whose diff only arrives on completion, as adapters that apply first and
+  // report afterwards do.
+  update({
+    sessionUpdate: "tool_call",
+    toolCallId: "edit-1",
+    title: "Edit scratch file",
+    kind: "edit",
+    status: "in_progress",
+    rawInput: { path: scratchPath },
+  });
+  await sleep(delayMs);
+  update({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "edit-1",
+    status: "completed",
+    content: [
+      { type: "diff", path: scratchPath, oldText: "line 2\n", newText: "line two\n" },
+    ],
+  });
 
   update({
     sessionUpdate: "agent_message_chunk",
