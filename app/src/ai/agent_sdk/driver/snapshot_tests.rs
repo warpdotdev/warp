@@ -16,7 +16,7 @@ use crate::ai::agent_sdk::test_support::build_test_http_client;
 use crate::ai::artifacts::Artifact;
 use crate::server::server_api::harness_support::{
     CommitSnapshotResponse, ReportArtifactResponse, ResolvePromptRequest, ResolvedHarnessPrompt,
-    SnapshotUploadMode,
+    SnapshotUploadMode, TranscriptUploadMetadata,
 };
 
 // ------------------------------------------------------------------------------------------------
@@ -122,10 +122,10 @@ impl HarnessSupportClient for TestClient {
         unimplemented!("not used by upload_snapshot_from_declarations_file")
     }
 
-    async fn get_transcript_upload_target(
+    async fn get_transcript_upload_metadata(
         &self,
         _conversation_id: &ServerConversationToken,
-    ) -> Result<UploadTarget> {
+    ) -> Result<TranscriptUploadMetadata> {
         unimplemented!("not used by upload_snapshot_from_declarations_file")
     }
 

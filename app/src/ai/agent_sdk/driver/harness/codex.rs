@@ -323,6 +323,9 @@ impl CodexHarnessRunner {
         is_final: bool,
         foreground: &ModelSpawner<AgentDriver>,
     ) -> Result<UploadedTranscriptUsage> {
+        let metadata = client
+            .get_transcript_upload_metadata(conversation_id)
+            .await?;
         let capture =
             capture_transcript_with_retry(self.persistence.is_reporting_enabled(), || async {
                 self.handle_session_update(foreground).await?;
@@ -333,8 +336,15 @@ impl CodexHarnessRunner {
                     return Ok(None);
                 };
                 let identity = self.persistence.begin_capture();
+                let policy = metadata.threshold_policy.clone();
                 tokio::task::spawn_blocking(move || {
-                    capture_transcript_with_usage(session_id, &transcript_path, is_final, identity)
+                    capture_transcript_with_usage(
+                        session_id,
+                        &transcript_path,
+                        is_final,
+                        identity,
+                        policy.as_ref(),
+                    )
                 })
                 .await
                 .context("Native transcript capture task failed")?
@@ -353,7 +363,7 @@ impl CodexHarnessRunner {
             return Ok(UploadedTranscriptUsage::empty());
         };
         log::info!("Uploading Codex transcript to conversation {conversation_id}");
-        upload_captured_transcript(client, conversation_id, capture).await
+        upload_captured_transcript(client, &metadata.target, capture).await
     }
 }
 
@@ -531,6 +541,7 @@ fn capture_transcript_with_usage(
     transcript_path: &Path,
     is_final: bool,
     identity: Option<CaptureIdentity>,
+    policy: Option<&warp_harness_usage::api::ThresholdPolicy>,
 ) -> Result<CapturedTranscript> {
     let captured_at = Utc::now();
     let capture = read_jsonl_capture(transcript_path)?;
@@ -554,7 +565,12 @@ fn capture_transcript_with_usage(
     let usage_request = identity.and_then(|identity| {
         identity.build_usage_request(
             captured_at,
-            extract_codex(&session_id.to_string(), &envelope.entries, &diagnostics),
+            extract_codex(
+                &session_id.to_string(),
+                &envelope.entries,
+                &diagnostics,
+                policy,
+            ),
         )
     });
     Ok(CapturedTranscript {
