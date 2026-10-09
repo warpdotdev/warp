@@ -408,7 +408,7 @@ impl RunAgentsExecutor {
         let AIAgentActionType::RunAgents(request) = action else {
             return ActionExecution::InvalidAction;
         };
-        let mut request = request.clone();
+        let mut request = request.as_ref().clone();
         let action_id = id.clone();
         let parent_conversation_id = input.conversation_id;
         let team_scope = self.team_scope(ctx);
@@ -479,7 +479,7 @@ impl RunAgentsExecutor {
         {
             return true;
         }
-        let mut resolved_request = request.clone();
+        let mut resolved_request = request.as_ref().clone();
         let team_scope = self.team_scope(ctx);
         resolve_request_from_approved_config(&mut resolved_request, input.conversation_id, ctx);
         populate_default_auth_secret_for_execution(&mut resolved_request, &team_scope, ctx);

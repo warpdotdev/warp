@@ -209,7 +209,7 @@ fn window_team_change_reseeds_the_auth_secret_for_the_new_scope() {
         let action = AIAgentAction {
             id: AIAgentActionId::from("run-agents-team-scope".to_string()),
             task_id: TaskId::new("task-1".to_string()),
-            action: AIAgentActionType::RunAgents(incoming.clone()),
+            action: AIAgentActionType::RunAgents(Box::new(incoming.clone())),
             requires_result: true,
         };
         let action_model = add_test_action_model(&mut app);
@@ -220,7 +220,7 @@ fn window_team_change_reseeds_the_auth_secret_for_the_new_scope() {
         let other_action = AIAgentAction {
             id: AIAgentActionId::from("run-agents-other-window".to_string()),
             task_id: TaskId::new("task-2".to_string()),
-            action: AIAgentActionType::RunAgents(other_incoming.clone()),
+            action: AIAgentActionType::RunAgents(Box::new(other_incoming.clone())),
             requires_result: true,
         };
         let block = app.update(|ctx| {
@@ -500,7 +500,7 @@ fn test_block(
     let action = AIAgentAction {
         id: AIAgentActionId::from("run-agents-1".to_string()),
         task_id: TaskId::new("task-1".to_string()),
-        action: AIAgentActionType::RunAgents(request.clone()),
+        action: AIAgentActionType::RunAgents(Box::new(request.clone())),
         requires_result: true,
     };
     let controller = Rc::new(TestController::default());
@@ -548,7 +548,7 @@ fn renderable_test_block(app: &mut App) -> ViewHandle<TuiOrchestrationBlock> {
     let action = AIAgentAction {
         id: AIAgentActionId::from("run-agents-1".to_string()),
         task_id: TaskId::new("task-1".to_string()),
-        action: AIAgentActionType::RunAgents(request.clone()),
+        action: AIAgentActionType::RunAgents(Box::new(request.clone())),
         requires_result: true,
     };
     let controller: Rc<dyn OrchestrationBlockController> = Rc::new(TestController::default());

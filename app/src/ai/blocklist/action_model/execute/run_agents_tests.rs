@@ -325,7 +325,7 @@ fn dispatch_merges_batch_metadata_with_independent_child_overrides() {
         ]
         .into();
         request.agent_run_configs.push(sibling);
-        let request = request.clone();
+        let request = request.as_ref().clone();
         let (sender, _receiver) = async_channel::bounded(1);
 
         state.executor.update(&mut app, |executor, ctx| {
@@ -366,7 +366,7 @@ fn remote_run_agents_action(harness_type: &str) -> AIAgentAction {
         id: AIAgentActionId::from("run-agents-action".to_string()),
         task_id: TaskId::new("run-agents-task".to_string()),
         requires_result: true,
-        action: AIAgentActionType::RunAgents(RunAgentsRequest {
+        action: AIAgentActionType::RunAgents(Box::new(RunAgentsRequest {
             metadata: Default::default(),
             summary: "Run child agent".to_string(),
             base_prompt: "Help".to_string(),
@@ -389,7 +389,7 @@ fn remote_run_agents_action(harness_type: &str) -> AIAgentAction {
             }],
             plan_id: String::new(),
             harness_auth_secret_name: None,
-        }),
+        })),
     }
 }
 

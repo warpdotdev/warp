@@ -126,7 +126,7 @@ fn convert_run_agents(
         execution_mode,
         plan_id,
     } = run_agents;
-    AIAgentActionType::RunAgents(RunAgentsRequest {
+    AIAgentActionType::RunAgents(Box::new(RunAgentsRequest {
         metadata,
         summary,
         base_prompt,
@@ -153,7 +153,7 @@ fn convert_run_agents(
         // confirmation card from `CloudAgentSettings.last_selected_auth_secret`
         // before Accept. The proto does not carry it.
         harness_auth_secret_name: None,
-    })
+    }))
 }
 
 /// Unexpected errors when trying to convert an [`api::Message`] to an [`AIAgentOutputMessage`].

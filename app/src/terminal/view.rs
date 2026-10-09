@@ -24062,7 +24062,7 @@ impl TerminalView {
                     AIAgentAction {
                         id: AIAgentActionId::from("fake-run-agents-action-id".to_owned()),
                         task_id: TaskId::new("fake-task-id".to_owned()),
-                        action: AIAgentActionType::RunAgents(request),
+                        action: AIAgentActionType::RunAgents(Box::new(request)),
                         requires_result: true,
                     },
                 ),
