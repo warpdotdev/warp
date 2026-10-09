@@ -456,7 +456,7 @@ impl TuiOrchestrationBlock {
         if self.spawning.is_some() || self.decided {
             return;
         }
-        self.action.action = AIAgentActionType::RunAgents(request.clone());
+        self.action.action = AIAgentActionType::RunAgents(Box::new(request.clone()));
         let new_state = Self::config_state_from_request(request, self.active_config.as_ref());
         let changed = self.request_fields != *request
             || self.orchestration_edit_state.orchestration_config_state != new_state;

@@ -54,6 +54,7 @@ fn prepared_remote_request_matches_gui_wire_semantics() {
     App::test((), |mut app| async move {
         crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
         let request = StartAgentRequest {
+            metadata: [("ticket_id".to_string(), "ENG-42".to_string())].into(),
             id: Default::default(),
             name: "  researcher  ".to_string(),
             prompt: "Inspect the code".to_string(),
@@ -109,6 +110,8 @@ fn prepared_remote_request_matches_gui_wire_semantics() {
                 Some("researcher-agent")
             );
             assert_eq!(prepared.spawn_request.team, Some(true));
+            let wire = serde_json::to_value(&prepared.spawn_request).unwrap();
+            assert_eq!(wire["metadata"]["ticket_id"], "ENG-42");
             let config = prepared.spawn_request.config.unwrap();
             assert_eq!(config.environment_id.as_deref(), Some("env-1"));
             assert_eq!(config.runner_id.as_deref(), Some("runner-1"));
@@ -159,6 +162,7 @@ fn repo_qualified_skill_spec_resolves_into_runtime_skills() {
             SkillReference::BundledSkillId("bundled-test".to_string()),
         ];
         let request = StartAgentRequest {
+            metadata: Default::default(),
             id: Default::default(),
             name: "child".to_string(),
             prompt: "Run".to_string(),
@@ -211,6 +215,7 @@ fn missing_repo_qualified_skill_reports_repository_and_reason() {
     App::test((), |mut app| async move {
         crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
         let request = StartAgentRequest {
+            metadata: Default::default(),
             id: Default::default(),
             name: "child".to_string(),
             prompt: "Run".to_string(),

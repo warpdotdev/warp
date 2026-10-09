@@ -15,12 +15,36 @@ fn make_request(harness: &str, mode: RunAgentsExecutionMode) -> RunAgentsRequest
     make_request_with_skills(harness, mode, Vec::new())
 }
 
+#[test]
+fn confirmation_preserves_metadata_defaults_and_child_overrides() {
+    let mut request = make_request(
+        "oz",
+        RunAgentsExecutionMode::Remote {
+            environment_id: String::new(),
+            worker_host: String::new(),
+            computer_use_enabled: false,
+            runner_id: String::new(),
+        },
+    );
+    request.metadata = [("ticket_id".to_string(), "ABC-1".to_string())].into();
+    request.agent_run_configs[0].metadata = [("ticket_id".to_string(), String::new())].into();
+
+    let confirmed = RunAgentsEditState::from_request(&request).to_request();
+
+    assert_eq!(confirmed.metadata, request.metadata);
+    assert_eq!(
+        confirmed.agent_run_configs[0].metadata,
+        request.agent_run_configs[0].metadata
+    );
+}
+
 fn make_request_with_skills(
     harness: &str,
     mode: RunAgentsExecutionMode,
     skills: Vec<SkillReference>,
 ) -> RunAgentsRequest {
     RunAgentsRequest {
+        metadata: Default::default(),
         summary: "summary".to_string(),
         base_prompt: "base".to_string(),
         skills,
@@ -28,6 +52,7 @@ fn make_request_with_skills(
         harness_type: harness.to_string(),
         execution_mode: mode,
         agent_run_configs: vec![RunAgentsAgentRunConfig {
+            metadata: Default::default(),
             name: "child".to_string(),
             prompt: "do work".to_string(),
             title: "Child agent".to_string(),
@@ -51,6 +76,7 @@ fn make_config_state_with_orch_fields(
             &request.execution_mode,
         ),
         card: RunAgentsCardFields {
+            metadata: request.metadata,
             agent_run_configs: request.agent_run_configs,
             base_prompt: request.base_prompt,
             summary: request.summary,

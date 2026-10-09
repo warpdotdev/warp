@@ -993,6 +993,7 @@ fn build_spawn_request(
     };
 
     SpawnAgentRequest {
+        metadata: Default::default(),
         prompt,
         mode,
         config: Some(config),

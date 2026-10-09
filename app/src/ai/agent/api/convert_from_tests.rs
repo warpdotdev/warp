@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use ai::agent::action::AskUserQuestionType;
 use ai::skills::SkillPathOrigin;
 use warp_multi_agent_api as api;
@@ -143,6 +145,47 @@ fn extract_file_artifact_created(
         panic!("expected file artifact created output message");
     };
     (filepath, filename, description, size_bytes)
+}
+
+#[test]
+fn converts_run_agents_metadata_maps() {
+    let task_id = TaskId::new("task-id".to_string());
+    let metadata = HashMap::from([("ticket_id".to_string(), "ENG-42".to_string())]);
+    let child_metadata = HashMap::from([("stage".to_string(), String::new())]);
+    let message = api::Message {
+        message: Some(api::message::Message::ToolCall(api::message::ToolCall {
+            tool_call_id: "run-agents".to_string(),
+            tool: Some(api::message::tool_call::Tool::RunAgents(api::RunAgents {
+                metadata: metadata.clone(),
+                agent_run_configs: vec![api::run_agents::AgentRunConfig {
+                    name: "child".to_string(),
+                    metadata: child_metadata.clone(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+        })),
+        ..Default::default()
+    };
+    let output = message
+        .to_client_output_message(ConversionParams {
+            task_id: &task_id,
+            current_todo_list: None,
+            active_code_review: None,
+            skill_path_origin: &SkillPathOrigin::Local,
+        })
+        .unwrap();
+    let MaybeAIAgentOutputMessage::Message(output) = output else {
+        panic!("expected message");
+    };
+    let AIAgentOutputMessageType::Action(action) = output.message else {
+        panic!("expected action");
+    };
+    let AIAgentActionType::RunAgents(request) = action.action else {
+        panic!("expected run_agents");
+    };
+    assert_eq!(request.metadata, metadata);
+    assert_eq!(request.agent_run_configs[0].metadata, child_metadata);
 }
 
 #[test]

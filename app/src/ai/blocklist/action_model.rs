@@ -746,7 +746,7 @@ impl BlocklistAIActionModel {
             );
             return;
         }
-        action.action = AIAgentActionType::RunAgents(request);
+        action.action = AIAgentActionType::RunAgents(Box::new(request));
         self.execute_action(action_id, conversation_id, ctx);
     }
 

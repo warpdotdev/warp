@@ -35,6 +35,7 @@ impl StartAgentRequestId {
 
 #[derive(Clone)]
 pub struct StartAgentRequest {
+    pub metadata: HashMap<String, String>,
     pub id: StartAgentRequestId,
     pub name: String,
     pub prompt: String,
@@ -252,6 +253,7 @@ impl StartAgentExecutor {
         name: String,
         prompt: String,
         execution_mode: StartAgentExecutionMode,
+        metadata: HashMap<String, String>,
         lifecycle_subscription: Option<Vec<LifecycleEventType>>,
         parent_conversation_id: AIConversationId,
         parent_run_id: Option<String>,
@@ -274,6 +276,7 @@ impl StartAgentExecutor {
                 name,
                 prompt,
                 execution_mode,
+                metadata,
                 lifecycle_subscription,
                 parent_conversation_id,
                 parent_run_id,

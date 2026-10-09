@@ -941,6 +941,7 @@ fn cloud_mode_terminal_for_test(app: &mut App) -> ViewHandle<TerminalView> {
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 fn handoff_request_for_test() -> SpawnAgentRequest {
     SpawnAgentRequest {
+        metadata: Default::default(),
         prompt: Some("Continue".to_owned()),
         mode: UserQueryMode::Normal,
         config: None,

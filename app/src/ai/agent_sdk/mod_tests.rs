@@ -378,7 +378,7 @@ fn factory_experiment_bootstrap_subprocess() {
             ai_client
                 .expect_create_agent_task()
                 .times(1)
-                .returning(|_, _, _, _, _| Ok(TASK_ID.parse().unwrap()));
+                .returning(|_, _, _, _, _, _| Ok(TASK_ID.parse().unwrap()));
             let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
             AgentDriverRunner::initialize_new_task(
                 &foreground,
@@ -573,8 +573,8 @@ fn multi_team_run_passes_selected_team_to_task_creation_and_headless_window() {
         ai_client
             .expect_create_agent_task()
             .times(1)
-            .withf(move |_, _, _, _, scope| scope.team_uid() == Some(selected_team_uid))
-            .returning(|_, _, _, _, _| Ok(TASK_ID.parse().unwrap()));
+            .withf(move |_, _, _, _, _, scope| scope.team_uid() == Some(selected_team_uid))
+            .returning(|_, _, _, _, _, _| Ok(TASK_ID.parse().unwrap()));
         let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
         let mut driver_options = agent_driver_options();
         let runner = app.add_singleton_model(|_| AgentDriverRunner);

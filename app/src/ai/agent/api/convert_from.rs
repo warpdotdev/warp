@@ -116,6 +116,7 @@ fn convert_run_agents(
     skill_path_origin: &SkillPathOrigin,
 ) -> AIAgentActionType {
     let api::RunAgents {
+        metadata,
         summary,
         base_prompt,
         skills,
@@ -125,7 +126,8 @@ fn convert_run_agents(
         execution_mode,
         plan_id,
     } = run_agents;
-    AIAgentActionType::RunAgents(RunAgentsRequest {
+    AIAgentActionType::RunAgents(Box::new(RunAgentsRequest {
+        metadata,
         summary,
         base_prompt,
         skills: skills
@@ -138,6 +140,7 @@ fn convert_run_agents(
         agent_run_configs: agent_run_configs
             .into_iter()
             .map(|config| RunAgentsAgentRunConfig {
+                metadata: config.metadata,
                 name: config.name,
                 prompt: config.prompt,
                 title: config.title,
@@ -150,7 +153,7 @@ fn convert_run_agents(
         // confirmation card from `CloudAgentSettings.last_selected_auth_secret`
         // before Accept. The proto does not carry it.
         harness_auth_secret_name: None,
-    })
+    }))
 }
 
 /// Unexpected errors when trying to convert an [`api::Message`] to an [`AIAgentOutputMessage`].

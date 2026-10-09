@@ -15933,7 +15933,7 @@ dependencies = [
 [[package]]
 name = "warp_multi_agent_api"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=00cdd6726f28fb6b32a6712f0ca3264dbd0956a1#00cdd6726f28fb6b32a6712f0ca3264dbd0956a1"
+source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=6b33333f17ae74f1d18769672d6594d095b3f3da#6b33333f17ae74f1d18769672d6594d095b3f3da"
 dependencies = [
  "prost",
  "prost-reflect",

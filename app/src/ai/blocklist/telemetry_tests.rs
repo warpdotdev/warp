@@ -9,6 +9,7 @@ use super::*;
 
 fn request() -> RunAgentsRequest {
     RunAgentsRequest {
+        metadata: Default::default(),
         summary: "summary".to_string(),
         base_prompt: "base".to_string(),
         skills: Vec::new(),
@@ -18,6 +19,7 @@ fn request() -> RunAgentsRequest {
         agent_run_configs: ["one", "two", "three"]
             .into_iter()
             .map(|name| RunAgentsAgentRunConfig {
+                metadata: Default::default(),
                 name: name.to_string(),
                 prompt: String::new(),
                 title: String::new(),

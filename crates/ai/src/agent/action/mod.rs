@@ -1,6 +1,7 @@
 mod convert;
 mod review_comments;
 
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::ops::Range;
 use std::path::PathBuf;
@@ -198,7 +199,7 @@ pub enum AIAgentActionType {
     /// The full per-child prompt is computed at dispatch time as
     /// `base_prompt + "\n\n" + agent_run_configs[i].prompt` (or just
     /// `base_prompt` when the per-agent `prompt` is empty).
-    RunAgents(RunAgentsRequest),
+    RunAgents(Box<RunAgentsRequest>),
 
     /// Synthesized from a server-emitted Message::ToolCall::WaitForEvents;
     /// dispatched by WaitForEventsExecutor.
@@ -221,6 +222,7 @@ pub enum AIAgentActionType {
 /// fully-resolved instance only.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct RunAgentsRequest {
+    pub metadata: HashMap<String, String>,
     pub summary: String,
     pub base_prompt: String,
     pub skills: Vec<SkillReference>,
@@ -256,6 +258,7 @@ impl RunAgentsExecutionMode {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct RunAgentsAgentRunConfig {
+    pub metadata: HashMap<String, String>,
     pub name: String,
     pub prompt: String,
     pub title: String,

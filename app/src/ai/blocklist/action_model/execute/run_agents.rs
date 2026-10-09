@@ -251,6 +251,7 @@ impl RunAgentsExecutor {
             .and_then(|c| c.run_id());
 
         let RunAgentsRequest {
+            metadata,
             execution_mode: run_execution_mode,
             harness_type,
             model_id,
@@ -287,10 +288,13 @@ impl RunAgentsExecutor {
                 continue;
             }
             let recv = self.start_agent_executor.update(ctx, |executor, exec_ctx| {
+                let mut child_metadata = metadata.clone();
+                child_metadata.extend(cfg.metadata.clone());
                 executor.dispatch(
                     cfg.name.clone(),
                     prompt,
                     mode,
+                    child_metadata,
                     None, /* lifecycle_subscription */
                     parent_conversation_id,
                     parent_run_id.clone(),
@@ -404,7 +408,7 @@ impl RunAgentsExecutor {
         let AIAgentActionType::RunAgents(request) = action else {
             return ActionExecution::InvalidAction;
         };
-        let mut request = request.clone();
+        let mut request = request.as_ref().clone();
         let action_id = id.clone();
         let parent_conversation_id = input.conversation_id;
         let team_scope = self.team_scope(ctx);
@@ -475,7 +479,7 @@ impl RunAgentsExecutor {
         {
             return true;
         }
-        let mut resolved_request = request.clone();
+        let mut resolved_request = request.as_ref().clone();
         let team_scope = self.team_scope(ctx);
         resolve_request_from_approved_config(&mut resolved_request, input.conversation_id, ctx);
         populate_default_auth_secret_for_execution(&mut resolved_request, &team_scope, ctx);
