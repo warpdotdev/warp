@@ -242,6 +242,14 @@ impl TemplatableMCPServerManager {
             .map(|s| s.as_str())
     }
 
+    /// Startup `tools/list` error for a connected server. Listing fails
+    /// soft; the server still runs with no tools.
+    pub fn get_server_tools_list_error(&self, installation_uuid: Uuid) -> Option<&str> {
+        self.active_servers
+            .get(&installation_uuid)
+            .and_then(|info| info.tools_list_error())
+    }
+
     pub fn resources(&self) -> impl Iterator<Item = &rmcp::model::Resource> {
         self.active_servers
             .values()
