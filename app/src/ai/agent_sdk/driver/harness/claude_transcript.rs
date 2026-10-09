@@ -111,6 +111,19 @@ pub(super) fn home_dir_for_claude_config() -> Option<PathBuf> {
     dirs::home_dir()
 }
 
+/// Where Claude Code writes the main transcript of `session_uuid` started in `cwd`.
+pub(super) fn session_transcript_path(
+    config_root: &Path,
+    cwd: &Path,
+    session_uuid: Uuid,
+) -> PathBuf {
+    projects_dir(config_root, cwd).join(format!("{session_uuid}.jsonl"))
+}
+
+fn projects_dir(config_root: &Path, cwd: &Path) -> PathBuf {
+    config_root.join("projects").join(encode_cwd(cwd))
+}
+
 /// Captures the session envelope and diagnostics from the same native reads.
 ///
 /// A required root must exist and contain a complete readable record. Usable partial root and
@@ -121,11 +134,10 @@ pub(super) fn read_envelope_with_diagnostics(
     config_root: &Path,
     require_main_transcript: bool,
 ) -> Result<(ClaudeTranscriptEnvelope, CaptureDiagnostics)> {
-    let encoded = encode_cwd(cwd);
-    let projects_dir = config_root.join("projects").join(&encoded);
+    let projects_dir = projects_dir(config_root, cwd);
 
     // Main session transcript.
-    let session_file = projects_dir.join(format!("{session_uuid}.jsonl"));
+    let session_file = session_transcript_path(config_root, cwd, session_uuid);
     let root = read_jsonl_capture(&session_file)?;
     if require_main_transcript && root.diagnostics.status == JsonlReadStatus::Missing {
         anyhow::bail!(
