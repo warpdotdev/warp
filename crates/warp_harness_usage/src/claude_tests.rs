@@ -35,6 +35,38 @@ fn capture(entries: &[Value]) -> crate::api::UsageSnapshot<ClaudeUsage> {
     snapshot
 }
 #[test]
+fn model_aliases_share_cost_groups_and_preserve_request_bands() {
+    let mut alias = response("b", 50, 2);
+    alias["message"]["model"] = json!(" Claude-A-20260101[1m]-latest ");
+    let mut long_context = response("c", 101, 3);
+    long_context["message"]["model"] = json!("claude-a@20260101");
+
+    let snapshot = capture(&[response("a", 50, 1), alias, long_context]);
+    let groups = snapshot.payload.cost_metadata.unwrap().groups;
+
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].attribution.model.as_deref(), Some("claude-a"));
+    assert_eq!(groups[0].long_context_threshold_tokens, Some(100));
+    assert_eq!(
+        groups[0].pre_threshold.as_ref().unwrap().input_tokens,
+        Some(100)
+    );
+    assert_eq!(
+        groups[0].pre_threshold.as_ref().unwrap().output_tokens,
+        Some(3)
+    );
+    assert_eq!(
+        groups[0].post_threshold.as_ref().unwrap().input_tokens,
+        Some(101)
+    );
+    assert_eq!(
+        groups[0].post_threshold.as_ref().unwrap().output_tokens,
+        Some(3)
+    );
+    assert_eq!(snapshot.payload.output_tokens, Some(6));
+}
+
+#[test]
 fn streaming_revisions_replace_usage_but_distinct_responses_add() {
     let mut first = response("a", 50, 0);
     first["message"]["content"] = json!([{"type":"tool_use","id":"read","name":"Read"}]);

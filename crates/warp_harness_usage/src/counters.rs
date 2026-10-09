@@ -158,10 +158,10 @@ impl<'a> Accounting<'a> {
         let Some(groups) = &mut self.groups else {
             return;
         };
-        let rule = attribution
-            .model
+        let model = attribution.model.as_deref().map(normalize_model);
+        let rule = model
             .as_ref()
-            .and_then(|model| self.policy?.models.get(&normalize_model(model)));
+            .and_then(|model| self.policy?.models.get(model));
         let Some(input) = self.provider.input(usage) else {
             self.invalidate_cost();
             findings.reason(ReasonCode::IncompleteInput);
@@ -177,6 +177,7 @@ impl<'a> Accounting<'a> {
             }
         };
         let mut key = attribution.clone();
+        key.model = model;
         key.service_tier = normalized_modifier(key.service_tier, &["", "default", "standard"]);
         key.inference_geo = normalized_modifier(key.inference_geo, &["", "global"]);
         key.speed = normalized_modifier(key.speed, &["", "standard"]);

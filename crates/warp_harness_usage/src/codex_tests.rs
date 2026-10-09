@@ -46,6 +46,30 @@ fn capture(entries: &[Value]) -> crate::api::UsageSnapshot<CodexUsage> {
 }
 
 #[test]
+fn model_aliases_share_cost_groups() {
+    let snapshot = capture(&[
+        context("t1", "gpt-a"),
+        record("a", "t1", 10, 2, 10, 2),
+        context("t2", " GPT-A-20260101-latest "),
+        record("b", "t2", 10, 2, 20, 4),
+    ]);
+    let groups = snapshot.payload.cost_metadata.unwrap().groups;
+
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].attribution.model.as_deref(), Some("gpt-a"));
+    assert_eq!(
+        groups[0].pre_threshold.as_ref().unwrap().input_tokens,
+        Some(20)
+    );
+    assert_eq!(
+        groups[0].pre_threshold.as_ref().unwrap().output_tokens,
+        Some(4)
+    );
+    assert_eq!(groups[0].post_threshold, None);
+    assert_eq!(snapshot.payload.output_tokens, Some(4));
+}
+
+#[test]
 fn native_responses_use_individual_input_and_deduplicate_checkpoint_copies() {
     let first = record("a", "t1", 10, 2, 10, 2);
     let second = record("b", "t2", 10, 2, 20, 4);
