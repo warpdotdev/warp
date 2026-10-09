@@ -241,6 +241,7 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
         resume: Option<ResumePayload>,
         resolved_env_vars: &HashMap<OsString, OsString>,
         skill_dirs: &[PathBuf],
+        has_deferred_repositories: bool,
         resolved_secrets: &HashMap<String, ManagedSecretValue>,
         resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
         third_party_harness_model_config: Option<&HarnessModelConfig>,

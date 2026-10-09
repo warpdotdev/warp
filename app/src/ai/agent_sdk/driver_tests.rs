@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use chrono::Local;
 use cloud_object_models::CodeForge;
+use command::blocking::Command as ProcessCommand;
 use futures::channel::oneshot;
 use futures::executor::block_on;
 use futures::poll;
@@ -15,7 +16,7 @@ use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, Repo
 use serde_json::json;
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 use tempfile::TempDir;
-use warp_cli::agent::Harness;
+use warp_cli::agent::{Harness, HarnessTransport};
 use warp_cli::skill::SkillSpec;
 use warp_cli::{
     OZ_CLI_ENV, OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV, SERVER_ROOT_URL_OVERRIDE_ENV,
@@ -47,6 +48,7 @@ use crate::ai::agent::{
     UploadArtifactResult,
 };
 use crate::ai::agent_sdk::driver::environment::PrepareEnvironmentError;
+use crate::ai::agent_sdk::driver::harness::{HarnessKind, harness_kind};
 use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::orchestration_events::{
@@ -2415,31 +2417,102 @@ fn ambient_driver_resumed_conversation_elapsed_idle_window_commits_exiting() {
 }
 
 #[test]
-fn deferred_only_workspace_activates_the_runtime_skill_before_terminal_creation() {
-    App::test((), |mut app| async move {
-        initialize_workspace_test_app(&mut app);
-        let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
-        options.workspace = super::environment::WorkspaceConfiguration::from_resolved(
-            Vec::new(),
-            vec![SourceRepo::new(
-                CodeForge::GitLab,
-                "platform/backend".into(),
-                "api".into(),
-            )],
-            Vec::new(),
-        )
-        .unwrap();
-        let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
-        driver.read(&app, |driver, _| {
-            assert_eq!(
-                driver
-                    .resolved_env_vars
-                    .get(std::ffi::OsStr::new(super::DEFERRED_REPOSITORIES_SKILL_ENV)),
-                Some(&OsString::from("1")),
-            );
-            assert!(driver.workspace.as_ref().unwrap().source_repos.is_empty());
-        });
-    });
+fn deferred_skill_publication_uses_inventory_after_workspace_consumption() {
+    if std::env::var_os("WARP_TEST_DEFERRED_SKILL_PUBLICATION").is_none() {
+        let home = TempDir::new().unwrap();
+        let output = ProcessCommand::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ai::agent_sdk::driver::tests::deferred_skill_publication_uses_inventory_after_workspace_consumption",
+                "--nocapture",
+            ])
+            .env("WARP_TEST_DEFERRED_SKILL_PUBLICATION", "1")
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .env("CLAUDE_CONFIG_DIR", home.path().join(".claude"))
+            .env("CODEX_HOME", home.path().join(".codex"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return;
+    }
+    let _factory_mcp = warp_core::features::FeatureFlag::FactoryMcp.override_enabled(false);
+    for has_deferred_repositories in [true, false] {
+        for (harness, skill_parent) in [
+            (Harness::Claude, ".claude"),
+            (Harness::Codex, ".agents"),
+            (Harness::Gemini, ".gemini"),
+        ] {
+            App::test((), |mut app| async move {
+                initialize_workspace_test_app(&mut app);
+                let root = TempDir::new().unwrap();
+                let skill_parent = root.path().join(skill_parent);
+                fs::write(&skill_parent, "existing file").unwrap();
+                let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
+                options.working_dir = root.path().to_path_buf();
+                options.selected_harness = harness;
+                options.workspace = super::environment::WorkspaceConfiguration::from_resolved(
+                    Vec::new(),
+                    if has_deferred_repositories {
+                        vec![SourceRepo::new(
+                            CodeForge::GitLab,
+                            "platform/backend".into(),
+                            "api".into(),
+                        )]
+                    } else {
+                        Vec::new()
+                    },
+                    Vec::new(),
+                )
+                .unwrap();
+                options.workspace.factory_skill_dirs = Some(Vec::new());
+                if !has_deferred_repositories {
+                    options.secrets.insert(
+                        "WARP_FACTORY_DEFERRED_REPOSITORIES_SKILL".into(),
+                        ManagedSecretValue::raw_value("1"),
+                    );
+                }
+                let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
+                let foreground = driver.update(&mut app, |driver, ctx| {
+                    assert!(driver.workspace.take().unwrap().source_repos.is_empty());
+                    assert_eq!(
+                        driver.resolved_env_vars.contains_key(std::ffi::OsStr::new(
+                            "WARP_FACTORY_DEFERRED_REPOSITORIES_SKILL",
+                        )),
+                        !has_deferred_repositories,
+                    );
+                    ctx.spawner()
+                });
+                let HarnessKind::ThirdParty(harness) =
+                    harness_kind(harness, HarnessTransport::Pty).unwrap()
+                else {
+                    panic!("expected a third-party harness");
+                };
+                let result = AgentDriver::prepare_harness(
+                    &AgentRunPrompt::Local("do the task".into()),
+                    &[],
+                    harness.as_ref(),
+                    &foreground,
+                )
+                .await;
+                if has_deferred_repositories {
+                    let Err(AgentDriverError::HarnessConfigSetupFailed { error, .. }) = result
+                    else {
+                        panic!("expected skill publication to fail");
+                    };
+                    assert!(format!("{error:#}").contains("skill"), "{error:#}");
+                } else {
+                    assert!(result.is_ok(), "{:?}", result.err());
+                }
+                assert_eq!(fs::read_to_string(skill_parent).unwrap(), "existing file");
+            });
+        }
+    }
 }
 
 #[test]

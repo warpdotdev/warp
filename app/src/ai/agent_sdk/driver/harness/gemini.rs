@@ -67,8 +67,9 @@ impl ThirdPartyHarness for GeminiHarness {
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
         _resume: Option<ResumePayload>,
-        resolved_env_vars: &HashMap<OsString, OsString>,
+        _resolved_env_vars: &HashMap<OsString, OsString>,
         skill_dirs: &[PathBuf],
+        has_deferred_repositories: bool,
         _resolved_secrets: &HashMap<String, ManagedSecretValue>,
         _resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
         _third_party_harness_model_config: Option<&HarnessModelConfig>,
@@ -80,9 +81,7 @@ impl ThirdPartyHarness for GeminiHarness {
                 error,
             }
         })?;
-        if resolved_env_vars.contains_key(std::ffi::OsStr::new(
-            super::super::DEFERRED_REPOSITORIES_SKILL_ENV,
-        )) {
+        if has_deferred_repositories {
             let skill_root = harness_working_dir.join(".gemini").join("skills");
             let published = super::skill_dirs_publish::publish_skills_for_harness(
                 &skill_root,

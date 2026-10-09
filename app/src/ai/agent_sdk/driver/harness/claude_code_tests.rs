@@ -690,7 +690,8 @@ fn prepare_claude_environment_config_without_config_dir_uses_home_global_config(
     unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") };
 
     let working_dir = home_dir.path().join("workspace/project");
-    prepare_claude_environment_config(&working_dir, &working_dir, &HashMap::new(), &[]).unwrap();
+    prepare_claude_environment_config(&working_dir, &working_dir, &HashMap::new(), &[], false)
+        .unwrap();
 
     assert!(home_dir.path().join(CLAUDE_JSON_FILE_NAME).exists());
     assert!(
@@ -735,7 +736,8 @@ fn prepare_claude_environment_config_with_config_dir_uses_dir_global_config() {
     unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", claude_config_dir.path()) };
 
     let working_dir = home_dir.path().join("workspace/project");
-    prepare_claude_environment_config(&working_dir, &working_dir, &HashMap::new(), &[]).unwrap();
+    prepare_claude_environment_config(&working_dir, &working_dir, &HashMap::new(), &[], false)
+        .unwrap();
 
     assert!(
         claude_config_dir

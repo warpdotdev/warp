@@ -139,6 +139,7 @@ impl ThirdPartyHarness for CodexHarness {
         resume: Option<ResumePayload>,
         resolved_env_vars: &HashMap<OsString, OsString>,
         skill_dirs: &[PathBuf],
+        has_deferred_repositories: bool,
         resolved_secrets: &HashMap<String, ManagedSecretValue>,
         resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
         third_party_harness_model_config: Option<&HarnessModelConfig>,
@@ -160,8 +161,7 @@ impl ThirdPartyHarness for CodexHarness {
             workspace_root,
             harness_working_dir,
             skill_dirs,
-            resolved_env_vars
-                .contains_key(OsStr::new(super::super::DEFERRED_REPOSITORIES_SKILL_ENV)),
+            has_deferred_repositories,
         )
         .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
             harness: self.cli_agent().command_prefix().to_owned(),

@@ -152,6 +152,7 @@ impl ThirdPartyHarness for ClaudeHarness {
         resume: Option<ResumePayload>,
         resolved_env_vars: &HashMap<OsString, OsString>,
         skill_dirs: &[PathBuf],
+        has_deferred_repositories: bool,
         _resolved_secrets: &HashMap<String, ManagedSecretValue>,
         resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
         _third_party_harness_model_config: Option<&HarnessModelConfig>,
@@ -162,6 +163,7 @@ impl ThirdPartyHarness for ClaudeHarness {
             harness_working_dir,
             resolved_env_vars,
             skill_dirs,
+            has_deferred_repositories,
         )
         .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
             harness: self.cli_agent().command_prefix().to_owned(),
@@ -726,6 +728,7 @@ pub(crate) fn prepare_claude_environment_config(
     harness_working_dir: &Path,
     resolved_env_vars: &HashMap<OsString, OsString>,
     skill_dirs: &[PathBuf],
+    has_deferred_repositories: bool,
 ) -> Result<()> {
     let claude_json_path = claude_global_config_path()?;
     let claude_dir = claude_config_dir()?;
@@ -741,7 +744,7 @@ pub(crate) fn prepare_claude_environment_config(
         workspace_root,
         harness_working_dir,
         skill_dirs,
-        resolved_env_vars.contains_key(OsStr::new(super::super::DEFERRED_REPOSITORIES_SKILL_ENV)),
+        has_deferred_repositories,
     )?;
     Ok(())
 }

@@ -197,7 +197,6 @@ const HARNESS_EXIT_FORCE_KILL_DELAY: Duration = Duration::from_secs(14);
 const TASK_STATUS_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
 /// Timeout for individual harness auth preflight commands.
 const PREFLIGHT_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
-pub(super) const DEFERRED_REPOSITORIES_SKILL_ENV: &str = "WARP_FACTORY_DEFERRED_REPOSITORIES_SKILL";
 /// Last-resort bound for draining `PendingCliHarnessPromptQueue` when the CLI-harness plugin
 /// never reports `CLIAgentSessionsModelEvent::StatusChanged` with `CLIAgentSessionStatus::InProgress`
 /// — the normal drain signal. Finding anything still queued once this window elapses is not a
@@ -733,6 +732,7 @@ pub struct AgentDriver {
 
     workspace: Option<environment::WorkspaceConfiguration>,
     skill_dirs: Vec<PathBuf>,
+    has_deferred_repositories: bool,
     computer_use_configured: bool,
 
     // End-of-run snapshot upload controls.
@@ -1197,12 +1197,7 @@ impl AgentDriver {
                 OsString::from(dirs.iter().map(|dir| dir.to_string_lossy()).join(",")),
             );
         }
-        if !workspace.deferred_repos.is_empty() {
-            env_vars.insert(
-                OsString::from(DEFERRED_REPOSITORIES_SKILL_ENV),
-                OsString::from("1"),
-            );
-        }
+        let has_deferred_repositories = !workspace.deferred_repos.is_empty();
         if let Err(error) = git_credentials::prepend_azure_cli_wrapper_to_path(&mut env_vars) {
             safe_warn!(
                 safe: ("Failed to add the Azure CLI authentication wrapper to PATH"),
@@ -1343,6 +1338,7 @@ impl AgentDriver {
             cloud_providers,
             workspace: Some(workspace),
             skill_dirs,
+            has_deferred_repositories,
             computer_use_configured,
             snapshot_disabled: snapshot_disabled_value,
             snapshot_upload_timeout: snapshot_upload_timeout
@@ -1399,6 +1395,7 @@ impl AgentDriver {
             cloud_providers: Vec::new(),
             workspace: Some(environment::WorkspaceConfiguration::default()),
             skill_dirs: parse_skills_dirs_env(),
+            has_deferred_repositories: false,
             computer_use_configured: false,
             snapshot_disabled: false,
             snapshot_upload_timeout: snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT,
@@ -3216,6 +3213,7 @@ impl AgentDriver {
             managed_mcp_client,
             terminal_driver,
             skill_dirs,
+            has_deferred_repositories,
         ) = foreground
             .spawn(|me, ctx| {
                 if me.harness.is_some() {
@@ -3233,6 +3231,7 @@ impl AgentDriver {
                     ServerApiProvider::as_ref(ctx).get_managed_mcp_client(),
                     me.terminal_driver.clone(),
                     me.skill_dirs.clone(),
+                    me.has_deferred_repositories,
                 ))
             })
             .await
@@ -3323,6 +3322,7 @@ impl AgentDriver {
                 resume,
                 &resolved_env_vars,
                 &skill_dirs,
+                has_deferred_repositories,
                 &secrets_for_harness,
                 &resolved_mcp_servers,
                 third_party_harness_model_config.as_ref(),
