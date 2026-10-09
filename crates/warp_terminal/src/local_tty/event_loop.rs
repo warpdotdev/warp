@@ -151,14 +151,24 @@ where
         event_listener: ChannelEventListener,
         pty: P,
         rx: Receiver<Message>,
-    ) -> EventLoop<P, M> {
-        EventLoop {
-            poll: mio::Poll::new().expect("create mio Poll"),
+    ) -> io::Result<EventLoop<P, M>> {
+        let poll = match mio::Poll::new() {
+            Ok(poll) => poll,
+            Err(err) => {
+                if let Err(kill_err) = pty.kill() {
+                    log::warn!("Failed to kill PTY after event loop creation failed: {kill_err:#}");
+                }
+                return Err(err);
+            }
+        };
+
+        Ok(EventLoop {
+            poll,
             pty,
             rx,
             terminal,
             event_listener,
-        }
+        })
     }
 
     /// Drain the channel.
