@@ -31,7 +31,9 @@ use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupS
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::cloud_environments::AmbientAgentEnvironment;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
-use crate::ai::mcp::builtin::{FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_NAME};
+use crate::ai::mcp::builtin::{
+    FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_NAME, PREVIEW_URLS_MCP_SERVER_NAME,
+};
 use crate::ai::mcp::file_based_manager::{FileBasedMCPManager, FileBasedMCPManagerEvent};
 use crate::ai::mcp::file_mcp_watcher::PendingScan;
 use crate::ai::mcp::parsing::normalize_mcp_json;
@@ -144,8 +146,67 @@ fn test_normalize_sse_server_with_headers() {
 
 #[test]
 #[serial_test::serial]
+fn resolve_mcp_specs_to_json_registers_both_builtins_without_configuration() {
+    let _factory_flag = FeatureFlag::FactoryMcp.override_enabled(true);
+    let _preview_flag = FeatureFlag::PreviewUrlsMcp.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.update(|ctx| {
+            AuthStateProvider::as_ref(ctx)
+                .get()
+                .set_credentials(Some(api_key_credentials()));
+        });
+        let driver_handle = setup_agent_driver(&mut app);
+        let foreground = driver_handle.update(&mut app, |_, ctx| ctx.spawner());
+
+        let resolved = AgentDriver::resolve_mcp_specs_to_json(
+            &[],
+            Arc::new(HashMap::new()),
+            Arc::new(MockManagedMcpClient::new()),
+            &foreground,
+        )
+        .await
+        .unwrap();
+
+        let server_root = ChannelState::server_root_url();
+        assert_eq!(
+            resolved,
+            HashMap::from([
+                (
+                    FACTORY_MCP_SERVER_NAME.to_string(),
+                    JSONMCPServer {
+                        transport_type: JSONTransportType::SSEServer {
+                            url: format!("{server_root}/api/v1/mcp/factory"),
+                            headers: HashMap::from([(
+                                "Authorization".to_string(),
+                                "Bearer wk-test-key".to_string(),
+                            )]),
+                        },
+                    },
+                ),
+                (
+                    PREVIEW_URLS_MCP_SERVER_NAME.to_string(),
+                    JSONMCPServer {
+                        transport_type: JSONTransportType::SSEServer {
+                            url: format!("{server_root}/api/v1/mcp/preview-urls"),
+                            headers: HashMap::from([(
+                                "Authorization".to_string(),
+                                "Bearer wk-test-key".to_string(),
+                            )]),
+                        },
+                    },
+                ),
+            ])
+        );
+    });
+}
+
+#[test]
+#[serial_test::serial]
 fn resolve_mcp_specs_to_json_attaches_factory_and_preserves_explicit_specs() {
     let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
+    let _preview_flag = FeatureFlag::PreviewUrlsMcp.override_enabled(false);
 
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
@@ -833,6 +894,58 @@ fn builtin_factory_mcp_for_oz_preserves_exact_name_collision() {
 
     assert!(
         AgentDriver::builtin_factory_mcp_for_run(
+            Some(&api_key_credentials()),
+            &taken_server_names,
+            &[]
+        )
+        .is_none()
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn builtin_preview_urls_mcp_for_oz_attaches_when_eligible() {
+    let _flag = FeatureFlag::PreviewUrlsMcp.override_enabled(true);
+
+    let installation = AgentDriver::builtin_preview_urls_mcp_for_run(
+        Some(&api_key_credentials()),
+        &HashSet::new(),
+        &[],
+    )
+    .expect("built-in preview URLs MCP should attach when eligible");
+
+    assert_eq!(
+        installation.templatable_mcp_server().name,
+        PREVIEW_URLS_MCP_SERVER_NAME
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn builtin_preview_urls_mcp_for_oz_skips_without_flag_or_credentials() {
+    let flag = FeatureFlag::PreviewUrlsMcp.override_enabled(false);
+    assert!(
+        AgentDriver::builtin_preview_urls_mcp_for_run(
+            Some(&api_key_credentials()),
+            &HashSet::new(),
+            &[]
+        )
+        .is_none()
+    );
+    drop(flag);
+
+    let _flag = FeatureFlag::PreviewUrlsMcp.override_enabled(true);
+    assert!(AgentDriver::builtin_preview_urls_mcp_for_run(None, &HashSet::new(), &[]).is_none());
+}
+
+#[test]
+#[serial_test::serial]
+fn builtin_preview_urls_mcp_for_oz_preserves_exact_name_collision() {
+    let _flag = FeatureFlag::PreviewUrlsMcp.override_enabled(true);
+    let taken_server_names = HashSet::from([PREVIEW_URLS_MCP_SERVER_NAME.to_string()]);
+
+    assert!(
+        AgentDriver::builtin_preview_urls_mcp_for_run(
             Some(&api_key_credentials()),
             &taken_server_names,
             &[]

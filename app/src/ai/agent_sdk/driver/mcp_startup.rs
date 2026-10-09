@@ -211,16 +211,21 @@ impl AgentDriver {
                     .flatten()
             })
             .await?;
-        if FeatureFlag::FactoryMcp.is_enabled()
-            && !installations.iter().any(|installation| {
-                installation.templatable_mcp_server().name == builtin::FACTORY_MCP_SERVER_NAME
-            })
-            && let Some(token) = credentials.as_ref().and_then(builtin::builtin_bearer_token)
-        {
-            log::info!("Attaching the built-in Factory MCP server to this agent run");
-            let ambient_headers = Self::factory_mcp_ambient_headers(foreground).await;
-            installations.push(builtin::factory_mcp_installation(&token, &ambient_headers));
-        }
+        let taken_server_names: HashSet<String> = installations
+            .iter()
+            .map(|installation| installation.templatable_mcp_server().name.clone())
+            .collect();
+        let ambient_headers = Self::builtin_mcp_ambient_headers(foreground).await;
+        installations.extend(Self::builtin_factory_mcp_for_run(
+            credentials.as_ref(),
+            &taken_server_names,
+            &ambient_headers,
+        ));
+        installations.extend(Self::builtin_preview_urls_mcp_for_run(
+            credentials.as_ref(),
+            &taken_server_names,
+            &ambient_headers,
+        ));
         Self::mcp_installations_to_json(installations, secrets.as_ref())
     }
 
@@ -409,7 +414,7 @@ impl AgentDriver {
     /// rotate, so only Firebase-authenticated local runs that outlive their
     /// token would see factory tool calls start failing. `ambient_headers`
     /// (workload token, cloud-agent ID) are resolved separately via
-    /// [`Self::factory_mcp_ambient_headers`] since they depend on this run's
+    /// [`Self::builtin_mcp_ambient_headers`] since they depend on this run's
     /// active ambient task, if any, rather than on credentials.
     fn builtin_factory_mcp_for_run(
         credentials: Option<&Credentials>,
@@ -431,8 +436,36 @@ impl AgentDriver {
         Some(builtin::factory_mcp_installation(&token, ambient_headers))
     }
 
+    /// Returns the built-in preview URLs MCP server installation to attach to this run, or
+    /// `None` when it should not be attached. Eligibility mirrors
+    /// [`Self::builtin_factory_mcp_for_run`] under the `PreviewUrlsMcp` flag; warp-server itself
+    /// rejects calls that do not carry this run's ambient workload token, so a run outside a
+    /// sandbox only ever sees an explanatory tool error.
+    fn builtin_preview_urls_mcp_for_run(
+        credentials: Option<&Credentials>,
+        taken_server_names: &HashSet<String>,
+        ambient_headers: &[(String, String)],
+    ) -> Option<TemplatableMCPServerInstallation> {
+        if !FeatureFlag::PreviewUrlsMcp.is_enabled() {
+            return None;
+        }
+        if taken_server_names.contains(builtin::PREVIEW_URLS_MCP_SERVER_NAME) {
+            log::info!(
+                "Skipping the built-in preview URLs MCP server: a server named '{}' is already configured for this run",
+                builtin::PREVIEW_URLS_MCP_SERVER_NAME
+            );
+            return None;
+        }
+        let token = builtin::builtin_bearer_token(credentials?)?;
+        log::info!("Attaching the built-in preview URLs MCP server to this agent run");
+        Some(builtin::preview_urls_mcp_installation(
+            &token,
+            ambient_headers,
+        ))
+    }
+
     /// Resolves the ambient headers (workload token, cloud-agent ID) to attach to the
-    /// built-in Factory MCP server, so warp-server can verify the caller is this run's
+    /// built-in MCP servers, so warp-server can verify the caller is this run's
     /// own worker instead of soft-failing the check on a missing token. Returns an
     /// empty list when this run has no active ambient task (e.g. a local session) or
     /// no isolation platform can issue a workload token.
@@ -441,7 +474,7 @@ impl AgentDriver {
     /// workload token is resolved against the sandbox deadline: a token that would expire
     /// first is left off entirely rather than pinned, because warp-server rejects an expired
     /// workload token but tolerates a missing one.
-    async fn factory_mcp_ambient_headers(foreground: &ModelSpawner<Self>) -> Vec<(String, String)> {
+    async fn builtin_mcp_ambient_headers(foreground: &ModelSpawner<Self>) -> Vec<(String, String)> {
         let Ok((task_id, server_api)) = foreground
             .spawn(|me, ctx| (me.task_id, ServerApiProvider::as_ref(ctx).get()))
             .await
@@ -457,7 +490,7 @@ impl AgentDriver {
             .await
             .unwrap_or_else(|err| {
                 log::warn!(
-                    "Failed to resolve ambient headers for the built-in Factory MCP server: {err:#}"
+                    "Failed to resolve ambient headers for the built-in MCP servers: {err:#}"
                 );
                 Vec::new()
             })
@@ -559,9 +592,9 @@ impl AgentDriver {
         let existing_uuids = resolved_mcp_specs.local_uuids;
         let mut ephemeral_installations = resolved_mcp_specs.ephemeral_installations;
 
-        // Attach the built-in Factory MCP server. Interactive clients attach built-ins via
+        // Attach the built-in Warp-hosted MCP servers. Interactive clients attach built-ins via
         // `TemplatableMCPServerManager::sync_builtin_servers`, which skips CLI agent runs, so
-        // the driver injects the same code-owned installation here, scoped to this run.
+        // the driver injects the same code-owned installations here, scoped to this run.
         let local_uuids = existing_uuids.clone();
         let mut taken_server_names: HashSet<String> = ephemeral_installations
             .iter()
@@ -602,14 +635,17 @@ impl AgentDriver {
                 taken_server_names.extend(local_names);
                 credentials
             })?;
-        let ambient_headers = Self::factory_mcp_ambient_headers(foreground).await;
-        if let Some(installation) = Self::builtin_factory_mcp_for_run(
+        let ambient_headers = Self::builtin_mcp_ambient_headers(foreground).await;
+        ephemeral_installations.extend(Self::builtin_factory_mcp_for_run(
             credentials.as_ref(),
             &taken_server_names,
             &ambient_headers,
-        ) {
-            ephemeral_installations.push(installation);
-        }
+        ));
+        ephemeral_installations.extend(Self::builtin_preview_urls_mcp_for_run(
+            credentials.as_ref(),
+            &taken_server_names,
+            &ambient_headers,
+        ));
 
         log::info!(
             "Starting {} existing and {} ephemeral MCP servers",
