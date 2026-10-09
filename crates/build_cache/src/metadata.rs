@@ -51,7 +51,7 @@ fn check_metadata_directory(directory: &Path) -> Result<(), CacheMetadataError> 
 
 #[derive(Serialize)]
 #[cfg_attr(test, derive(serde::Deserialize))]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 #[cfg_attr(test, serde(deny_unknown_fields))]
 struct CacheMetadata {
     version: u32,
@@ -61,7 +61,7 @@ struct CacheMetadata {
 
 #[derive(Serialize)]
 #[cfg_attr(test, derive(serde::Deserialize))]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 #[cfg_attr(test, serde(deny_unknown_fields))]
 struct CachePathUsage {
     source: String,
