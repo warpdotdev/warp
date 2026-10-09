@@ -322,11 +322,7 @@ impl HarnessRunner for AcpHarnessRunner {
         foreground: &ModelSpawner<AgentDriver>,
         _setup_events: &SetupClientEventReporter,
     ) -> Result<CommandHandle, AgentDriverError> {
-        let (background, idle_on_complete, shell_family): (
-            Arc<Background>,
-            Option<Duration>,
-            ShellFamily,
-        ) = foreground
+        let (background, shell_family): (Arc<Background>, ShellFamily) = foreground
             .spawn(|me, ctx| {
                 let shell_family = me
                     .terminal_driver
@@ -334,7 +330,7 @@ impl HarnessRunner for AcpHarnessRunner {
                     .active_session_shell_type(ctx)
                     .map(ShellFamily::from)
                     .unwrap_or(ShellFamily::Posix);
-                (ctx.background_executor(), me.idle_on_complete, shell_family)
+                (ctx.background_executor(), shell_family)
             })
             .await
             .map_err(|_| AgentDriverError::InvalidRuntimeState)?;
@@ -474,14 +470,14 @@ impl HarnessRunner for AcpHarnessRunner {
             session_id,
             prompt_text: self.prompt_text.clone(),
             attachments: self.attachments.clone(),
-            idle_on_complete,
         };
         background
             .spawn(async move { turn_driver.run(&mut mapper).await })
             .detach();
 
-        // The agent's block is the command the driver waits on: closing the connection at the
-        // end of the turn driver is what lets it finish.
+        // The agent's block is the command the driver waits on. The driver decides when the run
+        // is over (from the native conversation's status and its idle windows) and ends it
+        // through `exit`; the turn driver just keeps the session serviceable until then.
         Ok(command_handle)
     }
 
@@ -527,8 +523,9 @@ impl HarnessRunner for AcpHarnessRunner {
     }
 }
 
-/// Runs the initial prompt turn, then any follow-up prompts that arrive during the idle window,
-/// and finally closes the connection so the agent exits and its block completes.
+/// Runs the initial prompt turn, then any follow-up prompts that arrive while the session is
+/// open. The session ends when the driver closes the connection (its idle window elapsed or it
+/// is shutting down), when the controller unbinds the conversation, or when the agent leaves.
 ///
 /// A prompt turn spans one or more MAA request streams: every time the agent reports results
 /// for tool calls announced in the current stream, that stream is finished and a new one is
@@ -546,8 +543,6 @@ struct TurnDriver {
     session_id: String,
     prompt_text: String,
     attachments: Arc<AttachmentResolver>,
-    /// How long to keep the agent (and with it the shared session) alive after the turn ends.
-    idle_on_complete: Option<Duration>,
 }
 
 impl TurnDriver {
@@ -560,24 +555,25 @@ impl TurnDriver {
         }];
         let mut turn_result = self.run_turn(mapper, initial).await;
 
-        if let Some(idle) = self.idle_on_complete {
-            log::info!("ACP turn finished; accepting follow-ups for {idle:?} of idle time");
-            loop {
-                let idle_timer = Timer::after(idle).fuse();
-                pin_mut!(idle_timer);
-                select! {
-                    prompt = self.follow_ups.recv().fuse() => match prompt {
-                        Ok(prompt) => {
-                            log::info!("Running ACP follow-up turn");
-                            turn_result = self.run_follow_up(mapper, prompt).await;
-                        }
-                        Err(_) => break,
-                    },
-                    _ = idle_timer => {
-                        log::info!("ACP idle window elapsed; shutting the agent down");
-                        break;
+        log::info!("ACP turn finished; accepting follow-ups until the driver ends the run");
+        loop {
+            select! {
+                prompt = self.follow_ups.recv().fuse() => match prompt {
+                    Ok(prompt) => {
+                        log::info!("Running ACP follow-up turn");
+                        turn_result = self.run_follow_up(mapper, prompt).await;
                     }
-                }
+                    // The controller unbound the conversation; nothing more can be routed here.
+                    Err(_) => break,
+                },
+                notification = self.notifications.recv().fuse() => match notification {
+                    Ok(notification) => log::debug!(
+                        "Ignoring ACP notification {} received between turns",
+                        notification.method
+                    ),
+                    // The agent closed its side, typically because the driver closed ours.
+                    Err(_) => break,
+                },
             }
         }
         self.connection.close().await;

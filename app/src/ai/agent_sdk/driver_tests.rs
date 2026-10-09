@@ -32,11 +32,12 @@ use warpui::{App, SingletonEntity as _};
 
 use super::{
     AgentDriver, AgentDriverError, AgentRunPrompt, CLIAgentSessionStatus, DebugWindowController,
-    IdleTimeoutSender, LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
+    HarnessIdleAction, IdleTimeoutSender, LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
     LEGACY_OZ_PARENT_STATE_ROOT_ENV, OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
     OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, PlatformErrorCode, PluginInstallError,
     SDKConversationOutputStatus, WARP_MESSAGE_LISTENER_STATE_ROOT_ENV, build_secret_env_vars,
-    debug_turn_task_state, idle_window_for_cli_session_status, idle_window_for_terminal_status,
+    debug_turn_task_state, harness_idle_action_for_conversation_status,
+    idle_window_for_cli_session_status, idle_window_for_terminal_status,
     setup_failure_status_update, terminal_status_log_outcome,
 };
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
@@ -640,6 +641,61 @@ fn failed_cli_harness_session_defers_by_idle_on_fail() {
         ),
         idle_on_complete,
         "a Ctrl-C cancellation is a non-error completion, like Success or Blocked"
+    );
+}
+
+#[test]
+fn native_conversation_status_drives_the_harness_exit_like_a_cli_session() {
+    let idle_on_complete = Some(Duration::from_secs(45 * 60));
+    let idle_on_fail = Some(Duration::from_secs(15 * 60));
+    let action = |status: &ConversationStatus| {
+        harness_idle_action_for_conversation_status(status, idle_on_complete, idle_on_fail)
+    };
+
+    assert_eq!(
+        action(&ConversationStatus::InProgress),
+        HarnessIdleAction::CancelIdle
+    );
+    assert_eq!(
+        action(&ConversationStatus::Success),
+        HarnessIdleAction::Exit {
+            window: idle_on_complete,
+            failed: false,
+        }
+    );
+    assert_eq!(
+        action(&ConversationStatus::Cancelled),
+        HarnessIdleAction::Exit {
+            window: idle_on_complete,
+            failed: false,
+        }
+    );
+    assert_eq!(
+        action(&ConversationStatus::Error),
+        HarnessIdleAction::Exit {
+            window: idle_on_fail,
+            failed: true,
+        }
+    );
+    assert_eq!(
+        harness_idle_action_for_conversation_status(
+            &ConversationStatus::Error,
+            idle_on_complete,
+            None
+        ),
+        HarnessIdleAction::Exit {
+            window: None,
+            failed: true,
+        },
+        "--idle-on-complete must not act as a fallback for a failed turn"
+    );
+    assert_eq!(
+        action(&ConversationStatus::WaitingForEvents),
+        HarnessIdleAction::Ignore
+    );
+    assert_eq!(
+        action(&ConversationStatus::TransientError),
+        HarnessIdleAction::Ignore
     );
 }
 
