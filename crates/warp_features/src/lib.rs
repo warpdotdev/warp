@@ -765,6 +765,11 @@ pub enum FeatureFlag {
     /// CLIs (e.g. `claude`) to execute prompts instead of Warp's agent harness.
     AgentHarness,
 
+    /// Enables the `--harness-transport acp` flag for `oz agent run`, which drives a third-party
+    /// harness over the Agent Client Protocol instead of as an interactive CLI in the terminal
+    /// session.
+    AcpHarness,
+
     /// Enables workspace- and block-snapshot handoff between cloud agent runs
     /// and the local Warp client.
     /// When enabled:
@@ -1003,7 +1008,10 @@ static FEATURES_INITIALIZED: AtomicBool = AtomicBool::new(false);
 /// Features used in debugging.
 pub const DEBUG_FLAGS: &[FeatureFlag] = &[FeatureFlag::DebugMode, FeatureFlag::RuntimeFeatureFlags];
 /// Features enabled only for the WarpLocal developer build.
-pub const LOCAL_FLAGS: &[FeatureFlag] = &[FeatureFlag::LocalClaudeCodexChildHarnesses];
+pub const LOCAL_FLAGS: &[FeatureFlag] = &[
+    FeatureFlag::LocalClaudeCodexChildHarnesses,
+    FeatureFlag::AcpHarness,
+];
 
 /// Features enabled for the development team.  The expectation is that, over
 /// time, these will move on to PREVIEW_FLAGS before being launched.

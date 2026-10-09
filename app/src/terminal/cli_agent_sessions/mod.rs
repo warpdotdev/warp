@@ -249,6 +249,11 @@ impl CLIAgentSession {
                 self.session_context.query = event.payload.query.clone();
                 self.session_context.response = event.payload.response.clone();
                 self.clear_permission_scoped_state();
+                // The agent will wake itself again once that work finishes, so this turn
+                // boundary is a pause rather than the end of the session.
+                if event.payload.has_pending_background_work() {
+                    return None;
+                }
                 CLIAgentSessionStatus::Success
             }
             CLIAgentEventType::StopFailure => {

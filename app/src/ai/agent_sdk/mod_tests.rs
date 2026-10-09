@@ -8,7 +8,7 @@ use command::blocking::Command as ProcessCommand;
 use mockito::Server;
 use serde_json::json;
 use warp_cli::agent::{
-    AgentCommand, Harness, OutputFormat, RepositoryForge, RepositoryHeadRef,
+    AgentCommand, Harness, HarnessTransport, OutputFormat, RepositoryForge, RepositoryHeadRef,
     RepositoryPreparationOverride, RunAgentArgs,
 };
 use warp_cli::artifact::{
@@ -284,6 +284,7 @@ pub(crate) fn agent_driver_options() -> AgentDriverOptions {
         workspace: WorkspaceConfiguration::default(),
         computer_use_config: None,
         selected_harness: Harness::Oz,
+        harness_transport: HarnessTransport::Pty,
         third_party_harness_model_config: None,
         team_scope: None,
         bedrock_oidc_credentials: None,
@@ -853,8 +854,13 @@ fn run_message_send_telemetry_defaults_to_unknown_harness() {
 #[test]
 fn reconcile_task_harness_adopts_task_harness_when_cli_uses_default() {
     let mut selected_harness = Harness::Oz;
-    let harness = reconcile_task_harness(TASK_ID, &mut selected_harness, Harness::Claude)
-        .expect("default harness should adopt task harness");
+    let harness = reconcile_task_harness(
+        TASK_ID,
+        &mut selected_harness,
+        Harness::Claude,
+        HarnessTransport::Pty,
+    )
+    .expect("default harness should adopt task harness");
 
     assert_eq!(selected_harness, Harness::Claude);
     assert_eq!(harness.harness(), Harness::Claude);
@@ -863,8 +869,13 @@ fn reconcile_task_harness_adopts_task_harness_when_cli_uses_default() {
 #[test]
 fn reconcile_task_harness_allows_matching_explicit_harness() {
     let mut selected_harness = Harness::Claude;
-    let harness = reconcile_task_harness(TASK_ID, &mut selected_harness, Harness::Claude)
-        .expect("matching harness should succeed");
+    let harness = reconcile_task_harness(
+        TASK_ID,
+        &mut selected_harness,
+        Harness::Claude,
+        HarnessTransport::Pty,
+    )
+    .expect("matching harness should succeed");
 
     assert_eq!(selected_harness, Harness::Claude);
     assert_eq!(harness.harness(), Harness::Claude);
@@ -873,13 +884,33 @@ fn reconcile_task_harness_allows_matching_explicit_harness() {
 #[test]
 fn reconcile_task_harness_rejects_explicit_mismatch() {
     let mut selected_harness = Harness::Gemini;
-    let err = reconcile_task_harness(TASK_ID, &mut selected_harness, Harness::Claude)
-        .expect_err("mismatched harness should fail");
+    let err = reconcile_task_harness(
+        TASK_ID,
+        &mut selected_harness,
+        Harness::Claude,
+        HarnessTransport::Pty,
+    )
+    .expect_err("mismatched harness should fail");
 
     assert_eq!(selected_harness, Harness::Gemini);
     assert!(err.to_string().contains("Task"));
     assert!(err.to_string().contains("--harness gemini"));
     assert!(err.to_string().contains("claude"));
+}
+
+#[test]
+fn reconcile_task_harness_keeps_the_requested_transport() {
+    let mut selected_harness = Harness::Oz;
+    let err = reconcile_task_harness(
+        TASK_ID,
+        &mut selected_harness,
+        Harness::Claude,
+        HarnessTransport::Acp,
+    )
+    .expect_err("ACP transport is not wired up yet");
+
+    assert_eq!(selected_harness, Harness::Claude);
+    assert!(err.to_string().contains("ACP transport"), "{err}");
 }
 
 #[test]

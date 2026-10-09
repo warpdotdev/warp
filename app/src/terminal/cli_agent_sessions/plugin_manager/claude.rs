@@ -21,7 +21,7 @@ const MARKETPLACE_NAME: &str = "claude-code-warp";
 
 // Keep in sync with the plugin version in warpdotdev/claude-code-warp.
 // (See the Versioning section of that repo's README.)
-const MINIMUM_PLUGIN_VERSION: &str = "2.1.0";
+const MINIMUM_PLUGIN_VERSION: &str = "2.4.0";
 // Keep in sync with the oz-harness-support plugin version in warpdotdev/claude-code-warp.
 const MINIMUM_PLATFORM_PLUGIN_VERSION: &str = "1.1.2";
 
