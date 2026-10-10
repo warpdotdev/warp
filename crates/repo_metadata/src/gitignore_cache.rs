@@ -1,12 +1,12 @@
 //! A small process-wide cache of parsed `.gitignore` files.
 //!
 //! Constructing a [`Gitignore`] compiles a fresh `regex_automata` regex, and that regex owns
-//! its own thread-safe `Pool` of per-thread search caches (see
-//! `regex_automata::util::pool::Pool`). Re-parsing the same `.gitignore` file on every
-//! file-tree traversal — which happens on every watcher-triggered rebuild — creates a fresh
-//! pool each time. This cache reuses a parsed, `Arc`-shared [`Gitignore`] across traversals as
-//! long as the file's content is unchanged, so a given `.gitignore` path compiles its regex
-//! (and allocates its pool) at most once until the file is actually edited.
+//! its own thread-safe `Pool` of search caches (see `regex_automata::util::pool::Pool`).
+//! Re-parsing the same `.gitignore` file on every file-tree traversal — which happens on
+//! every watcher-triggered rebuild — creates a fresh pool each time. This cache reuses a
+//! parsed, `Arc`-shared [`Gitignore`] across traversals as long as the file's content is
+//! unchanged, so a given `.gitignore` path compiles its regex (and allocates its pool) at
+//! most once until the file is actually edited.
 //!
 //! Invalidation is keyed by a hash of the file's content, so an edit is detected even when it
 //! preserves the file's mtime and byte length. Hashing means an extra read on every call (in
@@ -15,7 +15,13 @@
 //! it guards.
 //!
 //! Eviction is source-byte-bounded LRU rather than count-bounded (see
-//! [`MAX_CACHED_SOURCE_BYTES`]).
+//! [`MAX_CACHED_SOURCE_BYTES`]). That bound caps how much re-parsing this cache can save
+//! (and this map's own retained source bytes) — it does **not** cap the retained size of a
+//! matcher's `Pool`. A `Gitignore` handed out by [`get_or_parse`] is commonly cloned into a
+//! longer-lived list (e.g. a repository's accumulated gitignore stack) that outlives this
+//! cache's own entry, so evicting the entry here does not drop the matcher or shrink its
+//! `Pool`. Bounding `Pool` growth itself is `matches_gitignores`'s job (`entry.rs`), which
+//! routes every match through the fixed dedicated thread set in `gitignore_match_pool`.
 
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -27,9 +33,8 @@ use ignore::gitignore::Gitignore;
 use parking_lot::Mutex;
 
 /// Total `.gitignore` source bytes the cache may hold before evicting least-recently-used
-/// entries, bounding memory regardless of `.gitignore` count. A compiled matcher can retain up
-/// to ~163x its source size in the worst case observed, so this bounds worst-case retained
-/// heap to roughly 60 MiB.
+/// entries. This bounds only this map's own retained source bytes and re-parse churn; see
+/// the module docs for why it does not bound a matcher's `Pool` memory.
 #[cfg(not(test))]
 const MAX_CACHED_SOURCE_BYTES: u64 = 384 * 1024;
 /// Small in tests so eviction can be exercised without huge fixtures.
