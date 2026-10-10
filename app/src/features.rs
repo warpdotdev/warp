@@ -397,8 +397,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::PluggableNotifications,
         #[cfg(feature = "async_find")]
         FeatureFlag::AsyncFind,
-        #[cfg(feature = "list_skills")]
-        FeatureFlag::ListSkills,
         #[cfg(feature = "ask_user_question")]
         FeatureFlag::AskUserQuestion,
         #[cfg(feature = "lsp_as_a_tool")]
