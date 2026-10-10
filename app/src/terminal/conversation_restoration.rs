@@ -28,6 +28,13 @@ impl RestoredConversationExchange {
         &self.exchange
     }
 
+    /// Consumes this entry, taking ownership of its exchange. `AIAgentExchange::clone` performs
+    /// a deep copy (see `Shared<T>`'s `Clone` impl), so callers that already own a
+    /// `RestoredConversationExchange` should prefer this over `exchange().clone()`.
+    pub fn into_exchange(self) -> AIAgentExchange {
+        self.exchange
+    }
+
     /// Returns the command block before which the exchange should be inserted.
     pub fn command_block_index(&self) -> Option<BlockIndex> {
         self.command_block_index
