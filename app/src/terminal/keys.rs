@@ -79,7 +79,10 @@ impl TerminalKeybindings {
         let KeybindingChangedEvent::BindingChanged {
             binding_name,
             new_trigger,
-        } = event;
+        } = event
+        else {
+            return;
+        };
         if binding_name == SET_INPUT_MODE_AGENT_ACTION_NAME {
             self.set_input_mode_agent_keybinding = new_trigger.as_ref().map(|key| key.displayed());
             ctx.notify();
