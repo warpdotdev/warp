@@ -1,8 +1,8 @@
 use std::io::{BufRead as _, Read as _, Write as _};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{fs, thread};
 
@@ -11,7 +11,12 @@ use command::Stdio;
 use command::blocking::Command;
 use futures::executor::block_on;
 use instant::Instant;
+use opentelemetry::KeyValue;
+use opentelemetry::trace::TracerProvider as _;
+use opentelemetry_sdk::error::OTelSdkResult;
+use opentelemetry_sdk::trace::{SdkTracerProvider, SpanData, SpanExporter};
 use tempfile::TempDir;
+use tracing_subscriber::layer::SubscriberExt as _;
 use warp_cli::agent::{RepositoryForge, RepositoryHeadRef, RepositoryIdentity};
 use warp_cli::environment_checkout::EnvironmentCheckoutArgs;
 use warp_core::features::FeatureFlag;
@@ -1261,6 +1266,241 @@ fn inherited_credentials_authenticate_without_leaking() {
             );
             let old_blob = git(&blobless, &["rev-parse", "HEAD~1:README"]);
             assert_eq!(git(&blobless, &["cat-file", "-p", &old_blob]), "old blob");
+        },
+    );
+}
+
+#[test]
+fn git_subprocesses_do_not_inherit_otlp_credentials() {
+    fixture_test(
+        "git_subprocesses_do_not_inherit_otlp_credentials",
+        |fixture| {
+            unsafe {
+                std::env::set_var("WARP_CLOUD_AGENT_OTLP_TOKEN", "inherited-test-token");
+            }
+            git(
+                &fixture.root,
+                &[
+                    "config",
+                    "--file",
+                    fixture.root.join("gitconfig").to_str().unwrap(),
+                    "alias.check-otlp",
+                    "!test -z \"$WARP_CLOUD_AGENT_OTLP_TOKEN\"",
+                ],
+            );
+            let mut child_git = Git::default();
+            block_on(Compat::new(child_git.run(
+                "credential isolation",
+                &fixture.work(),
+                &["check-otlp"],
+            )))
+            .unwrap();
+            assert_eq!(
+                block_on(Compat::new(super::identity_query(
+                    &fixture.work(),
+                    &["check-otlp"],
+                    None,
+                ))),
+                Some(String::new()),
+            );
+        },
+    );
+}
+
+#[derive(Clone, Debug, Default)]
+struct RecordingExporter(Arc<Mutex<Vec<SpanData>>>);
+
+impl SpanExporter for RecordingExporter {
+    async fn export(&self, batch: Vec<SpanData>) -> OTelSdkResult {
+        self.0.lock().unwrap().extend(batch);
+        Ok(())
+    }
+}
+
+#[test]
+fn checkout_traces_report_operation_outcomes_without_request_details() {
+    fixture_test(
+        "checkout_traces_report_operation_outcomes_without_request_details",
+        |fixture| {
+            let exporter = RecordingExporter::default();
+            let provider = SdkTracerProvider::builder()
+                .with_batch_exporter(exporter.clone())
+                .build();
+            let subscriber = tracing_subscriber::registry()
+                .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("checkout-test")));
+            tracing::subscriber::with_default(subscriber, || {
+                let directory = TempDir::new().unwrap();
+                let args = EnvironmentCheckoutArgs {
+                    requests_file: directory.path().join("requests.json"),
+                    report_file: directory.path().join("report.json"),
+                    remove_origins_only: false,
+                    fail_if_target_exists: false,
+                };
+                let batch = fixture.batch(vec![
+                    fixture.request("direct", None),
+                    fixture.request(
+                        "pinned",
+                        Some(RepositoryHeadRef::CommitSha(fixture.pinned())),
+                    ),
+                ]);
+                let mut outcomes = checkout_batch(&batch, None).unwrap();
+                assert_succeeded(&outcomes);
+                block_on(Compat::new(super::resolve_heads(&batch, &mut outcomes)));
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                {
+                    fs::write(
+                        &args.requests_file,
+                        serde_json::to_vec(&fixture.batch(vec![
+                            fixture.request("cold-cache", None),
+                            fixture.request("warm-cache", None),
+                        ]))
+                        .unwrap(),
+                    )
+                    .unwrap();
+                    run(&args).unwrap();
+                }
+                fs::write(
+                    &args.requests_file,
+                    serde_json::to_vec(&fixture.batch(vec![fixture.request(
+                        "direct",
+                        Some(RepositoryHeadRef::Branch("missing-private-head".to_owned())),
+                    )]))
+                    .unwrap(),
+                )
+                .unwrap();
+                assert!(run(&args).is_err());
+            });
+            provider.shutdown().unwrap();
+            let spans = exporter.0.lock().unwrap();
+            for name in [
+                "checkout_direct",
+                "clone_repository",
+                "checkout_requested_head",
+                "resolve_head",
+            ] {
+                assert!(spans.iter().any(|span| span.name == name), "missing {name}");
+            }
+            let repository = spans
+                .iter()
+                .find(|span| {
+                    span.name == "repository_checkout"
+                        && span.attributes.contains(&KeyValue::new("err", "Checkout"))
+                })
+                .unwrap();
+            assert!(repository.attributes.contains(&KeyValue::new(
+                "repo",
+                "github.com/fixtures/source (checkout direct)"
+            )));
+            assert!(
+                repository
+                    .attributes
+                    .contains(&KeyValue::new("result_ok", false))
+            );
+            assert!(spans.iter().any(|span| {
+                span.name == "checkout_requested_head"
+                    && span
+                        .attributes
+                        .contains(&KeyValue::new("head_kind", "commit"))
+                    && span.attributes.contains(&KeyValue::new("result_ok", true))
+            }));
+            assert!(spans.iter().any(|span| {
+                span.name == "checkout_requested_head"
+                    && span
+                        .attributes
+                        .contains(&KeyValue::new("head_kind", "branch"))
+                    && span.attributes.contains(&KeyValue::new("result_ok", false))
+            }));
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            {
+                for name in ["install_mirror", "clone_from_mirror"] {
+                    assert!(spans.iter().any(|span| span.name == name), "missing {name}");
+                }
+                assert!(spans.iter().any(|span| span.name == "refresh_mirror"
+                    && span.attributes.contains(&KeyValue::new("cache_hit", false))
+                    && span.attributes.contains(&KeyValue::new("rebuilt", true))));
+                assert!(spans.iter().any(|span| span.name == "refresh_mirror"
+                    && span.attributes.contains(&KeyValue::new("cache_hit", true))
+                    && span.attributes.contains(&KeyValue::new("rebuilt", false))));
+            }
+            for span in spans.iter() {
+                assert!(
+                    span.attributes
+                        .contains(&KeyValue::new("tags.cloud_agent", true))
+                );
+                assert!(span.end_time > span.start_time);
+                let attributes = format!("{:?}", span.attributes);
+                assert!(!attributes.contains("missing-private-head"));
+                assert!(!attributes.contains(CANONICAL_URL));
+                assert!(!attributes.contains(fixture.root.to_str().unwrap()));
+            }
+        },
+    );
+}
+
+#[test]
+fn helper_without_handoff_keeps_checkout_working() {
+    fixture_test("helper_without_handoff_keeps_checkout_working", |fixture| {
+        let directory = TempDir::new().unwrap();
+        let args = EnvironmentCheckoutArgs {
+            requests_file: directory.path().join("requests.json"),
+            report_file: directory.path().join("report.json"),
+            remove_origins_only: false,
+            fail_if_target_exists: false,
+        };
+        fs::write(
+            &args.requests_file,
+            serde_json::to_vec(&fixture.batch(vec![fixture.request("untraced", None)])).unwrap(),
+        )
+        .unwrap();
+        let (_initialization, _parent_context) =
+            crate::tracing::init_child_process(&args.requests_file).unwrap();
+        run(&args).unwrap();
+        assert!(fixture.work().join("untraced/.git").is_dir());
+    });
+}
+
+#[test]
+fn helper_with_expired_handoff_keeps_checkout_working() {
+    fixture_test(
+        "helper_with_expired_handoff_keeps_checkout_working",
+        |fixture| {
+            use chrono::{TimeDelta, Utc};
+
+            let directory = TempDir::new().unwrap();
+            let args = EnvironmentCheckoutArgs {
+                requests_file: directory.path().join("requests.json"),
+                report_file: directory.path().join("report.json"),
+                remove_origins_only: false,
+                fail_if_target_exists: false,
+            };
+            fs::write(
+                &args.requests_file,
+                serde_json::to_vec(&fixture.batch(vec![fixture.request("untraced", None)]))
+                    .unwrap(),
+            )
+            .unwrap();
+            let mut file = tempfile::NamedTempFile::new_in(directory.path()).unwrap();
+            serde_json::to_writer(
+                &mut file,
+                &serde_json::json!({
+                    "endpoint": "http://127.0.0.1:1",
+                    "credential": {
+                        "token": "expired-test-token",
+                        "expires_at": Utc::now() - TimeDelta::minutes(1),
+                    },
+                }),
+            )
+            .unwrap();
+            let handoff_path = directory.path().join("requests.json.otlp");
+            file.into_temp_path()
+                .persist_noclobber(&handoff_path)
+                .unwrap();
+            let handoff = tempfile::TempPath::from_path(handoff_path);
+            let (_initialization, _parent_context) =
+                crate::tracing::init_child_process(&args.requests_file).unwrap();
+            assert!(!handoff.exists());
+            run(&args).unwrap();
+            assert!(fixture.work().join("untraced/.git").is_dir());
         },
     );
 }

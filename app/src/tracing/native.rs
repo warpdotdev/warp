@@ -68,6 +68,7 @@ use url::{Host, Url};
 use warpui::AppContext;
 
 use super::Initialization;
+use super::child_process::ChildProcessTracingConfig;
 use super::cloud_agent_auth::{self, AuthContext};
 use crate::channel::ChannelState;
 use crate::server::server_api::managed_secrets::AppManagedSecretsClient;
@@ -88,7 +89,12 @@ const EXPORT_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(60);
 /// The exporter is built once during [`init`], while the stored context later starts dynamic
 /// credential refresh after authenticated application services become available, and this static
 /// remains unset for processes that did not opt in.
-static AUTH_CONTEXT: OnceLock<AuthContext> = OnceLock::new();
+static AUTH_CONTEXT: OnceLock<ParentTracingContext> = OnceLock::new();
+
+struct ParentTracingContext {
+    endpoint: String,
+    auth: AuthContext,
+}
 
 /// Installs the native tracing subscriber and optional cloud-agent OTLP exporter.
 ///
@@ -97,13 +103,6 @@ static AUTH_CONTEXT: OnceLock<AuthContext> = OnceLock::new();
 /// is installed so tracing instrumentation remains safe without producing output or partially
 /// initializing export.
 pub fn init() -> anyhow::Result<Initialization> {
-    // INFO is the default because this is a global subscriber and DEBUG-level application spans
-    // would otherwise create substantial work even though only marked cloud-agent spans are
-    // exported. RUST_LOG can still override this when deeper tracing is needed.
-    let env_filter = EnvFilter::builder()
-        .with_default_directive(tracing::Level::INFO.into())
-        .from_env_lossy();
-
     let Some(base_endpoint) = std::env::var(CLOUD_AGENT_OTLP_ENDPOINT)
         .ok()
         .filter(|endpoint| !endpoint.trim().is_empty())
@@ -116,8 +115,50 @@ pub fn init() -> anyhow::Result<Initialization> {
         return Ok(Initialization::default());
     };
 
+    let initialization = init_exporter(base_endpoint.trim(), &auth_context)?;
+    if initialization.provider.is_some() {
+        let _ = AUTH_CONTEXT.set(ParentTracingContext {
+            endpoint: base_endpoint.trim().to_owned(),
+            auth: auth_context,
+        });
+    }
+    Ok(initialization)
+}
+
+pub(super) fn child_process_snapshot() -> Option<ChildProcessTracingConfig> {
+    let context = AUTH_CONTEXT.get()?;
+    Some(ChildProcessTracingConfig::capture(
+        context.endpoint.clone(),
+        context.auth.snapshot()?,
+    ))
+}
+
+pub(super) fn init_child_process(
+    config: Option<ChildProcessTracingConfig>,
+) -> anyhow::Result<(Initialization, OtelContext)> {
+    if let Some(config) = config {
+        let parent_context = config.parent_context();
+        if let Ok(auth_context) = AuthContext::from_snapshot(config.credential) {
+            return init_exporter(&config.endpoint, &auth_context)
+                .map(|initialization| (initialization, parent_context));
+        }
+    }
+    install_no_subscriber()?;
+    Ok((Initialization::default(), OtelContext::new()))
+}
+
+fn init_exporter(
+    base_endpoint: &str,
+    auth_context: &AuthContext,
+) -> anyhow::Result<Initialization> {
+    // INFO is the default because this is a global subscriber and DEBUG-level application spans
+    // would otherwise create substantial work even though only marked cloud-agent spans are
+    // exported. RUST_LOG can still override this when deeper tracing is needed.
+    let env_filter = EnvFilter::builder()
+        .with_default_directive(tracing::Level::INFO.into())
+        .from_env_lossy();
     let shutdown_timeout = export_timeout();
-    let provider = match build_provider(base_endpoint.trim(), &auth_context) {
+    let provider = match build_provider(base_endpoint, auth_context) {
         Ok(provider) => provider,
         Err(err) => {
             install_no_subscriber()?;
@@ -129,7 +170,6 @@ pub fn init() -> anyhow::Result<Initialization> {
             });
         }
     };
-    let _ = AUTH_CONTEXT.set(auth_context);
 
     let active_spans = ActiveSpanRegistry::default();
     let tracer =
@@ -201,7 +241,7 @@ fn build_provider(
 /// retained [`AUTH_CONTEXT`] and remain no-ops here.
 pub(super) fn start_auth_refresh(client: Arc<AppManagedSecretsClient>, ctx: &mut AppContext) {
     if let Some(auth_context) = AUTH_CONTEXT.get() {
-        cloud_agent_auth::start_refresh_coordinator(auth_context.clone(), client, ctx);
+        cloud_agent_auth::start_refresh_coordinator(auth_context.auth.clone(), client, ctx);
     }
 }
 
