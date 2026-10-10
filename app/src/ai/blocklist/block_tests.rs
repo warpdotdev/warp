@@ -15,7 +15,7 @@ use super::{
     CollapsibleElementState, CollapsibleExpansionState, UserAvatarInfo,
     default_collapsible_state_for_orchestration_action,
     default_collapsible_state_for_orchestration_message, received_message_collapsible_id,
-    recording_artifact_view_url, user_avatar_info_for_conversation_creator,
+    recording_artifact_view_url, telemetry_duration_ms, user_avatar_info_for_conversation_creator,
 };
 use crate::ai::agent::{AIAgentActionType, StartAgentExecutionMode};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -131,6 +131,18 @@ fn recording_artifact_view_url_uses_configured_oz_origin() {
 #[test]
 fn recording_artifact_view_url_requires_task_id() {
     assert_eq!(recording_artifact_view_url(None, "recording-123"), None);
+}
+
+#[test]
+fn telemetry_duration_ms_omits_negative_values() {
+    assert_eq!(
+        telemetry_duration_ms(chrono::Duration::milliseconds(-1)),
+        None
+    );
+    assert_eq!(
+        telemetry_duration_ms(chrono::Duration::milliseconds(1)),
+        Some(1)
+    );
 }
 
 #[cfg(feature = "local_fs")]
