@@ -298,7 +298,11 @@ impl AskUserQuestionView {
     }
 
     /// Creates the dropdown view for the speedbump footer. No-op if already initialized.
-    pub fn init_speedbump_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
+    pub fn init_speedbump_dropdown(
+        &mut self,
+        selected_permission: AskUserQuestionPermission,
+        ctx: &mut ViewContext<Self>,
+    ) {
         if self.speedbump_dropdown.is_some() {
             return;
         }
@@ -332,6 +336,7 @@ impl AskUserQuestionView {
                     .collect(),
                 ctx,
             );
+            dropdown.set_selected_by_name(selected_permission.label(), ctx);
             dropdown
         });
         self.speedbump_dropdown = Some(view);
