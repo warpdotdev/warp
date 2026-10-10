@@ -17,6 +17,7 @@
 //! `PATH` that runs `node app/src/ai/agent_sdk/driver/harness/acp/testdata/fake_agent.mjs`.
 mod attachments;
 mod bridge;
+mod cli_transcript;
 mod connection;
 mod launch;
 mod mapping;
@@ -51,6 +52,7 @@ use warpui::{ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
 
 use self::attachments::AttachmentResolver;
 use self::bridge::{BridgeListener, bridge_command};
+use self::cli_transcript::CliTranscriptKind;
 use self::connection::{AcpConnection, InboundNotification, RpcError};
 use self::mapping::{AcpTurnMapper, TurnEvent};
 use self::policy::{PolicyDecision, PolicyRequest};
@@ -66,7 +68,12 @@ use super::super::{AgentDriver, AgentDriverError};
 use super::claude_code::prepare_claude_environment_config;
 use super::codex::{prepare_codex_environment_config, publish_skills_for_codex};
 use super::gemini::prepare_gemini_environment_config;
-use super::harness_persistence::{HarnessPersistence, PersistenceOutcome};
+use super::harness_persistence::{
+    HarnessPersistence, PersistenceOutcome, save_transcript_and_conversation_data,
+};
+use super::transcript_persistence::{
+    UploadedTranscriptUsage, capture_transcript_with_retry, upload_captured_transcript,
+};
 use super::{
     HarnessCleanupDisposition, HarnessKind, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint,
     ThirdPartyHarness, harness_kind, validate_cli_installed,
@@ -274,6 +281,7 @@ impl ThirdPartyHarness for AcpHarness {
                 .map(|(name, server)| mcp_server_for_acp(name, server))
                 .collect(),
             conversation: OnceLock::new(),
+            cli_session: OnceLock::new(),
             persistence: HarnessPersistence::default(),
             save_request_tx,
             save_request_rx,
@@ -298,6 +306,17 @@ struct RunConversation {
     restored_root_task_id: Option<String>,
 }
 
+/// The CLI session behind the ACP session, whose own transcript is uploaded for the run.
+struct CliSession {
+    kind: CliTranscriptKind,
+    /// The ACP session id, which is also the CLI's session id.
+    session_id: Uuid,
+    /// See [`CliTranscriptKind::root`].
+    root: PathBuf,
+    /// Cached once the CLI has written the transcript.
+    transcript_path: OnceLock<PathBuf>,
+}
+
 pub(crate) struct AcpHarnessRunner {
     harness: Harness,
     launch: AcpLaunchSpec,
@@ -313,6 +332,8 @@ pub(crate) struct AcpHarnessRunner {
     mcp_servers: Vec<McpServer>,
     /// Set before the first turn.
     conversation: OnceLock<RunConversation>,
+    /// Set after the handshake for harnesses whose CLI transcript is uploaded.
+    cli_session: OnceLock<CliSession>,
     persistence: HarnessPersistence,
     /// Save points raised by the turn driver at request-stream and turn boundaries.
     save_request_tx: async_channel::Sender<SavePoint>,
@@ -344,6 +365,96 @@ impl AcpHarnessRunner {
                 terminal_driver.update(ctx, |driver, ctx| driver.send_interrupt_to_pty(ctx));
             })
             .await;
+    }
+
+    fn record_cli_session(&self, session_id: &str) {
+        let Some(kind) = CliTranscriptKind::for_harness(self.harness) else {
+            return;
+        };
+        let session_id = match Uuid::parse_str(session_id) {
+            Ok(session_id) => session_id,
+            Err(error) => {
+                log::warn!(
+                    "ACP session id {session_id} is not a {kind:?} session id, so its transcript \
+                     will not be uploaded: {error}"
+                );
+                return;
+            }
+        };
+        let root = match kind.root() {
+            Ok(root) => root,
+            Err(error) => {
+                log::warn!("Cannot locate {kind:?} transcripts: {error:#}");
+                return;
+            }
+        };
+        let _ = self.cli_session.set(CliSession {
+            kind,
+            session_id,
+            root,
+            transcript_path: OnceLock::new(),
+        });
+    }
+
+    async fn cli_transcript_path(&self, cli: &CliSession) -> Result<Option<PathBuf>> {
+        if let Some(path) = cli.transcript_path.get() {
+            return Ok(Some(path.clone()));
+        }
+        let (kind, root, cwd, session_id) = (
+            cli.kind,
+            cli.root.clone(),
+            self.harness_working_dir.clone(),
+            cli.session_id,
+        );
+        let path = tokio::task::spawn_blocking(move || kind.locate(&root, &cwd, session_id))
+            .await
+            .context("CLI transcript discovery task failed")?;
+        if let Some(path) = &path {
+            let _ = cli.transcript_path.set(path.clone());
+        }
+        Ok(path)
+    }
+
+    /// Captures and uploads the CLI's own session transcript, as its terminal runner does,
+    /// including the usage derived from it.
+    async fn upload_cli_transcript(
+        &self,
+        server_id: &ServerConversationToken,
+        is_final: bool,
+    ) -> Result<UploadedTranscriptUsage> {
+        let Some(cli) = self.cli_session.get() else {
+            return Ok(UploadedTranscriptUsage::empty());
+        };
+        let capture =
+            capture_transcript_with_retry(self.persistence.is_reporting_enabled(), || async {
+                let Some(path) = self.cli_transcript_path(cli).await? else {
+                    return Ok(None);
+                };
+                let identity = self.persistence.begin_capture();
+                let (kind, root, cwd, session_id) = (
+                    cli.kind,
+                    cli.root.clone(),
+                    self.harness_working_dir.clone(),
+                    cli.session_id,
+                );
+                tokio::task::spawn_blocking(move || {
+                    kind.capture(session_id, &path, &root, &cwd, is_final, identity)
+                })
+                .await
+                .context("CLI transcript capture task failed")?
+                .map(Some)
+            })
+            .await?;
+        match capture {
+            Some(capture) => {
+                log::info!(
+                    "Uploading {:?} transcript to conversation {server_id}",
+                    cli.kind
+                );
+                upload_captured_transcript(self.client.as_ref(), server_id, capture).await
+            }
+            None => cli.kind.missing_transcript(is_final),
+        }
     }
 
     /// Binds the native conversation the run drives and gives it a server identity before the
@@ -567,6 +678,7 @@ impl HarnessRunner for AcpHarnessRunner {
         if let Some(agent) = self.agent.lock().as_mut() {
             agent.session_id = Some(session_id.clone());
         }
+        self.record_cli_session(&session_id);
 
         let conversation = match self
             .bind_server_conversation(restored_conversation_id, foreground, setup_events)
@@ -653,9 +765,14 @@ impl HarnessRunner for AcpHarnessRunner {
                 SavePoint::PostTurn | SavePoint::Periodic => PersistenceOutcome::skipped(),
             };
         };
-        PersistenceOutcome::without_transcript(
-            upload_conversation_snapshot(self.client.as_ref(), &conversation, foreground).await,
+        save_transcript_and_conversation_data(
+            self.upload_cli_transcript(
+                &conversation.server_id,
+                matches!(save_point, SavePoint::Final),
+            ),
+            upload_conversation_snapshot(self.client.as_ref(), &conversation, foreground),
         )
+        .await
     }
 
     async fn exit(&self, _foreground: &ModelSpawner<AgentDriver>) -> Result<()> {

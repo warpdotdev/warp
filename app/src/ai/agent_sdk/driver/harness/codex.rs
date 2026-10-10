@@ -520,7 +520,7 @@ impl HarnessRunner for CodexHarnessRunner {
     }
 }
 
-fn capture_transcript_with_usage(
+pub(super) fn capture_transcript_with_usage(
     session_id: Uuid,
     transcript_path: &Path,
     is_final: bool,
