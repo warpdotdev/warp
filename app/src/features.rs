@@ -219,8 +219,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::AIContextMenuCommands,
         #[cfg(feature = "ai_context_menu_code")]
         FeatureFlag::AIContextMenuCode,
-        #[cfg(feature = "expand_edit_to_pane")]
-        FeatureFlag::ExpandEditToPane,
         #[cfg(feature = "fallback_model_load_output_messaging")]
         FeatureFlag::FallbackModelLoadOutputMessaging,
         #[cfg(feature = "warping_model_name")]
