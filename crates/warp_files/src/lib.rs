@@ -76,6 +76,16 @@ impl FileModelEvent {
     }
 }
 
+/// How a write should treat content that already exists at the path.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SaveMode {
+    /// Replace whatever is there. The normal case: the buffer was loaded from that file.
+    Overwrite,
+    /// Refuse to replace anything. Used for the first write of a buffer opened at a path that did
+    /// not exist, where overwriting would discard a file created since the buffer was opened.
+    CreateNew,
+}
+
 /// Tracks how a file is being watched for changes.
 #[derive(Clone, PartialEq, Eq, Default)]
 enum WatcherType {
@@ -447,9 +457,7 @@ impl FileModel {
         let file_path_buf = file_path.to_owned();
         let future = ctx.spawn(
             async move {
-                let contents = async_fs::read_to_string(&file_path_buf)
-                    .await
-                    .map_err(FileLoadError::from);
+                let contents = Self::read_and_classify(&file_path_buf).await;
                 (file_id, contents)
             },
             move |me, (file_id, load_result), ctx| {
@@ -496,6 +504,46 @@ impl FileModel {
         file_id
     }
 
+    /// Reads `file_path`, distinguishing "nothing is there" from "there is something there that
+    /// could not be read".
+    ///
+    /// Only a genuinely absent path yields [`FileLoadError::DoesNotExist`]; callers use that to
+    /// offer an empty buffer at a path the user intends to create. A dangling symlink also reads
+    /// as `NotFound`, but something *does* exist at the path, so it stays an
+    /// [`FileLoadError::IOError`] alongside permission failures, directories, and device errors.
+    async fn read_and_classify(file_path: &Path) -> Result<String, FileLoadError> {
+        match async_fs::read_to_string(file_path).await {
+            Ok(contents) => Ok(contents),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                // `symlink_metadata` does not follow links, so it still succeeds for a dangling
+                // symlink and fails only when the path itself is absent.
+                let metadata_error = async_fs::symlink_metadata(file_path).await.err();
+                Err(Self::classify_missing_read(error, metadata_error))
+            }
+            Err(error) => Err(FileLoadError::IOError(error)),
+        }
+    }
+
+    /// Decides what a `NotFound` read means, given the outcome of a `symlink_metadata` probe of
+    /// the same path (`None` when the probe succeeded).
+    ///
+    /// Only the probe's own `NotFound` confirms absence. A permission, symlink-loop, or I/O
+    /// failure says nothing about whether the path exists, so it must not be read as "missing" —
+    /// that would hand the user an empty buffer over a file that is really there.
+    fn classify_missing_read(
+        read_error: io::Error,
+        metadata_error: Option<io::Error>,
+    ) -> FileLoadError {
+        match metadata_error {
+            // Something is at the path, e.g. a dangling symlink.
+            None => FileLoadError::IOError(read_error),
+            Some(metadata_error) if metadata_error.kind() == io::ErrorKind::NotFound => {
+                FileLoadError::DoesNotExist
+            }
+            Some(metadata_error) => FileLoadError::IOError(metadata_error),
+        }
+    }
+
     /// The directory an individually-watched file is watched through.
     ///
     /// The parent directory is watched (rather than the file) so the watch survives editors that
@@ -515,6 +563,39 @@ impl FileModel {
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())?;
         Some(parent.to_path_buf())
+    }
+
+    /// Writes `content` to `file_path`, failing if anything already exists there.
+    ///
+    /// `create_new` makes the existence check and the creation a single atomic operation, so a
+    /// file appearing between the two cannot be clobbered.
+    async fn write_new_file(file_path: &Path, content: &str) -> Result<(), FileSaveError> {
+        let file = async_fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(file_path)
+            .await;
+        let mut file = match file {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                return Err(FileSaveError::AlreadyExists {
+                    path: file_path.to_path_buf(),
+                });
+            }
+            Err(error) => {
+                return Err(FileSaveError::IOError {
+                    error,
+                    path: file_path.to_path_buf(),
+                });
+            }
+        };
+        futures::io::AsyncWriteExt::write_all(&mut file, content.as_bytes())
+            .await
+            .and(futures::io::AsyncWriteExt::flush(&mut file).await)
+            .map_err(|error| FileSaveError::IOError {
+                error,
+                path: file_path.to_path_buf(),
+            })
     }
 
     pub async fn read_content_for_file(file_path: &Path) -> Result<String, FileLoadError> {
@@ -729,6 +810,31 @@ impl FileModel {
         version: ContentVersion,
         ctx: &mut ModelContext<Self>,
     ) -> Result<SaveFuture, FileSaveError> {
+        self.write(file_id, content, version, SaveMode::Overwrite, ctx)
+    }
+
+    /// Writes a file for the first time, for a buffer opened at a path that did not exist.
+    ///
+    /// Nothing watches such a path, so a file created there between the open and this write would
+    /// otherwise be silently overwritten. The write is refused if anything is present.
+    pub fn create_new_file(
+        &mut self,
+        file_id: FileId,
+        content: String,
+        version: ContentVersion,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<SaveFuture, FileSaveError> {
+        self.write(file_id, content, version, SaveMode::CreateNew, ctx)
+    }
+
+    fn write(
+        &mut self,
+        file_id: FileId,
+        content: String,
+        version: ContentVersion,
+        mode: SaveMode,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<SaveFuture, FileSaveError> {
         let backend = self
             .file_state
             .get(file_id)
@@ -749,12 +855,15 @@ impl FileModel {
                                 path: file_path,
                             });
                         }
-                        async_fs::write(&file_path, content).await.map_err(|err| {
-                            FileSaveError::IOError {
-                                error: err,
-                                path: file_path,
-                            }
-                        })
+                        match mode {
+                            SaveMode::Overwrite => async_fs::write(&file_path, content)
+                                .await
+                                .map_err(|err| FileSaveError::IOError {
+                                    error: err,
+                                    path: file_path,
+                                }),
+                            SaveMode::CreateNew => Self::write_new_file(&file_path, &content).await,
+                        }
                     },
                     move |me, write_result: Result<(), FileSaveError>, ctx| {
                         let result = write_result.map_err(Arc::new);
