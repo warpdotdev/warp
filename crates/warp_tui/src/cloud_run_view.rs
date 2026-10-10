@@ -263,6 +263,7 @@ impl TuiCloudRunView {
                 }
             }
             TuiCloudRunStartup::Spawned => {
+                let link_url = state.run_url().map(str::to_string);
                 let status = state
                     .conversation_id()
                     .and_then(|conversation_id| {
@@ -284,8 +285,8 @@ impl TuiCloudRunView {
                     status: status.clone(),
                     status_label: status_label.to_string(),
                     detail: None,
-                    link_instruction: Some("to view or click the link below"),
-                    link_url: state.run_url().map(str::to_string),
+                    link_instruction: link_url.as_ref().map(|_| "to view or click the link below"),
+                    link_url,
                 }
             }
         }

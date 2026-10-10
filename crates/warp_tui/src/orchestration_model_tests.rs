@@ -1,9 +1,9 @@
 use warp::tui_export::{
     AIConversationId, AmbientAgentTaskId, BlocklistAIHistoryModel, CloudAgentStartupBlocker,
     CloudAgentStartupFailure, CloudAgentStartupIssue, ConversationStatus, Harness,
-    OrchestrationEventStreamerEvent, RenderableAIError, RequestTeamScope, StartAgentExecutionMode,
-    StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest,
-    TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR, UserWorkspaces,
+    OrchestrationEventStreamerEvent, RenderableAIError, RequestTeamScope, SpawnAgentResponse,
+    StartAgentExecutionMode, StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome,
+    StartAgentRequest, TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR, UserWorkspaces,
     register_tui_session_view_test_singletons, set_tui_workspace_teams_for_test,
 };
 use warp_core::features::FeatureFlag;
@@ -13,7 +13,10 @@ use warpui_core::elements::tui::{TuiBufferExt, TuiRect, text_width};
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, TuiView as _, TypedActionView as _, WindowId};
 
-use super::{MaterializedLocalOzChildSession, ORCHESTRATOR_TAB_LABEL, TuiOrchestrationModel};
+use super::{
+    MaterializedLocalOzChildSession, ORCHESTRATOR_TAB_LABEL, PendingRemoteChildRunLink,
+    TuiOrchestrationModel,
+};
 use crate::cloud_run::TuiCloudRunStartup;
 use crate::cloud_run_view::{TuiCloudRunAction, TuiCloudRunView};
 use crate::root_view::RootTuiView;
@@ -636,6 +639,141 @@ fn failed_remote_launch_records_cloud_startup_error_for_tui_rendering() {
                 Some(RenderableAIError::CloudStartupFailed(message))
                     if message == "Environment failed to start"
             ));
+        });
+    });
+}
+
+#[test]
+fn spawned_remote_child_can_be_killed_before_factory_probe_finishes() {
+    App::test((), |mut app| async move {
+        let fixture = orchestration_fixture(&mut app);
+        let parent_session_id = add_dispatching_session(&mut app, &fixture, true);
+        let parent_id = read_active_conversation_id(&app, parent_session_id);
+        let request = remote_request(parent_id);
+        let (conversation_id, surface_id, state) = add_remote_child_session(
+            &mut app,
+            &fixture,
+            parent_session_id,
+            &request,
+            "cloud-researcher".to_owned(),
+            Harness::Oz,
+        );
+        let task_id: AmbientAgentTaskId = "55555555-5555-5555-5555-555555555555".parse().unwrap();
+        let run_id = "pending-access-run";
+        let session_id = app.read(|ctx| {
+            TuiSessions::as_ref(ctx)
+                .session_id_for_surface(surface_id)
+                .expect("remote session exists")
+        });
+        app.update(|ctx| {
+            TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+                model.finish_remote_child_launch(
+                    conversation_id,
+                    surface_id,
+                    state.clone(),
+                    Ok(SpawnAgentResponse {
+                        task_id,
+                        run_id: run_id.to_owned(),
+                        at_capacity: false,
+                    }),
+                    ctx,
+                );
+            });
+        });
+        app.read(|ctx| {
+            assert!(matches!(
+                state.as_ref(ctx).startup(),
+                TuiCloudRunStartup::Spawned
+            ));
+            assert!(state.as_ref(ctx).run_url().is_none());
+            assert_eq!(
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&conversation_id)
+                    .and_then(|conversation| conversation.task_id()),
+                Some(task_id)
+            );
+        });
+        app.update(|ctx| {
+            TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+                model.kill_child_agent(conversation_id, ctx);
+                model.apply_remote_child_run_url(
+                    &PendingRemoteChildRunLink {
+                        conversation_id,
+                        session_id,
+                        task_id,
+                        run_id: run_id.to_owned(),
+                        cloud_run_state: state.clone(),
+                    },
+                    true,
+                    ctx,
+                );
+            });
+        });
+        app.read(|ctx| {
+            assert!(state.as_ref(ctx).run_url().is_none());
+            assert!(
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&conversation_id)
+                    .is_none()
+            );
+            assert!(TuiSessions::as_ref(ctx).session(session_id).is_none());
+        });
+    });
+}
+
+#[test]
+fn failed_factory_probe_sets_oz_url_on_live_remote_child() {
+    App::test((), |mut app| async move {
+        let fixture = orchestration_fixture(&mut app);
+        let parent_session_id = add_dispatching_session(&mut app, &fixture, true);
+        let parent_id = read_active_conversation_id(&app, parent_session_id);
+        let request = remote_request(parent_id);
+        let (conversation_id, surface_id, state) = add_remote_child_session(
+            &mut app,
+            &fixture,
+            parent_session_id,
+            &request,
+            "cloud-researcher".to_owned(),
+            Harness::Oz,
+        );
+        let task_id: AmbientAgentTaskId = "55555555-5555-5555-5555-555555555555".parse().unwrap();
+        let run_id = "denied-access-run";
+        let session_id = app.read(|ctx| {
+            TuiSessions::as_ref(ctx)
+                .session_id_for_surface(surface_id)
+                .expect("remote session exists")
+        });
+        app.update(|ctx| {
+            TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+                model.finish_remote_child_launch(
+                    conversation_id,
+                    surface_id,
+                    state.clone(),
+                    Ok(SpawnAgentResponse {
+                        task_id,
+                        run_id: run_id.to_owned(),
+                        at_capacity: false,
+                    }),
+                    ctx,
+                );
+                model.apply_remote_child_run_url(
+                    &PendingRemoteChildRunLink {
+                        conversation_id,
+                        session_id,
+                        task_id,
+                        run_id: run_id.to_owned(),
+                        cloud_run_state: state.clone(),
+                    },
+                    false,
+                    ctx,
+                );
+            });
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                state.as_ref(ctx).run_url(),
+                Some(warp::tui_export::cloud_run_url(run_id, false).as_str())
+            );
         });
     });
 }
