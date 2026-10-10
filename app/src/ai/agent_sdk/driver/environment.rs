@@ -1273,7 +1273,7 @@ async fn execute_checkout_helper(
         reason: "could not write checkout requests",
     })?;
     #[cfg(not(target_family = "wasm"))]
-    let _tracing_handoff = crate::tracing::create_checkout_handoff(&requests_file);
+    let _tracing_handoff = crate::tracing::create_child_process_handoff(&requests_file);
     let executable =
         std::env::current_exe().map_err(|_| PrepareEnvironmentError::CheckoutHelper {
             reason: "could not resolve the running Warp/Oz executable",

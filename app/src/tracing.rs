@@ -4,7 +4,7 @@ use std::time::Duration;
 use tracing::subscriber;
 
 #[cfg(not(target_family = "wasm"))]
-mod checkout_handoff;
+mod child_process;
 #[cfg(not(target_family = "wasm"))]
 mod cloud_agent_auth;
 #[cfg(not(target_family = "wasm"))]
@@ -25,25 +25,27 @@ pub fn init() -> anyhow::Result<Initialization> {
 }
 
 #[cfg(not(target_family = "wasm"))]
-pub(crate) fn create_checkout_handoff(
-    requests_file: &std::path::Path,
+pub(crate) fn create_child_process_handoff(
+    scope_file: &std::path::Path,
 ) -> Option<tempfile::TempPath> {
-    native::checkout_snapshot()?
-        .write(requests_file)
+    native::child_process_snapshot()?
+        .write(scope_file)
         .map_err(|_| {
-            log::warn!("Checkout tracing unavailable: could not create credential handoff");
+            log::warn!("Child-process tracing unavailable: could not create credential handoff");
         })
         .ok()
 }
 
 #[cfg(not(target_family = "wasm"))]
-pub(crate) fn init_checkout(requests_file: &std::path::Path) -> anyhow::Result<Initialization> {
+pub(crate) fn init_child_process(
+    scope_file: &std::path::Path,
+) -> anyhow::Result<(Initialization, opentelemetry::Context)> {
     let config =
-        checkout_handoff::CheckoutTracingConfig::consume(requests_file).unwrap_or_else(|_| {
-            log::warn!("Checkout tracing unavailable: invalid credential handoff");
+        child_process::ChildProcessTracingConfig::consume(scope_file).unwrap_or_else(|_| {
+            log::warn!("Child-process tracing unavailable: invalid credential handoff");
             None
         });
-    native::init_checkout(config)
+    native::init_child_process(config)
 }
 
 #[cfg(not(target_family = "wasm"))]

@@ -68,7 +68,7 @@ use url::{Host, Url};
 use warpui::AppContext;
 
 use super::Initialization;
-use super::checkout_handoff::CheckoutTracingConfig;
+use super::child_process::ChildProcessTracingConfig;
 use super::cloud_agent_auth::{self, AuthContext};
 use crate::channel::ChannelState;
 use crate::server::server_api::managed_secrets::AppManagedSecretsClient;
@@ -125,24 +125,26 @@ pub fn init() -> anyhow::Result<Initialization> {
     Ok(initialization)
 }
 
-pub(super) fn checkout_snapshot() -> Option<CheckoutTracingConfig> {
+pub(super) fn child_process_snapshot() -> Option<ChildProcessTracingConfig> {
     let context = AUTH_CONTEXT.get()?;
-    Some(CheckoutTracingConfig {
-        endpoint: context.endpoint.clone(),
-        credential: context.auth.snapshot()?,
-    })
+    Some(ChildProcessTracingConfig::capture(
+        context.endpoint.clone(),
+        context.auth.snapshot()?,
+    ))
 }
 
-pub(super) fn init_checkout(
-    config: Option<CheckoutTracingConfig>,
-) -> anyhow::Result<Initialization> {
-    if let Some(config) = config
-        && let Ok(auth_context) = AuthContext::from_snapshot(config.credential)
-    {
-        return init_exporter(&config.endpoint, &auth_context);
+pub(super) fn init_child_process(
+    config: Option<ChildProcessTracingConfig>,
+) -> anyhow::Result<(Initialization, OtelContext)> {
+    if let Some(config) = config {
+        let parent_context = config.parent_context();
+        if let Ok(auth_context) = AuthContext::from_snapshot(config.credential) {
+            return init_exporter(&config.endpoint, &auth_context)
+                .map(|initialization| (initialization, parent_context));
+        }
     }
     install_no_subscriber()?;
-    Ok(Initialization::default())
+    Ok((Initialization::default(), OtelContext::new()))
 }
 
 fn init_exporter(

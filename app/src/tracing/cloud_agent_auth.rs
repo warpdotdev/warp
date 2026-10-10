@@ -122,6 +122,7 @@ impl AuthContext {
             refresh_hint_receiver: Arc::new(Mutex::new(Some(refresh_hint_receiver))),
         })
     }
+
     pub(super) fn snapshot(&self) -> Option<CredentialSnapshot> {
         self.token_store.valid_snapshot()
     }
@@ -176,6 +177,7 @@ impl TokenStore {
         let snapshot = self.inner.read().unwrap_or_else(|err| err.into_inner());
         (snapshot.expires_at > Utc::now()).then(|| snapshot.authorization_header.clone())
     }
+
     fn valid_snapshot(&self) -> Option<CredentialSnapshot> {
         let snapshot = self.inner.read().unwrap_or_else(|err| err.into_inner());
         if snapshot.expires_at <= Utc::now() {

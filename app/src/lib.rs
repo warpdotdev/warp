@@ -805,7 +805,9 @@ pub fn run() -> Result<()> {
             warp_cli::Command::CommandLine(cmd) => {
                 #[cfg(not(target_family = "wasm"))]
                 if let CliCommand::EnvironmentCheckout(args) = cmd.as_ref() {
-                    let mut tracing_initialization = tracing::init_checkout(&args.requests_file)?;
+                    let (mut tracing_initialization, parent_context) =
+                        tracing::init_child_process(&args.requests_file)?;
+                    let _parent_context = parent_context.attach();
                     warp_logging::init(warp_logging::LogConfig {
                         frontend: warp_logging::LogFrontend::Cli,
                         log_destination: Some(warp_logging::LogDestination::Stderr),
