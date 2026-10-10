@@ -97,6 +97,9 @@ pub enum CustomEvent {
         width: f32,
         height: f32,
     },
+    /// Input received from the desktop text-input bridge on desktop WASM.
+    #[cfg(target_family = "wasm")]
+    DesktopTextInput(crate::platform::wasm::DesktopTextInputEvent),
     /// Momentum scrolling animation frame.
     MomentumScroll {
         window_id: winit::window::WindowId,

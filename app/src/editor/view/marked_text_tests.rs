@@ -1,8 +1,8 @@
 use vim::vim::VimMode;
 use warp_core::features::FeatureFlag;
-use warpui::App;
 use warpui::keymap::Keystroke;
 use warpui::platform::WindowStyle;
+use warpui::{App, BlurContext, FocusContext, View};
 
 use super::initialize_app;
 use crate::editor::{DisplayPoint, EditorOptions, EditorView};
@@ -145,6 +145,71 @@ fn test_set_marked_text_vim_normal_mode() {
             );
 
             editor
+        });
+    });
+}
+
+#[test]
+fn test_blur_to_a_non_text_area_clears_rather_than_commits_incomplete_marked_text() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let _guard = FeatureFlag::ImeMarkedText.override_enabled(true);
+
+        app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut editor = EditorView::new_with_base_text("", Default::default(), ctx);
+
+            // Simulate typing "nihao" into the IME, mid-composition.
+            editor.set_marked_text("nihao", &(5..5), ctx);
+            assert_eq!(editor.selected_text(ctx), "nihao");
+
+            // Losing focus before the composition commits (e.g. a click on a non-editable part
+            // of the canvas, which blurs the desktop text-input bridge without any other
+            // editable surface taking over) must discard the preedit, not insert it as if it had
+            // been typed.
+            editor.on_blur(&BlurContext::SelfBlurred, ctx);
+            assert_eq!(editor.buffer_text(ctx), "");
+
+            editor
+        });
+    });
+}
+
+#[test]
+fn test_focus_moving_to_another_editable_surface_clears_the_old_surfaces_marked_text() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let _guard = FeatureFlag::ImeMarkedText.override_enabled(true);
+
+        let (_, first) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            EditorView::new_with_base_text("", Default::default(), ctx)
+        });
+        let (_, second) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            EditorView::new_with_base_text("", Default::default(), ctx)
+        });
+
+        first.update(&mut app, |editor, ctx| {
+            // Simulate typing "nihao" into the IME on the first surface, mid-composition.
+            editor.set_marked_text("nihao", &(5..5), ctx);
+            assert_eq!(editor.selected_text(ctx), "nihao");
+        });
+
+        // Focus moves directly to a second, distinct editable surface - mirroring the desktop
+        // text-input bridge observing a different `CursorInfo::view_id` without the bridge's own
+        // DOM focus ever actually leaving the bridge. The first surface's own `on_blur` is the
+        // only thing that ever observes this transition, so it must discard the stale preedit
+        // itself rather than leaving it to be (wrongly) committed.
+        first.update(&mut app, |editor, ctx| {
+            editor.on_blur(&BlurContext::SelfBlurred, ctx);
+        });
+        second.update(&mut app, |editor, ctx| {
+            editor.on_focus(&FocusContext::SelfFocused, ctx);
+        });
+
+        first.read(&app, |editor, app| {
+            assert_eq!(editor.buffer_text(app), "");
+        });
+        second.read(&app, |editor, app| {
+            assert_eq!(editor.buffer_text(app), "");
         });
     });
 }
