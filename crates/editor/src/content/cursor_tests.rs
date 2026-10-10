@@ -2,7 +2,9 @@ use string_offset::CharOffset;
 use sum_tree::SumTree;
 
 use super::{BufferCursor, BufferSumTree};
-use crate::content::text::{BufferBlockStyle, BufferText, BufferTextStyle, MarkerDir};
+use crate::content::text::{
+    BufferBlockStyle, BufferText, BufferTextStyle, MarkerDir, TEXT_FRAGMENT_SIZE,
+};
 
 /// Helper function to count the number of Text fragments in a SumTree
 fn count_text_fragments(tree: &SumTree<BufferText>) -> usize {
@@ -121,8 +123,6 @@ fn test_append_str_merges_with_existing_fragment() {
 
 #[test]
 fn test_append_str_creates_new_fragment_when_full() {
-    use crate::content::text::TEXT_FRAGMENT_SIZE;
-
     let mut tree: SumTree<BufferText> = SumTree::new();
 
     // Create a text fragment that's at the TEXT_FRAGMENT_SIZE limit
@@ -191,6 +191,21 @@ fn test_styled_text_before_markers() {
 
     let new_content = text_cursor.suffix();
     assert_eq!(new_content.debug(), "<i_e>Plain text");
+}
+
+#[test]
+fn test_buffer_text_size_is_bounded() {
+    // `append_str` gives every source line at least one `BufferText::Text` fragment, and every
+    // `SumTree` element - including zero-payload variants like `BufferText::Newline` - costs
+    // `size_of::<BufferText>()` regardless of how much of that fragment is actually used
+    // (APP-4844). Pin both the fragment threshold and the resulting enum size so a future change
+    // that inflates the per-line cost of loading a file is caught here.
+    assert_eq!(TEXT_FRAGMENT_SIZE, 64);
+    assert!(
+        std::mem::size_of::<BufferText>() <= 96,
+        "size_of::<BufferText>() grew to {}",
+        std::mem::size_of::<BufferText>()
+    );
 }
 
 #[test]
