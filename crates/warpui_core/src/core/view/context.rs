@@ -511,6 +511,7 @@ impl<'a, T: Entity> ViewContext<'a, T> {
     ///
     /// TODO(vorporeal): Determine how best to eliminate this function and move
     ///     the relevant logic into `spawn()`.
+    #[track_caller]
     fn spawn_local<S, F, U>(
         &mut self,
         future: S,
@@ -563,6 +564,7 @@ impl<'a, T: Entity> ViewContext<'a, T> {
     ///
     /// See [`Self::spawn_abortable`] for an alternative version of this function that accepts an
     /// `on_abort` function that is called when the future is aborted.
+    #[track_caller]
     pub fn spawn<S, F, U>(&mut self, future: S, callback: F) -> SpawnedFutureHandle
     where
         S: crate::r#async::Spawnable,
@@ -597,6 +599,7 @@ impl<'a, T: Entity> ViewContext<'a, T> {
     ///
     /// See [`Self::spawn`] for an alternative version of this function that doesn't
     /// require a callback if/when the future is aborted.
+    #[track_caller]
     pub fn spawn_abortable<S, F, A>(
         &mut self,
         future: S,
@@ -671,6 +674,7 @@ impl<'a, T: Entity> ViewContext<'a, T> {
     /// The callbacks receive mutable references to the spawning view and its
     /// context, allowing for updating of the view's internal state and dirtying
     /// it (via [`Self::notify`]) if appropriate.
+    #[track_caller]
     pub fn spawn_stream_local<S, F, G>(
         &mut self,
         stream: S,
@@ -800,6 +804,7 @@ impl<'a, T: Entity> ViewContext<'a, T> {
     ///
     /// Note that the spawner *does not* keep a strong reference to the view. If the view is
     /// dropped, any pending or future tasks will be discarded.
+    #[track_caller]
     pub fn spawner(&mut self) -> ViewSpawner<T> {
         let (task_tx, task_rx) = async_channel::unbounded();
         let (completion_tx, _completion_rx) = futures::channel::oneshot::channel();
