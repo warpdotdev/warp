@@ -1,0 +1,52 @@
+# THIS FILE IS GENERATED FROM xtask/templates/cargo.stpl.toml; DO NOT EDIT MANUALLY
+
+[package]
+name = "arborium-sql"
+version = "2.13.0"
+edition = "2024"
+rust-version = "1.85"
+description = "SQL grammar for arborium (tree-sitter bindings)"
+authors = ["Amos Wenger <amos@bearcove.eu>"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/bearcove/arborium"
+homepage = "https://github.com/bearcove/arborium"
+documentation = "https://docs.rs/arborium-sql"
+keywords = ["tree-sitter", "sql", "syntax-highlighting", "query"]
+categories = ["parsing", "text-processing"]
+include = [
+    "src/**/*",
+    "grammar/**/*",
+    "queries/**/*",
+    "corpus/**/*",
+    "sample.*",
+    "samples/**/*",
+    "build.rs",
+    "Cargo.toml",
+    "README.md",
+    ".arborium-hash",
+]
+
+[package.metadata.cargo-shear]
+ignored = ["arborium-sysroot"]
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+tree-sitter-language = { version = "0.1", path = "../../../../crates/arborium-tree-sitter/language" }
+
+
+
+
+[dev-dependencies]
+arborium-test-harness = { version = "2.13.0", path = "../../../../crates/arborium-test-harness" }
+libtest-mimic = "0.8"
+
+# WASM allocator (only needed on WASM targets)
+[target.'cfg(target_family = "wasm")'.dependencies]
+arborium-sysroot = { version = "2.13.0", path = "../../../../crates/arborium-sysroot" }
+
+[build-dependencies]
+cc = "1"
+
