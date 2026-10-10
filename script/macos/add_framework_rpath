@@ -9,6 +9,9 @@
 # `osx_frameworks` (`dev`, `stable`, `preview`) therefore arrive with the rpath
 # already set, while bins that declare none (`warp`, `warp-oss`) still need us
 # to add it, so the add has to be conditional rather than dropped.
+#
+# Expects thin binaries. `otool -l` reports load commands per slice, so on a fat
+# binary one slice carrying the rpath would skip the add for every slice.
 
 set -euo pipefail
 
