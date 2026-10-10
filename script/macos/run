@@ -104,7 +104,7 @@ rm -rf "$WARP_APP_PATH"
 
 pushd app > /dev/null
 echo "Bundling app (bin: $WARP_BIN_NAME)..."
-cargo bundle --bin "$WARP_BIN_NAME" --features "$FEATURES" $PARAMS
+cargo bundle --bin "$WARP_BIN_NAME" --features "$FEATURES" --format osx $PARAMS
 echo "Successfully bundled..."
 popd > /dev/null
 
