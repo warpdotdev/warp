@@ -85,6 +85,16 @@ define_settings_group!(InputSettings,
             toml_path: "terminal.input.native_shell_completions_enabled",
             description: "Whether your shell's own completions are used for shell commands.",
         },
+        hide_cursor_while_typing: HideCursorWhileTyping {
+            type: bool,
+            default: true,
+            supported_platforms: SupportedPlatforms::MAC,
+            sync_to_cloud: SyncToCloud::PerPlatform(RespectUserSyncSetting::Yes),
+            surface: settings::SettingSurfaces::GUI,
+            private: false,
+            toml_path: "terminal.input.hide_cursor_while_typing",
+            description: "Whether the mouse cursor is hidden while typing.",
+        },
         error_underlining: ErrorUnderliningEnabled {
             type: bool,
             default: true,
@@ -279,3 +289,7 @@ impl InputSettings {
         *self.show_terminal_input_message_bar
     }
 }
+
+#[cfg(test)]
+#[path = "input_tests.rs"]
+mod tests;
