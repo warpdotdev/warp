@@ -86,7 +86,6 @@ fn setup_context_models(app: &mut App) {
 
 #[test]
 fn snapshot_decoding_keeps_valid_context_from_each_source() {
-    let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
     let host_id = HostId::new("remote-host".to_string());
     let state = parse_snapshot(&host_id, snapshot());
     let bundled = state.bundled_skills.unwrap();
@@ -114,7 +113,6 @@ fn snapshot_decoding_keeps_valid_context_from_each_source() {
 
 #[test]
 fn invalid_home_directory_drops_only_home_context() {
-    let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
     let host_id = HostId::new("remote-host".to_string());
     let mut snapshot = snapshot();
     snapshot.home_dir = "relative/home".to_string();
@@ -127,7 +125,6 @@ fn invalid_home_directory_drops_only_home_context() {
 
 #[test]
 fn reconcile_snapshot_fully_replaces_all_host_context() {
-    let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
     let host_id = HostId::new("remote-host".to_string());
     let bundled_path = remote_path(&host_id, "/bundled/skills/bundled/SKILL.md").unwrap();
     let home_path = remote_path(&host_id, "/home/user/.agents/skills/deploy/SKILL.md").unwrap();
@@ -184,7 +181,6 @@ fn reconcile_snapshot_fully_replaces_all_host_context() {
 
 #[test]
 fn remove_host_context_clears_only_the_matching_host() {
-    let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
     let first_host = HostId::new("first-host".to_string());
     let second_host = HostId::new("second-host".to_string());
     let first_bundled_path = remote_path(&first_host, "/bundled/skills/bundled/SKILL.md").unwrap();
