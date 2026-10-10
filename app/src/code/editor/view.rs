@@ -260,8 +260,15 @@ pub struct CodeEditorView {
     pub model: ModelHandle<CodeEditorModel>,
     pub searcher: ModelHandle<Searcher>,
     find_bar: Option<ViewHandle<Find>>,
-    goto_line_dialog: ViewHandle<GoToLineView>,
-    nav_bar: ViewHandle<NavBar>,
+    /// Created lazily on first use (see [`Self::goto_line_dialog`]) since most code editors
+    /// (e.g. read-only historical AI code blocks) never open it.
+    goto_line_dialog: Option<ViewHandle<GoToLineView>>,
+    /// Created lazily on first use (see [`Self::nav_bar`]) since most code editors never
+    /// activate diff navigation.
+    nav_bar: Option<ViewHandle<NavBar>>,
+    /// The behavior to apply to [`Self::nav_bar`], cached here so it can be re-applied if the
+    /// nav bar is (re-)created after [`Self::set_nav_bar_behavior`] is called.
+    nav_bar_behavior: NavBarBehavior,
     display_states: DisplayHandles,
     is_selecting: bool,
     self_handle: WeakViewHandle<Self>,
@@ -340,18 +347,9 @@ impl CodeEditorView {
             me.handle_find_event(event, ctx);
         });
 
-        let goto_line_dialog = ctx.add_typed_action_view(GoToLineView::new);
-        ctx.subscribe_to_view(&goto_line_dialog, |me, _, event, ctx| {
-            me.handle_goto_line_event(event, ctx);
-        });
-
-        let nav_bar = ctx.add_typed_action_view(|ctx| NavBar::new(model.clone(), ctx));
-        ctx.subscribe_to_view(&nav_bar, |me, _, event, ctx| match event {
-            NavBarEvent::Close => {
-                me.toggle_diff_nav(None, ctx);
-                ctx.notify();
-            }
-        });
+        // `goto_line_dialog` and `nav_bar` are created lazily (see `Self::goto_line_dialog` and
+        // `Self::nav_bar`) since most code editors (e.g. read-only historical AI code blocks)
+        // never open the go-to-line dialog or activate diff navigation.
 
         // If feature flag is enabled, enable vim mode.
         let supports_vim_mode = FeatureFlag::VimCodeEditor.is_enabled();
@@ -382,12 +380,13 @@ impl CodeEditorView {
         Self {
             searcher,
             find_bar: Some(find_bar),
-            goto_line_dialog,
+            goto_line_dialog: None,
             model,
             display_states: Default::default(),
             is_selecting: false,
             self_handle: ctx.handle(),
-            nav_bar,
+            nav_bar: None,
+            nav_bar_behavior: NavBarBehavior::Closable,
             comment_locations: Vec::new(),
             display_options: CodeEditorViewDisplayOptions {
                 vertical_expansion_behavior: render_options.vertical_expansion_behavior,
@@ -431,6 +430,42 @@ impl CodeEditorView {
             find_references_anchor_offset: None,
             window_id: ctx.window_id(),
         }
+    }
+
+    /// Returns the go-to-line dialog view, lazily creating it on first use. Most code editors
+    /// (e.g. read-only historical AI code blocks) never open this dialog, so deferring its
+    /// construction avoids the memory and subscription overhead for those instances.
+    fn goto_line_dialog(&mut self, ctx: &mut ViewContext<Self>) -> ViewHandle<GoToLineView> {
+        if let Some(dialog) = &self.goto_line_dialog {
+            return dialog.clone();
+        }
+        let dialog = ctx.add_typed_action_view(GoToLineView::new);
+        ctx.subscribe_to_view(&dialog, |me, _, event, ctx| {
+            me.handle_goto_line_event(event, ctx);
+        });
+        self.goto_line_dialog = Some(dialog.clone());
+        dialog
+    }
+
+    /// Returns the diff nav bar view, lazily creating it on first use. Most code editors never
+    /// activate diff navigation, so deferring its construction avoids the memory and
+    /// subscription overhead for those instances.
+    fn nav_bar(&mut self, ctx: &mut ViewContext<Self>) -> ViewHandle<NavBar> {
+        if let Some(nav_bar) = &self.nav_bar {
+            return nav_bar.clone();
+        }
+        let model = self.model.clone();
+        let nav_bar = ctx.add_typed_action_view(|ctx| NavBar::new(model, ctx));
+        let behavior = self.nav_bar_behavior;
+        nav_bar.update(ctx, move |nav_bar, _ctx| nav_bar.set_behavior(behavior));
+        ctx.subscribe_to_view(&nav_bar, |me, _, event, ctx| match event {
+            NavBarEvent::Close => {
+                me.toggle_diff_nav(None, ctx);
+                ctx.notify();
+            }
+        });
+        self.nav_bar = Some(nav_bar.clone());
+        nav_bar
     }
 
     pub fn set_find_references_anchor_offset(&mut self, offset: Option<CharOffset>) {
@@ -636,22 +671,29 @@ impl CodeEditorView {
         if self.find_bar_open(ctx) {
             self.close_find_bar(false, ctx);
         }
-        self.goto_line_dialog.update(ctx, |dialog, ctx| {
+        let dialog = self.goto_line_dialog(ctx);
+        dialog.update(ctx, |dialog, ctx| {
             dialog.open(ctx);
         });
-        ctx.focus(&self.goto_line_dialog);
+        ctx.focus(&dialog);
         ctx.notify();
     }
 
     fn close_goto_line_dialog(&mut self, ctx: &mut ViewContext<Self>) {
-        self.goto_line_dialog.update(ctx, |dialog, ctx| {
-            dialog.close(ctx);
-        });
+        if let Some(dialog) = self.goto_line_dialog.clone() {
+            dialog.update(ctx, |dialog, ctx| {
+                dialog.close(ctx);
+            });
+        }
         self.focus(ctx);
         ctx.notify();
     }
 
     fn handle_goto_line_event(&mut self, event: &GoToLineEvent, ctx: &mut ViewContext<Self>) {
+        // This is only ever invoked as a subscription callback from an already-created dialog.
+        let Some(dialog) = self.goto_line_dialog.clone() else {
+            return;
+        };
         match event {
             GoToLineEvent::Close => {
                 self.close_goto_line_dialog(ctx);
@@ -659,7 +701,7 @@ impl CodeEditorView {
             GoToLineEvent::Confirm { input } => {
                 let trimmed = input.trim().to_string();
                 if trimmed.is_empty() {
-                    self.goto_line_dialog.update(ctx, |dialog, ctx| {
+                    dialog.update(ctx, |dialog, ctx| {
                         dialog.set_error("Please enter a line number".to_string(), ctx);
                     });
                     return;
@@ -671,7 +713,7 @@ impl CodeEditorView {
                 let line_number = match line_str.parse::<usize>() {
                     Ok(n) if n >= 1 => n,
                     _ => {
-                        self.goto_line_dialog.update(ctx, |dialog, ctx| {
+                        dialog.update(ctx, |dialog, ctx| {
                             dialog.set_error("Please enter a valid line number".to_string(), ctx);
                         });
                         return;
@@ -681,7 +723,7 @@ impl CodeEditorView {
                     Some(c) if !c.is_empty() => match c.parse::<usize>() {
                         Ok(n) => Some(n),
                         Err(_) => {
-                            self.goto_line_dialog.update(ctx, |dialog, ctx| {
+                            dialog.update(ctx, |dialog, ctx| {
                                 dialog.set_error(
                                     "Please enter a valid column number".to_string(),
                                     ctx,
@@ -703,7 +745,11 @@ impl CodeEditorView {
     }
 
     fn escape(&mut self, ctx: &mut ViewContext<Self>) {
-        if self.goto_line_dialog.as_ref(ctx).is_open() {
+        if self
+            .goto_line_dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.as_ref(ctx).is_open())
+        {
             self.close_goto_line_dialog(ctx);
             return;
         }
@@ -758,10 +804,13 @@ impl CodeEditorView {
         self.display_options.show_nav_bar = show_nav_bar;
     }
 
-    pub fn set_nav_bar_behavior(&self, behavior: NavBarBehavior, ctx: &mut ViewContext<Self>) {
-        self.nav_bar.update(ctx, |nav_bar, _ctx| {
-            nav_bar.set_behavior(behavior);
-        });
+    pub fn set_nav_bar_behavior(&mut self, behavior: NavBarBehavior, ctx: &mut ViewContext<Self>) {
+        self.nav_bar_behavior = behavior;
+        if let Some(nav_bar) = self.nav_bar.clone() {
+            nav_bar.update(ctx, |nav_bar, _ctx| {
+                nav_bar.set_behavior(behavior);
+            });
+        }
     }
 
     pub fn set_show_current_line_highlights(
@@ -1276,12 +1325,16 @@ impl CodeEditorView {
     ) {
         match event {
             CodeEditorModelEvent::DiffUpdated => {
-                self.nav_bar.update(ctx, |_, ctx| ctx.notify());
+                if let Some(nav_bar) = &self.nav_bar {
+                    nav_bar.update(ctx, |_, ctx| ctx.notify());
+                }
                 ctx.emit(CodeEditorEvent::DiffUpdated);
                 ctx.notify()
             }
             CodeEditorModelEvent::SyntaxHighlightingUpdated => {
-                self.nav_bar.update(ctx, |_, ctx| ctx.notify());
+                if let Some(nav_bar) = &self.nav_bar {
+                    nav_bar.update(ctx, |_, ctx| ctx.notify());
+                }
                 ctx.notify()
             }
             CodeEditorModelEvent::SelectionChanged => {
@@ -1343,7 +1396,7 @@ impl CodeEditorView {
     }
 
     pub fn toggle_diff_nav(
-        &self,
+        &mut self,
         line_range: Option<Range<LineCount>>,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -1356,7 +1409,8 @@ impl CodeEditorView {
             .update(ctx, |model, ctx| model.toggle_diff_nav(line_range, ctx));
 
         if toggle_to_on {
-            self.nav_bar.update(ctx, |nav_bar, ctx| {
+            let nav_bar = self.nav_bar(ctx);
+            nav_bar.update(ctx, |nav_bar, ctx| {
                 nav_bar.autoscroll(ctx);
             });
         }
@@ -1636,20 +1690,23 @@ impl CodeEditorView {
         self.model.as_ref(app).interaction_state() == InteractionState::Editable
     }
 
-    pub fn navigate_next_diff_hunk(&self, ctx: &mut ViewContext<Self>) {
-        self.nav_bar.update(ctx, |nav_bar, ctx| {
+    pub fn navigate_next_diff_hunk(&mut self, ctx: &mut ViewContext<Self>) {
+        let nav_bar = self.nav_bar(ctx);
+        nav_bar.update(ctx, |nav_bar, ctx| {
             nav_bar.navigate_down(ctx);
         });
     }
 
-    pub fn navigate_previous_diff_hunk(&self, ctx: &mut ViewContext<Self>) {
-        self.nav_bar.update(ctx, |nav_bar, ctx| {
+    pub fn navigate_previous_diff_hunk(&mut self, ctx: &mut ViewContext<Self>) {
+        let nav_bar = self.nav_bar(ctx);
+        nav_bar.update(ctx, |nav_bar, ctx| {
             nav_bar.navigate_up(ctx);
         });
     }
 
-    fn navigate_current_diff_hunk(&self, ctx: &mut ViewContext<Self>) {
-        self.nav_bar.update(ctx, |nav_bar, ctx| {
+    fn navigate_current_diff_hunk(&mut self, ctx: &mut ViewContext<Self>) {
+        let nav_bar = self.nav_bar(ctx);
+        nav_bar.update(ctx, |nav_bar, ctx| {
             nav_bar.autoscroll(ctx);
         });
     }
@@ -2352,8 +2409,11 @@ impl View for CodeEditorView {
             }
         };
         let mut col = Flex::column().with_child(inner);
-        if self.model.as_ref(app).diff_nav_is_active() && self.display_options.show_nav_bar {
-            col.add_child(ChildView::new(&self.nav_bar).finish());
+        if self.model.as_ref(app).diff_nav_is_active()
+            && self.display_options.show_nav_bar
+            && let Some(nav_bar) = &self.nav_bar
+        {
+            col.add_child(ChildView::new(nav_bar).finish());
         }
 
         let mut stack = Stack::new()
@@ -2364,8 +2424,10 @@ impl View for CodeEditorView {
         {
             stack.add_overlay_child(ChildView::new(find_bar).finish());
         }
-        if self.goto_line_dialog.as_ref(app).is_open() {
-            let dialog = Dismiss::new(ChildView::new(&self.goto_line_dialog).finish())
+        if let Some(goto_line_dialog) = &self.goto_line_dialog
+            && goto_line_dialog.as_ref(app).is_open()
+        {
+            let dialog = Dismiss::new(ChildView::new(goto_line_dialog).finish())
                 .on_dismiss(|ctx, _app| {
                     ctx.dispatch_typed_action(CodeEditorViewAction::Escape);
                 })
@@ -2411,8 +2473,11 @@ impl View for CodeEditorView {
     }
 
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
-        if focus_ctx.is_self_focused() && self.goto_line_dialog.as_ref(ctx).is_open() {
-            ctx.focus(&self.goto_line_dialog);
+        if focus_ctx.is_self_focused()
+            && let Some(dialog) = self.goto_line_dialog.clone()
+            && dialog.as_ref(ctx).is_open()
+        {
+            ctx.focus(&dialog);
         }
     }
 
