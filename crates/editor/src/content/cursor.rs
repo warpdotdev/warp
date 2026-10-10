@@ -361,62 +361,64 @@ impl BufferSumTree for SumTree<BufferText> {
 
     fn append_str(&mut self, s: &str) {
         let trailing_newline = s.ends_with('\n');
-        let mut is_first = true;
-        let mut new_fragments = Vec::new();
-
-        // Split str into lines first. For linebreaks, we need to push BufferText::Newline.
         let mut lines = s.lines().peekable();
-        while let Some(line) = lines.next() {
-            let mut text = line;
-            // For the first fragment we are pushing, try to fill up the trailing text fragment if 1) it exists 2) it has extra byte space.
-            if is_first && !self.is_empty() {
-                self.update_last(|last_text| {
-                    if let BufferText::Text {
-                        fragment,
-                        char_count,
-                    } = last_text
-                    {
-                        let split_ix = if fragment.len() + text.len() <= TEXT_FRAGMENT_SIZE {
-                            text.len()
-                        } else {
-                            let mut split_ix = TEXT_FRAGMENT_SIZE
-                                .saturating_sub(fragment.len())
-                                .min(text.len());
-                            while !text.is_char_boundary(split_ix) {
-                                split_ix -= 1;
-                            }
-                            split_ix
-                        };
+        let Some(mut text) = lines.next() else {
+            return;
+        };
 
-                        let (suffix, remainder) = text.split_at(split_ix);
-                        fragment.push_str(suffix);
-                        *char_count = fragment.chars().count() as u8;
+        if !self.is_empty() {
+            self.update_last(|last_text| {
+                if let BufferText::Text {
+                    fragment,
+                    char_count,
+                } = last_text
+                {
+                    let split_ix = if fragment.len() + text.len() <= TEXT_FRAGMENT_SIZE {
+                        text.len()
+                    } else {
+                        let mut split_ix = TEXT_FRAGMENT_SIZE
+                            .saturating_sub(fragment.len())
+                            .min(text.len());
+                        while !text.is_char_boundary(split_ix) {
+                            split_ix -= 1;
+                        }
+                        split_ix
+                    };
 
-                        text = remainder;
-                    }
-                });
-            }
-            is_first = false;
+                    let (suffix, remainder) = text.split_at(split_ix);
+                    fragment.push_str(suffix);
+                    *char_count = fragment.chars().count() as u8;
 
-            // If there are still remaining text, push it as a new fragment.
-            while !text.is_empty() {
-                let mut split_ix = text.len().min(TEXT_FRAGMENT_SIZE);
-                while !text.is_char_boundary(split_ix) {
-                    split_ix -= 1;
+                    text = remainder;
                 }
-                let (chunk, remainder) = text.split_at(split_ix);
-                new_fragments.push(BufferText::Text {
-                    char_count: chunk.chars().count() as u8,
-                    fragment: ArrayString::from(chunk).unwrap(),
-                });
-                text = remainder;
-            }
-
-            if lines.peek().is_some() || trailing_newline {
-                new_fragments.push(BufferText::Newline);
-            }
+            });
         }
-        self.extend(new_fragments);
+
+        let mut append_newline = lines.peek().is_some() || trailing_newline;
+        self.extend(std::iter::from_fn(move || {
+            loop {
+                if !text.is_empty() {
+                    let mut split_ix = text.len().min(TEXT_FRAGMENT_SIZE);
+                    while !text.is_char_boundary(split_ix) {
+                        split_ix -= 1;
+                    }
+                    let (chunk, remainder) = text.split_at(split_ix);
+                    text = remainder;
+                    return Some(BufferText::Text {
+                        char_count: chunk.chars().count() as u8,
+                        fragment: ArrayString::from(chunk).unwrap(),
+                    });
+                }
+
+                if append_newline {
+                    append_newline = false;
+                    return Some(BufferText::Newline);
+                }
+
+                text = lines.next()?;
+                append_newline = lines.peek().is_some() || trailing_newline;
+            }
+        }));
     }
 }
 
