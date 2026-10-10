@@ -28,9 +28,11 @@ use crate::editor::{
     EditorOptions, EditorView, Event as EditorEvent, InteractionState,
     PropagateAndNoOpNavigationKeys, TextOptions,
 };
+use crate::server::team_scope::RequestTeamScope;
 use crate::ui_components::icons::Icon;
 use crate::util::git::{FileChangeEntry, PrInfo, get_file_change_entries};
 use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// Commit-specific sub-actions, dispatched wrapped in `GitDialogAction::Commit`.
 #[derive(Clone, Debug, PartialEq)]
@@ -292,8 +294,10 @@ pub(super) fn maybe_start_commit_message_autogen(me: &GitDialog, ctx: &mut ViewC
         _ => return,
     };
     let branch_name = me.branch_name().to_string();
+    let team_scope =
+        RequestTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
     me.diff_state_model().update(ctx, |m, ctx| {
-        m.generate_commit_message(include_unstaged, branch_name, ctx);
+        m.generate_commit_message(include_unstaged, branch_name, team_scope, ctx);
     });
 }
 
@@ -385,6 +389,8 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
         editor.set_interaction_state(InteractionState::Disabled, ctx);
     });
 
+    let team_scope =
+        RequestTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
     me.diff_state_model().update(ctx, |m, ctx| {
         m.git_commit_chain(
             intent,
@@ -392,6 +398,7 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
             include_unstaged,
             branch_name,
             autogenerate_pr_content,
+            team_scope,
             ctx,
         );
     });

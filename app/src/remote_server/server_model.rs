@@ -94,6 +94,7 @@ use crate::auth::auth_state::{AuthState, AuthStateProvider};
 use crate::code_review::git_actions;
 use crate::features::FeatureFlag;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::model::session::command_executor::{
     ExecuteCommandOptions, LocalCommandExecutor,
 };
@@ -3188,6 +3189,8 @@ impl ServerModel {
                     );
                 }
 
+                // The daemon is headless -- it has no window to resolve a team scope from,
+                // so this honestly sends no team header rather than guessing one.
                 git_actions::run_commit_chain(
                     &repo_path,
                     chain_mode,
@@ -3195,6 +3198,7 @@ impl ServerModel {
                     include_unstaged,
                     &branch,
                     ai_client.as_deref(),
+                    RequestTeamScope::none_for_headless_context(),
                     path_env,
                 )
                 .await
@@ -3328,8 +3332,16 @@ impl ServerModel {
                         "another git operation is in progress (merge, rebase, cherry-pick, or a lock file is present)"
                     );
                 }
-                git_actions::create_pr(&repo_path, &branch, ai_client.as_deref(), path_env.as_deref())
-                    .await
+                // The daemon is headless -- it has no window to resolve a team scope from,
+                // so this honestly sends no team header rather than guessing one.
+                git_actions::create_pr(
+                    &repo_path,
+                    &branch,
+                    ai_client.as_deref(),
+                    RequestTeamScope::none_for_headless_context(),
+                    path_env.as_deref(),
+                )
+                .await
             },
             move |me, result, _ctx| {
                 let message = match result {
@@ -3431,11 +3443,14 @@ impl ServerModel {
         let handle = self.spawn_request_handler(
             request_id.clone(),
             async move {
+                // The daemon is headless -- it has no window to resolve a team scope from,
+                // so this honestly sends no team header rather than guessing one.
                 git_actions::generate_commit_message(
                     &repo_path,
                     &branch_name,
                     include_unstaged,
                     ai_client.as_ref(),
+                    RequestTeamScope::none_for_headless_context(),
                 )
                 .await
             },
