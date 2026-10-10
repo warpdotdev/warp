@@ -119,6 +119,7 @@ use crate::session_management::SessionNavigationData;
 use crate::settings::{AISettings, DefaultSessionMode, PaneSettings};
 use crate::settings_view::SettingsSection;
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
+use crate::settings_view::pane_manager::SettingsPaneManager;
 use crate::shell_indicator::ShellIndicatorType;
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
 #[cfg(not(target_family = "wasm"))]
@@ -5613,6 +5614,16 @@ impl PaneGroup {
         true
     }
 
+    pub(crate) fn discard_duplicate_settings_pane(
+        &mut self,
+        pane_id: PaneId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.focus_next_terminal_pane_and_activate_session(pane_id, PaneRemovalReason::Close, ctx);
+        self.cleanup_closed_pane(pane_id, ctx);
+        self.handle_pane_count_change(ctx);
+    }
+
     /// Restore a pane that was closed by showing it, attaching it, and focusing it.
     /// Returns true if the pane was successfully restored, false otherwise.
     pub fn restore_closed_pane(&mut self, pane_id: PaneId, ctx: &mut ViewContext<Self>) -> bool {
@@ -7828,6 +7839,9 @@ impl PaneGroup {
             let Some(pane) = self.pane_contents.get(&pane_id) else {
                 continue;
             };
+            if pane.as_any().is::<SettingsPane>() && self.is_pane_hidden_for_close(pane_id) {
+                continue;
+            }
             self.attach_pane(pane.as_ref(), ctx);
             self.restore_missing_child_agent_panes_for_terminal_pane_if_needed(pane_id, ctx);
         }
@@ -8287,21 +8301,20 @@ impl View for PaneGroup {
     }
 
     fn child_view_ids(&self, _app: &AppContext) -> Vec<EntityId> {
-        // Modals and banners owned directly by the pane group are only
-        // rendered while open, so they're usually absent from the render-time
-        // parent graph. Report them explicitly so they move with the pane
-        // group when it is transferred to another window; otherwise a later
-        // render of one of these handles in the new window would look the
-        // view up in a window that no longer holds it and panic with a
-        // "circular view reference". The per-pane views (and their backing
-        // terminal/editor views) are reached via the structural parent graph
-        // and `PaneView::child_view_ids`.
-        vec![
+        // Closed modals and hidden Settings wrappers can be absent from the render-time parent
+        // graph. Settings wrappers also lack a structural parent, so explicit ownership prevents
+        // them and their backing views from being stranded when this group moves to another window.
+        let mut children = vec![
             self.share_block_modal.id(),
             self.share_session_modal.id(),
             self.shared_session_role_change_modal.id(),
             self.user_default_shell_changed_banner.id(),
-        ]
+        ];
+        children.extend(
+            self.panes_of::<SettingsPane>()
+                .map(SettingsPane::pane_view_id),
+        );
+        children
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
@@ -8416,9 +8429,46 @@ impl View for PaneGroup {
 
     fn on_window_transferred(
         &mut self,
-        _old_window_id: WindowId,
-        _new_window_id: WindowId,
-        _ctx: &mut ViewContext<Self>,
+        old_window_id: WindowId,
+        new_window_id: WindowId,
+        ctx: &mut ViewContext<Self>,
     ) {
+        let settings = self
+            .panes_of::<SettingsPane>()
+            .map(|pane| (pane.id(), pane.settings_view(ctx)))
+            .collect_vec();
+        for (pane_id, view) in settings {
+            let locator = PaneViewLocator {
+                pane_group_id: ctx.view_id(),
+                pane_id,
+            };
+            let hidden = self.is_pane_hidden_for_close(pane_id);
+            let manager = SettingsPaneManager::handle(ctx);
+            let retain_live_source = hidden
+                && manager
+                    .as_ref(ctx)
+                    .find_pane(old_window_id)
+                    .is_some_and(|live| live.pane_group_id != locator.pane_group_id)
+                && manager.as_ref(ctx).settings_view(old_window_id) == view;
+            manager.update(ctx, |manager, ctx| {
+                manager.release_transferred_view(
+                    old_window_id,
+                    locator,
+                    view,
+                    retain_live_source,
+                    ctx,
+                );
+            });
+            if retain_live_source {
+                self.cleanup_closed_pane(pane_id, ctx);
+                UndoCloseStack::handle(ctx)
+                    .update(ctx, |stack, _| stack.forget_closed_pane(locator));
+            } else if !hidden {
+                let pane = self.downcast_pane_by_id::<SettingsPane>(pane_id).unwrap();
+                manager.update(ctx, |manager, ctx| {
+                    manager.register_pane(pane, locator.pane_group_id, new_window_id, ctx);
+                });
+            }
+        }
     }
 }
