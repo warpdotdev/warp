@@ -12,15 +12,16 @@ use warpui_core::elements::ListIndentLevel;
 use warpui_core::fonts::FamilyId;
 use warpui_core::geometry::rect::RectF;
 use warpui_core::geometry::vector::vec2f;
-use warpui_core::text_layout::TextFrame;
+use warpui_core::text_layout::{Line, TextFrame};
 use warpui_core::units::{IntoPixels, Pixels};
 
 use super::debug::Describe;
 use super::test_utils::{layout_paragraph, layout_paragraphs};
 use super::{
     BlockItem, BlockLocation, COMMAND_SPACING, CellLayout, DEFAULT_BLOCK_SPACINGS,
-    HiddenBlockConfig, ImageBlockConfig, LaidOutTable, ParagraphBlock, RenderState,
-    TableBlockConfig, TableStyle, table_offset_map,
+    HiddenBlockConfig, ImageBlockConfig, LaidOutTable, OffsetMap, PARAGRAPH_MIN_HEIGHT, Paragraph,
+    ParagraphBlock, RenderLineLocation, RenderState, TableBlockConfig, TableStyle, WidthSetting,
+    table_offset_map,
 };
 use crate::content::edit::ParsedUrl;
 use crate::content::text::{
@@ -69,6 +70,7 @@ fn test_height() {
             height: 48. + 24. + 24. + 32.,
             width: (17.).into_pixels(),
             lines: LineCount(4),
+            logical_lines: LineCount(4),
             item_count: 4,
         }
     );
@@ -144,6 +146,7 @@ fn test_width() {
             height: 24.,
             width: (26.).into_pixels(),
             lines: LineCount(1),
+            logical_lines: LineCount(1),
             item_count: 1,
         }
     );
@@ -2123,4 +2126,198 @@ mod char_cell_scroll {
         state.clamp_scroll_offset(CharOffset::from(6), 1, &[]);
         assert_eq!(state.scroll_offset(), 0);
     }
+}
+
+/// A paragraph whose frame has `rows` laid-out lines, i.e. one source line that soft-wrapped onto
+/// `rows` visual rows. Built directly so the test doesn't depend on font metrics.
+fn soft_wrapped_paragraph(rows: usize, content_length: usize) -> Paragraph {
+    const ROW_HEIGHT: f32 = 20.;
+    let line = Line {
+        width: 100.,
+        trailing_whitespace_width: 0.,
+        runs: Vec::new(),
+        font_size: ROW_HEIGHT,
+        line_height_ratio: 1.,
+        baseline_ratio: 0.7,
+        ascent: ROW_HEIGHT * 0.7,
+        descent: ROW_HEIGHT * 0.3,
+        clip_config: None,
+        caret_positions: Vec::new(),
+        chars_with_missing_glyphs: Vec::new(),
+    };
+    let lines = Vec1::try_from_vec(vec![line; rows]).expect("rows must be non-zero");
+    Paragraph::new(
+        Arc::new(TextFrame::new(lines, 100., Default::default())),
+        OffsetMap::direct(content_length),
+        content_length.into(),
+        vec![],
+        TEXT_SPACING,
+        Some(PARAGRAPH_MIN_HEIGHT),
+    )
+}
+
+/// Source lines and their visual rows in [`soft_wrapped_render_state`]:
+///
+/// | logical | block (char offset)         | visual rows |
+/// |---------|-----------------------------|-------------|
+/// | 0       | paragraph (0)               | 0           |
+/// | 1       | paragraph, wraps x3 (10)    | 1..4        |
+/// | 2..5    | hidden section (70)         | 4..7        |
+/// | 5..8    | text block (100): 1, x2, 1  | 7..11       |
+/// | 8       | paragraph (130)             | 11          |
+fn soft_wrapped_render_state() -> RenderState {
+    let mut render_state = RenderState::new_for_test(
+        TEST_STYLES.clone(),
+        100.0.into_pixels(),
+        400.0.into_pixels(),
+    );
+    let mut content = SumTree::new();
+    content.push(BlockItem::Paragraph(soft_wrapped_paragraph(1, 10)));
+    content.push(BlockItem::Paragraph(soft_wrapped_paragraph(3, 60)));
+    content.push(BlockItem::Hidden(HiddenBlockConfig::new(
+        LineCount(3),
+        CharOffset::from(30),
+        BlockLocation::Middle,
+    )));
+    content.push(BlockItem::TextBlock {
+        paragraph_block: ParagraphBlock::new(vec1![
+            soft_wrapped_paragraph(1, 10),
+            soft_wrapped_paragraph(2, 10),
+            soft_wrapped_paragraph(1, 10),
+        ]),
+    });
+    content.push(BlockItem::Paragraph(soft_wrapped_paragraph(1, 10)));
+    render_state.set_content(content);
+    render_state
+}
+
+#[test]
+fn test_logical_lines_match_visual_rows_without_wrapping() {
+    let mut render_state = RenderState::new_for_test(
+        TEST_STYLES.clone(),
+        200.0.into_pixels(),
+        160.0.into_pixels(),
+    );
+    let mut content = SumTree::new();
+    content.push(mock_paragraph(18.2, 0., 10));
+    content.push(BlockItem::Hidden(HiddenBlockConfig::new(
+        LineCount(4),
+        CharOffset::from(40),
+        BlockLocation::Middle,
+    )));
+    content.push(BlockItem::TextBlock {
+        paragraph_block: ParagraphBlock::new(vec1![
+            soft_wrapped_paragraph(1, 5),
+            soft_wrapped_paragraph(1, 5),
+        ]),
+    });
+    render_state.set_content(content);
+
+    let content = render_state.content();
+    let mut cursor = content.0.cursor::<(), LayoutSummary>();
+    cursor.descend_to_first_item(&*content.0, |_| true);
+    while let Some(item) = cursor.item() {
+        assert_eq!(item.logical_lines(), item.lines(), "{item:?}");
+        cursor.next();
+    }
+    assert_eq!(content.0.summary().logical_lines, content.0.summary().lines);
+}
+
+#[test]
+fn test_block_line_ranges_are_logical_when_soft_wrapped() {
+    let render_state = soft_wrapped_render_state();
+    let content = render_state.content();
+
+    // Includes the trailing-newline item `set_content` appends after logical line 8.
+    let summary = content.0.summary();
+    assert_eq!(summary.logical_lines, LineCount(10));
+    assert_eq!(
+        summary.lines,
+        LineCount(13),
+        "fixture should actually soft-wrap"
+    );
+
+    for (offset, expected) in [(0, 0..1), (10, 1..2), (70, 2..5), (100, 5..8), (130, 8..9)] {
+        assert_eq!(
+            render_state.line_range_at_offset(CharOffset::from(offset)),
+            Some(LineCount(expected.start)..LineCount(expected.end)),
+            "block at offset {offset}"
+        );
+    }
+}
+
+#[test]
+fn test_hidden_section_range_is_logical_when_soft_wrapped() {
+    let render_state = soft_wrapped_render_state();
+
+    // Visually the section starts at row 4, but its hidden *source* lines are 2..5. Expanding by
+    // the visual range would reveal the wrong lines.
+    assert_eq!(
+        render_state.content().first_hidden_section_line_range(),
+        Some(LineCount(2)..LineCount(5))
+    );
+}
+
+#[test]
+fn test_line_y_offsets_are_logical_when_soft_wrapped() {
+    let render_state = soft_wrapped_render_state();
+    let content = render_state.content();
+
+    for (line, block_offset) in [(0, 0), (1, 10), (2, 70), (5, 100), (8, 130)] {
+        let block_top = content
+            .block_at_offset(CharOffset::from(block_offset))
+            .expect("block exists")
+            .start_y_offset;
+        assert_eq!(
+            content.y_offset_at_line(LineCount(line)),
+            block_top,
+            "line {line} should start at its block's top"
+        );
+        assert_eq!(
+            render_state
+                .vertical_offset_at_render_location(RenderLineLocation::Current(LineCount(line))),
+            Some(block_top - render_state.viewport().scroll_top()),
+            "render location for line {line}"
+        );
+    }
+}
+
+#[test]
+fn test_visual_row_at_logical_line_when_soft_wrapped() {
+    let render_state = soft_wrapped_render_state();
+
+    for (line, row) in [
+        (0, 0),
+        (1, 1),
+        (2, 4),
+        (3, 5),
+        (4, 6),
+        (5, 7),
+        (6, 8),
+        (7, 10),
+        (8, 11),
+    ] {
+        assert_eq!(
+            render_state.visual_row_at_logical_line(LineCount(line)),
+            row,
+            "logical line {line}"
+        );
+    }
+}
+
+#[test]
+fn test_set_width_setting_reports_changes() {
+    let mut render_state = RenderState::new_for_test(
+        TEST_STYLES.clone(),
+        200.0.into_pixels(),
+        160.0.into_pixels(),
+    )
+    .with_width_setting(WidthSetting::InfiniteWidth);
+
+    assert!(!render_state.set_width_setting(WidthSetting::InfiniteWidth));
+    assert!(render_state.set_width_setting(WidthSetting::FitViewport));
+    assert_eq!(render_state.width_setting(), WidthSetting::FitViewport);
+    assert!(!render_state.set_width_setting(WidthSetting::FitViewport));
+    assert!(render_state.set_width_setting(WidthSetting::InfiniteWidth));
+    assert!(render_state.container_scrolls_horizontally());
 }

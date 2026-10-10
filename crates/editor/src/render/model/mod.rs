@@ -175,7 +175,7 @@ const DASHED_UNDERLINE_GAP_LENGTH: f32 = 4.;
 
 /// In the future, we should also support MinimumWidth(f32) setting so the content will
 /// be laid out with a minimum width that could be larger than the viewport.
-#[derive(Default)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum WidthSetting {
     #[default]
     FitViewport,
@@ -339,24 +339,30 @@ impl<'a> RenderContentTreeRef<'a> {
         }
     }
 
-    /// The full line range of the first collapsed hidden section, or `None` if
-    /// there are none. Resolves the range the same way a hidden-section bar
-    /// does — the `Hidden` block's `start_line` plus its hidden line count —
-    /// so tests can fully expand the first section the bar would.
+    /// The logical (source) line range covered by the block starting at `offset`, independent of
+    /// soft wrap. `None` if no block starts exactly at `offset` (see [`Self::block_at_offset`]).
+    pub fn logical_line_range_at_offset(&self, offset: CharOffset) -> Option<Range<LineCount>> {
+        let mut cursor = self.0.cursor::<CharOffset, LayoutSummary>();
+        if !cursor.seek(&offset, SeekBias::Right) {
+            return None;
+        }
+        let item = cursor.item()?;
+        let start = cursor.start().logical_lines;
+        Some(start..start + item.logical_lines())
+    }
+
+    /// The full line range of the first collapsed hidden section, or `None` if there are none.
+    /// Resolves the range the same way a hidden-section bar does — the `Hidden` block's logical
+    /// start line plus its hidden line count — so tests can fully expand the first section the bar
+    /// would.
     pub fn first_hidden_section_line_range(&self) -> Option<Range<LineCount>> {
         let mut cursor = self.0.cursor::<CharOffset, LayoutSummary>();
         cursor.descend_to_first_item(&self.0, |_| true);
         loop {
-            let range = {
-                let positioned = cursor.positioned_item()?;
-                if matches!(positioned.item, BlockItem::Hidden(_)) {
-                    Some(positioned.start_line..positioned.start_line + positioned.item.lines())
-                } else {
-                    None
-                }
-            };
-            if let Some(range) = range {
-                return Some(range);
+            let item = cursor.item()?;
+            if matches!(item, BlockItem::Hidden(_)) {
+                let start = cursor.start().logical_lines;
+                return Some(start..start + item.logical_lines());
             }
             cursor.next();
         }
@@ -397,16 +403,18 @@ impl<'a> RenderContentTreeRef<'a> {
         ranges
     }
 
-    /// Returns the cumulative Y offset (in content-space pixels) at the given line.
+    /// Returns the cumulative Y offset (in content-space pixels) at the start of the given logical
+    /// (source) line, so a line that soft-wraps onto several rows spans the full height of all of
+    /// them.
     ///
     /// When `line >= total_lines`, returns the total content height.
     pub fn y_offset_at_line(&self, line: LineCount) -> Pixels {
         let summary = self.0.summary();
-        if line >= summary.lines {
+        if line >= summary.logical_lines {
             return (summary.height as f32).into_pixels();
         }
-        let mut cursor = self.0.cursor::<LineCount, LayoutSummary>();
-        cursor.seek_clamped(&line, SeekBias::Right);
+        let mut cursor = self.0.cursor::<LogicalLine, LayoutSummary>();
+        cursor.seek_clamped(&LogicalLine(line), SeekBias::Right);
         (cursor.start().height as f32).into_pixels()
     }
 }
@@ -1318,7 +1326,11 @@ pub struct LayoutSummary {
     content_length: CharOffset,
     height: f64,
     width: Pixels,
+    /// Laid-out (visual) rows. A source line that soft-wraps contributes one row per wrapped
+    /// segment. This is the coordinate space of [`SoftWrapPoint`].
     lines: LineCount,
+    /// Source (logical) lines, independent of soft wrap. See [`LogicalLine`].
+    logical_lines: LineCount,
     item_count: usize,
 }
 
@@ -1342,6 +1354,16 @@ impl LineCount {
         self.0 as u32
     }
 }
+
+/// Sum-tree dimension that counts source (logical) lines: one per buffer line, however many visual
+/// rows soft wrap lays it out on.
+///
+/// The plain [`LineCount`] dimension counts *visual* rows and is the right space for cursor
+/// geometry ([`SoftWrapPoint`]). Anything addressed by a buffer line number — gutter numbers, diff
+/// hunks, removed-line blocks, hidden sections, comment anchors — must seek by this dimension
+/// instead. The two coincide whenever nothing wraps (e.g. under [`WidthSetting::InfiniteWidth`]).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LogicalLine(pub LineCount);
 
 /// The unit used for the horizontal column component of a [`SoftWrapPoint`].
 ///
@@ -2686,6 +2708,28 @@ impl RenderState {
         self
     }
 
+    pub fn width_setting(&self) -> WidthSetting {
+        self.width_setting
+    }
+
+    /// Changes the width setting at runtime. Returns whether it changed.
+    ///
+    /// This only records the setting: the render state doesn't own the content it lays out, so on
+    /// `true` the caller must relayout the content for the new width to take effect.
+    pub fn set_width_setting(&mut self, setting: WidthSetting) -> bool {
+        if self.width_setting == setting {
+            return false;
+        }
+        self.width_setting = setting;
+        if setting == WidthSetting::FitViewport {
+            // Fitted content never overflows, so a leftover horizontal offset would hide the start
+            // of every line with no scrollbar to recover.
+            self.viewport
+                .scroll_horizontally_to(Pixels::zero(), self.width());
+        }
+        true
+    }
+
     /// Whether the surrounding container for this render state already provides horizontal
     /// scrolling over its full content area. Blocks that would otherwise introduce a nested
     /// horizontal scroll (for example, wide Markdown tables) should render at full intrinsic
@@ -2788,25 +2832,26 @@ impl RenderState {
         location: RenderLineLocation,
     ) -> Option<Pixels> {
         let content = self.content.borrow();
-        let mut cursor = content.cursor::<LineCount, LayoutSummary>();
+        let mut cursor = content.cursor::<LogicalLine, LayoutSummary>();
 
         Self::move_cursor_to_location(&mut cursor, location);
 
         Some(cursor.positioned_item()?.start_y_offset - self.viewport().scroll_top())
     }
 
+    /// Seeks to the block at `location`. Render locations are addressed by logical (source) line,
+    /// so this seeks the [`LogicalLine`] dimension and stays correct when lines soft-wrap.
     fn move_cursor_to_location<'a>(
-        cursor: &mut sum_tree::Cursor<'a, BlockItem, LineCount, LayoutSummary>,
+        cursor: &mut sum_tree::Cursor<'a, BlockItem, LogicalLine, LayoutSummary>,
         location: RenderLineLocation,
     ) {
+        let line = LogicalLine(location.line_count());
         match location {
-            RenderLineLocation::Current(_) => {
-                cursor.seek_clamped(&location.line_count(), SeekBias::Right)
-            }
+            RenderLineLocation::Current(_) => cursor.seek_clamped(&line, SeekBias::Right),
             RenderLineLocation::Temporary {
                 index_from_at_line, ..
             } => {
-                cursor.seek_clamped(&location.line_count(), SeekBias::Left);
+                cursor.seek_clamped(&line, SeekBias::Left);
                 if location.line_count() > LineCount(0) {
                     cursor.next();
                 }
@@ -2825,7 +2870,7 @@ impl RenderState {
         max_width: Pixels,
     ) -> Vec<(ViewportItem, BlockItem)> {
         let content = self.content.borrow();
-        let mut cursor = content.cursor::<LineCount, LayoutSummary>();
+        let mut cursor = content.cursor::<LogicalLine, LayoutSummary>();
         Self::move_cursor_to_location(&mut cursor, line_range.start);
 
         let mut blocks = Vec::new();
@@ -2843,13 +2888,15 @@ impl RenderState {
             let Some(item) = cursor.positioned_item() else {
                 break;
             };
-            if item.start_line != previous_line {
+            let start_line = cursor.start().logical_lines;
+            let end_line = start_line + item.item.logical_lines();
+            if start_line != previous_line {
                 index_within_line = 0;
             } else {
                 index_within_line += 1;
             }
 
-            previous_line = item.start_line;
+            previous_line = start_line;
 
             let spacing = item.item.spacing();
             let content_width = max_width - spacing.x_axis_offset();
@@ -2866,8 +2913,8 @@ impl RenderState {
             // we can break out of the loop. For temporary line ranges, we should check if 1) the current item hasn't past the at line
             // temporary block is anchored to 2) we haven't exceeded the index.
             match line_range.end {
-                RenderLineLocation::Current(end_line) => {
-                    if item.end_line() >= end_line {
+                RenderLineLocation::Current(range_end) => {
+                    if end_line >= range_end {
                         break;
                     }
                 }
@@ -2875,8 +2922,7 @@ impl RenderState {
                     index_from_at_line: index,
                     at_line,
                 } => {
-                    if item.start_line > at_line
-                        || (item.start_line == at_line && index_within_line >= index)
+                    if start_line > at_line || (start_line == at_line && index_within_line >= index)
                     {
                         break;
                     }
@@ -3508,7 +3554,9 @@ impl RenderState {
         let mut new_tree = SumTree::new();
         {
             let content = self.content.borrow();
-            let mut cursor = content.cursor::<LineCount, CharOffset>();
+            // Temporary blocks are keyed by the source line they're inserted before, so walk
+            // logical lines rather than (possibly wrapped) rows.
+            let mut cursor = content.cursor::<LogicalLine, CharOffset>();
 
             if let Some(items) = blocks.remove(&LineCount::zero()) {
                 for item in items {
@@ -3522,7 +3570,7 @@ impl RenderState {
                     new_tree.push(item.clone());
                 }
 
-                if let Some(items) = blocks.remove(&cursor.end_seek_position()) {
+                if let Some(items) = blocks.remove(&cursor.end_seek_position().0) {
                     for item in items {
                         new_tree.push(item);
                     }
@@ -4030,15 +4078,62 @@ impl RenderState {
     /// Line numbers are 1-indexed (LineCount).
     /// Returns the start offset of the line and the end offset (exclusive).
     pub fn line_number_to_offset_range(&self, line_number: LineCount) -> (CharOffset, CharOffset) {
-        // Convert LineCount (1-indexed) to SoftWrapPoint row (0-indexed)
-        let line_row = line_number.as_u32().saturating_sub(1);
+        // Convert LineCount (1-indexed) to a 0-indexed logical line.
+        let line = LineCount(line_number.as_usize().saturating_sub(1));
 
+        let start_row = self.visual_row_at_logical_line(line);
+        let end_row = self.visual_row_at_logical_line(line + LineCount(1));
         let start_offset =
-            self.softwrap_point_to_offset(SoftWrapPoint::new(line_row, ColumnUnit::pixels_zero()));
-        let end_offset = self
-            .softwrap_point_to_offset(SoftWrapPoint::new(line_row + 1, ColumnUnit::pixels_zero()));
+            self.softwrap_point_to_offset(SoftWrapPoint::new(start_row, ColumnUnit::pixels_zero()));
+        let end_offset =
+            self.softwrap_point_to_offset(SoftWrapPoint::new(end_row, ColumnUnit::pixels_zero()));
 
         (start_offset, end_offset)
+    }
+
+    /// The first visual ([`SoftWrapPoint`]) row of the 0-indexed logical line `line`. Equal to
+    /// `line` when nothing soft-wraps; otherwise accounts for every wrapped row above it.
+    fn visual_row_at_logical_line(&self, line: LineCount) -> u32 {
+        // The char-cell (TUI) path has its own wrap tables and is unaffected by the GUI width
+        // setting; preserve its existing row mapping.
+        if matches!(self.layout_mode, LayoutMode::CharCell(_)) {
+            return line.as_u32();
+        }
+
+        let content = self.content.borrow();
+        let mut cursor = content.cursor::<LogicalLine, LayoutSummary>();
+        cursor.seek_clamped(&LogicalLine(line), SeekBias::Right);
+        let Some(item) = cursor.item() else {
+            return content.summary().lines.as_u32();
+        };
+        let block_start = cursor.start();
+        let lines_into_block = line.saturating_sub(&block_start.logical_lines).as_usize();
+        let rows_into_block = match item {
+            BlockItem::TextBlock { paragraph_block }
+            | BlockItem::RunnableCodeBlock {
+                paragraph_block, ..
+            } => paragraph_block
+                .paragraphs()
+                .iter()
+                .take(lines_into_block)
+                .fold(LineCount(0), |rows, paragraph| rows + paragraph.lines()),
+            // A single logical line always starts at the item's first row.
+            BlockItem::Paragraph(_)
+            | BlockItem::Header { .. }
+            | BlockItem::UnorderedList { .. }
+            | BlockItem::OrderedList { .. }
+            | BlockItem::TaskList { .. } => LineCount(0),
+            // These items never soft-wrap: each logical line is exactly one row.
+            BlockItem::TemporaryBlock { .. }
+            | BlockItem::MermaidDiagram { .. }
+            | BlockItem::TrailingNewLine(_)
+            | BlockItem::Embedded(_)
+            | BlockItem::HorizontalRule(_)
+            | BlockItem::Image { .. }
+            | BlockItem::Table(_)
+            | BlockItem::Hidden(_) => LineCount(lines_into_block),
+        };
+        (block_start.lines + rows_into_block).as_u32()
     }
 
     /// The bounding box of the character at `offset`.
@@ -4181,11 +4276,10 @@ impl RenderState {
             .set_scroll_top(cursor.start().into_pixels() + adjustment.into_pixels());
     }
 
-    /// Line number of the first line in the block.
+    /// Logical (source) line number of the first line in the block, 0-indexed. Independent of soft
+    /// wrap: a line wrapped onto several rows still counts once.
     pub fn start_line_index(&self, block: &dyn RenderableBlock) -> Option<LineCount> {
-        let content = self.content();
-        let offset = block.viewport_item().block_offset();
-        Some(content.block_at_offset(offset)?.start_line)
+        Some(self.line_range(block)?.start)
     }
 
     /// The line height of the first line. Different from `first_line_bounds`, this does not
@@ -4208,20 +4302,16 @@ impl RenderState {
         Some(ctx.content_rect_to_screen(block.first_line_bounds()?))
     }
 
+    /// Logical (source) line range covered by the block. See [`Self::start_line_index`].
     pub fn line_range(&self, block: &dyn RenderableBlock) -> Option<Range<LineCount>> {
-        let start = self.start_line_index(block)?;
-        let content = self.content();
-        let offset = block.viewport_item().block_offset();
-        Some(start..start + content.block_at_offset(offset)?.item.lines())
+        self.line_range_at_offset(block.viewport_item().block_offset())
     }
 
     /// The full line range of the block starting at `offset`, resolved without a
     /// `RenderableBlock`. Used to compute a hidden section's complete range for
     /// double-click full expansion.
     pub fn line_range_at_offset(&self, offset: CharOffset) -> Option<Range<LineCount>> {
-        let content = self.content();
-        let block = content.block_at_offset(offset)?;
-        Some(block.start_line..block.start_line + block.item.lines())
+        self.content().logical_line_range_at_offset(offset)
     }
 }
 
@@ -4418,6 +4508,7 @@ impl AddAssign<&LayoutSummary> for LayoutSummary {
         self.content_length += rhs.content_length;
         self.width = self.width.max(rhs.width);
         self.lines += rhs.lines;
+        self.logical_lines += rhs.logical_lines;
         self.item_count += rhs.item_count;
     }
 }
@@ -4598,6 +4689,35 @@ impl BlockItem {
             | BlockItem::Image { .. } => LineCount(1),
             BlockItem::Table(laid_out_table) => laid_out_table.lines(),
             BlockItem::Hidden(config) => config.line_count(),
+        }
+    }
+
+    /// The number of source lines this item covers, independent of soft wrap.
+    ///
+    /// Layout emits exactly one [`Paragraph`] per source line, so text items count paragraphs where
+    /// [`Self::lines`] counts their wrapped frame rows. Every other variant already counts source
+    /// lines in [`Self::lines`] (tables count rows, hidden sections their hidden lines, and
+    /// temporary blocks occupy no line of the buffer). When nothing wraps, this equals
+    /// [`Self::lines`].
+    pub fn logical_lines(&self) -> LineCount {
+        match self {
+            BlockItem::Paragraph(_)
+            | BlockItem::Header { .. }
+            | BlockItem::UnorderedList { .. }
+            | BlockItem::OrderedList { .. }
+            | BlockItem::TaskList { .. } => LineCount(1),
+            BlockItem::TextBlock { paragraph_block }
+            | BlockItem::RunnableCodeBlock {
+                paragraph_block, ..
+            } => LineCount(paragraph_block.paragraphs().len()),
+            BlockItem::TemporaryBlock { .. }
+            | BlockItem::MermaidDiagram { .. }
+            | BlockItem::TrailingNewLine(_)
+            | BlockItem::Embedded(_)
+            | BlockItem::HorizontalRule(_)
+            | BlockItem::Image { .. }
+            | BlockItem::Table(_)
+            | BlockItem::Hidden(_) => self.lines(),
         }
     }
 
@@ -4907,6 +5027,7 @@ impl sum_tree::Item for BlockItem {
             height: self.height().as_f32() as f64,
             width: self.width(),
             lines: self.lines(),
+            logical_lines: self.logical_lines(),
             item_count: 1,
         }
     }
@@ -5484,6 +5605,12 @@ impl<'a> sum_tree::Dimension<'a, LayoutSummary> for LayoutSummary {
 impl<'a> sum_tree::Dimension<'a, LayoutSummary> for LineCount {
     fn add_summary(&mut self, summary: &'a LayoutSummary) {
         *self += summary.lines;
+    }
+}
+
+impl<'a> sum_tree::Dimension<'a, LayoutSummary> for LogicalLine {
+    fn add_summary(&mut self, summary: &'a LayoutSummary) {
+        self.0 += summary.logical_lines;
     }
 }
 

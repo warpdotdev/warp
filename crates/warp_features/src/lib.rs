@@ -509,6 +509,10 @@ pub enum FeatureFlag {
     /// Enables rendering markdown tables in notebooks.
     MarkdownTables,
 
+    /// Gates the "Word wrap long lines" setting for the code editor and code
+    /// review diff view.
+    CodeEditorSoftWrap,
+
     /// Renders `.ipynb` (Jupyter) files as a formatted, read-only notebook in
     /// Warp's notebook viewer instead of showing the raw JSON in the code editor.
     JupyterNotebookRendering,
@@ -1025,6 +1029,7 @@ pub const LOCAL_FLAGS: &[FeatureFlag] = &[
 /// Features enabled for the development team.  The expectation is that, over
 /// time, these will move on to PREVIEW_FLAGS before being launched.
 pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
+    FeatureFlag::CodeEditorSoftWrap,
     FeatureFlag::LogExpensiveFramesInSentry,
     FeatureFlag::ToggleBootstrapBlock,
     FeatureFlag::CreatingSharedSessions,

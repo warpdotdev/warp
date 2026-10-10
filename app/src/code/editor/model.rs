@@ -6,6 +6,7 @@ use std::ops::Range;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{cmp, mem};
 
 use ai::diff_validation::DiffDelta;
@@ -28,6 +29,7 @@ use vim::{
     vim_inner_block, vim_inner_line, vim_inner_paragraph, vim_inner_quote, vim_inner_word,
     vim_word_iterator_from_offset,
 };
+use warp_core::r#async::debounce;
 use warp_core::platform::SessionPlatform;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_core::ui::theme::Fill;
@@ -314,7 +316,12 @@ pub struct CodeEditorModel {
     lazy_layout_initialized: bool,
     /// Whether syntax parsing should be bootstrapped from the latest full buffer content.
     pending_syntax_tree_bootstrap: bool,
+    /// Debounced requests to re-wrap after the viewport width changes.
+    resize_tx: async_channel::Sender<()>,
 }
+
+/// Re-wrapping relays out the whole buffer, so coalesce bursts of width changes (e.g. a drag-resize).
+const SOFT_WRAP_RESIZE_DEBOUNCE: Duration = Duration::from_millis(5);
 
 impl CodeEditorModel {
     pub fn new(
@@ -451,6 +458,13 @@ impl CodeEditorModel {
             pending_comment: PendingComment::Closed,
         });
 
+        let (resize_tx, resize_rx) = async_channel::unbounded();
+        ctx.spawn_stream_local(
+            debounce(SOFT_WRAP_RESIZE_DEBOUNCE, resize_rx),
+            |me, _, ctx| me.rebuild_layout_and_refresh_diff(ctx),
+            |_, _| {},
+        );
+
         Self {
             render_state,
             diff,
@@ -471,6 +485,28 @@ impl CodeEditorModel {
             lazy_layout_enabled,
             lazy_layout_initialized,
             pending_syntax_tree_bootstrap: false,
+            resize_tx,
+        }
+    }
+
+    /// Whether long lines soft-wrap to the viewport width rather than extending past it.
+    pub fn soft_wrap(&self, ctx: &AppContext) -> bool {
+        self.render_state.as_ref(ctx).width_setting() == WidthSetting::FitViewport
+    }
+
+    /// Sets whether long lines soft-wrap. Wrapping is purely visual: the buffer is untouched.
+    pub fn set_soft_wrap(&mut self, enabled: bool, ctx: &mut ModelContext<Self>) {
+        let setting = if enabled {
+            WidthSetting::FitViewport
+        } else {
+            WidthSetting::InfiniteWidth
+        };
+        let changed = self.render_state.update(ctx, |render_state, _| {
+            render_state.set_width_setting(setting)
+        });
+        if changed {
+            self.rebuild_layout_and_refresh_diff(ctx);
+            ctx.notify();
         }
     }
 
@@ -599,7 +635,12 @@ impl CodeEditorModel {
             RenderEvent::LayoutUpdated => {
                 ctx.emit(CodeEditorModelEvent::LayoutInvalidated);
             }
-            RenderEvent::NeedsResize => {}
+            RenderEvent::NeedsResize => {
+                // Unwrapped layout doesn't depend on the viewport width.
+                if self.soft_wrap(ctx) {
+                    let _ = self.resize_tx.try_send(());
+                }
+            }
         }
     }
 

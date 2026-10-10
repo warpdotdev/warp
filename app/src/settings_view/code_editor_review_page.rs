@@ -23,6 +23,7 @@ use super::{
     flags,
 };
 use crate::appearance::Appearance;
+use crate::features::FeatureFlag;
 use crate::settings::{AppEditorSettings, CodeEditorLineNumberMode, CodeSettings};
 use crate::terminal::general_settings::GeneralSettings;
 use crate::view_components::{Dropdown, DropdownItem};
@@ -90,6 +91,9 @@ impl EditorAndCodeReviewPageView {
             Box::new(FormatOnSaveToggleWidget::default()),
             Box::new(AutoSaveToggleWidget::default()),
         ]);
+        if FeatureFlag::CodeEditorSoftWrap.is_enabled() {
+            widgets.push(Box::new(WordWrapToggleWidget::default()));
+        }
 
         PageType::new_uncategorized(widgets, Some(PageTitle::new(PAGE_TITLE)))
     }
@@ -155,6 +159,7 @@ pub enum EditorAndCodeReviewPageAction {
     ToggleShowHiddenFiles,
     ToggleFormatOnSave,
     ToggleAutoSave,
+    ToggleWordWrap,
     SetCodeEditorLineNumberMode(CodeEditorLineNumberMode),
 }
 
@@ -206,6 +211,12 @@ impl TypedActionView for EditorAndCodeReviewPageView {
             EditorAndCodeReviewPageAction::ToggleAutoSave => {
                 CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.auto_save.toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            EditorAndCodeReviewPageAction::ToggleWordWrap => {
+                CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.word_wrap.toggle_and_save_value(ctx));
                 });
                 ctx.notify();
             }
@@ -284,59 +295,67 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     context: &ContextPredicate,
     builder: fn(SettingsAction) -> T,
 ) {
-    ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
-        vec![
-            ToggleSettingActionPair::new(
-                "auto open code review panel",
-                builder(SettingsAction::EditorAndCodeReview(
-                    EditorAndCodeReviewPageAction::ToggleAutoOpenCodeReviewPane,
-                )),
-                context,
-                flags::AUTO_OPEN_CODE_REVIEW_PANE_FLAG,
-            ),
-            ToggleSettingActionPair::new(
-                "code review button",
-                builder(SettingsAction::EditorAndCodeReview(
-                    EditorAndCodeReviewPageAction::ToggleCodeReviewPanel,
-                )),
-                context,
-                flags::SHOW_CODE_REVIEW_BUTTON_FLAG,
-            ),
-            ToggleSettingActionPair::new(
-                "diff stats on code review button",
-                builder(SettingsAction::EditorAndCodeReview(
-                    EditorAndCodeReviewPageAction::ToggleShowCodeReviewDiffStats,
-                )),
-                context,
-                flags::SHOW_CODE_REVIEW_DIFF_STATS_FLAG,
-            ),
-            ToggleSettingActionPair::new(
-                "project explorer",
-                builder(SettingsAction::EditorAndCodeReview(
-                    EditorAndCodeReviewPageAction::ToggleProjectExplorer,
-                )),
-                context,
-                flags::SHOW_PROJECT_EXPLORER,
-            ),
-            ToggleSettingActionPair::new(
-                "global file search",
-                builder(SettingsAction::EditorAndCodeReview(
-                    EditorAndCodeReviewPageAction::ToggleGlobalSearch,
-                )),
-                context,
-                flags::SHOW_GLOBAL_SEARCH,
-            ),
-            ToggleSettingActionPair::new(
-                "show hidden files in project explorer",
-                builder(SettingsAction::EditorAndCodeReview(
-                    EditorAndCodeReviewPageAction::ToggleShowHiddenFiles,
-                )),
-                context,
-                flags::SHOW_HIDDEN_FILES,
-            ),
-        ],
-        app,
-    );
+    let mut action_pairs = vec![
+        ToggleSettingActionPair::new(
+            "auto open code review panel",
+            builder(SettingsAction::EditorAndCodeReview(
+                EditorAndCodeReviewPageAction::ToggleAutoOpenCodeReviewPane,
+            )),
+            context,
+            flags::AUTO_OPEN_CODE_REVIEW_PANE_FLAG,
+        ),
+        ToggleSettingActionPair::new(
+            "code review button",
+            builder(SettingsAction::EditorAndCodeReview(
+                EditorAndCodeReviewPageAction::ToggleCodeReviewPanel,
+            )),
+            context,
+            flags::SHOW_CODE_REVIEW_BUTTON_FLAG,
+        ),
+        ToggleSettingActionPair::new(
+            "diff stats on code review button",
+            builder(SettingsAction::EditorAndCodeReview(
+                EditorAndCodeReviewPageAction::ToggleShowCodeReviewDiffStats,
+            )),
+            context,
+            flags::SHOW_CODE_REVIEW_DIFF_STATS_FLAG,
+        ),
+        ToggleSettingActionPair::new(
+            "project explorer",
+            builder(SettingsAction::EditorAndCodeReview(
+                EditorAndCodeReviewPageAction::ToggleProjectExplorer,
+            )),
+            context,
+            flags::SHOW_PROJECT_EXPLORER,
+        ),
+        ToggleSettingActionPair::new(
+            "global file search",
+            builder(SettingsAction::EditorAndCodeReview(
+                EditorAndCodeReviewPageAction::ToggleGlobalSearch,
+            )),
+            context,
+            flags::SHOW_GLOBAL_SEARCH,
+        ),
+        ToggleSettingActionPair::new(
+            "show hidden files in project explorer",
+            builder(SettingsAction::EditorAndCodeReview(
+                EditorAndCodeReviewPageAction::ToggleShowHiddenFiles,
+            )),
+            context,
+            flags::SHOW_HIDDEN_FILES,
+        ),
+    ];
+    if FeatureFlag::CodeEditorSoftWrap.is_enabled() {
+        action_pairs.push(ToggleSettingActionPair::new(
+            "word wrap",
+            builder(SettingsAction::EditorAndCodeReview(
+                EditorAndCodeReviewPageAction::ToggleWordWrap,
+            )),
+            context,
+            flags::WORD_WRAP,
+        ));
+    }
+    ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(action_pairs, app);
 }
 
 #[cfg(feature = "local_fs")]
@@ -695,6 +714,49 @@ impl SettingsWidget for AutoSaveToggleWidget {
                 .finish(),
             Some(
                 "Automatically saves changes in the Warp text editor as you type and when the editor loses focus."
+                    .into(),
+            ),
+        )
+    }
+}
+
+#[derive(Default)]
+struct WordWrapToggleWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for WordWrapToggleWidget {
+    type View = EditorAndCodeReviewPageView;
+
+    fn search_terms(&self) -> &str {
+        "word wrap soft wrap line wrap long lines horizontal scroll editor diff code review"
+    }
+
+    fn render(
+        &self,
+        _view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let code_settings = CodeSettings::as_ref(app);
+
+        render_body_item::<EditorAndCodeReviewPageAction>(
+            "Word wrap long lines".into(),
+            None,
+            LocalOnlyIconState::Hidden,
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*code_settings.word_wrap)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(EditorAndCodeReviewPageAction::ToggleWordWrap);
+                })
+                .finish(),
+            Some(
+                "Wraps long lines to the pane width in the code editor and code review diffs instead of scrolling horizontally. Your files are never modified."
                     .into(),
             ),
         )
