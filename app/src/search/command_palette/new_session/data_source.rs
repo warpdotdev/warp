@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use fuzzy_match::{FuzzyMatchResult, match_indices_case_insensitive};
+use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
@@ -56,7 +57,12 @@ pub struct NewSessionDataSource {
 impl NewSessionDataSource {
     #[cfg(not(target_family = "wasm"))]
     pub fn new(binding_source: ModelHandle<BindingSource>, ctx: &mut ModelContext<Self>) -> Self {
-        if FeatureFlag::UseTantivySearch.is_enabled() {
+        if AppExecutionMode::as_ref(ctx).is_autonomous() {
+            // Autonomous execution modes (e.g. the SDK/agent driver, or the remote server
+            // daemon) have no user to present the command palette to, so there's no reason
+            // to build a full-text search index of new-session options.
+            Self::new_no_op(binding_source, ctx)
+        } else if FeatureFlag::UseTantivySearch.is_enabled() {
             Self::new_full_text(binding_source, ctx)
         } else {
             Self::new_fuzzy(binding_source, ctx)
@@ -86,6 +92,15 @@ impl NewSessionDataSource {
             searcher: Box::new(full_text_searcher::FullTextNewSessionSearcher::new(
                 ctx.background_executor(),
             )),
+            allowed: Default::default(),
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn new_no_op(binding_source: ModelHandle<BindingSource>, ctx: &mut ModelContext<Self>) -> Self {
+        ctx.observe(&binding_source, Self::on_binding_source_changed);
+        Self {
+            searcher: Box::new(NoOpNewSessionSearcher::default()),
             allowed: Default::default(),
         }
     }
@@ -294,6 +309,38 @@ impl NewSessionSearcher for FuzzyNewSessionSearcher {
             })
             .min()
             .map(|score| score as f64)
+    }
+}
+
+/// Search backend used in autonomous execution modes (e.g. the SDK/agent driver, or the
+/// remote server daemon), where there is no user to open the command palette. Tracks
+/// options (needed by [`NewSessionDataSource::query_result`]) but never builds a search
+/// index and always reports no results, since [`NewSessionDataSource::run_query`] is never
+/// reached in these modes.
+#[cfg(not(target_family = "wasm"))]
+#[derive(Default)]
+struct NoOpNewSessionSearcher {
+    shell_id_to_options: HashMap<NewSessionOptionId, Arc<NewSessionOption>>,
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl NewSessionSearcher for NoOpNewSessionSearcher {
+    fn search(&self, _search_term: &str) -> anyhow::Result<Vec<QueryResult<SearcherAction>>> {
+        Ok(Vec::new())
+    }
+
+    fn build_index(&mut self) {}
+
+    fn bindings(&self) -> &HashMap<NewSessionOptionId, Arc<NewSessionOption>> {
+        &self.shell_id_to_options
+    }
+
+    fn bindings_mut(&mut self) -> &mut HashMap<NewSessionOptionId, Arc<NewSessionOption>> {
+        &mut self.shell_id_to_options
+    }
+
+    fn compute_max_match(&self, _query_str: &str) -> Option<f64> {
+        None
     }
 }
 

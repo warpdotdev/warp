@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use fuzzy_match::{FuzzyMatchResult, match_indices_case_insensitive};
+use warp_core::execution_mode::AppExecutionMode;
 use warpui::keymap::{BindingId, DescriptionContext};
-use warpui::{AppContext, Entity, ModelContext, ModelHandle};
+use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::search::action::search_item::MatchedBinding;
 use crate::search::binding_source::BindingSource;
@@ -21,7 +22,12 @@ pub struct CommandBindingDataSource {
 impl CommandBindingDataSource {
     #[cfg(not(target_family = "wasm"))]
     pub fn new(binding_source: ModelHandle<BindingSource>, ctx: &mut ModelContext<Self>) -> Self {
-        if warp_core::features::FeatureFlag::UseTantivySearch.is_enabled() {
+        if AppExecutionMode::as_ref(ctx).is_autonomous() {
+            // Autonomous execution modes (e.g. the SDK/agent driver, or the remote server
+            // daemon) have no user to present the command palette to, so there's no reason
+            // to build a full-text search index of actions.
+            Self::new_no_op(binding_source, ctx)
+        } else if warp_core::features::FeatureFlag::UseTantivySearch.is_enabled() {
             Self::new_full_text(binding_source, ctx)
         } else {
             Self::new_fuzzy(binding_source, ctx)
@@ -50,6 +56,14 @@ impl CommandBindingDataSource {
         let searcher = Box::new(FuzzyActionSearcher {
             all_bindings: Default::default(),
         });
+        Self { searcher }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn new_no_op(binding_source: ModelHandle<BindingSource>, ctx: &mut ModelContext<Self>) -> Self {
+        ctx.observe(&binding_source, Self::on_binding_source_changed);
+
+        let searcher = Box::new(NoOpActionSearcher::default());
         Self { searcher }
     }
 
@@ -165,6 +179,34 @@ impl ActionSearcher for FuzzyActionSearcher {
                 MatchedBinding::new(match_result, binding.clone()).into()
             })
             .collect())
+    }
+
+    fn build_index(&mut self) {}
+
+    fn bindings(&self) -> &HashMap<BindingId, Arc<CommandBinding>> {
+        &self.all_bindings
+    }
+
+    fn bindings_mut(&mut self) -> &mut HashMap<BindingId, Arc<CommandBinding>> {
+        &mut self.all_bindings
+    }
+}
+
+/// Search backend used in autonomous execution modes (e.g. the SDK/agent driver, or the
+/// remote server daemon), where there is no user to open the command palette. Tracks
+/// bindings (needed by [`CommandBindingDataSource::query_result`]) but never builds a
+/// search index and always reports no results, since [`CommandBindingDataSource::run_query`]
+/// is never reached in these modes.
+#[cfg(not(target_family = "wasm"))]
+#[derive(Default)]
+struct NoOpActionSearcher {
+    all_bindings: HashMap<BindingId, Arc<CommandBinding>>,
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl ActionSearcher for NoOpActionSearcher {
+    fn search(&self, _search_term: &str) -> anyhow::Result<Vec<QueryResult<SearcherAction>>> {
+        Ok(Vec::new())
     }
 
     fn build_index(&mut self) {}
