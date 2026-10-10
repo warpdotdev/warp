@@ -17,6 +17,9 @@ enum TestFileModelEvent {
         _version: ContentVersion,
     },
     FileSaved,
+    FileUpdated {
+        content: String,
+    },
     FailedToLoad(String),
     FailedToSave,
 }
@@ -39,15 +42,9 @@ impl From<&FileModelEvent> for TestFileModelEvent {
                 error: err,
             } => TestFileModelEvent::FailedToLoad(format!("{err:?}")),
             FileModelEvent::FailedToSave { .. } => TestFileModelEvent::FailedToSave,
-            FileModelEvent::FileUpdated { .. } => {
-                // For now, we don't handle file updated events in tests
-                // This could be extended to include a FileUpdated variant in TestFileModelEvent if needed
-                TestFileModelEvent::FileLoaded {
-                    id: event.file_id(),
-                    content: String::new(),
-                    _version: ContentVersion::new(),
-                }
-            }
+            FileModelEvent::FileUpdated { content, .. } => TestFileModelEvent::FileUpdated {
+                content: content.clone(),
+            },
         }
     }
 }
@@ -162,6 +159,65 @@ fn test_save_file() {
         let model_version = files.read(app, |files, _ctx| files.version(file_id));
         assert_ne!(old_version, model_version);
         assert_eq!(Some(new_version), model_version);
+    });
+}
+
+#[test]
+fn test_watcher_events_that_leave_content_unchanged_are_not_reported() {
+    std::fs::create_dir_all(WRITE_TEST_PATH).unwrap();
+    let path = PathBuf::from(WRITE_TEST_PATH).join("test_unchanged_content.rs");
+    std::fs::write(&path, "loaded").unwrap();
+    let path = std::fs::canonicalize(path).unwrap();
+
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        let files = app.add_singleton_model(FileModel::new);
+        let receiver = setup_event_channel(app, &files);
+
+        let path_clone = path.clone();
+        files.update(app, |model, ctx| {
+            model.open(&path_clone, false, ctx);
+        });
+        let file_id = match receiver.recv().await.expect("Could not receive the result") {
+            TestFileModelEvent::FileLoaded { id, .. } => id,
+            _ => panic!("Failed to load file"),
+        };
+        files.update(app, |model, _ctx| {
+            if let Some(FileBackend::Local(file)) = model.file_state.get_mut(file_id) {
+                file.watcher_type = WatcherType::Repository;
+            }
+        });
+
+        files.update(app, |model, ctx| {
+            assert!(
+                model
+                    .save(file_id, "saved".to_string(), ContentVersion::new(), ctx)
+                    .is_ok()
+            );
+        });
+        match receiver.recv().await.expect("Could not receive the result") {
+            TestFileModelEvent::FileSaved => (),
+            _ => panic!("Failed to save file"),
+        }
+
+        // The watcher reports our own save, then an external write.
+        let path_clone = path.clone();
+        files.update(app, |model, ctx| {
+            model.reload_file_paths(HashSet::from([path_clone]), ctx);
+        });
+        std::fs::write(&path, "written externally").unwrap();
+        let path_clone = path.clone();
+        files.update(app, |model, ctx| {
+            model.reload_file_paths(HashSet::from([path_clone]), ctx);
+        });
+
+        match receiver.recv().await.expect("Could not receive the result") {
+            TestFileModelEvent::FileUpdated { content } => {
+                assert_eq!(content, "written externally")
+            }
+            event => panic!("Expected only the external write to be reported, got {event:?}"),
+        }
+        assert!(receiver.try_recv().is_err());
     });
 }
 

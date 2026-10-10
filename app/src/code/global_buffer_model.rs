@@ -154,6 +154,8 @@ struct InternalBufferState {
     latest_buffer_version: Option<usize>,
     /// Tracks any active background diff parsing for auto-reload.
     pending_diff_parse: Option<PendingDiffParse>,
+    /// Version of an on-disk update that was not applied because the buffer has unsaved edits.
+    unapplied_file_version: Option<ContentVersion>,
     source: BufferSource,
 }
 
@@ -179,6 +181,7 @@ impl InternalBufferState {
 
     /// Sets the base content version. Applicable to Local and ServerLocal buffers.
     fn set_base_content_version(&mut self, version: ContentVersion) {
+        self.unapplied_file_version = None;
         match &mut self.source {
             BufferSource::Local {
                 base_content_version,
@@ -602,6 +605,7 @@ impl GlobalBufferModel {
         // diff rather than incorrectly bumping the server version.
         if !buffer.as_ref(ctx).version_match(&base_version) {
             log::info!("Buffer version changed during diff parsing, aborting apply");
+            state.unapplied_file_version = Some(new_version);
             ctx.emit(GlobalBufferModelEvent::BufferUpdatedFromFileEvent {
                 file_id,
                 success: false,
@@ -752,18 +756,22 @@ impl GlobalBufferModel {
                         } else {
                             log::info!("Not updating global buffer due to version conflict");
 
-                            // Abort any pending diff parse since the buffer has
-                            // user edits that we must not overwrite.
-                            if let Some(state) = self.buffers.get_mut(id)
-                                && let Some(pending) = state.pending_diff_parse.take()
-                            {
-                                pending.abort_handle.abort();
+                            let latest_file_version = self.latest_file_version(*id);
+                            if let Some(state) = self.buffers.get_mut(id) {
+                                // Abort any pending diff parse since the buffer has
+                                // user edits that we must not overwrite.
+                                if let Some(pending) = state.pending_diff_parse.take() {
+                                    pending.abort_handle.abort();
+                                }
+                                // Recorded so the conflict is surfaced instead of the buffer silently
+                                // showing, and later saving over, the external change.
+                                state.unapplied_file_version = Some(*new_version);
                             }
 
-                            if internal_base_version != Some(*base_version) {
+                            if latest_file_version != Some(*base_version) {
                                 log::warn!(
-                                    "Internal global buffer base version {:?} mismatches file model base version {:?}",
-                                    internal_base_version,
+                                    "Latest global buffer file version {:?} mismatches file model base version {:?}",
+                                    latest_file_version,
                                     *base_version
                                 );
                             }
@@ -922,6 +930,16 @@ impl GlobalBufferModel {
             .and_then(|state| state.base_content_version())
     }
 
+    /// Get the latest known on-disk version for a tracked buffer, including an update that was not
+    /// applied because the buffer has unsaved edits.
+    pub fn latest_file_version(&self, file_id: FileId) -> Option<ContentVersion> {
+        self.buffers.get(&file_id).and_then(|state| {
+            state
+                .unapplied_file_version
+                .or_else(|| state.base_content_version())
+        })
+    }
+
     /// Discard any in progress changes and reload the buffer with the canonical version from the file system.
     #[cfg(feature = "local_fs")]
     pub fn discard_unsaved_changes(&mut self, path: &Path, ctx: &mut ModelContext<Self>) {
@@ -1063,6 +1081,7 @@ impl GlobalBufferModel {
                 buffer: buffer.downgrade(),
                 latest_buffer_version: None,
                 pending_diff_parse: None,
+                unapplied_file_version: None,
                 source: BufferSource::Local {
                     base_content_version,
                     initial_content_version,
@@ -1321,6 +1340,7 @@ impl GlobalBufferModel {
                 buffer: buffer.downgrade(),
                 latest_buffer_version: None,
                 pending_diff_parse: None,
+                unapplied_file_version: None,
                 source,
             },
         );
@@ -1778,6 +1798,7 @@ impl GlobalBufferModel {
                 buffer: buffer.downgrade(),
                 latest_buffer_version: None,
                 pending_diff_parse: None,
+                unapplied_file_version: None,
                 source: BufferSource::Remote {
                     remote_path,
                     sync_clock: None,
@@ -2450,6 +2471,7 @@ impl GlobalBufferModel {
                 buffer: buffer.downgrade(),
                 latest_buffer_version: None,
                 pending_diff_parse: None,
+                unapplied_file_version: None,
                 source: BufferSource::Remote {
                     remote_path,
                     sync_clock: Some(SyncClock::from_wire(server_version, 0)),

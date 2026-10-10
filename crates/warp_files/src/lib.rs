@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 /// Allows opening and saving files in a single, central model.  Subscribers can watch for content
 /// when files are loaded, and request that content be saved to disk.
 use std::future::Future;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -144,6 +145,9 @@ impl FileBackend {
 struct LocalFile {
     path: Option<PathBuf>,
     version: Option<ContentVersion>,
+    /// Hash of the content last read from or written to disk. Watcher events that leave the
+    /// content unchanged (e.g. the echo of our own save) are not reported as updates.
+    content_hash: Option<u64>,
     /// How this file is being watched for changes.
     watcher_type: WatcherType,
 }
@@ -171,6 +175,7 @@ impl LocalFile {
         Self {
             path: Some(canonicalized_path),
             version: None,
+            content_hash: None,
             watcher_type: WatcherType::None,
         }
     }
@@ -464,6 +469,9 @@ impl FileModel {
                     Ok(content) => {
                         let version = ContentVersion::new();
                         me.set_version(file_id, version);
+                        if let Some(FileBackend::Local(file)) = me.file_state.get_mut(file_id) {
+                            file.content_hash = Some(content_hash(&content));
+                        }
 
                         // Only register an individual watcher if not using a repo subscription,
                         // and only record it once it has actually been registered.
@@ -740,6 +748,7 @@ impl FileModel {
                 let file_path = self
                     .file_path(file_id)
                     .ok_or(FileSaveError::NoFilePath(file_id))?;
+                let saved_content_hash = content_hash(&content);
 
                 ctx.spawn(
                     async move {
@@ -761,6 +770,11 @@ impl FileModel {
                         match &result {
                             Ok(()) => {
                                 me.set_version(file_id, version);
+                                if let Some(FileBackend::Local(file)) =
+                                    me.file_state.get_mut(file_id)
+                                {
+                                    file.content_hash = Some(saved_content_hash);
+                                }
                                 ctx.emit(FileModelEvent::FileSaved {
                                     id: file_id,
                                     version,
@@ -1153,10 +1167,15 @@ impl FileModel {
             },
             move |me, res, ctx| {
                 for (file_path, content) in res {
+                    let hash = content_hash(&content);
                     let mut emitted_event = false;
                     for (file_id, file_state) in me.file_state.local_iter_mut() {
                         // Only set the new version of a file if it has opt-in to receiving updates.
                         if file_state.should_receive_update_for_path(&file_path) {
+                            emitted_event = true;
+                            if file_state.content_hash == Some(hash) {
+                                continue;
+                            }
                             let new_version = ContentVersion::new();
                             ctx.emit(FileModelEvent::FileUpdated {
                                 id: *file_id,
@@ -1164,8 +1183,8 @@ impl FileModel {
                                 base_version: file_state.version.expect("Version should be some"),
                                 new_version,
                             });
-                            emitted_event = true;
                             file_state.version = Some(new_version);
+                            file_state.content_hash = Some(hash);
                         }
                     }
 
@@ -1256,6 +1275,12 @@ impl RepositorySubscriber for FileRepositorySubscriber {
             let _ = tx.send(update).await;
         })
     }
+}
+
+fn content_hash(content: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    content.hash(&mut hasher);
+    hasher.finish()
 }
 
 #[cfg(test)]

@@ -3,7 +3,10 @@ use remote_server::proto::TextEdit;
 use repo_metadata::RepoMetadataModel;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
-use warp_files::FileModel;
+use string_offset::CharOffset;
+use warp_editor::content::buffer::Buffer;
+use warp_editor::content::diff::text_diff;
+use warp_files::{FileModel, FileModelEvent};
 use warp_util::content_version::ContentVersion;
 use warp_util::host_id::HostId;
 use warp_util::standardized_path::StandardizedPath;
@@ -319,5 +322,149 @@ fn pending_batch_bumps_client_version_immediately() {
             // server_version unchanged
             assert_eq!(clock.server_version, ContentVersion::from_raw(1));
         });
+    })
+}
+
+// ── Local buffers: external updates ───────────────────────────────
+
+/// Registers a local buffer whose content matches the file on disk and then makes an unsaved
+/// edit. Returns the buffer, which callers must keep alive, the file id, and the version that was
+/// saved to disk.
+fn register_local_buffer_with_unsaved_edit(
+    app: &mut App,
+    dir: &tempfile::TempDir,
+) -> (ModelHandle<Buffer>, warp_util::file::FileId, ContentVersion) {
+    let path = dir.path().join("file.txt");
+    std::fs::write(&path, "saved\n").unwrap();
+
+    let buffer = app.add_model(|_| Buffer::default());
+    buffer.update(app, |buffer, ctx| buffer.replace_all("saved\n", ctx));
+    let file_id = gbm(app)
+        .update(app, |gbm, ctx| gbm.register(path, buffer.clone(), ctx))
+        .file_id;
+    let saved_version = app.read(|ctx| buffer.as_ref(ctx).version());
+
+    buffer.update(app, |buffer, ctx| {
+        buffer.insert_at_char_offset_ranges(
+            vec![(
+                CharOffset::from(1)..CharOffset::from(1),
+                "unsaved ".to_string(),
+            )],
+            ContentVersion::new(),
+            ctx,
+        )
+    });
+    (buffer, file_id, saved_version)
+}
+
+fn deliver_file_model_event(app: &mut App, event: FileModelEvent) {
+    gbm(app).update(app, |gbm, ctx| {
+        let file_model = FileModel::handle(ctx);
+        gbm.handle_file_model_events(file_model, &event, ctx);
+    });
+}
+
+fn latest_file_version(app: &App, file_id: warp_util::file::FileId) -> Option<ContentVersion> {
+    let handle = gbm(app);
+    app.read(|ctx| handle.as_ref(ctx).latest_file_version(file_id))
+}
+
+#[test]
+fn external_updates_rejected_for_unsaved_edits_are_tracked_as_latest_file_version() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        app.add_singleton_model(GlobalBufferModel::new);
+        let dir = tempfile::tempdir().unwrap();
+        let (_buffer, file_id, saved_version) =
+            register_local_buffer_with_unsaved_edit(&mut app, &dir);
+
+        let disk_version = ContentVersion::new();
+        deliver_file_model_event(
+            &mut app,
+            FileModelEvent::FileUpdated {
+                id: file_id,
+                content: "written externally\n".to_string(),
+                base_version: saved_version,
+                new_version: disk_version,
+            },
+        );
+        assert_eq!(content(&app, file_id), "unsaved saved\n");
+        let handle = gbm(&app);
+        app.read(|ctx| {
+            assert_eq!(
+                handle.as_ref(ctx).base_version(file_id),
+                Some(saved_version)
+            )
+        });
+        assert_eq!(latest_file_version(&app, file_id), Some(disk_version));
+
+        let second_disk_version = ContentVersion::new();
+        deliver_file_model_event(
+            &mut app,
+            FileModelEvent::FileUpdated {
+                id: file_id,
+                content: "written again\n".to_string(),
+                base_version: disk_version,
+                new_version: second_disk_version,
+            },
+        );
+        assert_eq!(content(&app, file_id), "unsaved saved\n");
+        assert_eq!(
+            latest_file_version(&app, file_id),
+            Some(second_disk_version)
+        );
+    })
+}
+
+#[test]
+fn save_after_rejected_external_update_makes_saved_version_latest() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        app.add_singleton_model(GlobalBufferModel::new);
+        let dir = tempfile::tempdir().unwrap();
+        let (_buffer, file_id, saved_version) =
+            register_local_buffer_with_unsaved_edit(&mut app, &dir);
+        deliver_file_model_event(
+            &mut app,
+            FileModelEvent::FileUpdated {
+                id: file_id,
+                content: "written externally\n".to_string(),
+                base_version: saved_version,
+                new_version: ContentVersion::new(),
+            },
+        );
+
+        let overwritten_version = ContentVersion::new();
+        deliver_file_model_event(
+            &mut app,
+            FileModelEvent::FileSaved {
+                id: file_id,
+                version: overwritten_version,
+            },
+        );
+        assert_eq!(
+            latest_file_version(&app, file_id),
+            Some(overwritten_version)
+        );
+    })
+}
+
+#[test]
+fn external_update_dropped_during_diff_parse_is_tracked_as_latest_file_version() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        app.add_singleton_model(GlobalBufferModel::new);
+        let dir = tempfile::tempdir().unwrap();
+        // The unsaved edit stands in for the user typing while the reload's diff was parsed.
+        let (_buffer, file_id, saved_version) =
+            register_local_buffer_with_unsaved_edit(&mut app, &dir);
+
+        let diff = text_diff("saved\n", "written externally\n").await;
+        let disk_version = ContentVersion::new();
+        gbm(&app).update(&mut app, |gbm, ctx| {
+            gbm.apply_diff_result(file_id, diff, saved_version, disk_version, ctx);
+        });
+        assert_eq!(content(&app, file_id), "unsaved saved\n");
+        assert_eq!(latest_file_version(&app, file_id), Some(disk_version));
     })
 }

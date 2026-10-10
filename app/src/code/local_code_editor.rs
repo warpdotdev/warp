@@ -46,7 +46,7 @@ use warpui::elements::{
     Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, DropShadow, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
-    Rect, Shrinkable, Stack, Text,
+    Rect, SavePosition, Shrinkable, Stack, Text,
 };
 use warpui::keymap::FixedBinding;
 use warpui::keymap::macros::*;
@@ -288,6 +288,7 @@ pub struct LocalCodeEditorView {
     /// editor's buffer. Cleared when the user discards or overwrites.
     has_remote_conflict: bool,
     conflict_banner_mouse_states: ConflictResolutionBannerMouseStates,
+    conflict_banner_position_id: String,
     /// Default directory to use for save dialogs when creating new files
     default_directory: Option<PathBuf>,
     pub(super) lsp_server: Option<ModelHandle<LspServerModel>>,
@@ -525,6 +526,10 @@ impl LocalCodeEditorView {
             base_content_version: None,
             has_remote_conflict: false,
             conflict_banner_mouse_states: Default::default(),
+            conflict_banner_position_id: format!(
+                "local_code_editor:conflict_banner_{}",
+                ctx.view_id()
+            ),
             default_directory: None,
             lsp_server: None,
             footer: None,
@@ -1207,7 +1212,10 @@ impl LocalCodeEditorView {
             return;
         }
 
-        if self.is_remote_disconnected(ctx) || !self.has_unsaved_changes(ctx) {
+        if self.is_remote_disconnected(ctx)
+            || !self.has_unsaved_changes(ctx)
+            || self.has_version_conflicts(ctx)
+        {
             return;
         }
 
@@ -1236,6 +1244,7 @@ impl LocalCodeEditorView {
         if !*CodeSettings::as_ref(ctx).auto_save
             || self.diff_type.is_some()
             || !self.has_unsaved_changes(ctx)
+            || self.has_version_conflicts(ctx)
         {
             return;
         }
@@ -1685,9 +1694,7 @@ impl LocalCodeEditorView {
                     content_version,
                     ..
                 } => {
-                    if !*success {
-                        ctx.notify();
-                    } else {
+                    if *success {
                         me.base_content_version = Some(*content_version);
                     }
                 }
@@ -1718,7 +1725,14 @@ impl LocalCodeEditorView {
             }
 
             me.update_diff_hunk_gutter_buttons(ctx);
+            // The conflict banner rendered by this view depends on the versions updated above.
+            ctx.notify();
         });
+    }
+
+    /// The saved-position id of the banner shown while [`Self::has_version_conflicts`] is true.
+    pub fn conflict_banner_position_id(&self) -> &str {
+        &self.conflict_banner_position_id
     }
 
     pub fn has_version_conflicts(&self, app: &AppContext) -> bool {
@@ -1731,7 +1745,8 @@ impl LocalCodeEditorView {
             return false;
         };
         self.has_unsaved_changes(app)
-            && self.base_content_version != GlobalBufferModel::as_ref(app).base_version(file_id)
+            && self.base_content_version
+                != GlobalBufferModel::as_ref(app).latest_file_version(file_id)
     }
 
     /// Returns `true` when this editor is backed by a remote file whose
@@ -1749,9 +1764,13 @@ impl LocalCodeEditorView {
 
     /// Whether auto-save can actually persist this editor's changes: it needs
     /// a backing file and, for remote files, a still-connected host. Untitled
-    /// buffers (no `file_id`) and disconnected remotes return `false`.
+    /// buffers (no `file_id`) and disconnected remotes return `false`, as do
+    /// buffers that conflict with a newer version on disk, which only an
+    /// explicit save may overwrite.
     pub fn can_auto_save(&self, app: &AppContext) -> bool {
-        self.file_id().is_some() && !self.is_remote_disconnected(app)
+        self.file_id().is_some()
+            && !self.is_remote_disconnected(app)
+            && !self.has_version_conflicts(app)
     }
 
     /// Save the file to the local file system (or remotely via the remote server).
@@ -2337,6 +2356,9 @@ impl View for LocalCodeEditorView {
                         .overwrite_mouse_state
                         .clone(),
                 );
+                let banner = SavePosition::new(banner, &self.conflict_banner_position_id)
+                    .for_single_frame()
+                    .finish();
                 let mut col = Flex::column().with_child(banner);
 
                 let editor_view = ChildView::new(&self.editor).finish();
