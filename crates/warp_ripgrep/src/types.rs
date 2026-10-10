@@ -35,4 +35,6 @@ pub(crate) enum RipgrepMessage {
     Match { data: RipgrepMatchData },
     #[serde(rename = "end")]
     End,
+    #[serde(rename = "limit_reached")]
+    LimitReached,
 }
