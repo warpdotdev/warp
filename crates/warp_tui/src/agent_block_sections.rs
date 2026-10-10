@@ -113,7 +113,9 @@ pub(crate) fn render_fallback_tool_call_section(
         .finish()
 }
 
-/// Renders a reasoning message as a collapsible thinking block.
+/// Renders a reasoning message as a collapsible thinking block. The header
+/// tracks streaming progress (`Thinking...` until `finished_duration` lands),
+/// while the body stays collapsed by default.
 pub(crate) fn render_thinking_section(
     states: &CollapsibleSectionStates,
     message_id: &MessageId,
@@ -125,23 +127,11 @@ pub(crate) fn render_thinking_section(
         Some(duration) => format!("Thought for {}", format_elapsed_seconds(duration)),
         None => "Thinking...".to_owned(),
     };
-    render_collapsible_message_section(
-        states,
-        message_id,
-        header,
-        finished_duration.is_some(),
-        body,
-        app,
-    )
+    render_collapsible_message_section(states, message_id, header, body, app)
 }
 
 /// Renders a streamed conversation summary with the same persistent
 /// collapse/hover behavior as a reasoning section.
-///
-/// Defaults to **collapsed** whether or not streaming has finished, so an
-/// in-progress summary does not auto-expand — the prior expand-while-streaming
-/// then collapse-on-finish flip jittered the transcript. Manual expand still
-/// works via `CollapsibleSectionStates`.
 pub(crate) fn render_summarization_section(
     states: &CollapsibleSectionStates,
     message_id: &MessageId,
@@ -152,19 +142,24 @@ pub(crate) fn render_summarization_section(
         states,
         message_id,
         "Conversation summary".to_owned(),
-        // Always collapsed by default; a manual override in
-        // `CollapsibleSectionStates` still wins so users can expand it.
-        true,
         body,
         app,
     )
 }
 
+/// Renders `body` under a collapsible `header`, keyed by the owning message.
+///
+/// Always defaults to **collapsed**, whether or not the message has finished
+/// streaming. Auto-expanding a streaming message and then collapsing it on
+/// finish shrinks the section by its whole body in one frame, and the
+/// transcript viewport follows the content end, so that height delta jumps
+/// every visible row instead of scrolling smoothly. A manual override recorded
+/// in `CollapsibleSectionStates` still wins, so users can expand a section and
+/// keep it expanded.
 fn render_collapsible_message_section(
     states: &CollapsibleSectionStates,
     message_id: &MessageId,
     header: String,
-    finished: bool,
     body: Box<dyn TuiElement>,
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
@@ -172,7 +167,7 @@ fn render_collapsible_message_section(
     // Left-align the body with the header and separate the two with a blank row.
     let body_element = TuiContainer::new(body).with_padding_top(1).finish();
 
-    let collapsed = states.is_collapsed(message_id, finished);
+    let collapsed = states.is_collapsed(message_id, true);
     let toggle_message_id = message_id.clone();
     builder.collapsible(
         collapsed,
@@ -196,8 +191,8 @@ fn render_collapsible_message_section(
 ///
 /// Task lists default to expanded and collapse only on manual toggle (the
 /// GUI's `TodoListElementState` behavior), so the default passed to the
-/// state map is never "collapsed" — unlike thinking blocks, which
-/// auto-collapse on finish.
+/// state map is never "collapsed" — unlike thinking blocks and conversation
+/// summaries.
 pub(crate) fn render_todo_list_section(
     states: &CollapsibleSectionStates,
     message_id: &MessageId,
