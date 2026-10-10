@@ -16,10 +16,11 @@ use warp_multi_agent_api::{
 use warpui::{App, AppContext};
 
 use super::*;
-use crate::ai::agent::conversation::{ConversationDriver, ConversationStatus};
+use crate::ai::agent::conversation::{AIConversation, ConversationDriver, ConversationStatus};
 use crate::ai::agent::{AIAgentActionId, AIAgentInput};
 use crate::ai::blocklist::QueuedQueryModel;
 use crate::ai::blocklist::controller::ParticipantId;
+use crate::persistence::model::AgentConversationData;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
 fn done() -> ResponseEvent {
@@ -121,6 +122,17 @@ fn root_task_id(ctx: &AppContext, id: AIConversationId) -> String {
         .unwrap()
         .get_root_task_id()
         .to_string()
+}
+
+fn user_query(task_id: &str, request_id: &str, query: &str) -> Message {
+    message(
+        task_id,
+        request_id,
+        MessageKind::UserQuery(UserQuery {
+            query: query.into(),
+            ..Default::default()
+        }),
+    )
 }
 
 fn status(ctx: &AppContext, id: AIConversationId) -> ConversationStatus {
@@ -241,6 +253,89 @@ fn a_turn_without_tool_calls_settles_when_its_stream_finishes() {
                     .collect();
                 assert_eq!(queries, vec!["hello"]);
                 assert_eq!(conversation.driver(), ConversationDriver::ExternalHarness);
+            });
+        });
+    });
+}
+
+#[test]
+fn a_turn_on_a_restored_conversation_extends_its_root_task_under_the_same_server_id() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.ai_controller().update(ctx, |controller, ctx| {
+                let root = "restored-root";
+                let restored = AIConversation::new_restored(
+                    AIConversationId::new(),
+                    vec![Task {
+                        id: root.to_owned(),
+                        messages: vec![
+                            user_query(root, "prior-request", "before"),
+                            message(
+                                root,
+                                "prior-request",
+                                MessageKind::AgentOutput(AgentOutput {
+                                    text: "earlier answer".into(),
+                                }),
+                            ),
+                        ],
+                        ..Default::default()
+                    }],
+                    Some(AgentConversationData {
+                        server_conversation_token: Some("server-conversation".into()),
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+                let id = restored.id();
+                let terminal_surface_id = controller.terminal_surface_id;
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.restore_conversations(terminal_surface_id, vec![restored], ctx);
+                });
+                assert_eq!(
+                    controller.bind_native_prompt_conversation(Some(id), ctx),
+                    id
+                );
+
+                let turn = controller
+                    .begin_external_harness_turn(id, None, ctx)
+                    .unwrap();
+                assert_eq!(root_task_id(ctx, id), root);
+                controller.apply_external_harness_event(
+                    &turn.stream_id,
+                    client_actions(vec![add_messages(
+                        root,
+                        vec![user_query(root, &turn.request_id, "after")],
+                    )]),
+                    ctx,
+                );
+                controller.apply_external_harness_event(&turn.stream_id, done(), ctx);
+
+                let conversation = BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&id)
+                    .unwrap();
+                assert_eq!(
+                    conversation
+                        .server_conversation_token()
+                        .map(|token| token.as_str()),
+                    Some("server-conversation")
+                );
+                let snapshot = conversation.to_conversation_data();
+                assert_eq!(
+                    snapshot.tasks.len(),
+                    1,
+                    "the turn must not add a second root"
+                );
+                let queries: Vec<_> = snapshot.tasks[0]
+                    .messages
+                    .iter()
+                    .filter_map(|message| match &message.message {
+                        Some(MessageKind::UserQuery(query)) => Some(query.query.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(queries, vec!["before", "after"]);
             });
         });
     });

@@ -168,7 +168,7 @@ impl HarnessRunner for GeminiHarnessRunner {
         let conversation_id = setup_events
             .record_result(SetupStep::ThirdPartyHarnessExternalConversation, async {
                 self.client
-                    .create_external_conversation(GEMINI_CLI_FORMAT)
+                    .create_external_conversation(GEMINI_CLI_FORMAT, Harness::Gemini)
                     .await
                     .map_err(|e| {
                         report_error!(&e);
@@ -218,13 +218,13 @@ impl HarnessRunner for GeminiHarnessRunner {
             && !super::has_running_cli_agent(&self.terminal_driver, foreground).await
         {
             log::debug!("Will not save conversation, Gemini not in progress");
-            return PersistenceOutcome::block_only(Ok(()));
+            return PersistenceOutcome::without_transcript(Ok(()));
         }
 
         let (conversation_id, block_id) = match &*self.state.lock() {
             GeminiRunnerState::Preexec => {
                 log::warn!("save_conversation called before start");
-                return PersistenceOutcome::block_only(Ok(()));
+                return PersistenceOutcome::without_transcript(Ok(()));
             }
             GeminiRunnerState::Running {
                 conversation_id,
@@ -233,7 +233,7 @@ impl HarnessRunner for GeminiHarnessRunner {
         };
 
         // TODO(REMOTE-1408) Also save the conversation transcript.
-        PersistenceOutcome::block_only(
+        PersistenceOutcome::without_transcript(
             super::upload_current_block_snapshot(
                 foreground,
                 &self.terminal_driver,

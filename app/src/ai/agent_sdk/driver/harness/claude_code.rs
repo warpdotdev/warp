@@ -475,7 +475,7 @@ impl HarnessRunner for ClaudeHarnessRunner {
                 let id = setup_events
                     .record_result(SetupStep::ThirdPartyHarnessExternalConversation, async {
                         self.client
-                            .create_external_conversation(CLAUDE_CODE_FORMAT)
+                            .create_external_conversation(CLAUDE_CODE_FORMAT, Harness::Claude)
                             .await
                             .map_err(|e| {
                                 report_error!(&e);

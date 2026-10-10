@@ -296,6 +296,36 @@ fn unprojectable_tool_calls_use_the_generic_mcp_shape_and_report_failures() {
 }
 
 #[test]
+fn generic_tool_calls_always_carry_args() {
+    let mut mapper = mapper();
+    let without_input = mapper.map_update(update(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call-3",
+        "kind": "read",
+        "status": "pending"
+    })));
+    let Tool::CallMcpTool(mcp) = announced_tool(&without_input[0]).1 else {
+        panic!("expected CallMcpTool");
+    };
+    assert!(mcp.args.is_some_and(|args| args.fields.is_empty()));
+
+    let non_object_input = mapper.map_update(update(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call-4",
+        "kind": "fetch",
+        "status": "pending",
+        "rawInput": "https://example.com"
+    })));
+    let Tool::CallMcpTool(mcp) = announced_tool(&non_object_input[0]).1 else {
+        panic!("expected CallMcpTool");
+    };
+    assert!(
+        mcp.args
+            .is_some_and(|args| args.fields.contains_key("input"))
+    );
+}
+
+#[test]
 fn read_tool_calls_with_a_path_project_to_read_files() {
     let mut mapper = mapper();
     let call = mapper.map_update(update(json!({

@@ -3939,6 +3939,19 @@ impl AIConversation {
         }
     }
 
+    /// The conversation as the `ConversationData` the server stores for native history.
+    // Only the ACP harness runner in `agent_sdk` uploads it, and that is not built for wasm.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub(crate) fn to_conversation_data(&self) -> api::ConversationData {
+        api::ConversationData {
+            tasks: self
+                .all_tasks()
+                .filter_map(|task| task.source_for_persistence())
+                .collect(),
+            ..Default::default()
+        }
+    }
+
     pub(crate) fn write_updated_conversation_state(
         &mut self,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,

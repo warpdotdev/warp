@@ -44,8 +44,8 @@ pub struct CLIAgentConversation {
 ///
 /// The exact format depends on the agent harness that produced the conversation.
 pub enum CloudConversationData {
-    /// A conversation produced by the Oz harness, which we can materialize into the
-    /// [`AIConversation`] data model.
+    /// A conversation with a native task list (produced by the Oz harness, or by a third-party
+    /// harness driven over ACP), which we can materialize into the [`AIConversation`] data model.
     Oz(Box<AIConversation>),
     /// A conversation produced by an external CLI agent harness.
     CLIAgent(Box<CLIAgentConversation>),
@@ -150,6 +150,29 @@ pub async fn load_conversation_from_server(
                             "Ignoring non-Oz conversation {conversation_id}: AgentHarness flag is disabled"
                         );
                         return None;
+                    }
+                    // Harnesses driven over ACP store native task lists rather than a block
+                    // snapshot, and the server only fills the task list for such conversations.
+                    if !conversation_data.tasks.is_empty() {
+                        return match convert_conversation_data_to_ai_conversation(
+                            conversation_id,
+                            &conversation_data,
+                            server_metadata,
+                            RestorationMode::Continue,
+                        ) {
+                            Some(conversation) => {
+                                log::info!(
+                                    "Loaded third-party harness task list {conversation_id} from server"
+                                );
+                                Some(CloudConversationData::Oz(Box::new(conversation)))
+                            }
+                            None => {
+                                log::warn!(
+                                    "Failed to convert third-party harness task list for {conversation_id}"
+                                );
+                                None
+                            }
+                        };
                     }
                     // Fetch snapshot data for third-party harness conversations.
                     match server_api
