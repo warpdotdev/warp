@@ -1,7 +1,13 @@
+use std::cell::Cell;
+use std::io::Read;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use tempfile::TempDir;
+use warp_util::host_id::HostId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::remote_path::RemotePath;
+use warp_util::standardized_path::StandardizedPath;
 
 use super::*;
 
@@ -205,7 +211,7 @@ fn test_parse_truncates_fallback_description_with_hard_cut() {
 }
 
 #[test]
-fn test_parse_does_not_truncate_user_provided_description() {
+fn test_parse_truncates_user_provided_description() {
     let description = format!("{} {}", "a".repeat(450), "b".repeat(200));
     let content = format!(
         r#"---
@@ -221,7 +227,65 @@ description: "{}"
     let (_temp_dir, skill_file) = create_temp_skill_file(&content);
     let result = parse_skill(&skill_file).unwrap();
 
-    assert_eq!(result.description, description);
+    assert!(result.description.chars().count() <= MAX_SKILL_DESCRIPTION_CHARS);
+    assert_eq!(result.description, "a".repeat(450));
+}
+
+#[test]
+fn test_drop_listing_body_clears_content_and_keeps_hash() {
+    let content = r#"---
+name: some-skill
+description: Some description
+---
+
+# Body
+"#;
+    let (_temp_dir, skill_file) = create_temp_skill_file(content);
+    let mut skill = parse_skill(&skill_file).unwrap();
+    let hash = skill.listing_content_hash();
+    assert!(!skill.content.is_empty());
+
+    skill.drop_listing_body();
+
+    assert!(skill.content.is_empty());
+    assert_eq!(skill.listing_content_hash(), hash);
+    skill.refresh_local_file_for_invocation().unwrap();
+    assert_eq!(skill.content, content);
+}
+
+#[test]
+fn test_refresh_local_file_for_invocation_updates_line_range_after_front_matter_grows() {
+    let short = r#"---
+name: some-skill
+description: short
+---
+
+# Body
+"#;
+    let long = r#"---
+name: some-skill
+description: short
+padding1: "one"
+padding2: "two"
+padding3: "three"
+padding4: "four"
+---
+
+# Body
+"#;
+    let (_temp_dir, skill_file) = create_temp_skill_file(short);
+    let mut listed = parse_skill(&skill_file).unwrap();
+    listed.drop_listing_body();
+    let listed_range = listed.line_range.clone();
+
+    std::fs::write(&skill_file, long).unwrap();
+    listed.refresh_local_file_for_invocation().unwrap();
+
+    let expected = parse_skill(&skill_file).unwrap();
+    assert_ne!(listed_range, expected.line_range);
+    assert_eq!(listed.line_range, expected.line_range);
+    assert_eq!(listed.content, expected.content);
+    assert!(listed.content.contains("# Body"));
 }
 
 #[test]
@@ -247,4 +311,93 @@ fn test_truncation_cuts_at_sentence_boundary() {
     let result = parse_skill(&skill_file).unwrap();
 
     assert_eq!(result.description, "This is a sentence.");
+}
+
+#[test]
+fn test_parse_skill_rejects_oversized_file() {
+    let temp_dir = TempDir::new().unwrap();
+    let skill_dir = temp_dir.path().join(".agents/skills/huge-skill");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    let skill_file = skill_dir.join("SKILL.md");
+    let mut bytes = b"---\nname: huge-skill\ndescription: huge\n---\n".to_vec();
+    bytes.resize(LOCAL_SKILL_MAX_FILE_BYTES as usize + 1, b'x');
+    std::fs::write(&skill_file, bytes).unwrap();
+
+    let err = parse_skill(&skill_file).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains(&LOCAL_SKILL_MAX_FILE_BYTES.to_string())
+    );
+}
+
+#[test]
+fn test_read_bounded_skill_reader_does_not_consume_past_cap() {
+    let bytes_read = Rc::new(Cell::new(0));
+    let source_len = (LOCAL_SKILL_MAX_FILE_BYTES as usize).saturating_mul(4);
+    let err = read_bounded_skill_reader(CountingReader {
+        remaining: source_len,
+        bytes_read: bytes_read.clone(),
+    })
+    .unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains(&LOCAL_SKILL_MAX_FILE_BYTES.to_string())
+    );
+    assert_eq!(bytes_read.get(), LOCAL_SKILL_MAX_FILE_BYTES as usize + 1);
+}
+
+struct CountingReader {
+    remaining: usize,
+    bytes_read: Rc<Cell<usize>>,
+}
+
+impl Read for CountingReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.remaining == 0 || buf.is_empty() {
+            return Ok(0);
+        }
+        let n = buf.len().min(self.remaining);
+        buf[..n].fill(b'x');
+        self.remaining -= n;
+        self.bytes_read.set(self.bytes_read.get() + n);
+        Ok(n)
+    }
+}
+
+#[test]
+fn test_parse_bundled_skill_allows_oversized_file() {
+    let temp_dir = TempDir::new().unwrap();
+    let skill_dir = temp_dir.path().join("bundled-skill");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    let skill_file = skill_dir.join("SKILL.md");
+    let mut bytes = b"---\nname: bundled-skill\ndescription: bundled\n---\n".to_vec();
+    bytes.resize(LOCAL_SKILL_MAX_FILE_BYTES as usize + 1, b'x');
+    std::fs::write(&skill_file, &bytes).unwrap();
+
+    let result = parse_bundled_skill(&skill_file).unwrap();
+    assert_eq!(result.name, "bundled-skill");
+    assert_eq!(result.scope, SkillScope::Bundled);
+    assert_eq!(result.content.as_bytes(), bytes);
+}
+
+#[test]
+fn test_parse_skill_content_allows_oversized_remote_input() {
+    let content = format!(
+        "---\nname: remote-skill\ndescription: remote\n---\n{}",
+        "x".repeat(LOCAL_SKILL_MAX_FILE_BYTES as usize + 1)
+    );
+    let path = LocalOrRemotePath::Remote(RemotePath::new(
+        HostId::new("test-host".to_string()),
+        StandardizedPath::try_new("/repo/.agents/skills/remote-skill/SKILL.md").unwrap(),
+    ));
+    let result = parse_skill_content_at_location(
+        path.clone(),
+        &content,
+        SkillProvider::Agents,
+        SkillScope::Project,
+    )
+    .unwrap();
+    assert_eq!(result.path, path);
+    assert_eq!(result.content, content);
 }

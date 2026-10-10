@@ -128,6 +128,7 @@ fn skill() -> ParsedSkill {
         path: LocalOrRemotePath::Local(PathBuf::from("/tmp/skill/SKILL.md")),
         name: "skill".into(),
         description: "Test skill".into(),
+        content_hash: None,
         content: "instructions".into(),
         line_range: None,
         provider: SkillProvider::Agents,
