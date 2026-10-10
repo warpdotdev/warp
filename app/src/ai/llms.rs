@@ -350,6 +350,12 @@ fn is_usable_llm(info: &LLMInfo, app: &AppContext) -> bool {
         .is_none_or(|reason| !reason.should_clear_preference(has_byok_key))
 }
 
+/// Stricter than [`is_usable_llm`]: also excludes models the user is currently out of requests
+/// for, since sending a request to one would be rejected for lack of credits.
+fn is_requestable_llm(info: &LLMInfo, app: &AppContext) -> bool {
+    is_usable_llm(info, app) && !matches!(info.disable_reason, Some(DisableReason::OutOfRequests))
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LLMSpec {
     pub cost: f32,
@@ -627,6 +633,17 @@ impl AvailableLLMs {
     fn usable_default_llm_info(&self, app: &AppContext) -> Option<&LLMInfo> {
         self.usable_info_for_id(&self.default_id, app)
             .or_else(|| self.choices.iter().find(|info| is_usable_llm(info, app)))
+    }
+
+    /// Like [`Self::usable_default_llm_info`], but skips models the user is out of requests for.
+    fn requestable_default_llm_info(&self, app: &AppContext) -> Option<&LLMInfo> {
+        self.info_for_id(&self.default_id)
+            .filter(|info| is_requestable_llm(info, app))
+            .or_else(|| {
+                self.choices
+                    .iter()
+                    .find(|info| is_requestable_llm(info, app))
+            })
     }
 
     fn default_llm_info(&self) -> &LLMInfo {
@@ -991,18 +1008,36 @@ impl LLMPreferences {
     }
 
     /// Disable-aware fallback for when the user has no explicit (usable)
-    /// selection: the feature default when usable, else the first usable
-    /// server choice, else the user's first custom-endpoint model, else the
+    /// selection: the feature default when requestable, else the first
+    /// requestable server choice, else the user's first custom-endpoint model,
+    /// else the first usable (e.g. out-of-requests) server choice, else the
     /// (possibly disabled) server default as a last resort.
+    ///
+    /// Custom-endpoint models outrank out-of-requests server models so that users
+    /// without Warp credits keep being routed to their own endpoint.
     fn fallback_llm_info<'a>(
         &'a self,
         available: &'a AvailableLLMs,
         app: &'a AppContext,
     ) -> &'a LLMInfo {
         available
-            .usable_default_llm_info(app)
+            .requestable_default_llm_info(app)
             .or_else(|| self.custom_llm_choices(app).next())
+            .or_else(|| available.usable_default_llm_info(app))
             .unwrap_or_else(|| available.default_llm_info())
+    }
+
+    /// Returns `base`'s id in place of `slot`'s when `base` is one of the user's custom-endpoint
+    /// models and `slot` is a server model the user is out of requests for, so subagents keep
+    /// using the endpoint the user picked instead of failing for lack of credits.
+    pub fn requestable_or_custom_base(&self, slot: &LLMInfo, base: &LLMInfo) -> LLMId {
+        let slot_out_of_requests =
+            matches!(slot.disable_reason, Some(DisableReason::OutOfRequests));
+        if slot_out_of_requests && self.custom_llm_info_for_id(&base.id).is_some() {
+            base.id.clone()
+        } else {
+            slot.id.clone()
+        }
     }
 
     /// Resolves `id` against `available` (a feature's server-provided model

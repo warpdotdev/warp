@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use warpui::App;
+use warpui::{App, ModelHandle};
 
 use super::*;
 use crate::ai::aws_credentials::AwsCredentialRefresher;
@@ -700,6 +700,144 @@ fn active_models_fall_back_to_usable_choice_or_custom_endpoint_when_default_disa
             );
         });
     });
+}
+
+fn add_llm_preferences_test_singletons(app: &mut App) -> ModelHandle<LLMPreferences> {
+    initialize_settings_for_tests(app);
+    app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    app.add_singleton_model(AuthManager::new_for_test);
+    app.add_singleton_model(|_| NetworkStatus::new());
+    app.add_singleton_model(UserWorkspaces::default_mock);
+    app.add_singleton_model(CloudModel::mock);
+    app.add_singleton_model(TeamTesterStatus::mock);
+    app.add_singleton_model(SyncQueue::mock);
+    app.add_singleton_model(UpdateManager::mock);
+    app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+    app.add_singleton_model(|ctx| {
+        AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+    });
+    app.add_singleton_model(LLMPreferences::new)
+}
+
+fn add_test_custom_endpoint(app: &mut App, config_key: &LLMId) {
+    ApiKeyManager::handle(app).update(app, |api_key_manager, ctx| {
+        api_key_manager.add_custom_endpoint(
+            ai::api_keys::CustomEndpointParams {
+                name: "local".to_string(),
+                url: "https://example.com/v1".to_string(),
+                api_key: "test-key".to_string(),
+                models: vec![(
+                    "custom-model".to_string(),
+                    None,
+                    Some(config_key.to_string()),
+                )],
+                schema: ai::api_keys::CustomEndpointSchema::default(),
+            },
+            ctx,
+        );
+    });
+}
+
+fn out_of_requests_models() -> ModelsByFeature {
+    let out_of_requests =
+        |id| available(id, vec![server_llm(id, Some(DisableReason::OutOfRequests))]);
+    ModelsByFeature {
+        agent_mode: out_of_requests("auto"),
+        coding: out_of_requests("auto"),
+        cli_agent: Some(out_of_requests("cli-agent-auto")),
+        computer_use: None,
+    }
+}
+
+#[test]
+fn active_models_prefer_custom_endpoint_over_out_of_requests_defaults() {
+    App::test((), |mut app| async move {
+        let llm_preferences = add_llm_preferences_test_singletons(&mut app);
+        let custom_model_id = LLMId::from("custom-config-key");
+        add_test_custom_endpoint(&mut app, &custom_model_id);
+        llm_preferences.update(&mut app, |preferences, ctx| {
+            preferences.update_feature_model_choices(Ok(out_of_requests_models()), ctx);
+        });
+
+        llm_preferences.read(&app, |preferences, app| {
+            let scope = &TeamlessScopeForTest;
+            assert_eq!(
+                preferences.get_active_base_model(scope, app, None).id,
+                custom_model_id
+            );
+            assert_eq!(
+                preferences.get_active_coding_model(scope, app, None).id,
+                custom_model_id
+            );
+            assert_eq!(
+                preferences.get_active_cli_agent_model(scope, app, None).id,
+                custom_model_id
+            );
+        });
+    });
+}
+
+#[test]
+fn active_models_keep_out_of_requests_defaults_without_custom_endpoint() {
+    App::test((), |mut app| async move {
+        let llm_preferences = add_llm_preferences_test_singletons(&mut app);
+        llm_preferences.update(&mut app, |preferences, ctx| {
+            preferences.update_feature_model_choices(Ok(out_of_requests_models()), ctx);
+        });
+
+        llm_preferences.read(&app, |preferences, app| {
+            let scope = &TeamlessScopeForTest;
+            assert_eq!(
+                preferences
+                    .get_active_base_model(scope, app, None)
+                    .id
+                    .as_str(),
+                "auto"
+            );
+            assert_eq!(
+                preferences
+                    .get_active_cli_agent_model(scope, app, None)
+                    .id
+                    .as_str(),
+                "cli-agent-auto"
+            );
+        });
+    });
+}
+
+#[test]
+fn requestable_or_custom_base_routes_out_of_requests_slots_to_custom_base() {
+    let keys = ai::api_keys::ApiKeys {
+        custom_endpoints: vec![endpoint(
+            "local",
+            "https://example.com/v1",
+            "test-key",
+            vec![model("custom-model", None, "custom-config-key")],
+        )],
+        ..Default::default()
+    };
+    let preferences = LLMPreferences::for_test(build_custom_llm_infos(&keys.custom_endpoints));
+    let custom_base = preferences
+        .custom_llm_info_for_id(&LLMId::from("custom-config-key"))
+        .expect("custom model should exist")
+        .clone();
+    let server_base = server_llm("auto", None);
+    let out_of_requests_slot = server_llm("cli-agent-auto", Some(DisableReason::OutOfRequests));
+    let usable_slot = server_llm("cli-agent-usable", None);
+
+    assert_eq!(
+        preferences.requestable_or_custom_base(&out_of_requests_slot, &custom_base),
+        custom_base.id
+    );
+    assert_eq!(
+        preferences.requestable_or_custom_base(&usable_slot, &custom_base),
+        usable_slot.id
+    );
+    assert_eq!(
+        preferences.requestable_or_custom_base(&out_of_requests_slot, &server_base),
+        out_of_requests_slot.id
+    );
 }
 
 /// Runs picker-query assertions with searchable, selectable, and disabled model fixtures plus
