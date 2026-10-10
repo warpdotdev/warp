@@ -635,7 +635,7 @@ fn live_request_input(
 ) -> RequestInput {
     RequestInput {
         conversation_id,
-        input_messages: HashMap::from([(task_id, vec![input])]),
+        input_messages: Vec::from([(task_id, vec![input])]),
         working_directory: None,
         model_id: LLMId::from("test-model"),
         coding_model_id: LLMId::from("test-coding-model"),
