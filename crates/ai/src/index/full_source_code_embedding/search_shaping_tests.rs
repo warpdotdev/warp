@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use string_offset::ByteOffset;
 
@@ -15,7 +16,7 @@ fn metadata(
     end_line: usize,
 ) -> FragmentMetadata {
     FragmentMetadata {
-        absolute_path: PathBuf::from(path),
+        absolute_path: Arc::from(PathBuf::from(path)),
         location: super::super::fragment_metadata::FragmentLocation {
             start_line,
             end_line,

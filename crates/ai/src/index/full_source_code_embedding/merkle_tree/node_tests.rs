@@ -1,11 +1,42 @@
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 use repo_metadata::{DirectoryEntry, Entry};
 use virtual_fs::{Stub, VirtualFS};
 
+use super::super::serialized_tree::{SerializedFilesystemInfo, SerializedMerkleNode};
 use super::{MerkleNode, NodeMask};
 use crate::index::full_source_code_embedding::fragment_metadata::LeafToFragmentMetadataUpdates;
-use crate::index::full_source_code_embedding::merkle_tree::DirEntryOrFragment;
+use crate::index::full_source_code_embedding::merkle_tree::{DirEntryOrFragment, MerkleHash};
+
+#[test]
+fn deserialization_reserves_serialized_child_capacity() {
+    let directory = |path: &str, hash: &[u8]| SerializedMerkleNode {
+        hash: MerkleHash::from_bytes(hash),
+        children: vec![],
+        fs_info: SerializedFilesystemInfo::Directory {
+            absolute_path: PathBuf::from(path),
+        },
+    };
+    let serialized_node = SerializedMerkleNode {
+        hash: MerkleHash::from_bytes(b"root"),
+        children: vec![
+            directory("repo/first", b"first"),
+            directory("repo/second", b"second"),
+            directory("repo/third", b"third"),
+        ],
+        fs_info: SerializedFilesystemInfo::Directory {
+            absolute_path: PathBuf::from("repo"),
+        },
+    };
+    let serialized_child_count = serialized_node.children.len();
+
+    let (node, _) =
+        MerkleNode::from_serialized(serialized_node, None).expect("Should rebuild Merkle node");
+
+    assert_eq!(node.children.len(), serialized_child_count);
+    assert_eq!(node.children.capacity(), serialized_child_count);
+}
 
 /// Tests that node hashes for directories are sorted (meaning they are resilient to files within
 /// the directory being in a different order).
