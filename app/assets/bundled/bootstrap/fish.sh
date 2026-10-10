@@ -868,9 +868,7 @@ if test "$WARP_IS_LOCAL_SHELL_SESSION" = "1"
         # determine what shell is the login shell on the remote machine.  We perform a preliminary check to see if
         # the remote shell is the Bourne shell to avoid asking it to parse later lines that use syntax it doesn't
         # support.
-        command ssh -o ControlMaster=$control_master_mode -o ControlPath="$control_path" \
-        -t $argv \
-"
+        set -l remote_command "
 export TERM_PROGRAM='WarpTerminal'
 test -n '$WARP_CLIENT_VERSION' && export WARP_CLIENT_VERSION='$WARP_CLIENT_VERSION'
 # Only forward the protocol version if it was set locally (i.e. the HOANotifications feature flag is on).
@@ -938,6 +936,15 @@ TMPPREFIX="'$HOME/.zshtmp-'" WARP_SSH_RCFILES="'${ZDOTDIR:-$HOME}'" ZDOTDIR="'$W
     ;;
 esac
 "
+        # sshd runs the remote command with the remote login shell, which may not parse POSIX syntax (fish,
+        # for one). Send the script as octal escapes, a string every shell's single quotes pass through
+        # unchanged, and decode it with sh. bash and zsh get the script to run themselves, as their
+        # branches need their own syntax; any other shell has sh run it, which reaches `exec "$SHELL"`
+        # before it parses those branches.
+        set -l remote_command_octal (printf '%s' "$remote_command" | command od -An -v -to1 | command tr -d ' \n' | command sed 's/.../\\\\&/g')
+        set -l remote_decoder 'case ${SHELL##*/} in bash|zsh) exec "$SHELL" -c "$(printf "$1")";; esac; exec sh -c "$(printf "$1")"'
+        command ssh -o ControlMaster=$control_master_mode -o ControlPath="$control_path" \
+        -t $argv "exec sh -c '$remote_decoder' sh '$remote_command_octal'"
     end
 
     function ssh
