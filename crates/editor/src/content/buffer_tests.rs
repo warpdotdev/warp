@@ -12,6 +12,7 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 use serde_yaml::{Mapping, Value};
 use string_offset::{ByteOffset, CharOffset};
+use sum_tree::SumTree;
 use vec1::{Vec1, vec1};
 use warp_util::content_version::ContentVersion;
 use warpui_core::elements::ListIndentLevel;
@@ -32,8 +33,9 @@ use crate::content::markdown::MarkdownStyle;
 use crate::content::selection::TextStyleBias;
 use crate::content::selection_model::BufferSelectionModel;
 use crate::content::text::{
-    BlockHeaderSize, BlockType, BufferBlockItem, BufferBlockStyle, CodeBlockType, IndentBehavior,
-    IndentUnit, TABLE_BLOCK_MARKDOWN_LANG, TextStyles, TextStylesWithMetadata,
+    BlockHeaderSize, BlockType, BufferBlockItem, BufferBlockStyle, BufferText, CodeBlockType,
+    ColorMarker, IndentBehavior, IndentUnit, TABLE_BLOCK_MARKDOWN_LANG, TextStyles,
+    TextStylesWithMetadata,
 };
 use crate::content::undo::{
     NonAtomicType, ReversibleEditorActions, ReversibleSelectionState, UndoActionType, UndoArg,
@@ -11282,6 +11284,299 @@ fn test_color_code_block() {
                     },
                     content_length: CharOffset::from(6)
                 })]
+            );
+        });
+    });
+}
+
+// Re-applying identical colors to an already-colored code block must not rebuild the
+// block's content.
+#[test]
+fn test_color_code_block_no_op_on_identical_colors() {
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        buffer.update(&mut app, |buffer, ctx| {
+            buffer.edit_internal_first_selection(
+                CharOffset::from(1)..CharOffset::from(1),
+                "Test\nBlock\nLine",
+                Default::default(),
+                selection.clone(),
+                ctx,
+            );
+
+            buffer.block_style_range(
+                CharOffset::from(6)..CharOffset::from(11),
+                BufferBlockStyle::CodeBlock {
+                    code_block_type: CodeBlockType::Shell,
+                },
+                selection.clone(),
+                ctx,
+            );
+
+            let colors = [
+                (ByteOffset::from(0)..ByteOffset::from(1), ColorU::white()),
+                (ByteOffset::from(1)..ByteOffset::from(4), ColorU::black()),
+            ];
+
+            let edit_result = buffer.color_code_block_ranges_internal(CharOffset::from(6), &colors);
+            assert!(
+                edit_result.delta.is_some(),
+                "The first coloring pass should produce a delta"
+            );
+            let content_after_first_pass = buffer.content.debug();
+
+            // Re-applying the exact same colors (e.g. a cached highlight result reapplied to
+            // unchanged text) must be a no-op.
+            let edit_result = buffer.color_code_block_ranges_internal(CharOffset::from(6), &colors);
+            assert!(
+                edit_result.delta.is_none(),
+                "Re-applying identical colors should be a no-op"
+            );
+            assert_eq!(buffer.content.debug(), content_after_first_pass);
+
+            // Clearing colors is a real change, not a no-op.
+            let edit_result = buffer.color_code_block_ranges_internal(CharOffset::from(6), &[]);
+            assert!(edit_result.delta.is_some());
+            assert_eq!(
+                buffer.content.debug(),
+                "<text>Test<code:Shell>Block<text>Line"
+            );
+
+            // ...and is itself a no-op once applied.
+            let edit_result = buffer.color_code_block_ranges_internal(CharOffset::from(6), &[]);
+            assert!(edit_result.delta.is_none());
+        });
+    });
+}
+
+#[test]
+fn test_color_code_block_multibyte_utf8() {
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        buffer.update(&mut app, |buffer, ctx| {
+            buffer.edit_internal_first_selection(
+                CharOffset::from(1)..CharOffset::from(1),
+                "Test\nh\u{e9}llo\nLine",
+                Default::default(),
+                selection.clone(),
+                ctx,
+            );
+
+            // "h\u{e9}llo" is 5 characters (h, \u{e9}, l, l, o), matching the 5-character
+            // "Block" ranges used elsewhere in this file, but \u{e9} is a 2-byte UTF-8
+            // character, so char and byte offsets diverge partway through the block.
+            buffer.block_style_range(
+                CharOffset::from(6)..CharOffset::from(11),
+                BufferBlockStyle::CodeBlock {
+                    code_block_type: CodeBlockType::Shell,
+                },
+                selection.clone(),
+                ctx,
+            );
+
+            assert_eq!(
+                buffer.content.debug(),
+                "<text>Test<code:Shell>h\u{e9}llo<text>Line"
+            );
+
+            buffer.color_code_block_ranges_internal(
+                CharOffset::from(6),
+                &[
+                    (ByteOffset::from(0)..ByteOffset::from(1), ColorU::white()),
+                    (ByteOffset::from(1)..ByteOffset::from(3), ColorU::black()),
+                    (ByteOffset::from(3)..ByteOffset::from(6), ColorU::white()),
+                ],
+            );
+
+            assert_eq!(
+                buffer.content.debug(),
+                "<text>Test<code:Shell><c_#ffffff>h<c><c_#000000>\u{e9}<c><c_#ffffff>llo<c><text>Line"
+            );
+
+            // Re-applying the same colors, including across the multi-byte character, is a
+            // no-op.
+            let edit_result = buffer.color_code_block_ranges_internal(
+                CharOffset::from(6),
+                &[
+                    (ByteOffset::from(0)..ByteOffset::from(1), ColorU::white()),
+                    (ByteOffset::from(1)..ByteOffset::from(3), ColorU::black()),
+                    (ByteOffset::from(3)..ByteOffset::from(6), ColorU::white()),
+                ],
+            );
+            assert!(edit_result.delta.is_none());
+            assert_eq!(
+                buffer.content.debug(),
+                "<text>Test<code:Shell><c_#ffffff>h<c><c_#000000>\u{e9}<c><c_#ffffff>llo<c><text>Line"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_color_code_block_adjacent_to_block_item() {
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        buffer.update(&mut app, |buffer, ctx| {
+            buffer.edit_internal_first_selection(
+                CharOffset::from(1)..CharOffset::from(1),
+                "Test\nBlock\nLine",
+                Default::default(),
+                selection.clone(),
+                ctx,
+            );
+
+            buffer.block_style_range(
+                CharOffset::from(6)..CharOffset::from(11),
+                BufferBlockStyle::CodeBlock {
+                    code_block_type: CodeBlockType::Shell,
+                },
+                selection.clone(),
+                ctx,
+            );
+
+            // Insert a horizontal rule directly before the code block, so the block's start
+            // is immediately preceded by a block-item marker rather than plain text.
+            buffer.insert_block_after_block_with_offset(
+                CharOffset::from(1),
+                BlockType::Item(BufferBlockItem::HorizontalRule),
+                selection.clone(),
+                ctx,
+            );
+
+            assert_eq!(
+                buffer.content.debug(),
+                "<text>Test<hr><code:Shell>Block<text>Line"
+            );
+
+            // Inserting the <hr> shifted the code block's start by one character, since it's a
+            // pure insertion (rather than a newline replacement) next to a non-plain-text block.
+            let style_start = buffer.containing_block_start(CharOffset::from(7));
+
+            buffer.color_code_block_ranges_internal(
+                style_start,
+                &[(ByteOffset::from(0)..ByteOffset::from(5), ColorU::white())],
+            );
+
+            assert_eq!(
+                buffer.content.debug(),
+                "<text>Test<hr><code:Shell><c_#ffffff>Block<c><text>Line"
+            );
+
+            // Re-applying the same coloring is a no-op and leaves the adjacent <hr> untouched.
+            let edit_result = buffer.color_code_block_ranges_internal(
+                style_start,
+                &[(ByteOffset::from(0)..ByteOffset::from(5), ColorU::white())],
+            );
+            assert!(edit_result.delta.is_none());
+            assert_eq!(
+                buffer.content.debug(),
+                "<text>Test<hr><code:Shell><c_#ffffff>Block<c><text>Line"
+            );
+        });
+    });
+}
+
+// Regression test for the `started_colored` handling: a code block that inherits an
+// already-open color from before its own start must still be detected as a no-op when
+// the requested colors match what's already applied.
+#[test]
+fn test_color_code_block_started_colored_no_op() {
+    let mut buffer = Buffer::new(Box::new(|_, _| IndentBehavior::Ignore));
+
+    let mut content = SumTree::new();
+    content.push(BufferText::Color(ColorMarker::Start(ColorU::black())));
+    content.push(BufferText::BlockMarker {
+        marker_type: BufferBlockStyle::CodeBlock {
+            code_block_type: CodeBlockType::Shell,
+        },
+    });
+    content.append_str("Block");
+    buffer.content = content;
+
+    assert_eq!(buffer.content.debug(), "<c_#000000><code:Shell>Block");
+
+    let style_start = buffer.containing_block_start(CharOffset::from(1));
+    let colors = [(ByteOffset::from(0)..ByteOffset::from(5), ColorU::white())];
+
+    let edit_result = buffer.color_code_block_ranges_internal(style_start, &colors);
+    assert!(edit_result.delta.is_some());
+    assert_eq!(
+        buffer.content.debug(),
+        "<c_#000000><code:Shell><c><c_#ffffff>Block<c>"
+    );
+
+    // Re-applying the same colors is a genuine no-op, even though the block inherits an
+    // open color from before its own start.
+    let edit_result = buffer.color_code_block_ranges_internal(style_start, &colors);
+    assert!(edit_result.delta.is_none());
+    assert_eq!(
+        buffer.content.debug(),
+        "<c_#000000><code:Shell><c><c_#ffffff>Block<c>"
+    );
+}
+
+// Regression test for the batched-text-write staging buffer: a single color range spanning a
+// block with no internal marker transitions must not stage the whole block as one `String`
+// before flushing it into the `SumTree`, since that would allocate proportionally to the
+// block's size (the case this fix targets).
+#[test]
+fn test_color_code_block_large_run_without_color_transitions() {
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        // Long enough to cross several `TEXT_FRAGMENT_SIZE`-sized staging-buffer flushes (test
+        // builds use `TEXT_FRAGMENT_SIZE == 64`) with no color transition in between.
+        let body: String = (0..500).map(|i| (b'a' + (i % 26) as u8) as char).collect();
+        let markdown = format!("Test\n{body}\nLine");
+        let style_start = CharOffset::from(6);
+        let style_end = CharOffset::from(6 + body.chars().count());
+
+        buffer.update(&mut app, |buffer, ctx| {
+            buffer.edit_internal_first_selection(
+                CharOffset::from(1)..CharOffset::from(1),
+                &markdown,
+                Default::default(),
+                selection.clone(),
+                ctx,
+            );
+
+            buffer.block_style_range(
+                style_start..style_end,
+                BufferBlockStyle::CodeBlock {
+                    code_block_type: CodeBlockType::Shell,
+                },
+                selection.clone(),
+                ctx,
+            );
+
+            // A single color range spanning the entire block: no marker transitions occur
+            // within the run, so before this fix it would all be staged in one `String` before
+            // being flushed into the block's content.
+            let colors = [(
+                ByteOffset::from(0)..ByteOffset::from(body.len()),
+                ColorU::white(),
+            )];
+
+            let edit_result = buffer.color_code_block_ranges_internal(style_start, &colors);
+            assert!(edit_result.delta.is_some());
+            assert_eq!(
+                buffer.content.debug(),
+                format!("<text>Test<code:Shell><c_#ffffff>{body}<c><text>Line")
+            );
+
+            // Re-applying the same single-range coloring is a no-op.
+            let edit_result = buffer.color_code_block_ranges_internal(style_start, &colors);
+            assert!(edit_result.delta.is_none());
+            assert_eq!(
+                buffer.content.debug(),
+                format!("<text>Test<code:Shell><c_#ffffff>{body}<c><text>Line")
             );
         });
     });
