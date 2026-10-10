@@ -680,7 +680,7 @@ pub struct CodeReviewView {
     /// Rebuilt whenever the loaded diff changes; existing handles are preserved.
     dir_mouse_states: HashMap<String, MouseStateHandle>,
     /// Cached file tree built from the loaded diff; avoids per-frame allocations.
-    /// Rebuilt in the diff-load handler alongside `expanded_dirs` and `dir_mouse_states`.
+    /// Rebuilt on a full diff load and on each single-file update.
     cached_sidebar_tree: Vec<file_tree::CodeReviewTreeNode>,
     /// Pre-constructed fallback used when a dir path is absent from `dir_mouse_states`.
     /// Created during construction so no `MouseStateHandle` is ever allocated during render.
@@ -2484,7 +2484,33 @@ impl CodeReviewView {
         GlobalBufferModel::handle(ctx).update(ctx, |model, ctx| {
             model.remove_deallocated_buffers(ctx);
         });
+        self.refresh_sidebar_tree();
         ctx.notify();
+    }
+
+    /// Rebuilds the sidebar tree from the current file list.
+    ///
+    /// Directories that already existed keep their expand or collapse state.
+    /// Directories that appear in this update start expanded.
+    fn refresh_sidebar_tree(&mut self) {
+        let tree = {
+            let Some(repo) = self.active_repo.as_ref() else {
+                return;
+            };
+            let CodeReviewViewState::Loaded(state) = &repo.state else {
+                return;
+            };
+            file_tree::build_code_review_tree(&state.file_states)
+        };
+        let mut previous_dirs = HashSet::new();
+        file_tree::collect_dir_paths(&self.cached_sidebar_tree, &mut previous_dirs);
+        file_tree::sync_expanded_dirs(&previous_dirs, &tree, &mut self.expanded_dirs);
+        file_tree::rebuild_dir_mouse_states(&tree, &mut self.dir_mouse_states);
+        let mut live_dirs = HashSet::new();
+        file_tree::collect_dir_paths(&tree, &mut live_dirs);
+        self.dir_mouse_states
+            .retain(|path, _| live_dirs.contains(path));
+        self.cached_sidebar_tree = tree;
     }
 
     /// Updates state for the view when new git diffs come in.

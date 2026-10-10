@@ -5,7 +5,7 @@
 //! visual primitives from [`crate::code::file_tree::row_renderer`] so the tree rows
 //! look identical to those in the left-panel Project Explorer.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use indexmap::IndexMap;
 use warp_core::features::FeatureFlag;
@@ -74,11 +74,27 @@ impl CodeReviewTreeNode {
 pub(super) fn build_code_review_tree(
     file_states: &IndexMap<String, FileState>,
 ) -> Vec<CodeReviewTreeNode> {
+    build_tree_from_counts(
+        file_states
+            .iter()
+            .enumerate()
+            .map(|(file_index, (path, state))| {
+                (
+                    path.as_str(),
+                    file_index,
+                    state.file_diff.additions(),
+                    state.file_diff.deletions(),
+                )
+            }),
+    )
+}
+
+fn build_tree_from_counts<'a>(
+    files: impl IntoIterator<Item = (&'a str, usize, usize, usize)>,
+) -> Vec<CodeReviewTreeNode> {
     let mut roots: Vec<CodeReviewTreeNode> = Vec::new();
 
-    for (file_index, (path, state)) in file_states.iter().enumerate() {
-        let additions = state.file_diff.additions();
-        let deletions = state.file_diff.deletions();
+    for (path, file_index, additions, deletions) in files {
         insert_into_tree(&mut roots, path, "", file_index, additions, deletions);
     }
 
@@ -183,6 +199,32 @@ pub(super) fn collect_expanded_dirs(
 ///
 /// Existing handles are preserved (so hover tracking survives re-renders);
 /// new handles are created with `MouseStateHandle::default()`.
+pub(super) fn collect_dir_paths(nodes: &[CodeReviewTreeNode], paths: &mut HashSet<String>) {
+    for node in nodes {
+        if let CodeReviewTreeNode::Dir { path, children, .. } = node {
+            paths.insert(path.clone());
+            collect_dir_paths(children, paths);
+        }
+    }
+}
+
+/// Drops directories that are gone, keeps collapse state for directories that
+/// remain, and expands directories that were not in `previous_dirs`.
+pub(super) fn sync_expanded_dirs(
+    previous_dirs: &HashSet<String>,
+    nodes: &[CodeReviewTreeNode],
+    expanded_dirs: &mut HashSet<String>,
+) {
+    let mut live_dirs = HashSet::new();
+    collect_dir_paths(nodes, &mut live_dirs);
+    expanded_dirs.retain(|path| live_dirs.contains(path));
+    for path in &live_dirs {
+        if !previous_dirs.contains(path) {
+            expanded_dirs.insert(path.clone());
+        }
+    }
+}
+
 pub(super) fn rebuild_dir_mouse_states(
     nodes: &[CodeReviewTreeNode],
     states: &mut HashMap<String, MouseStateHandle>,
@@ -498,58 +540,5 @@ fn render_change_counts(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{sort_nodes, CodeReviewTreeNode};
-
-    fn file(name: &str) -> CodeReviewTreeNode {
-        CodeReviewTreeNode::File {
-            name: name.to_string(),
-            file_path: name.to_string(),
-            additions: 0,
-            deletions: 0,
-            file_index: 0,
-        }
-    }
-
-    fn dir(name: &str) -> CodeReviewTreeNode {
-        CodeReviewTreeNode::Dir {
-            name: name.to_string(),
-            path: name.to_string(),
-            children: Vec::new(),
-        }
-    }
-
-    fn node_names(nodes: &[CodeReviewTreeNode]) -> Vec<&str> {
-        nodes.iter().map(CodeReviewTreeNode::name).collect()
-    }
-
-    #[test]
-    fn sort_nodes_matches_project_explorer_ordering() {
-        let mut nodes = vec![
-            file("file10.rs"),
-            dir("src2"),
-            file(".env"),
-            dir(".config"),
-            file("file1.rs"),
-            dir("src10"),
-            file("file2.rs"),
-            dir("src1"),
-        ];
-
-        sort_nodes(&mut nodes);
-
-        assert_eq!(
-            node_names(&nodes),
-            [
-                ".config",
-                "src1",
-                "src2",
-                "src10",
-                ".env",
-                "file1.rs",
-                "file2.rs",
-                "file10.rs",
-            ]
-        );
-    }
-}
+#[path = "file_tree_tests.rs"]
+mod tests;
