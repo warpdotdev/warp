@@ -8,6 +8,31 @@ use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{AIAgentExchange, MessageId};
 
+/// The token a viewer addresses this conversation by: its own server token, or
+/// the one it was forked from. `None` for a conversation a viewer has no way to
+/// refer to.
+fn shared_session_replay_token(conversation: &AIConversation) -> Option<String> {
+    conversation
+        .server_conversation_token()
+        .or_else(|| conversation.forked_from_server_conversation_token())
+        .map(|token| token.as_str().to_string())
+}
+
+/// Whether a conversation living on the sharer's terminal surface belongs in a
+/// viewer's replay.
+///
+/// Two kinds are excluded, both of which used to make a viewer's pane drop the
+/// shared transcript for the conversation the events actually belonged to
+/// (QUALITY-1676):
+/// - Conversations with no token at all. They were replayed as an `Init` with an
+///   empty `conversation_id`, which matches nothing on the viewer side.
+/// - Remote-child placeholders. They live on the parent's surface but mirror
+///   another run's conversation, which the viewer materializes in its own child
+///   pane from that run's own session.
+fn is_replayable_for_shared_session(conversation: &AIConversation) -> bool {
+    !conversation.is_remote_child() && shared_session_replay_token(conversation).is_some()
+}
+
 // Reconstructs all response events from conversations for use in session sharing.
 // These messages are used to replay conversations as if they were happening live.
 pub fn reconstruct_response_events_from_conversations(
@@ -15,10 +40,28 @@ pub fn reconstruct_response_events_from_conversations(
 ) -> Vec<ResponseEvent> {
     let mut events = vec![];
 
+    let conversations: Vec<&AIConversation> = conversations
+        .iter()
+        .filter(|conversation| {
+            let replayable = is_replayable_for_shared_session(conversation);
+            if !replayable {
+                log::warn!(
+                    "Skipping conversation in shared session replay: id={:?} \
+                     exchanges={} is_remote_child={} has_token={}",
+                    conversation.id(),
+                    conversation.exchange_count(),
+                    conversation.is_remote_child(),
+                    shared_session_replay_token(conversation).is_some(),
+                );
+            }
+            replayable
+        })
+        .collect();
+
     // Build a map of message_id -> (task_id, message, conversation) for quick lookup
     let mut message_map: HashMap<MessageId, (&TaskId, &api::Message, &AIConversation)> =
         HashMap::new();
-    for conversation in conversations {
+    for conversation in conversations.iter().copied() {
         for task in conversation.all_tasks() {
             for message in task.messages() {
                 message_map.insert(
@@ -35,7 +78,7 @@ pub fn reconstruct_response_events_from_conversations(
         .flat_map(|conv| {
             conv.all_exchanges()
                 .into_iter()
-                .map(move |exchange| (conv, exchange))
+                .map(move |exchange| (*conv, exchange))
         })
         .collect();
     all_exchanges.sort_by_key(|(_, exchange)| exchange.start_time);
@@ -67,14 +110,11 @@ pub fn reconstruct_response_events_from_conversations(
             message.timestamp.as_ref().map(|ts| (ts.seconds, ts.nanos))
         });
 
-        // Use the server conversation token if it's available.
-        // Otherwise, fall back to the id that this conversation was forked from.
-        // This ensures viewers can properly group historical exchanges together.
-        let token = conversation
-            .server_conversation_token()
-            .or_else(|| conversation.forked_from_server_conversation_token())
-            .map(|t| t.as_str().to_string())
-            .unwrap_or_default();
+        // Every conversation still here has a token; `is_replayable_for_shared_session`
+        // dropped the rest above.
+        let Some(token) = shared_session_replay_token(conversation) else {
+            continue;
+        };
         let request_id = exchange_messages
             .first()
             .map(|(_, msg)| msg.request_id.clone())
@@ -218,3 +258,7 @@ fn create_finished_event_from_conversation(conversation: &AIConversation) -> Res
         )),
     }
 }
+
+#[cfg(test)]
+#[path = "replay_agent_conversations_tests.rs"]
+mod tests;
