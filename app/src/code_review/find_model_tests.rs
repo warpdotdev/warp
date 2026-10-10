@@ -190,7 +190,7 @@ fn create_find_model_with_query(
 ) -> ModelHandle<CodeReviewFindModel> {
     let (window_id, _) = app.add_window(WindowStyle::NotStealFocus, |_| TestView);
 
-    let diff_state_model = app.add_model(DiffStateModel::new_for_test);
+    let diff_state_model = app.add_model(DiffStateModel::new_for_local_test);
     let repo_path = PathBuf::from("/tmp/test");
     let working_directories_model = app.add_model(|_| WorkingDirectoriesModel::new());
     let repo_key = LocalOrRemotePath::Local(repo_path);
