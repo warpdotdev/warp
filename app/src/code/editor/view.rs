@@ -495,6 +495,15 @@ impl CodeEditorView {
         self
     }
 
+    /// See [`CodeEditorModel::set_copy_line_when_selection_is_empty`], which this
+    /// forwards to.
+    pub fn with_copy_line_when_selection_is_empty(self, ctx: &mut AppContext) -> Self {
+        self.model.update(ctx, |model, _ctx| {
+            model.set_copy_line_when_selection_is_empty(true);
+        });
+        self
+    }
+
     pub(crate) fn disable_find_and_replace(mut self) -> Self {
         self.find_bar = None;
         self
