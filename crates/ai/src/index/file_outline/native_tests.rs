@@ -194,3 +194,54 @@ fmt.Println("Helper function")
     assert_eq!(symbols[4].name, "helperFunction");
     assert_eq!(symbols[4].type_prefix, Some("func".to_owned()));
 }
+
+#[test]
+fn test_parse_dart_outline() {
+    let temp_dir = TempDir::new().unwrap();
+    let content = r#"
+/// Widget used to verify Dart outline extraction.
+class Probe {
+  Probe();
+
+  Widget build() => const SizedBox.shrink();
+}
+
+mixin Logging {
+  void log() {}
+}
+
+extension StringX on String {
+  bool get blank => isEmpty;
+}
+
+enum Status { ready }
+"#;
+    let file_path = create_test_file(&temp_dir, "main.dart", content);
+
+    let outline = parse_file_outline(&file_path).unwrap();
+    let symbols = outline.symbols.unwrap();
+    let names_and_types: Vec<_> = symbols
+        .iter()
+        .map(|symbol| (symbol.name.as_str(), symbol.type_prefix.as_deref()))
+        .collect();
+
+    assert_eq!(
+        names_and_types,
+        vec![
+            ("Probe", Some("class")),
+            ("Probe", Some("constructor")),
+            ("build", Some("fn")),
+            ("Logging", Some("class")),
+            ("log", Some("fn")),
+            ("StringX", Some("class")),
+            ("blank", Some("fn")),
+            ("Status", Some("enum")),
+        ],
+    );
+    assert_eq!(
+        symbols[0].comment,
+        Some(vec![
+            "/// Widget used to verify Dart outline extraction.".to_string()
+        ]),
+    );
+}
