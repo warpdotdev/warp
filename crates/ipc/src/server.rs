@@ -73,8 +73,17 @@ pub type Result<T> = std::result::Result<T, ServerError>;
 struct ConnectionListener(ConnectionListenerImpl);
 
 impl ConnectionListener {
-    fn new(connection_address: ConnectionAddress) -> Result<Self> {
-        ConnectionListenerImpl::new(connection_address).map(Self)
+    fn new(
+        connection_address: ConnectionAddress,
+        windows_pipe_security_descriptor: Option<&str>,
+        background_executor: Arc<Background>,
+    ) -> Result<Self> {
+        ConnectionListenerImpl::new(
+            connection_address,
+            windows_pipe_security_descriptor,
+            background_executor,
+        )
+        .map(Self)
     }
 
     /// Waits until a client connects and returns the connection.
@@ -113,6 +122,7 @@ impl Connection {
 pub struct ServerBuilder {
     services: HashMap<ServiceId, Box<dyn AnyServiceImpl>>,
     fixed_connection_address: Option<ConnectionAddress>,
+    windows_pipe_security_descriptor: Option<String>,
 }
 
 impl ServerBuilder {
@@ -125,6 +135,19 @@ impl ServerBuilder {
     /// Use a fixed address name instead of a randomly generated one.
     pub fn with_fixed_address(mut self, fixed_address: String) -> Self {
         self.fixed_connection_address = Some(ConnectionAddress::from(fixed_address));
+        self
+    }
+
+    /// On Windows, creates the underlying named pipe with the given SDDL security descriptor
+    /// instead of the OS default (which grants read-only access to Everyone and full control only
+    /// to the pipe's creator). Use this for servers that must accept connections from a client
+    /// process running at a different elevation level than the server -- the OS default DACL
+    /// otherwise denies such clients with `ERROR_ACCESS_DENIED` when they try to connect.
+    ///
+    /// This is a no-op on non-Windows platforms, where local sockets are Unix Domain Sockets with
+    /// no equivalent concept of a security descriptor.
+    pub fn with_windows_pipe_security_descriptor(mut self, sddl: impl Into<String>) -> Self {
+        self.windows_pipe_security_descriptor = Some(sddl.into());
         self
     }
 
@@ -145,6 +168,7 @@ impl ServerBuilder {
             connection_address.clone(),
             self.services,
             background_executor,
+            self.windows_pipe_security_descriptor,
         )
         .map(|server| (server, connection_address))
     }
@@ -169,8 +193,13 @@ impl Server {
         connection_address: ConnectionAddress,
         services: HashMap<ServiceId, Box<dyn AnyServiceImpl>>,
         background_executor: Arc<Background>,
+        windows_pipe_security_descriptor: Option<String>,
     ) -> Result<Self> {
-        let listener = ConnectionListener::new(connection_address)?;
+        let listener = ConnectionListener::new(
+            connection_address,
+            windows_pipe_security_descriptor.as_deref(),
+            background_executor.clone(),
+        )?;
 
         // Spawn two separate background tasks. The first is responsible for listening for new
         // client connections and passing them to the second, which itself spawns tasks to process
