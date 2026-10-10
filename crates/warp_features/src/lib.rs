@@ -685,9 +685,6 @@ pub enum FeatureFlag {
     /// Enables the launch modal announcing the Warp Agent CLI.
     AgentCliLaunchModal,
 
-    /// Updated tab styling (background colors, border, close button positioning, margins).
-    NewTabStyling,
-
     /// Enables file-based MCP server support via .mcp.json files in repo roots.
     FileBasedMcp,
 
