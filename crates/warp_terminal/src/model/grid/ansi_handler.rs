@@ -1887,6 +1887,16 @@ impl GridHandler {
                         image_protocol: ImageProtocol::Kitty,
                     });
 
+                if action.placement_data.unicode_placeholder {
+                    self.add_virtual_image_placement(
+                        action.image_id,
+                        action.placement_id,
+                        &action.placement_data,
+                        metadata.image_size,
+                    );
+                    return Ok(());
+                }
+
                 self.images.add_image_placement_data(
                     action.image_id,
                     action.placement_id,
@@ -1976,6 +1986,16 @@ impl GridHandler {
                     .ceil() as usize;
                 let width_cells =
                     (width_px as f32 / (self.ansi_handler_state.cell_width as f32)).ceil() as usize;
+
+                if action.placement_data.unicode_placeholder {
+                    self.add_virtual_image_placement(
+                        action.image_id,
+                        action.placement_id,
+                        &action.placement_data,
+                        metadata.image_size,
+                    );
+                    return Ok(());
+                }
 
                 self.images.add_image_placement_data(
                     action.image_id,

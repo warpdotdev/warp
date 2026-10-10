@@ -328,6 +328,8 @@ tokio-util.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
 warp_errors = { workspace = true, features = ["tokio-errors", "websocket-errors"] }
+# Reads kitty images sent as a file or shared memory (`t=f`, `t=t`, `t=s`).
+warp_terminal = { workspace = true, features = ["local_fs"] }
 
 # AWS SDK (loading credentials for BYO LLM)
 aws-config = { version = "1.8.16", features = ["credentials-login"] }

@@ -1,6 +1,9 @@
+use pathfinder_geometry::vector::Vector2F;
+
 use super::{AbsolutePoint, AbsoluteRectangle, GridHandler};
 use crate::model::Point;
-use crate::model::image_map::ImagePlacementData;
+use crate::model::image_map::{ImagePlacementData, VirtualPlacement};
+use crate::model::kitty::KittyPlacementData;
 
 impl GridHandler {
     pub fn get_image_ids_in_range(
@@ -55,6 +58,38 @@ impl GridHandler {
         placement_id: u32,
     ) -> Option<&ImagePlacementData> {
         self.images.get_image_placement_data(image_id, placement_id)
+    }
+
+    /// The virtual placement (kitty `U=1`) that this grid's placeholder cells for `image_id`
+    /// show, if the image has one.
+    pub fn virtual_image_placement(&self, image_id: u32) -> Option<VirtualPlacement> {
+        self.images.virtual_placement(image_id)
+    }
+
+    /// Records a kitty virtual placement (`U=1`), sized in cells as a direct placement would be.
+    /// Placeholder cells show it, so nothing is placed at the cursor.
+    pub(super) fn add_virtual_image_placement(
+        &mut self,
+        image_id: u32,
+        placement_id: u32,
+        placement_data: &KittyPlacementData,
+        image_size: Vector2F,
+    ) {
+        let cell_width = self.ansi_handler_state.cell_width.max(1);
+        let cell_height = self.ansi_handler_state.cell_height.max(1);
+        let size = placement_data.get_desired_dimensions(
+            image_size,
+            cell_height,
+            cell_width,
+            usize::MAX,
+            usize::MAX,
+        );
+        let placement = VirtualPlacement {
+            placement_id,
+            cols: (size.x() / cell_width as f32).ceil().max(1.) as u32,
+            rows: (size.y() / cell_height as f32).ceil().max(1.) as u32,
+        };
+        self.images.add_virtual_placement(image_id, placement);
     }
 }
 

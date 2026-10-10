@@ -12,6 +12,7 @@ use num_traits::Float as _;
 use unicode_width::UnicodeWidthChar;
 use warp_core::features::FeatureFlag;
 use warp_errors::{ReportErrorLogMode, report_error};
+use warp_terminal::model::kitty_unicode_placeholder::PlaceholderRunBuilder;
 use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
 use warpui::color::ColorU;
 use warpui::elements::{Border, CornerRadius, DEFAULT_UI_LINE_HEIGHT_RATIO, Fill, Radius};
@@ -621,6 +622,7 @@ fn render_grid_without_ligatures<'a>(
         }
     }
 
+    let mut image_placeholders = PlaceholderRunBuilder::new(FeatureFlag::KittyImages.is_enabled());
     for (offset, row_idx) in visible_rows.enumerate() {
         let offset_row = start_row + offset;
 
@@ -713,6 +715,8 @@ fn render_grid_without_ligatures<'a>(
             }
             // Check if the current block match contains the point.
             let cell = &row[col];
+            let placeholder_blank = image_placeholders.push(offset_row, col, cell);
+            let cell = placeholder_blank.as_ref().unwrap_or(cell);
             let mut cell_type = CellType::default();
             let mut first_cell_in_link = false;
             let mut first_cell_in_secret = FirstCellInSecret::No;
@@ -886,6 +890,7 @@ fn render_grid_without_ligatures<'a>(
             .draw_rect_without_hit_recording(RectF::new(data.origin, data.size))
             .with_background(Fill::Solid(data.color));
     }
+    render_placeholder_runs(grid, image_placeholders, cell_size, grid_origin, ctx, app);
 }
 
 #[inline]
@@ -1130,6 +1135,7 @@ fn render_grid_with_ligatures<'a>(
         }
     }
 
+    let mut image_placeholders = PlaceholderRunBuilder::new(FeatureFlag::KittyImages.is_enabled());
     for (offset, row_idx) in visible_rows.enumerate() {
         let offset_row = start_row + offset;
         let mut string_builder =
@@ -1180,6 +1186,8 @@ fn render_grid_with_ligatures<'a>(
 
         for col in 0..grid.columns() {
             let cell = &row[col];
+            let placeholder_blank = image_placeholders.push(offset_row, col, cell);
+            let cell = placeholder_blank.as_ref().unwrap_or(cell);
             let mut cell_type = CellType::default();
             let mut first_cell_in_link = false;
             let mut first_cell_in_secret = FirstCellInSecret::No;
@@ -1388,6 +1396,12 @@ fn render_grid_with_ligatures<'a>(
                 ctx,
             );
 
+            // A placeholder's image covers it, so it adds nothing to the text line but a space
+            // that keeps the text on either side from joining into a ligature, one per stretch.
+            if placeholder_blank.is_some() && string_builder.line.ends_with(' ') {
+                continue;
+            }
+
             let glyph_offset = cell_size * vec2f(col as f32, offset_row as f32);
             if first_cell_in_link {
                 // We want this to be a bounding box to be around the cell, so we don't include baseline_position in the origin.
@@ -1517,6 +1531,7 @@ fn render_grid_with_ligatures<'a>(
             .draw_rect_without_hit_recording(RectF::new(data.origin, data.size))
             .with_background(Fill::Solid(data.color));
     }
+    render_placeholder_runs(grid, image_placeholders, cell_size, grid_origin, ctx, app);
 }
 
 fn paint_line(
@@ -1905,6 +1920,68 @@ fn render_image(
         Image::Animated(_) => {
             log::warn!("Image should be static");
         }
+    }
+}
+
+/// Draws what kitty Unicode placeholder cells show: for each run, the image fitted into its
+/// virtual placement's box and centered, as kitty does, in a layer clipped to the run's cells.
+fn render_placeholder_runs(
+    grid: &GridHandler,
+    image_placeholders: PlaceholderRunBuilder,
+    cell_size: Vector2F,
+    grid_origin: Vector2F,
+    ctx: &mut PaintContext,
+    app: &AppContext,
+) {
+    let asset_cache = AssetCache::as_ref(app);
+    for run in image_placeholders.finish() {
+        let Some(placement) = grid.virtual_image_placement(run.image_id) else {
+            continue;
+        };
+        let box_size = cell_size * vec2f(placement.cols as f32, placement.rows as f32);
+        // At its own size: the GPU scales it as it draws, so no frame of an animation is
+        // resized on the CPU.
+        let image = ImageCache::as_ref(app).image(
+            AssetSource::Raw {
+                id: run.image_id.to_string(),
+            },
+            Default::default(),
+            FitType::Contain,
+            AnimatedImageBehavior::FullAnimation,
+            CacheOption::Original,
+            ctx.max_texture_dimension_2d,
+            asset_cache,
+        );
+        let AssetState::Loaded { data } = image else {
+            continue;
+        };
+        let Image::Static(image) = data.as_ref() else {
+            continue;
+        };
+
+        let natural_size = image.size().to_f32();
+        let image_size =
+            natural_size * (box_size.x() / natural_size.x()).min(box_size.y() / natural_size.y());
+        let box_origin = grid_origin
+            + cell_size
+                * vec2f(
+                    run.screen_col as f32 - run.tile_col as f32,
+                    run.screen_row as f32 - run.tile_row as f32,
+                );
+        let run_bounds = RectF::new(
+            grid_origin + cell_size * vec2f(run.screen_col as f32, run.screen_row as f32),
+            cell_size * vec2f(run.len as f32, run.rows as f32),
+        );
+
+        ctx.scene
+            .start_layer(warpui::ClipBounds::BoundedByActiveLayerAnd(run_bounds));
+        ctx.scene.draw_image(
+            RectF::new(box_origin + (box_size - image_size) * 0.5, image_size),
+            image.clone(),
+            1.,
+            CornerRadius::default(),
+        );
+        ctx.scene.stop_layer();
     }
 }
 

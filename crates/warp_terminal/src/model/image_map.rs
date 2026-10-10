@@ -25,11 +25,21 @@ pub struct ImageMap {
     image_placement_data: HashMap<(u32, u32), ImagePlacementData>,
     num_lines_truncated_at_last_update: u64,
     image_type_by_image_id: HashMap<u32, ImageType>,
+    /// Kitty virtual placements (`U=1`) by image id, shown wherever placeholder cells name them.
+    virtual_placements: HashMap<u32, VirtualPlacement>,
 }
 
 impl ImageMap {
     pub fn is_empty(&self) -> bool {
         self.image_placement_data.is_empty()
+    }
+
+    pub fn add_virtual_placement(&mut self, image_id: u32, placement: VirtualPlacement) {
+        self.virtual_placements.insert(image_id, placement);
+    }
+
+    pub fn virtual_placement(&self, image_id: u32) -> Option<VirtualPlacement> {
+        self.virtual_placements.get(&image_id).copied()
     }
 
     pub fn get_image_placement_data(
@@ -255,10 +265,12 @@ impl ImageMap {
         self.image_placement_data.clear();
         self.image_ids_by_point.clear();
         self.point_by_image_id.clear();
+        self.virtual_placements.clear();
         self.largest_height = 0;
     }
 
     pub fn evict_image(&mut self, image_id_to_evict: u32) {
+        self.virtual_placements.remove(&image_id_to_evict);
         let mut images_to_evict = vec![];
         for &(image_id, placement_id) in self.point_by_image_id.keys() {
             if image_id == image_id_to_evict {
@@ -272,6 +284,8 @@ impl ImageMap {
     }
 
     pub fn evict_placement(&mut self, image_id: u32, placement_id: u32) {
+        self.virtual_placements
+            .retain(|&id, p| id != image_id || p.placement_id != placement_id);
         self.image_placement_data.remove(&(image_id, placement_id));
         if let Some(point) = self.point_by_image_id.get(&(image_id, placement_id)) {
             if let Some(image_ids) = self.image_ids_by_point.get_mut(point) {
@@ -319,6 +333,14 @@ impl StoredImageMetadata {
             StoredImageMetadata::Kitty(_) => false,
         }
     }
+}
+
+/// A kitty virtual placement (`U=1`): the box of cells its placeholder cells fit the image into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VirtualPlacement {
+    pub placement_id: u32,
+    pub cols: u32,
+    pub rows: u32,
 }
 
 #[derive(Debug, Clone)]

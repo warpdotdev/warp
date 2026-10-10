@@ -124,7 +124,7 @@ impl CustomImageHeader {
     }
 
     pub fn prepend_custom_header(
-        mut data: Vec<u8>,
+        data: Vec<u8>,
         width: u32,
         height: u32,
         image_format: CustomImageFormat,
@@ -148,12 +148,14 @@ impl CustomImageHeader {
             image_format,
         };
 
-        data.splice(
-            0..0,
-            custom_header.create_header().as_bytes().iter().copied(),
-        );
+        // Copied once into a new buffer: inserting the header in front of `data` moves all of it,
+        // which for an image sent many times a second costs more than the copy.
+        let header = custom_header.create_header();
+        let mut with_header = Vec::with_capacity(header.len() + data.len());
+        with_header.extend_from_slice(header.as_bytes());
+        with_header.extend_from_slice(&data);
 
-        Ok(data)
+        Ok(with_header)
     }
 
     fn try_from_bytes(data: &[u8]) -> Result<(CustomImageHeader, &[u8]), CustomHeaderParsingError> {
