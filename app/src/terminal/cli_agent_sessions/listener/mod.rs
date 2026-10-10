@@ -36,20 +36,9 @@ trait CLIAgentSessionHandler {
 }
 
 /// Returns `true` if the given CLI agent has a supported session handler.
+/// Derived from `create_handler` so the two can't drift apart.
 pub fn is_agent_supported(agent: &CLIAgent) -> bool {
-    matches!(
-        agent,
-        CLIAgent::Claude
-            | CLIAgent::OpenCode
-            | CLIAgent::Codex
-            | CLIAgent::Gemini
-            | CLIAgent::Auggie
-            | CLIAgent::Droid
-            | CLIAgent::Pi
-            | CLIAgent::OhMyPi
-            | CLIAgent::Grok
-            | CLIAgent::WarpTui
-    )
+    create_handler(agent).is_some()
 }
 
 /// Creates the appropriate handler for the given CLI agent.
@@ -58,9 +47,10 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
         // Auggie and Pi are supported via community-maintained plugins
         // (https://github.com/augmentmoogi/auggie-warp,
         // https://github.com/badlogic/pi-mono). OhMyPi emits these structured
-        // OSC 777 events natively. Droid can be supported by user-configured
-        // hooks or future integrations that emit the same events. We don't ship
-        // install flows for these agents here — we just listen.
+        // OSC 777 events natively. Droid and Hermes can be supported by
+        // user-configured hooks or future integrations that emit the same
+        // events. We don't ship install flows for these agents here — we just
+        // listen.
         // WarpTui emits OSC 777 events directly (no external plugin needed).
         CLIAgent::Claude
         | CLIAgent::OpenCode
@@ -69,12 +59,12 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
         | CLIAgent::Droid
         | CLIAgent::Pi
         | CLIAgent::OhMyPi
+        | CLIAgent::Hermes
         | CLIAgent::WarpTui => Some(Box::new(DefaultSessionListener)),
         CLIAgent::Codex | CLIAgent::Grok => {
             Some(Box::new(Osc9FallbackSessionHandler { agent: *agent }))
         }
-        CLIAgent::Hermes
-        | CLIAgent::Kiro
+        CLIAgent::Kiro
         | CLIAgent::Amp
         | CLIAgent::Copilot
         | CLIAgent::CursorCli

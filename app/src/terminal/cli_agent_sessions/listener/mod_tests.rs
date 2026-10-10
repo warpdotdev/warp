@@ -338,3 +338,37 @@ fn oh_my_pi_end_to_end_parsing_and_handling() {
     assert_eq!(handled_stop.agent, CLIAgent::OhMyPi);
     assert_eq!(handled_stop.event, CLIAgentEventType::Stop);
 }
+
+#[test]
+fn hermes_structured_events_pass_support_gate_and_are_forwarded() {
+    // Exact payloads from GH #15666. The terminal view parses the notification
+    // first and drops it unless the resolved agent passes `is_agent_supported`.
+    let prompt_body =
+        r#"{"v":1,"agent":"hermes","event":"prompt_submit","session_id":"s1","query":"test"}"#;
+    let stop_body = r#"{"v":1,"agent":"hermes","event":"stop","session_id":"s1"}"#;
+
+    let parsed_prompt = parse_event(Some(CLI_AGENT_NOTIFICATION_SENTINEL), prompt_body)
+        .expect("should parse prompt_submit");
+    assert_eq!(parsed_prompt.agent, CLIAgent::Hermes);
+    assert!(is_agent_supported(&parsed_prompt.agent));
+
+    let mut handler = create_handler(&CLIAgent::Hermes).expect("should create handler");
+
+    let prompt = handler
+        .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), prompt_body, false)
+        .expect("should parse prompt_submit");
+    let prompt = handler
+        .handle_event(prompt)
+        .expect("should forward prompt_submit");
+    assert_eq!(prompt.agent, CLIAgent::Hermes);
+    assert_eq!(prompt.event, CLIAgentEventType::PromptSubmit);
+    assert_eq!(prompt.session_id.as_deref(), Some("s1"));
+    assert_eq!(prompt.payload.query.as_deref(), Some("test"));
+
+    let stop = handler
+        .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), stop_body, false)
+        .expect("should parse stop");
+    let stop = handler.handle_event(stop).expect("should forward stop");
+    assert_eq!(stop.agent, CLIAgent::Hermes);
+    assert_eq!(stop.event, CLIAgentEventType::Stop);
+}
