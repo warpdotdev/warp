@@ -6492,6 +6492,8 @@ dependencies = [
  "futures",
  "gloo",
  "http 1.4.0",
+ "http_client",
+ "instant",
  "log",
  "oauth2",
  "opentelemetry",

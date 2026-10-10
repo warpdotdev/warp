@@ -44,3 +44,6 @@ wasm-bindgen-futures.workspace = true
 # valid span context for the trace-link header.
 opentelemetry_sdk.workspace = true
 tracing-subscriber.workspace = true
+instant.workspace = true
+# Enable the `test-util` feature for our own package when running tests.
+http_client = { path = ".", features = ["test-util"] }
