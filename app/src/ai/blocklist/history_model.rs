@@ -28,8 +28,8 @@ use super::persistence::{PersistedAIInput, PersistedAIInputType};
 use crate::GlobalResourceHandlesProvider;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
-    AIConversation, AIConversationId, ConversationStatus, ServerAIConversationMetadata, TodoStatus,
-    UpdateConversationError,
+    AIConversation, AIConversationId, ConversationDriver, ConversationStatus,
+    ServerAIConversationMetadata, TodoStatus, UpdateConversationError,
 };
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::task::helper::{MessageExt, ToolCallExt};
@@ -2653,6 +2653,16 @@ impl BlocklistAIHistoryModel {
     ) {
         if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
             conversation.set_is_viewing_shared_session(is_viewing_shared_session);
+        }
+    }
+
+    pub fn set_driver_for_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+        driver: ConversationDriver,
+    ) {
+        if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
+            conversation.set_driver(driver);
         }
     }
 

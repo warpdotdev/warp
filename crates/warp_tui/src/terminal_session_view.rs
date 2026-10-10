@@ -56,6 +56,7 @@ use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
 use warp_editor::model::CoreEditorModel;
 use warp_errors::report_error;
+use warp_terminal::event::ExitReason;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
 #[cfg(feature = "voice_input")]
@@ -2139,6 +2140,11 @@ impl TuiTerminalSessionView {
             ModelEvent::TerminalModeSwapped(_) => {
                 view.reconcile_focus(ctx);
                 ctx.notify();
+            }
+            ModelEvent::ShellExitObserved { status } => {
+                view.terminal_model
+                    .lock()
+                    .finalize_exit(ExitReason::ShellProcessExited { status: *status });
             }
             ModelEvent::Typeahead => view.handle_typeahead_event(ctx),
             ModelEvent::BlockMetadataReceived(_)

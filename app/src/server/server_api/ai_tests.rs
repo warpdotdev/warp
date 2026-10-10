@@ -1,9 +1,11 @@
 use chrono::{TimeZone, Utc};
 use futures::executor::block_on;
 use itertools::Itertools;
-use mockito::{Matcher, Server};
+use mockito::{Matcher, Mock, Server};
+use serde_json::{Value, json};
 use warp_graphql::ai::PlatformErrorCode;
 use warp_graphql::platform_error::{PlatformErrorInfo, PlatformErrorMessageFormat};
+use warp_graphql::queries::execution_config::CodeForge;
 use warp_server_client::base_client::{CLOUD_AGENT_ID_HEADER, TEAM_UID_HEADER};
 
 use super::super::ServerApi;
@@ -25,6 +27,327 @@ use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeF
 
 fn request_scope_for_team(team_uid: ServerId) -> RequestTeamScope {
     RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid))
+}
+
+fn execution_bootstrap_response() -> Value {
+    json!({
+        "data": {
+            "task": {
+                "__typename": "TaskOutput",
+                "task": {
+                    "executionConfig": {
+                        "taskId": "task-one",
+                        "executionId": "1",
+                        "teamId": null,
+                        "conversationId": null,
+                        "parentRunId": null,
+                        "harness": "OZ",
+                        "modelId": null,
+                        "reasoningLevel": null,
+                        "profileId": null,
+                        "mcpServersJson": "{}",
+                        "skills": [],
+                        "factorySkillDirs": [],
+                        "computerUseEnabled": false,
+                        "computerUseModelId": null,
+                        "inferenceProviders": null,
+                        "repositories": [],
+                        "deferredRepositories": [{
+                            "codeForge": "GITLAB", "owner": "platform/backend", "repo": "api"
+                        }],
+                        "setupCommands": [],
+                        "providers": null,
+                        "sessionSharingAcls": [],
+                        "skipInitialTurn": false,
+                        "idleOnCompleteSeconds": null,
+                        "idleOnFailSeconds": null,
+                        "snapshotDisabled": false
+                    },
+                    "attachments": [{
+                        "fileId": "file-one",
+                        "filename": "file-one_test.txt",
+                        "downloadUrl": "https://example.com/file",
+                        "mimeType": "text/plain"
+                    }]
+                }
+            },
+            "taskSecrets": {
+                "__typename": "TaskSecretsOutput",
+                "secrets": [{
+                    "name": "API_KEY",
+                    "value": {"__typename": "ManagedSecretRawValue", "value": "secret"}
+                }]
+            }
+        }
+    })
+}
+
+fn mock_execution_bootstrap(
+    response: Value,
+    workload_token: &str,
+    supports_deferred_repositories: bool,
+) -> Mock {
+    let mut server = warp_core::channel::ChannelState::mock_server();
+    server
+        .mock("POST", "/graphql/v2")
+        .match_query(Matcher::UrlEncoded(
+            "op".into(),
+            "ExecutionBootstrap".into(),
+        ))
+        .match_body(Matcher::PartialJson(json!({
+            "variables": {
+                "executionId": "1",
+                "supportsDeferredRepositories": supports_deferred_repositories,
+                "secretsInput": {"taskId": "task-one", "workloadToken": workload_token},
+                "taskInput": {"taskId": "task-one"}
+            }
+        })))
+        .with_status(200)
+        .with_body(response.to_string())
+        .expect(1)
+        .create()
+}
+
+fn execution_bootstrap_server_api() -> ServerApi {
+    let api = ServerApi::new_for_test();
+    api.base_client
+        .set_ambient_workload_token_for_test("test-workload-token".to_owned(), None);
+    api
+}
+
+#[test]
+fn execution_bootstrap_fetches_config_secrets_and_attachments_once() {
+    for supports_deferred_repositories in [false, true] {
+        let mut response = execution_bootstrap_response();
+        if !supports_deferred_repositories {
+            let config = &mut response["data"]["task"]["task"]["executionConfig"];
+            config["repositories"] = json!([{
+                "forge": "GITLAB", "owner": "platform/backend", "name": "api",
+                "ref": null, "cloneFrom": null, "preserveOrigin": true,
+            }]);
+            config["deferredRepositories"] = json!([]);
+        }
+        let request =
+            mock_execution_bootstrap(response, "token-success", supports_deferred_repositories);
+        let data = block_on(execution_bootstrap_server_api().get_execution_bootstrap(
+            "task-one",
+            "1",
+            "token-success".into(),
+            supports_deferred_repositories,
+        ))
+        .unwrap();
+        assert_eq!(data.config.task_id.inner(), "task-one");
+        assert_eq!(data.config.execution_id.inner(), "1");
+        if supports_deferred_repositories {
+            assert!(data.config.repositories.is_empty());
+            assert_eq!(data.config.deferred_repositories.len(), 1);
+            assert_eq!(
+                data.config.deferred_repositories[0].code_forge,
+                CodeForge::GitLab,
+            );
+            assert_eq!(
+                data.config.deferred_repositories[0].owner,
+                "platform/backend"
+            );
+            assert_eq!(data.config.deferred_repositories[0].repo, "api");
+        } else {
+            assert!(data.config.deferred_repositories.is_empty());
+            assert_eq!(data.config.repositories.len(), 1);
+            assert_eq!(data.config.repositories[0].forge, CodeForge::GitLab);
+            assert_eq!(data.config.repositories[0].owner, "platform/backend");
+            assert_eq!(data.config.repositories[0].name, "api");
+        }
+        assert!(data.secrets.unwrap().contains_key("API_KEY"));
+        assert_eq!(data.attachments.unwrap()[0].filename, "file-one_test.txt");
+        request.assert();
+    }
+}
+
+#[test]
+fn execution_bootstrap_preserves_secret_errors_with_task_configuration() {
+    let mut response = execution_bootstrap_response();
+    response["data"]["taskSecrets"] = json!({
+        "__typename": "UserFacingError",
+        "error": {"__typename": "InvalidSecretError", "message": "Unable to access task secrets"},
+        "responseContext": {"serverVersion": null}
+    });
+    let request = mock_execution_bootstrap(response, "token-errors", true);
+    let data = block_on(execution_bootstrap_server_api().get_execution_bootstrap(
+        "task-one",
+        "1",
+        "token-errors".into(),
+        true,
+    ))
+    .unwrap();
+    assert_eq!(data.config.execution_id.inner(), "1");
+    assert_eq!(
+        data.secrets.unwrap_err().to_string(),
+        "Unable to access task secrets"
+    );
+    assert_eq!(data.attachments.unwrap()[0].filename, "file-one_test.txt");
+    request.assert();
+}
+
+#[test]
+fn execution_bootstrap_rejects_configuration_errors() {
+    let mut response = execution_bootstrap_response();
+    response["data"]["task"] = json!({
+        "__typename": "UserFacingError",
+        "error": {"__typename": "ResourceUnavailableError", "message": "Required repository is unavailable"},
+        "responseContext": {"serverVersion": null}
+    });
+    let request = mock_execution_bootstrap(response, "token-config-error", true);
+    let error = block_on(execution_bootstrap_server_api().get_execution_bootstrap(
+        "task-one",
+        "1",
+        "token-config-error".into(),
+        true,
+    ))
+    .err()
+    .expect("configuration errors must abort bootstrap");
+    assert_eq!(error.to_string(), "Required repository is unavailable");
+    request.assert();
+}
+
+#[test]
+fn execution_bootstrap_requires_non_null_deferred_inventory() {
+    let mut response = execution_bootstrap_response();
+    response["data"]["task"]["task"]["executionConfig"]["deferredRepositories"] = Value::Null;
+    let request = mock_execution_bootstrap(response, "token-null-inventory", true);
+    assert!(
+        block_on(execution_bootstrap_server_api().get_execution_bootstrap(
+            "task-one",
+            "1",
+            "token-null-inventory".into(),
+            true,
+        ))
+        .is_err()
+    );
+    request.assert();
+}
+
+fn mock_git_credentials(input: Value, response: Value, operation: &str) -> Mock {
+    let mut server = warp_core::channel::ChannelState::mock_server();
+    server
+        .mock("POST", "/graphql/v2")
+        .match_query(Matcher::UrlEncoded("op".into(), operation.into()))
+        .match_request(move |request| {
+            let body: Value = serde_json::from_slice(request.body().unwrap()).unwrap();
+            body["variables"]["input"] == input
+        })
+        .with_status(200)
+        .with_body(response.to_string())
+        .expect(1)
+        .create()
+}
+
+#[test]
+fn git_credentials_keep_repository_scope_for_bootstrap_and_partial_refresh() {
+    for use_factory_repositories in [false, true] {
+        for accepts_partial_refresh in [false, true] {
+            let mut input = json!({
+                "taskId": "task-one",
+                "workloadToken": "token-request",
+                "acceptsPartialRefresh": accepts_partial_refresh
+            });
+            if use_factory_repositories {
+                input["useFactoryRepositories"] = json!(true);
+            }
+            let request = mock_git_credentials(
+                input,
+                json!({"data": {"taskGitCredentials": {
+                    "__typename": "TaskGitCredentialsOutput",
+                    "credentials": [],
+                    "failedHosts": []
+                }}}),
+                "TaskGitCredentials",
+            );
+            let response = block_on(execution_bootstrap_server_api().get_task_git_credentials(
+                "task-one".into(),
+                "token-request".into(),
+                accepts_partial_refresh,
+                use_factory_repositories,
+            ))
+            .unwrap();
+            assert!(response.credentials.is_empty());
+            assert!(response.failed_hosts.is_empty());
+            request.assert();
+        }
+    }
+}
+
+#[test]
+fn factory_git_credentials_do_not_fall_back_after_schema_errors() {
+    let request = mock_git_credentials(
+        json!({
+            "taskId": "task-one",
+            "workloadToken": "token-request",
+            "acceptsPartialRefresh": false,
+            "useFactoryRepositories": true
+        }),
+        json!({"errors": [{
+            "message": "Cannot query field \"failedHosts\" on type \"TaskGitCredentialsOutput\""
+        }]}),
+        "TaskGitCredentials",
+    );
+    let mut server = warp_core::channel::ChannelState::mock_server();
+    let fallback = server
+        .mock("POST", "/graphql/v2")
+        .match_query(Matcher::UrlEncoded(
+            "op".into(),
+            "TaskGitCredentialsLegacy".into(),
+        ))
+        .expect(0)
+        .create();
+
+    let error = block_on(execution_bootstrap_server_api().get_task_git_credentials(
+        "task-one".into(),
+        "token-request".into(),
+        false,
+        true,
+    ))
+    .err()
+    .expect("Factory credential scope must not fall back after schema errors");
+    let TaskGitCredentialsError::Request(error) = error else {
+        panic!("expected the credential schema request error");
+    };
+    assert!(error.to_string().contains("failedHosts"));
+    request.assert();
+    fallback.assert();
+}
+
+#[test]
+fn legacy_git_credentials_keep_partial_refresh_schema_fallback() {
+    let request = mock_git_credentials(
+        json!({
+            "taskId": "task-one",
+            "workloadToken": "token-request",
+            "acceptsPartialRefresh": true
+        }),
+        json!({"errors": [{
+            "message": "Cannot query field \"failedHosts\" on type \"TaskGitCredentialsOutput\""
+        }]}),
+        "TaskGitCredentials",
+    );
+    let fallback = mock_git_credentials(
+        json!({"taskId": "task-one", "workloadToken": "token-request"}),
+        json!({"data": {"taskGitCredentials": {
+            "__typename": "TaskGitCredentialsOutput",
+            "credentials": []
+        }}}),
+        "TaskGitCredentialsLegacy",
+    );
+
+    let response = block_on(execution_bootstrap_server_api().get_task_git_credentials(
+        "task-one".into(),
+        "token-request".into(),
+        true,
+        false,
+    ))
+    .unwrap();
+    assert!(response.credentials.is_empty());
+    request.assert();
+    fallback.assert();
 }
 
 #[test]

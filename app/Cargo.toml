@@ -707,6 +707,7 @@ default = [
     "shell_widget_handoff",
     "native_shell_completions",
     "history_search_ranking_v2",
+    "cloud_agent_shell_respawn",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -1025,12 +1026,14 @@ cloud_mode_setup_v2 = ["cloud_mode"]
 cloud_mode_input_v2 = ["cloud_mode"]
 handoff_cloud_cloud = ["cloud_mode_setup_v2"]
 git_credential_refresh = []
+factory_deferred_repositories = []
 prompt_cache_expiry_warning = []
 osc_hyperlinks = []
 ctrl_c_cancels_third_party_harness = []
 shell_widget_handoff = []
 history_search_ranking_v2 = []
 stored_screenshots = []
+cloud_agent_shell_respawn = []
 
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"

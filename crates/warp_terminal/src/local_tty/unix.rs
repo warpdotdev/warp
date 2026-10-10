@@ -698,9 +698,9 @@ impl EventedPty for Pty {
                 return None;
             }
 
-            match self.pty_handle.has_process_terminated() {
-                Ok(true) => Some(ChildEvent::Exited),
-                Ok(false) => None,
+            match self.pty_handle.process_termination_status() {
+                Ok(Some(status)) => Some(ChildEvent::Exited(status)),
+                Ok(None) => None,
                 Err(e) => {
                     log::warn!("Error checking child process termination: {e:#}");
                     None

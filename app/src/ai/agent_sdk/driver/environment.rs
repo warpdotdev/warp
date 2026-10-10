@@ -241,6 +241,7 @@ fn environment_snapshot(
 #[derive(Default)]
 pub(crate) struct WorkspaceConfiguration {
     pub source_repos: Vec<SourceRepo>,
+    pub deferred_repos: Vec<SourceRepo>,
     pub setup_commands: Vec<String>,
     pub factory_skill_dirs: Option<Vec<PathBuf>>,
     pub has_environment: bool,
@@ -274,6 +275,7 @@ impl WorkspaceConfiguration {
             repository_clone_requests(&source_repos, &preparation_overrides, remove_origins)?;
         Ok(Self {
             source_repos,
+            deferred_repos: Vec::new(),
             setup_commands,
             factory_skill_dirs: None,
             has_environment: environment.is_some(),
@@ -283,6 +285,7 @@ impl WorkspaceConfiguration {
 
     pub fn from_resolved(
         repositories: Vec<ResolvedRepository>,
+        deferred_repos: Vec<SourceRepo>,
         setup_commands: Vec<String>,
     ) -> Result<Self, PrepareEnvironmentError> {
         let clone_requests = resolved_repository_clone_requests(&repositories)?;
@@ -291,6 +294,7 @@ impl WorkspaceConfiguration {
                 .iter()
                 .map(|repo| repo.source.clone())
                 .collect(),
+            deferred_repos,
             setup_commands,
             factory_skill_dirs: None,
             has_environment: false,
@@ -376,6 +380,7 @@ pub(crate) fn prepare_environment(
     async move {
         let WorkspaceConfiguration {
             source_repos,
+            deferred_repos: _,
             setup_commands,
             factory_skill_dirs: _,
             clone_requests,
@@ -450,6 +455,122 @@ pub(crate) fn merge_repos_deduped(
     }
 
     Ok(merged)
+}
+
+/// Builds the inventory for a run with deferred Factory repositories.
+pub(crate) fn build_deferred_repos_instruction(
+    working_dir: &Path,
+    eager_repos: &[SourceRepo],
+    deferred_repos: &[SourceRepo],
+    executable: &Path,
+    shell_type: ShellType,
+) -> Result<Option<String>, PrepareEnvironmentError> {
+    if deferred_repos.is_empty() {
+        return Ok(None);
+    }
+
+    let mut sorted_deferred = deferred_repos.to_vec();
+    sorted_deferred.sort_by(|a, b| {
+        a.code_forge
+            .unwrap_or_default()
+            .to_string()
+            .cmp(&b.code_forge.unwrap_or_default().to_string())
+            .then_with(|| a.owner.to_lowercase().cmp(&b.owner.to_lowercase()))
+            .then_with(|| a.repo.to_lowercase().cmp(&b.repo.to_lowercase()))
+    });
+
+    let entries = sorted_deferred
+        .iter()
+        .map(|repo| {
+            let forge = repo.code_forge.unwrap_or_default();
+            let clone_url = repo.https_clone_url();
+            let identity = format!("{forge} {}/{}", repo.owner, repo.repo);
+            let code_forge = repository_forge_for_repo(repo).ok_or_else(|| {
+                PrepareEnvironmentError::UnsupportedRepositoryForge {
+                    repo_name: format!("{}/{}", repo.owner, repo.repo),
+                }
+            })?;
+            let request = serde_json::to_string(&CheckoutRequest {
+                source: RepositoryIdentity {
+                    code_forge,
+                    repo_owner: repo.owner.clone(),
+                    repo_name: repo.repo.clone(),
+                },
+                checkout_name: repo.repo.clone(),
+                head: None,
+                fetch_branch_only: false,
+            })
+            .map_err(|_| PrepareEnvironmentError::CheckoutHelper {
+                reason: "could not serialize deferred checkout request",
+            })?;
+            let target = if let Some(conflicting) =
+                target_name_conflict(repo, eager_repos, &sorted_deferred)
+            {
+                format!(
+                    "- {identity} — {clone_url}; target '{}' conflicts with {conflicting}; set checkout_name to an unused single directory name under the workspace root",
+                    repo.repo
+                )
+            } else {
+                let target = deferred_repo_target(working_dir, &repo.repo);
+                format!("- {identity} — {clone_url}; preferred target: {target}")
+            };
+            Ok(format!("{target}; checkout request: {request}"))
+        })
+        .collect::<Result<Vec<_>, PrepareEnvironmentError>>()?;
+    let command = build_checkout_helper_command(
+        executable,
+        Path::new("<requests-file>"),
+        Path::new("<report-file>"),
+        false,
+        shell_type,
+    );
+    let runtime = serde_json::json!({
+        "working_dir": working_dir.to_string_lossy(),
+        "command_template": format!("{command} --fail-if-target-exists"),
+    });
+
+    Ok(Some(format!(
+        "Deferred Factory repositories (not yet cloned):\nCheckout runtime: {runtime}\n{}\n\
+         When needed, read the built-in factory-deferred-repositories skill before cloning.",
+        entries.join("\n\n")
+    )))
+}
+
+/// Uses POSIX separators because the target belongs to the agent's shell, not the host OS.
+fn deferred_repo_target(working_dir: &Path, repo_name: &str) -> String {
+    format!(
+        "{}/{repo_name}",
+        working_dir.to_string_lossy().trim_end_matches('/')
+    )
+}
+
+/// Names other repository identities sharing the same checkout directory.
+fn target_name_conflict(
+    repo: &SourceRepo,
+    eager_repos: &[SourceRepo],
+    deferred_repos: &[SourceRepo],
+) -> Option<String> {
+    let conflicting: Vec<String> = eager_repos
+        .iter()
+        .chain(deferred_repos.iter())
+        .filter(|other| {
+            other.repo == repo.repo
+                && (other.owner != repo.owner || other.code_forge != repo.code_forge)
+        })
+        .map(|other| {
+            format!(
+                "{} {}/{}",
+                other.code_forge.unwrap_or_default(),
+                other.owner,
+                other.repo
+            )
+        })
+        .collect();
+    if conflicting.is_empty() {
+        None
+    } else {
+        Some(conflicting.join(", "))
+    }
 }
 
 /// Environment variable carrying the authenticated remote URL of a Factory's

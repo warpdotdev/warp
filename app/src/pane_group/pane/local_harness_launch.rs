@@ -216,6 +216,7 @@ pub(super) async fn prepare_local_harness_child_launch(
                 &working_dir,
                 &HashMap::new(),
                 &ai::skills::parse_skills_dirs_env(),
+                false,
             )
             .map_err(|error| error.to_string())?;
             if let Some(manager) = plugin_manager_for(third_party_harness.cli_agent()) {

@@ -204,6 +204,7 @@ impl ClaudeHarness {
             &working_dir,
             &HashMap::new(),
             &ai::skills::parse_skills_dirs_env(),
+            false,
         )
         .context("Failed to prepare Claude environment for wake")?;
 

@@ -620,6 +620,122 @@ fn test_can_write_files_mcp_config_always_denied() {
 }
 
 #[test]
+fn cloud_mcp_config_writes_follow_profile_permissions() {
+    App::test((), |mut app| async move {
+        let state = initialize_permissions_test_sandboxed(&mut app);
+
+        state.permissions.read(&app, |permissions, ctx| {
+            let result = permissions.can_write_files(
+                &state.convo_id,
+                &[PathBuf::from("/project/.warp/.mcp.json")],
+                Some(state.terminal_view_id),
+                &test_scope(),
+                ctx,
+            );
+            assert!(
+                matches!(
+                    result,
+                    FileWritePermission::Allowed(
+                        FileWritePermissionAllowedReason::AutowriteSettingEnabled
+                    )
+                ),
+                "expected cloud profile auto-write, got {result:?}"
+            );
+        });
+    })
+}
+
+#[test]
+fn cloud_auto_approve_allows_mcp_config_writes() {
+    App::test((), |mut app| async move {
+        let state = initialize_permissions_test_sandboxed(&mut app);
+        state.profile_model.update(&mut app, |profiles, ctx| {
+            profiles.set_apply_code_diffs(
+                profiles
+                    .active_profile(Some(state.terminal_view_id), ctx)
+                    .id(),
+                &ActionPermission::AlwaysAsk,
+                ctx,
+            );
+        });
+        state.history.update(&mut app, |history, ctx| {
+            history.toggle_autoexecute_override(&state.convo_id, state.terminal_view_id, ctx);
+        });
+
+        state.permissions.read(&app, |permissions, ctx| {
+            let result = permissions.can_write_files(
+                &state.convo_id,
+                &[PathBuf::from("/project/.warp/.mcp.json")],
+                Some(state.terminal_view_id),
+                &test_scope(),
+                ctx,
+            );
+            assert!(
+                matches!(
+                    result,
+                    FileWritePermission::Allowed(FileWritePermissionAllowedReason::RunToCompletion)
+                ),
+                "expected cloud auto-approval, got {result:?}"
+            );
+        });
+    })
+}
+
+#[test]
+fn local_app_auto_approve_requires_mcp_config_approval() {
+    App::test((), |mut app| async move {
+        let state = initialize_permissions_test(&mut app);
+        state.history.update(&mut app, |history, ctx| {
+            history.toggle_autoexecute_override(&state.convo_id, state.terminal_view_id, ctx);
+        });
+
+        state.permissions.read(&app, |permissions, ctx| {
+            let result = permissions.can_write_files(
+                &state.convo_id,
+                &[PathBuf::from("/project/.warp/.mcp.json")],
+                Some(state.terminal_view_id),
+                &test_scope(),
+                ctx,
+            );
+            assert!(
+                matches!(
+                    result,
+                    FileWritePermission::Denied(FileWritePermissionDeniedReason::ProtectedPath)
+                ),
+                "expected local app path protection, got {result:?}"
+            );
+        });
+    })
+}
+
+#[test]
+fn local_cli_auto_approve_requires_mcp_config_approval() {
+    App::test((), |mut app| async move {
+        let state = initialize_permissions_test_with_mode(&mut app, ExecutionMode::Sdk, false);
+        state.history.update(&mut app, |history, ctx| {
+            history.toggle_autoexecute_override(&state.convo_id, state.terminal_view_id, ctx);
+        });
+
+        state.permissions.read(&app, |permissions, ctx| {
+            let result = permissions.can_write_files(
+                &state.convo_id,
+                &[PathBuf::from("/project/.warp/.mcp.json")],
+                Some(state.terminal_view_id),
+                &test_scope(),
+                ctx,
+            );
+            assert!(
+                matches!(
+                    result,
+                    FileWritePermission::Denied(FileWritePermissionDeniedReason::ProtectedPath)
+                ),
+                "expected local CLI path protection, got {result:?}"
+            );
+        });
+    })
+}
+
+#[test]
 fn test_can_autoexecute_command_workspace_settings_override_profile() {
     App::test((), |mut app| async move {
         let PermissionsTestState {

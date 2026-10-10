@@ -608,6 +608,7 @@ fn build_server_side_task(
 fn build_execution_task_and_options(
     args: &RunAgentArgs,
     config: ExecutionConfiguration,
+    use_factory_repositories: bool,
     working_dir: PathBuf,
     first_skill: Option<ResolvedSkill>,
     skill_discovery_dirs: Vec<PathBuf>,
@@ -643,6 +644,11 @@ fn build_execution_task_and_options(
         .and_then(|config| config.model_config());
     let mcp_specs = execution_config::mcp_specs(&config.mcp_servers_json)?;
     let repositories = execution_config::repositories(config.repositories)?;
+    let deferred_repositories = if use_factory_repositories {
+        execution_config::deferred_repositories(config.deferred_repositories)?
+    } else {
+        Vec::new()
+    };
     let idle_on_complete = execution_config::idle_duration(config.idle_on_complete_seconds)?;
     let idle_on_fail = execution_config::idle_duration(config.idle_on_fail_seconds)?;
     if config.skip_initial_turn && idle_on_complete.is_none() {
@@ -668,6 +674,7 @@ fn build_execution_task_and_options(
     let options = AgentDriverOptions {
         working_dir,
         task_id: Some(task_id),
+        use_factory_repositories,
         experimental: None,
         parent_run_id: config.parent_run_id.map(|id| id.into_inner()),
         should_share: FeatureFlag::AgentSharedSessions.is_enabled(),
@@ -679,6 +686,7 @@ fn build_execution_task_and_options(
         workspace: {
             let mut workspace = driver::environment::WorkspaceConfiguration::from_resolved(
                 repositories,
+                deferred_repositories,
                 config.setup_commands,
             )?;
             workspace.factory_skill_dirs = Some(factory_skill_dirs);
@@ -820,6 +828,7 @@ struct AgentDriverRunner;
 struct ExecutionTaskData {
     server_api: Arc<ServerApi>,
     config: ExecutionConfiguration,
+    use_factory_repositories: bool,
     secrets: HashMap<String, ManagedSecretValue>,
     attachments: anyhow::Result<Vec<TaskAttachment>>,
 }
@@ -1111,6 +1120,7 @@ impl AgentDriverRunner {
         task_id: &str,
         execution_id: &str,
     ) -> Result<ExecutionTaskData, AgentDriverError> {
+        let use_factory_repositories = FeatureFlag::FactoryDeferredRepositories.is_enabled();
         let (workload_token, no_isolation) =
             match warp_isolation_platform::issue_workload_token(Some(Duration::from_mins(5))).await
             {
@@ -1123,7 +1133,14 @@ impl AgentDriverRunner {
             .await?;
         let data = with_retry(
             "Execution bootstrap",
-            || api.get_execution_bootstrap(task_id, execution_id, workload_token.clone()),
+            || {
+                api.get_execution_bootstrap(
+                    task_id,
+                    execution_id,
+                    workload_token.clone(),
+                    use_factory_repositories,
+                )
+            },
             retry::is_transient_graphql_or_http_error,
             |delay| async move {
                 warpui::r#async::Timer::after(delay).await;
@@ -1145,6 +1162,7 @@ impl AgentDriverRunner {
         Ok(ExecutionTaskData {
             server_api: api,
             config: data.config,
+            use_factory_repositories,
             secrets,
             attachments: data.attachments,
         })
@@ -1153,6 +1171,7 @@ impl AgentDriverRunner {
     async fn fetch_task_git_credentials(
         task_id_str: String,
         ai_client: Arc<dyn AIClient>,
+        use_factory_repositories: bool,
     ) -> Result<Vec<GitCredential>, TaskGitCredentialsError> {
         with_retry(
             "Git credentials bootstrap",
@@ -1169,7 +1188,12 @@ impl AgentDriverRunner {
                     .map_err(|error| TaskGitCredentialsError::Request(error.into()))?
                     .token;
                     let response = ai_client
-                        .get_task_git_credentials(task_id_str, workload_token, false)
+                        .get_task_git_credentials(
+                            task_id_str,
+                            workload_token,
+                            false,
+                            use_factory_repositories,
+                        )
                         .await?;
                     driver::git_credentials::credentials_for_bootstrap(response)
                         .map_err(TaskGitCredentialsError::Request)
@@ -1192,6 +1216,7 @@ impl AgentDriverRunner {
         foreground: &ModelSpawner<Self>,
         task_id_str: &str,
         args: &RunAgentArgs,
+        use_factory_repositories: bool,
     ) -> Result<(), AgentDriverError> {
         // The gh CLI only covers github.com, so this must not replace the
         // server fetch below — other forges (GitLab, Azure DevOps) get their
@@ -1241,6 +1266,7 @@ impl AgentDriverRunner {
         let credentials = match Self::fetch_task_git_credentials(
             task_id_str.clone(),
             Arc::clone(&ai_client),
+            use_factory_repositories,
         )
         .await
         {
@@ -1395,11 +1421,20 @@ impl AgentDriverRunner {
         .map_err(AgentDriverError::ConfigBuildFailed)?;
 
         if let Some(task_id_str) = args.task_id.as_ref() {
-            Self::bootstrap_git_credentials_for_task(foreground, task_id_str, &args).await?;
+            Self::bootstrap_git_credentials_for_task(
+                foreground,
+                task_id_str,
+                &args,
+                execution_data
+                    .as_ref()
+                    .is_some_and(|data| data.use_factory_repositories),
+            )
+            .await?;
         }
         if let Some(ExecutionTaskData {
             server_api: execution_server_api,
             config,
+            use_factory_repositories,
             secrets,
             attachments,
         }) = execution_data
@@ -1417,6 +1452,7 @@ impl AgentDriverRunner {
                     build_execution_task_and_options(
                         &args,
                         config,
+                        use_factory_repositories,
                         working_dir,
                         first_skill,
                         skill_discovery_dirs,
@@ -1494,6 +1530,7 @@ impl AgentDriverRunner {
                 let driver_options = driver::AgentDriverOptions {
                     working_dir: working_dir.clone(),
                     task_id,
+                    use_factory_repositories: false,
                     experimental: None,
                     parent_run_id: None,
                     should_share,

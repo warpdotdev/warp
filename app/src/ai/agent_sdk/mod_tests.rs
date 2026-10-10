@@ -5,7 +5,7 @@ use chrono::Utc;
 use clap::Parser;
 use cloud_object_models::CodeForge;
 use command::blocking::Command as ProcessCommand;
-use mockito::Server;
+use mockito::{Matcher, Server};
 use serde_json::json;
 use warp_cli::agent::{
     AgentCommand, Harness, HarnessTransport, OutputFormat, RepositoryForge, RepositoryHeadRef,
@@ -52,6 +52,233 @@ use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
 
+#[test]
+fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
+    App::test((), |mut app| async move {
+        let root = tempfile::TempDir::new().unwrap();
+        let args =
+            parse_run_agent_args(&["agent", "run", "--task-id", TASK_ID, "--execution-id", "42"]);
+        let eager_repository = json!([{
+            "forge": "GITHUB", "owner": "acme", "name": "api",
+            "ref": {"type": "BRANCH", "value": "feature"},
+            "cloneFrom": null, "preserveOrigin": true,
+        }]);
+        for (use_factory_repositories, eager, deferred_forge) in [
+            (true, json!([]), "GITLAB"),
+            (true, eager_repository.clone(), "GITLAB"),
+            (false, eager_repository, "UNSUPPORTED_FORGE"),
+        ] {
+            let expected_eager_count = eager.as_array().unwrap().len();
+            let config = serde_json::from_value(json!({
+                "taskId": TASK_ID, "executionId": "42", "harness": "OZ",
+                "conversationId": null, "parentRunId": null, "teamId": null, "modelId": null,
+                "reasoningLevel": null, "profileId": null, "computerUseModelId": null,
+                "inferenceProviders": null, "providers": null,
+                "idleOnCompleteSeconds": null, "idleOnFailSeconds": null,
+                "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
+                "computerUseEnabled": false, "repositories": eager,
+                "deferredRepositories": [{
+                    "codeForge": deferred_forge, "owner": "platform/backend", "repo": "api",
+                }],
+                "setupCommands": [], "sessionSharingAcls": [],
+                "skipInitialTurn": false, "snapshotDisabled": false,
+            }))
+            .unwrap();
+            let (options, _, _, _) = app.update(|ctx| {
+                super::build_execution_task_and_options(
+                    &args,
+                    config,
+                    use_factory_repositories,
+                    root.path().to_path_buf(),
+                    None,
+                    Vec::new(),
+                    ctx,
+                )
+                .unwrap()
+            });
+            assert_eq!(options.workspace.source_repos.len(), expected_eager_count);
+            assert_eq!(options.use_factory_repositories, use_factory_repositories);
+            if expected_eager_count != 0 {
+                assert_eq!(
+                    options.workspace.source_repos,
+                    vec![SourceRepo::new(
+                        CodeForge::GitHub,
+                        "acme".into(),
+                        "api".into(),
+                    )]
+                );
+            }
+            if use_factory_repositories {
+                assert_eq!(
+                    options.workspace.deferred_repos,
+                    vec![SourceRepo::new(
+                        CodeForge::GitLab,
+                        "platform/backend".into(),
+                        "api".into(),
+                    )]
+                );
+            } else {
+                assert!(options.workspace.deferred_repos.is_empty());
+            }
+            assert_eq!(options.workspace.factory_skill_dirs, Some(Vec::new()));
+        }
+    });
+}
+
+#[test]
+fn paired_execution_retains_deferred_capability_through_task_setup() {
+    for scenario in ["eager", "deferred", "empty"] {
+        let output = ProcessCommand::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ai::agent_sdk::tests::deferred_capability_bootstrap_subprocess",
+                "--nocapture",
+            ])
+            .env("WARP_TEST_DEFERRED_CAPABILITY_SCENARIO", scenario)
+            .env("WARP_ISOLATION_PLATFORM", "docker")
+            .env("WARP_WORKLOAD_TOKEN", "test-workload-token")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{scenario}: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn deferred_capability_bootstrap_subprocess() {
+    let Ok(scenario) = std::env::var("WARP_TEST_DEFERRED_CAPABILITY_SCENARIO") else {
+        return;
+    };
+    let use_factory_repositories = scenario != "eager";
+    let eager = if use_factory_repositories {
+        json!([])
+    } else {
+        json!([{
+            "forge": "GITLAB", "owner": "platform/backend", "name": "api",
+            "ref": null, "cloneFrom": null, "preserveOrigin": true,
+        }])
+    };
+    let deferred = if scenario == "deferred" {
+        json!([{"codeForge": "GITLAB", "owner": "platform/backend", "repo": "api"}])
+    } else {
+        json!([])
+    };
+    let config = json!({
+        "taskId": TASK_ID, "executionId": "42", "harness": "OZ",
+        "conversationId": null, "parentRunId": null, "teamId": null, "modelId": null,
+        "reasoningLevel": null, "profileId": null, "computerUseModelId": null,
+        "inferenceProviders": null, "providers": null,
+        "idleOnCompleteSeconds": null, "idleOnFailSeconds": null,
+        "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
+        "computerUseEnabled": false, "repositories": eager,
+        "deferredRepositories": deferred,
+        "setupCommands": [], "sessionSharingAcls": [],
+        "skipInitialTurn": false, "snapshotDisabled": false,
+    });
+    let mut server = warp_core::channel::ChannelState::mock_server();
+    let bootstrap = server
+        .mock("POST", "/graphql/v2")
+        .match_query(Matcher::UrlEncoded(
+            "op".into(),
+            "ExecutionBootstrap".into(),
+        ))
+        .match_body(Matcher::PartialJson(json!({"variables": {
+            "executionId": "42",
+            "supportsDeferredRepositories": use_factory_repositories,
+            "secretsInput": {"taskId": TASK_ID, "workloadToken": "test-workload-token"},
+            "taskInput": {"taskId": TASK_ID}
+        }})))
+        .with_status(200)
+        .with_body(
+            json!({"data": {
+                "task": {"__typename": "TaskOutput", "task": {
+                    "executionConfig": config, "attachments": []
+                }},
+                "taskSecrets": {"__typename": "TaskSecretsOutput", "secrets": []}
+            }})
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+    let mut credentials_input = json!({
+        "taskId": TASK_ID, "workloadToken": "test-workload-token",
+        "acceptsPartialRefresh": false
+    });
+    if use_factory_repositories {
+        credentials_input["useFactoryRepositories"] = json!(true);
+    }
+    let credentials = server
+        .mock("POST", "/graphql/v2")
+        .match_query(Matcher::UrlEncoded(
+            "op".into(),
+            "TaskGitCredentials".into(),
+        ))
+        .match_request(move |request| {
+            let body: serde_json::Value = serde_json::from_slice(request.body().unwrap()).unwrap();
+            body["variables"]["input"] == credentials_input
+        })
+        .with_status(200)
+        .with_body(
+            json!({"data": {"taskGitCredentials": {
+                "__typename": "TaskGitCredentialsOutput", "credentials": [], "failedHosts": []
+            }}})
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+    App::test((), |mut app| async move {
+        let _refresh = FeatureFlag::GitCredentialRefresh.override_enabled(true);
+        let _handoff = FeatureFlag::OzHandoff.override_enabled(false);
+        let capability =
+            FeatureFlag::FactoryDeferredRepositories.override_enabled(use_factory_repositories);
+        let provider = app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        let ai_client = provider.read(&app, |provider, _| provider.get_ai_client());
+        let runner = app.add_singleton_model(|_| AgentDriverRunner);
+        let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _enter = runtime.enter();
+        let data = AgentDriverRunner::fetch_execution_task_data(&foreground, TASK_ID, "42")
+            .await
+            .unwrap();
+        assert_eq!(data.use_factory_repositories, use_factory_repositories);
+        drop(capability);
+        let _opposite =
+            FeatureFlag::FactoryDeferredRepositories.override_enabled(!use_factory_repositories);
+        let events = runner.update(&mut app, |_, ctx| {
+            super::SetupClientEventReporter::noop(ai_client.clone(), ctx.background_executor())
+        });
+        let args =
+            parse_run_agent_args(&["agent", "run", "--task-id", TASK_ID, "--execution-id", "42"]);
+        let (options, _, _) = AgentDriverRunner::build_driver_options_and_task(
+            &foreground,
+            args,
+            None,
+            &ai_client,
+            &events,
+            Some(data),
+        )
+        .await
+        .unwrap();
+        assert_eq!(options.use_factory_repositories, use_factory_repositories);
+        assert_eq!(
+            options.workspace.source_repos.len(),
+            usize::from(scenario == "eager")
+        );
+        assert_eq!(
+            options.workspace.deferred_repos.len(),
+            usize::from(scenario == "deferred")
+        );
+    });
+    bootstrap.assert();
+    credentials.assert();
+}
 #[test]
 fn paired_task_data_downloads_listed_attachment_without_refetching_it() {
     let _images = FeatureFlag::AmbientAgentsImageUpload.override_enabled(true);
@@ -273,6 +500,7 @@ pub(crate) fn agent_driver_options() -> AgentDriverOptions {
     AgentDriverOptions {
         working_dir: std::env::current_dir().unwrap(),
         task_id: None,
+        use_factory_repositories: false,
         experimental: None,
         parent_run_id: None,
         should_share: false,
@@ -901,16 +1129,20 @@ fn reconcile_task_harness_rejects_explicit_mismatch() {
 #[test]
 fn reconcile_task_harness_keeps_the_requested_transport() {
     let mut selected_harness = Harness::Oz;
-    let err = reconcile_task_harness(
+    let harness = reconcile_task_harness(
         TASK_ID,
         &mut selected_harness,
         Harness::Claude,
         HarnessTransport::Acp,
     )
-    .expect_err("ACP transport is not wired up yet");
+    .expect("the task's harness should be driven over the requested transport");
 
     assert_eq!(selected_harness, Harness::Claude);
-    assert!(err.to_string().contains("ACP transport"), "{err}");
+    assert_eq!(harness.harness(), Harness::Claude);
+    let HarnessKind::ThirdParty(harness) = harness else {
+        panic!("ACP transport should produce a third-party harness");
+    };
+    assert!(!harness.drives_cli_agent_session());
 }
 
 #[test]
