@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::channel::mpsc;
+use instant::Instant;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_multi_agent_api as api;
@@ -59,6 +60,7 @@ const EVENT_RUN_SESSION_LINKED: &str = "run_session_linked";
 struct SseStreamItem {
     event: AgentRunEvent,
     fetched_message: Option<ReceivedMessageInput>,
+    enqueued_at: Instant,
 }
 
 /// State for a single active SSE connection.
@@ -171,12 +173,23 @@ impl AgentEventConsumer for SseForwardingConsumer {
             None
         };
 
-        self.tx
+        let sequence = event.sequence;
+        let hydrated = fetched_message.is_some();
+        let result = self
+            .tx
             .unbounded_send(SseStreamItem {
                 event,
                 fetched_message,
+                enqueued_at: Instant::now(),
             })
-            .map_err(|_| anyhow!("SSE event receiver dropped"))?;
+            .map_err(|_| anyhow!("SSE event receiver dropped"));
+        log::info!(
+            target: "agent_events",
+            "[Agent events] stage=background_enqueue recipient_run_id={} sequence={sequence} hydrated={hydrated} error={}",
+            self.self_run_id,
+            result.is_err()
+        );
+        result?;
 
         Ok(AgentEventConsumerControlFlow::Continue)
     }
@@ -850,6 +863,16 @@ impl OrchestrationEventStreamer {
                 return;
             };
             while let Ok(Some(item)) = sse.event_receiver.try_next() {
+                log::info!(
+                    target: "agent_events",
+                    "[Agent events] stage=background_drain conversation_id={conversation_id} generation={} run_id={} sequence={} cursor={cursor} queue_ms={} hydrated={} duplicate_or_old={}",
+                    sse.generation,
+                    item.event.run_id,
+                    item.event.sequence,
+                    item.enqueued_at.elapsed().as_millis(),
+                    item.fetched_message.is_some(),
+                    item.event.sequence <= cursor
+                );
                 if item.event.sequence > cursor {
                     if let Some(message) = item.fetched_message {
                         messages.push(message);
@@ -2514,6 +2537,16 @@ impl OrchestrationEventStreamer {
 
             while let Ok(Some(item)) = sse.event_receiver.try_next() {
                 // Deduplicate: discard events at or below the cursor.
+                log::info!(
+                    target: "agent_events",
+                    "[Agent events] stage=background_drain conversation_id={conversation_id} generation={} run_id={} sequence={} cursor={cursor} queue_ms={} hydrated={} duplicate_or_old={}",
+                    sse.generation,
+                    item.event.run_id,
+                    item.event.sequence,
+                    item.enqueued_at.elapsed().as_millis(),
+                    item.fetched_message.is_some(),
+                    item.event.sequence <= cursor
+                );
                 if item.event.sequence > cursor {
                     if let Some(msg) = item.fetched_message {
                         messages.push(msg);
@@ -2597,6 +2630,17 @@ impl OrchestrationEventStreamer {
         }
 
         let pending = build_pending_events(messages, lifecycle_events);
+        if log::log_enabled!(target: "agent_events", log::Level::Info) {
+            for event in &pending {
+                if let PendingEventDetail::Message { message_id, .. } = &event.detail {
+                    log::info!(
+                        target: "agent_events",
+                        "[Agent events] stage=pending_enqueue conversation_id={conversation_id} recipient_run_id={self_run_id} message_id={message_id} sender_run_id={} cursor={max_seq}",
+                        event.source_agent_id
+                    );
+                }
+            }
+        }
         OrchestrationEventService::handle(ctx).update(ctx, |svc, ctx| {
             svc.enqueue_event_batch(conversation_id, pending, ctx);
         });
