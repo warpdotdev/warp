@@ -25,7 +25,24 @@ Before invoking Warp Control for the first time in a task, prefer the shortest a
 2. If `command -v {{warpctrl_binary_name}}` fails, verify that `{{warpctrl_wrapper_path}}` exists and is executable. If it is missing, tell the user that this Warp build does not contain the expected wrapper and stop.
 3. Inspect `/usr/local/bin/{{warpctrl_binary_name}}`. Treat setup as complete only when it is a symlink that resolves to the exact `{{warpctrl_wrapper_path}}` bundled wrapper.
 4. If the expected symlink is missing, broken, or points elsewhere, use the `ask_user_question` tool to ask whether the user wants to install it at `/usr/local/bin/{{warpctrl_binary_name}}` pointing to `{{warpctrl_wrapper_path}}`. Offer **Install command** as the recommended option and **Not now** as the alternative. Do not create or replace a symlink without an affirmative response.
-5. After approval, create or update only the expected symlink by running `ln -sf "{{warpctrl_wrapper_path}}" "/usr/local/bin/{{warpctrl_binary_name}}"`. Try without elevation first. If macOS permissions prevent the change, run that same command through `osascript` with administrator privileges; never request or expose the user's password directly.
+5. After approval, create or update only the expected symlink. Try without elevation first:
+
+   ```sh
+   ln -sf "{{warpctrl_wrapper_path}}" "/usr/local/bin/{{warpctrl_binary_name}}"
+   ```
+
+   If macOS permissions prevent the change, do not use `sudo` or request the user's password. Run this exact command and wait for the user to approve or cancel the standard macOS administrator dialog:
+
+   ```sh
+   osascript \
+     -e 'on run argv' \
+     -e 'do shell script "/bin/ln -sf " & quoted form of (item 1 of argv) & " " & quoted form of (item 2 of argv) with prompt "Warp needs administrator privileges to install the command in /usr/local/bin." with administrator privileges' \
+     -e 'end run' \
+     "{{warpctrl_wrapper_path}}" \
+     "/usr/local/bin/{{warpctrl_binary_name}}"
+   ```
+
+   If the user cancels, treat installation as declined and use the bundled wrapper directly for the current task.
 6. Verify the result with `command -v {{warpctrl_binary_name}}`, `readlink /usr/local/bin/{{warpctrl_binary_name}}`, and `{{warpctrl_binary_name}} app version`.
 
 If the user chooses **Not now**, do not create the symlink. Use the bundled wrapper at `{{warpctrl_wrapper_path}}` directly for the current task.
