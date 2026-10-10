@@ -283,6 +283,9 @@ pub struct CodeEditorView {
     /// The offset where find references card is anchored (if showing).
     find_references_anchor_offset: Option<CharOffset>,
     window_id: WindowId,
+    /// Whether a copy with an empty selection copies the line holding the cursor.
+    /// See [`CodeEditorView::with_copy_line_when_selection_is_empty`].
+    copy_line_when_selection_is_empty: bool,
 }
 
 impl CodeEditorView {
@@ -430,6 +433,7 @@ impl CodeEditorView {
             show_find_references_provider: render_options.show_find_references_provider,
             find_references_anchor_offset: None,
             window_id: ctx.window_id(),
+            copy_line_when_selection_is_empty: false,
         }
     }
 
@@ -492,6 +496,19 @@ impl CodeEditorView {
     /// Enables clicking on diff hunk gutter elements to collapse changed sections.
     pub fn with_collapsible_diffs(mut self, enabled: bool) -> Self {
         self.display_options.collapsible_diffs = enabled;
+        self
+    }
+
+    /// Copies the line holding the cursor when a copy runs with an empty selection,
+    /// matching VS Code and Zed.
+    ///
+    /// This is off by default and belongs only to editors that own their copy
+    /// shortcut outright. An editor embedded in an AI block, a diff view, or the
+    /// terminal must keep the default, because those surfaces rely on
+    /// [`CodeEditorEvent::CopiedEmptyText`] to hand an empty-selection copy to the
+    /// parent view that holds the real selection.
+    pub fn with_copy_line_when_selection_is_empty(mut self) -> Self {
+        self.copy_line_when_selection_is_empty = true;
         self
     }
 
