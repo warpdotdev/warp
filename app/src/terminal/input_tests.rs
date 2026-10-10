@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use ai::LLMProvider;
+use ai::api_keys::ApiKeyManager;
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use chrono::Local;
 use fuzzy_match::FuzzyMatchResult;
@@ -41,6 +43,7 @@ use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::{AIQueryHistory, BlocklistAIPermissions, ResponseStreamId};
 use crate::ai::cloud_agent_settings::{AuthSecretPreference, CloudAgentSettings};
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
+use crate::ai::credit_availability::{AICreditAvailability, AICreditDenialReason};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
@@ -9691,6 +9694,64 @@ fn test_remove_ignored_suggestion_on_ai_query_execution() {
         assert!(
             !is_ignored_after,
             "AI query should no longer be ignored after execution"
+        );
+    });
+}
+
+#[test]
+fn enter_submits_ai_query_with_byo_key_when_warp_credits_are_depleted() {
+    App::test((), |mut app| async move {
+        let _agent_mode = FeatureFlag::AgentMode.override_enabled(true);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
+        let _solo_byok = FeatureFlag::SoloUserByok.override_enabled(true);
+
+        initialize_app(&mut app);
+
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.set_provider_key(LLMProvider::OpenAI, Some("test-key".to_string()), ctx);
+        });
+        AIRequestUsageModel::handle(&app).update(&mut app, |model, ctx| {
+            model.apply_server_availability(
+                Ok(AICreditAvailability::unavailable(
+                    AICreditDenialReason::OutOfCredits,
+                )),
+                ctx,
+            );
+        });
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        let ai_query_count = Rc::new(RefCell::new(0));
+        let ai_query_count_for_subscription = ai_query_count.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event: &super::Event, _| {
+                if matches!(event, super::Event::ExecuteAIQuery) {
+                    *ai_query_count_for_subscription.borrow_mut() += 1;
+                }
+            });
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.ai_input_model.update(ctx, |ai_input, ctx| {
+                ai_input.set_input_type(InputType::AI, None, ctx);
+            });
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("summarize the current directory", ctx);
+            input.set_autosuggestion(
+                "ls -la",
+                AutosuggestionType::Command {
+                    was_intelligent_autosuggestion: true,
+                },
+                ctx,
+            );
+            input.input_enter(ctx);
+        });
+
+        assert_eq!(
+            *ai_query_count.borrow(),
+            1,
+            "Enter should submit BYOK AI prompts even when Warp credits are depleted"
         );
     });
 }
