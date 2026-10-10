@@ -3396,14 +3396,12 @@ impl Input {
                 )
             }
         });
-        if FeatureFlag::InlineHistoryMenu.is_enabled() {
-            ctx.subscribe_to_view(&inline_history_menu_view, |me, _, event, ctx| {
-                if me.is_cloud_mode_input_v2_composing(ctx) {
-                    return;
-                }
-                me.handle_inline_history_menu_event(event, ctx);
-            });
-        }
+        ctx.subscribe_to_view(&inline_history_menu_view, |me, _, event, ctx| {
+            if me.is_cloud_mode_input_v2_composing(ctx) {
+                return;
+            }
+            me.handle_inline_history_menu_event(event, ctx);
+        });
         let inline_history_model = inline_history_menu_view.as_ref(ctx).model().clone();
 
         let cloud_mode_v2_history_menu_view = if FeatureFlag::CloudModeInputV2.is_enabled() {
@@ -3423,14 +3421,12 @@ impl Input {
                     )
                 }
             });
-            if FeatureFlag::InlineHistoryMenu.is_enabled() {
-                ctx.subscribe_to_view(&view, |me, _, event, ctx| {
-                    if !me.is_cloud_mode_input_v2_composing(ctx) {
-                        return;
-                    }
-                    me.handle_inline_history_menu_event(event, ctx);
-                });
-            }
+            ctx.subscribe_to_view(&view, |me, _, event, ctx| {
+                if !me.is_cloud_mode_input_v2_composing(ctx) {
+                    return;
+                }
+                me.handle_inline_history_menu_event(event, ctx);
+            });
             Some(view)
         } else {
             None
@@ -6220,10 +6216,6 @@ impl Input {
     }
 
     fn open_inline_history_menu(&mut self, ctx: &mut ViewContext<Self>) {
-        if !FeatureFlag::InlineHistoryMenu.is_enabled() {
-            return;
-        }
-
         // Don't open inline history menu if a chip menu or model selector is already open
         let agent_footer = self.agent_input_footer.as_ref(ctx);
         if self.prompt_render_helper.has_open_chip_menu(ctx)
@@ -9745,9 +9737,7 @@ impl Input {
         // history up menu.
         let editor = self.editor.as_ref(ctx);
         if editor.single_cursor_on_first_row(ctx) {
-            if FeatureFlag::InlineHistoryMenu.is_enabled()
-                && self.suggestions_mode_model.as_ref(ctx).is_closed()
-            {
+            if self.suggestions_mode_model.as_ref(ctx).is_closed() {
                 self.open_inline_history_menu(ctx);
                 return;
             }
