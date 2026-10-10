@@ -636,7 +636,6 @@ default = [
     "new_tab_styling",
     "richtext_multiselect",
     "inline_profile_selector",
-    "web_fetch_ui",
     "oz_changelog_updates",
     "skill_arguments",
     "incremental_auto_reload",
@@ -948,7 +947,6 @@ create_environment_slash_command = []
 summarize_conversation_command = []
 mcp_grouped_server_context = []
 web_search_ui = []
-web_fetch_ui = []
 fork_from_command = []
 context_window_usage_v2 = []
 context_window_usage_breakdown = []
