@@ -4,7 +4,7 @@ use std::ops::AddAssign;
 
 use pathfinder_geometry::rect::RectF;
 use warp_errors::{ErrorExt, register_error};
-use warp_util::file::FileSaveError;
+use warp_util::file::{FileLoadError, FileSaveError};
 use warpui::AppContext;
 use warpui::elements::DropTargetData;
 
@@ -52,6 +52,42 @@ impl ErrorExt for ImmediateSaveError {
     }
 }
 register_error!(ImmediateSaveError);
+
+pub(crate) fn file_load_error_message(error: &FileLoadError) -> String {
+    match error {
+        FileLoadError::TooLarge {
+            size_estimate,
+            limit_bytes,
+        } => {
+            let limit = format_file_size(*limit_bytes);
+            match size_estimate {
+                Some(size) => format!(
+                    "File is larger than the {limit} limit (reported size ~{}).",
+                    format_file_size(*size)
+                ),
+                None => format!("File is larger than the {limit} limit."),
+            }
+        }
+        FileLoadError::DoesNotExist | FileLoadError::IOError(_) => {
+            "Failed to load file.".to_string()
+        }
+    }
+}
+
+fn format_file_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut size = bytes as f64;
+    let mut unit_index = 0;
+    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_index += 1;
+    }
+    if unit_index == 0 {
+        format!("{bytes} {}", UNITS[unit_index])
+    } else {
+        format!("{size:.1} {}", UNITS[unit_index])
+    }
+}
 
 /// Trait to determine whether we should show the comment editor based on state held
 /// by the parent of the [`CodeEditorView`].
@@ -171,3 +207,7 @@ impl DropTargetData for EditorTabBarDropTargetData {
         self
     }
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
