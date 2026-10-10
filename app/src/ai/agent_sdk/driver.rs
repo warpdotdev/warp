@@ -1236,7 +1236,8 @@ impl AgentDriver {
                 OsString::from(dirs.iter().map(|dir| dir.to_string_lossy()).join(",")),
             );
         }
-        let has_deferred_repositories = !workspace.deferred_repos.is_empty();
+        let has_deferred_repositories =
+            use_factory_repositories && !workspace.deferred_repos.is_empty();
         if let Err(error) = git_credentials::prepend_azure_cli_wrapper_to_path(&mut env_vars) {
             safe_warn!(
                 safe: ("Failed to add the Azure CLI authentication wrapper to PATH"),
@@ -2367,10 +2368,11 @@ impl AgentDriver {
                 .await?;
             let mut environment_skill_repos = Vec::new();
 
-            let (workspace, session_shell_type) = foreground
+            let (workspace, has_deferred_repositories, session_shell_type) = foreground
                 .spawn(|me, ctx| {
                     (
                         me.workspace.take(),
+                        me.has_deferred_repositories,
                         me.terminal_driver
                             .as_ref(ctx)
                             .active_session_shell_type(ctx),
@@ -2379,7 +2381,6 @@ impl AgentDriver {
                 .await?;
             let mut workspace = workspace.ok_or(AgentDriverError::InvalidRuntimeState)?;
             let source_repos = workspace.source_repos.clone();
-            let has_deferred_repositories = !workspace.deferred_repos.is_empty();
             if has_deferred_repositories {
                 let executable = std::env::current_exe()
                     .map_err(|error| AgentDriverError::ConfigBuildFailed(error.into()))?;

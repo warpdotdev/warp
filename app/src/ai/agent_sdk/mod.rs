@@ -644,8 +644,11 @@ fn build_execution_task_and_options(
         .and_then(|config| config.model_config());
     let mcp_specs = execution_config::mcp_specs(&config.mcp_servers_json)?;
     let repositories = execution_config::repositories(config.repositories)?;
-    let deferred_repositories =
-        execution_config::deferred_repositories(config.deferred_repositories)?;
+    let deferred_repositories = if use_factory_repositories {
+        execution_config::deferred_repositories(config.deferred_repositories)?
+    } else {
+        Vec::new()
+    };
     let idle_on_complete = execution_config::idle_duration(config.idle_on_complete_seconds)?;
     let idle_on_fail = execution_config::idle_duration(config.idle_on_fail_seconds)?;
     if config.skip_initial_turn && idle_on_complete.is_none() {

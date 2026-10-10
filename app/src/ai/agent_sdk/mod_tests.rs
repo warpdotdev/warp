@@ -58,13 +58,15 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
         let root = tempfile::TempDir::new().unwrap();
         let args =
             parse_run_agent_args(&["agent", "run", "--task-id", TASK_ID, "--execution-id", "42"]);
-        for eager in [
-            json!([]),
-            json!([{
-                "forge": "GITHUB", "owner": "acme", "name": "api",
-                "ref": {"type": "BRANCH", "value": "feature"},
-                "cloneFrom": null, "preserveOrigin": true,
-            }]),
+        let eager_repository = json!([{
+            "forge": "GITHUB", "owner": "acme", "name": "api",
+            "ref": {"type": "BRANCH", "value": "feature"},
+            "cloneFrom": null, "preserveOrigin": true,
+        }]);
+        for (use_factory_repositories, eager, deferred_forge) in [
+            (true, json!([]), "GITLAB"),
+            (true, eager_repository.clone(), "GITLAB"),
+            (false, eager_repository, "UNSUPPORTED_FORGE"),
         ] {
             let expected_eager_count = eager.as_array().unwrap().len();
             let config = serde_json::from_value(json!({
@@ -76,7 +78,7 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
                 "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
                 "computerUseEnabled": false, "repositories": eager,
                 "deferredRepositories": [{
-                    "codeForge": "GITLAB", "owner": "platform/backend", "repo": "api",
+                    "codeForge": deferred_forge, "owner": "platform/backend", "repo": "api",
                 }],
                 "setupCommands": [], "sessionSharingAcls": [],
                 "skipInitialTurn": false, "snapshotDisabled": false,
@@ -86,7 +88,7 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
                 super::build_execution_task_and_options(
                     &args,
                     config,
-                    true,
+                    use_factory_repositories,
                     root.path().to_path_buf(),
                     None,
                     Vec::new(),
@@ -95,7 +97,7 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
                 .unwrap()
             });
             assert_eq!(options.workspace.source_repos.len(), expected_eager_count);
-            assert!(options.use_factory_repositories);
+            assert_eq!(options.use_factory_repositories, use_factory_repositories);
             if expected_eager_count != 0 {
                 assert_eq!(
                     options.workspace.source_repos,
@@ -106,14 +108,18 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
                     )]
                 );
             }
-            assert_eq!(
-                options.workspace.deferred_repos,
-                vec![SourceRepo::new(
-                    CodeForge::GitLab,
-                    "platform/backend".into(),
-                    "api".into(),
-                )]
-            );
+            if use_factory_repositories {
+                assert_eq!(
+                    options.workspace.deferred_repos,
+                    vec![SourceRepo::new(
+                        CodeForge::GitLab,
+                        "platform/backend".into(),
+                        "api".into(),
+                    )]
+                );
+            } else {
+                assert!(options.workspace.deferred_repos.is_empty());
+            }
             assert_eq!(options.workspace.factory_skill_dirs, Some(Vec::new()));
         }
     });

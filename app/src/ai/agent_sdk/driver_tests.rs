@@ -2499,18 +2499,24 @@ fn deferred_skill_publication_uses_inventory_after_workspace_consumption() {
     }
     let _factory_mcp = warp_core::features::FeatureFlag::FactoryMcp.override_enabled(false);
     for transport in [HarnessTransport::Pty, HarnessTransport::Acp] {
-        for has_deferred_repositories in [true, false] {
+        for (use_factory_repositories, has_deferred_repositories) in
+            [(true, true), (false, true), (true, false)]
+        {
             for (harness, skill_parent) in [
                 (Harness::Claude, ".claude"),
                 (Harness::Codex, ".agents"),
                 (Harness::Gemini, ".gemini"),
             ] {
                 App::test((), |mut app| async move {
+                    let _capability = warp_core::features::FeatureFlag::FactoryDeferredRepositories
+                        .override_enabled(!use_factory_repositories);
+                    let should_activate = use_factory_repositories && has_deferred_repositories;
                     initialize_workspace_test_app(&mut app);
                     let root = TempDir::new().unwrap();
                     let skill_parent = root.path().join(skill_parent);
                     fs::write(&skill_parent, "existing file").unwrap();
                     let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
+                    options.use_factory_repositories = use_factory_repositories;
                     options.working_dir = root.path().to_path_buf();
                     options.selected_harness = harness;
                     options.harness_transport = transport;
@@ -2529,7 +2535,7 @@ fn deferred_skill_publication_uses_inventory_after_workspace_consumption() {
                     )
                     .unwrap();
                     options.workspace.factory_skill_dirs = Some(Vec::new());
-                    if !has_deferred_repositories {
+                    if !should_activate {
                         options.secrets.insert(
                             "WARP_FACTORY_DEFERRED_REPOSITORIES_SKILL".into(),
                             ManagedSecretValue::raw_value("1"),
@@ -2538,11 +2544,12 @@ fn deferred_skill_publication_uses_inventory_after_workspace_consumption() {
                     let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
                     let foreground = driver.update(&mut app, |driver, ctx| {
                         assert!(driver.workspace.take().unwrap().source_repos.is_empty());
+                        assert_eq!(driver.has_deferred_repositories, should_activate);
                         assert_eq!(
                             driver.resolved_env_vars.contains_key(std::ffi::OsStr::new(
                                 "WARP_FACTORY_DEFERRED_REPOSITORIES_SKILL",
                             )),
-                            !has_deferred_repositories,
+                            !should_activate,
                         );
                         ctx.spawner()
                     });
@@ -2558,7 +2565,7 @@ fn deferred_skill_publication_uses_inventory_after_workspace_consumption() {
                         &foreground,
                     )
                     .await;
-                    if has_deferred_repositories {
+                    if should_activate {
                         let Err(AgentDriverError::HarnessConfigSetupFailed { error, .. }) = result
                         else {
                             panic!("expected skill publication to fail");
