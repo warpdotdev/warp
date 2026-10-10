@@ -62,7 +62,7 @@ fn test_table_layout() -> LaidOutTable {
     let cell_frame = Arc::new(TextFrame::mock("aaa"));
 
     LaidOutTable {
-        table,
+        table: Arc::new(table),
         config: TableBlockConfig {
             width: 60.0.into_pixels(),
             spacing: Default::default(),
@@ -86,9 +86,9 @@ fn test_table_layout() -> LaidOutTable {
         row_heights: vec![20.0.into_pixels(), 20.0.into_pixels()],
         column_widths: vec![30.0.into_pixels(), 30.0.into_pixels()],
         total_height: 40.0.into_pixels(),
-        offset_map,
+        offset_map: Arc::new(offset_map),
         content_length,
-        cell_offset_maps,
+        cell_offset_maps: Arc::new(cell_offset_maps),
         row_y_offsets: vec![0.0, 20.0, 40.0],
         col_x_offsets: vec![0.0, 30.0, 60.0],
         cell_text_frames: vec![
