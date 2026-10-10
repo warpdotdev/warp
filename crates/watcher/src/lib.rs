@@ -144,6 +144,27 @@ fn ensure_watchable_path(path: &Path) -> Result<PathBuf> {
     Ok(path.to_path_buf())
 }
 
+/// Returns whether `path` exists on disk under its exact-case file name.
+///
+/// Unlike [`Path::exists`], this does not resolve case-insensitively on
+/// case-insensitive filesystems (e.g. default macOS APFS, Windows NTFS). It
+/// instead checks the parent directory's actual listing, so a stale, wrong-case
+/// path is correctly reported as not existing even though the same entry
+/// exists under a different case.
+fn path_exists_with_exact_case(path: &Path) -> bool {
+    let (Some(file_name), Some(parent)) = (path.file_name(), path.parent()) else {
+        return path.exists();
+    };
+
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return false;
+    };
+
+    entries
+        .filter_map(Result::ok)
+        .any(|entry| entry.file_name() == file_name)
+}
+
 /// Model for watching for all file / folder changes under target directories.
 /// The updates are debounced with a configurable duration.
 pub struct BulkFilesystemWatcher {
@@ -337,7 +358,14 @@ fn deduplicate_and_merge_raw_notifier_events(
                     // E.g. rename A -> B, B -> C, if we receives the first event after B is already renamed to C, this will
                     // translate the events to delete (A, B), create (C).
                     // TODO(kevin)
-                    let path_exists = is_rename && path.exists();
+                    //
+                    // `Path::exists` resolves case-insensitively on case-insensitive
+                    // filesystems (e.g. default macOS APFS, Windows NTFS), so a case-only
+                    // rename (`Foo` -> `foo`) would make both the old and new path "exist",
+                    // and both would be (incorrectly) treated as creates. Checking the
+                    // parent directory's actual listing instead confirms the path exists
+                    // under its exact case.
+                    let path_exists = is_rename && path_exists_with_exact_case(path);
 
                     if path_exists {
                         created.insert(path.clone());
