@@ -39,9 +39,7 @@ use super::{
     HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness, write_temp_file,
 };
 use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent_sdk::setup_observability::{
-    OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
-};
+use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::mcp::JSONTransportType;
@@ -416,10 +414,6 @@ impl HarnessRunner for CodexHarnessRunner {
             block_id: command_handle.block_id().clone(),
         };
 
-        setup_events
-            .post_timeline_event(OzRunTimelineEvent::AgentStarted)
-            .await;
-
         Ok(command_handle)
     }
 
@@ -598,7 +592,7 @@ const CODEX_MODEL_REASONING_EFFORT_KEY: &str = "model_reasoning_effort";
 /// TODO: Ideally, we would make this server-driven so we don't depend on a client
 /// release to change this.
 const CODEX_MODEL_MIGRATIONS_TARGET: &str = "gpt-5.4";
-fn prepare_codex_environment_config(
+pub(super) fn prepare_codex_environment_config(
     harness_working_dir: &Path,
     system_prompt: Option<&str>,
     resolved_env_vars: &HashMap<OsString, OsString>,
@@ -646,7 +640,7 @@ fn prepare_codex_environment_config(
 /// `skill_dirs_publish::publish_skill`), with the conflict-resolution behavior
 /// depending on whether this run is sandboxed (see
 /// `warp_isolation_platform::detect`).
-fn publish_skills_for_codex(
+pub(super) fn publish_skills_for_codex(
     workspace_root: &Path,
     harness_working_dir: &Path,
     skill_dirs: &[PathBuf],

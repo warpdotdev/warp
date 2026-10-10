@@ -456,10 +456,6 @@ impl TerminalDriver {
     /// Sends a raw Ctrl-C (`\x03`) to the PTY, interrupting the foreground process group. Unlike
     /// [`Self::send_bare_enter_to_cli`] this does not require a CLI agent session, so it also
     /// reaches harnesses that run as plain commands in the session.
-    #[expect(
-        dead_code,
-        reason = "the ACP harness runner that interrupts its agent lands in a follow-up"
-    )]
     pub(super) fn send_interrupt_to_pty(&self, ctx: &mut ModelContext<Self>) {
         self.terminal_view.update(ctx, |terminal, ctx| {
             terminal.write_to_pty(b"\x03".to_vec(), ctx);

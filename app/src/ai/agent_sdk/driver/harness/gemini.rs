@@ -23,9 +23,7 @@ use super::{
     ThirdPartyHarness, write_temp_file,
 };
 use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent_sdk::setup_observability::{
-    OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
-};
+use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::server::server_api::ServerApi;
@@ -81,24 +79,16 @@ impl ThirdPartyHarness for GeminiHarness {
                 error,
             }
         })?;
-        if has_deferred_repositories {
-            let skill_root = harness_working_dir.join(".gemini").join("skills");
-            let published = super::skill_dirs_publish::publish_skills_for_harness(
-                &skill_root,
-                workspace_root,
-                warp_isolation_platform::detect().is_some(),
-                skill_dirs,
-                true,
-            )
-            .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
-                harness: self.cli_agent().command_prefix().to_owned(),
-                error,
-            })?;
-            super::skill_dirs_publish::exclude_published_skill_paths_from_git(
-                harness_working_dir,
-                &published,
-            );
-        }
+        publish_skills_for_gemini(
+            workspace_root,
+            harness_working_dir,
+            skill_dirs,
+            has_deferred_repositories,
+        )
+        .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
+            harness: self.cli_agent().command_prefix().to_owned(),
+            error,
+        })?;
 
         // Gemini does not support conversation resume yet. When it does, it will add its
         // own `ResumePayload::Gemini(..)` variant and override `fetch_resume_payload`,
@@ -117,6 +107,30 @@ impl ThirdPartyHarness for GeminiHarness {
             terminal_driver,
         )?))
     }
+}
+
+pub(super) fn publish_skills_for_gemini(
+    workspace_root: &Path,
+    harness_working_dir: &Path,
+    skill_dirs: &[PathBuf],
+    has_deferred_repositories: bool,
+) -> Result<()> {
+    if !has_deferred_repositories {
+        return Ok(());
+    }
+    let skill_root = harness_working_dir.join(".gemini").join("skills");
+    let published = super::skill_dirs_publish::publish_skills_for_harness(
+        &skill_root,
+        workspace_root,
+        warp_isolation_platform::detect().is_some(),
+        skill_dirs,
+        has_deferred_repositories,
+    )?;
+    super::skill_dirs_publish::exclude_published_skill_paths_from_git(
+        harness_working_dir,
+        &published,
+    );
+    Ok(())
 }
 
 /// Build the shell command that launches the Gemini TUI.
@@ -214,10 +228,6 @@ impl HarnessRunner for GeminiHarnessRunner {
             block_id: command_handle.block_id().clone(),
         };
 
-        setup_events
-            .post_timeline_event(OzRunTimelineEvent::AgentStarted)
-            .await;
-
         Ok(command_handle)
     }
 
@@ -279,7 +289,7 @@ impl HarnessRunner for GeminiHarnessRunner {
     }
 }
 
-fn prepare_gemini_environment_config(
+pub(super) fn prepare_gemini_environment_config(
     harness_working_dir: &Path,
     system_prompt: Option<&str>,
 ) -> Result<()> {

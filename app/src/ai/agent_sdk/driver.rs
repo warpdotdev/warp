@@ -31,7 +31,7 @@ use warp_cli::share::ShareRequest;
 use warp_cli::skill::SkillSpec;
 use warp_core::features::FeatureFlag;
 use warp_core::{safe_debug, safe_error, safe_info, safe_warn};
-use warp_errors::{ErrorExt, register_error, report_error, report_if_error};
+use warp_errors::{ErrorExt, ReportErrorLogMode, register_error, report_error, report_if_error};
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_managed_secrets::ManagedSecretValue;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -58,7 +58,9 @@ use crate::ai::agent_sdk::driver::harness::{
 use crate::ai::agent_sdk::environment_snapshot::{
     EnvironmentSnapshot, EnvironmentSnapshotReporter,
 };
-use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
+use crate::ai::agent_sdk::setup_observability::{
+    OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
+};
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::{
     AmbientAgentTaskId, AmbientConversationStatus, conversation_output_status_from_conversation,
@@ -181,7 +183,7 @@ where
     }
 }
 
-const HARNESS_SAVE_INTERVAL: Duration = Duration::from_secs(30);
+const HARNESS_SAVE_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// Delay after the initial exit request before retrying with the harness's
 /// follow-up input (e.g. Claude's confirmation-dialog dismissal). Sent
 /// unconditionally, without waiting to see whether it's needed.
@@ -570,6 +572,47 @@ fn idle_window_for_cli_session_status(
     }
 }
 
+/// What a native conversation status change means for a harness exit signal driven by that
+/// conversation (see `AgentDriver::subscribe_to_native_conversation_status_events`).
+#[derive(Debug, PartialEq, Eq)]
+enum HarnessIdleAction {
+    /// A turn is under way; a pending exit must not fire underneath it.
+    CancelIdle,
+    /// The turn settled; exit after `window`, or immediately when `None`.
+    Exit {
+        window: Option<Duration>,
+        /// The window is a post-failure debug window, kept open by viewer input.
+        failed: bool,
+    },
+    /// Quiescent but not settled; leave the signal as it is.
+    Ignore,
+}
+
+/// [`idle_window_for_terminal_status`] for a harness whose progress is the status of the native
+/// conversation it drives.
+fn harness_idle_action_for_conversation_status(
+    status: &ConversationStatus,
+    idle_on_complete: Option<Duration>,
+    idle_on_fail: Option<Duration>,
+) -> HarnessIdleAction {
+    match status {
+        ConversationStatus::InProgress => HarnessIdleAction::CancelIdle,
+        ConversationStatus::Success
+        | ConversationStatus::Cancelled
+        | ConversationStatus::Blocked { .. } => HarnessIdleAction::Exit {
+            window: idle_on_complete,
+            failed: false,
+        },
+        ConversationStatus::Error => HarnessIdleAction::Exit {
+            window: idle_on_fail,
+            failed: true,
+        },
+        ConversationStatus::TransientError | ConversationStatus::WaitingForEvents => {
+            HarnessIdleAction::Ignore
+        }
+    }
+}
+
 /// Low-cardinality `outcome=` label for the ambient agent idle lifecycle logs.
 fn terminal_status_log_outcome(status: &SDKConversationOutputStatus) -> &'static str {
     match status {
@@ -698,10 +741,6 @@ pub struct AgentDriver {
     /// - We're using a third-party harness.
     /// In the future, we _may_ use the harness abstraction for the Oz agent as well.
     harness: Option<Arc<dyn HarnessRunner>>,
-
-    /// Exit signal for a third-party harness that has no CLI agent session to fire it. Held so
-    /// the receiver in `run_harness` stays pending until the harness command ends on its own.
-    detached_harness_exit: Option<IdleTimeoutSender<()>>,
 
     // Optional idle timeout after completion. If set, the process will stay alive for follow-ups
     // and exit after this period of inactivity.
@@ -1328,7 +1367,6 @@ impl AgentDriver {
             team_scope,
             bedrock_oidc_credentials,
             harness: None,
-            detached_harness_exit: None,
             idle_on_complete,
             idle_on_fail,
             debug_window_refresh_installed: false,
@@ -1385,7 +1423,6 @@ impl AgentDriver {
             team_scope: None,
             bedrock_oidc_credentials: None,
             harness: None,
-            detached_harness_exit: None,
             idle_on_complete: None,
             idle_on_fail: None,
             debug_window_refresh_installed: false,
@@ -3017,11 +3054,13 @@ impl AgentDriver {
         let harness_exit = IdleTimeoutSender::new(exit_tx);
 
         // Harnesses that report progress through the native conversation instead of a CLI agent
-        // session have no hook plugin to install and no session status to subscribe to; their
-        // exit is driven by the harness command ending.
+        // session have no hook plugin to install; the conversation's own status drives their
+        // idle window instead.
         if !harness.drives_cli_agent_session() {
             foreground
-                .spawn(move |me, _| me.detached_harness_exit = Some(harness_exit))
+                .spawn(move |me, ctx| {
+                    me.subscribe_to_native_conversation_status_events(harness_exit, ctx)
+                })
                 .await?;
             return Ok(exit_rx);
         }
@@ -3362,6 +3401,9 @@ impl AgentDriver {
 
         // Start the third-party harness.
         let command_handle = runner.start(foreground, setup_events).await?;
+        setup_events
+            .post_timeline_event(OzRunTimelineEvent::AgentStarted)
+            .await;
         let block_id = command_handle.block_id().clone();
         let mut command_handle = command_handle.fuse();
         let mut harness_exit_rx = harness_exit_rx.fuse();
@@ -4445,7 +4487,7 @@ impl AgentDriver {
                         | CLIAgentSessionStatus::Failed { .. }
                         | CLIAgentSessionStatus::Blocked { .. }
                         | CLIAgentSessionStatus::Cancelled => {
-                            if me.harness.is_some() {
+                            if !matches!(status, CLIAgentSessionStatus::Blocked { .. }) {
                                 me.request_harness_save(ctx);
                             }
                             let idle_window = idle_window_for_cli_session_status(
@@ -4507,13 +4549,95 @@ impl AgentDriver {
                         return;
                     }
 
-                    me.request_harness_save(ctx);
+                    let Some(runner) = me.harness.clone() else {
+                        return;
+                    };
+                    let foreground = ctx.spawner();
+                    ctx.spawn(
+                        async move {
+                            report_if_error!(
+                                runner
+                                    .handle_session_update(&foreground)
+                                    .await
+                                    .context("Failed to handle harness session update"),
+                                ReportErrorLogMode::OncePerRun
+                            );
+                        },
+                        |_, _, _| {},
+                    );
                 }
                 CLIAgentSessionsModelEvent::Started { .. }
                 | CLIAgentSessionsModelEvent::InputSessionChanged { .. }
                 | CLIAgentSessionsModelEvent::Ended { .. } => {}
             });
     }
+    /// Drives the harness exit signal from the status of the driver's bound native conversation,
+    /// for harnesses that author that conversation's turns themselves (see
+    /// `ConversationDriver::ExternalHarness`). Mirrors [`Self::subscribe_to_cli_agent_session_events`]
+    /// so `--idle-on-complete`, `--idle-on-fail`, and the viewer-input debug window behave the
+    /// same whichever way a third-party harness reports progress.
+    fn subscribe_to_native_conversation_status_events(
+        &self,
+        harness_exit: IdleTimeoutSender<()>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let terminal_view_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
+        ctx.subscribe_to_model(&BlocklistAIHistoryModel::handle(ctx), move |me, _, event, ctx| {
+            let BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                conversation_id,
+                terminal_surface_id,
+                update: ConversationStatusUpdate::Changed { .. },
+                new_status,
+            } = event
+            else {
+                return;
+            };
+            if *terminal_surface_id != terminal_view_id {
+                return;
+            }
+            let bound_conversation_id = me
+                .terminal_driver
+                .as_ref(ctx)
+                .terminal_view()
+                .as_ref(ctx)
+                .ai_controller()
+                .as_ref(ctx)
+                .native_prompt_conversation_id();
+            if bound_conversation_id != Some(*conversation_id) {
+                return;
+            }
+            match harness_idle_action_for_conversation_status(
+                new_status,
+                me.idle_on_complete,
+                me.idle_on_fail,
+            ) {
+                HarnessIdleAction::CancelIdle => {
+                    log::info!(
+                        "Ambient agent harness lifecycle: event=idle_timeout_cancel_requested task_id={:?} conversation_id={conversation_id} trigger=turn_in_progress",
+                        me.task_id
+                    );
+                    harness_exit.cancel_idle_timeout();
+                }
+                HarnessIdleAction::Exit { window, failed } => {
+                    me.request_harness_save(ctx);
+                    log::info!(
+                        "Ambient agent harness lifecycle: event=turn_settled task_id={:?} conversation_id={conversation_id} failed={failed} idle_window={window:?}",
+                        me.task_id
+                    );
+                    match window {
+                        // A failure window is held open by whoever is debugging in the
+                        // session, so it refreshes on viewer input like the other paths.
+                        Some(window) if failed => {
+                            me.arm_debug_window(harness_exit.clone(), (), window, ctx)
+                        }
+                        _ => harness_exit.complete_with_optional_idle(window, ()),
+                    }
+                }
+                HarnessIdleAction::Ignore => {}
+            }
+        });
+    }
+
     fn request_harness_save(&self, ctx: &mut ModelContext<Self>) {
         let Some(runner) = self.harness.clone() else {
             return;

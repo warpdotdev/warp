@@ -53,7 +53,7 @@ mod skill_dirs_publish;
 mod telemetry;
 mod transcript_persistence;
 mod usage_reporting;
-pub(crate) use acp::AcpLaunchSpec;
+pub(crate) use acp::{AcpHarness, AcpLaunchSpec};
 pub(crate) use claude_code::ClaudeHarness;
 use claude_transcript::ClaudeResumeInfo;
 use codex::CodexHarness;
@@ -333,13 +333,9 @@ fn acp_harness_kind(harness: Harness) -> Result<HarnessKind, AgentDriverError> {
             reason: format!("The {harness} harness cannot be driven over ACP."),
         });
     };
-    Err(AgentDriverError::HarnessSetupFailed {
-        harness: harness.to_string(),
-        reason: format!(
-            "The ACP transport is not available in this build (would launch `{}`).",
-            launch.program
-        ),
-    })
+    Ok(HarnessKind::ThirdParty(Box::new(AcpHarness::new(
+        harness, launch,
+    ))))
 }
 
 /// Returns the harness's auth-check preflight command, if any.
@@ -566,7 +562,7 @@ pub(crate) enum SavePoint {
     Periodic,
     /// The closing save after graceful or forced harness termination.
     Final,
-    /// A save after session activity such as prompt submission or completed tool use.
+    /// A save after a completed, failed, or cancelled turn.
     PostTurn,
 }
 

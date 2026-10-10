@@ -95,6 +95,8 @@ pub use context_model::{
     PendingFile,
 };
 pub use controller::BlocklistAIController;
+#[cfg_attr(target_family = "wasm", allow(unused_imports))]
+pub(in crate::ai) use controller::external_harness::{ExternalHarnessPrompt, ExternalHarnessTurn};
 pub use controller::input_context::{
     BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,
 };
@@ -127,6 +129,11 @@ pub(crate) use passive_suggestions::{
 #[cfg(test)]
 pub(crate) use permissions::is_agent_mode_autonomy_allowed;
 pub use permissions::{BlocklistAIPermissions, CommandExecutionPermissionAllowedReason};
+#[cfg_attr(target_family = "wasm", allow(unused_imports))]
+pub(crate) use permissions::{
+    CommandExecutionPermission, CommandExecutionPermissionDeniedReason, FileWritePermission,
+    FileWritePermissionDeniedReason,
+};
 #[cfg_attr(target_family = "wasm", allow(unused))]
 pub(crate) use persistence::PersistedAIInputType;
 #[cfg_attr(target_family = "wasm", allow(unused))]
