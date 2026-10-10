@@ -1,0 +1,39 @@
+[package]
+name = "warp_cli_wasm"
+version = "0.1.0"
+edition = "2024"
+description = "WASM/Node prototype: compile warp_cli to wasm32-unknown-unknown and run an agent-run entrypoint in a JS runtime (sandboxless orchestrator feasibility spike)"
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+warp_cli = { path = "../warp_cli" }
+clap = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+js-sys = "0.3.77"
+anyhow = { workspace = true }
+
+# `getrandom` only compiles for wasm32-unknown-unknown when its `js` feature is
+# enabled (it shims `getrandom` off `crypto.getRandomValues`). The `app` crate
+# enables this for the GUI wasm bundle via feature unification; a standalone
+# `warp_cli` wasm build does not go through `app`, so we enable it here for the
+# wasm target only. This is the same shim the browser wasm build relies on.
+#
+# `web-sys` features: the GUI `app` crate pulls `web-sys` with the workspace's
+# full feature list, and feature unification makes those features available to
+# every crate in the build graph. A standalone `warp_cli` wasm build does not
+# include `app`, so crates like `warpui_core` (which call
+# `gloo::utils::window().navigator()` through `web-sys`) fail to compile unless
+# the needed `web-sys` features are activated somewhere in the graph. We enable
+# the minimal set here (`Window`, `Navigator`) so the standalone CLI wasm build
+# links the same browser APIs the GUI build gets for free via `app`.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+web-sys = { workspace = true, features = ["Window", "Navigator"] }
