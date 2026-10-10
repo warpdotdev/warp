@@ -401,11 +401,72 @@ impl SkillManager {
                 }
                 self.bundled_skills.remote_active_skill_by_path(remote, ctx)
             }),
-            SkillReference::BundledSkillId(id) => {
-                self.bundled_skills.active_skill(id, path_origin, ctx)
-            }
+            SkillReference::BundledSkillId(id) => self
+                .bundled_skills
+                .active_skill(id, path_origin, ctx)
+                // Tolerate tool calls that pass a path/home skill's bare `name` as
+                // `bundled_skill_id` instead of its listed `path` (e.g. an agent
+                // retrying `read_skill{bundled_skill_id: "pr-walkthrough"}` for a
+                // project skill). Only path-based skills are eligible here — a
+                // genuine bundled-catalog hit above always wins.
+                .or_else(|| self.active_path_skill_by_name(id, path_origin)),
         };
         skill.ok_or_else(|| ActiveSkillLookupError::for_reference(reference, path_origin))
+    }
+
+    /// Resolves `name` against path-based (project/home) skills visible to
+    /// `path_origin`, ignoring bundled skills entirely.
+    ///
+    /// When multiple skills share `name`, home-scoped skills take precedence
+    /// over project skills — the same precedence documented for unqualified
+    /// `--skill` name resolution in `resolve_skill_spec.rs`. Remaining ties
+    /// within the chosen scope are broken by provider-directory precedence
+    /// (`.agents` before `.warp` before `.claude`, etc., per
+    /// [`SKILL_PROVIDER_DEFINITIONS`]) — the same rank `resolve_skill_spec.rs`
+    /// uses via `directory_precedence_rank` — so this fallback never serves
+    /// different instructions than canonical name resolution would pick, and
+    /// finally by a stable path sort so the result is fully deterministic.
+    fn active_path_skill_by_name(
+        &self,
+        name: &str,
+        path_origin: &SkillPathOrigin,
+    ) -> Option<&ParsedSkill> {
+        let paths = self.skills_by_name.get(name)?;
+        let mut candidates: Vec<&LocalOrRemotePath> = paths
+            .iter()
+            .filter(|path| path_matches_origin(path, path_origin))
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+
+        let home_paths: HashSet<&LocalOrRemotePath> = self
+            .home_directory_for_origin(path_origin)
+            .as_ref()
+            .and_then(|dir| self.directory_skills.get(dir))
+            .into_iter()
+            .flatten()
+            .collect();
+        let home_candidates: Vec<&LocalOrRemotePath> = candidates
+            .iter()
+            .copied()
+            .filter(|path| home_paths.contains(*path))
+            .collect();
+        if !home_candidates.is_empty() {
+            candidates = home_candidates;
+        }
+
+        candidates.sort_by_key(|path| {
+            let rank = self
+                .skills_by_path
+                .get(*path)
+                .map_or(usize::MAX, |skill| provider_rank(skill.provider));
+            (rank, path.display_path())
+        });
+        candidates
+            .into_iter()
+            .next()
+            .and_then(|path| self.skills_by_path.get(path))
     }
 
     /// Returns a local bundled skill by ID only if its activation condition is met.
@@ -691,6 +752,31 @@ fn path_matches_reference_location(path: &LocalOrRemotePath, reference: &SkillRe
         | (
             LocalOrRemotePath::Remote(_),
             SkillReference::Path(LocalOrRemotePath::Local(_)) | SkillReference::BundledSkillId(_),
+        ) => false,
+    }
+}
+
+/// Returns true if `path`'s host/local identity matches `path_origin`. Used to
+/// scope name-based skill fallback lookups (see `active_path_skill_by_name`)
+/// to the same execution host that requested the skill.
+fn path_matches_origin(path: &LocalOrRemotePath, path_origin: &SkillPathOrigin) -> bool {
+    match (path, path_origin) {
+        (
+            LocalOrRemotePath::Local(_),
+            SkillPathOrigin::Local | SkillPathOrigin::RestoredDisplayOnly,
+        ) => true,
+        (LocalOrRemotePath::Remote(remote), SkillPathOrigin::Remote { host_id }) => {
+            remote.host_id == *host_id
+        }
+        (
+            LocalOrRemotePath::Local(_),
+            SkillPathOrigin::Remote { .. } | SkillPathOrigin::Unavailable,
+        )
+        | (
+            LocalOrRemotePath::Remote(_),
+            SkillPathOrigin::Local
+            | SkillPathOrigin::RestoredDisplayOnly
+            | SkillPathOrigin::Unavailable,
         ) => false,
     }
 }
