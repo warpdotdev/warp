@@ -712,10 +712,9 @@ pub struct BlockListElement {
 
     use_ligature_rendering: bool,
 
-    /// When true, suppresses cursor rendering for CLI agents when rich input is open. For agents that draw their own cursor (SHOW_CURSOR off),
-    /// the cursor cell is skipped. For agents that let Warp draw the cursor
-    /// (SHOW_CURSOR on), the `draw_cursor` call and cursor contrast colouring
-    /// are suppressed instead.
+    /// When true, suppresses Warp's cursor overlay and cursor-contrast coloring
+    /// while CLI agent rich input is open. The PTY cell glyph is still painted so
+    /// programs that park their cursor on a visible character keep that glyph.
     hide_cursor_cell: bool,
 
     /// Child Elements to use for rich content inserted into the block list
