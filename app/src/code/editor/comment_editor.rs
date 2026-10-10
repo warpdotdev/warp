@@ -151,6 +151,32 @@ impl CommentEditor {
         self.laid_out_size.borrow().as_ref().cloned()
     }
 
+    /// The line this composer's draft is attached to, if initialized. Test-only introspection
+    /// used to prove the composer received its one-shot initialization event (see APP-5356).
+    #[cfg(test)]
+    pub(crate) fn line_for_test(&self) -> Option<&EditorLineLocation> {
+        self.line.as_ref()
+    }
+
+    /// The comment ID being edited, if this composer was reopened for an existing comment.
+    #[cfg(test)]
+    pub(crate) fn comment_id_for_test(&self) -> Option<CommentId> {
+        self.comment_id
+    }
+
+    /// Whether the composer is showing its "editing an existing comment" (Update/Remove) state.
+    #[cfg(test)]
+    pub(crate) fn show_remove_button_for_test(&self) -> bool {
+        self.show_remove_button
+    }
+
+    /// Whether this composer's inner text editor has focus. `CommentEditor::on_focus` delegates
+    /// focus to `self.editor`, so this is what actually ends up as the window's focused view.
+    #[cfg(test)]
+    pub(crate) fn is_editor_focused_for_test(&self, app: &AppContext) -> bool {
+        self.editor.is_focused(app)
+    }
+
     #[allow(unused)] // TODO(CODE-1464): use this
     pub fn set_laid_out_size(&self, value: Vector2F) {
         self.laid_out_size.replace(Some(value));
