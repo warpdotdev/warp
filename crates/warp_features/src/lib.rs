@@ -960,6 +960,10 @@ pub enum FeatureFlag {
     /// setup or API key required.
     FactoryMcp,
 
+    /// Attaches the Warp-hosted preview URLs MCP server (`/api/v1/mcp/preview-urls`)
+    /// to agent runs, so a cloud run can expose a sandbox port as a preview URL.
+    PreviewUrlsMcp,
+
     /// Enables periodic workspace-handoff checkpoints during a cloud agent run,
     /// rather than only uploading a workspace snapshot once at end-of-run.
     /// Requires `OzHandoff` to also be enabled; a no-op for local runs and when
@@ -1020,6 +1024,7 @@ pub const DEBUG_FLAGS: &[FeatureFlag] = &[FeatureFlag::DebugMode, FeatureFlag::R
 pub const LOCAL_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::LocalClaudeCodexChildHarnesses,
     FeatureFlag::AcpHarness,
+    FeatureFlag::PreviewUrlsMcp,
 ];
 
 /// Features enabled for the development team.  The expectation is that, over
