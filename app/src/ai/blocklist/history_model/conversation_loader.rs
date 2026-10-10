@@ -31,6 +31,17 @@ use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::AIClient;
 use crate::terminal::model::block::SerializedBlock;
 
+/// Caps how many orchestration child conversations get fully hydrated
+/// (DB read + task protobuf decode) during startup history
+/// initialization. Without this cap, every child conversation within the
+/// [`MAX_HISTORICAL_CONVERSATIONS`] window is eagerly loaded in full
+/// regardless of whether its parent pane is ever opened, which scales
+/// startup memory/time with total orchestration history size rather than
+/// what the UI can display. Children beyond the cap are still indexed via
+/// `children_by_parent` and load lazily via `restore_conversations` when
+/// their parent pane materializes.
+pub(crate) const MAX_EAGERLY_HYDRATED_CHILD_CONVERSATIONS: usize = 30;
+
 /// A conversation transcript from a CLI agent harness (e.g. Claude Code).
 #[derive(Debug, Clone)]
 pub struct CLIAgentConversation {
@@ -553,6 +564,7 @@ impl BlocklistAIHistoryModel {
             })
             .collect();
 
+        let mut eagerly_hydrated_child_count = 0usize;
         let collected: HashMap<AIConversationId, AIConversationMetadata> = historical_rows
             .into_iter()
             .filter_map(|row| {
@@ -590,20 +602,42 @@ impl BlocklistAIHistoryModel {
                     // Startup rows carry no tasks, so the child's task
                     // payload is loaded from the local DB; fully-hydrated
                     // inputs convert directly.
-                    let child_conversation = if agent_conversation.tasks.is_empty() {
-                        self.load_conversation_from_db(&conversation_id)
+                    //
+                    // Bounded: each hydration issues a separate DB query and
+                    // fully decodes that child's task protobufs, so eagerly
+                    // hydrating every child conversation in the historical
+                    // window (up to `MAX_HISTORICAL_CONVERSATIONS`) scales
+                    // with total history size rather than what the pill bar
+                    // can actually display, causing a startup latency/memory
+                    // spike for accounts with many orchestration runs. Cap
+                    // the number of eager hydrations here; children beyond
+                    // the cap are still indexed via `children_by_parent`
+                    // above and load normally (lazily) via
+                    // `restore_conversations` once their parent pane
+                    // materializes.
+                    if eagerly_hydrated_child_count < MAX_EAGERLY_HYDRATED_CHILD_CONVERSATIONS {
+                        let child_conversation = if agent_conversation.tasks.is_empty() {
+                            self.load_conversation_from_db(&conversation_id)
+                        } else {
+                            convert_persisted_conversation_to_ai_conversation_with_metadata(
+                                agent_conversation.clone(),
+                            )
+                        };
+                        if let Some(child_conversation) = child_conversation {
+                            eagerly_hydrated_child_count += 1;
+                            self.conversations_by_id
+                                .insert(conversation_id, child_conversation);
+                        } else {
+                            log::warn!(
+                                "Failed to eagerly hydrate orchestration child {conversation_id}; \
+                                 pill bar / name resolution will fall back to lazy materialization",
+                            );
+                        }
                     } else {
-                        convert_persisted_conversation_to_ai_conversation_with_metadata(
-                            agent_conversation.clone(),
-                        )
-                    };
-                    if let Some(child_conversation) = child_conversation {
-                        self.conversations_by_id
-                            .insert(conversation_id, child_conversation);
-                    } else {
-                        log::warn!(
-                            "Failed to eagerly hydrate orchestration child {conversation_id}; \
-                             pill bar / name resolution will fall back to lazy materialization",
+                        log::debug!(
+                            "Skipping eager hydration for child conversation {conversation_id}: \
+                             over the {MAX_EAGERLY_HYDRATED_CHILD_CONVERSATIONS}-conversation cap; \
+                             it will load lazily via restore_conversations instead",
                         );
                     }
                     return None;
