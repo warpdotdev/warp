@@ -86,7 +86,7 @@ pub fn assert_tab_groups(
                 .map(|&(name, color)| {
                     (
                         name.map(str::to_owned),
-                        color.map_or(SelectedTabColor::Unset, SelectedTabColor::Color),
+                        color.map_or(SelectedTabColor::Unset, |c| SelectedTabColor::Color(c.into())),
                     )
                 })
                 .collect();

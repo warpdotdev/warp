@@ -17,9 +17,8 @@ use crate::root_view::quake_mode_window_id;
 use crate::server::ids::{ServerId, SyncId};
 use crate::settings_view::SettingsSection;
 use crate::settings_view::environments_page::EnvironmentsPage;
-use crate::tab::SelectedTabColor;
+use crate::tab::{SelectedTabColor, TabColor};
 use crate::terminal::ShellLaunchData;
-use crate::themes::theme::AnsiColorIdentifier;
 use crate::workspace::WorkspaceRegistry;
 use crate::workspace::tab_group::TabGroupId;
 use crate::workspace::view::left_panel::ToolPanelView;
@@ -76,7 +75,7 @@ pub struct TabGroupSnapshot {
 pub struct TabSnapshot {
     pub custom_title: Option<String>,
     pub root: PaneNodeSnapshot,
-    pub default_directory_color: Option<AnsiColorIdentifier>,
+    pub default_directory_color: Option<TabColor>,
     pub selected_color: SelectedTabColor,
     pub left_panel: Option<LeftPanelSnapshot>,
     pub right_panel: Option<RightPanelSnapshot>,
@@ -87,7 +86,7 @@ pub struct TabSnapshot {
 }
 
 impl TabSnapshot {
-    pub(crate) fn color(&self) -> Option<AnsiColorIdentifier> {
+    pub(crate) fn color(&self) -> Option<TabColor> {
         self.selected_color.resolve(self.default_directory_color)
     }
 }

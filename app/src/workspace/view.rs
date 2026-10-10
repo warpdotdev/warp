@@ -368,8 +368,8 @@ use crate::shell_indicator::ShellIndicatorType;
 use crate::tab::{
     COMPACT_TAB_WIDTH_THRESHOLD, ColorPickerTarget, MOVE_TO_GROUP_LABEL, NewSessionMenuItem,
     PaneNameMenuTarget, SelectedTabColor, TAB_BAR_BORDER_HEIGHT, TAB_INDICATOR_HEIGHT,
-    TAB_PIN_INDICATOR_ICON_SIZE, TAB_PIN_VANISH_THRESHOLD, TabBarState, TabComponent, TabData,
-    TabShortcutModifierState, TabTelemetryAction, color_picker_menu_items, next_tab_color,
+    TAB_PIN_INDICATOR_ICON_SIZE, TAB_PIN_VANISH_THRESHOLD, TabBarState, TabColor, TabComponent,
+    TabData, TabShortcutModifierState, TabTelemetryAction, color_picker_menu_items, next_tab_color,
     tab_position_id, uses_vertical_tabs,
 };
 use crate::tab_configs::action_sidecar::SidecarItemKind;
@@ -440,7 +440,7 @@ use crate::terminal::view::{
 };
 use crate::terminal::warpify::settings::WarpifySettings;
 use crate::terminal::{self, BlockListSettings, SizeInfo, TerminalModel, TerminalView};
-use crate::themes::theme::{AnsiColorIdentifier, RespectSystemTheme, ThemeKind};
+use crate::themes::theme::{RespectSystemTheme, ThemeKind};
 use crate::themes::theme_chooser::{ThemeChooser, ThemeChooserEvent, ThemeChooserMode};
 use crate::themes::theme_creator_modal::{ThemeCreatorModal, ThemeCreatorModalEvent};
 use crate::themes::theme_deletion_modal::{ThemeDeletionModal, ThemeDeletionModalEvent};
@@ -1012,7 +1012,7 @@ fn query_for_rewind_prefill(inputs: &[AIAgentInput]) -> Option<String> {
 /// animation continues seamlessly after a handoff.
 pub struct TransferredTab {
     pub pane_group: ViewHandle<PaneGroup>,
-    pub color: Option<AnsiColorIdentifier>,
+    pub color: Option<TabColor>,
     pub custom_title: Option<String>,
     pub left_panel_open: bool,
     pub vertical_tabs_panel_open: bool,
@@ -5420,7 +5420,7 @@ impl Workspace {
     }
 
     /// Get the tab color for a given tab index.
-    pub fn get_tab_color(&self, index: usize) -> Option<AnsiColorIdentifier> {
+    pub fn get_tab_color(&self, index: usize) -> Option<TabColor> {
         self.tabs.get(index).and_then(|tab| tab.color())
     }
 
@@ -5783,12 +5783,7 @@ impl Workspace {
         ctx.notify();
     }
 
-    pub fn toggle_tab_color(
-        &mut self,
-        index: usize,
-        color: AnsiColorIdentifier,
-        ctx: &mut ViewContext<Self>,
-    ) {
+    pub fn toggle_tab_color(&mut self, index: usize, color: TabColor, ctx: &mut ViewContext<Self>) {
         if self.tabs.get(index).is_none() {
             log::warn!(
                 "Not toggling tab color: index was {index} but len is {}",
@@ -5834,7 +5829,7 @@ impl Workspace {
     fn toggle_tab_group_color(
         &mut self,
         group_id: TabGroupId,
-        color: AnsiColorIdentifier,
+        color: TabColor,
         ctx: &mut ViewContext<Self>,
     ) {
         let current = self

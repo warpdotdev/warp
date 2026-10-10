@@ -80,6 +80,7 @@ use crate::terminal::shared_session::{
     SharedSessionScrollbackType, SharedSessionSource, SharedSessionStatus,
 };
 use crate::test_util::settings::initialize_settings_for_tests;
+use crate::themes::theme::AnsiColorIdentifier;
 use crate::undo_close::UndoCloseSettings;
 #[cfg(feature = "local_fs")]
 use crate::user_config::tab_configs_dir;
@@ -1749,29 +1750,29 @@ fn test_set_active_tab_color() {
             // Setting a color stores it as the manual selection and resolves to it.
             workspace.handle_action(
                 &WorkspaceAction::SetActiveTabColor(SelectedTabColor::Color(
-                    AnsiColorIdentifier::Magenta,
+                    AnsiColorIdentifier::Magenta.into(),
                 )),
                 ctx,
             );
             assert_eq!(
                 workspace.tabs[active].selected_color,
-                SelectedTabColor::Color(AnsiColorIdentifier::Magenta),
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta.into()),
             );
             assert_eq!(
                 workspace.tabs[active].color(),
-                Some(AnsiColorIdentifier::Magenta),
+                Some(AnsiColorIdentifier::Magenta.into()),
             );
 
             // Replacing with a different color overwrites the previous selection.
             workspace.handle_action(
                 &WorkspaceAction::SetActiveTabColor(SelectedTabColor::Color(
-                    AnsiColorIdentifier::Green,
+                    AnsiColorIdentifier::Green.into(),
                 )),
                 ctx,
             );
             assert_eq!(
                 workspace.tabs[active].selected_color,
-                SelectedTabColor::Color(AnsiColorIdentifier::Green),
+                SelectedTabColor::Color(AnsiColorIdentifier::Green.into()),
             );
 
             // `Cleared` explicitly suppresses any color (including a directory default).
@@ -1802,13 +1803,13 @@ fn test_set_active_tab_color() {
             workspace.handle_action(&WorkspaceAction::ActivateTab(0), ctx);
             workspace.handle_action(
                 &WorkspaceAction::SetActiveTabColor(SelectedTabColor::Color(
-                    AnsiColorIdentifier::Blue,
+                    AnsiColorIdentifier::Blue.into(),
                 )),
                 ctx,
             );
             assert_eq!(
                 workspace.tabs[0].selected_color,
-                SelectedTabColor::Color(AnsiColorIdentifier::Blue),
+                SelectedTabColor::Color(AnsiColorIdentifier::Blue.into()),
             );
             assert_eq!(
                 workspace.tabs[active].selected_color,
@@ -1830,45 +1831,46 @@ fn test_cycle_active_tab_color_uses_resolved_color_and_only_mutates_the_active_t
             let active = workspace.active_tab_index;
             let inactive = 0;
             workspace.tabs[inactive].selected_color =
-                SelectedTabColor::Color(AnsiColorIdentifier::Magenta);
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta.into());
             workspace.tabs[inactive].in_multi_selection = true;
             workspace.tabs[active].in_multi_selection = true;
 
             workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
             assert_eq!(
                 workspace.tabs[active].selected_color,
-                SelectedTabColor::Color(AnsiColorIdentifier::Red),
+                SelectedTabColor::Color(AnsiColorIdentifier::Red.into()),
                 "an uncolored active tab should start at red"
             );
             workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
             assert_eq!(
                 workspace.tabs[active].selected_color,
-                SelectedTabColor::Color(AnsiColorIdentifier::Green),
+                SelectedTabColor::Color(AnsiColorIdentifier::Green.into()),
                 "red should advance to green"
             );
             workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
             assert_eq!(
                 workspace.tabs[active].selected_color,
-                SelectedTabColor::Color(AnsiColorIdentifier::Yellow),
+                SelectedTabColor::Color(AnsiColorIdentifier::Yellow.into()),
                 "green should advance to yellow"
             );
             workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
             assert_eq!(
                 workspace.tabs[active].selected_color,
-                SelectedTabColor::Color(AnsiColorIdentifier::Blue),
+                SelectedTabColor::Color(AnsiColorIdentifier::Blue.into()),
                 "yellow should advance to blue"
             );
             workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
             assert_eq!(
                 workspace.tabs[active].selected_color,
-                SelectedTabColor::Color(AnsiColorIdentifier::Magenta),
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta.into()),
                 "blue should advance to magenta"
             );
-            workspace.tabs[active].default_directory_color = Some(AnsiColorIdentifier::Yellow);
+            workspace.tabs[active].default_directory_color =
+                Some(AnsiColorIdentifier::Yellow.into());
             workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
             assert_eq!(
                 workspace.tabs[active].selected_color,
-                SelectedTabColor::Color(AnsiColorIdentifier::Cyan),
+                SelectedTabColor::Color(AnsiColorIdentifier::Cyan.into()),
                 "magenta should advance to cyan"
             );
             workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
@@ -1885,13 +1887,13 @@ fn test_cycle_active_tab_color_uses_resolved_color_and_only_mutates_the_active_t
             workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
             assert_eq!(
                 workspace.tabs[active].selected_color,
-                SelectedTabColor::Color(AnsiColorIdentifier::Red),
+                SelectedTabColor::Color(AnsiColorIdentifier::Red.into()),
                 "the invocation after an explicit clear should restart at red"
             );
 
             assert_eq!(
                 workspace.tabs[inactive].selected_color,
-                SelectedTabColor::Color(AnsiColorIdentifier::Magenta),
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta.into()),
                 "the inactive tab should not change"
             );
             assert!(workspace.tabs[inactive].in_multi_selection);
@@ -1901,7 +1903,7 @@ fn test_cycle_active_tab_color_uses_resolved_color_and_only_mutates_the_active_t
             workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
             assert_eq!(
                 workspace.tabs[active].selected_color,
-                SelectedTabColor::Color(AnsiColorIdentifier::Blue),
+                SelectedTabColor::Color(AnsiColorIdentifier::Blue.into()),
                 "a directory-derived yellow should advance to blue"
             );
 
@@ -1932,22 +1934,22 @@ fn test_cycle_active_tab_color_mutates_group_color_without_member_overrides() {
 
             let mut group = TabGroup::new();
             let group_id = group.id;
-            group.color = SelectedTabColor::Color(AnsiColorIdentifier::Yellow);
+            group.color = SelectedTabColor::Color(AnsiColorIdentifier::Yellow.into());
             workspace.tab_groups.insert(group_id, group);
             let mut unrelated_group = TabGroup::new();
             let unrelated_group_id = unrelated_group.id;
-            unrelated_group.color = SelectedTabColor::Color(AnsiColorIdentifier::Magenta);
+            unrelated_group.color = SelectedTabColor::Color(AnsiColorIdentifier::Magenta.into());
             workspace
                 .tab_groups
                 .insert(unrelated_group_id, unrelated_group);
             workspace.tabs[active].group_id = Some(group_id);
             workspace.tabs[grouped_sibling].group_id = Some(group_id);
             workspace.tabs[active].selected_color =
-                SelectedTabColor::Color(AnsiColorIdentifier::Magenta);
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta.into());
             workspace.tabs[grouped_sibling].selected_color =
-                SelectedTabColor::Color(AnsiColorIdentifier::Green);
+                SelectedTabColor::Color(AnsiColorIdentifier::Green.into());
             workspace.tabs[unrelated].selected_color =
-                SelectedTabColor::Color(AnsiColorIdentifier::Red);
+                SelectedTabColor::Color(AnsiColorIdentifier::Red.into());
             workspace.tabs[active].in_multi_selection = true;
             workspace.tabs[unrelated].in_multi_selection = true;
 
@@ -1955,34 +1957,34 @@ fn test_cycle_active_tab_color_mutates_group_color_without_member_overrides() {
 
             assert_eq!(
                 workspace.tab_groups[&group_id].color,
-                SelectedTabColor::Color(AnsiColorIdentifier::Blue),
+                SelectedTabColor::Color(AnsiColorIdentifier::Blue.into()),
                 "the active tab's group should advance from yellow to blue"
             );
             assert_eq!(
                 workspace.tabs[active].selected_color,
-                SelectedTabColor::Color(AnsiColorIdentifier::Magenta),
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta.into()),
                 "the active member override should remain unchanged"
             );
             assert_eq!(
                 workspace.tabs[grouped_sibling].selected_color,
-                SelectedTabColor::Color(AnsiColorIdentifier::Green),
+                SelectedTabColor::Color(AnsiColorIdentifier::Green.into()),
                 "the sibling member override should remain unchanged"
             );
             assert_eq!(
                 workspace.tabs[unrelated].selected_color,
-                SelectedTabColor::Color(AnsiColorIdentifier::Red),
+                SelectedTabColor::Color(AnsiColorIdentifier::Red.into()),
                 "an unrelated tab should remain unchanged"
             );
             assert_eq!(
                 workspace.tab_groups[&unrelated_group_id].color,
-                SelectedTabColor::Color(AnsiColorIdentifier::Magenta),
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta.into()),
                 "an unrelated group should remain unchanged"
             );
             assert!(workspace.tabs[active].in_multi_selection);
             assert!(workspace.tabs[unrelated].in_multi_selection);
 
             workspace.tab_groups.get_mut(&group_id).unwrap().color =
-                SelectedTabColor::Color(AnsiColorIdentifier::Cyan);
+                SelectedTabColor::Color(AnsiColorIdentifier::Cyan.into());
             workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
             assert_eq!(
                 workspace.tab_groups[&group_id].color,

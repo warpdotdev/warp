@@ -29,7 +29,7 @@ use crate::persistence::{
     BlockCompleted, ModelEvent, PersistedDataScope, PersistenceScope, StartedCommandMetadata,
 };
 use crate::server::ids::{ClientId, ServerId};
-use crate::tab::SelectedTabColor;
+use crate::tab::{SelectedTabColor, TabColor};
 use crate::terminal::ShellLaunchData;
 use crate::terminal::model::block::SerializedBlock;
 use crate::terminal::model::session::SessionId;
@@ -733,7 +733,7 @@ fn test_sqlite_round_trips_tab_groups() {
             tab_groups: vec![TabGroupSnapshot {
                 id: group_id,
                 name: Some("Backend".to_string()),
-                color: SelectedTabColor::Color(AnsiColorIdentifier::Blue),
+                color: SelectedTabColor::Color(AnsiColorIdentifier::Blue.into()),
                 collapsed: true,
                 pinned: false,
             }],
@@ -757,7 +757,7 @@ fn test_sqlite_round_trips_tab_groups() {
     assert_eq!(restored_group.name.as_deref(), Some("Backend"));
     assert_eq!(
         restored_group.color,
-        SelectedTabColor::Color(AnsiColorIdentifier::Blue)
+        SelectedTabColor::Color(AnsiColorIdentifier::Blue.into())
     );
     assert!(restored_group.collapsed);
 
@@ -767,6 +767,44 @@ fn test_sqlite_round_trips_tab_groups() {
     assert_eq!(restored_window.tabs.len(), 2);
     assert_eq!(restored_window.tabs[0].group_id, Some(restored_group.id));
     assert_eq!(restored_window.tabs[1].group_id, None);
+}
+
+/// A custom tab color round-trips through save/restore, and the legacy format that stored a bare
+/// color name (no `SelectedTabColor` wrapper) still reads as that ANSI color.
+#[test]
+fn test_sqlite_round_trips_custom_tab_color_and_reads_legacy_bare_color() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let custom: TabColor = "#ff8800".parse().expect("hex color should parse");
+    let mut window = test_terminal_window_snapshot(false);
+    window.tabs[0].selected_color = SelectedTabColor::Color(custom);
+    let app_state = AppState {
+        windows: vec![window],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+
+    let read_tab_color = |conn: &mut _| {
+        read_sqlite_data(conn, None, PersistedDataScope::Full)
+            .expect("app state should load")
+            .app_state
+            .expect("app state should be present for the full scope")
+            .windows[0]
+            .tabs[0]
+            .selected_color
+    };
+    assert_eq!(read_tab_color(&mut conn), SelectedTabColor::Color(custom));
+
+    conn.batch_execute("UPDATE tabs SET color = 'red'")
+        .expect("update should succeed");
+    assert_eq!(
+        read_tab_color(&mut conn),
+        SelectedTabColor::Color(AnsiColorIdentifier::Red.into())
+    );
 }
 
 /// Verifies that the `pinned` flag on tabs and tab groups round-trips through
