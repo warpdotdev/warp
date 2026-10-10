@@ -405,8 +405,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::LSPAsATool,
         #[cfg(feature = "inline_profile_selector")]
         FeatureFlag::InlineProfileSelector,
-        #[cfg(feature = "oz_platform_skills")]
-        FeatureFlag::OzPlatformSkills,
         #[cfg(feature = "oz_identity_federation")]
         FeatureFlag::OzIdentityFederation,
         #[cfg(feature = "oz_changelog_updates")]

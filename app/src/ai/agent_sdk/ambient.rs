@@ -275,11 +275,6 @@ impl AmbientAgentRunner {
         if !FeatureFlag::AmbientAgentsCommandLine.is_enabled() {
             return Err(anyhow::anyhow!("Unsupported feature"));
         }
-        let skill_enabled = FeatureFlag::OzPlatformSkills.is_enabled();
-        if args.skill.is_some() && !skill_enabled {
-            return Err(anyhow::anyhow!("unexpected argument '--skill' found"));
-        }
-
         let refresh_future = super::common::refresh_workspace_metadata(ctx);
         let warp_drive_sync_future = super::common::refresh_warp_drive(ctx);
         let setup_future = future::try_join(refresh_future, warp_drive_sync_future);
@@ -293,9 +288,8 @@ impl AmbientAgentRunner {
             // Validate that at least one of prompt, skill, or conversation is provided.
             // conversation is used to continue an existing cloud conversation.
             let prompt = args.prompt_arg.to_prompt();
-            let has_prompt_source = prompt.is_some()
-                || (skill_enabled && args.skill.is_some())
-                || args.conversation.is_some();
+            let has_prompt_source =
+                prompt.is_some() || args.skill.is_some() || args.conversation.is_some();
             if !has_prompt_source {
                 super::report_fatal_error(
                     anyhow::anyhow!("Either --prompt, --skill, or --conversation must be provided"),
@@ -554,11 +548,7 @@ impl AmbientAgentRunner {
             };
 
             // For ambient runs, skill is passed to the server and resolved in the remote environment
-            let skill = if skill_enabled {
-                args.skill.as_ref().map(|s| s.to_string())
-            } else {
-                None
-            };
+            let skill = args.skill.as_ref().map(|s| s.to_string());
 
             let (prompt, mode) = match prompt {
                 Some(prompt) => {
