@@ -130,7 +130,8 @@ fn test_parse_context_line_starting_with_dash() {
     let result = parse_diff_hunk(diff_hunk, 1, Some(CommentSide::Right));
     assert!(result.is_ok());
     let (_, content) = result.unwrap();
-    assert_eq!(content.content, " - list item");
+    assert_eq!(content.content, "- list item");
+    assert_eq!(content.original_text(), "- list item");
 }
 
 /// Context line with content that starts with `@`.
@@ -141,5 +142,18 @@ fn test_parse_context_line_starting_with_at_sign() {
     let result = parse_diff_hunk(diff_hunk, 1, Some(CommentSide::Right));
     assert!(result.is_ok());
     let (_, content) = result.unwrap();
-    assert_eq!(content.content, " @decorator");
+    assert_eq!(content.content, "@decorator");
+    assert_eq!(content.original_text(), "@decorator");
+}
+
+/// Context line whose actual content is indented.
+#[test]
+fn test_parse_indented_context_line_preserves_content_indent() {
+    let diff_hunk = "@@ -1,2 +1,2 @@\n     indented\n next";
+
+    let result = parse_diff_hunk(diff_hunk, 1, Some(CommentSide::Right));
+    assert!(result.is_ok());
+    let (_, content) = result.unwrap();
+    assert_eq!(content.content, "    indented");
+    assert_eq!(content.original_text(), "    indented");
 }
