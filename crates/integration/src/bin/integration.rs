@@ -418,6 +418,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
 
     register_test!(test_autosuggestions_are_hidden_when_opening_tab_completions);
     register_test!(test_latest_buffer_operations);
+    register_test!(test_multiline_slash_command_edit_is_re_detected);
 
     register_test!(test_pass_control_sequences_to_long_running_block);
     register_test!(test_execution_profiles_load_from_settings_file);

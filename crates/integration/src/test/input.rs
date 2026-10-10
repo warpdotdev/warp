@@ -223,6 +223,33 @@ pub fn test_latest_buffer_operations() -> Builder {
         )
 }
 
+pub fn test_multiline_slash_command_edit_is_re_detected() -> Builder {
+    new_builder()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            new_step_with_default_assertions("Type initial multiline slash command")
+                .with_typed_characters(&["/plan\nwrite a product spec"])
+                .add_named_assertion(
+                    "Initial multiline slash command is in the input",
+                    input_contains_string(0, "/plan\nwrite a product spec".to_owned()),
+                ),
+        )
+        .with_step(
+            TestStep::new("Replace with another multiline slash command")
+                .with_action(|app, window_id, _step_data| {
+                    let input = single_input_view_for_tab(app, window_id, 0);
+                    input.update(app, |input, ctx| {
+                        input.user_replace_editor_text("/rename-tab\nBackend API", ctx);
+                    });
+                })
+                .add_named_assertion(
+                    "Edited multiline slash command is visible",
+                    input_contains_string(0, "/rename-tab\nBackend API".to_owned()),
+                )
+                .with_take_screenshot("multiline_slash_command_detected.png"),
+        )
+}
+
 pub fn test_middle_click_paste() -> Builder {
     new_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))

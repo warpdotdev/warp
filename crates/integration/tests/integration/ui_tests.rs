@@ -271,6 +271,7 @@ integration_tests! {
     test_block_filtering_clear_blocklist,
     test_autosuggestions_are_hidden_when_opening_tab_completions,
     test_latest_buffer_operations,
+    test_multiline_slash_command_edit_is_re_detected,
 
     test_pass_control_sequences_to_long_running_block,
     test_execution_profiles_load_from_settings_file,
