@@ -585,6 +585,22 @@ impl<'a> RequestBuilder<'a> {
             ..self
         }
     }
+    /// Include browser credentials such as session cookies when sending the request.
+    ///
+    /// This is only meaningful for cross-origin browser requests. Native clients do not have
+    /// browser-managed credentials, so this is intentionally a no-op outside of WASM.
+    pub fn fetch_credentials_include(self) -> RequestBuilder<'a> {
+        cfg_if::cfg_if! {
+            if #[cfg(target_family = "wasm")] {
+                Self {
+                    wrapped: self.wrapped.fetch_credentials_include(),
+                    ..self
+                }
+            } else {
+                self
+            }
+        }
+    }
 
     // The `timeout` argument is unused on wasm.
     #[cfg_attr(target_family = "wasm", allow(unused_variables))]
