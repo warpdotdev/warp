@@ -39,6 +39,7 @@ use warpui::r#async::executor::Background;
 use warpui::r#async::{FutureExt, TimeoutError, Timer};
 use warpui::{
     AppContext, Entity, EntityId, ModelContext, ModelHandle, ModelSpawner, SingletonEntity,
+    ViewUpdateError,
 };
 
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
@@ -1462,11 +1463,14 @@ impl AgentDriver {
             });
         }
         let terminal = self.terminal_driver.as_ref(ctx).terminal_view().clone();
-        terminal.update(ctx, |terminal, ctx| {
+        match terminal.try_update(ctx, |terminal, ctx| {
             terminal.ai_controller().update(ctx, |controller, ctx| {
                 controller.unbind_native_prompt_conversation(ctx);
             });
-        });
+        }) {
+            Ok(()) | Err(ViewUpdateError::WindowClosed) => {}
+            Err(ViewUpdateError::CircularUpdate) => panic!("Circular view update"),
+        }
         let Some(conversation_id) = self.run_conversation_id else {
             return;
         };
