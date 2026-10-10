@@ -620,7 +620,6 @@ default = [
     "background_computer_use",
     "oz_platform_skills",
     "oz_identity_federation",
-    "sync_ambient_plans",
     "conversation_artifacts",
     "agent_view",
     "agent_view_block_context",
@@ -921,7 +920,6 @@ pr_comments_skill = []
 conversation_artifacts = []
 conversations_as_context = []
 conversation_api = []
-sync_ambient_plans = []
 projects = []
 vim_code_editor = []
 allow_opening_file_links_using_editor_env = []

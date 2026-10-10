@@ -649,9 +649,6 @@ pub enum FeatureFlag {
     /// Enables conversation artifacts.
     ConversationArtifacts,
 
-    /// Enables auto-syncing ambient plans to Warp Drive.
-    SyncAmbientPlans,
-
     /// Enables platform skills support (--skill flag) for agent runs.
     ///
     /// Skills are loaded from `.agents/skills/`, `.warp/skills/`, `.claude/skills/`, and `.codex/skills/`
