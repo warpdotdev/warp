@@ -438,6 +438,14 @@ fn cli_agent_footer_does_not_render_for_warp_tui_session() {
     })
 }
 #[test]
+fn test_rich_input_submit_strategy_for_muse_uses_bracketed_paste() {
+    assert_eq!(
+        rich_input_submit_strategy(CLIAgent::Muse),
+        RichInputSubmitStrategy::BracketedPaste
+    );
+}
+
+#[test]
 fn test_rich_input_submit_strategy_for_oh_my_pi() {
     assert_eq!(
         rich_input_submit_strategy(CLIAgent::OhMyPi),

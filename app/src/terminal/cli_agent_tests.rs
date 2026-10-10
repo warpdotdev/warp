@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use ai::skills::SkillProvider;
 use chrono::Local;
 use pathfinder_color::ColorU;
 use smol_str::SmolStr;
@@ -269,6 +270,7 @@ fn test_detect_known_agents() {
                 ("agy", CLIAgent::Antigravity),
                 ("omp", CLIAgent::OhMyPi),
                 ("grok", CLIAgent::Grok),
+                ("muse", CLIAgent::Muse),
                 ("warp", CLIAgent::WarpTui),
                 ("warp-dev", CLIAgent::WarpTui),
                 ("./script/run-tui", CLIAgent::WarpTui),
@@ -295,6 +297,11 @@ fn test_detect_with_arguments() {
                 CLIAgent::detect("gemini chat", None, None, ctx),
                 Some(CLIAgent::Gemini),
             );
+            assert_eq!(
+                CLIAgent::detect(r#"muse exec "ping""#, None, None, ctx),
+                Some(CLIAgent::Muse),
+            );
+            assert_eq!(CLIAgent::detect("npx muse", None, None, ctx), None);
         });
     });
 }
@@ -306,6 +313,23 @@ fn test_grok_public_configuration() {
     assert!(CLIAgent::Grok.supports_bash_mode());
     assert_eq!(CLIAgent::Grok.skill_command_prefix(), "/");
     assert_eq!(CLIAgent::Grok.icon(), Some(Icon::GrokLogo));
+}
+
+#[test]
+fn test_muse_public_configuration() {
+    assert_eq!(CLIAgent::Muse.command_prefix(), "muse");
+    assert_eq!(CLIAgent::Muse.display_name(), "Muse Code");
+    assert!(CLIAgent::Muse.supports_bash_mode());
+    assert_eq!(CLIAgent::Muse.skill_command_prefix(), "/");
+    assert_eq!(CLIAgent::Muse.icon(), Some(Icon::MuseLogo));
+    assert_eq!(
+        CLIAgent::Muse.supported_skill_providers(),
+        &[
+            SkillProvider::Agents,
+            SkillProvider::Claude,
+            SkillProvider::Codex,
+        ]
+    );
 }
 
 #[test]
