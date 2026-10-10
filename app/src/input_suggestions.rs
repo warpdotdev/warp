@@ -12,7 +12,6 @@ use warp_command_signatures::IconType;
 use warp_completer::completer::{
     MatchType, PathSeparators, PreparedSuggestion, Suggestion, SuggestionResults, SuggestionType,
 };
-use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::AnsiColorIdentifier;
 use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
 use warpui::elements::{
@@ -875,10 +874,7 @@ impl InputSuggestions {
                                 );
                             }
 
-                            if FeatureFlag::AllowIgnoringInputSuggestions.is_enabled()
-                                && item.is_history_item
-                                && (mouse_state.is_hovered() || is_selected)
-                            {
+                            if item.is_history_item && (mouse_state.is_hovered() || is_selected) {
                                 // Add an empty spacer so that the actual ignore button appears
                                 // right justified.
                                 row.add_child(Expanded::new(1., Empty::new().finish()).finish());
