@@ -82,7 +82,11 @@ fn execution_bootstrap_response() -> Value {
     })
 }
 
-fn mock_execution_bootstrap(response: Value, workload_token: &str) -> Mock {
+fn mock_execution_bootstrap(
+    response: Value,
+    workload_token: &str,
+    supports_deferred_repositories: bool,
+) -> Mock {
     let mut server = warp_core::channel::ChannelState::mock_server();
     server
         .mock("POST", "/graphql/v2")
@@ -93,6 +97,7 @@ fn mock_execution_bootstrap(response: Value, workload_token: &str) -> Mock {
         .match_body(Matcher::PartialJson(json!({
             "variables": {
                 "executionId": "1",
+                "supportsDeferredRepositories": supports_deferred_repositories,
                 "secretsInput": {"taskId": "task-one", "workloadToken": workload_token},
                 "taskInput": {"taskId": "task-one"}
             }
@@ -112,29 +117,50 @@ fn execution_bootstrap_server_api() -> ServerApi {
 
 #[test]
 fn execution_bootstrap_fetches_config_secrets_and_attachments_once() {
-    let request = mock_execution_bootstrap(execution_bootstrap_response(), "token-success");
-    let data = block_on(execution_bootstrap_server_api().get_execution_bootstrap(
-        "task-one",
-        "1",
-        "token-success".into(),
-    ))
-    .unwrap();
-    assert_eq!(data.config.task_id.inner(), "task-one");
-    assert_eq!(data.config.execution_id.inner(), "1");
-    assert!(data.config.repositories.is_empty());
-    assert_eq!(data.config.deferred_repositories.len(), 1);
-    assert_eq!(
-        data.config.deferred_repositories[0].code_forge,
-        CodeForge::GitLab,
-    );
-    assert_eq!(
-        data.config.deferred_repositories[0].owner,
-        "platform/backend"
-    );
-    assert_eq!(data.config.deferred_repositories[0].repo, "api");
-    assert!(data.secrets.unwrap().contains_key("API_KEY"));
-    assert_eq!(data.attachments.unwrap()[0].filename, "file-one_test.txt");
-    request.assert();
+    for supports_deferred_repositories in [false, true] {
+        let mut response = execution_bootstrap_response();
+        if !supports_deferred_repositories {
+            let config = &mut response["data"]["task"]["task"]["executionConfig"];
+            config["repositories"] = json!([{
+                "forge": "GITLAB", "owner": "platform/backend", "name": "api",
+                "ref": null, "cloneFrom": null, "preserveOrigin": true,
+            }]);
+            config["deferredRepositories"] = json!([]);
+        }
+        let request =
+            mock_execution_bootstrap(response, "token-success", supports_deferred_repositories);
+        let data = block_on(execution_bootstrap_server_api().get_execution_bootstrap(
+            "task-one",
+            "1",
+            "token-success".into(),
+            supports_deferred_repositories,
+        ))
+        .unwrap();
+        assert_eq!(data.config.task_id.inner(), "task-one");
+        assert_eq!(data.config.execution_id.inner(), "1");
+        if supports_deferred_repositories {
+            assert!(data.config.repositories.is_empty());
+            assert_eq!(data.config.deferred_repositories.len(), 1);
+            assert_eq!(
+                data.config.deferred_repositories[0].code_forge,
+                CodeForge::GitLab,
+            );
+            assert_eq!(
+                data.config.deferred_repositories[0].owner,
+                "platform/backend"
+            );
+            assert_eq!(data.config.deferred_repositories[0].repo, "api");
+        } else {
+            assert!(data.config.deferred_repositories.is_empty());
+            assert_eq!(data.config.repositories.len(), 1);
+            assert_eq!(data.config.repositories[0].forge, CodeForge::GitLab);
+            assert_eq!(data.config.repositories[0].owner, "platform/backend");
+            assert_eq!(data.config.repositories[0].name, "api");
+        }
+        assert!(data.secrets.unwrap().contains_key("API_KEY"));
+        assert_eq!(data.attachments.unwrap()[0].filename, "file-one_test.txt");
+        request.assert();
+    }
 }
 
 #[test]
@@ -145,11 +171,12 @@ fn execution_bootstrap_preserves_secret_errors_with_task_configuration() {
         "error": {"__typename": "InvalidSecretError", "message": "Unable to access task secrets"},
         "responseContext": {"serverVersion": null}
     });
-    let request = mock_execution_bootstrap(response, "token-errors");
+    let request = mock_execution_bootstrap(response, "token-errors", true);
     let data = block_on(execution_bootstrap_server_api().get_execution_bootstrap(
         "task-one",
         "1",
         "token-errors".into(),
+        true,
     ))
     .unwrap();
     assert_eq!(data.config.execution_id.inner(), "1");
@@ -169,11 +196,12 @@ fn execution_bootstrap_rejects_configuration_errors() {
         "error": {"__typename": "ResourceUnavailableError", "message": "Required repository is unavailable"},
         "responseContext": {"serverVersion": null}
     });
-    let request = mock_execution_bootstrap(response, "token-config-error");
+    let request = mock_execution_bootstrap(response, "token-config-error", true);
     let error = block_on(execution_bootstrap_server_api().get_execution_bootstrap(
         "task-one",
         "1",
         "token-config-error".into(),
+        true,
     ))
     .err()
     .expect("configuration errors must abort bootstrap");
@@ -185,12 +213,13 @@ fn execution_bootstrap_rejects_configuration_errors() {
 fn execution_bootstrap_requires_non_null_deferred_inventory() {
     let mut response = execution_bootstrap_response();
     response["data"]["task"]["task"]["executionConfig"]["deferredRepositories"] = Value::Null;
-    let request = mock_execution_bootstrap(response, "token-null-inventory");
+    let request = mock_execution_bootstrap(response, "token-null-inventory", true);
     assert!(
         block_on(execution_bootstrap_server_api().get_execution_bootstrap(
             "task-one",
             "1",
             "token-null-inventory".into(),
+            true,
         ))
         .is_err()
     );
@@ -213,32 +242,37 @@ fn mock_git_credentials(input: Value, response: Value, operation: &str) -> Mock 
 }
 
 #[test]
-fn factory_git_credentials_keep_opt_in_for_bootstrap_and_partial_refresh() {
-    for accepts_partial_refresh in [false, true] {
-        let request = mock_git_credentials(
-            json!({
+fn git_credentials_keep_repository_scope_for_bootstrap_and_partial_refresh() {
+    for use_factory_repositories in [false, true] {
+        for accepts_partial_refresh in [false, true] {
+            let mut input = json!({
                 "taskId": "task-one",
                 "workloadToken": "token-request",
-                "acceptsPartialRefresh": accepts_partial_refresh,
-                "useFactoryRepositories": true
-            }),
-            json!({"data": {"taskGitCredentials": {
-                "__typename": "TaskGitCredentialsOutput",
-                "credentials": [],
-                "failedHosts": []
-            }}}),
-            "TaskGitCredentials",
-        );
-        let response = block_on(execution_bootstrap_server_api().get_task_git_credentials(
-            "task-one".into(),
-            "token-request".into(),
-            accepts_partial_refresh,
-            true,
-        ))
-        .unwrap();
-        assert!(response.credentials.is_empty());
-        assert!(response.failed_hosts.is_empty());
-        request.assert();
+                "acceptsPartialRefresh": accepts_partial_refresh
+            });
+            if use_factory_repositories {
+                input["useFactoryRepositories"] = json!(true);
+            }
+            let request = mock_git_credentials(
+                input,
+                json!({"data": {"taskGitCredentials": {
+                    "__typename": "TaskGitCredentialsOutput",
+                    "credentials": [],
+                    "failedHosts": []
+                }}}),
+                "TaskGitCredentials",
+            );
+            let response = block_on(execution_bootstrap_server_api().get_task_git_credentials(
+                "task-one".into(),
+                "token-request".into(),
+                accepts_partial_refresh,
+                use_factory_repositories,
+            ))
+            .unwrap();
+            assert!(response.credentials.is_empty());
+            assert!(response.failed_hosts.is_empty());
+            request.assert();
+        }
     }
 }
 

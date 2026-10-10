@@ -507,7 +507,7 @@ pub(crate) fn build_deferred_repos_instruction(
                 target_name_conflict(repo, eager_repos, &sorted_deferred)
             {
                 format!(
-                    "- {identity} — {clone_url}; target '{}' conflicts with {conflicting}; choose an unused absolute target",
+                    "- {identity} — {clone_url}; target '{}' conflicts with {conflicting}; set checkout_name to an unused single directory name under the workspace root",
                     repo.repo
                 )
             } else {

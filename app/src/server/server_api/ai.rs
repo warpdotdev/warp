@@ -1759,9 +1759,11 @@ impl ServerApi {
         task_id: &str,
         execution_id: &str,
         workload_token: String,
+        supports_deferred_repositories: bool,
     ) -> anyhow::Result<ExecutionBootstrapData> {
         let operation = ExecutionBootstrap::build(ExecutionBootstrapVariables {
             execution_id: execution_id.to_string().into(),
+            supports_deferred_repositories,
             secrets_input: TaskSecretsInput {
                 task_id: task_id.to_string().into(),
                 workload_token,

@@ -882,7 +882,11 @@ fn deferred_instruction_flags_conflict_with_shared_target_name_and_never_emits_i
     assert!(!instruction.contains("preferred target: /home/agent/widget"));
     assert!(instruction.contains("target 'widget' conflicts with GitHub acme/widget"));
     assert!(instruction.contains("target 'widget' conflicts with GitLab other/widget"));
-    assert!(instruction.contains("choose an unused absolute target"));
+    assert!(
+        instruction.contains(
+            "set checkout_name to an unused single directory name under the workspace root"
+        )
+    );
 }
 
 #[test]

@@ -866,6 +866,8 @@ pub enum FeatureFlag {
     NamedAgents,
     /// Loads server-owned execution settings for paired cloud agent launches.
     CloudAgentExecutionConfig,
+    /// Enables on-demand Factory repository checkouts and their credential scope.
+    FactoryDeferredRepositories,
     /// Gates the driver behavior that writes GitHub credentials to disk
     /// (`~/.git-credentials`, `~/.config/gh/hosts.yaml`) and runs the
     /// background refresh loop that keeps them fresh during a task run.
@@ -1077,6 +1079,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::StoredScreenshots,
     FeatureFlag::GitMirrorCache,
     FeatureFlag::CloudAgentExecutionConfig,
+    FeatureFlag::FactoryDeferredRepositories,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

@@ -56,13 +56,38 @@ fn strict_checkout_preserves_existing_work_and_reports_partial_success() {
             assert!(
                 report.outcomes[0]
                     .diagnostics
-                    .contains("target already exists")
+                    .contains("checkout target already exists; choose an unused checkout name")
             );
             assert_eq!(report.outcomes[1].request_index, 1);
             assert_eq!(report.outcomes[1].failure, None);
             assert_eq!(
                 git(&fixture.work().join("fresh"), &["rev-parse", "HEAD"]),
                 fixture.base()
+            );
+            assert_eq!(git(&target, &["show-ref"]), original_refs);
+            assert_eq!(
+                fs::read(target.join(".git/config")).unwrap(),
+                original_config
+            );
+            assert_eq!(
+                fs::read_to_string(target.join("README")).unwrap(),
+                "uncommitted work\n"
+            );
+            let mut retry = batch.repositories[0].clone();
+            retry.checkout_name = "alternate".to_owned();
+            fs::write(
+                &args.requests_file,
+                serde_json::to_vec(&fixture.batch(vec![retry])).unwrap(),
+            )
+            .unwrap();
+            run(&args).unwrap();
+            let report: CheckoutReport =
+                serde_json::from_slice(&fs::read(&args.report_file).unwrap()).unwrap();
+            assert_eq!(report.outcomes.len(), 1);
+            assert_eq!(report.outcomes[0].failure, None);
+            assert_eq!(
+                git(&fixture.work().join("alternate"), &["rev-parse", "HEAD"]),
+                fixture.pinned()
             );
             assert_eq!(git(&target, &["show-ref"]), original_refs);
             assert_eq!(
