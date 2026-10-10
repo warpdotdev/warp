@@ -233,9 +233,6 @@ pub enum FeatureFlag {
     /// Enables auto-generated AI memories.
     AIMemories,
 
-    /// Enables the XML output system prompt for the primary (terminal) agent in Agent Mode.
-    AgentModePrimaryXML,
-
     /// Enables the XML output system prompt for the pre-plan agent in Agent Mode.
     AgentModePrePlanXML,
 
