@@ -34,10 +34,9 @@ impl RepositorySubscriber for RecordingSubscriber {
     fn on_files_updated(
         &mut self,
         _repository: &Repository,
-        update: &RepositoryUpdate,
+        update: RepositoryUpdate,
         _ctx: &mut ModelContext<Repository>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
-        let update = update.clone();
         let update_tx = self.update_tx.clone();
         Box::pin(async move {
             let _ = update_tx.unbounded_send(update);
@@ -189,13 +188,70 @@ fn merge_repository_updates_preserves_remote_ref_updates() {
         ..Default::default()
     };
 
-    merge_repository_updates(&mut acc, &incoming);
+    merge_repository_updates(&mut acc, incoming);
 
     assert!(acc.remote_ref_updated);
     assert!(
         acc.added
             .contains(&TargetFile::new(PathBuf::from("/repo/file.txt"), false))
     );
+}
+
+#[test]
+fn merge_repository_updates_cancels_add_then_delete_in_same_window() {
+    let file = TargetFile::new(PathBuf::from("/repo/new.txt"), false);
+    let mut acc = RepositoryUpdate {
+        added: [file.clone()].into(),
+        ..Default::default()
+    };
+    let incoming = RepositoryUpdate {
+        deleted: [file].into(),
+        ..Default::default()
+    };
+
+    merge_repository_updates(&mut acc, incoming);
+
+    assert!(acc.added.is_empty());
+    assert!(acc.deleted.is_empty());
+}
+
+#[test]
+fn merge_repository_updates_deleting_move_target_rewrites_to_source() {
+    let from = TargetFile::new(PathBuf::from("/repo/old.txt"), false);
+    let to = TargetFile::new(PathBuf::from("/repo/new.txt"), false);
+    let mut acc = RepositoryUpdate {
+        moved: [(to.clone(), from.clone())].into(),
+        ..Default::default()
+    };
+    let incoming = RepositoryUpdate {
+        deleted: [to].into(),
+        ..Default::default()
+    };
+
+    merge_repository_updates(&mut acc, incoming);
+
+    assert!(acc.moved.is_empty());
+    assert!(acc.deleted.contains(&from));
+}
+
+#[test]
+fn merge_repository_updates_collapses_move_chain() {
+    let a = TargetFile::new(PathBuf::from("/repo/a.txt"), false);
+    let b = TargetFile::new(PathBuf::from("/repo/b.txt"), false);
+    let c = TargetFile::new(PathBuf::from("/repo/c.txt"), false);
+    let mut acc = RepositoryUpdate {
+        moved: [(b.clone(), a.clone())].into(),
+        ..Default::default()
+    };
+    let incoming = RepositoryUpdate {
+        moved: [(c.clone(), b.clone())].into(),
+        ..Default::default()
+    };
+
+    merge_repository_updates(&mut acc, incoming);
+
+    assert_eq!(acc.moved.get(&c), Some(&a));
+    assert!(!acc.moved.contains_key(&b));
 }
 
 #[test]

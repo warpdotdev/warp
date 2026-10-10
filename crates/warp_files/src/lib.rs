@@ -1247,11 +1247,10 @@ impl RepositorySubscriber for FileRepositorySubscriber {
     fn on_files_updated(
         &mut self,
         _repository: &Repository,
-        update: &RepositoryUpdate,
+        update: RepositoryUpdate,
         _ctx: &mut ModelContext<Repository>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         let tx = self.repository_update_tx.clone();
-        let update = update.clone();
         Box::pin(async move {
             let _ = tx.send(update).await;
         })

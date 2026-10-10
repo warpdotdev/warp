@@ -383,12 +383,11 @@ impl RepositorySubscriber for GlobalRulesRepositorySubscriber {
     fn on_files_updated(
         &mut self,
         _repository: &Repository,
-        update: &repo_metadata::RepositoryUpdate,
+        update: repo_metadata::RepositoryUpdate,
         _ctx: &mut ModelContext<Repository>,
     ) -> std::pin::Pin<Box<dyn std::prelude::rust_2024::Future<Output = ()> + Send + 'static>> {
         let tx = self.update_tx.clone();
         let source = self.source;
-        let update = update.clone();
         Box::pin(async move {
             let _ = tx.send(GlobalRulesUpdate { source, update }).await;
         })
