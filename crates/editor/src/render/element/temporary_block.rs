@@ -48,32 +48,37 @@ impl RenderableBlock for RenderableTemporaryBlock {
         ctx: &mut RenderContext,
         _app: &warpui_core::AppContext,
     ) {
-        // We cannot use `extract_block` macro here since we need to locate the viewport item by content height instead of charoffset
-        // (temporary block has an offset of zero).
         let content = model.content();
-        let paragraph_block = match content.block_at_height(self.viewport_item.height()) {
-            Some(block) => match (&block, block.item) {
-                (
-                    block,
-                    BlockItem::TemporaryBlock {
-                        paragraph_block, ..
-                    },
-                ) => block.temporary_block(paragraph_block),
-                other => {
-                    log::warn!(
-                        "Unexpected block {other:?} at {}",
-                        self.viewport_item.block_offset
-                    );
-                    return;
-                }
-            },
-            None => return,
+        let Some(item) = self.viewport_item.resolved_block(&content) else {
+            return;
+        };
+        let block = self.viewport_item.positioned_block(&item);
+        let paragraph_block = match (&block, block.item) {
+            (
+                block,
+                BlockItem::TemporaryBlock {
+                    paragraph_block, ..
+                },
+            ) => block.temporary_block(paragraph_block),
+            other => {
+                log::warn!(
+                    "Unexpected block {other:?} at {}",
+                    self.viewport_item.block_offset
+                );
+                return;
+            }
         };
 
         let start = paragraph_block.start_char_offset;
         let paragraph_styles = &model.styles().base_text;
-        let mut decoration_index = 0;
-        for paragraph in paragraph_block.paragraphs() {
+        let mut paragraphs = paragraph_block
+            .paragraphs_in(self.viewport_item.paragraph_range())
+            .peekable();
+        let mut decoration_index = paragraphs.peek().map_or(0, |paragraph| {
+            self.text_decoration
+                .partition_point(|decoration| decoration.end + start <= paragraph.start_char_offset)
+        });
+        for paragraph in paragraphs {
             // We could draw text directly since temporary paragraph should have its own decoration and selection state.
             ctx.draw_text(
                 paragraph.content_origin(),

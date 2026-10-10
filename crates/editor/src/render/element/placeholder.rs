@@ -55,14 +55,13 @@ impl BlockPlaceholder {
         self.state = State::NotShown;
 
         let content = model.content();
-        let block_offset = item.block_offset();
-        let block = match content.block_at_offset(block_offset) {
-            Some(block) if block.item.is_empty() => block,
-            _ => {
-                // Placeholders are _never_ shown if the block has user content.
-                return;
-            }
+        let Some(resolved) = item.resolved_block(&content) else {
+            return;
         };
+        let block = item.positioned_block(&resolved);
+        if !block.item.is_empty() {
+            return;
+        }
 
         let contains_cursor = model.selections().iter().any(|selection| {
             selection
