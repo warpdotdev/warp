@@ -639,7 +639,6 @@ default = [
     "web_fetch_ui",
     "oz_changelog_updates",
     "skill_arguments",
-    "incremental_auto_reload",
     "active_conversation_requires_interaction",
     "figma_detection",
     "file_based_mcp",
@@ -991,7 +990,6 @@ new_tab_styling = []
 file_based_mcp = []
 skill_arguments = []
 active_conversation_requires_interaction = []
-incremental_auto_reload = []
 pending_user_query_indicator = []
 queue_slash_command = []
 queued_prompts_v2 = ["queue_slash_command"]
