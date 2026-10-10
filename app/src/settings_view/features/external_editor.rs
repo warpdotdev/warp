@@ -152,12 +152,10 @@ impl ExternalEditorView {
         let mut items = vec![default_app];
 
         items.push(DropdownItem::new("Warp", make_action(EditorChoice::Warp)));
-        if FeatureFlag::AllowOpeningFileLinksUsingEditorEnv.is_enabled() {
-            items.push(DropdownItem::new(
-                "$EDITOR",
-                make_action(EditorChoice::EnvEditor),
-            ));
-        }
+        items.push(DropdownItem::new(
+            "$EDITOR",
+            make_action(EditorChoice::EnvEditor),
+        ));
         for editor in SUPPORTED_EDITORS {
             if editor.is_installed(ctx) {
                 let editor_name = format!("{editor}");
