@@ -27,6 +27,7 @@ use warp::settings::{NativeShellCompletionsEnabled, WarpCompletionsEnabled};
 use warp::terminal::model::block::TranscriptScope;
 use warp::terminal::shell::ShellType;
 use warpui_core::async_assert;
+use warpui_core::integration::TestStep;
 use warpui_core::units::Lines;
 
 use super::new_builder;
@@ -522,6 +523,160 @@ pub fn test_native_shell_completions_reach_a_spec_command_native_only() -> Build
                                 view.items().iter().any(|item| item.text() == "checkzzz"),
                                 "expected the shell override's 'checkzzz' under native-only, \
                                  got {texts:?}"
+                            )
+                        })
+                    },
+                ),
+        )
+}
+
+fn bash_native_completion_input(typed: &'static str, expected: &'static str) -> Vec<TestStep> {
+    vec![
+        new_step_with_default_assertions("Clear the previous completion").with_action(
+            |app, window_id, _| {
+                let input = single_input_view_for_tab(app, window_id, 0);
+                input.update(app, |view, ctx| view.clear_buffer_and_reset_undo_stack(ctx));
+            },
+        ),
+        new_step_with_default_assertions(&format!("Complete {typed}"))
+            .with_typed_characters(&[typed])
+            .with_keystrokes(&["tab"])
+            .set_timeout(Duration::from_secs(30))
+            .add_named_assertion(
+                "Bash completion inserts the expected suffix",
+                move |app, window_id| {
+                    let input = single_input_view_for_tab(app, window_id, 0);
+                    input.read(app, |view, ctx| {
+                        let actual = view.buffer_text(ctx);
+                        async_assert!(
+                            actual == expected,
+                            "expected {expected:?} after completing {typed:?}, got {actual:?}"
+                        )
+                    })
+                },
+            ),
+    ]
+}
+
+pub fn test_bash_native_directory_completion_suffixes() -> Builder {
+    enable_native_shell_completions_feature();
+    new_builder()
+        .set_should_run_test(|| {
+            let (starter, _version) = current_shell_starter_and_version();
+            starter.shell_type() == ShellType::Bash
+        })
+        .with_user_defaults(native_only_completion_defaults())
+        .with_setup(|utils| {
+            let home = utils.test_dir();
+            std::fs::create_dir(home.join("foobar")).expect("directory fixture");
+            std::fs::create_dir(home.join("quoted dir")).expect("quoted directory fixture");
+            std::fs::create_dir(home.join("tilde-folder")).expect("home directory fixture");
+            std::fs::create_dir(home.join("don't")).expect("apostrophe directory fixture");
+            std::fs::create_dir(home.join("say\"hi")).expect("double-quote directory fixture");
+            std::fs::create_dir(home.join("back\\slash")).expect("backslash directory fixture");
+            std::fs::create_dir_all(home.join("cdroot/cdonly")).expect("CDPATH fixture");
+            std::fs::create_dir_all(home.join("pwdroot/cdplus"))
+                .expect("current-directory CDPATH fixture");
+            std::fs::create_dir_all(home.join("oldroot/cdminus"))
+                .expect("previous-directory CDPATH fixture");
+            std::fs::write(home.join("foofile"), "").expect("file fixture");
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(home.join("foobar"), home.join("linkdir"))
+                .expect("directory symlink fixture");
+            write_rc_files_for_test(
+                &home,
+                r#"
+                cd "$HOME"
+                OLDPWD="$HOME/oldroot"
+                CDPATH='~/cdroot:~+/pwdroot:~-'
+                _warp_test_cd() {
+                  case "${COMP_WORDS[COMP_CWORD]}" in
+                    fo*) COMPREPLY=( foobar ) ;;
+                    'quoted d'*) COMPREPLY=( 'quoted dir' ) ;;
+                    '~/'*) COMPREPLY=( '~/tilde-folder' ) ;;
+                    don*) COMPREPLY=( "don't" ) ;;
+                    say*) COMPREPLY=( 'say"hi' ) ;;
+                    back*) COMPREPLY=( 'back\slash' ) ;;
+                    cdonly*) COMPREPLY=( cdonly ) ;;
+                    cdplus*) COMPREPLY=( cdplus ) ;;
+                    cdminus*) COMPREPLY=( cdminus ) ;;
+                  esac
+                }
+                complete -F _warp_test_cd cd
+                _warp_test_paths() {
+                  case "${COMP_WORDS[COMP_CWORD]}" in
+                    fo*) COMPREPLY=( foobar foofile ) ;;
+                    link*) COMPREPLY=( linkdir ) ;;
+                  esac
+                }
+                complete -o filenames -F _warp_test_paths warptool
+                _warp_test_words() {
+                  case "${COMP_WORDS[COMP_CWORD]}" in
+                    ./*) COMPREPLY=( ./foobar ) ;;
+                    *) COMPREPLY=( foobar ) ;;
+                  esac
+                }
+                complete -F _warp_test_words wordtool
+                "#,
+                [ShellRcType::Bash],
+            );
+        })
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(clear_blocklist_to_remove_bootstrapped_blocks())
+        .with_steps(bash_native_completion_input("cd foo", "cd foobar/"))
+        .with_steps(bash_native_completion_input(
+            r#"cd "quoted d"#,
+            r#"cd "quoted dir"/"#,
+        ))
+        .with_steps(bash_native_completion_input(
+            r"cd quoted\ d",
+            r"cd quoted\ dir/",
+        ))
+        .with_steps(bash_native_completion_input("cd cdonly", "cd cdonly/"))
+        .with_steps(bash_native_completion_input("cd cdplus", "cd cdplus/"))
+        .with_steps(bash_native_completion_input("cd cdminus", "cd cdminus/"))
+        .with_steps(bash_native_completion_input("cd don", r"cd don\'t/"))
+        .with_steps(bash_native_completion_input("cd say", r#"cd say\"hi/"#))
+        .with_steps(bash_native_completion_input("cd back", r"cd back\\slash/"))
+        .with_steps(bash_native_completion_input(
+            "cd ~/ti",
+            "cd ~/tilde-folder/",
+        ))
+        .with_steps(bash_native_completion_input(
+            "warptool link",
+            "warptool linkdir/",
+        ))
+        .with_steps(bash_native_completion_input(
+            "wordtool foo",
+            "wordtool foobar ",
+        ))
+        .with_steps(bash_native_completion_input(
+            "wordtool ./fo",
+            "wordtool ./foobar/",
+        ))
+        .with_step(
+            new_step_with_default_assertions("Clear the previous completion").with_action(
+                |app, window_id, _| {
+                    let input = single_input_view_for_tab(app, window_id, 0);
+                    input.update(app, |view, ctx| view.clear_buffer_and_reset_undo_stack(ctx));
+                },
+            ),
+        )
+        .with_step(
+            new_step_with_default_assertions("Directory and file suggestions stay distinct")
+                .with_typed_characters(&["warptool foo"])
+                .with_keystrokes(&["tab"])
+                .set_timeout(Duration::from_secs(30))
+                .add_named_assertion(
+                    "directory ends in slash; file does not",
+                    |app, window_id| {
+                        let suggestions = single_input_suggestions_view_for_tab(app, window_id, 0);
+                        suggestions.read(app, |view, _| {
+                            let items: Vec<_> =
+                                view.items().iter().map(|item| item.text()).collect();
+                            async_assert!(
+                                items.contains(&"foobar/") && items.contains(&"foofile"),
+                                "expected both file and directory suggestions, got {items:?}"
                             )
                         })
                     },
