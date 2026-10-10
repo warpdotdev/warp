@@ -1726,6 +1726,14 @@ impl LocalRepoMetadataModel {
                         if emit {
                             let parent_std = std_dir.parent().unwrap_or(std_dir.clone());
                             let metadata = flatten_entry_metadata(subtree);
+                            // This mutation replaces whatever previously existed at
+                            // `subtree.path()` (mirrored above via `root_entry.remove`),
+                            // but `subtree_metadata` only lists the new contents and
+                            // `apply_entry_update` is purely additive. Emit the replaced
+                            // root as a removal first so a delta-applying receiver clears
+                            // stale descendants instead of merging the new subtree on top
+                            // of the old one.
+                            remove_entries.push(subtree.path().clone());
                             update_entries.push(FileTreeEntryUpdate {
                                 parent_path_to_replace: parent_std,
                                 subtree_metadata: metadata,
