@@ -222,6 +222,17 @@ fn test_iterm_image_renders_in_script_execution_block() {
 }
 
 #[test]
+fn bootstrap_contents_include_script_execution_output() {
+    let mut block_list = TestBlockListBuilder::new().build();
+    advance_to_script_execution(&mut block_list);
+
+    input_string(&mut block_list, "motd");
+
+    assert_eq!(block_list.active_block().command_to_string(), "");
+    assert_eq!(block_list.bootstrap_block_contents(), "motd");
+}
+
+#[test]
 fn test_invalid_iterm_image_does_not_render_in_script_execution_block() {
     let _iterm_images = FeatureFlag::ITermImages.override_enabled(true);
     let mut block_list = TestBlockListBuilder::new().build();
