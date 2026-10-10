@@ -325,8 +325,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ContextWindowUsageV2,
         #[cfg(feature = "context_window_usage_breakdown")]
         FeatureFlag::ContextWindowUsageBreakdown,
-        #[cfg(feature = "global_search")]
-        FeatureFlag::GlobalSearch,
         #[cfg(feature = "embedded_code_review_comments")]
         FeatureFlag::EmbeddedCodeReviewComments,
         #[cfg(feature = "file_and_diff_set_comments")]
