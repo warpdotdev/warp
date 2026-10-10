@@ -113,7 +113,7 @@ fn tmux_passthrough_wraps_and_doubles_escapes() {
 
 #[test]
 fn test_mouse_actions_to_escape_sequence() {
-    // Validating we produce the correct escape sequences.
+    // Validating we produce the correct SGR escape sequences.
     let test_cases: &[(MouseState, Vec<u8>)] = &[
         (
             MouseState::new(MouseButton::Right, MouseAction::Pressed, Default::default())
@@ -211,13 +211,71 @@ fn test_mouse_actions_to_escape_sequence() {
         ),
     ];
 
+    let mut terminal_model_mock = TerminalModelMock::new();
+    terminal_model_mock.set_mode(TermMode::SGR_MOUSE);
+    validate_mouse_test_cases(test_cases, &terminal_model_mock);
+}
+
+#[test]
+fn test_legacy_mouse_actions_to_escape_sequence() {
+    let test_cases: &[(MouseState, Vec<u8>)] = &[
+        (
+            MouseState::new(MouseButton::Left, MouseAction::Pressed, Default::default())
+                .set_point(Point::new(5, 5)),
+            b"\x1b[M &&".to_vec(),
+        ),
+        (
+            MouseState::new(MouseButton::Left, MouseAction::Released, Default::default())
+                .set_point(Point::new(5, 5)),
+            b"\x1b[M#&&".to_vec(),
+        ),
+        (
+            MouseState::new(
+                MouseButton::LeftDrag,
+                MouseAction::Pressed,
+                Default::default(),
+            )
+            .set_point(Point::new(5, 5)),
+            b"\x1b[M@&&".to_vec(),
+        ),
+        (
+            MouseState::new(
+                MouseButton::Wheel,
+                MouseAction::Scrolled { delta: -1 },
+                Default::default(),
+            )
+            .set_point(Point::new(5, 5)),
+            b"\x1b[Ma&&".to_vec(),
+        ),
+    ];
+
     let terminal_model_mock = TerminalModelMock::new();
     validate_mouse_test_cases(test_cases, &terminal_model_mock);
 }
 
 #[test]
+fn test_utf8_mouse_actions_to_escape_sequence() {
+    let mut terminal_model_mock = TerminalModelMock::new();
+    terminal_model_mock.set_mode(TermMode::UTF8_MOUSE);
+    let result = MouseState::new(MouseButton::Left, MouseAction::Pressed, Default::default())
+        .set_point(Point::new(300, 300))
+        .to_escape_sequence(&terminal_model_mock);
+    assert_eq!(result, Some("\x1b[M ōō".as_bytes().to_vec()));
+}
+
+#[test]
+fn test_normal_mouse_action_outside_legacy_coordinate_range_returns_none() {
+    let terminal_model_mock = TerminalModelMock::new();
+    let result = MouseState::new(MouseButton::Left, MouseAction::Pressed, Default::default())
+        .set_point(Point::new(300, 300))
+        .to_escape_sequence(&terminal_model_mock);
+    assert_eq!(result, None);
+}
+
+#[test]
 fn test_alt_screen_scroll_to_pty_bytes() {
-    let terminal_model = TerminalModelMock::new();
+    let mut terminal_model = TerminalModelMock::new();
+    terminal_model.set_mode(TermMode::SGR_MOUSE);
     let point = Point::new(3, 2);
 
     assert_eq!(
