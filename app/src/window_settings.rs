@@ -1,7 +1,7 @@
 use settings::macros::define_settings_group;
 use settings::{RespectUserSyncSetting, Setting as _, SupportedPlatforms, SyncToCloud};
 use warp_errors::report_if_error;
-use warpui::platform::WindowBackdrop;
+use warpui::platform::{AcrylicTintColor, WindowBackdrop};
 use warpui::{AppContext, SingletonEntity, WindowId};
 
 define_settings_group!(WindowSettings, settings: [
@@ -36,6 +36,26 @@ define_settings_group!(WindowSettings, settings: [
         storage_key: "OverrideBlurTexture",
         toml_path: "appearance.window.override_blur_texture",
         description: "Deprecated legacy setting for the Acrylic window backdrop.",
+    },
+    background_backdrop_tint_color: BackgroundBackdropTintColor {
+        type: AcrylicTintColor,
+        default: AcrylicTintColor::Dark,
+        supported_platforms: SupportedPlatforms::WINDOWS,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "appearance.window.backdrop_tint_color",
+        description: "The tint color used behind the Acrylic window backdrop.",
+    },
+    background_backdrop_tint_opacity: BackgroundBackdropTintOpacity {
+        type: u8,
+        default: 80,
+        supported_platforms: SupportedPlatforms::WINDOWS,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "appearance.window.backdrop_tint_opacity",
+        description: "The opacity of the tint used behind the Acrylic window backdrop, from 10 to 100 percent.",
     },
     background_opacity: BackgroundOpacity {
         type: u8,
@@ -170,6 +190,15 @@ impl BackgroundBlurRadius {
         } else {
             new_value
         }
+    }
+}
+
+impl BackgroundBackdropTintOpacity {
+    pub const MIN: u8 = 10;
+    pub const MAX: u8 = 100;
+
+    fn validate(&self, new_value: u8) -> u8 {
+        new_value.clamp(Self::MIN, Self::MAX)
     }
 }
 
