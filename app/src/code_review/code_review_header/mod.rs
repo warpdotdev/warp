@@ -114,7 +114,8 @@ impl CodeReviewHeader {
         let mut right_section_wide = Flex::row()
             .with_main_axis_alignment(MainAxisAlignment::End)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(ChildView::new(&code_review_header_fields.diff_selector).finish());
+            .with_child(ChildView::new(&code_review_header_fields.diff_selector).finish())
+            .with_child(ChildView::new(&code_review_header_fields.stack_control).finish());
 
         let has_no_changes = state.to_diff_stats().has_no_changes();
 
@@ -233,6 +234,7 @@ impl CodeReviewHeader {
             .with_main_axis_size(MainAxisSize::Max)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(ChildView::new(&code_review_header_fields.diff_selector).finish())
+            .with_child(ChildView::new(&code_review_header_fields.stack_control).finish())
             .with_child(Container::new(right_subsection_compact.finish()).finish());
 
         Clipped::new(
@@ -303,7 +305,8 @@ impl CodeReviewHeader {
         let theme = appearance.theme();
         let has_no_changes = state.to_diff_stats().has_no_changes();
         let git_operation_blocked = diff_state_model.as_ref(app).is_git_operation_blocked(app);
-        let is_disabled = has_no_changes || git_operation_blocked;
+        let is_read_only_layer = diff_state_model.as_ref(app).diff_mode(app).is_read_only();
+        let is_disabled = has_no_changes || git_operation_blocked || is_read_only_layer;
 
         let sub_text_color = theme.sub_text_color(theme.background());
         let mut button_builder = appearance

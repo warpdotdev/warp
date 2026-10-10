@@ -5,8 +5,8 @@ use command::r#async::Command;
 use tempfile::TempDir;
 
 use super::{
-    RepositoryInfo, detect_current_branch, detect_current_branch_display, get_pr_for_branch,
-    is_gh_auth_error, is_gh_missing_error,
+    RepositoryInfo, StackDiscoveryResult, detect_current_branch, detect_current_branch_display,
+    get_pr_for_branch, is_gh_auth_error, is_gh_missing_error,
 };
 
 /// Helper: run a git command inside the given repo directory.
@@ -438,4 +438,223 @@ async fn detached_tag_display_returns_short_sha() {
         full_sha.starts_with(&result),
         "expected {full_sha} to start with {result}"
     );
+}
+
+// ── PR stack discovery ───────────────────────────────────────────────────────
+// Fixtures below are the exact response shapes captured against a live
+// GitHub-native stack (warpdotdev/warp-cli-survey, stack #7, PRs #4/#5/#6).
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn parse_stack_topology_response_parses_two_layer_response() {
+    let json = r#"[
+      {
+        "id": 245657,
+        "number": 7,
+        "base": { "ref": "master" },
+        "open": true,
+        "pull_requests": [
+          { "number": 4, "state": "open", "draft": false, "merged_at": null,
+            "head": { "ref": "demo/stack-1-greeting-pkg", "sha": "5b3d024" } },
+          { "number": 5, "state": "open", "draft": false, "merged_at": null,
+            "head": { "ref": "demo/stack-2-cli-integration", "sha": "668a0b5" } }
+        ]
+      }
+    ]"#;
+
+    let topology = super::parse_stack_topology_response(json).unwrap();
+    assert_eq!(topology.stack_number, 7);
+    assert_eq!(topology.trunk_ref, "master");
+    assert_eq!(topology.layer_numbers, vec![4, 5]);
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn parse_stack_topology_response_parses_multi_layer_response() {
+    let json = r#"[
+      {
+        "number": 7,
+        "base": { "ref": "master" },
+        "pull_requests": [
+          { "number": 4, "state": "open", "draft": false, "merged_at": null, "head": { "ref": "a", "sha": "1" } },
+          { "number": 5, "state": "open", "draft": false, "merged_at": null, "head": { "ref": "b", "sha": "2" } },
+          { "number": 6, "state": "open", "draft": false, "merged_at": null, "head": { "ref": "c", "sha": "3" } }
+        ]
+      }
+    ]"#;
+
+    let topology = super::parse_stack_topology_response(json).unwrap();
+    assert_eq!(topology.layer_numbers, vec![4, 5, 6]);
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn parse_stack_topology_response_handles_empty_array() {
+    let topology = super::parse_stack_topology_response("[]").unwrap();
+    assert!(topology.layer_numbers.is_empty());
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn parse_stack_topology_response_rejects_malformed_json() {
+    assert!(super::parse_stack_topology_response("not json").is_err());
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn parse_stack_topology_response_rejects_missing_base_ref() {
+    let json = r#"[{"number":7,"pull_requests":[{"number":4}]}]"#;
+    assert!(super::parse_stack_topology_response(json).is_err());
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn build_stack_enrichment_query_aliases_every_pull_request_in_one_request() {
+    let query = super::build_stack_enrichment_query("warpdotdev", "warp-cli-survey", &[4, 5, 6]);
+    assert!(query.contains("pr0: pullRequest(number: 4)"));
+    assert!(query.contains("pr1: pullRequest(number: 5)"));
+    assert!(query.contains("pr2: pullRequest(number: 6)"));
+    assert!(query.contains("warpdotdev"));
+    assert!(query.contains("warp-cli-survey"));
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn parse_stack_enrichment_response_parses_multiple_pull_requests_in_one_round_trip() {
+    let json = r#"{
+      "data": {
+        "repository": {
+          "pr0": {
+            "title": "Add greeting package for the survey CLI",
+            "url": "https://github.com/warpdotdev/warp-cli-survey/pull/4",
+            "state": "OPEN",
+            "isDraft": false,
+            "mergedAt": null,
+            "baseRefName": "master",
+            "baseRefOid": "f371810d1b3cf50ff186c536ccec5b3a6322ed2b",
+            "headRefName": "demo/stack-1-greeting-pkg",
+            "headRefOid": "5b3d0244e39d89194ebae14d414ce2366d66a8b3"
+          },
+          "pr1": {
+            "title": "Print greeting message when the survey starts",
+            "url": "https://github.com/warpdotdev/warp-cli-survey/pull/5",
+            "state": "OPEN",
+            "isDraft": false,
+            "mergedAt": null,
+            "baseRefName": "demo/stack-1-greeting-pkg",
+            "baseRefOid": "5b3d0244e39d89194ebae14d414ce2366d66a8b3",
+            "headRefName": "demo/stack-2-cli-integration",
+            "headRefOid": "668a0b582314f832c6407aaf7f90be171acf89f7"
+          }
+        }
+      }
+    }"#;
+
+    let layers = super::parse_stack_enrichment_response(json, &[4, 5]).unwrap();
+    assert_eq!(layers.len(), 2);
+    assert_eq!(layers[&4].head_ref, "demo/stack-1-greeting-pkg".to_string());
+    assert_eq!(layers[&5].base_ref, "demo/stack-1-greeting-pkg".to_string());
+    assert_eq!(
+        layers[&5].base_oid,
+        "5b3d0244e39d89194ebae14d414ce2366d66a8b3".to_string()
+    );
+    assert_eq!(layers[&4].pr.state, "OPEN".to_string());
+    assert_eq!(layers[&4].merged_at, None);
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn parse_stack_enrichment_response_rejects_missing_pull_request() {
+    let json = r#"{"data":{"repository":{"pr0":{
+        "title": "only one", "url": "u", "state": "OPEN", "isDraft": false, "mergedAt": null,
+        "baseRefName": "master", "baseRefOid": "aaa", "headRefName": "h", "headRefOid": "bbb"
+    }}}}"#;
+
+    // Expects enrichment for both #4 and #5, but only #4 ("pr0") is present.
+    assert!(super::parse_stack_enrichment_response(json, &[4, 5]).is_err());
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn parse_stack_enrichment_response_rejects_missing_object_id() {
+    let json = r#"{"data":{"repository":{"pr0":{
+        "title": "missing oid", "url": "u", "state": "OPEN", "isDraft": false, "mergedAt": null,
+        "baseRefName": "master", "headRefName": "h", "headRefOid": "bbb"
+    }}}}"#;
+
+    assert!(super::parse_stack_enrichment_response(json, &[4]).is_err());
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn classify_stack_discovery_error_maps_known_failures_to_unavailable() {
+    let cases = [
+        "gh command failed: HTTP 404: Not Found (https://api.github.com/repos/o/r/stacks)",
+        "Failed to execute gh command: No such file or directory (os error 2)",
+        "gh command failed: GraphQL: authentication required; run gh auth login",
+        "gh command failed: request timed out",
+    ];
+    for msg in cases {
+        match super::classify_stack_discovery_error(msg) {
+            StackDiscoveryResult::Unavailable { reason } => assert!(!reason.is_empty()),
+            other => panic!("expected Unavailable for {msg:?}, got {other:?}"),
+        }
+    }
+}
+
+#[cfg(all(feature = "local_fs", unix))]
+fn write_fake_gh(dir: &TempDir, script_body: &str) -> String {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let gh_path = dir.path().join("gh");
+    fs::write(&gh_path, format!("#!/bin/sh\n{script_body}\n")).expect("failed to write fake gh");
+    let mut permissions = fs::metadata(&gh_path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&gh_path, permissions).unwrap();
+
+    format!(
+        "{}:{}",
+        dir.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    )
+}
+
+#[cfg(all(feature = "local_fs", unix))]
+#[tokio::test]
+async fn get_pr_stack_normalizes_empty_result_to_not_stacked() {
+    let (_dir, repo) = init_repo().await;
+    let fake_bin = tempfile::tempdir().expect("failed to create fake bin dir");
+    let path_env = write_fake_gh(&fake_bin, "printf '[]\\n'");
+
+    let result =
+        super::get_pr_stack(&repo, Some(&path_env), 4, "warpdotdev", "warp-cli-survey").await;
+    assert_eq!(result, StackDiscoveryResult::NotStacked);
+}
+
+#[cfg(all(feature = "local_fs", unix))]
+#[tokio::test]
+async fn get_pr_stack_normalizes_single_layer_result_to_not_stacked() {
+    let (_dir, repo) = init_repo().await;
+    let fake_bin = tempfile::tempdir().expect("failed to create fake bin dir");
+    let path_env = write_fake_gh(
+        &fake_bin,
+        r#"printf '[{"number":7,"base":{"ref":"master"},"pull_requests":[{"number":4,"state":"open","draft":false,"merged_at":null,"head":{"ref":"demo","sha":"aaa"}}]}]\n'"#,
+    );
+
+    let result =
+        super::get_pr_stack(&repo, Some(&path_env), 4, "warpdotdev", "warp-cli-survey").await;
+    assert_eq!(result, StackDiscoveryResult::NotStacked);
+}
+
+#[cfg(all(feature = "local_fs", unix))]
+#[tokio::test]
+async fn get_pr_stack_returns_unavailable_on_404() {
+    let (_dir, repo) = init_repo().await;
+    let fake_bin = tempfile::tempdir().expect("failed to create fake bin dir");
+    let path_env = write_fake_gh(&fake_bin, "printf 'HTTP 404: Not Found\\n' >&2\nexit 1");
+
+    let result =
+        super::get_pr_stack(&repo, Some(&path_env), 4, "warpdotdev", "warp-cli-survey").await;
+    assert!(matches!(result, StackDiscoveryResult::Unavailable { .. }));
 }

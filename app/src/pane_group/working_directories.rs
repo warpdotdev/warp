@@ -284,10 +284,15 @@ pub struct WorkingDirectoriesModel {
     /// Since git state is inherently tied to a repository (not a pane group),
     /// this is stored globally and shared across all pane groups viewing the same repo.
     diff_state_models: DiffStateModelMap,
-    /// Global mapping from repository locations to their CommentBatch.
-    /// Like the DiffStateModel mapping, comments are inherently tied to git diffs
-    /// and are shared across all pane groups viewing the same repo.
-    comment_models: HashMap<LocalOrRemotePath, ModelHandle<ReviewCommentBatch>>,
+    /// Global mapping from (repository location, review layer) to their
+    /// CommentBatch. Like the DiffStateModel mapping, comments are
+    /// inherently tied to git diffs and are shared across all pane groups
+    /// viewing the same repo. `None` is the working-tree batch; `Some(pr_number)`
+    /// is a GitHub-native stack layer's batch (CODE-1947) — both share this
+    /// same application-lifetime, repository-scoped map so a layer's drafts
+    /// survive the owning `CodeReviewView` being evicted or closed, exactly
+    /// like the working-tree batch already does.
+    comment_models: HashMap<(LocalOrRemotePath, Option<u64>), ModelHandle<ReviewCommentBatch>>,
     /// Per-pane-group mapping from repository root locations to their CodeReviewView.
     /// This allows reusing code review views across multiple requests for the same repo.
     code_review_views: HashMap<EntityId, HashMap<LocalOrRemotePath, ViewHandle<CodeReviewView>>>,
@@ -441,18 +446,33 @@ impl WorkingDirectoriesModel {
         }
     }
 
-    /// Get or create a ReviewCommentBatch for a specific repository.
-    /// If the model doesn't exist, it will be created.
+    /// Get or create the working-tree ReviewCommentBatch for a specific
+    /// repository. If the model doesn't exist, it will be created.
     pub fn get_or_create_code_review_comments(
         &mut self,
         repo_path: &LocalOrRemotePath,
         ctx: &mut ModelContext<Self>,
     ) -> Option<ModelHandle<ReviewCommentBatch>> {
-        if let Some(existing) = self.comment_models.get(repo_path) {
+        self.get_or_create_code_review_comments_for_layer(repo_path, None, ctx)
+    }
+
+    /// Get or create the ReviewCommentBatch for a specific repository and
+    /// review layer: `None` for the working tree, `Some(pr_number)` for a
+    /// GitHub-native stack layer (CODE-1947). Shared across pane groups and
+    /// outlives any single `CodeReviewView`, exactly like the working-tree
+    /// batch.
+    pub fn get_or_create_code_review_comments_for_layer(
+        &mut self,
+        repo_path: &LocalOrRemotePath,
+        layer: Option<u64>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<ModelHandle<ReviewCommentBatch>> {
+        let key = (repo_path.clone(), layer);
+        if let Some(existing) = self.comment_models.get(&key) {
             return Some(existing.clone());
         }
         let model = ctx.add_model(|_ctx| ReviewCommentBatch::default());
-        self.comment_models.insert(repo_path.clone(), model.clone());
+        self.comment_models.insert(key, model.clone());
         Some(model)
     }
 
