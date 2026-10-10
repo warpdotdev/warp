@@ -57,8 +57,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::SharedSessionWriteToLongRunningCommands,
         #[cfg(feature = "resize_fix")]
         FeatureFlag::ResizeFix,
-        #[cfg(feature = "richtext_multiselect")]
-        FeatureFlag::RichTextMultiselect,
         #[cfg(feature = "default_waterfall_mode")]
         FeatureFlag::DefaultWaterfallMode,
         #[cfg(feature = "settings_file")]

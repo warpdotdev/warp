@@ -3448,7 +3448,7 @@ impl RichTextAction<RichTextEditorView> for EditorViewAction {
             modifiers.cmd,
             modifiers.shift
         );
-        let multiselect = modifiers.alt && FeatureFlag::RichTextMultiselect.is_enabled();
+        let multiselect = modifiers.alt;
 
         // The first mouse down to bring focus to a Warp window will not have a corresponding mouse up.
         // We ignore it, and they can click again.
