@@ -144,10 +144,6 @@ fn rich_input_submit_strategy(agent: CLIAgent) -> RichInputSubmitStrategy {
     }
 }
 
-fn cli_agent_submit_keystroke(_agent: CLIAgent) -> &'static [u8] {
-    b"\r"
-}
-
 static USE_AGENT_KEYSTROKE: LazyLock<Keystroke> =
     LazyLock::new(|| Keystroke::parse(cmd_or_ctrl_shift("enter")).expect("valid keystroke"));
 
@@ -685,13 +681,10 @@ impl TerminalView {
             sessions_model.clear_draft(view_id);
         });
 
-        let agent = CLIAgentSessionsModel::as_ref(ctx)
+        let strategy = CLIAgentSessionsModel::as_ref(ctx)
             .session(self.view_id)
-            .map(|s| s.agent);
-        let strategy = agent
-            .map(rich_input_submit_strategy)
+            .map(|s| rich_input_submit_strategy(s.agent))
             .unwrap_or(RichInputSubmitStrategy::Inline);
-        let submit_agent = agent.unwrap_or(CLIAgent::Unknown);
 
         let text_bytes = text.into_bytes();
 
@@ -731,11 +724,11 @@ impl TerminalView {
             ctx.spawn(
                 Timer::after(CLI_AGENT_PTY_WRITE_DELAY),
                 move |me, _, ctx| {
-                    me.paste_images_then_submit_text(images, rest, strategy, submit_agent, ctx);
+                    me.paste_images_then_submit_text(images, rest, strategy, ctx);
                 },
             );
         } else {
-            self.paste_images_then_submit_text(images, text_bytes, strategy, submit_agent, ctx);
+            self.paste_images_then_submit_text(images, text_bytes, strategy, ctx);
         }
     }
 
@@ -766,7 +759,7 @@ impl TerminalView {
         }
 
         let strategy = rich_input_submit_strategy(agent);
-        self.write_cli_agent_text_then_submit(text_bytes, strategy, agent, ctx);
+        self.write_cli_agent_text_then_submit(text_bytes, strategy, ctx);
     }
 
     /// Sends a raw Enter (`\r`) directly to the active CLI agent's PTY,
@@ -779,13 +772,13 @@ impl TerminalView {
     /// writing if there is no active CLI agent session.
     #[cfg(feature = "local_tty")]
     pub(crate) fn submit_bare_enter_to_cli_agent_pty(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some(agent) = CLIAgentSessionsModel::as_ref(ctx)
+        if CLIAgentSessionsModel::as_ref(ctx)
             .session(self.view_id)
-            .map(|s| s.agent)
-        else {
+            .is_none()
+        {
             return;
-        };
-        self.write_user_bytes_to_pty(cli_agent_submit_keystroke(agent).to_vec(), ctx);
+        }
+        self.write_user_bytes_to_pty(b"\r".to_vec(), ctx);
     }
 
     /// Inserts `text` into the active CLI agent's input without submitting it.
@@ -845,7 +838,6 @@ impl TerminalView {
         images: Vec<ImageContext>,
         text_bytes: Vec<u8>,
         strategy: RichInputSubmitStrategy,
-        agent: CLIAgent,
         ctx: &mut ViewContext<Self>,
     ) {
         // Bail if the rich input session was closed before we got here.
@@ -854,7 +846,7 @@ impl TerminalView {
         }
 
         if images.is_empty() {
-            self.write_cli_agent_text_then_submit(text_bytes, strategy, agent, ctx);
+            self.write_cli_agent_text_then_submit(text_bytes, strategy, ctx);
             return;
         }
 
@@ -910,7 +902,7 @@ impl TerminalView {
                 if !ok || !me.has_active_cli_agent_input_session(ctx) {
                     return;
                 }
-                me.write_cli_agent_text_then_submit(text_bytes, strategy, agent, ctx);
+                me.write_cli_agent_text_then_submit(text_bytes, strategy, ctx);
             },
         );
     }
@@ -1025,29 +1017,27 @@ impl TerminalView {
         );
     }
 
-    /// Writes the input text to the PTY and then sends the agent-specific
-    /// submit keystroke, using the agent-specific strategy. After the
-    /// submission is complete (synchronously for the inline strategies, after a
-    /// timer for the delayed strategies), closes the rich input if the user's
-    /// settings request auto-dismissal.
+    /// Writes the input text to the PTY and then sends a carriage return to
+    /// submit it, using the agent-specific strategy. After the submission is
+    /// complete (synchronously for the inline strategies, after a timer for
+    /// the delayed strategies), closes the rich input if the user's settings
+    /// request auto-dismissal.
     fn write_cli_agent_text_then_submit(
         &mut self,
         text_bytes: Vec<u8>,
         strategy: RichInputSubmitStrategy,
-        agent: CLIAgent,
         ctx: &mut ViewContext<Self>,
     ) {
-        let submit = cli_agent_submit_keystroke(agent);
         match strategy {
             RichInputSubmitStrategy::Inline => {
                 let mut bytes = text_bytes;
-                bytes.extend_from_slice(submit);
+                bytes.extend_from_slice(b"\r");
                 self.write_user_bytes_to_pty(bytes, ctx);
                 self.maybe_close_rich_input_after_submit(ctx);
             }
             RichInputSubmitStrategy::BracketedPaste => {
                 self.write_cli_agent_text(&text_bytes, strategy, ctx);
-                self.write_user_bytes_to_pty(submit.to_vec(), ctx);
+                self.write_user_bytes_to_pty(b"\r".to_vec(), ctx);
                 self.maybe_close_rich_input_after_submit(ctx);
             }
             RichInputSubmitStrategy::DelayedEnter => {
@@ -1055,7 +1045,7 @@ impl TerminalView {
                 ctx.spawn(
                     Timer::after(CLI_AGENT_PTY_WRITE_DELAY),
                     move |me, _, ctx| {
-                        me.write_user_bytes_to_pty(submit.to_vec(), ctx);
+                        me.write_user_bytes_to_pty(b"\r".to_vec(), ctx);
                         me.maybe_close_rich_input_after_submit(ctx);
                     },
                 );
@@ -1065,7 +1055,7 @@ impl TerminalView {
                 ctx.spawn(
                     Timer::after(CLI_AGENT_BRACKETED_PASTE_ENTER_DELAY),
                     move |me, _, ctx| {
-                        me.write_user_bytes_to_pty(submit.to_vec(), ctx);
+                        me.write_user_bytes_to_pty(b"\r".to_vec(), ctx);
                         me.maybe_close_rich_input_after_submit(ctx);
                     },
                 );
