@@ -131,9 +131,6 @@ fn rich_input_submit_strategy(agent: CLIAgent) -> RichInputSubmitStrategy {
         | CLIAgent::Auggie
         | CLIAgent::Grok
         | CLIAgent::CursorCli => RichInputSubmitStrategy::DelayedEnter,
-        // Muse enables bracketed paste (`CSI ? 2004 h`). A raw burst + 50ms `\r`
-        // (DelayedEnter) inserts into the composer without submitting; wrapping
-        // the text in paste markers then sending `\r` does submit.
         CLIAgent::Hermes | CLIAgent::Muse => RichInputSubmitStrategy::BracketedPaste,
         CLIAgent::Amp
         | CLIAgent::Droid
