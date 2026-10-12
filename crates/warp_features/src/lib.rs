@@ -1078,7 +1078,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::LrcActivitySignal,
     FeatureFlag::StoredScreenshots,
     FeatureFlag::GitMirrorCache,
-    FeatureFlag::CloudAgentExecutionConfig,
     FeatureFlag::FactoryDeferredRepositories,
 ];
 

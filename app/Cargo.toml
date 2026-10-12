@@ -699,6 +699,7 @@ default = [
     "terminal_lifecycle_recovery",
     "cloud_runners",
     "cloud_agent_runners",
+    "cloud_agent_execution_config",
     "file_backed_execution_profiles",
     "well_known_mcp_ids",
     "factory_mcp",
@@ -944,6 +945,7 @@ artifact_command = []
 cloud_environments = []
 cloud_runners = []
 cloud_agent_runners = []
+cloud_agent_execution_config = []
 create_environment_slash_command = []
 summarize_conversation_command = []
 mcp_grouped_server_context = []
