@@ -953,6 +953,10 @@ pub enum FeatureFlag {
     /// setup or API key required.
     FactoryMcp,
 
+    /// Attaches the Warp-hosted preview URLs MCP server (`/api/v1/mcp/preview-urls`)
+    /// to agent runs, so a cloud run can expose a sandbox port as a preview URL.
+    PreviewUrlsMcp,
+
     /// Enables periodic workspace-handoff checkpoints during a cloud agent run,
     /// rather than only uploading a workspace snapshot once at end-of-run.
     /// Requires `OzHandoff` to also be enabled; a no-op for local runs and when
@@ -1066,6 +1070,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::WarpingModelName,
     FeatureFlag::LrcActivitySignal,
     FeatureFlag::StoredScreenshots,
+    FeatureFlag::PreviewUrlsMcp,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

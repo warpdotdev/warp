@@ -501,6 +501,7 @@ cross_repo_context = []
 codebase_index_persistence = ["full_source_code_embedding"]
 well_known_mcp_ids = []
 factory_mcp = []
+preview_urls_mcp = []
 default = [
     "agent_mode",
     "osc_hyperlinks",

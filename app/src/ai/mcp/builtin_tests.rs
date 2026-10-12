@@ -2,7 +2,9 @@ use chrono::Duration;
 
 use super::*;
 use crate::ai::mcp::parsing::resolve_json;
-use crate::ai::mcp::{MCPServer, MCPServerExt as _, TransportType};
+use crate::ai::mcp::{
+    JSONMCPServer, JSONTransportType, MCPServer, MCPServerExt as _, TransportType,
+};
 use crate::auth::user::FirebaseAuthTokens;
 
 fn firebase_credentials(expires_in: Duration) -> Credentials {
@@ -49,11 +51,11 @@ fn bearer_token_rejects_session_cookie_auth() {
 #[test]
 fn factory_mcp_url_joins_server_roots_with_and_without_trailing_slash() {
     assert_eq!(
-        factory_mcp_url("https://app.warp.dev"),
+        FACTORY_MCP.url("https://app.warp.dev"),
         "https://app.warp.dev/api/v1/mcp/factory"
     );
     assert_eq!(
-        factory_mcp_url("http://localhost:8080/"),
+        FACTORY_MCP.url("http://localhost:8080/"),
         "http://localhost:8080/api/v1/mcp/factory"
     );
 }
@@ -61,7 +63,7 @@ fn factory_mcp_url_joins_server_roots_with_and_without_trailing_slash() {
 #[test]
 fn factory_installation_resolves_to_a_preauthenticated_http_server() {
     let installation =
-        factory_mcp_installation_for_server_root("https://staging.warp.dev", "tok-123", &[]);
+        builtin_mcp_installation(&FACTORY_MCP, "https://staging.warp.dev", "tok-123", &[]);
     assert_eq!(installation.uuid(), FACTORY_MCP_INSTALLATION_UUID);
     // Fully resolved: nothing for the variable-prompt UI to ask for, and
     // nothing for handlebars to substitute at spawn time.
@@ -95,7 +97,8 @@ fn factory_installation_attaches_ambient_headers_for_an_active_task() {
         ),
         ("X-Warp-Cloud-Agent-ID".to_string(), "task-abc".to_string()),
     ];
-    let installation = factory_mcp_installation_for_server_root(
+    let installation = builtin_mcp_installation(
+        &FACTORY_MCP,
         "https://staging.warp.dev",
         "tok-123",
         &ambient_headers,
@@ -129,4 +132,43 @@ fn factory_installation_attaches_ambient_headers_for_an_active_task() {
         }
         TransportType::CLIServer(_) => panic!("expected an HTTP transport"),
     }
+}
+
+#[test]
+fn preview_urls_installation_resolves_to_a_preauthenticated_http_server() {
+    let ambient_headers = [
+        (
+            "X-Warp-Ambient-Workload-Token".to_string(),
+            "workload-tok".to_string(),
+        ),
+        ("X-Warp-Cloud-Agent-ID".to_string(), "task-abc".to_string()),
+    ];
+    let installation = builtin_mcp_installation(
+        &PREVIEW_URLS_MCP,
+        "http://localhost:8080/",
+        "wk-test-key",
+        &ambient_headers,
+    );
+
+    assert!(installation.template_variables().is_empty());
+    let servers: HashMap<String, JSONMCPServer> =
+        serde_json::from_str(&resolve_json(&installation)).unwrap();
+    assert_eq!(servers.len(), 1);
+    assert_eq!(
+        servers[PREVIEW_URLS_MCP_SERVER_NAME].transport_type,
+        JSONTransportType::SSEServer {
+            url: "http://localhost:8080/api/v1/mcp/preview-urls".to_string(),
+            headers: HashMap::from([
+                (
+                    "Authorization".to_string(),
+                    "Bearer wk-test-key".to_string()
+                ),
+                (
+                    "X-Warp-Ambient-Workload-Token".to_string(),
+                    "workload-tok".to_string()
+                ),
+                ("X-Warp-Cloud-Agent-ID".to_string(), "task-abc".to_string()),
+            ]),
+        }
+    );
 }
